@@ -3067,6 +3067,135 @@ fn a_copy_filed_into_a_binder_the_same_page_brings_back_stays_in_it() {
     assert!(skips(&a).is_empty() && skips(&b).is_empty());
 }
 
+/// **A folder moved into a new one made under a parent deleted here goes, though the page meets
+/// it before the new one.** `b` holds `X` and deletes `P`; `a`, not having heard, renames `X`,
+/// makes `Z` under `P` and moves `X` into `Z`. `X`'s group sorts ahead of `Z`'s (its earliest op,
+/// the rename, is older than `Z`'s creation), so on the one retry there was, `X` asked after `Z`
+/// before `Z` had been decided: unknown, and not yet gone, so `X` was held — and `Z` behind it —
+/// until the release dropped `X`'s ops and `b` kept `X`, where `a`'s cascade had taken it. The
+/// retry is a fixed point now: `Z` is tombstoned as moot on the first retry pass, and the second
+/// finds `X` under a parent that is gone and deletes it as `a`'s cascade did.
+///
+/// **What makes it red**: a single retry pass.
+#[test]
+fn a_folder_moved_into_one_made_under_a_parent_deleted_here_goes_on_both() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let p_on_b = binder(&b, "P", None);
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    let x = binder(&a, "X", None);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    crate::collection_folders::delete_folder(&b, p_on_b).unwrap();
+    let p_on_a: i64 = a
+        .query_row(
+            "SELECT id FROM collection_folders WHERE name = 'P'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    // The rename gives `X`'s group an op older than `Z`'s creation, which sorts it first.
+    a.execute(
+        "UPDATE collection_folders SET name = 'X2' WHERE id = ?1",
+        [x],
+    )
+    .unwrap();
+    let z = binder(&a, "Z", Some(p_on_a));
+    crate::collection_folders::move_folder(&a, x, Some(z)).unwrap();
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(
+        (rb.held_waiting, rb.dropped),
+        (0, 0),
+        "{rb:?}: {:?}",
+        skips(&b)
+    );
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0), "{ra:?}");
+    for (who, c) in [("a", &a), ("b", &b)] {
+        let left: i64 = c
+            .query_row(
+                "SELECT count(*) FROM collection_folders WHERE kind = 'user'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "{who} kept a folder the delete takes");
+    }
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
+}
+
+/// **The retry passes stop when nothing moves: a child whose parent is genuinely missing costs
+/// one more pass, not a loop to the cap.** `a` files a copy into a binder `b` never receives —
+/// its put is left out of the page, so the parent is missing and not gone — and, ahead of it, a
+/// copy into a binder `b` deleted, which the first retry pass writes at the root. That is
+/// progress, so a second pass runs, finds the waiting copy unchanged, and stops. Six more copies
+/// put the page's group count, which is the cap, at eight. The waiting copy ends held exactly as
+/// it did when there was one retry.
+///
+/// **What makes it red**: a loop that goes on while anything waits, rather than while something
+/// moved — it runs to the cap.
+#[test]
+fn the_retry_passes_stop_when_nothing_can_progress() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let gone_on_b = binder(&b, "Gone", None);
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    crate::collection_folders::delete_folder(&b, gone_on_b).unwrap();
+
+    let never_sent = binder(&a, "Never sent", None);
+    let never_uid: String = a
+        .query_row(
+            "SELECT sync_uid FROM collection_folders WHERE id = ?1",
+            [never_sent],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let gone_on_a: i64 = a
+        .query_row(
+            "SELECT id FROM collection_folders WHERE name = 'Gone'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let copy_of = |card: &str, folder: Option<i64>| {
+        a.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,
+                 created_at,updated_at)
+             VALUES (?1,'lea','1','en','nonfoil','NM',1,?2,unixepoch(),unixepoch())",
+            rusqlite::params![card, folder],
+        )
+        .unwrap();
+    };
+    for card in ["d1", "d2", "d3", "d4", "d5", "d6"] {
+        copy_of(card, None);
+    }
+    copy_of("g1", Some(gone_on_a));
+    copy_of("n1", Some(never_sent));
+    let page: Vec<Op> = since(&a, &mut ma)
+        .into_iter()
+        .filter(|op| op.uid != never_uid)
+        .collect();
+    assert_eq!(
+        page.len(),
+        8,
+        "the premise: eight groups, the cap: {page:?}"
+    );
+
+    super::RETRY_PASSES.with(|c| c.set(0));
+    let rb = apply(&b, &page).unwrap();
+    let passes = super::RETRY_PASSES.with(|c| c.get());
+
+    assert_eq!(
+        passes, 2,
+        "the retry passes did not stop when nothing moved"
+    );
+    assert_eq!((rb.held_waiting, rb.dropped), (1, 0), "{rb:?}");
+    assert_eq!(qty(&b), (7, 7), "the six copies and the one the pass wrote");
+    assert_eq!(copies_at_root(&b), 7);
+}
+
 /// **A moot folder delete waits for the retry when rows are still filed in it, so the page's own
 /// re-filing of them lands first** — the delete arm's reason, met one level up: every decision
 /// resting on `gone` is made on the retry (`Why::DecidedOnRetry`). Both
