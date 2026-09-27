@@ -1267,7 +1267,8 @@ it("makes a category from the picker and files the card into it", async () => {
   expect(await screen.findByLabelText("New category")).toHaveValue("Ramp");
 
   await userEvent.click(screen.getByRole("button", { name: /^Create/ }));
-  await waitFor(() => expect(deckCategoryCreate).toHaveBeenCalledWith(1, "Ramp"));
+  // Made in the list the card was opened from — `live` here — since each list has its own piles.
+  await waitFor(() => expect(deckCategoryCreate).toHaveBeenCalledWith(1, "live", "Ramp"));
   // deckId, cardId, from, to, toName, variant, finish — the new pile is the destination of the
   // very same move a pick would have made, which is the whole point of creating one from here.
   await waitFor(() =>

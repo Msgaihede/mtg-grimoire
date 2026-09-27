@@ -189,7 +189,7 @@ enum Source {
 /// seeds its own `Recently removed` folder, so **two paired devices hold that row under two
 /// uids from the moment they meet** — and a uid-only rule would try to insert a second one and
 /// fail the index forever. `deck_categories` has a second as well:
-/// `idx_deck_categories_kind`, `UNIQUE (deck_id, kind) WHERE kind <> 'main'`.
+/// `idx_deck_categories_kind`, `UNIQUE (deck_id, variant, kind) WHERE kind <> 'main'`.
 ///
 /// A partial index needs no new machinery, because the `WHERE` clause can be written into the
 /// predicate: `kind = ? AND kind = 'removed'` matches the one holding area when the incoming row
@@ -260,17 +260,30 @@ const META: [Meta; 17] = [
     Meta {
         table: "deck_categories",
         order: 2,
+        // **Both per list since user schema v53**, `variant` in each where the two indexes
+        // carry it: a theory `Ramp` beside the deck's live one is two piles, and folding them on
+        // `deck_id, name` would put the plan's cards in the deck's pile on the far device. An
+        // older sender's op carries no `variant`, so neither grain can bind and its insert lands
+        // under its own uid in the column's `'live'` default.
         grains: &[
             Grain {
-                predicate: "deck_id = ? AND name = ?",
-                sources: &[Source::Parent("deck"), Source::Field("name")],
+                predicate: "deck_id = ? AND variant = ? AND name = ?",
+                sources: &[
+                    Source::Parent("deck"),
+                    Source::Field("variant"),
+                    Source::Field("name"),
+                ],
             },
             // `idx_deck_categories_kind`, and the `WHERE kind <> 'main'` is in the predicate:
-            // a deck has one Sideboard, one Commander, one Companion and one Maybeboard, and a
-            // renamed one would slip past the grain above.
+            // each list has one Sideboard, one Commander, one Companion and one Maybeboard, and
+            // a renamed one would slip past the grain above.
             Grain {
-                predicate: "deck_id = ? AND kind = ? AND kind <> 'main'",
-                sources: &[Source::Parent("deck"), Source::Field("kind")],
+                predicate: "deck_id = ? AND variant = ? AND kind = ? AND kind <> 'main'",
+                sources: &[
+                    Source::Parent("deck"),
+                    Source::Field("variant"),
+                    Source::Field("kind"),
+                ],
             },
         ],
         counters: &[],

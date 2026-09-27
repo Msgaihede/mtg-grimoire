@@ -30,6 +30,8 @@ const formatSpecs = vi.hoisted(() => vi.fn());
 const deckClear = vi.hoisted(() => vi.fn());
 const deckPullPlan = vi.hoisted(() => vi.fn());
 const deckPullFromCollection = vi.hoisted(() => vi.fn());
+/** The plan's piles — the one read this dialog makes about the theory list, for its total. */
+const deckCategoryList = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -41,6 +43,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckClear,
     deckPullPlan,
     deckPullFromCollection,
+    deckCategoryList,
   },
 }));
 
@@ -104,7 +107,7 @@ const CATEGORIES: DeckCategory[] = [
   sortOrder: i,
   cardCount: 0,
   totalPrice: null,
-  cardCountAllVariants: 0,
+  variant: "live" as const,
   ...c,
 }));
 
@@ -114,20 +117,30 @@ function detail(deck: Partial<DeckRow> = {}, cards: DeckCard[] = []): DeckDetail
 }
 
 /**
+ * The plan's own piles — what `deck_category_list(4, "theory", …)` answers. Each list has piles
+ * of its own since user schema v53 (issue #561), so these are separate rows from
+ * {@link CATEGORIES} with ids of their own, holding `5 + 3 = 8` copies.
+ */
+const PLAN: DeckCategory[] = [
+  { ...CATEGORIES[0], id: 21, variant: "theory", cardCount: 5 },
+  { ...CATEGORIES[1], id: 22, variant: "theory", cardCount: 3 },
+];
+
+/**
  * A deck with a plan, whose two lists hold **different** numbers of cards.
  *
- * That difference is the whole point of the fixture. `cardCount` is the copies in the variant
- * that was asked for — the dialog reads `live` — and `cardCountAllVariants` is both lists
- * together, so live is `4 + 3 = 7` and the plan is `(10 + 5) − 7 = 8`. With the two equal, a
- * confirmation handed the wrong one of them draws exactly the same sentence as one handed the
- * right one, and every case below would pass against a host that had them the wrong way round.
+ * That difference is the whole point of the fixture. The dialog reads the live list through
+ * `deck_get` — `4 + 3 = 7` — and the plan through its own piles, {@link PLAN}, which hold 8.
+ * With the two equal, a confirmation handed the wrong one of them draws exactly the same sentence
+ * as one handed the right one, and every case below would pass against a host that had them the
+ * wrong way round.
  */
 function withPlan(): DeckDetail {
   return {
     ...detail({ theoryEnabled: true }),
     categories: [
-      { ...CATEGORIES[0], cardCount: 4, cardCountAllVariants: 10 },
-      { ...CATEGORIES[1], cardCount: 3, cardCountAllVariants: 5 },
+      { ...CATEGORIES[0], cardCount: 4 },
+      { ...CATEGORIES[1], cardCount: 3 },
     ],
   };
 }
@@ -203,6 +216,21 @@ async function loaded() {
   return screen.getByRole("dialog", { name: "Deck settings" });
 }
 
+/**
+ * {@link loaded}, and then the plan's total too.
+ *
+ * The theory list's piles are a second read the dialog only starts once the deck row says it
+ * keeps a plan, and the theory clear is greyed until it lands — so a case that presses that
+ * button, or reads the plan's count off the live question, waits here first.
+ */
+async function loadedWithPlan() {
+  const dialog = await loaded();
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: /Clear theory list/ })).toBeEnabled(),
+  );
+  return dialog;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   // A restore rather than a reset: `clearAllMocks` wipes the implementation a
@@ -222,6 +250,8 @@ beforeEach(() => {
   // drawn in; the empty plan is the case a test asks for by name.
   deckPullPlan.mockResolvedValue([pullRow()]);
   deckPullFromCollection.mockResolvedValue({ copies: 3, cards: 1 });
+  // Read only for a deck with a plan, so every case without one never reaches it.
+  deckCategoryList.mockResolvedValue(PLAN);
 });
 
 /**
@@ -904,7 +934,7 @@ describe("DeckSettingsDialog", () => {
   it("withdraws the theory question when the deck stops keeping a plan", async () => {
     deckGet.mockResolvedValue(withPlan());
     open();
-    await loaded();
+    await loadedWithPlan();
 
     await userEvent.click(screen.getByRole("button", { name: /Clear theory list/ }));
     expect(screen.getByRole("group", { name: "Clear the theory list" })).toBeInTheDocument();
@@ -930,7 +960,7 @@ describe("DeckSettingsDialog", () => {
   it("opens the question for the list the press was about", async () => {
     deckGet.mockResolvedValue(withPlan());
     open();
-    await loaded();
+    await loadedWithPlan();
 
     await userEvent.click(screen.getByRole("button", { name: /Clear theory list/ }));
 
@@ -942,7 +972,7 @@ describe("DeckSettingsDialog", () => {
 
   /**
    * **The case this whole section is riskiest in.** The dialog mounts `useDeck(deckId)`, which
-   * is the *live* list, and the theory total is a subtraction over the same rows — so the one
+   * is the *live* list, and reads the theory total off the plan's own piles — so the one
    * mistake available here is handing the theory question the live figure, which would quote a
    * destructive press wrong in the only direction that matters.
    *
@@ -952,7 +982,7 @@ describe("DeckSettingsDialog", () => {
   it("quotes each list's own count, and the other list's as the untouched one", async () => {
     deckGet.mockResolvedValue(withPlan());
     open();
-    await loaded();
+    await loadedWithPlan();
     const user = userEvent.setup();
 
     await user.click(screen.getByRole("button", { name: /Clear actual list/ }));
@@ -973,7 +1003,7 @@ describe("DeckSettingsDialog", () => {
   it("clears the list the question was about, and closes on success", async () => {
     deckGet.mockResolvedValue(withPlan());
     open();
-    await loaded();
+    await loadedWithPlan();
 
     await userEvent.click(screen.getByRole("button", { name: /Clear theory list/ }));
     await userEvent.click(screen.getByRole("button", { name: "Remove 8 cards" }));
@@ -1013,7 +1043,7 @@ describe("DeckSettingsDialog", () => {
   it("hands the caret back to the button that opened a declined question", async () => {
     deckGet.mockResolvedValue(withPlan());
     open();
-    await loaded();
+    await loadedWithPlan();
 
     await userEvent.click(screen.getByRole("button", { name: /Clear theory list/ }));
     await userEvent.click(screen.getByRole("button", { name: "Keep them" }));
@@ -1028,14 +1058,47 @@ describe("DeckSettingsDialog", () => {
    *  whose name is the bare label reads as a control that is missing. */
   it("greys the clear for a list with nothing in it, and says so in its name", async () => {
     deckGet.mockResolvedValue(detail({ theoryEnabled: true }));
+    deckCategoryList.mockResolvedValue(PLAN.map((pile) => ({ ...pile, cardCount: 0 })));
     open();
     await loaded();
 
     const live = screen.getByRole("button", { name: /Clear actual list/ });
     expect(live).toBeDisabled();
     expect(live).toHaveAccessibleName("Clear actual list… (already empty)");
+    // Greyed while the plan is read as well, so the name is what says it has been read.
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /Clear theory list/ })).toHaveAccessibleName(
+        "Clear theory list… (already empty)",
+      ),
+    );
     expect(screen.getByRole("button", { name: /Clear theory list/ })).toBeDisabled();
     expect(deckClear).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The plan's total is the plan's own piles, asked for only when there is a plan.**
+   *
+   * Since user schema v53 (issue #561) `deck_get`'s live answer carries the live list's piles and
+   * nothing about the theory list, so the dialog reads the plan's piles on their own. A deck with
+   * no plan draws no theory clear, so it must not pay for the read either.
+   */
+  it("reads the plan's piles for its total, and only on a deck that keeps a plan", async () => {
+    deckGet.mockResolvedValue(withPlan());
+    const first = open();
+    await loadedWithPlan();
+
+    expect(deckCategoryList).toHaveBeenCalledWith(4, "theory", expect.any(String));
+    expect(screen.getByRole("button", { name: /Clear theory list/ })).toHaveAccessibleName(
+      "Clear theory list…",
+    );
+    first.unmount();
+
+    deckCategoryList.mockClear();
+    deckGet.mockResolvedValue(detail());
+    open();
+    await loaded();
+
+    expect(deckCategoryList).not.toHaveBeenCalled();
   });
 
   /*
@@ -1336,8 +1399,8 @@ describe("DeckSettingsDialog", () => {
     deckGet.mockResolvedValue({
       ...detail({ virtualOnly: true }),
       categories: [
-        { ...CATEGORIES[0], cardCount: 4, cardCountAllVariants: 4 },
-        { ...CATEGORIES[1], cardCount: 3, cardCountAllVariants: 3 },
+        { ...CATEGORIES[0], cardCount: 4 },
+        { ...CATEGORIES[1], cardCount: 3 },
       ],
     });
     open();
