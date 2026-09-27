@@ -49,6 +49,7 @@ const NONE = {
   manaX: false,
   rarities: [],
   types: [],
+  borders: [],
   priceMin: undefined,
   priceMax: undefined,
   finishes: [],
@@ -77,6 +78,8 @@ describe("activeFilterCount", () => {
     // The type chips are the same rule over a row of eight: a reader narrowed to creatures and
     // lands has narrowed once.
     expect(activeFilterCount({ ...NONE, types: ["Creature", "Land"] })).toBe(1);
+    // And the border chips, three to a row, are the same rule again.
+    expect(activeFilterCount({ ...NONE, borders: ["borderless", "fullart"] })).toBe(1);
   });
 
   /**
@@ -102,16 +105,16 @@ describe("activeFilterCount", () => {
 
   /**
    * The collection's row is longer than the search's by three: what the copy is (finish),
-   * what state it is in (condition), and whether it is one of the rows a sync flagged. Eleven
-   * kinds over thirteen fields — the price band is one kind with two ends, and the X chip rides
+   * what state it is in (condition), and whether it is one of the rows a sync flagged. Twelve
+   * kinds over fourteen fields — the price band is one kind with two ends, and the X chip rides
    * with the mana values. Reset all has to reach every one of them, so the count has to see
    * every one of them.
    *
-   * **`colorsStrict` is not one of the thirteen and never will be**: it is not a field of
+   * **`colorsStrict` is not one of the fourteen and never will be**: it is not a field of
    * `CollectionFilterState` at all, because it modifies what a picked colour means rather than
    * narrowing anything of its own.
    */
-  it("sees all eleven kinds the collection offers", () => {
+  it("sees all twelve kinds the collection offers", () => {
     expect(
       activeFilterCount({
         text: "bolt",
@@ -122,13 +125,14 @@ describe("activeFilterCount", () => {
         manaX: true,
         rarities: ["rare"],
         types: ["Creature"],
+        borders: ["borderless"],
         priceMin: 5,
         priceMax: 20,
         finishes: ["foil"],
         conditions: ["NM"],
         needsReview: true,
       }),
-    ).toBe(11);
+    ).toBe(12);
   });
 
   /** X is the last chip of the mana-value group and is OR'd with the numerals, so it is that
@@ -211,7 +215,7 @@ describe("useCollection", () => {
     setShelfFolds.mockReset().mockResolvedValue(undefined);
   });
 
-  it("clears all nine filters at once", async () => {
+  it("clears all ten filters at once", async () => {
     const { result } = renderHook(() => useCollection(), { wrapper });
     await waitFor(() => expect(collectionList).toHaveBeenCalled());
 
@@ -225,12 +229,13 @@ describe("useCollection", () => {
       // its own: it is counted with the numerals it sits among, so the badge does not move.
       result.current.toggleManaX();
       result.current.toggleType("Creature");
+      result.current.toggleBorder("fullart");
       result.current.toggleFinish("foil");
       result.current.toggleCondition("NM");
       result.current.toggleNeedsReview();
     });
 
-    expect(result.current.activeCount).toBe(9);
+    expect(result.current.activeCount).toBe(10);
 
     act(() => result.current.resetAll());
 
@@ -239,6 +244,7 @@ describe("useCollection", () => {
     expect(result.current.conditions).toEqual([]);
     expect(result.current.manaX).toBe(false);
     expect(result.current.types).toEqual([]);
+    expect(result.current.borders).toEqual([]);
     // Cleared although the badge above never counted it — Reset all means "no filters", and a
     // strict flag left over an emptied colour row is state with no control drawn for it.
     expect(result.current.colorsStrict).toBe(false);
@@ -250,9 +256,40 @@ describe("useCollection", () => {
       expect(q.conditions).toBeUndefined();
       expect(q.manaX).toBeUndefined();
       expect(q.types).toBeUndefined();
+      expect(q.borders).toBeUndefined();
       expect(q.colorsStrict).toBeUndefined();
       expect(q.needsReview).toBeUndefined();
     });
+  });
+
+  /**
+   * The border chips (issue #573), end to end — the type chips' test one row over. The finish
+   * beside them is **not** touched here and must not be: on this list `finishes` is the copy's
+   * own finish, and the printing's published finishes (`printedFinishes`) are a question this
+   * page never sends.
+   */
+  it("sends the border chips and keys the query on them", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(lastQuery().borders).toBeUndefined();
+    const asked = collectionList.mock.calls.length;
+    const key = result.current.queryKeyString;
+
+    act(() => result.current.toggleBorder("fullart"));
+    act(() => result.current.toggleBorder("regular"));
+
+    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
+    expect(result.current.queryKeyString).not.toBe(key);
+    // In `BORDERS` order, whatever the press order.
+    await waitFor(() => expect(lastQuery().borders).toEqual(["regular", "fullart"]));
+    expect(result.current.activeCount).toBe(1);
+    // The export sweep reads `filters`, so the chips reach it too.
+    expect(result.current.filters.borders).toEqual(["regular", "fullart"]);
+
+    act(() => result.current.toggleFinish("foil"));
+    await waitFor(() => expect(lastQuery().finishes).toEqual(["foil"]));
+    expect(lastQuery().printedFinishes).toBeUndefined();
+    expect(result.current.activeCount).toBe(2);
   });
 
   /**

@@ -77,6 +77,15 @@ const search = (over: Record<string, unknown> = {}) =>
     // in the shape every other case shares.
     types: [] as string[],
     toggleType: vi.fn(),
+    // The border and finish cells' pairs, present for the type pair's reason: `SEARCH_TRAY` names
+    // both cells since issue #573 and `useCardSearch` answers both. On this surface the finish
+    // chips ask what the printing was **published** in, which is why the card search stub carries
+    // them at all — a case about a surface that answers neither overrides the setter to
+    // `undefined`.
+    borders: [] as string[],
+    toggleBorder: vi.fn(),
+    finishes: [] as string[],
+    toggleFinish: vi.fn(),
     setOwned: vi.fn(),
     allPrintings: false,
     toggleAllPrintings: vi.fn(),
@@ -495,6 +504,11 @@ const facets = (over: Partial<FacetResponse> = {}): FacetResponse => ({
     Battle: 5,
     Land: 5,
   },
+  // All three keys of each, as a ready response always carries them — the rarities' reason. Both
+  // overlap rather than partition (a borderless full-art printing, a printing in nonfoil and
+  // foil), so neither sums to `total`.
+  borders: { regular: 5, borderless: 5, fullart: 5 },
+  finishes: { nonfoil: 5, foil: 5, etched: 5 },
   sets: { lea: 5 },
   owned: { owned: 3, missing: 37 },
   total: 40,
@@ -2435,7 +2449,7 @@ describe("FilterBar, its type chips", () => {
 
     expect(screen.getByRole("button", { name: /^Battle\b/ })).not.toHaveAttribute("aria-disabled");
   });
-});
+
   /**
    * **This row and the badge are one arithmetic**, which is what makes the chip worth its place:
    * the type chips are in the tray, so with the tray shut a type filter has no control on screen
@@ -2478,7 +2492,219 @@ describe("FilterBar, its type chips", () => {
 
     expect(chipLabels()).toEqual([]);
   });
+});
 
+/**
+ * The border cell (issue #573) — three chips over the printing's frame, the type cell's shape one
+ * dimension along.
+ */
+describe("FilterBar, its border chips", () => {
+  /** Every border counted, so a case overriding one is overriding exactly one. */
+  const ALL_BORDERS = { regular: 5, borderless: 5, fullart: 5 };
+  const group = () => screen.getByRole("group", { name: "Border" });
+
+  /** Absent rather than dead where the surface cannot answer it — the type cell's rule. */
+  it("draws the border cell only where the surface answers it", async () => {
+    render(<FilterBar search={search({ toggleBorder: undefined })} />);
+    await openTray();
+
+    expect(screen.queryByRole("group", { name: "Border" })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Borderless\b/ })).toBeNull();
+  });
+
+  /**
+   * The ordinary card first, then the two treatments that take the frame away — `BORDERS`' order,
+   * which is `sortOptions`' order-is-the-information exemption; sorted, `Borderless` would lead.
+   * The whole sequence, and the text rather than the name, which carries a facet count wherever
+   * there is one.
+   */
+  it("draws three border chips, the ordinary card first", async () => {
+    render(<FilterBar search={search()} />);
+    await openTray();
+
+    expect(
+      within(group())
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Regular", "Borderless", "Full art"]);
+  });
+
+  it("shows which borders are on, and toggles one by its id", async () => {
+    const toggleBorder = vi.fn();
+    render(<FilterBar search={search({ borders: ["fullart"], toggleBorder })} />);
+    await openTray();
+
+    expect(within(group()).getByRole("button", { name: "Full art" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(group()).getByRole("button", { name: "Borderless" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    await userEvent.click(within(group()).getByRole("button", { name: "Borderless" }));
+
+    // The id and never the label: `filters::picked_borders` drops anything it does not know, so
+    // a chip sending `Borderless` would filter nothing and nothing would go red for it.
+    expect(toggleBorder).toHaveBeenCalledWith("borderless");
+  });
+
+  /** `aria-disabled` and never the attribute, and the name carries the reason. */
+  it("greys a border nothing in this search has, and keeps it reachable", async () => {
+    const toggleBorder = vi.fn();
+    render(
+      <FilterBar
+        search={search({
+          toggleBorder,
+          facets: facets({ borders: { ...ALL_BORDERS, borderless: 0 } }),
+        })}
+      />,
+    );
+    await openTray();
+
+    const borderless = within(group()).getByRole("button", { name: /^Borderless\b/ });
+    expect(borderless).toHaveAccessibleName("Borderless — nothing in this search");
+    expect(borderless).toHaveAttribute("aria-disabled", "true");
+    expect(borderless).not.toBeDisabled();
+    const regular = within(group()).getByRole("button", { name: /^Regular\b/ });
+    expect(regular).toHaveAccessibleName("Regular — 5 printings");
+    expect(regular).not.toHaveAttribute("aria-disabled");
+
+    await userEvent.click(borderless);
+    expect(toggleBorder).not.toHaveBeenCalled();
+  });
+
+  /** The way out of a dead end never greys — `facets.ts`' selected arm. */
+  it("never greys a border that is switched on", async () => {
+    render(
+      <FilterBar
+        search={search({
+          borders: ["borderless"],
+          facets: facets({ borders: { ...ALL_BORDERS, borderless: 0 } }),
+        })}
+      />,
+    );
+    await openTray();
+
+    expect(within(group()).getByRole("button", { name: /^Borderless\b/ })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  /** One chip for the kind, in `BORDERS`' order however they were pressed, in the tray's words. */
+  it("states the picked borders as one chip, and takes them all off in one press", async () => {
+    const toggleBorder = vi.fn();
+    render(
+      <FilterBar
+        search={search({ borders: ["fullart", "regular"], toggleBorder, activeCount: 1 })}
+      />,
+    );
+
+    expect(chipLabels()).toEqual(["Border: Regular, Full art"]);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove filter — Border: Regular, Full art" }),
+    );
+    expect(toggleBorder.mock.calls.map(([b]) => b)).toEqual(["fullart", "regular"]);
+  });
+
+  /** Gated on the setter, like every other optional kind on the strip. */
+  it("states no border filter on a surface that has no border chips", () => {
+    render(
+      <FilterBar
+        search={search({ borders: ["regular"], toggleBorder: undefined, activeCount: 0 })}
+      />,
+    );
+
+    expect(chipLabels()).toEqual([]);
+  });
+});
+
+/**
+ * The finish cell on the **card search** (issue #573), where it asks what the printing was
+ * published in. It was absent from this surface until then; the collection's own suite covers the
+ * copy's reading, which draws the same cell with `facets` undefined.
+ */
+describe("FilterBar, its finish chips", () => {
+  /** Every finish counted, so a case overriding one is overriding exactly one. */
+  const ALL_FINISHES = { nonfoil: 5, foil: 5, etched: 5 };
+  const group = () => screen.getByRole("group", { name: "Finish" });
+
+  it("draws the finish cell on the card search, and toggles a finish by its id", async () => {
+    const toggleFinish = vi.fn();
+    render(<FilterBar search={search({ finishes: ["foil"], toggleFinish })} />);
+    await openTray();
+
+    expect(
+      within(group())
+        .getAllByRole("button")
+        .map((b) => b.textContent),
+    ).toEqual(["Nonfoil", "Foil", "Etched"]);
+    expect(within(group()).getByRole("button", { name: "Foil" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await userEvent.click(within(group()).getByRole("button", { name: "Etched" }));
+    expect(toggleFinish).toHaveBeenCalledWith("etched");
+  });
+
+  it("draws no finish cell where the surface does not answer it", async () => {
+    render(<FilterBar search={search({ toggleFinish: undefined })} />);
+    await openTray();
+
+    expect(screen.queryByRole("group", { name: "Finish" })).toBeNull();
+  });
+
+  /** Counted as printings published in each finish, and greyed on a counted zero. */
+  it("greys a finish nothing in this search was published in, but never a pressed one", async () => {
+    const toggleFinish = vi.fn();
+    const zeroEtched = facets({ finishes: { ...ALL_FINISHES, etched: 0 } });
+    const { rerender } = render(
+      <FilterBar search={search({ toggleFinish, facets: zeroEtched })} />,
+    );
+    await openTray();
+
+    const etched = within(group()).getByRole("button", { name: /^Etched\b/ });
+    expect(etched).toHaveAccessibleName("Etched — nothing in this search");
+    expect(etched).toHaveAttribute("aria-disabled", "true");
+    const foil = within(group()).getByRole("button", { name: /^Foil\b/ });
+    expect(foil).toHaveAccessibleName("Foil — 5 printings");
+    expect(foil).not.toHaveAttribute("aria-disabled");
+    await userEvent.click(etched);
+    expect(toggleFinish).not.toHaveBeenCalled();
+
+    rerender(
+      <FilterBar search={search({ finishes: ["etched"], toggleFinish, facets: zeroEtched })} />,
+    );
+    expect(within(group()).getByRole("button", { name: /^Etched\b/ })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  /**
+   * A copy surface has no facet command and hands `facets` over as `undefined`, so every chip is
+   * live and carries its plain word — `facets.ts`' fail-open arm, which is what keeps a copy's
+   * question from being greyed by a printing's count.
+   */
+  it("stays live with its plain words where there are no facets", async () => {
+    render(<FilterBar search={search({ facets: undefined })} tray={["finish"]} />);
+    await openTray();
+
+    for (const name of ["Nonfoil", "Foil", "Etched"]) {
+      const chip = within(group()).getByRole("button", { name: new RegExp(`^${name}\\b`) });
+      expect(chip).toHaveAccessibleName(name);
+      expect(chip).not.toHaveAttribute("aria-disabled");
+    }
+  });
+
+  it("states the picked finishes as one chip, in the tray's order", () => {
+    render(<FilterBar search={search({ finishes: ["etched", "foil"], activeCount: 1 })} />);
+
+    expect(chipLabels()).toEqual(["Finish: Foil, Etched"]);
+  });
+});
 
 /**
  * The chips under the rule — the search, said in words.

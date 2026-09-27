@@ -361,7 +361,12 @@ const WISHLIST_LABELS: FilterLabels = { idStem: "wishlist", search: "Search your
 /**
  * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
  *
- * Three of the card search's, then the two only a shopping list can ask. **No `price` cell**, and
+ * The card search's printing cells, `border` among them (issue #573 — a wish is for a printing,
+ * and the printing has a frame), then `needsReview`, which only a list the reconciler walks can
+ * ask. **No `finish` cell**, although the collection's tray has one: a wish carries the finish
+ * the reader *prefers*, which is neither the card search's question (what the printing was
+ * published in) nor the collection's (what a copy is), and a cell drawn here would be read as one
+ * of those two while filtering by the third. **No `price` cell**, and
  * that is the one absence here that is a fact about the wire rather than about the screen:
  * `WishlistQuery` carries no `priceMin`/`priceMax`, so the band would be a control whose numbers
  * reach nothing — which is why those three fields are the optional half of `FilterSurface`.
@@ -380,6 +385,7 @@ const WISHLIST_TRAY: readonly TrayCell[] = [
   "format",
   "rarity",
   "type",
+  "border",
   "needsReview",
 ];
 
