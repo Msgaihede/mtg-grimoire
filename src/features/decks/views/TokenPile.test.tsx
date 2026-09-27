@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import { DEFAULT_ZOOM } from "@/lib/cardZoom";
+import { chinHeight, DEFAULT_ZOOM } from "@/lib/cardZoom";
 import { tileKeyOf } from "@/lib/tileKey";
 
 // `useMarketplace` is the real hook — the pile reads it for the heading's total and every chin's
@@ -16,7 +16,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { THEORY_MATCH_ATTR, theoryMatchLabel } from "../CardMarks";
-import { STACK_OPEN_ATTR, stackHeight } from "../CardStack";
+import { deckCardScale, STACK_OPEN_ATTR, stackHeight } from "../CardStack";
 import { CARD_BODY_ATTR, DECK_GROUP_ATTR } from "../cardControl";
 import { tokenCountWords } from "../CountPill";
 import { TOKENS_HEADING } from "../DeckTokensPanel";
@@ -495,5 +495,18 @@ describe("TokenGridPile", () => {
     expect(within(tile).getByText("TCLB · 5")).toBeInTheDocument();
     expect(within(tile).getByText("$0.25")).toBeInTheDocument();
     expect(within(tile).getByText("2")).toHaveAttribute("aria-hidden", "true");
+  });
+
+  /**
+   * **A token tile's marks are the deck tile's — scaled to its width, not to the wall's zoom**
+   * (issue #567). The zoom is handed in at 2× against a 150px tile on purpose: the two disagree,
+   * and a tile that published the zoom would draw a 420px card's tag and chin on a 150px card.
+   */
+  it("scales its marks and chin to the tile's width against a stacked card's", () => {
+    renderWith(<TokenGridPile pile={pileOf([token()])} zoom={2} tileWidth={150} gap={10} />);
+    const tile = screen.getByRole("button", { name: /^Change the art for Treasure/ }).closest("li")!;
+    expect(tile.style.getPropertyValue("--mark-scale")).toBe(String(deckCardScale(150)));
+    const chin = within(tile).getByText("TCLB · 5").parentElement as HTMLElement;
+    expect(chin.style.height).toBe(`${chinHeight(deckCardScale(150))}px`);
   });
 });

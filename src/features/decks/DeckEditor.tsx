@@ -53,6 +53,7 @@ import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useCardSelection } from "@/lib/useCardSelection";
 import { useDockHeight } from "@/lib/useDockHeight";
+import { useScrollPerView } from "@/lib/useScrollPerView";
 import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import {
@@ -2077,6 +2078,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * desk moves the row's top without resizing either observed box.
    */
   useDockHeight(dockRef, deskRef);
+
+  // **Each view keeps its own place on the page** (issue #567). All four scroll `AppShell`'s one
+  // `main`, so without this a switch carried the departing view's `scrollTop` into the arriving
+  // one — two thousand pixels down a Stacks desk was two thousand pixels down a Grid wall that
+  // lays the deck out nothing like it. `parkScroll` records where the departing view was and must
+  // run **before** `setView`, while the box still holds it; `useScrollPerView` has why.
+  const parkScroll = useScrollPerView(deskRef, view);
 
   // A refused write re-reads the deck, and the read is what decides what happened: every write
   // goes through `touch_deck`, which answers "That deck is not there any more" when the deck
@@ -4886,7 +4894,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               id="deck-view"
               labelledBy="deck-view-label"
               value={view}
-              onChange={(value) => setView(value as DeckView)}
+              onChange={(value) => {
+                parkScroll();
+                setView(value as DeckView);
+              }}
               options={VIEW_OPTIONS}
             />
           </div>
