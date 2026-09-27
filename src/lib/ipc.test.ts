@@ -4662,9 +4662,11 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     expect([...tsPredicate].sort()).toEqual([...rustPredicate].sort());
 
     const fields = rustVariants(cardFiltersRs, "PredicateField").map(variantName);
-    expect(fields).toHaveLength(12);
+    expect(fields).toHaveLength(13);
     expect(fields).toContain("typeLine");
     expect(fields).toContain("cmc");
+    // The one field no keyword names — a leading `-` on free text (issue #571).
+    expect(fields).toContain("name");
     expect([...tsUnion(ipcSource, "PredicateField")].sort()).toEqual([...fields].sort());
 
     const ops = rustVariants(cardFiltersRs, "PredicateOp").map(variantName);
