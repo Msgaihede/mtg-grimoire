@@ -866,8 +866,9 @@ pub fn reorder_categories(
 ///
 /// **`moveToCategoryId: Some(id)` moves the cards first, in the same transaction**, folding on
 /// [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) — `deck_id, variant, category_id,
-/// card_id` — so a `live`-variant row and a `theory`-variant row of the same printing fold
-/// into their own matching row in the target and never into each other. `None` leaves the
+/// card_id, coalesce(finish, '')` — so a `live`-variant row and a `theory`-variant row of the
+/// same printing fold into their own matching row in the target and never into each other, and
+/// a foil and the regular copy likewise. `None` leaves the
 /// `ON DELETE CASCADE` on `deck_cards.category_id` to take the cards with the category, which
 /// is the DDL's own comment on that column: "deleting a category deletes the cards filed under
 /// it, which is what the confirm dialog says it will do."
@@ -991,12 +992,19 @@ pub fn delete_category(
         // instead of zones. The `DO UPDATE` touches only `quantity`/`updated_at`: a row the
         // target already holds keeps its own `label_id` and `needs_review`, never the moved
         // row's — the same "the existing row wins a fold" rule `move_card`'s comment names.
+        //
+        // **`finish` is selected across**, because it is a term of the grain the fold is on:
+        // left out, every moved row lands as the regular copy, and a pile holding a foil and a
+        // regular copy of one printing folds them into one regular row. `sync_uid` is the one
+        // column deliberately *not* carried — the source row still holds it when this INSERT
+        // runs, so a copy would collide on `idx_deck_cards_uid`, and the capture trigger mints
+        // the new row its own.
         let sql = format!(
             "INSERT INTO deck_cards
                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
-                 name, label_id, quantity, needs_review, created_at, updated_at)
+                 name, label_id, finish, quantity, needs_review, created_at, updated_at)
              SELECT deck_id, ?2, variant, card_id, set_code, collector_number, lang, name,
-                    label_id, quantity, needs_review, unixepoch(), unixepoch()
+                    label_id, finish, quantity, needs_review, unixepoch(), unixepoch()
                FROM deck_cards WHERE category_id = ?1
              ON CONFLICT({grain}) DO UPDATE SET
                 quantity = deck_cards.quantity + excluded.quantity,
@@ -3134,6 +3142,49 @@ mod tests {
         assert_eq!(
             theory_qty, 5,
             "the theory copy moved on its own, never folded into live"
+        );
+    }
+
+    /// **The move carries `finish`, or a foil lands as the regular copy.** `finish` is a term of
+    /// `DECK_CARD_GRAIN`, so an INSERT … SELECT that leaves it out writes every moved row as NULL
+    /// — and a pile holding a foil and a regular copy of one printing folds them into one regular
+    /// row, summing the two. Nothing refuses and nothing draws differently until the reader
+    /// prices the deck or looks for the foil.
+    #[test]
+    fn deck_category_delete_with_a_move_target_keeps_each_finish_its_own_row() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let from = category(&conn, deck_id, "main", "Creatures");
+        let to = category(&conn, deck_id, "main", "Main deck");
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        deck_card(&conn, deck_id, "bolt-lea", from, 3);
+        conn.execute(
+            "INSERT INTO deck_cards
+                (deck_id,category_id,variant,card_id,set_code,collector_number,lang,name,
+                 finish,quantity,created_at,updated_at)
+             VALUES (?1,?2,'live','bolt-lea','lea','161','en','Lightning Bolt','foil',2,
+                     unixepoch(),unixepoch())",
+            params![deck_id, from],
+        )
+        .unwrap();
+
+        delete_category(&conn, from, Some(to)).unwrap();
+
+        let rows: Vec<(Option<String>, i64)> = conn
+            .prepare(
+                "SELECT finish, quantity FROM deck_cards
+                  WHERE deck_id = ?1 AND card_id = 'bolt-lea' AND category_id = ?2
+                  ORDER BY coalesce(finish, '')",
+            )
+            .unwrap()
+            .query_map(params![deck_id, to], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![(None, 3), (Some("foil".to_owned()), 2)],
+            "the regular copy and the foil arrive as two rows, each with its own quantity"
         );
     }
 
