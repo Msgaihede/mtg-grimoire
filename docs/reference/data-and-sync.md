@@ -5,18 +5,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the databases are
   `src-tauri/target/debug/data/user.db` and `corpus.db`** — not `src-tauri/data/`, and
-  **not one file since schema 27**: the reader's **thirty-one** tables are `main` and the
-  rebuildable **twenty-five** are `ATTACH`ed as `corpus`. (Eighteen against twenty-five at the
-  split itself; the user side is what has grown since, and this line said eighteen until user
-  schema v43, twenty-seven until v44, twenty-eight until v45, twenty-nine until v46 and thirty
-  until v52 — a count in prose that no build checks, which is the rot
-  this file's own header warns about. Both halves are
+  **not one file since schema 27**: the reader's tables are `main` and the rebuildable ones are
+  `ATTACH`ed as `corpus`. (Eighteen against twenty-five at the split itself; the user side is what
+  has grown since, and this line carried the user figure and said eighteen until user schema v43,
+  twenty-seven until v44, twenty-eight until v45, twenty-nine until v46, thirty until v52 and
+  thirty-one until v53 — a count in prose that no build checks, which is the rot this file's own
+  header warns about, so it carries none now. Both halves are
   `grep -c '^\s*("[a-z_]*", Side::User),'` and the same with `Side::Corpus` over
-  `schema.rs` — re-run 2026-09-26 at v52: **31** and **25**; **a bare `grep -c 'Side::User'`
-  over-counts** — 36 against 31 at v52, because `mod tests` matches the enum by name five more
+  `schema.rs` — re-run 2026-09-27 at v53: **32** and **25**; **a bare `grep -c 'Side::User'`
+  over-counts** — 37 against 32 at v53, because `mod tests` matches the enum by name five more
   times (this said four until v52's stray-table test began asking the registry). Count them,
-  never add to the number above; `src/lib/userTables.json` is the same thirty-one and a Rust test
-  holds the two equal.)
+  never add to a number written here; `src/lib/userTables.json` holds the same list and a Rust
+  test holds the two equal.)
   A folder still holding a single
   `mtg.db` is converted at the next launch by `split::convert`, which never touches that
   file until the new one is safely renamed into place. Delete that `data/` folder to force
@@ -1192,6 +1192,34 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   re-pick, both mixed-version stalls, the reversion the gate closes and the per-pick savepoint by
   `deck_tokens.rs`'.
   [decks-storage.md](decks-storage.md) has the entries, the commands and the reconcile.
+  **v53 adds `sync_gone`, one tombstone per deleted row of a table other rows are filed under**
+  (2026-09-27,
+  [folder deletes across devices](../superpowers/specs/2026-09-27-folder-deletes-across-devices-design.md)
+  §3.1). **One table, `WITHOUT ROWID`** — `(tbl TEXT NOT NULL, uid TEXT NOT NULL, PRIMARY KEY (tbl,
+  uid))` — whose composite key is the table, so it brings no index and no autoindex: the index
+  figure does not move, and the table figure is the grep at the top of this page, both re-counted
+  off `USER_SCHEMA_SQL` in the landing commit rather than added. **Not synced**, on no capture spec
+  and with no `sync_uid`: which parents a device has seen deleted is a fact about that device, and
+  each writes its own. **Written by a trigger and by nothing else** — `capture::install`'s
+  `sync_gone_{table}`, `AFTER DELETE` on every table `capture::parent_tables()` reads off
+  `capture::TABLES`, gated on the row having a uid and **not** on the apply guard or on a group —
+  so this device's own delete, one applied from a peer and every cascade either sets off all land
+  there, where before only the first left anything `apply`'s `gone` could read, and a device in no
+  group still records what it deletes. **The rung backfills it from this device's own `del` ops**
+  for the seven parent tables of the day — `deck_folders`, `decks`, `deck_categories`,
+  `deck_labels`, `deck_notes`, `collection_folders` and `wishlist_folders`, spelled in the rung
+  because a rung is history while live code derives the list — so nothing `gone` answered the day
+  before stops answering. ⚠️ **A delete applied from a peer before the upgrade is not recovered**:
+  it ran behind the guard and recorded nothing anywhere. It owes its `USER_SCHEMA_SQL` lines and
+  **`UNDO_V53`**, for `UNDO_V37`'s loud reason (a bare `CREATE TABLE`), at the head of every
+  rewind chain `UNDO_V52` headed. ⚠️ **`UNDO_V53` drops the table and leaves the `sync_gone_*`
+  triggers standing**, because they belong to the parent tables: a fixture that ran
+  `capture::install` and then rewinds finds a delete from any of those tables, and a `DROP COLUMN`
+  or `RENAME` on one, refused with `no such table: main.sync_gone` (measured against 3.53.0) — so
+  such a fixture may rewind v53 and nothing below it. No production path drops the table. **v53 is
+  the number token stacks PR 3 had planned** for a new `collection_folders.kind` word; that PR was
+  dropped the same day. [sync.md](sync.md) *Held while it can resolve, skipped when it cannot* has
+  what reads the table and the colliding folder delete that shipped beside it.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

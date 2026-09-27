@@ -84,9 +84,10 @@ both plus the frontend.
   rather than a new one.
 - **The data folder holds two databases, and which one is `main` is the whole design**
   (schema 27). `data/user.db` is the reader's — the tables in `schema::TABLES` marked
-  `Side::User`, which nothing outside this app can produce again (thirty-one since user schema
-  v52's `deck_token_printings`; this line said thirty through v51, and
-  `grep -c '^\s*("[a-z_]*", Side::User),' src-tauri/src/schema.rs` is the count) — and it is what
+  `Side::User`, which nothing outside this app can produce again
+  (`grep -c '^\s*("[a-z_]*", Side::User),' src-tauri/src/schema.rs` is the count; this line
+  carried the number too, and said thirty through v51 and thirty-one through v52 until user schema
+  v53's `sync_gone` moved it again) — and it is what
   `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
   rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
   a corpus that will not open has to be a delete and a re-`ATTACH`, not a process-wide reopen
@@ -195,10 +196,17 @@ both plus the frontend.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v52**
-  (2026-09-26, the token-stacks spec §4) makes a token's printings **entries** —
-  `deck_token_printings`, the thirty-first user table and the **seventeenth synced** one, one
-  printing in one finish in one list with a quantity, grained on `DECK_TOKEN_PRINTING_GRAIN`
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v53**
+  (2026-09-27, the folder-deletes spec §3.1) is `sync_gone`, a **tombstone table** — `(tbl, uid)`,
+  `WITHOUT ROWID` and **not synced**, one row per deleted row of a table other rows are filed
+  under, written by `capture::install`'s `sync_gone_{table}` trigger and by nothing else (ungated by
+  the apply guard, so a peer's delete and every cascade leave one too) and **backfilled from this
+  device's own `del` ops** for the seven parent tables of the day, spelled in the rung while live
+  code reads `capture::parent_tables()`, so a delete applied from a peer before the upgrade is not
+  recovered — on the number token stacks PR 3 had planned, and PR 3 was dropped the same day. That
+  is one above **v52** (2026-09-26, the token-stacks spec §4), which makes a token's printings
+  **entries** — `deck_token_printings`, the thirty-first user table and the **seventeenth synced**
+  one, one printing in one finish in one list with a quantity, grained on `DECK_TOKEN_PRINTING_GRAIN`
   (`deck_id, variant, card_id, finish`, `finish` NOT NULL so the unique index cannot hold one
   regular printing twice) — and replaces `decks.token_stack` with `decks.token_mode`
   (`managed|collection|hidden`, `DEFAULT 'managed'`, a `CHECK` carrying PR 3's word already so
@@ -1305,8 +1313,9 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   ⚠️ **And the hook has two blind spots, each of which a command has to cover by hand.**
   **`WITHOUT ROWID` tables never fire it at all** — `muted_tags`, `sync_devices`, `sync_state` and
   `device_names` are marked by the commands a reader's press reaches
-  (`changes::MARKED_BY_COMMAND`), `price_snapshots` and `sync_peers` deliberately are not
-  (`WRITTEN_BY_THE_APP`: the app writes them and no press does), and a test enumerates
+  (`changes::MARKED_BY_COMMAND`), `price_snapshots`, `sync_peers` and `sync_gone` deliberately are
+  not (`WRITTEN_BY_THE_APP`: the app writes them and no press does — a press reaches `sync_gone`
+  only through the tombstone trigger, and no window draws it), and a test enumerates
   `main.sqlite_master` against the two lists so a new one goes red until somebody decides. It is
   also `db::CrossFileFence`'s blind spot, one bullet up, and the mirror's.
   **A bare `DELETE FROM t` with no `WHERE` is the second** — SQLite's truncate optimisation visits
@@ -1574,7 +1583,9 @@ record, with every measurement, is
   `decks.notes` is gone. The two directions cost very differently. Adding a table is the job
   [sync.md](../docs/reference/sync.md) lists — **twelve sites since v52 counted them**, the ten it
   named plus `src/lib/userTables.json` and `crossWindow.ts`' `TABLE_KEYS`, which any new *user*
-  table owes, synced or not; dropping a synced *column* costs nothing on the
+  table owes, synced or not, and a thirteenth for a `WITHOUT ROWID` one,
+  `changes::MARKED_BY_COMMAND` or `changes::WRITTEN_BY_THE_APP`, which v53's unsynced `sync_gone`
+  found missing from the list; dropping a synced *column* costs nothing on the
   wire at all, because `apply::updates()` walks the **local** spec's field list and looks each
   name up in the incoming op, so a field a v42 peer goes on sending is skipped rather than
   deferred. An unknown *table* from a newer peer holds that peer's ops from the first one on until
@@ -1594,7 +1605,10 @@ record, with every measurement, is
   a build that changed the generator would leave every existing database running the old rules.
   **`capture::clear_stale_guard` runs just before them**: `suppressed` writes `applying` ahead of
   its work and no `Drop` runs through a kill, so a row left by one switches capture off until
-  something clears it — and before this, with no deck, nothing at launch did.
+  something clears it — and before this, with no deck, nothing at launch did. **The tombstone
+  triggers ride the same install and are the one kind never gated on that guard** (user schema v53,
+  `sync_gone_{table}` on every `capture::parent_tables()` entry): a delete `apply` makes, and every
+  cascade it sets off, runs behind the guard, and recording exactly those is what they are for.
 - **`PRAGMA recursive_triggers` being OFF does not mean a trigger's statements fire no triggers**
   — it stops a trigger firing *itself*. The uid mint is an `UPDATE`, so an update trigger without
   both its guards (`AFTER UPDATE OF <captured columns>` **and** a `WHEN` that compares values)
@@ -1653,15 +1667,25 @@ record, with every measurement, is
   and **it stores the blocks it holds on** (`apply::Held`): a block not in the stored set starts
   the bound over, so a wait that has run its course cannot release a new one with it — the final
   review's I1 — and `identity::leave_group` deletes the key with the group.
-  Everything else is **consumed** and blocks nothing: a child of a parent deleted here or in the
-  page is **moot** where the key cascades — and a row this device holds under its uid is deleted,
-  as the sender's cascade takes it, where the fold says the group's placement stands and no capture
-  spec names its table as a parent (`apply::is_a_parent`; a folder deleted uncaptured here left the
-  peer's later children waiting on a parent `gone` could not see, and the release dropped them) —
-  and written without it where the key is `SET NULL`;
+  Everything else is **consumed** and blocks nothing: a child of a parent deleted in the page, or
+  anywhere a delete has ever reached this device — `gone` reads `sync_gone` since user schema v53,
+  which the tombstone trigger writes for this device's own deletes, a peer's applied here and every
+  row a cascade took with either — is **moot** where the key cascades, and a row this device holds
+  under its uid is deleted, as the sender's cascade takes it, where the fold says the group's
+  placement stands, **a folder included** (excluded until v53, because a delete made here
+  uncaptured was invisible to `gone`, and the release dropped the peer's later children of the
+  folder) — and written without it where the key is `SET NULL`;
   an unknown table or an unbuildable row from a same or older schema is **dropped**, one
-  `error_log` row (`Source::Relay`, `apply`) folded per table. **Do not hold the cursor on
-  anything that cannot resolve**: the relay compacts nothing above a device's ack, so that hold
+  `error_log` row (`Source::Relay`, `apply`) folded per table. **A delete `apply` issues that would
+  drop two rows onto one grain** — a folder's or a deck's, whose `SET NULL` would land a copy or a
+  wish on a grain the root, or another doomed row, already holds — **waits for the page's retry**
+  (`Why::Occupied`, never classified), by which the sender's own re-filing has landed, **then
+  re-homes** each doomed row at the root through `collection_folders::refile_entry` /
+  `wishlist_folders::refile_wish`, the survivor of a fold keeping the lower `sync_uid`, and deletes;
+  a refusal is rolled back and is **never `?`** — `Why::Unbuildable` on the delete arm, the row left
+  standing on the moot one — where the delete arm's `?` used to fail the whole apply on every pull
+  (`apply/rehome.rs`). **Do not hold the cursor on anything that cannot resolve**: the relay
+  compacts nothing above a device's ack, so that hold
   pins the group's log for good and re-downloads it on every pull — metered storage. **Do not
   advance past a held op either**: until 2026-09-27 `pull` set the cursor to the page head
   whatever `apply` deferred, so a deferred op and its sender's later ops in the page were lost,

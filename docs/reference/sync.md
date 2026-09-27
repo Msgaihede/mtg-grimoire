@@ -1136,10 +1136,13 @@ row was gone, with no tombstone check, so a peer's entry announcement for a deck
 deleted was deferred — and dropped, together with that peer's later ops in the page — as every
 child op of a deleted parent was. It is **moot** now: a `del` for the deck in this device's own
 `sync_ops`, or in the page, makes the child consumed silently, since `deck_token_printings.deck_id`
-cascades and the delete would have taken it anyway; a deck deleted on a third device waits out the
-bound and is skipped, recorded. **`apply::find_row`'s uid rename was unchecked**: it renamed the
-local row to the lower uid without asking whether another local row already held it, and derived
-names make that reachable — a v51 device re-picks art Y2 while the other device holds Y2 as a
+cascades and the delete would have taken it anyway; a deck deleted on a third device waited out the
+bound and was skipped, recorded, until user schema v53's `sync_gone` made that moot too, for a
+delete applied here from then on — `gone` has read the tombstone table since, and not `sync_ops`
+(*Held while it can resolve*, below).
+**`apply::find_row`'s uid rename was unchecked**: it renamed the local row to the lower uid
+without asking whether another local row already held it, and derived names make that reachable
+— a v51 device re-picks art Y2 while the other device holds Y2 as a
 separate entry, which case 1 declined to move — at which point the `UNIQUE(sync_uid)` error escaped
 the group's savepoint and failed the whole `apply` on every pull, about half the time by uid order.
 The rename is made inside the savepoint now, after a check that the uid is free, and a taken one is
@@ -1157,6 +1160,23 @@ the_registry` holds to `schema::TABLES` — and `src/lib/crossWindow.ts`' `TABLE
 not. The three length fences (`capture::TABLES`, `apply::META`, `SYNCED_TABLES.len()`) and the
 mirror's census in `every_table_in_the_schema_has_been_decided_about` are what go red first, and
 are counted inside the sites they fence rather than beside them.
+
+**A `WITHOUT ROWID` table owes one more, and `sync_gone` found it** (user schema v53, 2026-09-27,
+counted while landing it): `changes::MARKED_BY_COMMAND` or `changes::WRITTEN_BY_THE_APP`, because
+the update hook never fires for such a table and a window learns of its writes only by a hand-made
+mark or not at all. `every_without_rowid_user_table_has_been_decided_about` holds
+`main.sqlite_master` to the two lists, so a new one goes red there until somebody decides — the
+census counted inside that site, like the others. (`device_names`, synced and `WITHOUT ROWID`, has
+owed it since the lists existed, and is on the first.) `sync_gone` itself, unsynced, owed eight of
+these: the rung, its `USER_SCHEMA_SQL` lines, `UNDO_V53` **at the head of every rewind chain
+`UNDO_V52` headed** and not merely declared, `schema::TABLES`, the mirror's decided-about list
+(`surface_of` needs no arm — it falls through to `None`, as `sync_peers` does),
+`WRITTEN_BY_THE_APP` (a press reaches it only through the tombstone trigger, and no window draws
+one), `src/lib/userTables.json`, and `TABLE_KEYS` as `sync_gone: []`. Two hand-spelled fences in
+`schema.rs` went red with it and are counted inside the sites they fence:
+`the_user_side_is_every_table_no_feed_can_rebuild` (`schema::TABLES`) and the figure in
+`the_user_schema_is_byte_identical_to_what_the_ladder_builds` (`USER_SCHEMA_SQL`) — re-counted
+there rather than incremented.
 
 Two further corrections, both found by reading `schema.rs` rather than the spec:
 
@@ -1631,7 +1651,9 @@ can still resolve and for no others — the next section.
 
 Built 2026-09-27 ([the delivery holds design](../superpowers/specs/2026-09-27-sync-delivery-holds-design.md)),
 to ship in the release that carries user schema v52 and ahead of token stacks PR 3's v53, whose new
-`collection_folders.kind` word a v52 device must hold rather than drop. This section was titled
+`collection_folders.kind` word a v52 device must hold rather than drop. (PR 3 was dropped the same
+day, and v53 went to `sync_gone` — the moot row below, and *A delete that would drop two rows onto
+one grain waits for the retry, then merges* after the table's notes.) This section was titled
 *Deferred ops are dropped, not held (open)* until then, and what it recorded is at its end.
 
 **The client used to supply half a hold.** `apply` held the sender's watermark at the first op it could
@@ -1656,11 +1678,12 @@ receiver ignores the key, because nothing on the wire is `deny_unknown_fields`
 
 **`apply` classifies every group it could not write**, from why — `UnknownTable`,
 `UnknownParent { table, uid }`, or `Unbuildable` carrying the constraint's own words, which were
-once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in this order):
+once discarded; a fourth, `Occupied`, is only ever a first attempt's and never reaches here (after
+the table's notes) — and from who sealed it (`apply.rs`'s `classify`, asked in this order):
 
 | The group | Class | Holds its device? | Recorded? |
 | --- | --- | --- | --- |
-| Names a parent deleted here — a `del` for its uid in this device's own `sync_ops`, served by `idx_sync_ops_row` — or deleted in this page, and the parent's foreign key **cascades** | **moot** — and the row goes here too, where this device holds it, the group's placement under that parent stands, and no synced table files rows under it (never a folder) | no | no — the convergent outcome |
+| Names a parent deleted in this page, or anywhere a delete has ever reached this device — its own, a peer's applied here, or a row a cascade took with either, which is what `sync_gone` records (user schema v53) — and the parent's foreign key **cascades** | **moot** — and the row goes here too, where this device holds it and the group's placement under that parent stands, a folder included | no | no — the convergent outcome |
 | The same, but the key is **`SET NULL`** (`collection_entries.folder_id`, `wishlist_entries.folder_id`, `decks.folder_id`, `deck_cards.label_id`) | **not deferred** — written without that parent | no | no |
 | Any reason, and an op in it was sealed by a **newer** schema | **held · newer** | yes, with no bound | no — the Sync panel says it |
 | An unknown parent, from a same or older schema | **held · waiting** | yes, until the client's bound | only when released |
@@ -1690,29 +1713,50 @@ once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in thi
   order-free either — its applier takes a page parents first, so a delete and a later move of the
   same row in one page cascade the row before the move is attempted, and the move rebuilds it only
   where that device's history holds the row's insert.
-  **Never for a table another table's spec names as a parent** (`apply::is_a_parent`, read off
-  `capture::TABLES`) — the three folder tables, and a deck, a pile, a label and a note, which moot
-  never finds here anyway. The scoped re-review of this delete found why: it is uncaptured and no
-  delete in the page, so `gone` cannot see it. A peer that moves a folder under one deleted here and
-  then files a deck in it sends a deck naming a folder nothing here says is gone; the deck waits
-  out the bound and the release drops it, every card in it with it — where on the peer the delete
-  cascades the folder and `SET NULL` puts the deck at the root
+  **Until user schema v53 it never reached a table another table's spec names as a parent** — the
+  three folder tables, and a deck, a pile, a label and a note, which moot never finds here anyway
+  — and `gone` was the reason. The scoped re-review of this delete found it: the delete is
+  uncaptured and no delete in the page, so nothing recorded it. A peer that moved a folder under one
+  deleted here and then filed a deck in it sent a deck naming a folder nothing here said was gone;
+  the deck waited out the bound and the release dropped it, every card in it with it — where on the
+  peer the delete cascaded the folder and `SET NULL` put the deck at the root. So for those tables
+  the moot arm consumed the group and touched nothing, and the moved folder stayed here while the
+  peer's cascade took it — a folder one device held and the other did not. ⚠️ **That was a lasting
+  loss, not a placement difference** (the second scoped re-review of #574, read off the code and
+  unmeasured). The peer's cascade ran inside `apply`, under capture suppression, so it left no
+  `del` there either, and **anything this device filed into that folder afterwards** — a deck with
+  its piles and cards, a copy, a wish, a sub-folder — named a parent the peer's `gone` could not
+  see, waited out the bound there and was dropped, for as long as the folder stood here; a rename of
+  it was skipped there with an `error_log` row each time. Deleting the folder here instead (round 1)
+  converged but lost what the peer had filed into it before hearing about the delete. **Neither
+  answer was right without a trace, and v53 is the trace**
+  ([folder deletes across devices](../superpowers/specs/2026-09-27-folder-deletes-across-devices-design.md),
+  2026-09-27). `sync_gone (tbl, uid)` is a user table, `WITHOUT ROWID` and **not synced**, one row
+  per deleted row of a table other rows are filed under, written by an `AFTER DELETE` trigger,
+  `sync_gone_{table}`, that `capture::install` puts on every table `capture::parent_tables()` reads
+  off `capture::TABLES`' `parents` — and by nothing else. **It is gated on `OLD.sync_uid IS NOT NULL`
+  and on nothing else**: not the apply guard, and not the device being in a group, so a device that
+  pairs later still knows what it deleted. SQLite fires `AFTER DELETE` on the rows a foreign-key
+  cascade takes as well — measured 2026-09-27 with `node:sqlite`, a folder whose child folder
+  cascades logged `before p, before x, after x, after p` — so this device's own delete, a peer's
+  applied here, a moot delete and every cascade any of them sets off all land there, and no command
+  has to remember to record anything. `gone` asks the page's delete set and then that table, one
+  primary-key read, in place of this device's own `sync_ops`; the rung backfills it from those `del`
+  ops for the seven parent tables of the day, spelled in the rung because a rung is history, so
+  nothing `gone` answered before it stops answering. **Nothing clears it** — leaving a group keeps
+  it, as it keeps `sync_ops` — and a stale row is never read, because a parent add-wins brought
+  back is found by `resolve_parent` before `gone` is asked. So the moot delete reaches folders
+  again, on the same placement check: in the moved-folder case this device now deletes the moved
+  folder as the peer's cascade did, a tombstone for it lands on both devices, and whatever either
+  files into it afterwards is written at the root (a deck, a copy, a wish: `SET NULL`) or dropped
+  with it (a sub-folder, a pile: `CASCADE`) on both
   (`a_deck_filed_into_a_folder_moved_under_one_this_device_deleted_survives_on_both`, and
   `a_copy_filed_into_a_binder_moved_under_one_this_device_deleted_survives_on_both` for the
-  collection's cabinet; both red with the folder tables back in). For those the moot arm is what it
-  was before the delete: consume the group and touch nothing, so the moved folder stays where it
-  was here while the peer's cascade takes it — a folder one device holds and the other does not.
-  ⚠️ **That is a lasting loss, not a placement difference** (the second scoped re-review of #574,
-  read off the code and unmeasured). What was filed in the folder before the exchange is kept on
-  both; but the peer's cascade ran inside `apply`, under capture suppression, so it left no `del`
-  there and none ever reaches a page. **Anything this device files into that folder afterwards** —
-  a deck with its piles and cards, a copy, a wish, a sub-folder — names a parent the peer's `gone`
-  cannot see, waits out the bound there and is dropped, for as long as the folder stays on this
-  device's screen; a rename of it is skipped there with an `error_log` row each time. Deleting the
-  folder here instead (round 1) converged but lost what the peer filed into it before hearing about
-  the delete. **Neither is right, and the fix is a design change**: make a cascaded or moot delete
-  leave a trace `gone` can read — a captured or tombstoned delete — so a later child lands without
-  the parent, as `SET NULL` does. It is owed with the folder-delete stall under *What is still owed*.
+  collection's cabinet, each extended to file from both devices and to find the moved folder gone
+  on both). A third device's delete is the same fix seen from the other side
+  (`a_copy_filed_into_a_binder_a_third_device_deleted_lands_at_the_root`, and *What a hold cannot
+  reach*, below). A folder's or a deck's moot delete asks the collision question every delete
+  `apply` issues now asks, after these notes.
   **A moot `deck_cards` row on the live list goes without `release_group_copies`**, so copies its
   deck's group held for it stay in the group, claimed by no row — which is what the peer's own
   cascade leaves too, since a foreign-key cascade releases nothing, so the two agree.
@@ -1749,6 +1793,80 @@ once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in thi
   collateral applies exactly once, while a newer group stays held either way
   (`an_unknown_parent_waits_then_release_drops_it_and_applies_its_collateral_once`).
 
+**A delete that would drop two rows onto one grain waits for the retry, then merges** (user schema
+v53's branch, 2026-09-27, the folder-deletes design §3.3). It was a stall, and the worst kind.
+`apply` takes a page parents first (`META[].order`), so a peer's `collection_folders` delete, rank
+6, runs ahead of the rank-7 `collection_entries` ops that re-filed its copies on the sender — where
+`collection_folders::delete_folder` merges every copy onto the root one at a time before the
+folder goes, and so never meets a collision. Here the folder's `DELETE` ran with a copy still filed
+in it, `ON DELETE SET NULL` moved the copy onto the grain of a copy the root already held, and the
+delete arm answered `UNIQUE constraint failed: index 'idx_collection_grain'` through `?`: **the
+whole apply failed, and the same page failed it again on every pull**, so that device's sync
+stopped for good. A throwaway probe in the `apply` test harness reproduced it (debug build). Read
+off the code, a wishlist folder is the same shape, and so is a deck: its group folder goes with it
+(`collection_folders.deck_id` cascades) while `deck::delete_deck`'s re-filing into `Recently
+removed` is rank 7 behind the deck's rank 1 — and a copy filed into the folder here, concurrently,
+has no re-filing in the page at all. So every `DELETE` `apply` issues — the delete arm's, and the
+moot delete above — now asks first (`sync_engine/apply/rehome.rs`):
+
+1. **The doomed folders.** A `collection_folders` or `wishlist_folders` row and its sub-tree, or a
+   `decks` row's group folders and theirs: the three `ON DELETE CASCADE` keys into the two folder
+   tables, `collection_folders.parent_id`, `collection_folders.deck_id` and
+   `wishlist_folders.parent_id`. (`wishlist_folders.managed_deck_id` has no foreign key, so a deck's
+   delete never cascades into the wishlist.) `rehome::CASCADES_INTO_FOLDERS` names the three, and a
+   test reads every such key off the live schema and fails on one it does not cover. Any other
+   table dooms nothing and costs no query.
+2. **The doomed rows**: the copies and wishes filed directly in those folders.
+3. **A collision**: a doomed row whose grain, its folder cleared, matches a root row — or two doomed
+   rows that match each other.
+
+- **A first attempt that collides writes nothing** and answers `Why::Occupied`. The group joins
+  `run_groups`' failed list and is tried again after every other group in the page, by which time
+  the sender's own re-filing — later in rank, sealed before its delete — has landed. `Occupied` is
+  **never classified**: only a first attempt answers it, and only the second attempt's reason is
+  kept.
+- **The second attempt re-homes, then deletes.** Each doomed row still in a doomed folder, in `id`
+  order, is filed at the root through the crate's own merge — `collection_folders::refile_entry`
+  and `wishlist_folders::refile_wish` with no folder — which folds it onto a twin (counters summed,
+  provenance coalesced) or clears its folder. Where it folded, **the survivor takes the lower of
+  the two `sync_uid`s**, set after the source is gone so the uid index has nothing to refuse; a
+  nameless side takes the other's, and two nameless sides keep none. Then the `DELETE`, whose `SET
+  NULL` has nothing left to act on. `a_binder_deleted_with_a_copy_the_root_also_holds_lands_on_the_peer`
+  went red against the old arm with the stall's own words.
+- **Why the lower uid.** A row re-homed here is one the page did not mention — filed here
+  concurrently, or by a third device — so its own put reaches the sender with its folder gone,
+  tombstoned there by the sender's own delete. The sender writes it without the folder, and
+  `find_row`'s grain match lands it on the same twin, adopting `min`: one row, one count and one uid
+  on both devices.
+- **Why the retry and not at once.** On the first attempt the sender's re-filing has not landed, so
+  a merge would fold a copy the sender has itself already merged onto the root, and the sender's own
+  `+n` for the twin would then count it a second time. Measured by mutation on 2026-09-27: merging
+  on the first attempt turns five of the branch's new tests red, the binder's above among them.
+- **Why only on a collision.** A delete that clears copies onto free grains is not held: the copies
+  keep their uids, so the sender's own move of each applies afterwards either way, and a delete kept
+  in stamp order is what keeps a folder deleted and re-made at the same grain in one page right.
+  That is also why this is not "apply deletes last", which would have fixed the ordering in one
+  line: a row deleted and re-added at the same grain between two pulls — a card stepped to 0 and
+  added again, a pile deleted and re-made under its old name — would have its put land first,
+  grain-match the row the delete is about to take, and either sum the two or delete the survivor.
+  A test pins a copy removed and re-added in one page against that change.
+- **The backstop.** Every `DELETE` `apply` issues runs inside a savepoint, and a refusal is rolled
+  back and **never `?`**. The moot delete already fenced its refusal, leaving the row where it
+  stood; the delete arm gained the fence, and there a refusal becomes `Why::Unbuildable` carrying
+  the constraint's words — dropped and recorded, or held where the sender is newer
+  (`a_folder_delete_this_database_refuses_is_dropped_and_the_page_applies`, a TEMP trigger standing
+  in for the refusal). A refused delete leaves a folder on one device, which is recorded and
+  visible; a stalled sync is neither.
+
+All of it runs inside `apply`'s `capture::suppressed`, so every device derives the same re-homing
+from the same delete, and `rehome.rs` borrows only the every-target halves of
+`collection_folders` and `wishlist_folders`, so the browser build re-homes as the desktop does.
+What it leaves is under *What is still owed*. **And for whatever files into a folder next**: a
+folder deleted on a peer re-homes its leftover copies to the **root**, as `SET NULL` does, and a
+sweep that files them somewhere else afterwards must be a derived write behind
+`capture::suppressed`, like `reconcile`, or both devices sweep the same copy and the destination
+counts it twice.
+
 **The client holds for the reason, and for no longer than the reason lasts.** After `apply` in
 `client::pull`, with the epoch rule (`behind`) unchanged and still first:
 
@@ -1769,8 +1887,8 @@ before it emits baselines, so a peer can pull a child a moment before the baseli
 parent, which arrives on that same trip of its sender's, seconds later. **Ten minutes** is time for
 it to have come. **Three pulls** is evidence that this device has looked since: elapsed time says
 nothing about a device that slept through it, and its next page may be the one with the parent.
-What the bound ends is a parent that will never come — deleted on a third device, which leaves no
-trace here (below). A parent that does arrive clears the hold on that pull, advancing, with nothing
+What the bound ends is a parent that will never come — deleted on a third device before user schema
+v53, or before this device ever held it, either of which leaves no trace here (below). A parent that does arrive clears the hold on that pull, advancing, with nothing
 recorded (`client`'s `a_waiting_hold_clears_when_the_parent_arrives`).
 
 **The bound belongs to the blocks it has watched, and a new block starts it over** (the final
@@ -1896,15 +2014,25 @@ The cursor-carrying loop the limit needs must walk to the head, and only then ma
   reset made there — turns every later edit to it into a sparse update that peer cannot place, with
   both devices at v52. It deferred and dropped the sender's page from there on; it is **skipped** now,
   one `error_log` row per table, and the sender's later ops apply.
-- **A parent deleted on a third device, and applied here on an earlier pull, leaves no trace.**
-  `apply` runs inside `capture::suppressed` and there is no tombstone table, so `gone` cannot find the
-  delete: the child waits out the bound and is skipped, recorded. Where the key cascades that is
-  convergent — the child's own device loses it when the delete arrives there — at the price of an
-  `error_log` row that describes no fault. ⚠️ **Where the key is `SET NULL` it is not**, read off the
-  code and unmeasured: the child's device keeps it at the root when the third device's delete
-  reaches it, and this device skipped it — the divergence the `SET NULL` row closes for a delete
-  made here or in the page, left open for one made elsewhere. *A third device's tombstone* under
-  *What is still owed* is the same missing table.
+- ~~**A parent deleted on a third device, and applied here on an earlier pull, leaves no
+  trace.**~~ **Closed by user schema v53** (2026-09-27,
+  [folder deletes across devices](../superpowers/specs/2026-09-27-folder-deletes-across-devices-design.md)).
+  It left none because `apply` runs inside `capture::suppressed` and there was no tombstone table, so
+  `gone` could not find the delete: the child waited out the bound and was skipped, recorded. Where
+  the key cascades that was convergent — the child's own device loses it when the delete arrives
+  there — at the price of an `error_log` row that described no fault; ⚠️ where the key is `SET NULL`
+  it was not, read off the code and unmeasured: the child's device kept it at the root when the
+  third device's delete reached it, and this device had skipped it. The delete now writes a
+  `sync_gone` row as it is applied here — the tombstone trigger ignores the apply guard, which is
+  its point — so the child lands on the pull that brings it, the way its parent's key answers a delete:
+  dropped with it where the key cascades, at the root where it is `SET NULL`, with no hold and no
+  `error_log` row (`a_copy_filed_into_a_binder_a_third_device_deleted_lands_at_the_root`). **A delete
+  applied here by a build before v53 left no row anywhere and is not recovered** — the rung backfills
+  only this device's own `del` ops — so its later children still wait out the bound. ⚠️ **Nor does
+  a parent this device never held leave one**, read off the code and unmeasured: a parent created
+  and deleted on the third device between two of this device's pulls folds away here with no row
+  to `DELETE`, so no trigger fires, and a child another device filed into it, arriving on a later
+  page, waits out the bound as before.
 - ⚠️ **A newer hold that spans a device removal loses everything it held** (the final review's I2,
   read off the code and unmeasured). A removal makes every remaining device forget the superseded
   keys (`identity::supersede` → `forget_superseded`, *One correction to the plan* below). The held
@@ -2608,6 +2736,7 @@ of the two ways it happens:
 | `sync_clock` | one row: the hybrid logical clock, **seeded** |
 | `sync_state` | key/value: `pull_cursor`, `last_sync_at`, the `applying` guard, the entitlement tokens the hosted relay design §10 adds, the superseded group keys (`group_key@<epoch>`) and the last manifest's ids that `identity::supersede` keeps, and `relay_url` — which is **a test/dev override with no UI**, not something a reader types |
 | `sync_peers` | per-device watermarks — what makes a counter idempotent |
+| `sync_gone` (v53) | tombstones, `(tbl, uid)` and `WITHOUT ROWID`, **not synced**: one row per deleted row of a table other rows are filed under, written by the `sync_gone_{table}` trigger alone and read by `apply`'s `gone` (*Held while it can resolve, skipped when it cannot*) |
 | `error_log` rebuilt | `source` gains `'relay'`, which is a table rebuild because the vocabulary is inside a `CHECK` |
 | `sync_devices.baselined_at INTEGER` (v30) | when this peer was last handed a baseline. NULL is "never", which is the trigger. **`sync_peers` is deliberately not consulted** — see the pairing-baseline design §10 |
 
@@ -2916,28 +3045,21 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   applied, and its child waits out the bound. The horizon exempts baseline ops from its own filter
   and not from the watermark. It needs a client test with an earlier emitter delta and the parent
   drawn from `baseline::build`, where the holds' tests seal the parent by hand.
-- ⚠️ **A folder delete from a peer fails the whole apply when one of its entries would land on a
-  grain the root already holds** (found 2026-09-27 while building the moot row's delete, older than
-  the holds; measured in the `apply` test harness, debug build). `collection_folders::delete_folder`
-  merges each entry into the root before the folder goes, so the deleting device never meets the
-  collision — but a peer applies a page parents first, `collection_folders` (rank 6) ahead of the
-  merge's `collection_entries` ops (rank 7), so the folder's `DELETE` runs while its entry is still
-  in it, `SET NULL` moves the entry onto the root row's grain, and `write_group`'s delete answers
-  `Err("UNIQUE constraint failed: index 'idx_collection_grain'")` through `?` — the whole apply
-  fails, and the same page fails it again on every pull, so that device's sync stops. A throwaway
-  probe — a binder holding one copy of a printing the root also holds, deleted through
-  `delete_folder` on one device and applied on the other — reproduced it. The moot row's delete
-  never reaches a folder table and fences any refusal (it keeps the row); the applier's ordinary
-  delete is not fenced.
-- ⚠️ **A folder moved under one deleted on another device diverges, and what is filed into it later
-  is lost on the device that deleted it** (the second scoped re-review of the holds' follow-up,
-  read off the code and unmeasured; the behaviour since #572, unchanged by it). The deleting
-  device's cascade takes the moved folder inside `apply`, under capture suppression, so no `del`
-  for it exists anywhere `gone` reads; the mover keeps it, and every later child of it — a deck, a
-  copy, a wish, a sub-folder — waits out the bound on the deleting device and is dropped. The fix is
-  one with the stall above: a cascaded or moot delete that leaves a readable trace (captured, or a
-  tombstone), so a later child lands without the parent the way `SET NULL` does. *Held while it can
-  resolve* has the two answers that were tried and what each lost.
+- ⚠️ **A folder deleted and re-made at the same grain in one page, whose delete also had to wait,
+  loses the re-made row where its uid sorts higher** (the folder-deletes design §3.5, read off the
+  code and unmeasured). The re-made row's put grain-matches the old row the waiting delete is about
+  to take and keeps the old uid, and the retry then deletes it. The one real case is a deck switched
+  to Virtual and back between two pulls, with a copy in its group the root also holds. It is the
+  price of *A delete that would drop two rows onto one grain waits for the retry* above: only a
+  colliding delete leaves stamp order, and stamp order is what keeps a row deleted and re-made at
+  its own grain right.
+- **Provenance can differ after a concurrent merge** (the same design §3.5, read off the code and
+  unmeasured). The re-homing coalesces the survivor's price, date, source and entry note over the
+  source's, where the sender's grain match takes each field by last-writer-wins. Counts and identity
+  converge; a field both rows carried may not.
+- **A sparse edit under the losing uid, on a later page, is still skipped** (the same design §3.5,
+  read off the code and unmeasured) — `find_row`'s existing behaviour after any grain merge, and
+  not new here.
 - **An open Sync panel can show a stale `pullHeld`.** `RelayStatus` is under `SYNC_KEY`, which
   `useDeviceSyncInvalidation` refreshes on `sync:applied` — and `live::trip` and `sync_now` emit that
   only when a trip pulled or pushed something, while `pulled` counts newly applied ops only, on
@@ -2954,11 +3076,13 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   and nothing tells it one: `/rotate` is answered out of D1 ahead of the bearer gate and never
   reaches the object — the gap the rewrap's fan-out bullet below records from the other side.
 - **A third device's tombstone against a third device's edit.** Add-wins reads this device's own
-  history and the incoming batch; two *other* devices' ops only meet if they arrive together. A
-  tombstone table would close it and is not built. **The delivery holds meet the same gap from the
-  other side**: a parent deleted on a third device and applied here earlier leaves no trace, so its
-  child waits out the bound and is skipped — convergent where the key cascades, and ⚠️ a copy this
-  device never holds where it is `SET NULL` (read off the code, unmeasured).
+  history and the incoming batch; two *other* devices' ops only meet if they arrive together. This
+  said a tombstone table would close it; **user schema v53 built one, and it does not**: `sync_gone`
+  records a uid and no stamp, only for the tables other rows are filed under, and add-wins does not
+  read it — it answers `gone` alone. **The delivery holds met the same gap from the other side** —
+  a parent deleted on a third device and applied here earlier left no trace, so its child waited
+  out the bound and was skipped — and that half *is* closed by v53, for a delete applied from then
+  on (*What a hold cannot reach*, above).
 - ~~**A revoked device's rewrapped key over the relay.**~~ **Built and deployed 2026-08-30** —
   `/rotate` publishes it, `/keys` hands it over, and `client::check_keys` runs on every round trip
   before push and pull, so the pull cursor an envelope from a newer epoch was holding now advances
