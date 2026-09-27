@@ -553,7 +553,7 @@ shared_cell` walks both into two databases and compares them column by column.
   REFERENCES without a NULL default, and GENERATED STORED). It has none because no command
   parameter reaches it — and, unlike `last_variant`, **no Rust fence either**: no command
   parameter reaches this column, so there is no untrusted value to refuse. **The reason it is a
-  stored fact and not a name test**: `DECK_CATEGORY_GRAIN` is `(deck_id, name)` and
+  stored fact and not a name test**: `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)` and
   `category_for_name` finds before it creates, so a reader's own "Ramp" keeps `'user'` forever
   even once the app files cards into it — and "Ramp"/"Draw"/"Removal"/"Land" are exactly what a
   person names their own piles. The v15 backfill is a **frozen one-time guess** (`kind = 'main'`

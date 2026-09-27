@@ -1437,7 +1437,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `deck_meta::create_category` → `'user'`, `deck_meta::ensure_predefined_categories` → `'user'`,
   and `deck::duplicate_deck`, which **copies** the source pile's answer rather than re-deciding
   it) and no command parameter reaches it. **The point of storing it is that `category_for_name`
-  finds before it creates**: `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so a reader's own "Ramp"
+  finds before it creates**: `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)`, so a reader's own "Ramp"
   is found rather than re-made and keeps `'user'` forever, which is exactly the case a rule driven
   off the _name_ — "Ramp", "Draw", "Removal", "Land" are what people call their own piles — gets
   wrong. The backfill is a **one-time frozen guess**: `kind = 'main'` plus one of the 22 names

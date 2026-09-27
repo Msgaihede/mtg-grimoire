@@ -24,7 +24,7 @@ const CATEGORIES: DeckCategory[] = (
   sortOrder: over.id,
   cardCount: 0,
   totalPrice: null,
-  cardCountAllVariants: 0,
+  variant: "live" as const,
   ...over,
 }));
 

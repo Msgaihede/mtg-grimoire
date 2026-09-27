@@ -63,6 +63,7 @@ import {
   type DeckCardGroupDrag,
 } from "./cardControl";
 import { AUTO_CATEGORY } from "./autoCategory";
+import { defaultPileFor } from "./defaultCategory";
 import { CategoriesDialog, DeleteCategory } from "./CategoriesDialog";
 import { movedTo } from "./categoryDrag";
 import { buildCategoryMenu } from "./categoryMenu";
@@ -799,9 +800,9 @@ type Layer =
    * was when a menu row was pressed.
    *
    * A separate arm from `deleteCategory` rather than a flag on it, because the two ask different
-   * questions with different scopes — a delete takes both lists and offers somewhere to put the
-   * cards, a clear takes one list and offers nothing — and a union arm is where a state that
-   * means nothing while the other is open belongs.
+   * questions — a delete takes the pile and offers somewhere to put the cards, a clear leaves the
+   * pile and offers nothing — and a union arm is where a state that means nothing while the other
+   * is open belongs.
    */
   | { kind: "clearCategory"; categoryId: number }
   /**
@@ -3760,6 +3761,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
+   * The **live** list's piles, read on the Theory tab for one fact: the name of the pile
+   * `decks.default_category_id` points at, which {@link targetCategoryId} carries across to the
+   * plan's pile of that name.
+   *
+   * `deck_category_list` rather than a second `deck_get` — a name is all this wants, and the key
+   * is `useDeckMeta`'s, so a Categories dialog opened on the Actual tab shares the answer and every
+   * write's `["decks"]` invalidation reaches it. **Gated on the tab and on there being a pile to
+   * resolve**: on the Actual tab the id is read against the piles already on screen, and Auto
+   * names none. The tab gate is repeated where the answer is *used*, because a disabled query
+   * still serves what its key holds — `planned`'s lesson below.
+   */
+  const defaultLivePiles = useQuery({
+    queryKey: ["decks", "categories", deckId, "live", marketplace.id],
+    queryFn: () => ipc.deckCategoryList(deckId, "live", marketplace.id),
+    enabled: variant === "theory" && row !== null && row.defaultCategoryId !== AUTO_CATEGORY,
+  });
+
+  /**
    * Where the docked panel's adds land, and the quick add with them — **the deck row's answer**
    * (`decks.default_category_id`), read here and handed down.
    *
@@ -3779,11 +3798,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * render a deleted pile can be caught in, where the deck row and the category list arrive on
    * the same commit and nothing orders them — and Auto is the honest answer there, because it is
    * where the deck is about to land anyway.
+   *
+   * **On the Theory tab it is resolved by name** (issue #561). The setting names a *live* pile —
+   * Deck settings offers the live list's — and since user schema v53 the plan has piles of its
+   * own, so the stored id is never one on screen there. {@link defaultPileFor} carries it across
+   * by the live pile's name to the plan's pile of that name, else Auto; the one extra read that
+   * needs is {@link defaultLivePiles}.
    */
   const targetCategoryId =
-    row !== null && categories.some((c) => c.id === row.defaultCategoryId)
-      ? row.defaultCategoryId
-      : AUTO_CATEGORY;
+    row === null
+      ? AUTO_CATEGORY
+      : defaultPileFor(
+          row.defaultCategoryId,
+          categories,
+          variant === "theory" ? defaultLivePiles.data : undefined,
+        );
 
   /**
    * **Which one card is picked** — the deck row the pane was opened from, as a

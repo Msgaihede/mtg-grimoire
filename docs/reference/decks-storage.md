@@ -103,7 +103,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   a Ramp column appears with its first ramp spell while a pile the reader made stays until they
   delete it; Rust records the fact and draws no conclusion from it. **It is stored rather than
   derived from the name because `category_for_name` finds before it creates**: the grain is
-  `(deck_id, name)`, so a reader's own "Ramp" is found rather than re-made and keeps `'user'`
+  `(deck_id, variant, name)`, so a reader's own "Ramp" is found rather than re-made and keeps `'user'`
   even once ramp spells are filed into it — and "Ramp", "Draw", "Removal" and "Land" are exactly
   what a person names their own piles. The one-time backfill and why it is frozen:
   [data-and-sync.md](data-and-sync.md).
@@ -1249,12 +1249,11 @@ variant)`; `deck_missing_to_wishlist(deckId, folderId?)`, which reads `live` and
   refusal halfway leaving the pile half-empty with nothing able to say so. One statement, one
   transaction, one history row. (It was "one allocator run" as well until schema v25; the
   arithmetic that made this a command survives the allocator that first motivated it.)
-  - **Variant-scoped, which is the exact reverse of `deck_category_delete`.** That command
-    cascades through both lists because `deck_cards.category_id` is `ON DELETE CASCADE` and a
-    category is not per-variant; a clear leaves the pile standing, so what it empties is the list
-    the reader is looking at. The two confirmations therefore quote **different numbers** —
-    `cardCountAllVariants` for the delete, `cardCount` for the clear — and swapping them would
-    over- or understate a destructive press.
+  - **Variant-scoped, and since user schema v53 so is `deck_category_delete`.** A delete used to
+    cascade through both lists, because `deck_cards.category_id` is `ON DELETE CASCADE` and a
+    category was not per-variant, so the two confirmations quoted different numbers
+    (`cardCountAllVariants` against `cardCount`). A pile now belongs to one list (issue #561), the
+    field is gone, and both quote `cardCount`.
   - **It answers the copies it removed**, counted before the `DELETE` and in copies rather than
     rows, which is what the confirmation quoted and what `delta` means in the history.
   - **An empty pile writes nothing at all**: no `touch_deck` and no audit row. The

@@ -603,6 +603,13 @@ fn grouped_diff(
 /// cannot reach — so a seed that touched the collection would file a second set of copies the
 /// reader does not own into a group that already holds theirs.
 ///
+/// **Each card is filed into the plan's pile of the same name, made there when the plan has
+/// none** (user schema v53, issue #561) — [`crate::deck_meta::counterpart_in`], the rule the
+/// theory switch uses too. It kept the card's `category_id` while the two lists shared one pile
+/// set; a pile belongs to one list now, and a theory row under a live pile is the row every card
+/// write refuses to make. Only piles that hold a live card are looked up, so a copy makes no
+/// empty column in the plan; the piles it does make are [`copy_from_live`]'s step's to undo.
+///
 /// Answers the number of **rows** written, which is what `execute` counts. [`copy_from_live`]
 /// wants **copies** for its history and measures them itself with [`theory_copies`] — a row is
 /// a line and a copy is a card, and this app counts decks in cards everywhere else.
@@ -614,19 +621,70 @@ pub(crate) fn seed_from_live(tx: &Connection, deck_id: i64) -> Result<usize, Str
         "INSERT INTO deck_cards
             (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
              label_id, quantity, needs_review, finish, created_at, updated_at)
-         SELECT deck_id, category_id, ?2, card_id, set_code, collector_number, lang, name,
+         SELECT deck_id, ?4, ?2, card_id, set_code, collector_number, lang, name,
                 label_id, quantity, needs_review, finish, unixepoch(), unixepoch()
            FROM deck_cards
-          WHERE deck_id = ?1 AND variant = ?3
+          WHERE deck_id = ?1 AND variant = ?3 AND category_id = ?5
          ON CONFLICT({grain}) DO NOTHING",
         grain = crate::schema::DECK_CARD_GRAIN
     );
-    tx.execute(&sql, params![deck_id, THEORY, LIVE])
+    let mut written = 0;
+    for pile in live_piles_holding_cards(tx, deck_id)? {
+        let plan_pile = crate::deck_meta::counterpart_in(tx, deck_id, THEORY, pile)?;
+        written += tx
+            .execute(&sql, params![deck_id, THEORY, LIVE, plan_pile, pile])
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(written)
+}
+
+/// The live piles that hold at least one live card, in the order the Actual tab draws them —
+/// so a pile [`seed_from_live`] has to make lands in the plan in the same order the reader sees
+/// it on the other tab.
+fn live_piles_holding_cards(tx: &Connection, deck_id: i64) -> Result<Vec<i64>, String> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT cat.id FROM deck_categories cat
+              WHERE cat.deck_id = ?1 AND cat.variant = ?2
+                AND EXISTS(SELECT 1 FROM deck_cards dc
+                            WHERE dc.category_id = cat.id AND dc.variant = ?2)
+              ORDER BY cat.sort_order, cat.id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![deck_id, LIVE], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// Every live pile of a deck, in the order the Actual tab draws them — what the theory switch
+/// clones, empty piles included.
+fn live_piles(tx: &Connection, deck_id: i64) -> Result<Vec<i64>, String> {
+    let mut stmt = tx
+        .prepare(
+            "SELECT id FROM deck_categories WHERE deck_id = ?1 AND variant = ?2
+              ORDER BY sort_order, id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![deck_id, LIVE], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())
 }
 
 /// **Move** the live list into the theory one: the same rows, re-labelled, leaving `live`
 /// empty.
+///
+/// **Every live pile is cloned into the plan and each card is filed into its clone** (user
+/// schema v53, issue #561) — [`crate::deck_meta::counterpart_in`], so a plan pile of the same name
+/// (or, for a predefined zone, the same kind) is used where one exists and made otherwise, as a
+/// copy of the live one. The live piles **stay**, empty: the Actual list keeps the structure the
+/// reader built, and from this press on the two lists' piles are independent — renaming one, or
+/// switching a Sideboard off, touches one tab. Empty live piles are cloned too, because the
+/// columns the reader made are part of the deck they built and the plan is that deck. The piles
+/// this makes are undone by the caller's step (`deck_undo::push_made_categories`).
 ///
 /// What switching the theory list on actually does. The deck the reader has spent their evening
 /// building **is the plan** — they typed it out of a list, not out of a box — and the live list
@@ -657,13 +715,17 @@ pub(crate) fn seed_from_live(tx: &Connection, deck_id: i64) -> Result<usize, Str
 /// Answers the number of **rows** moved, which is what `execute` counts — [`seed_from_live`]'s
 /// unit, and for its reason.
 pub(crate) fn move_live_into_theory(tx: &Connection, deck_id: i64) -> Result<usize, String> {
-    let moved = tx
-        .execute(
-            "UPDATE deck_cards SET variant = ?2, updated_at = unixepoch()
-              WHERE deck_id = ?1 AND variant = ?3",
-            params![deck_id, THEORY, LIVE],
-        )
-        .map_err(|e| e.to_string())?;
+    let mut moved = 0;
+    for pile in live_piles(tx, deck_id)? {
+        let plan_pile = crate::deck_meta::counterpart_in(tx, deck_id, THEORY, pile)?;
+        moved += tx
+            .execute(
+                "UPDATE deck_cards SET variant = ?2, category_id = ?4, updated_at = unixepoch()
+                  WHERE deck_id = ?1 AND variant = ?3 AND category_id = ?5",
+                params![deck_id, THEORY, LIVE, plan_pile, pile],
+            )
+            .map_err(|e| e.to_string())?;
+    }
     tx.execute(
         "UPDATE decks SET last_variant = ?2 WHERE id = ?1",
         params![deck_id, THEORY],
@@ -732,6 +794,10 @@ pub fn copy_from_live(conn: &Connection, deck_id: i64) -> Result<usize, String> 
     // whole job is to pour one list into another, so what an undo has to put back is the
     // *other* list's rows rather than a number of them.
     let cards_before = crate::deck_undo::read_variant(&tx, deck_id, THEORY)?;
+    // The piles before the copy, for the step's pile diff: the copy files into the plan's pile
+    // of each name and makes the ones the plan lacks, and an undo that took the cards back and
+    // left those piles would leave user-looking columns nobody made on the Theory tab.
+    let piles_before = crate::deck_undo::category_ids(&tx, deck_id)?;
     let rows = seed_from_live(&tx, deck_id)?;
     let copied = theory_copies(&tx, deck_id)? - before;
     let audit_id = crate::deck_audit::record(
@@ -743,9 +809,15 @@ pub fn copy_from_live(conn: &Connection, deck_id: i64) -> Result<usize, String> 
         &serde_json::json!({ "field": "theory", "copied": copied }),
         copied,
     )?;
-    // `None` for the pile diff: `seed_from_live` re-labels rows into categories the deck
-    // already has, so this command cannot invent one.
-    crate::deck_undo::record_variant(&tx, audit_id, deck_id, THEORY, cards_before, None, None)?;
+    crate::deck_undo::record_variant(
+        &tx,
+        audit_id,
+        deck_id,
+        THEORY,
+        cards_before,
+        Some(piles_before),
+        None,
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(rows)
 }
@@ -1210,8 +1282,25 @@ mod tests {
         .id
     }
 
+    /// The **live** list's pile of this name, found or made. A case hands it to [`add`] for
+    /// either list and [`in_list`] carries it across — the lists keep separate piles since user
+    /// schema v53 (issue #561), and one name per case reads better than two ids.
     fn category(conn: &Connection, deck_id: i64, name: &str) -> i64 {
-        crate::deck_meta::category_for_name(conn, deck_id, name).unwrap()
+        crate::deck_meta::category_for_name(conn, deck_id, LIVE, name).unwrap()
+    }
+
+    /// The **theory** list's pile of this name, found or made — for the cases that write to the
+    /// plan's pile itself rather than filing a card into it, such as switching it off.
+    fn theory_category(conn: &Connection, deck_id: i64, name: &str) -> i64 {
+        crate::deck_meta::category_for_name(conn, deck_id, THEORY, name).unwrap()
+    }
+
+    /// The pile of `variant` standing for `cat` — `cat` itself when it is already that list's,
+    /// else the other list's pile of the same name (or kind), made there if it is missing. Every
+    /// card write refuses a pile of the other list (`deck_meta::CATEGORY_WRONG_LIST`), so a
+    /// theory write goes through this.
+    fn in_list(conn: &Connection, deck_id: i64, variant: &str, cat: i64) -> i64 {
+        crate::deck_meta::counterpart_in(conn, deck_id, variant, cat).unwrap()
     }
 
     fn add(conn: &Connection, deck_id: i64, card: &str, cat: i64, variant: &str, quantity: i64) {
@@ -1219,7 +1308,8 @@ mod tests {
     }
 
     /// The same add, naming the object played — `None` is the regular copy, which
-    /// `deck::normalise_finish` stores as NULL.
+    /// `deck::normalise_finish` stores as NULL. `cat` is carried into the list being written by
+    /// [`in_list`], so a case may name the live pile for a theory add.
     fn add_finish(
         conn: &Connection,
         deck_id: i64,
@@ -1233,7 +1323,7 @@ mod tests {
             conn,
             deck_id,
             card,
-            Some(cat),
+            Some(in_list(conn, deck_id, variant, cat)),
             None,
             variant,
             finish,
@@ -1494,7 +1584,9 @@ mod tests {
 
         // And each side is summed across its piles rather than compared pile by pile: two here
         // and two there is four wanted, which is what the deck has.
-        crate::deck::set_card_quantity(&conn, id, "bolt-lea", removal, THEORY, None, 2).unwrap();
+        let plan_removal = in_list(&conn, id, THEORY, removal);
+        crate::deck::set_card_quantity(&conn, id, "bolt-lea", plan_removal, THEORY, None, 2)
+            .unwrap();
         add(&conn, id, "bolt-lea", burn, THEORY, 2);
         assert!(theory_diff(&conn, id, ANY_MARKET).unwrap().is_empty());
     }
@@ -1693,7 +1785,8 @@ mod tests {
 
     /// An inactive category counts toward nothing — on **both** sides. A card parked in the
     /// theory Maybeboard is not a decision the user made, and one parked in the live
-    /// Maybeboard is not a card the deck has.
+    /// Maybeboard is not a card the deck has. Each list has its own Maybeboard since user schema
+    /// v53, and the plan's is made by [`add`] as a copy of the live one — switched off with it.
     #[test]
     fn the_diff_reads_neither_sides_inactive_categories() {
         let conn = seeded();
@@ -1701,7 +1794,8 @@ mod tests {
         let main = category(&conn, id, "Main deck");
         let maybe: i64 = conn
             .query_row(
-                "SELECT id FROM deck_categories WHERE deck_id = ?1 AND kind = 'maybe'",
+                "SELECT id FROM deck_categories
+                  WHERE deck_id = ?1 AND variant = 'live' AND kind = 'maybe'",
                 params![id],
                 |r| r.get(0),
             )
@@ -2915,14 +3009,16 @@ mod tests {
 
     /// An inactive pile is excluded from the **quantity** too, not merely from the key list —
     /// the plan is not asking for a card it has parked in the Maybeboard, so those copies may
-    /// not swell the number the tick counts down from.
+    /// not swell the number the tick counts down from. **The plan's own Maybeboard** is the one
+    /// switched off: each list has its own since user schema v53, and the live one's switch
+    /// reaches no theory row.
     #[test]
     fn theory_slots_leave_a_switched_off_pile_out_of_the_count() {
         let conn = seeded();
         let d = deck(&conn, "Burn");
         set_theory(&conn, d, true);
         let main = category(&conn, d, "Main deck");
-        let maybe = category(&conn, d, "Maybeboard");
+        let maybe = theory_category(&conn, d, "Maybeboard");
         add(&conn, d, "bolt-lea", main, THEORY, 2);
         add(&conn, d, "bolt-lea", maybe, THEORY, 3);
         conn.execute(
@@ -3001,14 +3097,15 @@ mod tests {
     }
 
     /// `diff_select`'s rule, read by the same reasoning: a card parked in an inactive pile is
-    /// not something the user has decided to play, so the plan is not asking for it.
+    /// not something the user has decided to play, so the plan is not asking for it. The pile is
+    /// the plan's own, for the reason the case above gives.
     #[test]
     fn theory_slots_skips_a_switched_off_pile() {
         let conn = seeded();
         let d = deck(&conn, "Burn");
         set_theory(&conn, d, true);
         let main = category(&conn, d, "Main deck");
-        let maybe = category(&conn, d, "Maybeboard");
+        let maybe = theory_category(&conn, d, "Maybeboard");
         add(&conn, d, "bolt-lea", main, THEORY, 1);
         add(&conn, d, "serra-lea", maybe, THEORY, 1);
         conn.execute(

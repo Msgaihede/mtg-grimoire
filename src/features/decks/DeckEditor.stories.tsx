@@ -1050,9 +1050,9 @@ export const EmptyCommandZone: Story = {
  *
  * A fresh deck rather than a seeded one, because the two facts have to be **made** rather than
  * asserted: a hand-written seed row could claim any `origin` it liked and would be a story about
- * this file's opinion. {@link ReopensOnThePlan}'s deck 4 is the seeded half — its `Ramp` is `auto`
- * and holds cards in both lists, and its switched-off `Cut list` is a user pile the plan leaves
- * empty.
+ * this file's opinion. {@link ReopensOnThePlan}'s deck 4 is the seeded half — each of its lists
+ * has an `auto` `Ramp` of its own holding cards, and its switched-off `Cut list` is a user pile
+ * the plan leaves empty.
  */
 export const AutoPileArrivesWithItsCard: Story = {
   args: { deckId: null },

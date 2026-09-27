@@ -1297,7 +1297,7 @@ plan's table misses entirely, and one of them matters from the first minute a gr
 | --- | --- | --- |
 | `idx_collection_folder_removed` | `kind = ? AND kind = 'removed'` | **every database seeds its own `Recently removed`**, so two paired devices hold that row under two uids the moment they meet |
 | `idx_collection_folder_deck` | `deck_id = ? AND deck_id IS NOT NULL` | one group per deck; two readers each pressing Clear collection rebuild one each |
-| `idx_deck_categories_kind` | `deck_id = ? AND kind = ? AND kind <> 'main'` | a deck has one Sideboard, one Commander, one Companion and one Maybeboard, and a renamed one slips past the `(deck_id, name)` grain |
+| `idx_deck_categories_kind` | `deck_id = ? AND variant = ? AND kind = ? AND kind <> 'main'` | each of a deck's two lists has one Sideboard, one Commander, one Companion and one Maybeboard (user schema v53), and a renamed one slips past the `(deck_id, variant, name)` grain |
 
 A partial index needs no new machinery: its own `WHERE` folds into the predicate, so
 `kind = ? AND kind = 'removed'` matches the one holding area when the incoming row is one and
