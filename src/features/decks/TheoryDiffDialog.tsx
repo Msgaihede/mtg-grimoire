@@ -186,11 +186,61 @@ function rowPhrase(row: TheoryDiffRow): string {
  * makes it safe is that the *write* carries the id and not the name, so a name that has not
  * arrived costs a clause and never a destination.
  *
- * One function, so the live region and a row's button cannot come to say "in Ordered" and
- * "to Ordered" about one press.
+ * One function, so the sentence a footer press is reported in ({@link wishesSentNote}) and a
+ * row's button cannot come to say "in Ordered" and "to Ordered" about one press.
  */
 function filedIn(destination: string | null): string {
   return destination === null ? "" : ` in ${destination}`;
+}
+
+/**
+ * What the footer's press did, handed to the host as the dialog closes — see
+ * {@link TheoryDiffDialogProps.onSent}.
+ *
+ * **Facts rather than a sentence**, so a host that wants to say it differently (or count it) is
+ * not left parsing prose; {@link wishesSentNote} is the sentence for a host that wants this
+ * dialog's own words, so the dialog's vocabulary for its own press stays in this file.
+ */
+export interface WishesSent {
+  /** How many wishes the write touched — created, or raised by `add_wish`'s fold. `0` is a
+   *  success too: every row sent had left the difference, or its printing the card database. */
+  wishes: number;
+  /** The destination's **name**, `null` at the wishlist root — the same value, with the same
+   *  fallback, that {@link filedIn} reads. */
+  destination: string | null;
+}
+
+/**
+ * The footer press's answer, in words — **said by the host now, because the dialog is gone by the
+ * time anybody could read it here.**
+ *
+ * It was the footer's live region until issue #553 (2026-09-27): `Sent. 3 wishes updated.`,
+ * beside the press, in a dialog that stayed open. Pressing it twice doubled every wish — the
+ * press is `add_wish`'s fold, which **raises** a wish already there, and the reader chose to keep
+ * that fold — and nothing on screen said the first press had worked except a dim line at the far
+ * end of the footer. So a successful press closes the dialog, which is the plainest "done" there
+ * is and leaves no second press to make from the same open, and this sentence travels out with
+ * {@link TheoryDiffDialogProps.onSent}.
+ *
+ * **It names what was sent and from where**, which the old line did not have to: beside the
+ * button, "Sent." was about the button; on the editor, with the dialog gone, a bare "Sent." is
+ * about nothing a reader can see. The destination clause is {@link filedIn}'s, so the root still
+ * adds nothing — `to your wishlist` already says where that is.
+ *
+ * **Zero is not "they were already wished for"**, which is `DeckStats`' zero arm's rule for the
+ * same fold: nothing is ever skipped for being on the wishlist already, so a `0` means the rows
+ * sent were no longer in the difference when the write re-read it (another window built them, or
+ * they left the plan) or that every one was a printing the card database no longer holds.
+ */
+export function wishesSentNote({ wishes, destination }: WishesSent): string {
+  if (wishes === 0) {
+    return (
+      "Nothing sent from the plan — those cards are no longer missing, or have left the card " +
+      "database."
+    );
+  }
+  const noun = wishes === 1 ? "wish" : "wishes";
+  return `Sent from the plan to your wishlist — ${wishes} ${noun} updated${filedIn(destination)}.`;
 }
 
 /**
@@ -283,6 +333,14 @@ function useTheoryDiff(
    *
    * **The destination rides beside the keys** — the third argument, `null` for the root, which
    * is what every press this dialog made before the control existed was writing.
+   *
+   * **Closing the dialog is not this mutation's `onSuccess`**, and must not become it. It is
+   * the press's own, passed to `mutate` at the call site, because TanStack drops a
+   * `mutate`-scoped callback when its observer unmounts — so a write that lands after the dialog
+   * has gone (the reader clicked the scrim while it was in flight) closes nothing and hands the
+   * caret nowhere, where an option up here would still run and call `onDismiss` over whatever
+   * the reader opened next. What that costs is the host's sentence for that one press; the
+   * wishes are written either way, and the invalidation below is the mutation's and still runs.
    */
   const wishAll = useMutation({
     mutationFn: (only: readonly string[]) =>
@@ -383,10 +441,28 @@ export function diffTotals(rows: readonly TheoryDiffRow[]): Totals {
 export interface TheoryDiffDialogProps {
   deckId: number;
   open: boolean;
-  /** Escape: hand focus back to whatever opened the dialog, then close. */
+  /**
+   * Escape: hand focus back to whatever opened the dialog, then close.
+   *
+   * **Also what a successful footer press calls** (issue #553), and for Escape's reason rather
+   * than the scrim's: the reader pressed a button inside the dialog, so the caret is theirs to be
+   * given back. The press's own button disables itself for the write, which blurs it to `<body>`,
+   * so `onClose` there would strand the caret at the top of the document — `DeckEditor`'s
+   * `dismiss` is what hands it back to `Compare`.
+   */
   onDismiss: () => void;
   /** Outside click: close without moving focus. */
   onClose: () => void;
+  /**
+   * Told what the footer's press did, **just before** {@link onDismiss} closes the dialog on it —
+   * so a host can say so where the reader will be standing. {@link wishesSentNote} words it.
+   *
+   * **Optional, and a host that passes nothing gets a dialog that closes without a word**, which
+   * is the one gap this leaves: a closed dialog cannot announce anything itself, because its body
+   * — the footer's live region included — unmounts on close. A row's own `Wishlist` press never
+   * calls it; that press keeps the dialog open and answers on its own button.
+   */
+  onSent?: (sent: WishesSent) => void;
 }
 
 /**
@@ -430,6 +506,16 @@ export interface TheoryDiffDialogProps {
  * `useDismissOnEscape` states for every layer here, and the shell has a scrim to hang the second
  * half on.
  *
+ * **A successful footer press is a third way out, and it takes the first one's door** (issue
+ * #553). `Send N selected to wishlist` folds into wishes already there — a second press raises
+ * every one of them again — and the only thing that said the first press had worked was a dim
+ * sentence at the far end of the footer. So the write, once it succeeds, closes the dialog
+ * through `onDismiss`, because the caret was in the dialog and is owed a way back; what it did is
+ * handed out first through `onSent`, since nothing inside a closing dialog can still say it. **A
+ * refusal keeps the dialog open** with the backend's sentence in the footer, and **a row's own
+ * `Wishlist` press never closes it**: that reader is working down a list, and each press answers
+ * on its own button.
+ *
  * **Not portalled, and `fixed` — so where it is mounted matters.** Nothing in this app is
  * portalled (the shipped CSP is `style-src 'self'` and every overlay primitive in reach injects a
  * runtime `<style>`; `SetCombobox`'s finding). A `fixed` element is positioned against the
@@ -467,6 +553,7 @@ export function TheoryDiffDialog({
   open,
   onDismiss,
   onClose,
+  onSent,
 }: TheoryDiffDialogProps): React.JSX.Element {
   return (
     <Dialog
@@ -490,15 +577,26 @@ export function TheoryDiffDialog({
       onDismiss={onDismiss}
       onClose={onClose}
     >
-      <TheoryDiffBody deckId={deckId} />
+      <TheoryDiffBody deckId={deckId} onDismiss={onDismiss} onSent={onSent} />
     </Dialog>
   );
 }
 
 /** The shopping list itself — the query, the two writes, the reader's selection and the body's
  *  own scroller. Mounted only while the dialog is open, which is {@link Dialog}'s guarantee and
- *  what makes the two records below a session rather than something an effect has to clear. */
-function TheoryDiffBody({ deckId }: { deckId: number }) {
+ *  what makes the two records below a session rather than something an effect has to clear.
+ *
+ *  `onDismiss` and `onSent` are the host's two, handed down for the footer's press alone — see
+ *  {@link TheoryDiffDialogProps.onDismiss}. */
+function TheoryDiffBody({
+  deckId,
+  onDismiss,
+  onSent,
+}: {
+  deckId: number;
+  onDismiss: () => void;
+  onSent?: (sent: WishesSent) => void;
+}) {
   // Read here rather than threaded from the editor: this dialog is mounted only while it is
   // open, already holds a query client of its own, and a shopping list is exactly the surface
   // a reader would open *because* they have just changed which shop they are pricing against.
@@ -526,9 +624,10 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
    * The folder's own name, or `null` at the root — **and `null` again while the folder list is
    * still being read, or for an id that names no folder any more.**
    *
-   * One lookup for the three sentences that need it: the control's own accessible name, the
-   * live region's answer and every row button's name. A second one would be two answers to
-   * "where does this file" on one screen, free to disagree for the length of a read.
+   * One lookup for the three sentences that need it: the control's own accessible name, every
+   * row button's name and the footer press's answer — which is the host's to say since issue
+   * #553 and is handed out through `onSent` carrying this name. A second lookup would be two
+   * answers to "where does this file" about one press, free to disagree for the length of a read.
    */
   const destination = useWishDestinationName(folderId);
 
@@ -558,10 +657,11 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
    * so `cardId` is shared by up to three rows. Kept here rather than read off the mutation,
    * because a mutation remembers only its last variables and a reader presses several.
    *
-   * **The footer's press deliberately marks nothing.** It answers in the live region, in one
-   * sentence, for however many rows it wrote; marking each of them would turn one press into a
-   * dozen buttons changing at once and leave the reader nothing to compare against next time
-   * they open this. A row button marks its own row because that press *is* about that row.
+   * **The footer's press deliberately marks nothing.** It closes the dialog and hands the host
+   * one sentence for however many rows it wrote (issue #553); marking each of them first would
+   * be a dozen buttons changing at once in a panel that is already leaving. A row button marks
+   * its own row because that press *is* about that row, and it is the one press that leaves the
+   * reader here to see the mark.
    */
   const [sent, setSent] = useState<ReadonlySet<string>>(new Set());
 
@@ -578,12 +678,13 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
    * honest answer — the alternative is a per-destination record of what was sent where, which is
    * a mark saying "sent, but somewhere else" that no button on this row has room for.
    *
-   * **The two mutations are reset for the same reason, one sentence over.** `wishAll.isSuccess`
-   * outlives its press, and the live region words its answer with the destination that is
-   * selected *now* — so without this, sending to `Ordered` and then picking `Someday` re-words a
-   * standing sentence into a claim about a press nobody made. A refusal is dropped on the same
-   * argument: `That folder is not there any more.` is a fact about the folder the reader has
-   * just moved off.
+   * **The two mutations are reset for the same reason, one sentence over — and since issue #553
+   * the only answer either can leave standing here is a refusal.** A footer press that succeeds
+   * closes the dialog, so there is no success sentence left to re-word; what the reset still
+   * drops is a refused write's, and `That folder is not there any more.` is a fact about the
+   * folder the reader has just moved off. (It used to drop `wishAll.isSuccess`'s `Sent. …` too,
+   * which outlived its press and was worded with the destination selected *now* — sending to
+   * `Ordered` and then picking `Someday` re-worded it into a claim about a press nobody made.)
    *
    * **Guarded on the id actually changing**, because a `Dropdown` row is pressable while it is
    * already the picked one — a reader who opens the panel and presses `Wishlist` at the root has
@@ -764,32 +865,34 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
           <p className="text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
         </div>
 
-        {/* One live region for every answer this dialog gives, so a reader who cannot see the
-              buttons change still hears what the press did. Rendered always, so the region is in
-              the tree before it has anything to say — a live region mounted with its own text is
-              a region that announces nothing. */}
+        {/* One live region for every refusal this dialog's two writes can meet, so a reader who
+              cannot see the buttons still hears why a press did nothing. Rendered always, so the
+              region is in the tree before it has anything to say — a live region mounted with its
+              own text is a region that announces nothing.
+
+              **It says nothing on success any more, and that is issue #553 rather than an
+              omission.** It used to read `Sent. 3 wishes updated.` after the footer's press; that
+              press now closes the dialog, and its sentence leaves with it through `onSent` —
+              {@link wishesSentNote}. Kept here instead, it would flash into a panel that is
+              already fading out, in a region that unmounts before a screen reader could read it.
+              A row's press was never announced here: its own button turning `Wishlisted` is the
+              answer, on the control the reader pressed. */}
         {/* **`max-w-36` is a measurement rather than a taste**, and it is one half of what keeps
             this footer one row taller than it was before the destination joined it. The note
             column to the left is the only `flex-1` item here, so it absorbs every pixel the other
             three take: at `w-[47.5rem]` with the destination drawn and this region uncapped, the
             note was squeezed to **187px** and wrapped to six lines, taking the footer from 96px to
             **128px** (shipped window, 2026-09-09, debug build, 1280x800). Capping the region — it
-            is usually empty, and its longest sentence wraps to two lines perfectly well — gives
-            the note 269px and four lines, and the footer measures 96px again. */}
+            is usually empty, and the success sentence it was sized against wrapped to two lines
+            perfectly well — gives the note 269px and four lines, and the footer measures 96px
+            again. Since issue #553 it holds refusals only, and nothing has re-measured the
+            longest of those at this width. */}
         <p
           role="status"
           aria-live="polite"
           className="min-w-0 max-w-36 shrink text-right text-[0.7rem] text-dim"
         >
-          {failure !== null
-            ? ipcError(failure)
-            : wishAll.isSuccess
-              ? // Where the wishes went, in the same clause a row button uses — see
-                // {@link filedIn}. At the root the sentence is exactly what it has always been,
-                // which is the point of the clause being appended rather than a term that is
-                // always drawn.
-                `Sent. ${wishAll.data} ${wishAll.data === 1 ? "wish" : "wishes"} updated${filedIn(destination)}.`
-              : ""}
+          {failure !== null ? ipcError(failure) : ""}
         </p>
 
         {/* Where the press files, immediately left of the press. It is a *destination* rather
@@ -836,10 +939,22 @@ function TheoryDiffBody({ deckId }: { deckId: number }) {
 
         <button
           type="button"
-          onClick={() => wishAll.mutate(picked.map(rowKey))}
-          // Nothing ticked and nothing sent twice while the write is in flight. A second
-          // press would fold rather than duplicate — `add_wish` upserts on the grain — so this
-          // is about the reader not being told twice, rather than about the data.
+          onClick={() =>
+            wishAll.mutate(picked.map(rowKey), {
+              // Said, then shut — see the class doc's paragraph on issue #553. `destination` is
+              // this render's, and it is the one the write carried: the control that picks it is
+              // disabled for as long as the write is in flight.
+              onSuccess: (wishes) => {
+                onSent?.({ wishes, destination });
+                onDismiss();
+              },
+            })
+          }
+          // Nothing ticked, and nothing sent twice while the write is in flight — **and that is
+          // about the data, not only about the reader being told twice.** `add_wish` folds on
+          // the grain by *raising* the wish already there, so a second press doubles every wish
+          // the first one wrote (issue #553). The reader chose to keep that fold, which is why a
+          // success closes the dialog: there is no second press to make from the same open.
           disabled={picked.length === 0 || wishAll.isPending}
           className={cn(
             "h-8 shrink-0 rounded-md border border-accent px-3 text-xs text-accent",
