@@ -27,10 +27,18 @@
 //!   marketplace's line and never a step, because a period is only ever made from rows.
 //! * **The day comes from SQLite's `date('now')`, UTC**, never `SystemTime::now()`, which panics on
 //!   the web target — read **once** per snapshot and bound into every statement it makes. A
-//!   calendar day is the key, and **a snapshot replaces its marketplace's whole day** — deleted,
-//!   then written — so the day holds its last snapshot's prices and holding and nothing older: a
-//!   printing sold between a sync and a feed refresh on one afternoon has no row that day, where an
-//!   insert-or-replace would have left the morning's.
+//!   calendar day is the key, and **a snapshot replaces its marketplace's whole day** — so the
+//!   day holds its last snapshot's prices and holding and nothing older: a printing sold between a
+//!   sync and a feed refresh on one afternoon has no row that day, where an insert-or-replace would
+//!   have left the morning's. **Replaced, not rewritten**: each marketplace deletes the rows of its
+//!   day the new holding does not contain, then upserts the rest, and a row whose price and copies
+//!   already say the same is not touched. The rule was once kept by deleting the whole day and
+//!   inserting it again, which rewrote every row — a few thousand — on every launch, ingest and
+//!   feed store, for a day in which usually nothing had moved. On a thousand held printings in
+//!   three priced marketplaces that was 3 000 rows and ~320 KB of WAL a snapshot; an unchanged one
+//!   now writes no row and no WAL frame, in about the same ~30 ms (debug build, Linux, file-backed
+//!   WAL, 2026-09-27 — the one figure here not taken on Windows).
+//!   `a_snapshot_that_changes_nothing_writes_nothing` pins the zero.
 //! * **A marketplace is the *priced* one**: [`crate::marketplace::MARKETPLACE_IDS`] mapped through
 //!   [`Marketplace::from_id`], so `cardtrader` — which quotes TCGplayer — is not a key of its own
 //!   and cannot store a second copy of every TCGplayer row. [`market_key`] is the spelling.
@@ -130,7 +138,13 @@ pub fn priced_markets() -> Vec<Marketplace> {
 }
 
 /// Record today's price for every owned printing in every priced marketplace, then keep the
-/// history inside its bounds. Answers how many rows were written.
+/// history inside its bounds.
+///
+/// **Answers how many of today's rows the snapshot changed** — inserted, updated or deleted, the
+/// sum of `changes()` over each marketplace's two statements — and not how many rows today
+/// holds. A second snapshot on a day in which nothing moved answers `0`, which is the point: it
+/// wrote nothing. The rows the day's first snapshot [`prune`]s are not in it. No caller reads it
+/// but the tests; the launch, the ingest and the feed store only ask whether it failed.
 ///
 /// **Its own transaction**, which is both the atomicity (a day is written whole or not at all) and
 /// the cross-file fence the module doc describes — called inside a caller's transaction it
@@ -151,9 +165,10 @@ fn write_snapshot(conn: &Connection, markets: &[Marketplace]) -> rusqlite::Resul
     // floor, and each marketplace's delete and insert — so a snapshot straddling UTC midnight
     // cannot delete one day's rows and write the next day's.
     let today: String = tx.query_row("SELECT date('now')", [], |r| r.get(0))?;
-    // **Decided before anything is deleted, and the order is the rule**: the loop below empties
-    // today for each marketplace it writes, so asked after it every snapshot would look like the
-    // day's first and thin again. One seek on the primary key, which leads with `day`.
+    // **Decided before anything is deleted, and the order is the rule**: the loop below can empty
+    // today for a marketplace — every row, when it prices nothing held or the reader holds
+    // nothing — so asked after it a snapshot could look like the day's first and thin again. One
+    // seek on the primary key, which leads with `day`.
     let first_today: bool = tx.query_row(
         "SELECT NOT EXISTS (SELECT 1 FROM price_snapshots WHERE day = ?1)",
         params![today],
@@ -175,40 +190,43 @@ fn write_snapshot(conn: &Connection, markets: &[Marketplace]) -> rusqlite::Resul
     let mut written = 0;
     for market in markets {
         let key = market_key(*market);
-        // The day's rows for this marketplace go before its new ones arrive, so the day holds its
-        // LAST snapshot's holding and nothing older. An insert-or-replace would leave the row of a
-        // printing sold since the morning's snapshot standing, and the value graph would count it
-        // held that day. The insert below is a plain `INSERT` for the same reason: without this
-        // line a second snapshot today is a primary-key failure rather than a stale row.
-        tx.execute(
-            "DELETE FROM price_snapshots WHERE day = ?1 AND marketplace = ?2",
-            params![today, key],
-        )?;
+        // **Stale rows first, then the upsert, and only the difference is written.** The day
+        // holds its LAST snapshot's holding and nothing older, so a row of this marketplace's day
+        // that the new holding does not contain goes — a printing sold since the morning's
+        // snapshot, or every row when the marketplace has stopped pricing anything held — where
+        // an insert-or-replace would have left it standing and the value graph would count it held
+        // that day. Every other row is left alone unless its price or its copies moved.
+        //
+        // This replaced a DELETE of the marketplace's whole day and a plain INSERT of it again,
+        // which kept exactly the same rule and rewrote every row on every launch, ingest and feed
+        // store — thousands of rows, both b-trees, a third of a megabyte of WAL on a USB stick
+        // for a day in which nothing had changed.
+        written += tx.execute(&stale_sql(&tx, *market), params![key, today])?;
         written += tx.execute(&snapshot_sql(&tx, *market), params![key, today])?;
     }
     tx.commit()?;
     Ok(written)
 }
 
-/// One marketplace's insert for today, into a day [`write_snapshot`] has just emptied for it.
-/// Bound: `?1` the marketplace key, `?2` today (`YYYY-MM-DD`).
+/// The holding a snapshot records for one marketplace today, as the CTE both of
+/// [`write_snapshot`]'s statements open with: `held(card_id, finish, price, copies)`, one row per
+/// printing and finish the reader holds.
 ///
 /// **`WITH owned(card_id, finish, copies)`** is [`collection_source::copies_by_printing_and_finish`]
 /// under [`Availability::Everything`], named — the crate's one statement of "which printings does
-/// the reader own, per finish". `held` writes the price expression once for the two places that
-/// read it, the rows and the gate.
+/// the reader own, per finish". `held` writes the price expression once for the places that read
+/// it, the rows and the gate. `owned` is grouped on `(card_id, finish)`, so `held` never names one
+/// key twice — which the upsert needs, since `DO UPDATE` may not touch one row twice.
 ///
 /// **Every held printing is a row, priced or not** (user schema v50): `price` is NULL where this
 /// marketplace does not quote that finish, and `cards` is a `LEFT JOIN`, so a printing the corpus
 /// has lost is still a holding — the live point of [`crate::value_history`] counts it, and a
-/// snapshot that did not would read its return to the corpus as a purchase. **The one gate is
-/// the `EXISTS`**: a marketplace that prices none of the held printings today writes nothing at
-/// all, which the module doc argues.
+/// snapshot that did not would read its return to the corpus as a purchase.
 ///
 /// **`copies` rides beside the price**: the same sum `owned` already computes to decide what is
 /// owned, every folder at once, so a day's row says what the reader's holding of that printing was
 /// worth and not only what one copy cost. [`crate::value_history`] is the reader.
-fn snapshot_sql(conn: &Connection, market: Marketplace) -> String {
+fn held_cte(conn: &Connection, market: Marketplace) -> String {
     format!(
         "WITH owned(card_id, finish, copies) AS ({owned}),
          held AS (
@@ -217,13 +235,60 @@ fn snapshot_sql(conn: &Connection, market: Marketplace) -> String {
                FROM owned o
                LEFT JOIN cards c ON c.id = o.card_id
               WHERE o.copies > 0
-         )
+         )",
+        owned = collection_source::copies_by_printing_and_finish(conn, Availability::Everything),
+        price = sorting::price_expr(market, "o.finish"),
+    )
+}
+
+/// **The one gate**, as the SQL both statements test: does this marketplace price any of the
+/// held printings today? A marketplace that prices none of them has no rows that day at all,
+/// which the module doc argues — so the delete takes all of them and the insert writes none.
+const PRICES_SOMETHING_HELD: &str = "EXISTS (SELECT 1 FROM held WHERE price IS NOT NULL)";
+
+/// One marketplace's delete for today: every row of its day the new holding does not contain.
+/// Bound: `?1` the marketplace key, `?2` today (`YYYY-MM-DD`).
+///
+/// A row goes when its `(card_id, finish)` is no longer held — sold, or stepped to zero, since
+/// the day's previous snapshot — or when [`PRICES_SOMETHING_HELD`] is false and the whole day
+/// goes. What survives is exactly the set of keys [`snapshot_sql`] is about to write, so the
+/// upsert that follows leaves the day holding this snapshot's rows and no older one.
+fn stale_sql(conn: &Connection, market: Marketplace) -> String {
+    format!(
+        "{held}
+         DELETE FROM price_snapshots
+          WHERE day = ?2 AND marketplace = ?1
+            AND (NOT {PRICES_SOMETHING_HELD}
+                 OR NOT EXISTS (SELECT 1 FROM held h
+                                 WHERE h.card_id = price_snapshots.card_id
+                                   AND h.finish = price_snapshots.finish))",
+        held = held_cte(conn, market),
+    )
+}
+
+/// One marketplace's upsert for today, into a day [`stale_sql`] has just trimmed to the keys it
+/// writes. Bound: `?1` the marketplace key, `?2` today (`YYYY-MM-DD`).
+///
+/// **A row that already says the same thing is not written.** The `DO UPDATE` carries a `WHERE`
+/// that compares both values with `IS NOT`, so a NULL price that stays NULL is no change and a
+/// price that becomes NULL is one; a skipped row is not counted by `changes()` and dirties no page.
+/// The target is the table's whole primary key, which a `WITHOUT ROWID` table's upsert must name.
+///
+/// **The gate's `WHERE` is load-bearing twice**: it is the rule, and it is what lets SQLite parse
+/// this at all — in an `INSERT … SELECT … ON CONFLICT`, a `SELECT` with no `WHERE` of its own reads
+/// the `ON` as a join constraint. Removing the gate needs a `WHERE true` in its place.
+fn snapshot_sql(conn: &Connection, market: Marketplace) -> String {
+    format!(
+        "{held}
          INSERT INTO price_snapshots (day, marketplace, card_id, finish, price, copies)
          SELECT ?2, ?1, card_id, finish, price, copies
            FROM held
-          WHERE EXISTS (SELECT 1 FROM held WHERE price IS NOT NULL)",
-        owned = collection_source::copies_by_printing_and_finish(conn, Availability::Everything),
-        price = sorting::price_expr(market, "o.finish"),
+          WHERE {PRICES_SOMETHING_HELD}
+         ON CONFLICT (day, marketplace, card_id, finish) DO UPDATE
+            SET price = excluded.price, copies = excluded.copies
+          WHERE price_snapshots.price IS NOT excluded.price
+             OR price_snapshots.copies IS NOT excluded.copies",
+        held = held_cte(conn, market),
     )
 }
 
@@ -834,6 +899,116 @@ mod tests {
             1,
             "Card Kingdom quotes no ring, so its row is the holding without a price"
         );
+    }
+
+    /// **A snapshot that finds nothing moved writes nothing** — no row inserted, updated or
+    /// deleted, which `total_changes` counts across both statements of every marketplace — and
+    /// answers `0`. The day is what the first snapshot left, row for row.
+    #[test]
+    fn a_snapshot_that_changes_nothing_writes_nothing() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil");
+        own(&conn, "bolt", "foil");
+        own(&conn, "free", "nonfoil"); // a NULL price that stays NULL is no change either
+        own(&conn, "gone", "nonfoil");
+        assert!(snapshot(&conn).unwrap() > 0);
+        let before = rows(&conn);
+
+        let changes = conn.total_changes();
+        assert_eq!(snapshot(&conn).unwrap(), 0);
+        assert_eq!(snapshot_market(&conn, Marketplace::Cardkingdom).unwrap(), 0);
+        assert_eq!(
+            conn.total_changes(),
+            changes,
+            "no row was touched, not even to write the value it already held"
+        );
+        assert_eq!(rows(&conn), before);
+    }
+
+    /// **Only what moved is written, and every kind of move is**: a price that changed, a price
+    /// that stopped being quoted while the marketplace still prices something else held, copies
+    /// that changed, and a printing no longer held — each counted once, and nothing else.
+    #[test]
+    fn a_snapshot_writes_only_the_rows_that_moved() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil");
+        own(&conn, "ring", "nonfoil");
+        own(&conn, "free", "nonfoil");
+        // TCGplayer, Cardmarket and Card Kingdom each hold the three; Mana Pool prices none.
+        assert_eq!(snapshot(&conn).unwrap(), 9);
+
+        conn.execute_batch(
+            r#"UPDATE cards SET prices = '{"usd":"11.00","usd_foil":"50.00"}' WHERE id = 'bolt';
+               UPDATE collection_entries SET quantity = 5 WHERE card_id = 'ring';
+               DELETE FROM collection_entries WHERE card_id = 'free';"#,
+        )
+        .unwrap();
+        let changes = conn.total_changes();
+        let written = snapshot(&conn).unwrap();
+
+        // bolt: TCGplayer 10 → 11, Cardmarket 8 → unquoted (it still prices the ring, so the
+        // day stays); ring: copies 2 → 5 at all three; free: gone from all three.
+        assert_eq!(written, 2 + 3 + 3);
+        assert_eq!(
+            (conn.total_changes() - changes) as usize,
+            written,
+            "the count is changes()"
+        );
+        assert_eq!(
+            rows(&conn),
+            [
+                ("cardkingdom", "bolt", Some(12.5)),
+                ("cardkingdom", "ring", None),
+                ("cardmarket", "bolt", None),
+                ("cardmarket", "ring", Some(90.0)),
+                ("tcgplayer", "bolt", Some(11.0)),
+                ("tcgplayer", "ring", Some(100.0)),
+            ]
+            .map(|(m, id, price)| (
+                m.to_owned(),
+                id.to_owned(),
+                "nonfoil".to_owned(),
+                price
+            ))
+        );
+        let ring_copies: Vec<i64> = {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT copies FROM price_snapshots
+                      WHERE day = date('now') AND card_id = 'ring' ORDER BY marketplace",
+                )
+                .unwrap();
+            let out = stmt
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            out
+        };
+        assert_eq!(ring_copies, [5, 5, 5]);
+    }
+
+    /// **A marketplace that stops pricing anything held loses its whole day**, NULL rows
+    /// included, because the day it prices nothing it would have written nothing — and the other
+    /// marketplaces' rows are not touched by its snapshot.
+    #[test]
+    fn a_marketplace_that_stops_pricing_anything_held_loses_its_day() {
+        let conn = conn();
+        own(&conn, "bolt", "nonfoil");
+        own(&conn, "ring", "nonfoil"); // a NULL row at Card Kingdom while the bolt is priced
+        snapshot(&conn).unwrap();
+        let others: Vec<_> = rows(&conn)
+            .into_iter()
+            .filter(|r| r.0 != "cardkingdom")
+            .collect();
+
+        conn.execute("DELETE FROM marketplace_prices", []).unwrap();
+        assert_eq!(
+            snapshot_market(&conn, Marketplace::Cardkingdom).unwrap(),
+            2,
+            "the priced bolt and the unpriced ring both go"
+        );
+        assert_eq!(rows(&conn), others);
     }
 
     /// **The day's first snapshot is decided before any snapshot deletes the day**, so a second
