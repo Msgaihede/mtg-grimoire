@@ -375,8 +375,8 @@ a `PRIMARY_KEY` map so that an upsert conflicts the way D1 would. Import it; nev
 not consume a second slot" passes trivially against a table that cannot hold a duplicate anyway.
 
 **Why the split.** `@cloudflare/vitest-pool-workers` would run the real class in workerd, but it
-pulls wrangler and workerd into a tree pinned to vitest 4.1.10 whose support it does not
-advertise. Compaction, the pull window, the thirty-day tail, token minting, the status decision
+pulls wrangler and workerd into the tree and peers on `vitest ^4.1.0` (0.22.0, checked
+2026-09-27), which does not cover the vitest 5 this suite runs. Compaction, the pull window, the thirty-day tail, token minting, the status decision
 and the HMAC are all pure functions of their inputs, so they are testable without any of that, and
 what is left in the Durable Object and the handlers is SQL and routing — where a bug is a 500 in a
 log rather than a reader's data quietly disappearing.

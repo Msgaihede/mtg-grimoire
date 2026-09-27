@@ -7,7 +7,7 @@ import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { defineConfig } from "vite";
-import { manifestJson } from "./src/pwa/manifest";
+import { manifestJson } from "./src/pwa/manifest.ts";
 
 /** PR 4's web bundle goes to `dist-web/`, not `dist/`. `vite.web.config.ts` is the authority. */
 const DIST = "dist-web";
