@@ -2177,10 +2177,18 @@ layer.
   than a row's own identity counts one binder copy once per row that could have used it. Its SQL
   carries the one translation in the pair — `coalesce(?2, 'nonfoil')` — because `deck_cards`
   spells the regular copy NULL and `collection_entries` spells it `nonfoil`.
-- **Wishes stay oracle-grained and finish-blind**, deliberately: a shopping list is not a
-  printing preference, so two lines of one card fold into one wish on `add_wish`'s upsert, and a
-  foil line does not write a foil wish. That is the one place the diff's grain and the wishlist's
-  do not agree, and it is the wishlist's own rule rather than an oversight here.
+- **A wish Compare sends is pinned to the printing and finish the line names** — since
+  2026-08-22, which reversed what stood here (*wishes stay oracle-grained and finish-blind: a
+  shopping list is not a printing preference*). A plan naming a printing is a plan for that
+  cardboard, so `deck_theory_missing_to_wishlist` files one wish per line on the wishlist's own
+  grain — the line's `cardId`, its oracle card, and its finish, **the regular copy of a card
+  pinning none** (`deck_cards.finish` is NULL for it) while `foil` and `etched` pass through. Two
+  lines of one card in two finishes are two wishes, and the diff's grain and the wishlist's now
+  agree. **A token line (v55) is pinned the same way with one difference**: its finish is spelled
+  out, **`nonfoil` included** (`deck_theory::wish_finish`), because a token entry always names its
+  finish — so a hand-made Treasure wish (no finish) and the one Compare sends (`nonfoil`) are two
+  rows (*Tokens & Emblems*' Compare bullet). The whole record is decks-storage.md's
+  `deck_theory_missing_to_wishlist` bullet.
 - **The editor reopens on the view the reader left, and the deck row is where that is kept.**
   `lastVariant`/`lastGroupBy`/`lastSortBy` come off `DeckRow` and go back through
   `useDeck`'s `rememberView` (`deck_set_view_state`), which touches no `updated_at`, writes no
@@ -4258,7 +4266,9 @@ already effective, and `viewOf` copies them.
      not — a `0` tile no stepper can zero again. One Undo brings the zero back.
   6. **Theory and live never share an entry**; every entry write names its list.
   7. **A token nothing makes any more is removed** — its entries in that list are deleted, unless
-     it is `manual`. That is a reconcile after card writes, below, never a read-time filter.
+     its state is anything but `auto`: `manual`, or a pre-v55 `hidden` the launch has not retired
+     yet, which the wall draws as the reader's own. That is a reconcile after card writes, below,
+     never a read-time filter.
 
   **Remove printing** (v55, managed tokens spec §3.4) is the one write that takes a token's
   **last** entry, which rule 3's stepper holds at zero: `deck_token_remove` deletes one stored
@@ -4699,10 +4709,13 @@ already effective, and `viewOf` copies them.
     (2026-09-26), so one entry answers to one name on the band and in the four views by
     construction rather than by agreement — they were two verbatim copies for a day, and
     `deckTokens.test.ts` pins the whole string for a foil and a nonfoil entry.
-  - **Remove printing is the entry's, and drawn on every stored entry's tile** — the band's and
-    the pile's alike — named for the entry it sits on (`Remove Treasure, …, TMH3 · 12, Foil`), so a
-    token's plain and foil tiles are two presses; `Remove printing` is the pointer's word, the same
-    on every tile. Dismiss, Restore and Reset were the token's and went with v55.
+  - **Remove printing is the entry's, and drawn on every stored entry** — the band's tile and the
+    pile in all four views: the Stacks and Grid cards' controls column, and since the final review
+    the Text line (beside the stepper that rides over its tail) and a Table row's own last column
+    (`LineRemove`, which keeps the column where an implicit entry draws nothing) — named for the
+    entry it sits on (`Remove Treasure, …, TMH3 · 12, Foil`), so a token's plain and foil tiles are
+    two presses; `Remove printing` is the pointer's word, the same everywhere. Dismiss, Restore and
+    Reset were the token's and went with v55.
   - **A token nothing in the deck makes is marked the way a rule-break card is** (managed tokens
     spec §3.5): **`isHandAdded` is `!derived`, never `state === "manual"`**, because a derived
     token can be `manual` (kept by hand after a cut) and marking it would be a false sentence about

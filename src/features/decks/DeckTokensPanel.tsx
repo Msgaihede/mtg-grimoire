@@ -534,7 +534,7 @@ function TokenTile({
 
   return (
     <div
-      // The stepper, the two icon buttons and every line of type below size themselves against
+      // The stepper, the icon button beside it and every line of type below size themselves against
       // these two rather than taking a prop — `cardZoom.ts`'s rule, and the reason it is a
       // variable: `QuantityStepper` is drawn in three tables as well as on this tile, and a prop
       // would have to be threaded to every one of them and defaulted where nothing scales.

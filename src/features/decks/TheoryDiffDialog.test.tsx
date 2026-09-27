@@ -864,8 +864,8 @@ describe("the theory difference dialog", () => {
    * **A token row names its printing**, because tokens share names in a way cards do not: two
    * different Wurms, or two Treasure printings at one count and one finish, are two lines that a
    * name, a count and a finish cannot tell apart — two identical `Wishlist 1 more Treasure`
-   * controls. The set and collector number are what separate them, the spelling the row's own
-   * printing column uses.
+   * controls. The set and collector number are what separate them — the facts the row's own
+   * printing column shows as `THOB · 13`, spelled in the name as `(THOB #13)`.
    */
   it("tells two token rows of one name and finish apart by their printing", async () => {
     deckTheoryDiff.mockResolvedValue([

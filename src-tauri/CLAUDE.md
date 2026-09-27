@@ -170,9 +170,12 @@ picks it up from any directory under the root.
   captured**, and **gated**: it converts on a device in no sync group, and on one in a group only
   once a pull at v52 has landed, `sync_engine::client::pull` converting behind every such pull
   meanwhile, because a conversion before the device has heard its group reverted a peer's later
-  edits; the repair after it and suppressed; and v55's `deck_tokens::retire_hidden`, last and
-  suppressed, which brings every pre-v55 dismissal back as an ordinary token at zero) are logged and
-  left owing — their likeliest cause is a full or read-only disk,
+  edits; the repair after it and suppressed; v55's `deck_tokens::retire_hidden`, suppressed, which
+  brings every pre-v55 dismissal back as an ordinary token at zero; and **last, the drain of the
+  dirty marks those passes left** — `deck_tokens::reconcile_dirty_logged` then
+  `managed_wishlist::settle_logged`, `sync::with_write`'s pair, because `settle_all` armed the
+  connection before them and would otherwise have settled a managed wishlist on counts the retire
+  pass then zeroed) are logged and left owing — their likeliest cause is a full or read-only disk,
   and `init_state` turns any error into a refusal to start, which does that disk no good (it no
   longer says "move it aside": `user.db` is the one file nothing can rebuild). **A corpus
   that will not open is not one of those failures**: it is deleted and rebuilt, and the
@@ -2429,7 +2432,10 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
     `Op::Tokens` step over the token's entries in that list, carrying `states` only when the state
     moved. `touch_deck` is split off the fence because its `UPDATE` stamps as it checks, and a no-op
     press must not move the deck up the gallery.
-  - **Rule 7's reconcile runs in two layers.** `reconcile_in` inside `deck_undo::record_cells`,
+  - **Rule 7's reconcile takes only an `auto` token's entries** — never a `manual` one's, and since
+    v55's final review never a `hidden` one's either, because the wall draws a dismissal of a token
+    nothing makes as the reader's own until `retire_hidden` settles it at launch. **It runs in two
+    layers.** `reconcile_in` inside `deck_undo::record_cells`,
     `record_variant` and the three hand-built steps (the theory switch, `set_category_active`,
     `delete_category`), so its deletions ride the card write's own step; and
     `reconcile_dirty_logged` in `sync::with_write` after every write, off the managed wishlist's

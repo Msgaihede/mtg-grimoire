@@ -226,7 +226,8 @@ function heldNote(row: TheoryDiffRow): string | null {
  * words instead of in a key.
  *
  * **A token row names its printing as well** (managed tokens spec §3.7, 2026-09-27) —
- * `1 more Treasure (THOB #13)`, the set and number the row's own printing column shows. A name, a
+ * `1 more Treasure (THOB #13)`: the row's set and collector number, the facts its printing column
+ * shows (as `THOB · 13`), spelled here the way the deck's own lines name a printing. A name, a
  * count and a finish are not enough for tokens: a deck's Treasures come in many printings as a
  * matter of course, and two different Wurm tokens share a name, so two lines at one count and
  * finish would hand a reader two identical controls. A card row keeps the name it has always

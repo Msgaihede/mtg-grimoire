@@ -3401,11 +3401,18 @@ commands; `add_printing_in` calls it inside whatever transaction it was handed, 
 
 The reader: *"if you cut all cards that create a token, so a token is no longer needed in the deck,
 simply remove all tokens of that type"*. `deck_tokens::reconcile_in(tx, deck, variants)` deletes
-every entry, in each list asked about, of a token that list no longer derives and that is not
-`manual`, and **answers the rows it deleted** so the caller's step can put them back. A `hidden`
-token is taken like any other: a dismissal is still a token the deck makes, and once it is not, it
-has nothing left to be dismissed from. Cutting the card and adding it back brings the token back as
-its implicit entry. **A reconcile after every card write and never a read-time rule** — reading
+every entry, in each list asked about, of a token that list no longer derives and **whose state is
+`auto`**, and **answers the rows it deleted** so the caller's step can put them back. A `manual`
+token is never taken — no card made it, so no cut can unmake it — **and since the final review of
+v55 nor is a `hidden` one**: `deck_token_rows`' hand-added tail draws any state but `auto`, so a
+pre-v55 dismissal of a token nothing makes is on the wall like a `manual` one until `retire_hidden`
+settles it at the next launch, and a reconcile that took its entries would delete what the wall is
+drawing, capture the deletes for the group and, from the backstop, file them on no undo step. (Until
+then this read *a `hidden` token is taken like any other: a dismissal is still a token the deck
+makes, and once it is not, it has nothing left to be dismissed from* — true while a dismissal hid
+the token.) `a_reconcile_keeps_a_dismissed_token_nothing_makes`. Cutting the card and adding it back
+brings an `auto` token back as its implicit entry. **A reconcile after every card write and never a
+read-time rule** — reading
 around a stale entry would leave it in the table, and in PR 3's Collection mode (dropped on
 2026-09-27, before it was built) its copies in the
 deck's folder, which is the stranding the rule exists to prevent.
@@ -3445,7 +3452,7 @@ deck's folder, which is the stranding the rule exists to prevent.
   card table every stepper press on any deck would run a derivation over both of its lists for
   nothing.
 
-**Three things keep it cheap and one keeps it safe.** A list with no non-`manual` entries at all
+**Three things keep it cheap and one keeps it safe.** A list with no entries of an `auto` token at all
 is one indexed read and no derivation; a list is only derived when there is something it could
 delete; and the deletes are **ordinary captured writes** — every device derives the same answer, a
 delete that finds nothing is a no-op on the far device, and a captured delete keeps an undo's
@@ -3739,6 +3746,13 @@ an ordinary token at 0, its printings kept.* `deck_tokens::retire_hidden`, per t
   `schema::prepare_database` runs it after `repair_entry_finishes` (and, since the fan-in with
   `main`, after `deck_meta::refile_stray_theory_cards_at_launch`), through `retire_hidden_logged`:
   logged and left owing, because a dismissal not yet retired draws as an ordinary token anyway.
+  **And then drains the marks every launch pass left**, the way `sync::with_write` drains a
+  write's — `reconcile_dirty_logged`, then `managed_wishlist::settle_logged`. `settle_all` runs
+  earlier in the launch and arms the connection, so the passes after it mark the decks they write
+  and nothing read the marks until the first write of the session; on the first v55 launch that
+  meant a theory deck following `all` or `tokens` built its Tokens subfolder from a dismissed
+  token's counts, which the pass then zeroed under it (the final review's M2,
+  `the_launch_files_no_managed_token_wish_for_a_dismissal_it_retires`).
 - **Behind `capture::suppressed`**, `src-tauri/CLAUDE.md`'s rule for a write every device derives
   for itself: each device retires the same synced rows over the same corpus to the same answer, and
   an announced zero would reach a peer still on v54 as a count nobody set there.
@@ -3746,7 +3760,13 @@ an ordinary token at 0, its printings kept.* `deck_tokens::retire_hidden`, per t
   after the pass has run draws as an ordinary token — no reader treats the word as hidden — and is
   retired at the next launch; **every token write settles it sooner** (`settle_hidden`, inside the
   write's own `journal_in`, so it rides the write's undo step), because a step, a swap or a remove
-  is the reader using the token. A database with nothing dismissed costs one read.
+  is the reader using the token — **clearing the legacy count as this pass does**
+  (`clear_legacy_count`, step 2's statement), so the other list's implicit entry comes back at 0
+  rather than at the dismissal's old count; an added printing clears it **before** the implicit
+  entry would be materialised, so none is (the final review's deferred 1,
+  `a_write_that_settles_a_dismissal_clears_its_legacy_count` and
+  `an_add_that_settles_a_dismissal_clears_its_legacy_count_first`). A database with nothing
+  dismissed costs one read.
 - ⚠️ **A token the pass cannot prove unmade waits.** Where no list derives it and a list has a maker
   this corpus cannot read (`Derivation::unreadable` — a device synced before its corpus arrived),
   `manual` would be a guess, and a wrong one keeps the entries from every reconcile after the maker
@@ -3992,6 +4012,20 @@ because `main` shipped its own v50 first — `price_snapshots.copies`. It rides
 - **How the page spends it** — Stacks' drag and grip, Grid and Text inserting the pile at that
   place, Table not spending it at all, and the optimistic move — is
   [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md)'s *Tokens & Emblems*.
+
+### Owed: known, parked, and not fixed
+
+- **A pre-reroute deck-card row naming a token printing collides with a token entry in
+  Compare** (found by the final review of user schema v55, 2026-09-27; parked). Before
+  `deck::add_card` rerouted tokens (v52), a token added to a pile was an ordinary `deck_cards`
+  row. Such a row still on disk, and a token entry at the same printing and finish, share one
+  `deck_theory::group_key` — `grouped_diff` answers the card row and `token_diff` the token row,
+  each correctly from its own tally (a card and a token never share a pool) — so the Compare
+  dialog draws **two rows under one React key** (`rowKey` is the same `group_key`), and one
+  **Send** of that key files **two wishes**, because `missing_to_wishlist` walks both arms and
+  matches each against the one key in `only`. It needs pre-reroute data *and* an entry on the same
+  grain, so it is rare; no code is owed until a reader has it. The fix, when one is, is to keep
+  the two arms' keys apart (a token key the card arm cannot spell) rather than to fold the rows.
 
 ### A stale comment found on the way, and deliberately not fixed here
 

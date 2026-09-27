@@ -5336,20 +5336,6 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   );
 
   /**
-   * `PullRow`'s picture, named on its own — the assertion `mirrors` makes for the four card
-   * walls, owed here for their reason and made separately because that table's other two rules
-   * are properties of a wall's row rather than of a mirror.
-   *
-   * The pull dialog draws an art crop per row, and the failure a missing `image_uris` produces
-   * is the silent one this whole block exists for: `undefined` at the call site, a bare frame on
-   * screen, and no type error anywhere — because the field is optional on the TypeScript side,
-   * as every `imageUris` in this file is. jsdom has no network and cannot notice a picture that
-   * never arrives, so the field name agreeing on both sides is the whole of the fence.
-   *
-   * It costs the crate nothing to carry: `deck_pull` clones the value off the `DeckCardRow`s the
-   * plan is already built from, rather than running a second `front_face_selects` query.
-   */
-  /**
    * **`isToken` on both sides of the Compare row** (managed tokens spec §3.7) — named on its own as
    * well as counted by `mirrors`, because its absence is the quietest kind this file guards: a row
    * with no `isToken` reads `undefined`, which is falsy, so every token row would be filed as a
@@ -5412,6 +5398,20 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     expect([...ts].sort()).toEqual([...own].sort());
   });
 
+  /**
+   * `PullRow`'s picture, named on its own — the assertion `mirrors` makes for the four card
+   * walls, owed here for their reason and made separately because that table's other two rules
+   * are properties of a wall's row rather than of a mirror.
+   *
+   * The pull dialog draws an art crop per row, and the failure a missing `image_uris` produces
+   * is the silent one this whole block exists for: `undefined` at the call site, a bare frame on
+   * screen, and no type error anywhere — because the field is optional on the TypeScript side,
+   * as every `imageUris` in this file is. jsdom has no network and cannot notice a picture that
+   * never arrives, so the field name agreeing on both sides is the whole of the fence.
+   *
+   * It costs the crate nothing to carry: `deck_pull` clones the value off the `DeckCardRow`s the
+   * plan is already built from, rather than running a second `front_face_selects` query.
+   */
   it("names the front face's image URLs on both sides of the pull row", () => {
     expect(rustFields(deckPullRs, "PullRow"), "`PullRow` (Rust) has no `image_uris`").toContain(
       "image_uris",
