@@ -19224,13 +19224,9 @@ export function writeHandlers(db: FakeDb) {
       if (args.moveToCategoryId !== null) {
         const target = args.moveToCategoryId;
         for (const dc of held) {
-          const landed = db.deckCards.find(
-            (row) =>
-              row.deckId === dc.deckId &&
-              row.variant === dc.variant &&
-              row.categoryId === target &&
-              row.cardId === dc.cardId,
-          );
+          // {@link deckCardAt}, the grain in full: until 2026-09-27 this was a hand-written
+          // `find` without `finish`, so a moved foil summed into the target's regular row.
+          const landed = deckCardAt(db, dc.deckId, dc.cardId, target, dc.variant, dc.finish);
           if (landed) landed.quantity += dc.quantity;
           else dc.categoryId = target;
         }
