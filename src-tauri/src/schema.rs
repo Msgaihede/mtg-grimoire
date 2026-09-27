@@ -5258,7 +5258,9 @@ fn replace_attached_corpus(conn: &Connection, failed: rusqlite::Error) -> rusqli
 /// Delete a database file and its two journals, answering the first failure that was not "it
 /// was not there". **`NotFound` is success**: the file this was asked to remove is gone, which
 /// is the whole of what a caller wants to know.
-#[cfg(not(target_family = "wasm"))]
+///
+/// **Not gated to the desktop**, though only the desktop has files to delete: [`prepare_data_dir`]
+/// compiles on every target and calls it.
 fn remove_database_files(path: &std::path::Path) -> std::io::Result<()> {
     let mut first = Ok(());
     for suffix in ["", "-wal", "-shm"] {
@@ -5278,6 +5280,7 @@ pub const USER_BACKUPS_DIR: &str = "backups";
 /// How many pre-upgrade copies of `user.db` [`back_up_user_file`] keeps. Three upgrades back is
 /// long enough for a bug in a rung to be noticed, and at ~1.35 MB a copy it bounds the folder
 /// on a USB stick where one per update forever would not be.
+#[cfg(not(target_family = "wasm"))]
 const USER_BACKUPS_KEPT: usize = 3;
 
 /// Copy `user.db` to `backups/user.v{from}.db` before [`migrate_user`] climbs from `from`, and
