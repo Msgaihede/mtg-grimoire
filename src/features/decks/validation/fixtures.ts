@@ -15,6 +15,7 @@
  * Not a `.test.ts` file on purpose: Vitest would collect it and report "no test suite".
  */
 import type { CardFacts } from "./types";
+import { SIZE_KINDS } from "./kinds";
 import type { CategoryKind, FormatSpec } from "@/lib/ipc";
 
 /** The seeded rows these tests judge against, hand-copied from `schema.rs`. */
@@ -288,7 +289,7 @@ export function resetRowIds(): void {
  * two categories"; no rule in this folder reads {@link CardFacts.categoryId}, and a test that
  * cares about a *particular* category passes one.
  */
-const CATEGORIES: Record<CategoryKind, { id: number; name: string }> = {
+export const CATEGORIES: Record<CategoryKind, { id: number; name: string }> = {
   main: { id: 1, name: "Main deck" },
   side: { id: 2, name: "Sideboard" },
   commander: { id: 3, name: "Commander" },
@@ -533,7 +534,7 @@ export function tinyCommander(): CardFacts {
 }
 
 /**
- * Pad the size-counting kinds (`main` + `commander`) out to a legal deck with basics, so a
+ * Pad the size-counting kinds ({@link SIZE_KINDS}) out to a legal deck with basics, so a
  * test about copies or legality does not also trip the deck-size rule.
  *
  * It reads `categoryActive` as well as the kind, because the engine's size rule does: a
@@ -543,9 +544,7 @@ export function tinyCommander(): CardFacts {
  */
 export function padTo(size: number, cards: CardFacts[]): CardFacts[] {
   const counted = cards
-    .filter(
-      (c) => c.categoryActive && (c.categoryKind === "main" || c.categoryKind === "commander"),
-    )
+    .filter((c) => c.categoryActive && SIZE_KINDS.includes(c.categoryKind))
     .reduce((n, c) => n + c.quantity, 0);
   return counted < size ? [...cards, islands(size - counted)] : cards;
 }

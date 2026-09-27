@@ -48,13 +48,20 @@ import type { CategoryKind, FormatSpec } from "@/lib/ipc";
 import type { CardFacts, ValidationIssue } from "./types";
 import { colorIdentityIssues, commanderIdentity, frontFace } from "./commanders";
 import { isOrphan, manaValueOf } from "./engine";
+import { SIZE_KINDS } from "./kinds";
 
 /**
- * The category kinds a companion's condition reads. `side` is out (a sideboard is not the
- * starting deck) and so is `companion` itself — the companion begins the game outside the
- * deck, which is why Lurrus at mana value 3 can be its own deck's Lurrus.
+ * The category kinds a companion's condition reads — the starting deck, which is exactly the
+ * piles the deck is sized over, so it is {@link SIZE_KINDS} and never a second spelling of it.
+ * `side` is out (a sideboard is not the starting deck) and so is `companion` itself — the
+ * companion begins the game outside the deck, which is why Lurrus at mana value 3 can be its own
+ * deck's Lurrus. A switched-on Maybeboard is in, because it is in the deck's size; this list was
+ * `main | commander` until issue #554, so Yorion and Lurrus never saw one.
+ *
+ * Imported from `kinds.ts` rather than from `engine.ts`, which imports this module back: a
+ * top-level read of an `engine.ts` export here would run before `engine.ts` had.
  */
-const STARTING_DECK: readonly CategoryKind[] = ["main", "commander"];
+const STARTING_DECK: readonly CategoryKind[] = SIZE_KINDS;
 
 /** U+2014, written as an escape for the reason `commanders.ts` gives: an editor or a paste
  *  that swaps it for an en dash or a hyphen must not break a parser invisibly. */

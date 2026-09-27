@@ -39,7 +39,7 @@ import {
 } from "./cardControl";
 import { deckCardSlot } from "./dnd";
 import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "./theoryMatch";
-import { ruleBreak } from "./violations";
+import { ruleBreak, violationsFor } from "./violations";
 import type { ValidationIssue } from "./validation/types";
 
 /**
@@ -580,7 +580,7 @@ export interface CardStackProps {
    */
   currency: Currency;
   /**
-   * Every finding, by `cardId` — `violationsByCard`'s answer, handed in whole rather than
+   * Every finding, by row slot — `violationsBySlot`'s answer, handed in whole rather than
    * per card so one map serves a whole view.
    */
   violations?: Map<string, ValidationIssue[]>;
@@ -801,7 +801,7 @@ export function CardStack({
           onRelease={release}
           onMenuFrom={onMenuFrom}
           transition={reduced ? STILL : stackCard}
-          ruleBreakText={ruleBreak(violations?.get(card.cardId))}
+          ruleBreakText={ruleBreak(violationsFor(violations, card))}
           theoryMark={theoryMatchMark(theoryPlan, card)}
           noted={deckCardNoted(card, noted)}
           tracksCollection={tracksCollection}

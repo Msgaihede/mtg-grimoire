@@ -43,7 +43,7 @@ import { DeckCardFace } from "../DeckCardFace";
 import { theoryMatchMark, type TheoryMark, type TheoryPlan } from "../theoryMatch";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
-import { ruleBreak } from "../violations";
+import { ruleBreak, violationsFor } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { splitRail } from "./columns";
 import { GroupHeader } from "./GroupHeader";
@@ -360,7 +360,7 @@ function GridGroup({
               key={card.id}
               card={card}
               currency={marketplace.currency}
-              ruleBreakText={ruleBreak(violations?.get(card.cardId))}
+              ruleBreakText={ruleBreak(violationsFor(violations, card))}
               theoryMark={theoryMatchMark(theoryPlan, card)}
               noted={deckCardNoted(card, noted)}
               tracksCollection={tracksCollection}
