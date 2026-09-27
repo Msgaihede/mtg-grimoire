@@ -197,6 +197,7 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   sticky_notes: [["stickyNotes"]],
   sync_clock: [],
   sync_devices: [SYNC_KEY],
+  sync_gone: [],
   sync_group: [SYNC_KEY],
   sync_identity: [SYNC_KEY],
   sync_ops: [],

@@ -78,7 +78,7 @@
  * a decklist line with no `*F*` — while an add out of the binder carries the copy's own `foil`. Read
  * raw, the Surge Foil Palantír the reader had put in both lists was `palantir-hoc|` in one and
  * `palantir-hoc|foil` in the other: the blue tier here, and a line on the Compare dialog and the
- * wishlist besides. `deck_theory.rs`' `played_finish` spells the plan's half by the same rule, so
+ * wishlist besides. `deck.rs`' `played_finish` spells the plan's half by the same rule, so
  * the two stay one key. The second tier does not weaken any of this — it says two rows are the
  * same *card*, which is a different sentence and is drawn in a different colour.
  *

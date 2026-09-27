@@ -58,6 +58,14 @@ const BOLT: DeckCard = {
 
 const card = (over: Partial<DeckCard> = {}): DeckCard => ({ ...BOLT, ...over });
 
+/**
+ * A printing Scryfall sells only in foil — issue #563's Palantír of Orthanc, HOC 85 — and one sold
+ * in both. The plan is folded on the finish a row *plays*, so what `finishes` says decides whether
+ * a row that stored no finish is the foil (the first) or the regular copy (the second).
+ */
+const FOIL_ONLY = '["foil"]';
+const FOILABLE = '["nonfoil","foil"]';
+
 const candidate = (over: Partial<DeckPullCandidate> = {}): DeckPullCandidate => ({
   entryId: 21,
   quantity: 1,
@@ -325,6 +333,34 @@ describe("choosePull", () => {
   });
 
   /**
+   * **The finish half is the one the row _plays_** (issue #563's follow-up). `deck_pull_plan`
+   * answers `"foil"` for a foil-only printing whose deck row stored nothing — the search's Add,
+   * the quick add and every drag store no finish — so a card keyed on its stored column finds no
+   * row, and the press opens a dialog with nothing in it over copies the reader owns. A printing
+   * sold in both finishes is the contrast: there an unsaid row is still the regular copy, and it
+   * must not be answered by the foil row's candidates.
+   */
+  it("matches the finish a row plays, so an unsaid foil-only card finds the foil row", () => {
+    const plan = [
+      row({ cardId: "palantir", finish: "foil", candidates: [candidate({ entryId: 41 })] }),
+      row({ cardId: "m10", finish: null, candidates: [candidate({ entryId: 51, quantity: 4 })] }),
+      row({ cardId: "m10", finish: "foil", candidates: [candidate({ entryId: 52, quantity: 4 })] }),
+    ];
+
+    expect(
+      choosePull(plan, card({ cardId: "palantir", finish: null, finishes: FOIL_ONLY })),
+    ).toEqual({ kind: "take", picks: [{ entryId: 41, quantity: 1 }] });
+    expect(choosePull(plan, card({ cardId: "m10", finish: null, finishes: FOILABLE }))).toEqual({
+      kind: "take",
+      picks: [{ entryId: 51, quantity: 2 }],
+    });
+    expect(choosePull(plan, card({ cardId: "m10", finish: "foil", finishes: FOILABLE }))).toEqual({
+      kind: "take",
+      picks: [{ entryId: 52, quantity: 2 }],
+    });
+  });
+
+  /**
    * A lone candidate holding nothing yields no pick at all, and an empty batch is not something
    * to send: the dialog explains, this does not. Not reachable through the backend's own contract
    * — a candidate is a row that holds copies — which is exactly why it is pinned rather than
@@ -385,6 +421,29 @@ describe("missingPicks", () => {
       { cardId: "p1", finish: "foil", quantity: 2 },
     ]);
   });
+
+  /**
+   * **Folded on the finish a row plays, and that finish is what is sent** (issue #563's
+   * follow-up). A foil-only printing added once from the search (no finish stored) and once out of
+   * the binder (`"foil"`) is one address to `deck_missing_to_collection` — the plan folds the two
+   * into one row — so it is one pick, and it names the foil even though the first row said
+   * nothing. A printing sold in both finishes keeps its two picks: its unsaid row is the regular
+   * copy, which is a different piece of cardboard from the foil.
+   */
+  it("folds a foil-only printing's two spellings into one foil pick", () => {
+    expect(
+      missingPicks([
+        { card: card({ cardId: "palantir", finish: null, finishes: FOIL_ONLY }), copies: 1 },
+        { card: card({ cardId: "m10", finish: null, finishes: FOILABLE }), copies: 1 },
+        { card: card({ cardId: "palantir", finish: "foil", finishes: FOIL_ONLY }), copies: 2 },
+        { card: card({ cardId: "m10", finish: "foil", finishes: FOILABLE }), copies: 3 },
+      ]),
+    ).toEqual([
+      { cardId: "palantir", finish: "foil", quantity: 3 },
+      { cardId: "m10", finish: null, quantity: 1 },
+      { cardId: "m10", finish: "foil", quantity: 3 },
+    ]);
+  });
 });
 
 describe("choosePullFor", () => {
@@ -416,6 +475,35 @@ describe("choosePullFor", () => {
     expect(choosePullFor([bolt], [card({ id: 1 }), card({ id: 2, categoryId: 2 })])).toEqual({
       kind: "take",
       picks: [{ entryId: 21, quantity: 2 }],
+    });
+  });
+
+  /**
+   * **One foil-only printing under both spellings is one plan row, so it is taken once** (issue
+   * #563's follow-up). The plan folds an unsaid row and a `"foil"` row of a printing sold only in
+   * foil into a single `"foil"` shortfall; keyed on the stored finish the set would ask about a
+   * row that does not exist (the unsaid one) and open the dialog, or — were both keys found —
+   * take the one row's copies twice.
+   */
+  it("takes a foil-only printing picked under both spellings once", () => {
+    const palantir = row({
+      cardId: "palantir",
+      finish: "foil",
+      short: 3,
+      candidates: [candidate({ entryId: 41, quantity: 4 })],
+    });
+    const unsaid = card({ id: 1, cardId: "palantir", finish: null, finishes: FOIL_ONLY });
+    const foil = card({
+      id: 2,
+      categoryId: 2,
+      cardId: "palantir",
+      finish: "foil",
+      finishes: FOIL_ONLY,
+    });
+
+    expect(choosePullFor([palantir], [unsaid, foil])).toEqual({
+      kind: "take",
+      picks: [{ entryId: 41, quantity: 3 }],
     });
   });
 });

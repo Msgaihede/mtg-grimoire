@@ -486,6 +486,68 @@ preferred_finish`'s nullability one table over.
   inconsistency — *what am I still short of* and *what is in this box* are two questions, and the
   Theory tab is only ever asking the first.
 
+  **Since 2026-09-27 the finish half of that key is the finish each row _plays_, on both
+  tables** — the follow-up to [issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563),
+  whose fix taught the theory comparison the same rule a day earlier. `deck_cards.finish` is NULL
+  wherever a write named no finish, and nearly every write names none: the search's Add, the quick
+  add, every drag, the card menu, a decklist line without a `*F*`. The collection's own add offers
+  a printing only in the finishes it is sold in, so a foil-only printing's copy is `foil`. Keyed on
+  the raw column, the deck row wanted `nonfoil` — a copy nobody sells — and every owned/missing
+  read that translated NULL to `nonfoil` answered it wrongly:
+
+  - `attribute_owned` read the row as **missing beside its own foil copy** in the deck's group;
+  - `release_unclaimed_copies` read that copy as **unclaimed**, so the next *Use this printing* or
+    finish change anywhere in the deck filed it into `Recently removed`;
+  - `release_group_copies` found nothing behind the row, so a cut or a clear **stranded** the foil
+    copy in a group that no longer listed the card;
+  - `deck_pull_plan` offered **no candidate**, and `deck_missing_to_collection` and
+    `deck_quick_add_to_collection` **recorded `nonfoil` copies** of a card sold only in foil;
+  - `collection_to_deck` taking the foil copy out of another deck's group left that deck's unsaid
+    row **standing with nothing behind it**;
+  - the home page's deck completion followed `attribute_owned`, by its own contract.
+
+  **The decision is yes: owned attribution matches on the played finish**, and the rule is one
+  function rather than a re-spelling per site. `deck::played_finish` — moved out of `deck_theory`,
+  where #563 wrote it, to sit beside `normalise_finish` — is the deck row's stored finish, else the
+  printing's `deck::sole_finish` (`src/lib/finish.ts`' `playedFinish`, line for line), and
+  `deck::entry_finish` is the same answer in the collection's spelling. **It reads a collection
+  row's `nonfoil` exactly as it reads a deck row's NULL**, because both are the regular copy's
+  spelling on their table and a printing sold only in foil has no regular copy. That half is what
+  keeps the change from taking copies away: the quick add, *Add missing to collection*, a
+  collection import that named no finish and the scanner's default finish all wrote `nonfoil` for
+  such a card, every one of those rows answered an unsaid deck row while both sides translated to
+  `nonfoil`, and keyed on the deck side alone they would stop counting — and be swept into
+  `Recently removed` as unclaimed. `deck::entry_spellings` is the other direction, the words a
+  copy of a played finish may carry, and is what the SQL matches (`finish IN (?, ?)`).
+
+  **Measured on 2026-09-27 against the real dev database** (read-only): 13 548 foil-only and 892
+  etched-only printings in the corpus; 22 collection rows (58 copies) of sole-finish printings, all
+  stored in their sole finish — **45 of those copies in `Recently removed`** — no `nonfoil` row of
+  one; and one live deck row of a sole-finish printing that named no finish. So the bug was live
+  on real data and the legacy half guards a population this database happens not to have.
+
+  **What moved**: both pools (`owned_by_printing`, `available_by_printing`) fold a collection row
+  onto its entry finish; `attribute_owned`, `release_group_copies`, `release_unclaimed_copies`,
+  `collection_alloc`'s `take_from_deck_list`, `deck_pull`'s candidates, `deck_theory`'s
+  `OWNED_SPARE_SQL` and `deck_completion` key both sides on it; `live_shortfall` folds on the
+  played finish and **reports** it, so `DeckPullRow.finish` and `DeckMissingRow.finish` say `foil`
+  for an unsaid foil-only row, and an unsaid row and a `foil` row of one such printing are one
+  shortfall row and share one pool; `deck_missing_to_collection`, `deck_quick_add_to_collection`
+  and `deck_quick_add_wishes` resolve the finish they were handed through the printing, so the
+  deck card's own NULL records — and clears a wish for — the foil. The page keys a `DeckCard`
+  against the plan with `pullPlan.ts`' `deckCardPullKey`, the played finish, where it used
+  `pullKey` on the stored one.
+
+  **What did not move, deliberately**: a printing sold in two or more finishes, where an unsaid row
+  is the regular copy and a foil copy does not answer it (`sole_finish` answers only when there is
+  no choice); the `deck_cards` column itself, so a foil-only printing may still sit in one pile as
+  an unsaid row beside a `foil` row that `collection_to_deck` wrote — two rows on the grain that
+  every read above folds into one object; `wishlist::OWNED_SQL`, which decides whether a *wish* is
+  filled and is its own finish rule; and the two collection writers that are not deck writes — the
+  collection importer's `finish ?? "nonfoil"` and the scanner's default finish — which still
+  *write* `nonfoil` for an unsaid foil-only card. Those rows are now read correctly and still
+  written wrongly, and fixing the writers is a separate change.
+
   ⚠️ **`deck_theory::OWNED_SPARE_SQL` deliberately did not follow, and "fixing" it to match is
   the trap this paragraph exists for.** The shopping list is a *different* question and already
   nets the live list out: `theory_diff` computes `short = wanted − held`, where `held` is what the

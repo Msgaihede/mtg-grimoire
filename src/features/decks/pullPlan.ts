@@ -38,7 +38,14 @@
  * entry to draw from **first** — which moves one candidate and leaves the rest of the backend's
  * order alone.
  */
-import type { DeckPullCandidate, DeckPullPick, DeckPullRow } from "@/lib/ipc";
+import { playedFinish } from "@/lib/finish";
+import type {
+  DeckCard,
+  DeckFinish,
+  DeckPullCandidate,
+  DeckPullPick,
+  DeckPullRow,
+} from "@/lib/ipc";
 
 /** A row's identity — its printing and finish, the grain the backend folds at. */
 export type PullKey = string;
@@ -64,9 +71,56 @@ export type PullKey = string;
  *
  * Takes the two fields it reads rather than a whole {@link DeckPullRow}, so a caller holding only
  * a printing and a finish can ask — a row satisfies it unchanged.
+ *
+ * **It is the key for a _plan row_, and a {@link DeckCard} is keyed by {@link deckCardPullKey}.**
+ * A deck card satisfies this signature structurally, which is exactly the trap: its `finish` is
+ * the column as stored, and the plan's is the finish the row plays.
  */
 export function pullKey(row: Pick<DeckPullRow, "cardId" | "finish">): PullKey {
   return `${row.cardId}|${row.finish ?? ""}`;
+}
+
+/**
+ * The key a **deck card** is matched to a plan row by — {@link pullKey} over the finish the card
+ * _plays_, `playedFinish(stored, finishes)`, rather than the finish it stored.
+ *
+ * **Because that is the finish the plan is folded on.** `deck_pull_plan` and `deck_missing_plan`
+ * answer one row per `(card_id, played finish)`: the stored `deck_cards.finish`, else the
+ * printing's sole finish. For a printing sold in both finishes the two readings are one reading —
+ * `soleFinish` answers nothing there, so an unsaid row is the regular copy on both sides. For a
+ * printing Scryfall sells **only** in foil they are not: the search's Add, the quick add, every
+ * drag and a decklist line with no `*F*` store no finish, an add out of the binder stores the
+ * copy's own `foil`, and the plan folds both into one `"foil"` row. Keyed on the stored column,
+ * the unsaid row is `id|` against a plan row `id|foil`: `Collection ▸ Pull …` finds no row, the
+ * dialog is handed nothing and says *Nothing to pull.* over copies the reader owns, and a picked
+ * set's quick add sends the same address twice under two spellings.
+ *
+ * It is `theorySlot`'s rule in `theoryMatch.ts` applied to the plan's key, and it arrived as the
+ * follow-up to [issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563), which moved the
+ * theory comparison onto the played finish the same day. `finishes` is required for that file's
+ * reason: a caller that could leave it out would compile, key every unsaid foil-only row as the
+ * regular copy, and put this bug back with nothing going red.
+ */
+export function deckCardPullKey(card: Pick<DeckCard, "cardId" | "finish" | "finishes">): PullKey {
+  return pullKey({ cardId: card.cardId, finish: deckCardPlanFinish(card) });
+}
+
+/**
+ * The finish a plan row names this deck card by — `playedFinish`, in the deck's own spelling.
+ *
+ * The half of {@link deckCardPullKey} a write needs on its own: a `DeckMissingPick` addresses the
+ * cardboard by `(cardId, finish)`, and the finish it sends should be the one the plan row it
+ * answers carries rather than whatever this row happened to store.
+ *
+ * `playedFinish` answers in Scryfall's enum, where the regular copy is `nonfoil`; a plan says it
+ * `null` (`deck::normalise_finish`). `soleFinish` already answers `null` for a nonfoil-only
+ * printing and a deck row never stores the word, so that arm is the type's rather than a case —
+ * written as the translation, not a cast, so a future answer in the other spelling still lands on
+ * the plan's.
+ */
+export function deckCardPlanFinish(card: Pick<DeckCard, "finish" | "finishes">): DeckFinish {
+  const played = playedFinish(card.finish, card.finishes);
+  return played === "nonfoil" ? null : played;
 }
 
 /** The reader's departures from the default. Tiny on purpose: everything else is derived. */
