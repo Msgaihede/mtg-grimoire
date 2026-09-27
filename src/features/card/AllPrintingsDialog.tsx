@@ -107,6 +107,7 @@ import {
 } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { refreshCardSearches } from "@/lib/searchMarks";
 import { buildCardMenu, type CardMenuDeps } from "./cardMenu";
 import { finishRefusal } from "./copyEdit";
 import { handBackToDeckCard } from "./deckControl";
@@ -690,7 +691,7 @@ function Body({
       ipc.wishlistSetPrinting(id, cardId),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
       onDone();
     },
   });
@@ -721,7 +722,7 @@ function Body({
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
       if (useAppStore.getState().paneCopy?.entryId === id) editCopy(cardId, finish, change.id);
       onDone();
     },

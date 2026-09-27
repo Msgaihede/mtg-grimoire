@@ -108,6 +108,13 @@ fn publish_build(state: &AppState, generation: u64, ix: CardIndex) -> bool {
 /// the only thing that can supersede an amendment. Two collection writes racing each other
 /// clone the same base, and without this the slower one's re-read wins and the faster one's
 /// row is lost until the next write.
+///
+/// **A refusal is not the end of an amendment, and until 2026-09-27 it was** (issue #552). The
+/// check above stops a stale copy landing; it cannot tell *whose* write was stale. Two quick
+/// "+" presses clone one base, the first to commit reads `owned` before the second's row is in
+/// the database and publishes, and the second — whose re-read held both rows — was refused here
+/// and dropped, so the Owned chip greyed out over a card the search still returned. The refusal
+/// is now [`amend_owned`]'s cue to re-clone whatever is live and read again.
 fn publish_amendment(state: &AppState, base: &Arc<CardIndex>, ix: CardIndex) -> bool {
     let mut slot = crate::db::lock_write(&state.index);
     if !slot
@@ -192,15 +199,43 @@ pub fn invalidate_owned(state: &AppState) {
     let Ok(conn) = crate::db::open_read(&state.data_dir) else {
         return;
     };
-    let mut next = (*base).clone();
-    if let Err(e) = next.rebuild_owned(&conn) {
-        eprintln!("the owned facet could not be refreshed: {e}");
-        crate::sync::note_database(state, "index_owned_refresh", &e.to_string());
-        return;
+    amend_owned(state, &conn, base);
+}
+
+/// How many times [`amend_owned`] re-clones after a refusal before it lets the amendment go.
+///
+/// Each retry re-reads `owned` *after* the write that asked for it committed, so one retry is
+/// enough for the two-write race; the rest is headroom for a burst of writes. A bound rather
+/// than a loop until it lands, because the thing on the other side of a refusal is another
+/// writer making progress, and one that keeps winning has published a read at least as new as
+/// ours.
+const AMEND_ATTEMPTS: usize = 4;
+
+/// Clone `base`, re-read `owned` into the copy and publish it — and **on a refusal, re-clone
+/// whatever is live now and read again**, rather than dropping the amendment.
+///
+/// A refusal has two causes and only one of them ends the attempt. **Cold** — a sync cleared
+/// the index — stops here in silence: the sync's own rebuild is the answer, and a quick-add is
+/// not the place to spend a build. **Replaced** — a sibling amendment or a build landed first —
+/// retries, because the index that won may have read `owned` before this write committed; see
+/// [`publish_amendment`] for the race that cost.
+fn amend_owned(state: &AppState, conn: &rusqlite::Connection, mut base: Arc<CardIndex>) {
+    for _ in 0..AMEND_ATTEMPTS {
+        let mut next = (*base).clone();
+        if let Err(e) = next.rebuild_owned(conn) {
+            eprintln!("the owned facet could not be refreshed: {e}");
+            crate::sync::note_database(state, "index_owned_refresh", &e.to_string());
+            return;
+        }
+        if publish_amendment(state, &base, next) {
+            return;
+        }
+        let Some(live) = current(state) else {
+            return;
+        };
+        base = live;
     }
-    // Dropped in silence if the base is gone: a sync taking the index cold underneath a
-    // quick-add is ordinary, and the sync's own rebuild is the answer to it.
-    publish_amendment(state, &base, next);
+    eprintln!("the owned facet refresh lost {AMEND_ATTEMPTS} races in a row and was dropped");
 }
 
 #[cfg(test)]
@@ -399,6 +434,55 @@ mod tests {
             3,
             "the live index is left exactly as it was"
         );
+    }
+
+    /// **Two quick collection writes must both land in `owned`** (issue #552). The race, laid
+    /// out by hand at the point [`amend_owned`] decides it: the second write cloned the base
+    /// *before* the first published, so its publish is refused — and until the retry, that
+    /// refusal dropped the only read that held both rows, leaving the Owned chip greyed over a
+    /// card the search returned until the next write.
+    #[test]
+    fn a_refused_amendment_is_read_again_over_the_live_index_rather_than_dropped() {
+        let state = state_with_seeded_cards("amend-retry");
+        build_now(&state).unwrap();
+        // The second write's clone, taken before the first write's amendment publishes.
+        let stale = current(&state).unwrap();
+
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            own(&conn, "1", 1);
+        }
+        invalidate_owned(&state);
+        assert_eq!(
+            current(&state).unwrap().owned.count(),
+            1,
+            "the first write landed"
+        );
+
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            own(&conn, "2", 1);
+        }
+        let conn = crate::db::open_read(&state.data_dir).unwrap();
+        amend_owned(&state, &conn, stale);
+        assert_eq!(
+            current(&state).unwrap().owned.count(),
+            2,
+            "the refused amendment re-read over the live index instead of vanishing"
+        );
+    }
+
+    /// A refusal because the index went **cold** is the one that must stay dropped: a sync
+    /// cleared it, and its rebuild is the answer. Retrying would have nothing to clone.
+    #[test]
+    fn a_refused_amendment_over_a_cold_index_leaves_it_cold() {
+        let state = state_with_seeded_cards("amend-cold");
+        build_now(&state).unwrap();
+        let base = current(&state).unwrap();
+        clear(&state);
+        let conn = crate::db::open_read(&state.data_dir).unwrap();
+        amend_owned(&state, &conn, base);
+        assert!(current(&state).is_none());
     }
 
     /// The wrapper the three call sites actually use: it must run the build, and it must not
