@@ -214,7 +214,12 @@ from the same delete.
   are retried in page order while the previous pass made progress (a group written or decided moot),
   capped at the group count, and only each group's last answer is classified. One pass met a folder
   moved into a new folder created under a deleted parent before the new folder was decided, held it,
-  and dropped it at the bound.
+  and dropped it at the bound. **A gone-based decision is taken only on a pass that follows one on
+  which nothing else landed** (amended at the fourth fix round): the group that resurrects a parent
+  can itself land only on a retry pass — a parent renamed and moved into a folder made later in the
+  page — and a decision taken before it deleted a folder the sender keeps. Withheld decisions are
+  taken on the next pass that lands nothing, and the loop continues; the cap is twice the group count
+  plus one.
 
 ### 3.4 Why not "apply deletes last"
 

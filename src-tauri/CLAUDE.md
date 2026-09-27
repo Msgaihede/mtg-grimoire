@@ -1683,18 +1683,22 @@ record, with every measurement, is
   release dropped the peer's later children of the folder) — and written without it where the key
   is `SET NULL`; an unknown table or an unbuildable row from a same or older schema is **dropped**,
   one `error_log` row (`Source::Relay`, `apply`) folded per table. **Every decision resting on
-  `gone`, moot or `SET NULL`, is made on a retry pass and never on the first attempt**, which
-  answers `Why::DecidedOnRetry`: a later group of the same page can bring the parent back through
-  add-wins, and decided at once the moot arm deleted a folder moved under it that its sparse move
-  could not rebuild, and the `SET NULL` arm filed at the root a copy the sender keeps in its
-  binder. The cost is a retry pass for every child of a gone parent — every card of a deck deleted
-  in the same page — cheap, and not rare. **The moot arm's `sync_gone` row for a row it never held
-  is written on the retry too**: on the first attempt it misfiled a child at the root when the
-  parent came back later in the page. **The retry passes are a bounded fixed point**
-  (`apply::run_groups`): the groups still failing are retried in page order while the previous pass
-  made progress — wrote a group or decided one moot — capped at the page's group count, and only
-  each group's last answer is classified; a single pass held a folder moved into a new folder made
-  under a deleted parent, met before that folder was decided, and the release dropped it.
+  `gone`, moot or `SET NULL`, is taken only on a retry pass that follows one on which nothing else
+  landed** (an `Attempt::Decide` pass); the first attempt and every `Retry` pass answer
+  `Why::DecidedOnRetry` and withhold it. The group that brings a parent back through add-wins can
+  sort after the child or land only on a retry pass itself — a parent renamed and moved into a
+  folder made later in the page — and a decision taken before it deleted a folder the sender keeps
+  (its sparse move cannot rebuild it) or filed at the root a copy the sender keeps in its binder.
+  The cost is at least two retry passes for every **put, or put and delete, naming a gone parent**;
+  a bare `del` carries no parents and never reaches the arm, so a deck's cards deleted with it do
+  not pay it. **The moot arm's `sync_gone` row for a row it never held waits for the deciding pass
+  too**: on the first attempt it misfiled a child at the root when the parent came back later in
+  the page. **The retry passes are a bounded fixed point** (`apply::run_groups`): after a pass that
+  landed something comes a `Retry`, after one that landed nothing but withheld a decision a
+  `Decide`, and a pass that did neither ends the loop; the cap is twice the page's group count
+  plus one, and only each group's last answer is classified. A single retry held a folder moved
+  into a new folder made under a deleted parent, met before that folder was decided, and the
+  release dropped it.
   **Every delete `apply` issues that would clear rows out of a folder waits for the page's retry**
   too — a folder's or a deck's whose doomed set (the copies and wishes filed in the folders it
   would take) is non-empty, collision or not, answers `Why::DecidedOnRetry` on the first attempt,

@@ -1687,8 +1687,8 @@ last answer each group gave):
 
 | The group | Class | Holds its device? | Recorded? |
 | --- | --- | --- | --- |
-| Names a parent deleted in this page, or anywhere a delete has ever reached this device — its own, a peer's applied here, a row a cascade took with either, or a row this device never held — which is what `sync_gone` records (user schema v53: a table of tombstones, not the `del` ops also called that) — and the parent's foreign key **cascades** | **moot**, decided on a retry pass and never the first attempt — and the row goes here too, where this device holds it and the group's placement under that parent stands, a folder included | no | no — the convergent outcome |
-| The same, but the key is **`SET NULL`** (`collection_entries.folder_id`, `wishlist_entries.folder_id`, `decks.folder_id`, `deck_cards.label_id`) | **not held** — written without that parent, on a retry pass and never the first attempt | no | no |
+| Names a parent deleted in this page, or anywhere a delete has ever reached this device — its own, a peer's applied here, a row a cascade took with either, or a row this device never held — which is what `sync_gone` records (user schema v53: a table of tombstones, not the `del` ops also called that) — and the parent's foreign key **cascades** | **moot**, decided only on a retry pass that follows one on which nothing else landed — and the row goes here too, where this device holds it and the group's placement under that parent stands, a folder included | no | no — the convergent outcome |
+| The same, but the key is **`SET NULL`** (`collection_entries.folder_id`, `wishlist_entries.folder_id`, `decks.folder_id`, `deck_cards.label_id`) | **not held** — written without that parent, only on a retry pass that follows one on which nothing else landed | no | no |
 | Any reason, and an op in it was sealed by a **newer** schema | **held · newer** | yes, with no bound | no — the Sync panel says it |
 | An unknown parent, from a same or older schema | **held · waiting** | yes, until the client's bound | only when released |
 | An unknown table, or a row this database cannot build, from a same or older schema | **dropped** — skipped | no | yes |
@@ -1767,15 +1767,16 @@ last answer each group gave):
   consumes as moot with no row to take, and the copy behind it named a folder nothing here said
   was gone — it waited out the bound and was dropped, where the peer's cascade puts it at the root
   (`a_copy_filed_into_a_binder_made_under_one_this_device_deleted_lands_at_the_root_on_both`).
-  **That row is written on a retry pass only**, as the whole moot decision is (below). Written on
-  the first attempt, as it was for one fix round, it sent a child in the same page to the root
+  **That row is written only on a deciding pass**, as the whole moot decision is (below). Written
+  on the first attempt, as it was for one fix round, it sent a child in the same page to the root
   before a later group of that page brought the parent back through add-wins, and the retry then
   built the folder under the resurrected parent — the child at the root here and in the folder on
   the peer (`a_folder_made_under_a_parent_the_same_page_brings_back_keeps_its_copy`).
-  **A folder's or a deck's moot delete needs no wait of its own**: it only ever runs on a retry
-  pass, by which the page's own re-filing of the rows filed in it has landed, and the re-homing
-  after these notes takes whatever is left. It had a wait of its own until the whole decision
-  moved to the retry, and two dragged-copy tests pin that the wait still happens
+  **A folder's or a deck's moot delete needs no wait of its own**: it only ever runs on a deciding
+  pass, which follows a pass on which nothing landed, so the page's own re-filing of the rows filed
+  in it has landed, and the re-homing after these notes takes whatever is left. It had a wait of
+  its own until the whole decision moved to the retry, and two dragged-copy tests pin that the
+  wait still happens
   (`a_copy_dragged_onto_a_lower_root_twin_out_of_a_binder_moved_under_a_deleted_one_lands_once`
   and its `…higher_root_twin…` sibling: deleted on the first attempt, the folder re-homed a copy
   the page was itself folding, which counted it twice or deleted the survivor, by uid order).
@@ -1795,41 +1796,58 @@ last answer each group gave):
   deck. `apply::cascades` reads `on_delete` off `pragma_foreign_key_list` on the live schema, so the
   rule is never restated beside the key it describes
   (`a_child_of_a_folder_this_device_deleted_lands_at_the_root_on_both`).
-- **Every decision resting on `gone` is made on a retry pass, never on the first attempt** — both
-  arms, the moot one and the `SET NULL` one — and the first attempt answers `Why::DecidedOnRetry`
-  instead (Task C's fix rounds, 2026-09-27; until then the branch decided both on the first one).
-  `gone` answers for the page as it stood before this group, and a later group of the same page
-  can bring the parent back: an edit made on the sender after this device's delete resurrects it
-  through add-wins, and the page sorts by table rank and then by each group's earliest op, so that
-  edit can come after the child. Decided at once, the moot arm deleted a folder moved under the
-  parent, which the folder's own sparse move could not rebuild when the parent returned — dropped
-  as `NOT NULL constraint failed: collection_folders.name` while the sender kept it
-  (`a_folder_moved_under_a_parent_the_same_page_brings_back_follows_it`) — and the `SET NULL` arm
-  filed a copy at the root that the sender keeps in its binder
-  (`a_copy_filed_into_a_binder_the_same_page_brings_back_stays_in_it`). On a retry pass
-  `resolve_parent` is asked again first, finds a resurrected parent, and the group is written like
-  any other; only a parent still unknown and still gone reaches either arm. **The cost: every child
-  of a gone parent takes a retry pass** — every card of a deck deleted in the same page included,
-  each one more `write_group` over a parent the first attempt already failed to find. Cheap beside
-  the pull; not rare.
+- **Every decision resting on `gone` is taken only on a retry pass that follows one on which
+  nothing else landed** — both arms, the moot one and the `SET NULL` one. The first attempt, and
+  every retry pass after a pass that landed something, answers `Why::DecidedOnRetry` and withholds
+  the decision (Task C's fix rounds, 2026-09-27: the branch decided both arms on the first attempt,
+  then on any retry pass, before this). `gone` answers for the page as it stands, and a group of
+  the same page can still bring the parent back: an edit made on the sender after this device's
+  delete resurrects it through add-wins, and that group can sort after the child — the page sorts
+  by table rank and then by each group's earliest op — **or land only on a retry pass itself**,
+  because it waits on a parent of its own. Decided before the parent came back, the moot arm
+  deleted a folder moved under it, which the folder's own sparse move could not rebuild when the
+  parent returned — dropped as `NOT NULL constraint failed: collection_folders.name` while the
+  sender kept it (`a_folder_moved_under_a_parent_the_same_page_brings_back_follows_it`) — and the
+  `SET NULL` arm filed at the root a copy the sender keeps in its binder
+  (`a_copy_filed_into_a_binder_the_same_page_brings_back_stays_in_it`). **One retry pass was not
+  late enough either**: `b` holds `X` and deletes `P`, and `a` moves `X` under `P`, renames `P`,
+  makes `Outer` and moves `P` into it, so `P` waits on `Outer` on the first attempt and is
+  resurrected on the first retry pass — after `X` was met on it; decided there, `X` was deleted as
+  moot and lost for good (`a_folder_moved_under_a_parent_resurrected_on_a_retry_pass_follows_it`,
+  and `a_copy_filed_into_a_binder_resurrected_on_a_later_retry_pass_stays_in_it` for the
+  `SET NULL` arm two passes in). A pass on which nothing landed is one after which no group of the
+  page can land without a gone-based decision, so no resurrection is still to come; `resolve_parent`
+  is asked again first on every pass, finds a resurrected parent, and the group is written like any
+  other — only a parent still unknown and still gone reaches either arm. **The cost: every group
+  naming a gone parent takes at least two retry passes**, one that withholds and one that decides.
+  That is a put, or a put and its delete in one page, naming the parent: **a bare `del` carries no
+  parents**, resolves none and never reaches this arm, so a deck's cards deleted with it in the
+  same page, each a bare `del`, do not pay it. Each pass is one more `write_group` over a parent
+  already not found — cheap beside the pull.
 - **The retry passes run to a fixed point, bounded** (`apply::run_groups`). The groups the first
-  attempt did not write are retried in page order; another pass runs only while the one before it
-  **made progress** — wrote a group, or decided one moot — and never more passes than the page has
-  groups. A group waiting on a parent that is unknown and not gone goes round again, every other
-  answer on a retry pass is final, and **only each group's last answer is classified**, so a hold
-  is decided by the page as it finally stood. One retry was not enough: `a` renames `X`, makes `Z`
-  under a `P` this device deleted and moves `X` into `Z`, and `X`'s group sorts ahead of `Z`'s (its
-  earliest op, the rename, is older than `Z`'s creation), so on the single retry `X` asked after `Z`
-  before `Z` had been decided — unknown and not yet gone — and was held, `Z` got its `sync_gone`
-  row too late, and when the release dropped `X`'s ops this device kept `X` where `a`'s cascade had
-  taken it (`a_folder_moved_into_one_made_under_a_parent_deleted_here_goes_on_both`). Now `Z` gets
-  that row on the first retry pass and the second finds `X` under a parent that is gone, deleting
-  it as `a`'s cascade did. The loop stops as soon
-  as a pass moves nothing, so a child whose parent is genuinely missing costs one more pass and not
-  a run to the cap (`the_retry_passes_stop_when_nothing_can_progress`, which reads the pass count a
-  test-only counter keeps). The cost is a pass per link of the longest such chain, over only the
-  groups still waiting; the passes all run inside one round of the apply, so a round that is rolled
-  back takes every pass with it.
+  attempt did not write are retried in page order on **two kinds of pass**: a `Retry` pass writes
+  what it can and withholds every gone-based decision, and a `Decide` pass, which runs only after a
+  pass on which nothing landed, takes them. A pass that wrote something is followed by a `Retry`;
+  one that wrote nothing but withheld a decision is followed by a `Decide`; one that did neither
+  ends the loop — and a decision is progress in its own right, so the loop goes on with `Retry`
+  passes after it. A group waiting on a parent that is unknown and not gone goes round again, every
+  other answer is final, and **only each group's last answer is classified**, so a hold is decided
+  by the page as it finally stood. **The cap is twice the page's group count plus one** and is
+  never reached: every pass that lands or decides something takes a group out of the waiting set
+  for good, and at most one pass falls between two of those. Why the loop at all: a child can be
+  met before the parent it waits on has been decided. `a` renames `X`, makes `Z` under a `P` this
+  device deleted and moves `X` into `Z`, and `X`'s group sorts ahead of `Z`'s (its earliest op, the
+  rename, is older than `Z`'s creation), so on a single retry `X` asked after `Z` before `Z` had
+  been decided — unknown and not yet gone — and was held, `Z` got its `sync_gone` row too late,
+  and when the release dropped `X`'s ops this device kept `X` where `a`'s cascade had taken it
+  (`a_folder_moved_into_one_made_under_a_parent_deleted_here_goes_on_both`). Now `Z` is decided
+  moot on a `Decide` pass and a later pass finds `X` under a parent that is gone, deleting it as
+  `a`'s cascade did. A child whose parent is genuinely missing ends the loop on the first pass after
+  the last thing moved, never at the cap (`the_retry_passes_stop_when_nothing_can_progress`, which
+  reads the pass count a test-only counter keeps). The cost is two passes for each link of the longest chain of waiting
+  groups, over only the groups still waiting; a page with nothing withheld and nothing waiting pays
+  the one retry it always paid. All the passes run inside one round of the apply, so a round that
+  is rolled back takes every pass with it.
 - **Held · newer is a hold on a possibility.** A newer sender's group this build cannot write may be
   one an upgrade can — a table it has not heard of, a `CHECK` word a rung will add — and nothing
   here can tell which, so every newer deferral holds
@@ -1865,7 +1883,7 @@ and so is a deck: its group folder goes with it (`collection_folders.deck_id` ca
 `deck::delete_deck`'s re-filing into `Recently removed` is rank 7 behind the deck's rank 1 — and a
 copy filed into the folder here, concurrently, has no re-filing in the page at all. So every
 `DELETE` `apply` issues — the delete arm's, and the moot delete above, which only ever runs on a
-retry pass — now finds first what it would clear (`sync_engine/apply/rehome.rs`'s `doomed`):
+deciding pass — now finds first what it would clear (`sync_engine/apply/rehome.rs`'s `doomed`):
 
 1. **The doomed folders.** A `collection_folders` or `wishlist_folders` row and its sub-tree, or a
    `decks` row's group folders and theirs: the three `ON DELETE CASCADE` keys into the two folder
@@ -1881,10 +1899,12 @@ retry pass — now finds first what it would clear (`sync_engine/apply/rehome.rs
   reason every decision resting on `gone` shares (the table's notes, above). The group joins
   `run_groups`' failed list and is tried again on the retry passes, after every other group in the
   page has had its first attempt, by which time the sender's own writes to those rows — later in
-  rank, sealed before its delete — have landed.
-  `DecidedOnRetry` is **never classified**: only a first attempt answers it, and only the last
-  retry pass's answer is kept. A delete that dooms nothing — any other table, or an empty folder —
-  goes on the first attempt, in stamp order.
+  rank, sealed before its delete — have landed. Any retry pass decides a clearing delete; a
+  gone-based decision waits for a deciding pass, and
+  answers `DecidedOnRetry` on every pass before it. The reason is **never classified**, short of
+  the loop's cap: a withheld group is on every pass until it is decided, the loop ends only on a
+  pass that withheld nothing, and only each group's last answer is kept. A delete that dooms
+  nothing — any other table, or an empty folder — goes on the first attempt, in stamp order.
 - **The retry re-homes, then deletes.** Each doomed row still in a doomed folder, in `id`
   order, is filed at the root through the crate's own merge — `collection_folders::refile_entry`
   and `wishlist_folders::refile_wish` with no folder — which folds it onto a twin (counters summed,
@@ -2148,7 +2168,7 @@ The cursor-carrying loop the limit needs must walk to the head, and only then ma
   parent-table row it did not find (`apply::tombstone`), so a child another device filed into that
   parent lands on the later page at once
   (`a_child_of_a_parent_a_third_device_made_and_deleted_between_two_pulls_lands_at_once`), and the
-  moot arm does the same, on a retry pass, for a child it never held (the moot notes after the
+  moot arm does the same, on a deciding pass, for a child it never held (the moot notes after the
   table, above).
 - ⚠️ **A newer hold that spans a device removal loses everything it held** (the final review's I2,
   read off the code and unmeasured). A removal makes every remaining device forget the superseded
