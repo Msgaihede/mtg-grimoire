@@ -355,15 +355,25 @@ export const ImportFromCollection: Story = {
 };
 
 /**
- * Deck 4, the testbed, which has nothing on the reader's desk that fits a hole in its live list.
+ * Deck 4, the testbed, once its one hole is filled — **nothing left on the reader's desk that fits
+ * a hole in its live list.**
  *
  * **An empty plan is the ordinary answer rather than a fault**, so the button greys and says why
  * in its own visible name — the rule the two Clear buttons under it already follow, and the reason
  * is that a greyed control whose name is the bare label reads to a screen reader, and to a test,
  * as a control that is *missing* rather than one with nothing to do.
  *
- * A pull moves only the exact printing **and finish** the list names and never a copy another deck
- * is already holding, which is why a deck can read missing and still have nothing to import.
+ * **The state is reached by a press rather than seeded, and that is issue #563's follow-up.** This
+ * story used to open on it: deck 4's live list names Consecrated Sphinx (`mp2 8`) with no finish,
+ * and the only copy on the desk is the graded **foil** one in `Binder`. The pull matched the
+ * unsaid row as `nonfoil` and offered nothing. Scryfall sells that printing only in foil, so the
+ * row can only be the foil, and the pull now offers the Binder copy — which is the fix working, and
+ * which left no seeded deck with an empty plan. So the play pulls the Sphinx the way a reader would
+ * and then asks the button, which also proves the plan re-reads after a pull.
+ *
+ * A pull still moves only the exact printing **and finish** the list names — the finish it
+ * *plays* — and never a copy another deck is already holding, which is why a deck can read missing
+ * and still have nothing to import.
  */
 export const NothingToImport: Story = {
   args: { deckId: 4 },
@@ -371,6 +381,19 @@ export const NothingToImport: Story = {
     const canvas = within(canvasElement);
     await canvas.findByLabelText("Name");
 
+    await userEvent.click(
+      await canvas.findByRole("button", { name: "Import missing cards from collection…" }),
+    );
+    const pull = await canvas.findByRole("dialog", { name: "Pull from collection" });
+    // `ImportFromCollection`'s wait, for its reason: a `motion` surface inside another one.
+    await waitFor(() => expect(pull).toBeVisible(), { timeout: FRAME_WAIT });
+    await userEvent.click(within(pull).getByRole("button", { name: "Pull 1 copy" }));
+    await expect(await within(pull).findByText(/Pulled 1 copy across 1 card/)).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(canvas.queryByRole("dialog", { name: "Pull from collection" })).toBeNull(),
+    );
     await expect(
       await canvas.findByRole("button", {
         name: "Import missing cards from collection… (nothing to import)",

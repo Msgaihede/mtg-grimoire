@@ -1928,7 +1928,15 @@ Full detail, with the measurements and the traps behind each rule, is in
   2026-09-07.** Through the day before it matched on oracle id alone and ignored finish (and
   condition and language) entirely, so a foil deck row was answered by whatever copies of that
   card the group held, foil or not. `owned_by_printing` matches `(card_id, finish)` now, so a
-  foil row wants a foil copy specifically — condition and language are still ignored.
+  foil row wants a foil copy specifically — condition and language are still ignored. **And since
+  2026-09-27 each side's finish is the one the row _plays_** (issue #563's follow-up):
+  `deck::entry_finish` reads a deck row's NULL, and a collection row's `nonfoil`, as the printing's
+  `deck::sole_finish` where it is sold in only one finish (13 548 foil-only, 892 etched-only), so
+  an unsaid row of a foil-only printing owns, claims, releases and records **foil** copies. Every
+  owned/missing read and every deck write that creates or moves a copy goes through that one
+  function — `deck::played_finish`, which `deck_theory` shares, is its deck-spelling half. Why the
+  collection half too, and the whole list of sites, is in
+  [decks-storage.md](../docs/reference/decks-storage.md).
 - **The variant picks the _pool_ the owned numbers are attributed from, and `deck::get_deck` is
   the one line that decides it** (2026-09-09,
   [issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). A `live` row is answered by
@@ -2133,7 +2141,8 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   checks it against `format_specs` not at all: which format a *dialog* starts on is a display
   decision, and TypeScript's `newDeckFormat` is where the fallback to Commander lives.
 - **A `live` row's owned/missing is `sum(quantity)` over the deck's own group, matched by
-  `(card_id, finish)` since 2026-09-07, and there is no allocator** (schema v25). **A `theory`
+  `(card_id, finish)` since 2026-09-07 — each side's finish the one it plays,
+  `deck::entry_finish`, since 2026-09-27 — and there is no allocator** (schema v25). **A `theory`
   row's comes out of the wider pool instead** — see the deck bullet above, and read every
   sentence below as being about the live list. `deck::owned_by_printing` joins
   `collection_entries` to `collection_folders` on `f.deck_id = ?1` and groups by `e.card_id,

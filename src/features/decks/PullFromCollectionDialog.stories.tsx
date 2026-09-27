@@ -273,9 +273,9 @@ export const PickingASource: Story = {
  * it says what the press does, and that is the same act at either scope.
  *
  * **The narrowing is the caller's and never this component's.** The editor filters the same cached
- * plan to the card's `pullKey` and hands over what is left, so nothing here holds a notion of a
- * key and the two entrances cannot come to disagree about which rows belong to which card. That
- * is why this story is one `args` line rather than a second component.
+ * plan to the card's `deckCardPullKey` and hands over what is left, so nothing here holds a notion
+ * of a key and the two entrances cannot come to disagree about which rows belong to which card.
+ * That is why this story is one `args` line rather than a second component.
  *
  * **It opens at all only where there is a decision in it**: `choosePull` takes a lone candidate
  * outright with no dialog, and sends two or more — this row — here. None comes here too, so that

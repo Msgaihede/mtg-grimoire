@@ -44,6 +44,7 @@
 //! list. Nothing in this module or in `deck.rs` deletes a `theory` row except the ordinary card
 //! writes the user makes against it.
 
+use crate::deck::{entry_finish, entry_spellings, played_finish};
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -248,6 +249,9 @@ pub struct TheoryDiffRow {
 /// two figures, and has no use for a uuid it cannot show.
 struct Grouped {
     oracle_id: Option<String>,
+    /// The printing's `cards.finishes`, for [`OWNED_SPARE_SQL`]'s [`entry_spellings`] — not on
+    /// [`TheoryDiffRow`] for `oracle_id`'s reason.
+    finishes: Option<String>,
     row: TheoryDiffRow,
 }
 
@@ -262,54 +266,6 @@ const GROUP_SEPARATOR: char = '|';
 /// [`Grouped`]'s key for one deck row: the exact card, in the exact object the row plays.
 fn group_key(card_id: &str, finish: Option<&str>) -> String {
     format!("{card_id}{GROUP_SEPARATOR}{}", finish.unwrap_or(""))
-}
-
-/// The finish a printing leaves no choice about, or `None` — `src/lib/finish.ts`'s `soleFinish`,
-/// line for line, over the JSON text `cards.finishes` holds.
-///
-/// **It has to answer exactly what that function answers**, because the two are the two halves
-/// of one key: [`theory_slots`] spells the plan's side here and `theoryMatch.ts` spells the live
-/// row's side there, and a printing the two disagreed about would miss every lookup. So an
-/// unknown word is dropped *before* counting (`parseFinishes`' rule), a printing sold in two
-/// finishes answers `None` even when neither is `nonfoil`, and `nonfoil` itself answers `None` —
-/// the regular copy is what an unsaid row already is. `deck_tokens`' `default_finish` is a
-/// different question and is not this: it picks a finish to *file*, so it answers `foil` for a
-/// printing sold in foil and etched, where this says the printing has not decided.
-fn sole_finish(finishes: Option<&str>) -> Option<&'static str> {
-    let listed: Vec<serde_json::Value> = serde_json::from_str(finishes?).ok()?;
-    let known: Vec<&'static str> = listed
-        .iter()
-        .filter_map(serde_json::Value::as_str)
-        .filter_map(|word| crate::schema::FINISHES.into_iter().find(|f| *f == word))
-        .collect();
-    match known.as_slice() {
-        [only] if *only != crate::schema::FINISHES[0] => Some(only),
-        _ => None,
-    }
-}
-
-/// The finish a deck row **plays** — its own where it names one, and the printing's
-/// [`sole_finish`] where it does not. `src/lib/finish.ts`'s `playedFinish`, and the finish half of
-/// every [`group_key`] this module builds.
-///
-/// **Why the comparison reads this rather than the raw column**
-/// ([issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563)). `deck_cards.finish` is
-/// NULL where a write named no finish, and most writes name none: the search's Add, the quick
-/// add, every drag and a decklist line without a `*F*`. An add out of the binder names the copy's
-/// own. For a printing sold in both finishes that NULL is the regular copy and the two spellings
-/// are rightly two objects — but for one sold **only** in foil it can be nothing but the foil, and
-/// the deck's own views already draw it with the foil mark. Keyed raw, the plan's `id|` and the
-/// live list's `id|foil` were one Surge Foil Palantír counted as two cards, so the copy the reader
-/// had put in both lists was on the Compare dialog, the wishlist press and the managed wishlist
-/// at once. [`crate::deck::normalise_finish`]'s doc names this shape — two spellings that draw
-/// identically and sum apart — as the worst a bug in that table can have; this is the one it
-/// could not see, because telling them apart needs the printing.
-///
-/// Read rather than written: the rows keep what their writers stored, so a database already
-/// holding both spellings, and a sync peer on an older build writing either, compare correctly
-/// with no rung.
-fn played_finish(stored: Option<String>, finishes: Option<&str>) -> Option<String> {
-    stored.or_else(|| sole_finish(finishes).map(str::to_owned))
 }
 
 /// Every row of one deck, both variants, in the editor's own order — [`theory_diff`]'s input.
@@ -385,14 +341,18 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
 /// not disagree about what a card is: "buy the foil retro-frame one" over a spare count earned
 /// by regular precon copies is a sentence about two different objects.
 ///
-/// **`?2` is the finish the line plays ([`played_finish`]), and the `coalesce` is the translation
-/// between two spellings of the regular copy**: the deck spells it NULL
-/// ([`crate::deck::normalise_finish`], so the grain's `coalesce(finish, '')` has one thing to
-/// compare) while `collection_entries.finish` is `NOT NULL` and spells it `nonfoil` outright.
-/// Binding the deck's NULL straight through would make every regular line read zero spare. It is
-/// the *played* finish rather than the stored one for the same reason one level up: an unsaid row
-/// of a foil-only printing bound as `nonfoil` counted none of the foil copies the binder holds,
-/// which are the only copies of it there are.
+/// **`?2` and `?3` are the words a copy of the line's finish may carry** —
+/// [`crate::deck::entry_spellings`] of the finish the line plays, in the collection's spelling
+/// ([`crate::deck::entry_finish`]). That is the translation between two spellings of the regular
+/// copy: the deck spells it NULL ([`crate::deck::normalise_finish`], so the grain's
+/// `coalesce(finish, '')` has one thing to compare) while `collection_entries.finish` is `NOT NULL`
+/// and spells it `nonfoil` outright, and binding the deck's NULL straight through would make every
+/// regular line read zero spare. It is the *played* finish rather than the stored one for the same
+/// reason one level up: an unsaid row of a foil-only printing bound as `nonfoil` counted none of
+/// the foil copies the binder holds, which are the only copies of it there are. And it is **both**
+/// spellings on such a printing, because a binder row stored `nonfoil` for a card sold only in foil
+/// is that foil too (2026-09-27) — the quick add, an import that named no finish and the scanner's
+/// default all wrote one. Everywhere else the two holes carry one word twice.
 ///
 /// No `LEFT JOIN cards` and no orphan arm: `collection_entries.card_id` is the printing, so an
 /// entry whose card has left the corpus is matched by exactly the same equality as every other.
@@ -427,7 +387,7 @@ static OWNED_SPARE_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|
     format!(
         "SELECT coalesce(sum(e.quantity), 0)
        FROM collection_entries e
-      WHERE e.card_id = ?1 AND e.finish = coalesce(?2, 'nonfoil')
+      WHERE e.card_id = ?1 AND e.finish IN (?2, ?3)
         AND (e.folder_id IS NULL
              OR (SELECT f.kind FROM collection_folders f
                   WHERE f.id = e.folder_id) <> '{deck}')
@@ -551,6 +511,7 @@ fn grouped_diff(
                     key,
                     Grouped {
                         oracle_id: oracle,
+                        finishes: finishes.clone(),
                         row: TheoryDiffRow {
                             card_id,
                             name,
@@ -602,8 +563,10 @@ fn grouped_diff(
         // deck's stored claims and a collection stepped down under one went negative. This one
         // sums quantities off a column with `CHECK (quantity >= 0)`, so there is no arithmetic
         // left that can produce a number with no reading.
+        let played = entry_finish(grouped.row.finish.as_deref(), grouped.finishes.as_deref());
+        let [said, legacy] = entry_spellings(&played, grouped.finishes.as_deref());
         grouped.row.owned_spare = spare
-            .query_row(params![grouped.row.card_id, grouped.row.finish], |r| {
+            .query_row(params![grouped.row.card_id, said, legacy], |r| {
                 r.get::<_, i64>(0)
             })
             .map_err(|e| e.to_string())?;
@@ -1786,6 +1749,29 @@ mod tests {
         );
     }
 
+    /// **A `nonfoil` binder copy of a foil-only printing is the foil too**, on this side of the
+    /// comparison as on the deck's: the quick add, *Add missing to collection*, an import that
+    /// named no finish and the scanner all wrote that word for a card that has no such copy.
+    /// `crate::deck::entry_finish` reads both tables the same way, so the spare figure counts it.
+    #[test]
+    fn a_legacy_nonfoil_copy_of_a_foil_only_printing_counts_as_spare() {
+        let conn = seeded();
+        foil_only(&conn);
+        own_finish(&conn, "palantir-hoc", "nonfoil", 1);
+        let id = deck(&conn, "Palantír");
+        let main = category(&conn, id, "Main deck");
+        add_finish(&conn, id, "palantir-hoc", main, THEORY, None, 1);
+
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
+        assert_eq!(
+            diff.iter()
+                .map(|r| (r.finish.as_deref(), r.owned_spare))
+                .collect::<Vec<_>>(),
+            vec![(Some("foil"), 1)],
+            "{diff:?}"
+        );
+    }
+
     /// The press the Compare dialog makes, for issue #563's card. Its `only` keys are built off the
     /// diff rows, whose finish is the played one, so the dialog ticks `palantir-hoc|foil`, and that
     /// is the spelling the press has to find. The wish is pinned to the foil, the only finish the
@@ -1851,29 +1837,6 @@ mod tests {
             "bolt-lea|foil",
             "and the regular copy in the live list keeps its own key, `bolt-lea|`"
         );
-    }
-
-    /// [`sole_finish`] is `finish.ts`'s `soleFinish`, and the two sides of the theory key must
-    /// agree on every one of these — `theoryMatch.test.ts` pins the same literals from the other
-    /// end of the IPC boundary.
-    #[test]
-    fn sole_finish_answers_only_for_a_printing_with_no_choice() {
-        for (finishes, sole) in [
-            (Some(r#"["foil"]"#), Some("foil")),
-            (Some(r#"["etched"]"#), Some("etched")),
-            (Some(r#"["nonfoil"]"#), None),
-            (Some(r#"["nonfoil","foil"]"#), None),
-            (Some(r#"["foil","etched"]"#), None),
-            // A repeated word is counted twice, as `parseFinishes` keeps it twice.
-            (Some(r#"["foil","foil"]"#), None),
-            // An unknown word is dropped before counting, as `parseFinishes` drops it.
-            (Some(r#"["foil","glossy"]"#), Some("foil")),
-            (Some("not json"), None),
-            (Some(r#"{"foil":true}"#), None),
-            (None, None),
-        ] {
-            assert_eq!(sole_finish(finishes), sole, "{finishes:?}");
-        }
     }
 
     /// An inactive category counts toward nothing — on **both** sides. A card parked in the
