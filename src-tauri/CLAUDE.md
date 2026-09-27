@@ -217,21 +217,26 @@ both plus the frontend.
   ⚠️ **It is gated on a pull for a paired device, and until the fifth review round it was not**:
   `convert_legacy_picks_at_launch` converts at launch only on a device in no group or once the
   `sync_state` key `token_picks_ready` is set, and `convert_legacy_picks_after_pull`, run by
-  `sync_engine::client::pull` behind every pull that read everything, sets it and converts. A
-  laggard converting at launch — before it had applied the entries and the clear an earlier
+  `sync_engine::client::pull` behind every pull that read everything **and advanced its cursor**,
+  sets it and converts — a pull held on a newer device's page has not heard everything, which is
+  the gate's own reason. <!-- verify-B -->
+  A laggard converting at launch — before it had applied the entries and the clear an earlier
   climber announced, but with its clock already past their stamps from deferring them on v51 —
   inserted `<uid>-live` at the legacy count under a later stamp and reverted the climber's steps,
   finish changes and moves on both devices. ⚠️ **The gate assumes the laggard's first pull at v52
-  brings what it deferred on v51, and today it does not**: the client drops a deferred op rather
-  than holding it, so a laggard that *pulled* at v51 during the window still holds the pick after
-  it climbs and reverts the same way — closed only by the sync-delivery fix (*`sync_peers` is a
-  watermark*, below). One savepoint per pick, and a pick with no uid is
-  given the insert trigger's mint first and its clear left uncaptured. It is total
+  brings what it deferred on v51, and for a laggard that *pulled* at v51 it does not**: a v51
+  client steps past a deferred op rather than holding it, so that laggard still holds the pick
+  after it climbs and reverts the same way, and nothing at v52 can fetch the page back from below
+  its cursor. The delivery holds make the assumption true for every laggard on v52 or later — a
+  held page is re-delivered and applied before an advancing pull converts — and cannot reach
+  back to v51 (*`sync_peers` is a watermark*, below). One savepoint per pick, and a pick with no
+  uid is given the insert trigger's mint first and its clear left uncaptured. It is total
   (a negative synced count floored at 0; two tokens that picked one printing keep one entry, the
   first in **`oracle_id` order, never rowid**, the loser keeping its count), idempotent, and clears
   each pick after all the entries so a v51 peer — which defers the first op for the new table and,
-  today, drops the sender's later ops in that page with it — never applies a clear ahead of its
-  entry. The rung drops only `decks`' three capture triggers now (v43's move); `deck_tokens`' stay.
+  its client being v51's, drops the sender's later ops in that page with it — never applies a
+  clear ahead of its entry. The rung drops only `decks`' three capture triggers now (v43's move);
+  `deck_tokens`' stay.
   **The conversion files each pick in the printing's own `default_finish`**, read from the corpus
   it runs after — v51 stored no finish, and the retired rung wrote `nonfoil` for every art only
   because no rung reads the corpus — so every device whose corpus holds the printing announces
@@ -1572,8 +1577,10 @@ record, with every measurement, is
   table owes, synced or not; dropping a synced *column* costs nothing on the
   wire at all, because `apply::updates()` walks the **local** spec's field list and looks each
   name up in the incoming op, so a field a v42 peer goes on sending is skipped rather than
-  deferred. An unknown *table* defers — and today drops — that peer's ops from the first one on
-  (the `sync_peers` bullet below); an unknown *field* does not.
+  deferred. An unknown *table* from a newer peer holds that peer's ops from the first one on until
+  this device upgrades, and one from a same or older peer — a table this build renamed — is
+  skipped and recorded (the `sync_peers` bullet below); an unknown *field* does neither. A v51
+  receiver still drops the newer peer's ops from the first one on.
   `capture::TABLES` is held to that constant by a
   test, and a second test asserts every column a capture spec names exists on its table — a
   misspelt column is not a compile error and not a runtime error either until the trigger fires,
@@ -1610,11 +1617,13 @@ record, with every measurement, is
   *this* device's card database is a fact about this device, and two machines that synced on
   different days can honestly disagree. The managed wishlist and
   `deck_tokens::repair_entry_finishes` are suppressed for the same reason.
-  ⚠️ **The rule has two deliberate exceptions, and suppressing either would reopen a stall.**
+  ⚠️ **The rule has two deliberate exceptions, and suppressing either would reopen a break.**
   `deck_tokens::reconcile_in` is captured because a delete applied twice is a no-op and its undo
   needs a captured delete to restore. **`deck_tokens::convert_legacy_picks` is captured** because
   an entry derived on one device must reach peers that never derived it — the v52 rung did the same
-  conversion uncaptured and stalled a stream in each direction in a mixed-version group — and it
+  conversion uncaptured and broke a stream in each direction in a mixed-version group (a peer's
+  edit to a row it was never told of cannot be placed: dropped with the sender's later ops then,
+  skipped and recorded since 2026-09-27, and never landing either way) — and it
   is safe because every device announces one pick's entry under the same derived name, so a second
   put merges on the uid, and the table carries no counter to double — **provided the device has
   heard its group first**, which is why a paired device converts only behind a pull: a laggard's
@@ -1626,22 +1635,30 @@ record, with every measurement, is
   add-wins never fires on a two-device group and a concurrent edit is silently deleted.
 - **A pushed op is kept, never pruned.** The op log is also this device's memory of what it did,
   and both add-wins and the cycle-break read it.
-- **`sync_peers` is a watermark and a deferred op holds it — but the client does not, so a
-  deferred op is dropped today.** Advancing the watermark past an op that could not be applied
-  loses it; applying the ops above it while holding it adds their counter deltas twice on a
-  re-delivery. So `apply` holds that device's watermark at the first unappliable op and leaves its
-  later ops in the page unapplied, visible in `ApplyReport::deferred` — **which makes a
-  re-delivery safe, and nothing re-delivers**: `client::pull` sets `PULL_CURSOR` to the page head
-  whatever `apply` deferred (only `behind`, a newer key epoch, holds it), the relay answers only
-  `seq > since`, and `apply` keeps no copy. So a deferred op, and its sender's later ops in that
-  page, are **lost**, not stalled — which is what an older peer does to a newer schema's new
-  table (`deck_notes` at v43, `deck_token_printings` at v52), and upgrading does not bring them
-  back. ⚠️ Found at token stacks PR 2's final review (2026-09-26) and older than it; ruled a
-  sync-delivery PR of its own — hold the cursor on a newer-schema deferral, resolve the child of a
-  deleted parent — that must land **before any release carrying v52**. Until then, every device
-  in a group is updated before it syncs across a schema change. **Do not "fix" it by holding the
-  cursor on every deferral**: a block that never clears would stop the relay compacting, which
-  is metered storage. [sync.md](../docs/reference/sync.md) *Deferred ops are dropped, not held*.
+- **`sync_peers` is a watermark, and the client holds its cursor only for what can still
+  resolve.** Advancing the watermark past an op that may still apply loses it; applying the ops
+  above it while holding it adds their counter deltas twice on a re-delivery. So `apply` holds a
+  device's watermark at its first *held* op and leaves its later ops in the page unapplied, and
+  `client::pull` keeps `PULL_CURSOR` — and so the ack — where it was, so the relay hands the page
+  back and the watermark makes that re-delivery safe. <!-- verify-B -->
+  **Two reasons hold, and nothing else does** (`apply::classify`, spec 2026-09-27 §3.2): a group a
+  **newer** schema sealed — `Op::schema > Some(USER_SCHEMA_VERSION)`, stamped by
+  `wire::seal_batch` and never at capture — holds with no bound, until this device upgrades, and
+  an envelope that opens under the key and does not parse counts as one; an **unknown parent**
+  from a same or older schema holds until seen on 3 pulls spanning at least 600 s, and then
+  `apply_with(.., Waiting::Release)` skips it. The state is `sync_state.pull_hold`, no rung. <!-- verify-B -->
+  Everything else is **consumed** and blocks nothing: a child of a parent deleted here or in the
+  page is **moot** where the key cascades and written without it where the key is `SET NULL`;
+  an unknown table or an unbuildable row from a same or older schema is **dropped**, one
+  `error_log` row (`Source::Relay`, `apply`) folded per table. **Do not hold the cursor on
+  anything that cannot resolve**: the relay compacts nothing above a device's ack, so that hold
+  pins the group's log for good and re-downloads it on every pull — metered storage. **Do not
+  advance past a held op either**: until 2026-09-27 `pull` set the cursor to the page head
+  whatever `apply` deferred, so a deferred op and its sender's later ops in the page were lost,
+  upgrade or not — which a v51 client still does, so every device is updated before it syncs
+  across v52. **A future `LIMIT` on `pull` must page to the end before a hold is decided**, or a
+  held cursor never reaches the page that resolves it. [sync.md](../docs/reference/sync.md)
+  *Held while it can resolve, skipped when it cannot*.
 - **Six tables can hold a `needs_review` sentence** since v29, and `sync_engine::commands::REVIEWABLE`
   is the list, held to `sqlite_master` by a test. The sentences are Rust's, following
   `reconcile.rs`, and the first message wins.
@@ -2072,9 +2089,11 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   `{"field":"undo","of":<id>}`, because a CHECK cannot be altered and a tenth word would rebuild
   every reader's history — and a token write (user schema v52) is a `deck` row with
   `{"field":"token","action":…}` for a sharper reason still: `deck_audit` **syncs**, so a word a
-  paired device's `CHECK` does not know is refused there and its applier defers the op — which,
-  while the client drops a deferral (*`sync_peers` is a watermark*), loses it and the sender's
-  later ops in that page for good, upgrade or not. (Schema **v33** renamed one of the nine, `'tag'`
+  paired device's `CHECK` does not know is refused there and its applier defers the op — which on
+  a v51 peer loses it and the sender's later ops in that page for good, upgrade or not, and on v52
+  or later holds that sender's stream to it until it upgrades, pinning the relay's log meanwhile
+  (*`sync_peers` is a watermark*). A stall rather than a loss is still a cost every paired device
+  of an older build pays. (Schema **v33** renamed one of the nine, `'tag'`
   to `'label'`, and paid exactly that rebuild once — the table copied through, the CHECK
   restated, the stored rows and their payload key rewritten. It is the cost this rule exists to
   keep out of the ordinary case, not a counter-example to it.) **The reversal's own row records no
@@ -2248,8 +2267,9 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   - **Every token write journals as a deck write**, through the one `journal_in`: a read of the
     deck first (`GONE` ahead of every other sentence), and — **only if the write changed
     something** — `touch_deck`, one `deck_audit` row of kind **`deck`** with `field: "token"`
-    (never a tenth kind — `deck_audit` syncs, and an older peer defers an unknown word, which
-    today drops the sender's page from there on), and one
+    (never a tenth kind — `deck_audit` syncs, and an older peer defers an unknown word, which a
+    v51 client drops with the sender's page from there on and a v52 one holds until it upgrades),
+    and one
     `Op::Tokens` step over the token's entries in that list, carrying `states` only when the state
     moved. `touch_deck` is split off the fence because its `UPDATE` stamps as it checks, and a no-op
     press must not move the deck up the gallery.

@@ -105,26 +105,50 @@ pub fn seal_batch(group: &Group, device: &str, ops: &[Op]) -> Result<Envelope, W
         .collect();
     let plaintext =
         serde_json::to_vec(&stamped).map_err(|e| WireError::Malformed(e.to_string()))?;
-    let sealed = crypto::seal(
-        &group.group_key,
-        &aad(&group.group_id, device, group.epoch),
-        &plaintext,
-    )
-    .map_err(|_| WireError::Unreadable)?;
     // The last op's stamp, which is this batch's ordering key. `ops` is non-empty.
     let last = ops
         .iter()
         .map(|o| &o.at)
         .max()
         .expect("a non-empty batch has a latest stamp");
+    seal_bytes(group, device, &plaintext, (last.ms, last.ctr))
+}
+
+/// The envelope around `plaintext` — the AEAD and the clear fields, and nothing about ops.
+fn seal_bytes(
+    group: &Group,
+    device: &str,
+    plaintext: &[u8],
+    (hlc_ms, hlc_ctr): (i64, i64),
+) -> Result<Envelope, WireError> {
+    let sealed = crypto::seal(
+        &group.group_key,
+        &aad(&group.group_id, device, group.epoch),
+        plaintext,
+    )
+    .map_err(|_| WireError::Unreadable)?;
     Ok(Envelope {
         group: group.group_id.clone(),
         device: device.to_owned(),
         epoch: group.epoch,
-        hlc_ms: last.ms,
-        hlc_ctr: last.ctr,
+        hlc_ms,
+        hlc_ctr,
         sealed: URL_SAFE_NO_PAD.encode(sealed),
     })
+}
+
+/// **Test-only: seal `plaintext` exactly as given**, under the stamp `at` (`hlc_ms`, `hlc_ctr`),
+/// for the two envelopes [`seal_batch`] will not make — ops stamped with a schema other than this
+/// build's, and bytes that are not a list of ops at all. Both open under the group key, which is
+/// what makes them authentic rather than altered.
+#[cfg(test)]
+pub(crate) fn seal_plaintext(
+    group: &Group,
+    device: &str,
+    plaintext: &[u8],
+    at: (i64, i64),
+) -> Envelope {
+    seal_bytes(group, device, plaintext, at).expect("sealing a test plaintext")
 }
 
 /// Open one batch.
