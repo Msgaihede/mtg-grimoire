@@ -2435,6 +2435,24 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     many surfaces that reaches; the design spec said eight and the JSX sites are six, because
     `CardSearchBody` is one component behind several docked panels — which is exactly why this
     page does not write the number down).
+- **`Border` and `Finish` sit after `Type` in the tray, and `Finish` now asks a different question
+  depending on what the rows are** (2026-09-27, issue #573). `Border` — Regular, Borderless, Full
+  art, in that order because the order is the information — is in every tray: search, Tags, the
+  docked panels, the collection (both callers) and the wishlist. It is `Type`'s shape: OR within,
+  AND without, greyed against `facets.borders`, and the chips overlap (a borderless full-art
+  printing answers both treatments). The ids are `printingFilters.ts`' own, so the printings modal
+  and the tray spell the fact one way; `@/lib/border` owns them.
+  - **`Finish` on a printing surface asks *published in*, reversing what this cell's comment said
+    until that day.** It used to be absent from the card search on the premise that "a printing
+    exists in every finish it was printed in at once", so `Foil` over a wall of printings had no
+    question behind it. The premise was the wrong way round: a printing exists in **only** the
+    finishes it was published in, and Scryfall's `is:foil` is exactly that question. On the dev
+    corpus (2026-09-27) 44,019 of 109,254 paper printings are nonfoil only and 12,389 foil only,
+    so `Foil` removes two fifths of the wall. The search surfaces send it as `printedFinishes` and
+    grey against `facets.finishes`; the collection and the deck editor's Collection tab keep the
+    cell's older meaning, the finish the **copy** is, sent as `finishes`. The wishlist draws
+    `Border` and no `Finish`. One cell, two questions, two wire names — the name is what keeps
+    them from colliding on the collection's flattened payload.
 
 ## The theory mark, and the four things a photograph settled
 

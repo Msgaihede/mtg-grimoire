@@ -175,6 +175,7 @@ import { core } from "@/lib/core";
 import type { CallArgs, CallOptions } from "@/lib/core";
 import { bytesToBase64 } from "@/lib/bytes";
 import { isAndroid } from "@/lib/platform";
+import type { Border } from "./border";
 import type { Condition } from "./conditions";
 import type { Finish } from "./finish";
 import type { MarketplaceId } from "./marketplace";
@@ -341,6 +342,24 @@ export interface SearchRequest {
    * (`Land Creature — Forest Dryad`) answers both `Land` and `Creature`.
    */
   types?: string[];
+  /**
+   * Border chips — `regular`/`borderless`/`fullart` (`@/lib/border`). ORed with each other,
+   * ANDed with every other filter: the type chips' shape one dimension along. `regular` is a
+   * printing that is **neither** borderless nor full art; a borderless full-art printing
+   * answers both of the other two. Rust: `borders: Option<Vec<String>>`.
+   */
+  borders?: Border[];
+  /**
+   * Finish chips over the **printing** — "is this printing published in foil", Scryfall's
+   * `is:foil` — ORed with each other. Answered from `cards.finishes`, so a printing that exists
+   * in nonfoil and foil answers both chips.
+   *
+   * **Not the collection's {@link CollectionQuery.finishes}**, which is the finish one *copy*
+   * is in. The two share the tray's Finish cell and nothing else; the different name is what
+   * keeps them from colliding on the collection's flattened payload. Rust:
+   * `printed_finishes: Option<Vec<String>>`.
+   */
+  printedFinishes?: Finish[];
   /**
    * The price band, at {@link marketplace}. Inclusive at both ends, either half usable alone.
    *
@@ -687,6 +706,18 @@ export interface FacetResponse {
    * {@link rarities} needs.
    */
   types: Record<string, number>;
+  /**
+   * Keyed `regular`/`borderless`/`fullart`. Plain counts, all three on every ready response,
+   * zeros included. **They overlap** — a borderless full-art printing is counted under both —
+   * so, like {@link types}, they do not sum to {@link total}. Rust: `borders`.
+   */
+  borders: Record<string, number>;
+  /**
+   * Keyed `nonfoil`/`foil`/`etched`: how many printings are **published** in each finish. Plain
+   * counts, all three on every ready response. They overlap (51,628 paper printings come in
+   * both nonfoil and foil), so they do not sum to {@link total}. Rust: `finishes`.
+   */
+  finishes: Record<string, number>;
   /**
    * Keyed by set code. Plain counts, and **every code in the corpus arrives, zeros
    * included** — 1 047 keys on the live corpus, on every **ready** response, whatever the
@@ -1071,6 +1102,16 @@ export interface CardFilters {
    * be narrowed to a type without a second filter path. Rust: `types: Option<Vec<String>>`.
    */
   types?: string[];
+  /** Border chips — see {@link SearchRequest.borders}, the same field on the same control.
+   *  Declared here as well because `filters::push_card_filters` emits it for all three lists, so
+   *  a binder and a wishlist narrow by the printing's frame too. Rust:
+   *  `borders: Option<Vec<String>>`. */
+  borders?: Border[];
+  /** The printing's published finishes — see {@link SearchRequest.printedFinishes}. On the
+   *  collection's payload this sits beside {@link CollectionQuery.finishes}, the copy's own
+   *  finish, which is a different question; nothing in the app sends this one there. Rust:
+   *  `printed_finishes: Option<Vec<String>>`. */
+  printedFinishes?: Finish[];
   /** Omitted means true in the search and false in the collection: a search offers cards to
    *  own, a collection lists cards that are owned. */
   paperOnly?: boolean;
