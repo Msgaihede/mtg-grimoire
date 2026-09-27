@@ -14,6 +14,8 @@ const collectionList = vi.fn();
 const wishlistList = vi.fn();
 const collectionAdd = vi.fn();
 const collectionSetQuantity = vi.fn();
+const collectionUpdate = vi.fn();
+const collectionSetPrinting = vi.fn();
 const wishlistAdd = vi.fn();
 const wishlistSetQuantity = vi.fn();
 const collectionFolderList = vi.fn();
@@ -65,6 +67,9 @@ vi.mock("@/lib/ipc", async (original) => ({
     wishlistList: (query: unknown) => wishlistList(query),
     collectionAdd: (entry: unknown) => collectionAdd(entry),
     collectionSetQuantity: (id: number, quantity: number) => collectionSetQuantity(id, quantity),
+    // The two writes `Edit` unlocks on a collection copy — its finish and its printing.
+    collectionUpdate: (id: number, patch: unknown) => collectionUpdate(id, patch),
+    collectionSetPrinting: (id: number, cardId: string) => collectionSetPrinting(id, cardId),
     wishlistAdd: (wish: unknown) => wishlistAdd(wish),
     wishlistSetQuantity: (id: number, quantity: number) => wishlistSetQuantity(id, quantity),
     collectionFolderList: () => collectionFolderList(),
@@ -193,6 +198,8 @@ beforeEach(() => {
   wishlistList.mockReset().mockResolvedValue({ items: [], total: 0 });
   collectionAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1 });
   collectionSetQuantity.mockReset().mockResolvedValue({ id: 1, quantity: 2 });
+  collectionUpdate.mockReset().mockResolvedValue({ id: 42, quantity: 2, removed: false });
+  collectionSetPrinting.mockReset().mockResolvedValue({ id: 42, quantity: 2, removed: false });
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1 });
   wishlistSetQuantity.mockReset().mockResolvedValue({ id: 1, quantity: 2 });
   collectionFolderList.mockReset().mockResolvedValue([]);
@@ -1694,4 +1701,145 @@ it("steps onto the next card when a collection entry is stepped to zero", async 
   // A wall's stop names no deck row, so the reader lands there the way every non-deck surface in
   // this app opens a card — with no context to address a stepper at somebody's Sideboard.
   expect(useAppStore.getState().paneDeckContext).toBeNull();
+});
+
+/**
+ * Issue #564 — **a collection card is read-only until the reader presses `Edit`**, and then its
+ * foil control and its printing rows write to one row.
+ *
+ * The rows are as much of `CollectionRow` as the modal reads: the id every write is addressed by,
+ * the printing and the finish `Edit` filters on, and the three facts its picker names a row by.
+ */
+function copyRow(id: number, over: Record<string, unknown> = {}) {
+  return {
+    id,
+    cardId: "c1",
+    finish: "nonfoil",
+    condition: "NM",
+    quantity: 2,
+    folderName: null,
+    ...over,
+  };
+}
+
+/** Open `c1` on the collection's own surface, as the wall does — `openCardAsFinish`. */
+function renderFromCollection(finish: "nonfoil" | "foil" | null = null) {
+  useAppStore.setState({ activeView: "collection" });
+  useAppStore.getState().openCardAsFinish("c1", finish);
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  return render(
+    <QueryClientProvider client={qc}>
+      <CardDetailModal />
+    </QueryClientProvider>,
+  );
+}
+
+it("keeps a collection card read-only until Edit is pressed", async () => {
+  cardPrintings.mockResolvedValue(printings);
+  collectionList.mockResolvedValue({ items: [copyRow(42)], total: 1 });
+  renderFromCollection();
+
+  expect(await screen.findByRole("button", { name: "Edit this copy" })).toBeInTheDocument();
+  // The printing row still only offers to show the printing, and pressing it browses.
+  await userEvent.click(await screen.findByRole("button", { name: /^Show LEB · 161/ }));
+  await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("c2"));
+  expect(collectionSetPrinting).not.toHaveBeenCalled();
+  expect(useAppStore.getState().paneCopy).toBeNull();
+});
+
+it("moves the copy onto a printing picked once Edit is on, and follows it there", async () => {
+  cardPrintings.mockResolvedValue(printings);
+  collectionList.mockResolvedValue({ items: [copyRow(42)], total: 1 });
+  // A fold: the Beta printing already had a row at this grain, so the answer names *that* row.
+  collectionSetPrinting.mockResolvedValue({ id: 77, quantity: 5, removed: false });
+  renderFromCollection("nonfoil");
+
+  await userEvent.click(await screen.findByRole("button", { name: "Edit this copy" }));
+  expect(await screen.findByRole("button", { name: "Done editing" })).toHaveFocus();
+  expect(screen.getByText(/^Editing/)).toBeInTheDocument();
+
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Change this copy to LEB 161" }),
+  );
+  await waitFor(() => expect(collectionSetPrinting).toHaveBeenCalledWith(42, "c2"));
+  await waitFor(() => expect(useAppStore.getState().paneCopy).toEqual({ entryId: 77 }));
+  expect(useAppStore.getState().selectedCardId).toBe("c2");
+  expect(useAppStore.getState().paneFinish).toBe("nonfoil");
+});
+
+it("sets the copy's finish once Edit is on, where it only viewed it before", async () => {
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["nonfoil","foil"]' });
+  collectionList.mockResolvedValue({ items: [copyRow(42)], total: 1 });
+  renderFromCollection("nonfoil");
+
+  expect(await screen.findByRole("button", { name: "View as foil" })).toBeInTheDocument();
+  await userEvent.click(await screen.findByRole("button", { name: "Edit this copy" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Set as foil" }));
+
+  await waitFor(() => expect(collectionUpdate).toHaveBeenCalledWith(42, { finish: "foil" }));
+  await waitFor(() => expect(useAppStore.getState().paneFinish).toBe("foil"));
+  expect(useAppStore.getState().paneCopy).toEqual({ entryId: 42 });
+});
+
+it("asks which copy to edit when the printing is held in more than one row", async () => {
+  collectionList.mockResolvedValue({
+    items: [copyRow(42), copyRow(43, { condition: "LP", quantity: 1, folderName: "Binder" })],
+    total: 2,
+  });
+  renderFromCollection();
+
+  await userEvent.click(await screen.findByRole("button", { name: /^edit which copy/i }));
+  await userEvent.click(await screen.findByRole("option", { name: /1× Lightly played/ }));
+
+  await waitFor(() => expect(useAppStore.getState().paneCopy).toEqual({ entryId: 43 }));
+});
+
+it("offers to edit only the rows at the finish the tile named", async () => {
+  // A foil tile and a regular tile are two tiles; the foil one must not offer the regular copy.
+  collectionList.mockResolvedValue({
+    items: [copyRow(42), copyRow(43, { finish: "foil" })],
+    total: 2,
+  });
+  renderFromCollection("foil");
+
+  await userEvent.click(await screen.findByRole("button", { name: "Edit this copy" }));
+  await waitFor(() => expect(useAppStore.getState().paneCopy).toEqual({ entryId: 43 }));
+});
+
+it("refuses to move a foil copy onto a printing never made in foil", async () => {
+  cardDetail.mockResolvedValue({ ...detail, finishes: '["nonfoil","foil"]' });
+  cardPrintings.mockResolvedValue({
+    ...printings,
+    items: printings.items.map((p) => ({ ...p, finishes: '["nonfoil"]' })),
+  });
+  collectionList.mockResolvedValue({ items: [copyRow(42, { finish: "foil" })], total: 1 });
+  renderFromCollection("foil");
+
+  await userEvent.click(await screen.findByRole("button", { name: "Edit this copy" }));
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Change this copy to LEB 161" }),
+  );
+
+  expect(await screen.findByRole("alert")).toHaveTextContent(/has no foil version/);
+  expect(collectionSetPrinting).not.toHaveBeenCalled();
+});
+
+it("goes back to reading on Done", async () => {
+  cardPrintings.mockResolvedValue(printings);
+  collectionList.mockResolvedValue({ items: [copyRow(42)], total: 1 });
+  renderFromCollection();
+
+  await userEvent.click(await screen.findByRole("button", { name: "Edit this copy" }));
+  await userEvent.click(await screen.findByRole("button", { name: "Done editing" }));
+
+  expect(useAppStore.getState().paneCopy).toBeNull();
+  expect(await screen.findByRole("button", { name: "Edit this copy" })).toHaveFocus();
+  expect(screen.getByRole("button", { name: /^Show LEB · 161/ })).toBeInTheDocument();
+});
+
+it("draws no Edit off the collection's own surface", async () => {
+  collectionList.mockResolvedValue({ items: [copyRow(42)], total: 1 });
+  renderModal("c1");
+  await screen.findByRole("button", { name: "Add to collection" });
+  expect(screen.queryByRole("button", { name: /^edit/i })).toBeNull();
 });

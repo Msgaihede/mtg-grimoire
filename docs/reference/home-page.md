@@ -474,7 +474,8 @@ and a grep that cannot see a conflict clause is a census that silently under-rep
 | `collection.rs` · `set_quantity` | 2 | records | `quantity`, or `remove` when the step lands on zero and the row goes |
 | `collection.rs` · `PATCH_SQL` (`update_entry`, both paths) | 1 | records | `edit`, through `record_edit`; `delta` is `0` even when the patch names a quantity — an edit form is not a stepper |
 | `collection.rs` · `delete_entry` | 1 | a consequence | `remove_entry` without the feed row; the import's zero arm reaches it so a file does not write a line per zeroed row |
-| `collection.rs` · `fold_entry` | 2 | a consequence | the grain collapsing two rows into one; all three callers record their own event |
+| `collection.rs` · `set_entry_printing` | 1 | records | `edit` with `fields: ["printing"]` on both paths, the wishlist's word; the fold it can end in is `fold_entry`'s two. Added 2026-09-27 (issue #564), after the count above was taken |
+| `collection.rs` · `fold_entry` | 2 | a consequence | the grain collapsing two rows into one; all four callers record their own event |
 | `collection_folders.rs` · `create_folder` / `rename_folder` / `delete_folder` | 3 | records | one `collection/folder` line each, through `record_folder` |
 | `collection_folders.rs` · `set_folder_locked` | 1 | a consequence | a lock changes what the app offers from a drawer, not what drawers exist or what is in them |
 | `collection_folders.rs` · `move_folder` | 1 | a consequence | re-parenting a drawer changes no card and no folder's existence |

@@ -1068,15 +1068,11 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             )
         };
 
-        // The owned badge, by **oracle card** because the row stands for a whole group of
-        // printings — built by [`crate::collection_source`] rather than written out, so the
-        // wall and the Collection page cannot disagree about what the reader has.
-        //
-        // Counted at [`SearchRequest::availability`]'s scope, the same one the `owned` filter
-        // above was pushed at: in the deck builder this number is *what this deck can use*,
-        // everywhere else it is what the reader owns.
-        let owned_by_oracle =
-            crate::collection_source::copies_of_oracle(conn, "c.oracle_id", req.availability());
+        // The two badges at the oracle grain — see [`marks_selects`]. Counted at
+        // [`SearchRequest::availability`]'s scope, the same one the `owned` filter above was
+        // pushed at: in the deck builder this number is *what this deck can use*, everywhere
+        // else it is what the reader owns.
+        let marks = marks_selects(conn, true, req.availability());
         format!(
             "{cte} g AS (
                 SELECT {COLLAPSE_KEY} AS oid, count(*) AS printings,
@@ -1098,11 +1094,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                     -- either branch adds goes in both, at the same index, and the three
                     -- collapse-only aggregates stay last of all.
                     c.game_changer,
-                    {owned_by_oracle},
-                    EXISTS (SELECT 1 FROM wishlist_entries w
-                             WHERE (w.oracle_id IS NOT NULL AND w.oracle_id = c.oracle_id)
-                                OR w.card_id IN (SELECT id FROM cards
-                                                  WHERE oracle_id = c.oracle_id)),
+                    {marks},
                     g.printings, g.lo, g.hi
              FROM g JOIN cards c ON c.id = g.rep
              ORDER BY {final_order}"
@@ -1110,17 +1102,12 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     } else {
         // The same badge, by **printing**: an uncollapsed row is one printing, so the count
         // beside it is that printing's.
-        let owned_by_printing =
-            crate::collection_source::copies_of_printing(conn, "c.id", req.availability());
+        let marks = marks_selects(conn, false, req.availability());
         format!(
             "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
                     c.type_line, c.mana_cost, {price} AS price, c.layout,
                     c.oracle_id, c.finishes, c.promo_types, c.game_changer,
-                    {owned_by_printing},
-                    EXISTS (SELECT 1 FROM wishlist_entries w
-                             WHERE w.card_id = c.id
-                                OR (w.card_id IS NULL AND w.oracle_id IS NOT NULL
-                                    AND w.oracle_id = c.oracle_id))
+                    {marks}
              FROM {from_sql} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
         )
     };
@@ -1191,6 +1178,129 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         total,
         total_is_capped,
     })
+}
+
+/// A result row's two badge columns — `ownedQuantity`, then `wishlisted` — for a row whose
+/// printing is `c`, as SQL a statement splices in.
+///
+/// **Written once for [`run_search`]'s two branches and [`run_search_marks`]**, because the
+/// second exists to patch the first's rows in place: a mark computed by a different expression
+/// from the one the page was fetched with would be a badge that changed meaning on a "+".
+///
+/// `collapse` picks the grain, and the two are not one rule with a flag. A collapsed row stands
+/// for every printing of its oracle card, so it counts the copies of any of them and is
+/// wishlisted by a wish on any of them; an uncollapsed row is one printing, so it counts that
+/// printing's copies and is wishlisted by a wish pinned to it or an unpinned wish on its card.
+/// Both counts are taken at `scope` — see [`SearchRequest::availability`].
+fn marks_selects(
+    conn: &Connection,
+    collapse: bool,
+    scope: crate::collection_source::Availability,
+) -> String {
+    if collapse {
+        // The owned badge, by **oracle card** because the row stands for a whole group of
+        // printings — built by [`crate::collection_source`] rather than written out, so the
+        // wall and the Collection page cannot disagree about what the reader has.
+        let owned = crate::collection_source::copies_of_oracle(conn, "c.oracle_id", scope);
+        format!(
+            "{owned},
+             EXISTS (SELECT 1 FROM wishlist_entries w
+                      WHERE (w.oracle_id IS NOT NULL AND w.oracle_id = c.oracle_id)
+                         OR w.card_id IN (SELECT id FROM cards
+                                           WHERE oracle_id = c.oracle_id))"
+        )
+    } else {
+        // The same badge, by **printing**: an uncollapsed row is one printing, so the count
+        // beside it is that printing's.
+        let owned = crate::collection_source::copies_of_printing(conn, "c.id", scope);
+        format!(
+            "{owned},
+             EXISTS (SELECT 1 FROM wishlist_entries w
+                      WHERE w.card_id = c.id
+                         OR (w.card_id IS NULL AND w.oracle_id IS NOT NULL
+                             AND w.oracle_id = c.oracle_id))"
+        )
+    }
+}
+
+/// Which rows of a loaded search to re-read the badges of, and at which grain and scope.
+///
+/// The three fields are exactly the ones [`marks_selects`] reads off a [`SearchRequest`] —
+/// `ids` stands in for the filters, which decided *which* rows a page holds and have nothing to
+/// say about what a row's badge reads.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarksRequest {
+    /// The `CardSummary.id` of every row to re-read. For a collapsed row that is the
+    /// representative printing, whose oracle id names the group.
+    pub ids: Vec<String>,
+    /// The loaded search's own `collapse`: absent or `false` is per printing.
+    #[serde(default)]
+    pub collapse: Option<bool>,
+    /// The loaded search's own [`SearchRequest::available_for_deck`].
+    #[serde(default)]
+    pub available_for_deck: Option<i64>,
+}
+
+/// One row's badges, re-read.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CardMarks {
+    pub id: String,
+    pub owned_quantity: i64,
+    pub wishlisted: bool,
+}
+
+/// The two badges of the rows a search already holds, re-read after a write (issue #552).
+///
+/// **What a collection or wishlist write changes about a loaded search is these two columns and
+/// nothing else** — every other field of a `CardSummary` is the corpus's, and a write to the
+/// reader's own tables cannot move it. So rather than refetch every page an infinite search has
+/// loaded — up to 100 of them at ~53 ms each, in sequence, behind a "+" — the page asks for the
+/// badges of the ids on screen in one statement and patches them in. The one search this cannot
+/// serve is one filtered by `owned`, where a write changes which rows *belong*; the caller
+/// refetches that one instead.
+///
+/// An id that names no row in `cards` is left out of the answer rather than answered `0`: the
+/// row it stood for came from a corpus that has since been swapped, and a sync refetches the
+/// whole search anyway.
+pub fn run_search_marks(conn: &Connection, req: &MarksRequest) -> Result<Vec<CardMarks>, String> {
+    if req.ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let scope = req.available_for_deck.map_or(
+        crate::collection_source::Availability::Everything,
+        crate::collection_source::Availability::ForDeck,
+    );
+    let marks = marks_selects(conn, req.collapse.unwrap_or(false), scope);
+    let sql = format!(
+        "SELECT c.id, {marks} FROM cards c
+          WHERE c.id IN (SELECT j.value FROM json_each(?) AS j)"
+    );
+    let ids = serde_json::to_string(&req.ids).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([ids], |row| {
+            Ok(CardMarks {
+                id: row.get(0)?,
+                owned_quantity: row.get(1)?,
+                wishlisted: row.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+/// [`run_search_marks`] over the read connection, for [`search_cards`]' reasons.
+#[tauri::command]
+pub async fn search_marks(
+    state: tauri::State<'_, Arc<AppState>>,
+    req: MarksRequest,
+) -> Result<Vec<CardMarks>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || run_search_marks(&lock_db_read(&state), &req))
+        .await
+        .map_err(|e| format!("search marks could not be read: {e}"))?
 }
 
 /// Search the card database.
@@ -3991,6 +4101,97 @@ mod tests {
         assert!(bolt.wishlisted);
         assert_eq!(helix.owned_quantity, 0);
         assert!(!helix.wishlisted);
+    }
+
+    /// **The re-read a write patches in must answer exactly what the page was fetched with**
+    /// (issue #552): same number, same grain, for every row, collapsed or not, and at the scope
+    /// the search was made at. A mark computed differently would change a badge's meaning on a
+    /// "+" rather than bring it up to date.
+    #[test]
+    fn search_marks_answer_what_the_search_itself_answers() {
+        let conn = filed_for_two_decks();
+        // The collapsed grain counts by oracle card, and the fixture's rows carry none.
+        conn.execute_batch(
+            "UPDATE cards SET oracle_id = 'o-' || id;
+             INSERT INTO wishlist_entries (oracle_id,card_id,name,quantity,created_at,updated_at)
+             VALUES (NULL,'2','Lightning Helix',1,unixepoch(),unixepoch());",
+        )
+        .unwrap();
+        for collapse in [None, Some(true)] {
+            for for_deck in [None, Some(1), Some(2)] {
+                let page = run_search(
+                    &conn,
+                    &SearchRequest {
+                        collapse,
+                        available_for_deck: for_deck,
+                        limit: 50,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let ids: Vec<String> = page.items.iter().map(|c| c.id.clone()).collect();
+                let mut marks = run_search_marks(
+                    &conn,
+                    &MarksRequest {
+                        ids,
+                        collapse,
+                        available_for_deck: for_deck,
+                    },
+                )
+                .unwrap();
+                marks.sort_by(|a, b| a.id.cmp(&b.id));
+                let mut expected: Vec<CardMarks> = page
+                    .items
+                    .iter()
+                    .map(|c| CardMarks {
+                        id: c.id.clone(),
+                        owned_quantity: c.owned_quantity,
+                        wishlisted: c.wishlisted,
+                    })
+                    .collect();
+                expected.sort_by(|a, b| a.id.cmp(&b.id));
+                assert_eq!(marks, expected, "{collapse:?} {for_deck:?}");
+                assert!(
+                    expected.iter().any(|m| m.owned_quantity > 0),
+                    "the fixture must own something, or the equality proves nothing"
+                );
+            }
+        }
+    }
+
+    /// A write moves the marks and nothing else, and the re-read sees it; an id the corpus no
+    /// longer holds is left out rather than answered `0`, and no ids is no statement at all.
+    #[test]
+    fn search_marks_see_a_write_and_skip_an_unknown_id() {
+        let conn = seeded();
+        let ask = |ids: &[&str]| {
+            run_search_marks(
+                &conn,
+                &MarksRequest {
+                    ids: ids.iter().map(|s| s.to_string()).collect(),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(ask(&["1"])[0].owned_quantity, 0);
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,created_at,updated_at)
+             VALUES ('1','lea','161','en','nonfoil','NM',2,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+        let after = ask(&["1", "no-such-card"]);
+        assert_eq!(
+            after,
+            [CardMarks {
+                id: "1".into(),
+                owned_quantity: 2,
+                wishlisted: false
+            }]
+        );
+        assert!(ask(&[]).is_empty());
     }
 
     /// Four copies of the Bolt in four places, and one Helix sleeved into somebody else's deck

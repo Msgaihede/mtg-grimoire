@@ -1246,10 +1246,14 @@ describe("CollectionPage", () => {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "summary"] }),
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
-    // And refetched, not merely marked: Task 12's badges put `ownedQuantity` on every result
-    // row, so a search left on screen behind this write is now visibly wrong rather than
-    // stale in a field nothing draws.
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    // And brought up to date, not merely marked: Task 12's badges put `ownedQuantity` on every
+    // result row, so a search left on screen behind this write is now visibly wrong rather than
+    // stale in a field nothing draws. `objectContaining` because the page's own docked search is
+    // mounted and patchable, so `refreshCardSearches` leaves it out of the prefix invalidation
+    // with a `predicate` and patches its badges instead (issue #552).
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ["cards", "search"] }),
+    );
     // And every deck: a deck owns what its own group holds, summed per oracle id, so a copy
     // stepped away from a deck's group has just changed what that deck reads as owning — and
     // the shortfall its "missing to wishlist" button would push. A copy stepped away from
@@ -1322,7 +1326,9 @@ describe("CollectionPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/not there any more/i);
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ["cards", "search"] }),
+    );
     // And the row is still there — the removal did not happen, so the list must not pretend
     // it did.
     expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
@@ -2808,7 +2814,9 @@ describe("the card menu", () => {
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ["cards", "search"] }),
+    );
 
     // And the wish's two, which are a strict subset — so the assertion that matters is the one
     // that must *not* fire: a wish is a copy nobody has, so it files nothing anywhere and no
@@ -2820,7 +2828,9 @@ describe("the card menu", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Wishlist" }));
 
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] }));
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ["cards", "search"] }),
+    );
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["decks"] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
   });
@@ -3236,7 +3246,9 @@ describe("clearing Recently removed", () => {
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ["cards", "search"] }),
+    );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
   });
 

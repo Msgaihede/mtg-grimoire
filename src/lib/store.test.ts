@@ -1426,3 +1426,36 @@ describe("what the shelves design removed", () => {
     }
   });
 });
+
+/**
+ * Issue #564: a collection copy being edited is **cleared by every opener**, or the next card's
+ * foil control would write to a row on the card before it.
+ */
+describe("paneCopy", () => {
+  beforeEach(() => useAppStore.setState(useAppStore.getInitialState()));
+
+  it("is set with the card and the copy's finish, and cleared by Done", () => {
+    useAppStore.getState().editCopy("c1", "foil", 42);
+    expect(useAppStore.getState()).toMatchObject({
+      selectedCardId: "c1",
+      paneFinish: "foil",
+      paneCopy: { entryId: 42 },
+    });
+    useAppStore.getState().stopEditingCopy();
+    expect(useAppStore.getState().paneCopy).toBeNull();
+    expect(useAppStore.getState().selectedCardId).toBe("c1");
+  });
+
+  it.each([
+    ["setSelectedCardId", () => useAppStore.getState().setSelectedCardId("c2")],
+    ["openCardAsFinish", () => useAppStore.getState().openCardAsFinish("c2", "foil")],
+    ["openCardFromDeckSearch", () => useAppStore.getState().openCardFromDeckSearch("c2")],
+    ["viewPrinting", () => useAppStore.getState().viewPrinting("c2")],
+    ["setActiveView", () => useAppStore.getState().setActiveView("search")],
+    ["setOpenDeckId", () => useAppStore.getState().setOpenDeckId(3)],
+  ])("is cleared by %s", (_name, press) => {
+    useAppStore.getState().editCopy("c1", "nonfoil", 42);
+    press();
+    expect(useAppStore.getState().paneCopy).toBeNull();
+  });
+});

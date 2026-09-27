@@ -11,6 +11,7 @@ import type { Currency, Marketplace, MarketplaceId } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { refreshCardSearches } from "@/lib/searchMarks";
 import { Dialog } from "@/components/Dialog";
 import {
   useWishDestinationName,
@@ -318,7 +319,7 @@ function useTheoryDiff(
    */
   const bought = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    void refreshCardSearches(queryClient);
   }, [queryClient]);
 
   /**

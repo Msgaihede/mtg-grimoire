@@ -993,7 +993,11 @@ fn printing_row(conn: &Connection, card_id: &str) -> Result<Option<Printing>, St
 /// all 116 k of them, but the column is), and a null is as uncomparable as a missing row —
 /// folding it into the SQL rather than into a `match` is what keeps a caller from reading
 /// `Some(null)` as an oracle two printings could share.
-fn oracle_of(conn: &Connection, card_id: &str) -> Result<Option<String>, String> {
+///
+/// **`pub(crate)` for `collection::set_entry_printing`**, which asks [`swap_printing`]'s question
+/// of a collection row and must get the same answer to it — a second spelling of "can these two
+/// be compared" is the one that forgets the NULL.
+pub(crate) fn oracle_of(conn: &Connection, card_id: &str) -> Result<Option<String>, String> {
     conn.query_row(
         "SELECT oracle_id FROM cards WHERE id = ?1 AND oracle_id IS NOT NULL",
         params![card_id],

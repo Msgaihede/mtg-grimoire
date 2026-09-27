@@ -7466,6 +7466,26 @@ export interface ShareRow {
  * refusal.** It arrives `false`, the publish succeeds, and the column the reader ticked is
  * missing from every card in the snapshot — which is why `ipc.test.ts` pins all three by name.
  */
+/**
+ * Which rows of a loaded search to re-read the badges of — mirrors `search::MarksRequest`.
+ *
+ * `collapse` and `availableForDeck` are the loaded search's own, because they decide the grain
+ * and the scope {@link CardSummary.ownedQuantity} was counted at; the ids stand in for every
+ * filter, which decided which rows a page holds and nothing about what a row's badge reads.
+ */
+export interface MarksRequest {
+  ids: string[];
+  collapse?: boolean;
+  availableForDeck?: number;
+}
+
+/** One row's badges, re-read — mirrors `search::CardMarks`. */
+export interface CardMarks {
+  id: string;
+  ownedQuantity: number;
+  wishlisted: boolean;
+}
+
 export interface ShareFields {
   /** The grade each copy is in, `NM` and friends. An **ungraded** copy still carries nothing —
    *  see `@/lib/shareSnapshot`'s header. */
@@ -7478,6 +7498,12 @@ export interface ShareFields {
 
 export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
+  /**
+   * The two badges of rows a search already holds, re-read after a write — what
+   * `@/lib/searchMarks` patches into the cached pages instead of refetching every one of them
+   * (issue #552). An id the corpus no longer holds is left out of the answer.
+   */
+  searchMarks: (req: MarksRequest) => invoke<CardMarks[]>("search_marks", { req }),
   /**
    * Facet counts for one search — the same request shape as `searchCards`, whose `sort`,
    * `offset` and `limit` are ignored. Its own command so a page turn does not recompute
@@ -7600,6 +7626,18 @@ export const ipc = {
     invoke<EntryChange>("collection_set_quantity", { id, quantity }),
   collectionUpdate: (id: number, patch: EntryPatch) =>
     invoke<EntryChange>("collection_update", { id, patch }),
+  /**
+   * Move one row's copies onto another printing of the same card — the one write that reaches
+   * `collection_entries.card_id` after the row exists (issue #564). `set_code`,
+   * `collector_number` and `lang` follow from `cards`, because they describe the printing.
+   *
+   * **Merges rather than fails on a collision**, {@link ipc.collectionUpdate}'s rule: a row
+   * already holding the new printing at the same finish, condition and folder takes these copies,
+   * and the answer's `id` names *that* row — so a caller following the edit reads the id off the
+   * answer and never keeps the one it sent. A printing of a different card is refused.
+   */
+  collectionSetPrinting: (id: number, cardId: string) =>
+    invoke<EntryChange>("collection_set_printing", { id, cardId }),
   collectionRemove: (id: number) => invoke<EntryChange>("collection_remove", { id }),
   collectionList: (query: CollectionQuery) => invoke<CollectionPage>("collection_list", { query }),
   /** The aggregate header, over the same filters as the list it captions. */
