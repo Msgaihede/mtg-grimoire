@@ -954,7 +954,7 @@ pub fn install(conn: &Connection) -> rusqlite::Result<()> {
 /// Read one `sync_ops` row as an [`Op`](super::merge::Op).
 ///
 /// **One reader, two callers**, and they must not drift: [`super::apply`] loads this device's
-/// own history for a row so that add-wins can compare a remote tombstone against a local edit,
+/// own history for a row so that add-wins can compare a remote `del` op against a local edit,
 /// and [`super::client`] drains the unpushed tail. The column order below is the order both
 /// their `SELECT`s use, and `OPS_SELECT` is what keeps that true.
 pub const OPS_SELECT: &str =
@@ -1978,9 +1978,9 @@ mod tests {
         );
     }
 
-    /// A delete writes a tombstone.
+    /// A delete writes one `del` op.
     #[test]
-    fn a_delete_writes_one_tombstone() {
+    fn a_delete_writes_one_del_op() {
         let conn = db();
         conn.execute(
             "INSERT INTO decks (name, format_key, created_at, updated_at)
@@ -1997,10 +1997,10 @@ mod tests {
         let o = ops(&conn);
         assert_eq!(o.len(), 1);
         assert_eq!(o[0].1, "del");
-        let tombstone: String = conn
+        let deleted: String = conn
             .query_row("SELECT uid FROM sync_ops", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(tombstone, uid);
+        assert_eq!(deleted, uid);
     }
 
     fn gone_rows(conn: &Connection) -> Vec<(String, String)> {

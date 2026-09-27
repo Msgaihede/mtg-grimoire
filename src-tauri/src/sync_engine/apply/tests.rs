@@ -3125,13 +3125,148 @@ fn a_folder_moved_into_one_made_under_a_parent_deleted_here_goes_on_both() {
     assert!(skips(&a).is_empty() && skips(&b).is_empty());
 }
 
+/// **A folder moved under a parent deleted here follows it when the page brings the parent back
+/// only on a retry pass.** `b` makes `P`, `a` makes `X`, and both hold both; `b` deletes `P`; `a`,
+/// not having heard, moves `X` under `P`, renames `P` — later than the delete, so add-wins brings
+/// it back — makes `Outer` and moves `P` into it. The page meets `X`, then `P`, then `Outer`: `P`
+/// waits on `Outer` on the first attempt and is resurrected on the first retry pass, after `X`
+/// has been met on it. Decided there, `X` was deleted as moot, and a sparse move cannot rebuild it
+/// once `P` was back — `b` lost `X` for good while `a` kept it under `P` under `Outer`. A decision
+/// resting on `gone` now waits for a pass on which nothing else landed, and by then `P` has.
+///
+/// **What makes it red**: a gone-based decision taken on a retry pass on which other groups were
+/// still landing.
+#[test]
+fn a_folder_moved_under_a_parent_resurrected_on_a_retry_pass_follows_it() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let p_on_b = binder(&b, "P", None);
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    let x = binder(&a, "X", None);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    crate::collection_folders::delete_folder(&b, p_on_b).unwrap();
+    // Every write of `a`'s is later than `b`'s delete, which is what add-wins asks of the rename.
+    a.execute("UPDATE sync_clock SET ms = ms + 60000", [])
+        .unwrap();
+    let p_on_a: i64 = a
+        .query_row(
+            "SELECT id FROM collection_folders WHERE name = 'P'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    crate::collection_folders::move_folder(&a, x, Some(p_on_a)).unwrap();
+    a.execute(
+        "UPDATE collection_folders SET name = 'P2' WHERE id = ?1",
+        [p_on_a],
+    )
+    .unwrap();
+    let outer = binder(&a, "Outer", None);
+    crate::collection_folders::move_folder(&a, p_on_a, Some(outer)).unwrap();
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(unwritten(rb), (0, 0), "{rb:?}: {:?}", skips(&b));
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0), "{ra:?}");
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(
+            chain_of(c, "X"),
+            ["X", "P2", "Outer"],
+            "{who} does not hold X under P under Outer"
+        );
+    }
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
+}
+
+/// **...and a copy filed into a binder deleted here stays in it when the binder comes back two
+/// retry passes in.** `b` makes `B` and deletes it; `a`, not having heard, files a copy into `B`,
+/// renames `B` — which add-wins lets bring it back — makes `Outer` and moves `B` into it, then
+/// makes `Outer2` and moves `Outer` into that. The page meets `B`, `Outer`, `Outer2`, then the
+/// copy: `Outer` lands on the first retry pass and `B` only on the second. Decided on the first,
+/// the copy was written at the root as the `SET NULL` would leave it, while on `a` it is in `B`.
+///
+/// **What makes it red**: a gone-based decision taken on a retry pass on which other groups were
+/// still landing.
+#[test]
+fn a_copy_filed_into_a_binder_resurrected_on_a_later_retry_pass_stays_in_it() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let bin_on_b = binder(&b, "B", None);
+    apply(&a, &since(&b, &mut mb)).unwrap();
+
+    crate::collection_folders::delete_folder(&b, bin_on_b).unwrap();
+    a.execute("UPDATE sync_clock SET ms = ms + 60000", [])
+        .unwrap();
+    let bin_on_a: i64 = a
+        .query_row(
+            "SELECT id FROM collection_folders WHERE name = 'B'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    file_copies(&a, Some(bin_on_a), 1);
+    a.execute(
+        "UPDATE collection_folders SET name = 'B2' WHERE id = ?1",
+        [bin_on_a],
+    )
+    .unwrap();
+    let outer = binder(&a, "Outer", None);
+    crate::collection_folders::move_folder(&a, bin_on_a, Some(outer)).unwrap();
+    let outer2 = binder(&a, "Outer2", None);
+    crate::collection_folders::move_folder(&a, outer, Some(outer2)).unwrap();
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(unwritten(rb), (0, 0), "{rb:?}: {:?}", skips(&b));
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0), "{ra:?}");
+    for (who, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(c), (1, 1), "{who} lost the copy");
+        let folder: Option<String> = c
+            .query_row(
+                "SELECT f.name FROM collection_entries e
+                   LEFT JOIN collection_folders f ON f.id = e.folder_id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            folder.as_deref(),
+            Some("B2"),
+            "{who} holds the copy elsewhere"
+        );
+        assert_eq!(chain_of(c, "B2"), ["B2", "Outer", "Outer2"], "{who}");
+    }
+    assert!(skips(&a).is_empty() && skips(&b).is_empty());
+}
+
+/// The names from the collection folder called `name` up to the root, or empty when there is none.
+fn chain_of(conn: &Connection, name: &str) -> Vec<String> {
+    conn.query_row(
+        "WITH RECURSIVE up(id, name, parent_id, depth) AS (
+             SELECT id, name, parent_id, 0 FROM collection_folders WHERE name = ?1
+             UNION ALL
+             SELECT f.id, f.name, f.parent_id, up.depth + 1
+               FROM collection_folders f JOIN up ON f.id = up.parent_id
+         )
+         SELECT group_concat(name, '/' ORDER BY depth) FROM up",
+        [name],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .unwrap()
+    .map(|s| s.split('/').map(str::to_owned).collect())
+    .unwrap_or_default()
+}
+
 /// **The retry passes stop when nothing moves: a child whose parent is genuinely missing costs
 /// one more pass, not a loop to the cap.** `a` files a copy into a binder `b` never receives —
 /// its put is left out of the page, so the parent is missing and not gone — and, ahead of it, a
-/// copy into a binder `b` deleted, which the first retry pass writes at the root. That is
-/// progress, so a second pass runs, finds the waiting copy unchanged, and stops. Six more copies
-/// put the page's group count, which is the cap, at eight. The waiting copy ends held exactly as
-/// it did when there was one retry.
+/// copy into a binder `b` deleted. The first retry pass withholds that copy's decision and lands
+/// nothing; the `Decide` pass after it writes the copy at the root, which is progress; so one more
+/// pass runs, finds the waiting copy unchanged with nothing withheld, and stops — three passes.
+/// (Two, until gone-based decisions waited for a pass on which nothing landed.) Six more copies
+/// put the page's group count at eight and so the cap at seventeen. The waiting copy ends held
+/// exactly as it did when there was one retry.
 ///
 /// **What makes it red**: a loop that goes on while anything waits, rather than while something
 /// moved — it runs to the cap.
@@ -3180,7 +3315,7 @@ fn the_retry_passes_stop_when_nothing_can_progress() {
     assert_eq!(
         page.len(),
         8,
-        "the premise: eight groups, the cap: {page:?}"
+        "the premise: eight groups, so a cap of seventeen passes: {page:?}"
     );
 
     super::RETRY_PASSES.with(|c| c.set(0));
@@ -3188,7 +3323,7 @@ fn the_retry_passes_stop_when_nothing_can_progress() {
     let passes = super::RETRY_PASSES.with(|c| c.get());
 
     assert_eq!(
-        passes, 2,
+        passes, 3,
         "the retry passes did not stop when nothing moved"
     );
     assert_eq!((rb.held_waiting, rb.dropped), (1, 0), "{rb:?}");
