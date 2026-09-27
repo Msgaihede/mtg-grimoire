@@ -98,8 +98,13 @@ the row's uid and the reason, folding on the existing grain so a bad afternoon i
 
 After `apply` in `client::pull` (the epoch `behind` rule is unchanged and still wins):
 
-1. **`held_newer > 0`** → do not advance `PULL_CURSOR`. Write `sync_state.pull_hold =
-   {"kind":"newer","since":<unix>}`. No bound: it lasts until this device upgrades.
+1. **`held_newer > 0`, or an envelope that opened under the key but did not parse** → do not
+   advance `PULL_CURSOR`. Write `sync_state.pull_hold = {"kind":"newer","since":<unix>}`. No bound:
+   it lasts until this device upgrades. *(The second arm is `wire::open_batch`'s
+   `WireError::Malformed`: the AEAD passed, so a member of the group wrote it, and a batch this
+   build cannot parse — an op `Kind` it does not know — can only come from a newer one. Today it is
+   counted unreadable and stepped past, which drops it; an AEAD failure at the same epoch is still
+   stepped past, as today.)*
 2. **Else `held_waiting > 0`** → hold, recording `{"kind":"waiting","since":…,"pulls":n}`. Once the
    hold has been seen on **3 pulls spanning at least 10 minutes**, re-run `apply` on the same ops
    with `release_waiting = true`, then advance. (A baseline its sender owed arrives on that sender's
