@@ -3252,9 +3252,6 @@ mod tests {
                     crate::deck::set_folder(c, id, None).unwrap();
                 },
             ),
-            ("deck_theory_copy_from_live", nothing, |c, id| {
-                crate::deck_theory::copy_from_live(c, id).unwrap();
-            }),
             ("deck_import_commit (merge)", nothing, |c, id| {
                 crate::import::commit_import(
                     c,

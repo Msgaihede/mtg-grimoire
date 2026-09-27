@@ -10636,7 +10636,9 @@ describe("the busy fault", () => {
     // (`deck_token_set`, `_clear`, `_add`) and five in their place (`deck_token_set_quantity`,
     // `_swap`, `_add_printing`, `_state`, `_reset`), all plain `sync::with_write`.
     // 123 when the two met on 2026-09-27 — read from `left` after the merge, never added to.
-    expect(names).toHaveLength(123);
+    // 123 → 122 the same day, when the theory list's copy-from-live command left the fake with
+    // its Rust twin: it never had a caller, and its handler was one of the plain writes here.
+    expect(names).toHaveLength(122);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -13260,26 +13262,6 @@ describe("categories, labels, folders, history and the plan", () => {
     expect(db.wishlistEntries.find((x) => x.cardId === lotus.cardId)!.preferredFinish).toBeNull();
   });
 
-  it("seeds the plan from the deck without overwriting what the plan already says", () => {
-    const { db, w } = testbed();
-    const ramp = db.deckCategories.find((c) => c.deckId === 4 && c.name === "Ramp")!;
-    const planned = db.deckCards.find(
-      (dc) => dc.deckId === 4 && dc.variant === "theory" && dc.categoryId === ramp.id,
-    )!;
-    const before = planned.quantity;
-
-    w.deck_theory_copy_from_live({ deckId: 4 });
-
-    // The reader's own plan for that card is untouched — `DO NOTHING`, never a fold, because
-    // topping it up with the live count would overwrite the edit the plan exists to hold.
-    expect(planned.quantity).toBe(before);
-    // The one `deck`-kind row that moves the day header's arithmetic.
-    const row = lastAudit(db)!;
-    expect(row.variant).toBe("theory");
-    expect(row.delta).toBeGreaterThan(0);
-    expect(JSON.parse(row.payload)).toMatchObject({ field: "theory", copied: row.delta });
-  });
-
   it("wishes for the plan's shortfall without netting out the spare copies", () => {
     const { db, r, w } = testbed();
     const diff = r.deck_theory_diff({ deckId: 4 });
@@ -13326,8 +13308,9 @@ describe("categories, labels, folders, history and the plan", () => {
    * not something a **re-press** of the switch may pour the live deck over.
    *
    * Deck 4 is the case in one deck — it has both lists — and switching it off and back on is
-   * the exact gesture that would do the damage. The reader who really does want the deck copied
-   * into a plan they have begun asks for it by name, through `deck_theory_copy_from_live`.
+   * the exact gesture that would do the damage. There is no other way to copy the deck into a
+   * plan the reader has begun: the explicit copy command never had a caller and was removed on
+   * 2026-09-27, so a started plan changes only through the reader's own card writes.
    */
   it("leaves a plan the reader has already started alone, and the deck beside it", () => {
     const { db, w } = testbed();
