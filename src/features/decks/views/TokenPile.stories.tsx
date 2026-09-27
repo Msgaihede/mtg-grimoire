@@ -5,7 +5,7 @@ import { useAppStore } from "@/lib/store";
 import { THEORY_MATCH_ATTR } from "../CardMarks";
 import { tokenCountWords } from "../CountPill";
 import { TOKENS_HEADING } from "../DeckTokensPanel";
-import type { DeckTokenView } from "../deckTokens";
+import { pileTokens, type DeckTokenView } from "../deckTokens";
 import type { TheoryMark } from "../theoryMatch";
 import { useDeckTokens } from "../useDeckTokens";
 import {
@@ -42,16 +42,20 @@ const UNPLANNED: TheoryMark = { tier: "unplanned", delta: 0 };
  * carries the fake's own set code, number, rarity, finishes and price for its printing, and the
  * chin and the heading's total are the fake's figures rather than a story's. One card per
  * **entry** — the fake's per-entry rows, so a token held in two printings or two finishes is two
- * cards. The press logs nothing here — the printing picker is the editor's, mounted once beside
- * the band — while the steppers write through the fake like the band's.
+ * cards — and **only the counted ones**: `pileTokens`, the filter `DeckEditor` applies to the
+ * pile and nowhere else (managed tokens spec §3.2). The press logs nothing here — the printing
+ * picker is the editor's, mounted once beside the band — while the steppers and Remove printing
+ * write through the fake like the band's.
  */
 function PileHost({ drawing, deckId, planMarks = false }: PileHostProps): JSX.Element {
   const tokens = useDeckTokens(deckId, "live");
   const zoom = useAppStore((s) => s.cardZoom.deck);
-  const first = tokens.tokens[0]?.entryKey;
+  const counted = pileTokens(tokens.tokens);
+  const first = counted[0]?.entryKey;
   const pile: TokenPile = {
-    tokens: tokens.tokens,
+    tokens: counted,
     setQuantity: tokens.setQuantity,
+    remove: tokens.remove,
     pickArt: () => {},
     // Last in the rail, every existing deck's position — where the pile is drawn is the view's.
     railIndex: -1,
@@ -148,12 +152,57 @@ export const Table: Story = {
 };
 
 /**
+ * **The pile draws the counted tokens only** (managed tokens spec §3.2): deck 1 makes five tokens
+ * and the reader has counted one, the Treasure — so one card, where the band beside it lists all
+ * five at their counts.
+ */
+export const CountedOnly: Story = {
+  play: async ({ canvasElement }) => {
+    const pile = await isThePile(canvasElement);
+    await expect(
+      within(pile).getAllByRole("button", { name: /^Change the art for / }).map((b) =>
+        b.getAttribute("aria-label"),
+      ),
+    ).toEqual([expect.stringMatching(/^Change the art for Treasure/)]);
+  },
+};
+
+/**
+ * **A token nothing in the deck makes, marked as a rule-break card is** (managed tokens spec §3.5)
+ * — deck 2 keeps Oko's emblem by hand: the card's own edge and its chin in the destructive colour,
+ * and `NOT MADE BY DECK` in the rule-break mark's bottom-left corner. **Remove printing** stands in
+ * the controls column under the stepper, the one way to take it off the deck.
+ */
+export const HandAdded: Story = {
+  args: { deckId: 2 },
+  play: async ({ canvasElement }) => {
+    const pile = await isThePile(canvasElement);
+    const art = within(pile).getByRole("button", { name: /^Change the art for Oko.*, not made by deck$/ });
+    const card = art.closest("li") as HTMLElement;
+    await expect(card.classList.contains("border-destructive")).toBe(true);
+    await expect(within(card).getByText("NOT MADE BY DECK")).toHaveAttribute("aria-hidden", "true");
+    await expect(within(card).getByRole("button", { name: /^Remove Oko/ })).toBeInTheDocument();
+  },
+};
+
+/** The same token on the compact drawings: the words as a small destructive tag after the name. */
+export const HandAddedTable: Story = {
+  args: { deckId: 2, drawing: "table" },
+  play: async ({ canvasElement }) => {
+    const pile = await isThePile(canvasElement);
+    await expect(within(pile).getByText("NOT MADE BY DECK")).toBeInTheDocument();
+  },
+};
+
+/**
  * The plan's two answers for a token, side by side: the tick the deck card wears where the plan
  * makes this token in this printing, and the X where it does not — the same `TheoryMatchMark`, in
- * the same top-right corner, as on every deck card beside the pile.
+ * the same top-right corner, as on every deck card beside the pile. On the `tokenPlan` seed, where
+ * deck 1 counts two tokens — two cards are what the two marks need.
  */
 export const WithPlanMarks: Story = {
   args: { planMarks: true },
+  parameters: { fake: { seed: "tokenPlan" } },
   play: async ({ canvasElement }) => {
     const pile = await isThePile(canvasElement);
     const presses = within(pile).getAllByRole("button", { name: /^Change the art for / });

@@ -51,6 +51,7 @@ import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
 import { QuantityTag, RuleBreakMark, TheoryMatchMark } from "./CardMarks";
 import { DECK_CARD_VARIANT, LandedMark } from "./cardControl";
+import { NotMadeByDeckMark } from "./NotMadeByDeckMark";
 import type { TheoryMark } from "./theoryMatch";
 
 /**
@@ -191,6 +192,28 @@ const FRAME_NAME_INSET = "calc(34px * var(--mark-scale, 1))";
 const FRAME_BAR = "color-mix(in oklab, var(--color-border) 35%, var(--color-surface))";
 
 /**
+ * **The bottom-left corner a card's word mark sits in** — `RULE BREAK` on a deck card, and
+ * `NOT MADE BY DECK` on a token added by hand (managed tokens spec §3.5), which takes that mark's
+ * place because a token never breaks a rule and so never needs the corner for it.
+ *
+ * Exported because the Tokens & Emblems band draws its tile with `CardArt` rather than this face,
+ * and its badge has to sit where this one does: the chin under both rides up by the same
+ * `CHIN_RISE`, so the same offset clears it on both. The offset is **the only sum on this card
+ * with a scaled term and a fixed one**, and both are needed: `0.25rem × --mark-scale` is the inset
+ * the mark is drawn at, and `+ 4px` is `CHIN_RISE`, the distance the chin rides **up** over the
+ * face to hide its square corners. The rise does not scale — it is derived from a Tailwind corner
+ * radius that does not — so a wholly scaled offset would clear the bar at 1× and put the mark
+ * behind it at 0.5×, which is exactly the zoom a reader picks when they want to see more cards and
+ * fewer details. The Grid tile drew the mark 4px lower for as long as its chin was flush; it is
+ * the same card now, so it takes the same clearance.
+ */
+export const BOTTOM_LEFT_MARK = cn(
+  "absolute",
+  "bottom-[calc(0.25rem*var(--mark-scale,1)+4px)]",
+  "left-[calc(5px*var(--mark-scale,1))]",
+);
+
+/**
  * **The fields of a deck card this face reads, and nothing else** — so a caller that is not a
  * deck row can hand it one without faking the other forty.
  *
@@ -231,6 +254,14 @@ export interface DeckCardFaceProps {
   width: number;
   /** The sentence the `RULE BREAK` mark carries, or `null` when there is nothing wrong. */
   ruleBreakText: string | null;
+  /**
+   * **A token nothing in the deck makes**: its name, which draws the `NOT MADE BY DECK` mark in
+   * `RULE BREAK`'s corner and style and names it in the mark's sentence (managed tokens spec
+   * §3.5). `null` or absent draws nothing, which is every deck card — a deck row is by definition
+   * in the deck — and every token a card in the deck makes. The token pile is the one caller that
+   * sets it; the card's edge is the caller's to colour, as a rule break's is.
+   */
+  notMadeByDeck?: string | null;
   /** What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchMark`, resolved by
    *  the caller so the face is handed an answer rather than a plan to look itself up in. `null` is
    *  a card the plan does not ask for; otherwise the tier it is in and how far the live list is
@@ -265,6 +296,7 @@ export function DeckCardFace({
   card,
   width,
   ruleBreakText,
+  notMadeByDeck = null,
   theoryMark,
   noted = false,
   landedKey,
@@ -482,24 +514,18 @@ export function DeckCardFace({
           before they have read either. Adjacent in one corner they would have been a tick and a box
           arguing; in opposite corners they are two unrelated facts about one card.
 
-          The offset is **the only sum on this card with a scaled term and a fixed one**, and both
-          are needed: `0.25rem × --mark-scale` is the inset the mark is drawn at, and `+ 4px` is
-          `CHIN_RISE`, the distance the chin rides **up** over the face to hide its square corners.
-          The rise does not scale — it is derived from a Tailwind corner radius that does not — so a
-          wholly scaled offset would clear the bar at 1× and put the mark behind it at 0.5×, which
-          is exactly the zoom a reader picks when they want to see more cards and fewer details.
-          The Grid tile drew the mark 4px lower for as long as its chin was flush; it is the same
-          card now, so it takes the same clearance. */}
-      {ruleBreakText !== null && (
-        <RuleBreakMark
-          text={ruleBreakText}
-          className={cn(
-            "absolute",
-            "bottom-[calc(0.25rem*var(--mark-scale,1)+4px)]",
-            "left-[calc(5px*var(--mark-scale,1))]",
-          )}
-        />
-      )}
+          The offset is {@link BOTTOM_LEFT_MARK}'s, whose comment has the sum and why it is one.
+
+          **The corner has a second tenant since managed tokens, and they never meet**: a token the
+          deck does not make wears `NOT MADE BY DECK` here in the same style (spec §3.5), and a
+          token is never validated, so it never has a rule to break. A rule break still wins the
+          corner should a caller ever hand both, because it is the one of the two the reader has
+          to act on. */}
+      {ruleBreakText !== null ? (
+        <RuleBreakMark text={ruleBreakText} className={BOTTOM_LEFT_MARK} />
+      ) : notMadeByDeck !== null ? (
+        <NotMadeByDeckMark name={notMadeByDeck} className={BOTTOM_LEFT_MARK} />
+      ) : null}
 
       {/* **Inside the face, which is what makes it findable in a fanned pile.** The face is the one
           box here that a collapsed card still shows 34px of, so a mark laid over it is a lit band

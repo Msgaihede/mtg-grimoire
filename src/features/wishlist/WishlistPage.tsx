@@ -1070,9 +1070,10 @@ export function WishlistPage() {
   });
   const managedSentenceOf = useCallback(
     (managedFolderId: number): string => {
-      const deckId = folders.folders.find((f) => f.id === managedFolderId)?.managedDeckId;
-      const deck = deckList.data?.find((d) => d.id === deckId);
-      return managedEmptySentence(deck?.managedWishlist);
+      const folder = folders.folders.find((f) => f.id === managedFolderId);
+      const deck = deckList.data?.find((d) => d.id === folder?.managedDeckId);
+      // A deck's Tokens child carries the deck's id too, and says its own sentence (v54).
+      return managedEmptySentence(deck?.managedWishlist, folder?.managedTokens === true);
     },
     [folders.folders, deckList.data],
   );

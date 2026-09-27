@@ -47,6 +47,16 @@
  * go nowhere else: they are never added to the deck's size, the ledger's price or any other
  * pile's heading. A token's price is summed in exactly one place, this heading.
  *
+ * ## The counted tokens only, and a token the deck does not make is marked
+ *
+ * **The pile draws what the reader has counted** (managed tokens spec §3.2) — the editor hands it
+ * `deckTokens.ts`' `pileTokens`, the band's list less every entry at 0 — so nothing here filters,
+ * and the band is where a token at 0 is found and counted. **A token nothing in the deck makes is
+ * drawn as a rule-break card is** (spec §3.5): the card's edge and its chin in the destructive
+ * colour and `NOT MADE BY DECK` in the rule-break mark's corner on the two card drawings, and the
+ * same words as a small destructive tag after the name on the two compact ones. And every card
+ * carries **Remove printing** (spec §3.4), the one way to take a hand-added token off the deck.
+ *
  * ## One name per control, and the subtitle is in every one
  *
  * A token's name does not identify it (`DeckTokensPanel.tsx`'s header has the corpus figures —
@@ -58,9 +68,14 @@
  */
 import { useCallback, useId, type ReactNode } from "react";
 import { motion, useReducedMotion } from "motion/react";
-import { ImageIcon } from "lucide-react";
+import { ImageIcon, Trash2 } from "lucide-react";
 import { CardChin } from "@/components/CardChin";
-import { QuantityStepper } from "@/components/QuantityStepper";
+import {
+  BUTTON_OVER_ART,
+  QUANTITY_STEPPER_CARD_BOX,
+  QUANTITY_STEPPER_CARD_ICON,
+  QuantityStepper,
+} from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { atLeast, cardScaleVars } from "@/lib/cardZoom";
 import { playedFinish } from "@/lib/finish";
@@ -86,19 +101,34 @@ import { REVEALED_ON_CARD, revealedWhenOpen } from "../cardControl";
 import { tokenCountWords } from "../CountPill";
 import { DeckCardFace, type DeckCardFaceFacts } from "../DeckCardFace";
 import { TOKENS_HEADING } from "../DeckTokensPanel";
-import { entryRef, tokenEntryName, type DeckTokenView, type TokenEntryRef } from "../deckTokens";
+import {
+  entryRef,
+  isHandAdded,
+  NOT_MADE_BY_DECK,
+  notMadeByDeckHint,
+  tokenArtName,
+  tokenEntryName,
+  type DeckTokenView,
+  type TokenEntryRef,
+} from "../deckTokens";
 import type { TheoryMark } from "../theoryMatch";
 import { tokenDeckFinish } from "../tokenTheory";
 import { GroupHeader, type GroupHeading } from "./GroupHeader";
 
 /** What a view is handed to draw the pile — the band's own answer, never a copy of it. */
 export interface TokenPile {
-  /** What the pile draws, one view **per entry**, in `deckTokenViews` order — never a dismissed
-   *  token. */
+  /** What the pile draws, one view **per entry**, in `deckTokenViews` order — the entries the
+   *  reader has counted (`pileTokens`), never one at 0. The pile filters nothing itself. */
   tokens: readonly DeckTokenView[];
   /** Step one entry — addressed by its token, printing and finish, never by the token alone, which
    *  a token with two entries would share between them. */
   setQuantity: (entry: TokenEntryRef, quantity: number) => void;
+  /**
+   * **Remove printing** — one stored entry, deleted (managed tokens spec §3.4). Drawn on the two
+   * card drawings' controls, on every card that is a stored entry. Absent draws no button, which is
+   * a host that has not wired the write — never a statement about the token.
+   */
+  remove?: (entry: TokenEntryRef) => void;
   /** Open the one printing picker the editor mounts, to swap this entry. The whole view, so the
    *  editor can hold its `entryKey` — the editor keeps the key, never the view. */
   pickArt: (view: DeckTokenView) => void;
@@ -169,6 +199,71 @@ export function tokenFaceFacts(view: DeckTokenView): DeckCardFaceFacts {
  */
 function entryFinishFacts(view: DeckTokenView) {
   return { finish: tokenDeckFinish(view), finishes: view.finishes, promoTypes: null };
+}
+
+/**
+ * The card's own edge on the two card drawings — **the destructive colour for a token nothing in
+ * the deck makes**, the rule-break card's own outline (managed tokens spec §3.5), and the neutral
+ * hairline otherwise. The chin under the face takes the matching `tone`, because it paints over
+ * the card's edge along its whole height and a neutral chin would put the wrong colour back
+ * through the foot of a red card.
+ */
+function cardEdge(view: DeckTokenView): string {
+  return isHandAdded(view) ? "border-destructive" : "border-border";
+}
+
+/**
+ * **Remove printing on a card** — the trash glyph in the controls column under the stepper, the
+ * same 36px box the stepper's own buttons are (`QUANTITY_STEPPER_CARD_BOX`) and the same backing
+ * over art, so the column reads as one set of controls rather than a stepper with a stray icon
+ * beside it — the wishlist tile's pencil makes the same move. Named for its entry through
+ * `tokenEntryName`, so a token's two entries are two presses; `Remove printing` is the pointer's
+ * word. Drawn only on a stored entry — never an implicit one, which is not stored and has nothing
+ * to delete — and only where the host wired the write.
+ */
+function CardRemove({ view, pile }: { view: DeckTokenView; pile: TokenPile }) {
+  const tip = useTooltip();
+  const remove = pile.remove;
+  if (remove === undefined || view.implicit) return null;
+  return (
+    <button
+      type="button"
+      onClick={() => remove(entryRef(view))}
+      aria-label={tokenEntryName("Remove", view)}
+      {...tip("Remove printing", { describes: false })}
+      className={cn(
+        "grid shrink-0 place-items-center border border-border",
+        QUANTITY_STEPPER_CARD_BOX,
+        BUTTON_OVER_ART,
+        "hover:text-destructive",
+        PRESS,
+        FOCUS_INSET,
+      )}
+    >
+      <Trash2 aria-hidden="true" className={QUANTITY_STEPPER_CARD_ICON} />
+    </button>
+  );
+}
+
+/**
+ * `NOT MADE BY DECK` on a line of the two compact drawings — **a small destructive tag after the
+ * name** (managed tokens spec §3.5), because a 22px line and a table row have no corner to put a
+ * badge in and no card edge to colour. The words are the badge's and the tag says them outright,
+ * so the pointer's sentence is all it adds; `aria-hidden` for the badge's reason — the line's
+ * press carries the words in its own name (`tokenArtName`).
+ */
+function NotMadeByDeckTag({ view }: { view: DeckTokenView }) {
+  const tip = useTooltip();
+  if (!isHandAdded(view)) return null;
+  return (
+    <span
+      aria-hidden="true"
+      {...tip(notMadeByDeckHint(view.name), { describes: false })}
+      className="shrink-0 whitespace-nowrap rounded-[3px] border border-destructive/50 px-1 font-mono text-[0.5625rem] leading-3 text-destructive"
+    >
+      {NOT_MADE_BY_DECK}
+    </span>
+  );
 }
 
 /**
@@ -297,9 +392,10 @@ export function TokenStackPile({
             // `marginBottom` is not among the keys `MotionConfig reducedMotion="user"` reduces, so
             // the opt-out is this component's own — `CardStack`'s `STILL`, for its reason.
             transition={reduced ? { duration: 0 } : stackCard}
-            // The deck stack's card body, class for class — `border-border` because a token has
-            // no rule to break, and no ring because a token is never picked.
-            className={cn(STACKED_CARD_BODY, "border-border", stackedCardShadow(index === open))}
+            // The deck stack's card body, class for class — its edge the destructive colour for a
+            // token the deck does not make ({@link cardEdge}), as a rule-break card's is, and no
+            // ring because a token is never picked.
+            className={cn(STACKED_CARD_BODY, cardEdge(view), stackedCardShadow(index === open))}
           >
             <TokenFace
               view={view}
@@ -310,10 +406,11 @@ export function TokenStackPile({
             />
             {/* The stacked card's controls column, at its offset: `top-9` clears the 27px title
                 bar the quantity tag and the plan's mark are in. Over the card and taking no height,
-                so the list is still `stackHeight` of the count. */}
+                so the list is still `stackHeight` of the count. `gap-1` is `DeckCardControls`'
+                column's, so the stepper and Remove printing under it are one column of controls. */}
             <span
               className={cn(
-                "absolute top-9 right-1.5 flex flex-col items-end",
+                "absolute top-9 right-1.5 flex flex-col items-end gap-1",
                 revealedWhenOpen(index === open),
               )}
             >
@@ -327,6 +424,7 @@ export function TokenStackPile({
                 label={tokenEntryName("Quantity of", view)}
                 onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
+              <CardRemove view={view} pile={pile} />
             </span>
           </motion.li>
         ))}
@@ -350,7 +448,10 @@ export function TokenStackPile({
  * **The chin is a sibling of the button, never a child**, for `CardChin`'s own reason: everything
  * in it is a fact (the set, the number, the finish, what one copy costs) and a button's
  * `aria-label` would swallow it. `seam="card"` because this sits in the stacked card's bordered
- * body, and `tone` is left at its default because a token has no rule to break.
+ * body, and its `tone` follows the card's edge ({@link cardEdge}): destructive for a token nothing
+ * in the deck makes, whose face wears `NOT MADE BY DECK` in the rule-break mark's corner and whose
+ * press says the same words in its name ({@link tokenArtName}) — a token never breaks a rule, so
+ * the two never compete for the corner.
  */
 function TokenFace({
   view,
@@ -371,7 +472,8 @@ function TokenFace({
   const tip = useTooltip();
   const press = useCallback(() => pile.pickArt(view), [pile, view]);
   const mark = pile.theoryMark?.(view) ?? null;
-  const name = tokenEntryName("Change the art for", view);
+  const name = tokenArtName(view);
+  const handAdded = isHandAdded(view);
   return (
     <>
       <button
@@ -393,6 +495,8 @@ function TokenFace({
           card={tokenFaceFacts(view)}
           width={width}
           ruleBreakText={null}
+          // In the rule-break mark's corner and style, where a token has no rule to break.
+          notMadeByDeck={handAdded ? view.name : null}
           theoryMark={mark}
           landedKey={undefined}
         />
@@ -410,6 +514,8 @@ function TokenFace({
         finish={playedFinish(tokenDeckFinish(view), view.finishes)}
         money={formatPrice(view.unitPrice, currency)}
         seam="card"
+        // The card's own edge, carried down through the foot — see {@link cardEdge}.
+        tone={handAdded ? "destructive" : "default"}
       />
     </>
   );
@@ -460,8 +566,9 @@ export function TokenGridPile({
             style={{ width: tileWidth, ...cardScaleVars(zoom) }}
             // `group` is the one thing here that is not the stack's, for `GridView`'s tile's
             // reason: nothing overlaps a tile, so the pointer is the honest question and
-            // `REVEALED_ON_CARD` hangs off it. The resting shadow, since a tile is never fanned.
-            className={cn("group", STACKED_CARD_BODY, "border-border", stackedCardShadow(false))}
+            // `REVEALED_ON_CARD` hangs off it. The resting shadow, since a tile is never fanned;
+            // the edge is {@link cardEdge}'s, as on the stack.
+            className={cn("group", STACKED_CARD_BODY, cardEdge(view), stackedCardShadow(false))}
           >
             <TokenFace
               view={view}
@@ -471,7 +578,10 @@ export function TokenGridPile({
               currency={marketplace.currency}
             />
             <span
-              className={cn("absolute top-9 right-1.5 flex flex-col items-end", REVEALED_ON_CARD)}
+              className={cn(
+                "absolute top-9 right-1.5 flex flex-col items-end gap-1",
+                REVEALED_ON_CARD,
+              )}
             >
               <QuantityStepper
                 size="card"
@@ -483,6 +593,7 @@ export function TokenGridPile({
                 label={tokenEntryName("Quantity of", view)}
                 onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
+              <CardRemove view={view} pile={pile} />
             </span>
           </li>
         ))}
@@ -499,7 +610,8 @@ export function TokenGridPile({
  * The Text view's pile — a trailing group of lines in `TextRow`'s grammar: a 22px line per entry
  * with the quantity in the data face and the name, the subtitle dim after it and the entry's finish
  * mark in the tail. The line itself is the press that opens the printing picker on that entry; the
- * stepper rides over its tail on hover, as a deck line's does.
+ * stepper rides over its tail on hover, as a deck line's does. A token nothing in the deck makes
+ * carries `NOT MADE BY DECK` as a tag right after its name ({@link NotMadeByDeckTag}).
  */
 export function TokenTextPile({ pile }: { pile: TokenPile }) {
   const headingId = useId();
@@ -520,7 +632,9 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
             <button
               type="button"
               onClick={() => pile.pickArt(view)}
-              aria-label={tokenEntryName("Change the art for", view)}
+              // The mark's words are in this name for a hand-added token, since the tag inside the
+              // button is covered by it — an `aria-label` replaces its element's content.
+              aria-label={tokenArtName(view)}
               className={cn(
                 "flex h-[22px] w-full cursor-pointer items-center gap-1.5 rounded px-1 text-xs",
                 "transition-colors duration-150 hover:bg-surface motion-reduce:transition-none",
@@ -536,6 +650,7 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
               <span className="min-w-0 shrink-0 truncate border-l-2 border-transparent pl-1.5 text-left">
                 {view.name}
               </span>
+              <NotMadeByDeckTag view={view} />
               {view.subtitle !== null && (
                 <span className="min-w-0 flex-1 truncate text-left text-[0.6875rem] text-dim">
                   {view.subtitle}
@@ -575,8 +690,9 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
  * The Table view's pile — a trailing section under the table's bands, as a compact list rather
  * than more `VirtualTable` rows: its columns (price, owned, rarity, printing) are facts about a
  * deck card that a token does not have, and a row with six empty cells reads as a row that failed
- * to load. Four things per entry: the stepper, the name (with the entry's finish mark) over its
- * subtitle, what makes it, and the press that opens the printing picker on that entry.
+ * to load. Four things per entry: the stepper, the name (with the entry's finish mark, and
+ * `NOT MADE BY DECK` after it for a token the deck does not make) over its subtitle, what makes
+ * it, and the press that opens the printing picker on that entry.
  */
 export function TokenTablePile({ pile }: { pile: TokenPile }) {
   const headingId = useId();
@@ -613,6 +729,7 @@ export function TokenTablePile({ pile }: { pile: TokenPile }) {
             <span className="flex min-w-0 flex-col">
               <span className="flex min-w-0 items-center gap-1.5">
                 <span className="truncate">{view.name}</span>
+                <NotMadeByDeckTag view={view} />
                 <DeckFinishMark card={entryFinishFacts(view)} />
               </span>
               {view.subtitle !== null && (
@@ -628,7 +745,7 @@ export function TokenTablePile({ pile }: { pile: TokenPile }) {
             <button
               type="button"
               onClick={() => pile.pickArt(view)}
-              aria-label={tokenEntryName("Change the art for", view)}
+              aria-label={tokenArtName(view)}
               {...tip("Change the art", { describes: false })}
               className={cn(
                 "grid size-7 place-items-center rounded-md border border-border text-dim hover:text-text",

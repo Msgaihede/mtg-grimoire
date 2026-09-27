@@ -1,7 +1,12 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  TOOLTIP_OPEN_MS,
+  TOOLTIP_PANEL_ID,
+  TooltipProvider,
+} from "@/components/tooltip/TooltipProvider";
 
 // `useMarketplace` is the real hook — every tile's foot quotes its entry's price in the currency
 // it answers — so its two reads need answers or they sit rejected for the life of the file.
@@ -65,10 +70,32 @@ const WURM = entry({
   finish: "nonfoil",
   implicit: true,
   overridden: false,
-  quantity: 1,
+  quantity: 0,
   subtitle: "Colorless 3/3 · Deathtouch",
   setCode: "tsom",
   collectorNumber: "9",
+  finishes: '["nonfoil"]',
+});
+/**
+ * **A token nothing in the deck makes** — Oko's emblem, added by hand: `derived: false`, no
+ * sources, `manual`. Stepped to **0** on purpose, which is Review Focus 2: a hand-added token at
+ * zero is still the reader's, so it stays on the band with its mark and its Remove button — it is
+ * only the deck's stacks that leave it out.
+ */
+const OKO = entry({
+  oracleId: "o-oko",
+  name: "Oko, Shadowmoor Scion Emblem",
+  typeLine: "Emblem — Oko",
+  layout: "emblem",
+  printingId: "p-tecl-12",
+  entryKey: "p-tecl-12:nonfoil",
+  quantity: 0,
+  sources: [],
+  derived: false,
+  state: "manual",
+  subtitle: null,
+  setCode: "tecl",
+  collectorNumber: "12",
   finishes: '["nonfoil"]',
 });
 
@@ -88,14 +115,11 @@ function tokensOf(
     tokens: views,
     loading: false,
     failure: null,
-    showDismissed: false,
-    setShowDismissed: vi.fn(),
+    writes: [],
     setQuantity: vi.fn(),
     swap: vi.fn(),
     addPrinting: vi.fn(),
-    dismiss: vi.fn(),
-    restore: vi.fn(),
-    reset: vi.fn(),
+    remove: vi.fn(),
   } as unknown as DeckTokens;
 }
 
@@ -104,13 +128,14 @@ function band(props: Partial<DeckTokensPanelProps> = {}) {
     onToggle: vi.fn(),
     onPick: vi.fn(),
     onAddPrinting: vi.fn(),
-    onMode: vi.fn(),
   };
   const tokens = props.tokens ?? tokensOf([PLAIN, FOIL, WURM]);
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
-      <DeckTokensPanel tokens={tokens} open mode="managed" {...callbacks} {...props} />
+      <TooltipProvider>
+        <DeckTokensPanel tokens={tokens} open {...callbacks} {...props} />
+      </TooltipProvider>
     </QueryClientProvider>,
   );
   return { tokens, ...callbacks };
@@ -119,6 +144,12 @@ function band(props: Partial<DeckTokensPanelProps> = {}) {
 const TMOM_PLAIN = `Treasure, ${TREASURE_TEXT}, TMOM · 12, Nonfoil`;
 const TMOM_FOIL = `Treasure, ${TREASURE_TEXT}, TMOM · 12, Foil`;
 const WURM_NAME = "Wurm, Colorless 3/3 · Deathtouch, TSOM · 9, Nonfoil";
+const OKO_NAME = "Oko, Shadowmoor Scion Emblem, TECL · 12, Nonfoil";
+
+/** A tile — the `<li>` holding its picture, its foot and its controls — by the art press's name. */
+function tileOf(name: string | RegExp): HTMLElement {
+  return screen.getByRole("button", { name }).closest("li")!;
+}
 
 describe("DeckTokensPanel", () => {
   /**
@@ -186,7 +217,8 @@ describe("DeckTokensPanel", () => {
     expect(tokens.setQuantity).toHaveBeenCalledTimes(1);
   });
 
-  /** An implicit entry says so in its reference, so Rust knows to materialise it (rule 2). */
+  /** An implicit entry says so in its reference, so Rust knows to materialise it (rule 2) — and
+   *  an untouched token reads 0 since managed tokens spec §3.1, so its first `+` writes one. */
   it("hands an implicit entry's reference over as implicit", async () => {
     const { tokens } = band();
 
@@ -194,7 +226,7 @@ describe("DeckTokensPanel", () => {
 
     expect(tokens.setQuantity).toHaveBeenCalledWith(
       { oracleId: "o-wurm", cardId: "p-tsom-9", finish: "nonfoil", implicit: true },
-      2,
+      1,
     );
   });
 
@@ -234,83 +266,163 @@ describe("DeckTokensPanel", () => {
     expect(onToggle).not.toHaveBeenCalled();
   });
 
-  /** The mode control is the header's, and a press writes the column's word through the host. */
-  it("draws the mode control in the header and reports a press", async () => {
-    const { onMode } = band({ open: false, mode: "managed" });
-
-    const group = screen.getByRole("group", { name: "Tokens" });
-    expect(within(group).getByRole("button", { name: "Managed" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await userEvent.click(within(group).getByRole("button", { name: "Hide" }));
-
-    expect(onMode).toHaveBeenCalledWith("hidden");
-  });
-
   /**
-   * **The header draws on a deck that makes nothing**, mode control and all — the mode is a
-   * question about the deck, so a reader can set it before the deck makes its first token. What
-   * is *not* drawn is Add printing: there is no token to add a printing of, and a control that
-   * spends the whole deck refusing is the band's own argument against a greyed one.
+   * **The header draws on a deck that makes nothing**, and says so in words. What is not drawn is
+   * Add printing — there is no token of the deck's to add a printing of, and a control that spends
+   * the whole deck refusing is the band's own argument against a greyed one — and since managed
+   * tokens spec §3.9, no mode control either.
    */
-  it("keeps the header and its mode control on a deck that makes no tokens", () => {
-    band({ tokens: tokensOf([]), mode: "hidden" });
+  it("keeps the header on a deck that makes no tokens", () => {
+    band({ tokens: tokensOf([]) });
 
     expect(screen.getByText("Nothing in this deck makes a token or an emblem.")).toBeInTheDocument();
-    const group = screen.getByRole("group", { name: "Tokens" });
-    expect(within(group).getByRole("button", { name: "Hide" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
     expect(screen.queryByRole("button", { name: "Add printing" })).toBeNull();
     expect(screen.queryByRole("button", { name: TOKENS_HEADING })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Tokens" })).toBeNull();
   });
 
   /**
-   * **Every token dismissed: no Add printing, and the band still opens.** The picker offers the
-   * printings of the tokens the deck *keeps*, so here it would open on "This deck makes no token
-   * or emblem to add a printing of" — a sentence that is false about a deck whose tokens are only
-   * put away. The disclosure stays, because opening the band is how a reader finds `Show
-   * dismissed` and restores one.
+   * **Dismiss, restore, Reset printings and the mode control are gone** (managed tokens spec §3.3,
+   * §3.4, §3.9) — every one of them, on a wall holding an entry each of them used to be drawn on:
+   * a stored entry (Reset's), an implicit one, and a `hidden` row (the eye and `Show dismissed`).
    */
-  it("draws no Add printing when every token is dismissed, and still lets the band open", async () => {
-    const hidden = { ...PLAIN, state: "hidden" as const };
-    const { onToggle } = band({
-      open: false,
-      tokens: tokensOf(
-        [hidden],
-        [
-          { oracleId: "o-treasure", state: "hidden" },
-          { oracleId: "o-wurm", state: "hidden" },
-        ],
-      ),
-    });
+  it("draws no dismiss, restore, reset, dismissed switch or mode control", () => {
+    const hidden = { ...WURM, state: "hidden" as const };
+    band({ tokens: tokensOf([PLAIN, FOIL, hidden]) });
 
-    expect(screen.queryByRole("button", { name: "Add printing" })).toBeNull();
-    await userEvent.click(screen.getByRole("button", { name: TOKENS_HEADING }));
-    expect(onToggle).toHaveBeenCalledWith(true);
+    const region = screen.getByRole("region", { name: TOKENS_HEADING });
+    for (const gone of [/^Show dismissed/, /^Dismiss /, /^Restore /, /^Reset /]) {
+      expect(within(region).queryByRole("button", { name: gone }), String(gone)).toBeNull();
+    }
+    expect(within(region).queryByRole("group", { name: "Tokens" })).toBeNull();
+    for (const word of ["Managed", "Hide", "Collection"]) {
+      expect(within(region).queryByRole("button", { name: word }), word).toBeNull();
+    }
   });
 
   /**
-   * **A dismissal is counted once per token, not once per entry.** The rows are one per entry
-   * now, so a Treasure dismissed with two printings is two hidden rows — and one token the switch
-   * offers to show.
+   * **A `hidden` row is an ordinary tile, and it counts** (Review Focus 1). The resolver can still
+   * answer the word — an older peer can sync a dismissal in after the launch pass that retires it
+   * has run — and until the next launch it is a token like any other: on the wall, in the count,
+   * with its stepper. Nothing on the band can bring back a token that vanished.
    */
-  it("counts a dismissed token once however many entries it has", () => {
-    band({
-      tokens: tokensOf(
-        [WURM],
-        [
-          { oracleId: "o-treasure", state: "hidden" },
-          { oracleId: "o-treasure", state: "hidden" },
-          { oracleId: "o-wurm", state: "auto" },
-        ],
-      ),
-    });
+  it("draws a hidden row as an ordinary tile, counted with the rest", () => {
+    const hidden = { ...WURM, state: "hidden" as const, quantity: 3, implicit: false };
+    band({ tokens: tokensOf([PLAIN, hidden]) });
 
+    const region = screen.getByRole("region", { name: TOKENS_HEADING });
     expect(
-      screen.getByRole("button", { name: "Show dismissed, 1 token or emblem" }),
+      within(region).getByRole("button", { name: `Change the art for ${WURM_NAME}` }),
     ).toBeInTheDocument();
+    // Two plain Treasures and three Wurms: the dismissed word takes nothing out of the count.
+    expect(within(region).getByText("5 tokens and emblems")).toBeInTheDocument();
+  });
+
+  /**
+   * **Remove printing on every tile that is an entry the list holds** (managed tokens spec §3.4) —
+   * a trash glyph named for its entry, so the plain and the foil Treasure are two presses — and on
+   * none that is implicit, because an implicit entry is not stored and there is nothing to delete.
+   * A press hands the host the entry's address and nothing else.
+   */
+  it("draws Remove printing on each stored entry, named for it, and hands the entry over", async () => {
+    const { tokens } = band();
+
+    const region = screen.getByRole("region", { name: TOKENS_HEADING });
+    expect(
+      within(region)
+        .getAllByRole("button", { name: /^Remove / })
+        .map((b) => b.getAttribute("aria-label")),
+    ).toEqual([`Remove ${TMOM_PLAIN}`, `Remove ${TMOM_FOIL}`]);
+    expect(within(region).queryByRole("button", { name: `Remove ${WURM_NAME}` })).toBeNull();
+
+    await userEvent.click(within(region).getByRole("button", { name: `Remove ${TMOM_FOIL}` }));
+    expect(tokens.remove).toHaveBeenCalledTimes(1);
+    expect(tokens.remove).toHaveBeenCalledWith({
+      oracleId: "o-treasure",
+      cardId: "p-tmom-12",
+      finish: "foil",
+      implicit: false,
+    });
+  });
+
+  /** The pointer's word for the glyph is the spec's, `Remove printing`, whatever the entry. */
+  it("says Remove printing under the pointer", async () => {
+    band();
+
+    const remove = screen.getByRole("button", { name: `Remove ${TMOM_PLAIN}` });
+    fireEvent.pointerEnter(remove);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent("Remove printing");
+  });
+
+  /**
+   * **A token nothing in the deck makes is marked like a rule-break card — an outline and a
+   * badge** (managed tokens spec §3.5). The outline is on the tile's wrapper, since `CardArt` takes
+   * no tone, and the chin under it wears `tone="destructive"` so the red runs through the foot; the
+   * badge reads `NOT MADE BY DECK`, is `aria-hidden` like every other mark, and its words join the
+   * art press's name. A **derived** token wears none of it — `derived`, never `state`, is the test,
+   * because a derived token can be `manual` too.
+   */
+  it("marks a hand-added token with the outline and the badge, and a derived one with neither", () => {
+    const derivedManual = entry({
+      oracleId: "o-wurm",
+      name: "Wurm",
+      printingId: "p-tsom-9",
+      entryKey: "p-tsom-9:nonfoil",
+      subtitle: "Colorless 3/3 · Deathtouch",
+      setCode: "tsom",
+      collectorNumber: "9",
+      state: "manual",
+    });
+    band({ tokens: tokensOf([PLAIN, derivedManual, OKO]) });
+
+    const oko = tileOf(`Change the art for ${OKO_NAME}, not made by deck`);
+    const badge = within(oko).getByText("NOT MADE BY DECK");
+    expect(badge).toHaveAttribute("aria-hidden", "true");
+    const art = within(oko).getByRole("button", { name: /^Change the art for Oko/ });
+    expect(art.parentElement!.classList.contains("ring-destructive")).toBe(true);
+    const chin = within(oko).getByText("TECL · 12").parentElement!;
+    expect(chin.classList.contains("border-destructive")).toBe(true);
+
+    for (const made of [
+      tileOf(`Change the art for ${TMOM_PLAIN}`),
+      tileOf(/^Change the art for Wurm/),
+    ]) {
+      expect(within(made).queryByText("NOT MADE BY DECK")).toBeNull();
+      const press = within(made).getByRole("button", { name: /^Change the art for / });
+      expect(press.parentElement!.classList.contains("ring-destructive")).toBe(false);
+      expect(press).not.toHaveAccessibleName(/not made by deck/);
+    }
+  });
+
+  /** The badge's own sentence, for the pointer — the spec's words, with the token's name in them. */
+  it("says why a hand-added token is marked under the pointer", async () => {
+    band({ tokens: tokensOf([OKO]) });
+
+    const badge = screen.getByText("NOT MADE BY DECK");
+    fireEvent.pointerEnter(badge);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "Nothing in this deck makes Oko, Shadowmoor Scion Emblem. It was added by hand.",
+    );
+  });
+
+  /**
+   * **Review Focus 2: a hand-added token stepped to 0 stays on the band** — at 0, with its mark
+   * and its Remove button, which is the one way to take it off the deck. The pile leaves it out;
+   * the band never does.
+   */
+  it("keeps a hand-added token at zero on the band, marked and removable", () => {
+    band({ tokens: tokensOf([OKO]) });
+
+    const region = screen.getByRole("region", { name: TOKENS_HEADING });
+    expect(within(region).getByRole("spinbutton", { name: `Quantity of ${OKO_NAME}` })).toHaveValue(0);
+    expect(within(region).getByText("NOT MADE BY DECK")).toBeInTheDocument();
+    expect(within(region).getByRole("button", { name: `Remove ${OKO_NAME}` })).toBeInTheDocument();
+    expect(within(region).getByText("Added by hand")).toBeInTheDocument();
   });
 });

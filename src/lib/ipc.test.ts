@@ -1883,30 +1883,31 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * **The six token commands of user schema v52** — the read, one row per entry, and the five
-   * writes that replaced `deck_token_set`, `deck_token_clear` and `deck_token_add`.
+   * **The token commands** — the read, one row per entry (user schema v52); the four writes, of
+   * which Remove printing is the newest (managed tokens spec §3.4); and `token_printings`, the
+   * whole game's tokens behind Add printing's `All tokens` (§3.6). Dismiss (`deck_token_state`)
+   * and Reset printings (`deck_token_reset`) are retired and must be gone from both ends.
    *
    * Three separations carry this case, and none of them is visible to the compiler:
    *
-   * - **`variant` on every write that names a list**, and on none that does not. A step, a swap,
-   *   an added printing and a reset write *this list's* entries — each list has its own since
-   *   v52 — while `deck_token_state` is the token's in both. A wrapper that dropped `variant`
-   *   is a refusal; one that sent it to `deck_token_state` would hand Tauri a field it drops.
-   * - **`oracleId` against `cardId`.** Four writes address the token; `deck_token_add_printing`
+   * - **`variant` on every write that names a list.** A step, a swap, an added printing and a
+   *   removed one write *this list's* entries — each list has its own since v52. A wrapper that
+   *   dropped `variant` is a refusal.
+   * - **`oracleId` against `cardId`.** Three writes address the token; `deck_token_add_printing`
    *   addresses a **printing** because the reader picks out of a printings grid and Rust resolves
    *   the oracle id from it. One word apart and interchangeable to a type checker.
    * - **`null` is a value.** An implicit entry travels as `entry: null` / `from: null`, and a
    *   step to `0` as `quantity: 0` — both are the reader saying something, and both have to
-   *   travel as explicit keys, because Tauri fills parameters by name.
+   *   travel as explicit keys, because Tauri fills parameters by name. **Remove never sends a
+   *   `null`**: it deletes a stored entry, and an implicit one is not stored.
    *
-   * `deck_tokens` is still priced by `marketplace` (user schema v51's token pile) and scoped by
-   * `variant`, and that one fails quietly: an absent marketplace reads as TCGplayer, so a
-   * misspelt key would quote dollars under a Card Kingdom heading with nothing red.
+   * `deck_tokens` and `token_printings` are priced by `marketplace`, and that fails quietly: an
+   * absent marketplace reads as TCGplayer, so a misspelt key would quote dollars under a Card
+   * Kingdom heading with nothing red.
    *
    * **And the crate declares every key sent**, read out of `deck_tokens.rs` with the deck notes'
-   * `commandParams` — so the one place a spelling could part (`state`, which Rust's own managed
-   * `tauri::State` parameter already wears) goes red here rather than dropping a dismissal on
-   * the floor at runtime.
+   * `commandParams` — so a spelling that parts goes red here rather than dropping a removal on the
+   * floor at runtime.
    */
   it("names the deck token command arguments the way Rust spells them", async () => {
     const row: DeckTokenRow = {
@@ -2008,20 +2009,20 @@ describe("ipc argument names match the Rust command signatures", () => {
       finish: "foil",
     });
 
-    // The token's own state, shared by both lists — the one write with no `variant`.
-    await ipc.deckTokenState(7, "o-1", "hidden");
-    expect(invoke).toHaveBeenLastCalledWith("deck_token_state", {
-      deckId: 7,
-      oracleId: "o-1",
-      state: "hidden",
-    });
-
-    await ipc.deckTokenReset(7, "theory", "o-1");
-    expect(invoke).toHaveBeenLastCalledWith("deck_token_reset", {
+    // Remove printing: one stored entry, by its grain and nothing wider — the view's own
+    // `TokenEntryRef` handed in is cut down to the two fields the command reads.
+    await ipc.deckTokenRemove(7, "theory", "o-1", wide);
+    expect(invoke).toHaveBeenLastCalledWith("deck_token_remove", {
       deckId: 7,
       variant: "theory",
       oracleId: "o-1",
+      entry: { cardId: "c-9", finish: "foil" },
     });
+
+    // Every token in the game, priced at the marketplace asked — the only argument it takes.
+    invoke.mockResolvedValue([]);
+    await ipc.tokenPrintings("cardkingdom");
+    expect(invoke).toHaveBeenLastCalledWith("token_printings", { marketplace: "cardkingdom" });
 
     // **And the crate declares every key sent** — the deck notes' fence, applied to this family.
     // The expected list is read out of `ipc.ts` rather than written down here, so this cannot
@@ -2034,8 +2035,8 @@ describe("ipc argument names match the Rust command signatures", () => {
       "deck_token_set_quantity",
       "deck_token_swap",
       "deck_token_add_printing",
-      "deck_token_state",
-      "deck_token_reset",
+      "deck_token_remove",
+      "token_printings",
     ]) {
       const sent = payloadKeys(ipcSource, command).map(snake);
       const declared = commandParams(deckTokensRs, command);
@@ -2053,11 +2054,17 @@ describe("ipc argument names match the Rust command signatures", () => {
       expect(desktopRs).toContain(`deck_tokens::${command},`);
     }
 
-    // **The three it replaced are gone from both ends.** A wrapper left behind would compile and
-    // be answered by nothing; a command left registered would be a write no caller can reach,
-    // which is the shape `deck_token_add` had for its whole life (no caller, measured
-    // 2026-09-26).
-    for (const retired of ["deck_token_set", "deck_token_clear", "deck_token_add"]) {
+    // **The five retired commands are gone from both ends** — v52's three and managed tokens' two
+    // (Dismiss and Reset printings). A wrapper left behind would compile and be answered by
+    // nothing; a command left registered would be a write no caller can reach, which is the shape
+    // `deck_token_add` had for its whole life (no caller, measured 2026-09-26).
+    for (const retired of [
+      "deck_token_set",
+      "deck_token_clear",
+      "deck_token_add",
+      "deck_token_state",
+      "deck_token_reset",
+    ]) {
       expect(ipcSource).not.toContain(`"${retired}"`);
       expect(deckTokensRs).not.toContain(`pub async fn ${retired}(`);
       expect(desktopRs).not.toContain(`deck_tokens::${retired},`);
@@ -5349,6 +5356,69 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
    * It costs the crate nothing to carry: `deck_pull` clones the value off the `DeckCardRow`s the
    * plan is already built from, rather than running a second `front_face_selects` query.
    */
+  /**
+   * **`isToken` on both sides of the Compare row** (managed tokens spec §3.7) — named on its own as
+   * well as counted by `mirrors`, because its absence is the quietest kind this file guards: a row
+   * with no `isToken` reads `undefined`, which is falsy, so every token row would be filed as a
+   * card row — in Missing and Different printing, where the plan's tokens do not belong, and never
+   * in the Tokens view. Nothing on screen would say why.
+   */
+  it("names isToken on both sides of the Compare row", () => {
+    expect(rustFields(deckTheoryRs, "TheoryDiffRow"), "`TheoryDiffRow` (Rust) has no `is_token`").toContain(
+      "is_token",
+    );
+    expect(tsFields(ipcSource, "TheoryDiffRow"), "`TheoryDiffRow` (ipc.ts) has no `isToken`").toContain(
+      "isToken",
+    );
+  });
+
+  /**
+   * **`managedTokens` on both sides of the wishlist folder** (user schema v54) — named for
+   * `isToken`'s reason one test up. A folder with no `managedTokens` reads `undefined`, which is
+   * falsy, so every deck's Tokens child would be listed among the managed folders by name — one
+   * indistinguishable `Tokens` row per deck — and nothing would say why.
+   */
+  it("names managedTokens on both sides of the wishlist folder", () => {
+    expect(
+      rustFields(wishlistFoldersRs, "WishlistFolder"),
+      "`WishlistFolder` (Rust) has no `managed_tokens`",
+    ).toContain("managed_tokens");
+    expect(
+      tsFields(ipcSource, "WishlistFolder"),
+      "`WishlistFolder` (ipc.ts) has no `managedTokens`",
+    ).toContain("managedTokens");
+  });
+
+  /**
+   * **`TokenPrinting` is a `Printing` with the token's facts beside it** (managed tokens spec §3.6)
+   * — `#[serde(flatten)]` in the crate, `extends Printing` here — so the picker's tile code renders
+   * both answers without a branch. `tsFields` reads a plain `export interface X {`, so the
+   * extending body is sliced here, the way the two `extends CardFilters` queries are above. The
+   * Rust struct's own fields are compared less the one flattened field, which carries no key of
+   * its own on the wire, and that field is held to being flattened rather than trusted to be.
+   */
+  it("mirrors TokenPrinting: the token's facts, and the printing flattened into it", () => {
+    const start = ipcSource.indexOf("export interface TokenPrinting extends Printing {");
+    expect(start, "`TokenPrinting extends Printing` is not in ipc.ts").toBeGreaterThan(-1);
+    const rest = ipcSource.slice(start);
+    const ts = rest
+      .slice(0, rest.search(/\r?\n\}/))
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split(/\r?\n/)
+      .map((line) => /^ {2}([A-Za-z0-9_]+)\??:/.exec(line)?.[1])
+      .filter((f): f is string => f !== undefined);
+
+    const rust = rustFields(deckTokensRs, "TokenPrinting");
+    expect(rust, "`TokenPrinting` (Rust) flattens no `printing`").toContain("printing");
+    const body = deckTokensRs.slice(deckTokensRs.indexOf("pub struct TokenPrinting {"));
+    expect(body.slice(0, body.indexOf("pub printing:"))).toMatch(/#\[serde\(flatten\)\]\s*$/);
+
+    const own = rust.filter((f) => f !== "printing").map(camel);
+    expect(own.length, "nothing parsed out of `TokenPrinting`").toBeGreaterThan(0);
+    expect(ts.length, "nothing parsed out of `TokenPrinting`'s own body").toBeGreaterThan(0);
+    expect([...ts].sort()).toEqual([...own].sort());
+  });
+
   it("names the front face's image URLs on both sides of the pull row", () => {
     expect(rustFields(deckPullRs, "PullRow"), "`PullRow` (Rust) has no `image_uris`").toContain(
       "image_uris",

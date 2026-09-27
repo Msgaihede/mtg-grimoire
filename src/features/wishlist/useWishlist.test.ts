@@ -46,6 +46,7 @@ const ORDERED: WishlistFolder = {
   name: "Ordered",
   sortOrder: 0,
   managedDeckId: null,
+  managedTokens: false,
 };
 const BACKORDERED: WishlistFolder = {
   id: 2,
@@ -53,6 +54,7 @@ const BACKORDERED: WishlistFolder = {
   name: "Backordered",
   sortOrder: 0,
   managedDeckId: null,
+  managedTokens: false,
 };
 const SOMEDAY: WishlistFolder = {
   id: 3,
@@ -60,6 +62,7 @@ const SOMEDAY: WishlistFolder = {
   name: "Someday",
   sortOrder: 1,
   managedDeckId: null,
+  managedTokens: false,
 };
 const MANAGED: WishlistFolder = {
   id: 9,
@@ -67,6 +70,7 @@ const MANAGED: WishlistFolder = {
   name: "Rhystic Testbed",
   sortOrder: 2,
   managedDeckId: 4,
+  managedTokens: false,
 };
 
 beforeEach(() => {

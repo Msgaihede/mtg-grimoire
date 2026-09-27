@@ -946,6 +946,14 @@ describe("auditSentence", () => {
     expect(token({ action: "swap", finish: "foil", from: null, to: null }).text).toBe(
       "Swapped Treasure's art",
     );
+    // Remove printing names the printing it took away, and says its finish only when it is not
+    // the regular copy.
+    expect(
+      token({ action: "remove", finish: "foil", set_code: "tmom", collector_number: "12" }).text,
+    ).toBe("Removed Treasure's TMOM #12 printing (foil)");
+    // Dismiss and Reset printings are gone from this build (managed tokens spec §3.3, §3.4), and
+    // their rows are not: `deck_audit` is append-only and synced, so a history written before the
+    // change still has to read as what the reader did then.
     expect(token({ action: "state", from: "auto", to: "hidden" }).text).toBe("Dismissed Treasure");
     expect(token({ action: "state", from: "hidden", to: "auto" }).text).toBe("Restored Treasure");
     expect(token({ action: "state", from: "hidden", to: "manual" }).text).toBe(
@@ -1102,6 +1110,58 @@ describe("auditSentence", () => {
       expect(
         sentence(row({ action: "state", list: null, from: "hidden", to: "auto" })).text,
       ).toBe("Restored Treasure");
+    });
+
+    /**
+     * **`remove` — Remove printing** (managed tokens spec §3.4): one stored entry deleted, the
+     * common `card_id`/`finish` naming it, and the printing's set and number carried beside them
+     * so the drawer can say which one without the corpus. The finish is said only where it is not
+     * the regular copy, the token rows' own rule.
+     */
+    it("words a remove row by the printing it took away", () => {
+      const removed = (finish: string) =>
+        row({
+          action: "remove",
+          card_id: TREASURE,
+          finish,
+          set_code: "tmom",
+          collector_number: "12",
+          from: 2,
+          to: null,
+        });
+      expect(sentence(removed("nonfoil"))).toEqual({
+        text: "Removed Treasure's TMOM #12 printing",
+        detail: SUBTITLE,
+      });
+      expect(sentence(removed("foil")).text).toBe("Removed Treasure's TMOM #12 printing (foil)");
+      expect(sentence(removed("etched")).text).toBe(
+        "Removed Treasure's TMOM #12 printing (etched)",
+      );
+      expect(sentence({ ...removed("nonfoil"), list: "theory" }).detail).toBe(
+        `${SUBTITLE} · in the theory list`,
+      );
+    });
+
+    /**
+     * The same sentence off an `entry_facts` object, which is the shape a swap's two ends already
+     * carry — so a crate that records the removed entry the way it records a swapped one reads the
+     * same line. And a row that names no set (a printing gone from the corpus when it was written)
+     * still says what happened to which token rather than inventing a printing.
+     */
+    it("words a remove row from an entry_facts object, and one with no set", () => {
+      expect(
+        sentence(
+          row({
+            action: "remove",
+            card_id: TREASURE,
+            finish: "foil",
+            from: { card_id: TREASURE, finish: "foil", set_code: "tcmm", collector_number: "48" },
+          }),
+        ).text,
+      ).toBe("Removed Treasure's TCMM #48 printing (foil)");
+      expect(sentence(row({ action: "remove", card_id: TREASURE, finish: "nonfoil" })).text).toBe(
+        "Removed a printing of Treasure",
+      );
     });
 
     /** `reset` — no entry, no counts, and `entries` the number of entries the list lost. */
