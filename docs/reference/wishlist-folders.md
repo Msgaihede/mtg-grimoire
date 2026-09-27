@@ -706,7 +706,8 @@ in the table, the status line over an empty table with **no box and so no drop t
 re-check measured one answer everywhere: the dashed box alone in both views for the reader's folder,
 with a card dropped on the table's box filing into it, and for `Azula` the same words-only box in
 both views reading the `all` sentence. The final review then took out `statusOf`'s managed branch,
-which nothing could reach once the box said it (W-M8).
+which nothing could reach once the box said it (W-M8), and re-check 2 (2026-09-27, debug build) read
+both answers again with that branch gone.
 
 ## What a wish costs, and which printing it is drawn as
 
@@ -1332,14 +1333,15 @@ nothing on a confirmation plainly on screen; find it by its text.
 6.0 px on the first and last folder card mid-drag, 8 of 8 ringed; and the `⋯` menu opens at
 dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClick` exists for.
 
-### Folder shelves — a first pass, a fix wave and a re-check, 2026-09-26
+### Folder shelves — four passes, 2026-09-26 and 2026-09-27
 
 Both pages were driven together, on the **debug** build at 1920×1080, and
-[the collection's record](collection-folders.md#folder-shelves--a-first-pass-a-fix-wave-and-a-re-check-2026-09-26)
+[the collection's record](collection-folders.md#folder-shelves--four-passes-2026-09-26-and-2026-09-27)
 has the method, the tallies (8 pass and 6 fail on the first pass, 6 pass and 2 fail on the
-re-check) and the fix wave's five commits. The staging here was `Want › Later › Much later ›
-Deep Four` and `Upgrades`, with every root wish filed, and later three managed wishlists: `Azula`
-following `all` with no wishes, and two following `other`. What was this page's own:
+re-check, 13 of 13 on re-check 2 and 3 of 3 on re-check 3) and the fix wave's five commits. The
+staging here was `Want › Later › Much later › Deep Four` and `Upgrades`, with every root wish filed,
+and later three managed wishlists: `Azula` following `all` with no wishes, and two following
+`other`. What was this page's own:
 
 - **The wall full** (check 1): `Tst`, `Want` with its nested shelves, then `Upgrades`, and the header
   reading `Wishes 89 · Total cost $732.93`, equal to `wishlist_summary`. With the managed folders it
@@ -1372,8 +1374,33 @@ following `all` with no wishes, and two following `other`. What was this page's 
   control's ring visibly cut — the `Updating…` line again.
 
 The sidebar's stray drop (the re-check's first new finding) was found on this page, adding a wish at
-the root from a card held on `Want`'s first tile; it applies to both. **None of the final review's
-fixes had been driven in the shipped window when this was written.**
+the root from a card held on `Want`'s first tile; it applies to both.
+
+**Re-check 2** (2026-09-27, debug build, the branch at `cf8553c0`) drove the final review's fixes
+on both pages and passed 13 of 13. On this one:
+
+- tile 60 kept the caret through a zoom (scrollTop 5791 → 4694), which it took on the third React
+  commit after the wheel;
+- the far Move up and the commit of Add folder in `Want` landed flush under the sticky bar at
+  128–168, with the caret on the control;
+- the drop that had settled 16px low landed where it was released, 419/419;
+- a card held 1.2s on `Want`'s first tile, overlapping the sidebar's Wishlist entry, filed nothing;
+- Move to folder… into an open heading left the caret on the moved heading's `⋯`, deleting a
+  child left it on the parent's, and deleting a root folder left it on the path row's Add folder;
+- a click on a tile above the path row's draft opened that tile's card with the scroll held at 9580;
+- the fold pause held on `Want`, `Later` and `Much later` and on the toolbar, and wrote nothing;
+- `Azula`'s box still read the `all` sentence in the table, and the opened empty `Wish Child 2`
+  showed the dashed box alone.
+
+It also found this page's **finding A**. `Wish Child 2`, pressed at y=512 near the end of the
+folded wall, folded to the clamp at scrollTop 222 and was held 78–126px under the pointer for the
+whole drag: 766px of folded wall sat in a 988px row that the docked search column decides, so the
+room the anchor added never lengthened the page.
+[The collection's fold section](collection-folders.md#a-folder-drag-folds-the-wall-on-the-grid-only)
+has the cause and the fix, `2ece040d`. **Re-check 3** (2026-09-27, debug build) folded the same
+press to scrollTop 300 with the slot on the pointer's 518, held it there through a 150px hover,
+ended Escape at 374/374 and a drop at 419/419, and left the page's height and the wall's end as
+they were before the press. Findings B and C, both known and accepted, are recorded there too.
 
 ## Where the code is
 

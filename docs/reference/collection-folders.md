@@ -2033,7 +2033,10 @@ the only shelf that is not a folder. The button is **Add folder**, never "New fo
   *Folding is paused while filtering* as their description (`FOLD_PAUSED_REASON`, handed to
   `ShelfToolbar` and every `ShelfHeading` as `foldPaused`), stay in the tab order, and a press
   writes nothing. Until then the chevron here stored a fold the reader could not see, and Expand
-  all and Collapse all wrote on both pages.
+  all and Collapse all wrote on both pages. Driven on 2026-09-27 (debug build, re-check 2): on both
+  pages all three were `aria-disabled` and still tabbable, the sentence showed on hover and on
+  keyboard focus, clicks and an Enter changed nothing, and `app_meta.shelf_folds` was
+  byte-identical afterwards.
 - **Indentation stops at three levels** (`MAX_SHELF_INDENT`); a deeper heading keeps the
   third level's indent and names its path from the ancestor on the cap. `SHELF_INDENT_PX` is 32 per
   level on the grid and the table alike (`SHELF_INDENT_PX`, `src/lib/shelfLayout.ts`).
@@ -2064,7 +2067,10 @@ deleted one was left. A create whose id has nothing stored writes nothing to the
 it. The live re-check (2026-09-26, debug build) found that 16px line coming and going after every
 write and throwing the grid's reveal 16px off through Chromium's scroll anchoring — and, very
 likely, the fold anchor's three drops that settled 16px low, which carry the same signature. Both
-pages spell it the same.
+pages spell it the same. **Re-check 2 confirmed both** (2026-09-27, debug build): through a far
+Move up the wall's page offset held at 262 in every frame while `Updating…` showed, and the three
+drops that had settled 16px low landed exactly where they were released (503/503 and 371/371 here,
+419/419 on the wishlist).
 
 ### The wire: `shelves`, an ordered list the crate never builds
 
@@ -2225,11 +2231,45 @@ drag dnd-kit promotes that element to a `position: fixed` copy at the pointer, s
 its slot. The fold's own render still used the old scroll offset, so the heading's row was
 virtualised away in that very commit, which also lost dnd-kit's feedback element. And the page's
 layout effect runs after the wall's. `shelfCarry`'s own doc carries the argument, and
-[the live record](#folder-shelves--a-first-pass-a-fix-wave-and-a-re-check-2026-09-26) has the
+[the live record](#folder-shelves--four-passes-2026-09-26-and-2026-09-27) has the
 figures before and after. **A moved heading gets no drop animation** (`useShelfDragSource` passes
 `folderDraggable` `animateDrop: false`): dnd-kit aims its floating copy at the slot measured when
 the drag began, which a far move has already re-laid out, so the copy slid away from the heading for
-2–4 frames (live re-check, new finding 3).
+2–4 frames (live re-check, new finding 3). Re-check 2 (2026-09-27, debug build) found the copy gone
+from the first frame after the release in four far drops on both pages.
+
+**The room below a folded wall is measured from the end of the wall's own rows, not from the end
+of the page** (re-check 2's finding A, 2026-09-27, debug build; fixed in `2ece040d`). Both
+cabinets set the wall in a flex row beside the docked search column, whose dock is
+`sticky top-0 self-start` and made as tall as the scrollport by `useDockHeight` — and it keeps
+that height when the panel collapses to its rail. A folded wall shorter than that row sat in a row
+the dock decided: 766px of folded wishlist in a 988px row. Room added after the wall grew the wall
+inside the row's slack, `main`'s scroll end never moved, and the virtualiser clamped the fold at
+scrollTop 222, so a heading pressed at y=512 near the end of the wall was held 78–126px under the
+pointer for the whole drag (Escape still ended exact). The collection escaped only because its
+folded root, 1,289px, is taller than the row; a shorter cabinet had the same failure waiting.
+`anchorPlan` now takes an optional `end` — where the wall's own rows end in the scroll content,
+which `CardGrid` passes as `rowsTop + layoutHeight(…)` and which defaults to `content` — and
+sizes the room below as `max(wanted − most, wanted + viewport − end)`, so the rows reach the
+scrollport's bottom at the wanted offset whatever stretches around the wall. The second half of
+the same mechanism: once the row has swallowed room, the page less the whole room underestimates
+the page, so a request that may add room takes the whole room off, and one that may not — an
+Escape, an unfold — leaves it on and lets the browser's own end clamp it.
+
+**Re-check 3** (2026-09-27, debug build, at `2ece040d`, 3 of 3 pass): the same wishlist press
+folded to scrollTop 300 with the slot at 518, the pointer's 518, held through a 150px hover, and
+ended with Escape at 374/374 and a drop at 419/419. A short cabinet staged inside `Binder`, its
+last heading pressed at y≈300, folded to 416 with the slot at the pointer's 306, where the old
+arithmetic would have clamped it about 194px low; Escape 462/462, drops 371/371 and 757/757. The
+collection root's deep folds and drops stayed exact. After every unfold the page's height and the
+wall's end were what they had been before the press. What the room costs is blank space below the
+last folded heading for the length of the drag — about 350px on that wishlist and 746px in that
+cabinet.
+
+**Known and accepted: an Escape at the very end of a level can come back 2px short** (re-check 2's
+finding C, 2026-09-27, debug build). `Recheck CT`, the last heading of `Binder`'s level, returned
+at 897 against a pointer of 899; every other Escape in that pass and in re-check 3 landed exactly
+on the pointer.
 
 **The table does not fold** — the page hands `useFoldAnchor` `false` there — because `VirtualTable`
 keys its rows by position, so folding under a carried heading would remount it and end the drag.
@@ -2237,7 +2277,9 @@ keys its rows by position, so folding under a carried heading would remount it a
 flight (`useDragRecord` and `readFolderDrag`) and passes that band's index as `VirtualTable`'s
 `keepRow`, which a `rangeExtractor` keeps in the rendered range however far the table scrolls.
 Without it, a band dragged past the overscan unmounted its own drag source. The table's paging rule
-reads the virtual window's own last row, never a kept row parked below it.
+reads the virtual window's own last row, never a kept row parked below it. Driven on 2026-09-27
+(debug build, re-check 2): a band carried up through about 3,800px of autoscroll stayed connected,
+with its floating copy, the whole way, and landed where its `before` line said.
 
 ### The table draws bands, and stops at the edge of what has loaded
 
@@ -2281,14 +2323,17 @@ Four things about a table with a sticky band, all `VirtualTable`'s
   bar over a heading, so Top landed the list on the first heading, the bar unmounted with the caret
   inside it, and the caret fell to `<body>`. Now a caret that fell is handed to the first control
   of the row at the header's edge — the first heading's chevron — or to the scroller where that row
-  has none. A caret that anything else claimed in the same commit is left where it is.
+  has none. A caret that anything else claimed in the same commit is left where it is. Re-check 2
+  (2026-09-27, debug build) pressed Top by click and by Enter, in the table and the grid on both
+  pages: 8 of 8 left the caret on the first row's chevron at scrollTop 0.
 
 ### The grid: the sticky bar's room, Top, and a caret across a zoom
 
 - **The sticky bar's height is one number**, `SHELF_STICKY_HEIGHT` (36, `src/lib/shelfLayout.ts`).
   `ShelfStickyBar` takes it as its inline height and a sectioned `CardGrid` reserves it as the
   virtualiser's `scrollPaddingStart`, so a revealed or walked-to row lands below the bar rather than
-  half under it (the final review's S-M2).
+  half under it (the final review's S-M2). In re-check 2 (2026-09-27, debug build) the headings the
+  re-check had found half under the bar landed flush under it at 128–168.
 - **A revealed heading brings its empty box with it.** When the row after the heading is that
   shelf's empty box, the wall scrolls to the box — except for a heading above the window, where
   aligning the heading to the top already brings the box in under it (S-M5).
@@ -2304,7 +2349,10 @@ Four things about a table with a sticky band, all `VirtualTable`'s
   reader's caret moves elsewhere, the tile leaves the list, a new re-layout happens, or
   `CARET_CHASE_COMMITS` (8) run out. A focused tile whose row stayed drawn but ended off-screen (the
   re-check's tile 40, at −491…−175) is scrolled back into view after the column change
-  (`keepInView`).
+  (`keepInView`). **Re-check 2** (2026-09-27, debug build): tile 63 kept the caret through one
+  Ctrl+wheel step (scrollTop 6192 → 5070, the tile at 128–444), and so did the wishlist's tile 60.
+  The caret landed on the third React commit after the wheel on both pages, against the budget of
+  8, and tile 40 came back into view at 128–444.
 
 ### The level on screen trails the level asked for
 
@@ -2329,7 +2377,8 @@ Measured in the shipped window (debug build, 1920×1080, 2026-09-26): the first 
 2–6 frames, of a wall missing its level's own leading row under the child level's figures — Deep
 Four → Showcase read `Cards 5 · $13.55` — before the cards popped in above the first heading
 (FAIL 14). The re-check saw every walk from a never-read level switch in one frame, with no frame
-mixing two levels.
+mixing two levels, and re-check 2 (2026-09-27, debug build) saw the same on all five walks it drove,
+at 148–190 ms.
 
 **A level deleted elsewhere is walked away from** (the final review's C-M4). While the asked level
 is in the folder list, the page remembers its trail (`levelTrail`, root-most first). Once the list
@@ -2397,9 +2446,17 @@ pages, including headings that had been virtualised away, and the table's reveal
 header and the band every time. In the grid, 4 of 9 cases left the heading only partly on screen —
 half under the sticky bar after a far Move up and after the wishlist's commit, and 6px past the
 window's bottom after this page's far Move down. The re-check traced all four to the `Updating…`
-line, which now keeps its slot, and the bar's height is now the grid's scroll padding. Move to
-folder…, Delete… and the path row's blur are the final review's, and none of the final review's
-fixes had been driven in the shipped window when this was written.
+line, which now keeps its slot, and the bar's height is now the grid's scroll padding.
+
+**Re-check 2 drove the final review's half** (2026-09-27, debug build, at `cf8553c0`). The four
+grid cases landed flush under the bar at 128–168 with the caret on the control, and the far Move
+down at 924–964 with its empty box, 972–1068, in view too. Move to folder… and Delete… never left
+the caret on `<body>`: into an open heading it went to the moved heading's `⋯` (revealed at
+924–964 here), into a collapsed one to the `⋯` of the heading the folder left, after deleting a
+child to the parent's `⋯`, and after deleting a root folder on the wishlist to the path row's Add
+folder. A click on a tile above the path row's draft opened that tile's card with the scroll held
+(8079 here, 9580 on the wishlist) and left the caret on the tile after Escape; the path row's commit
+kept the scroll too, with the new folder in view at 924–964.
 
 ### A card lands only where the pointer is
 
@@ -2413,16 +2470,27 @@ the re-check the same release filed nothing and the heading only armed. `pointer
 twice: by the detector on every collision pass, and again at the release against the target's own
 rect as it is then (`containsPointer`). The second ask is there because the collisions follow a
 scrolling wall about one update behind, and a heading that autoscroll carried past a still pointer
-stayed the target up to 16px after it had passed (re-check, new finding 5). The folder half takes
+stayed the target up to 16px after it had passed (re-check, new finding 5); in re-check 2
+(2026-09-27, debug build) three cards released with the target still on a passed heading and the
+pointer 4px outside it filed nothing. The folder half takes
 the same rule, because the table does not fold during a folder drag, and a heading carried over card
 rows would otherwise land beside whichever heading it overlapped. What that gives up is a folder
 dropped in the 8px gap between two folded headings, which now lands nowhere.
+
+**Known and accepted: during autoscroll a heading becomes the target only after about 30px of
+travel under a still pointer** (re-check 2's finding B, 2026-09-27, debug build). A card released
+14px into a heading that autoscroll was carrying past filed nothing, because the operation's target
+was still `null`; at 30px it filed, twice. It fails safe — the release files nowhere rather than
+into the wrong shelf — and it is probably also why one table run in that pass, with the pointer
+left still on `Binder`'s band when the scroll stopped, landed nothing.
 
 **The sidebar joined in the final review.** The re-check found the navigation rail's Wishlist entry
 taking a card whose pointer was on the wall's first tile column, and adding a wish at the root (new
 finding 1): the rail sits flush against the page's left edge. `useSidebarDropTarget`
 (`src/components/useSidebarDrops.ts`) now passes `pointerOnly`, which covers both drawings of the
-navigation. The deck editor's own targets keep the default detector.
+navigation. The deck editor's own targets keep the default detector. In re-check 2 (2026-09-27,
+debug build) a card held 1.2s on the wishlist's first tile, overlapping the Wishlist entry, left
+the target `null` and filed nothing, while a release on the entry itself still added a wish.
 
 **The sticky bar is the one shelf target drawn over the others**, so it is an `overlay` instead
 (`useShelfStickyDropTarget`): the same pointer-inside detector, ranked `CollisionPriority.Highest`.
@@ -2434,7 +2502,8 @@ to each centre and never by paint order, so a heading half under the bar used to
 read dnd-kit's `position.current` in its `dragmove` listener, which the library writes a microtask
 after dispatching the move. So a heading arrived at in its bottom quarter showed the `inside` wash
 with no line, and the release then landed `after` (re-check, new finding 4, on the table). The
-listener now reads the move's own point.
+listener now reads the move's own point, and re-check 2 (2026-09-27, debug build) saw the `after`
+line drawn one frame, 7ms, after the pointer arrived, with no nudge, and the release land `after`.
 
 ### What the `shelves` query costs — measured 2026-09-26, in a test harness on Windows
 
@@ -2513,11 +2582,10 @@ only for the shelves whose heading is shut, since only a shut heading draws one 
 `ShelfCount`'s contract across both pages, is not built, and has no figure behind it.
 
 **The wall has been driven in the shipped window since this section was first written** — a first
-pass, a fix wave and a re-check, all on 2026-09-26 and all on the debug build. What they measured is
-in [the live record](#folder-shelves--a-first-pass-a-fix-wave-and-a-re-check-2026-09-26), and what
-each finding changed is in the subsections above. None of them measured the query's cost, which is
-the harness's figures above and nothing else.
-
+pass and a re-check on 2026-09-26, and two more re-checks on 2026-09-27, all on the debug build.
+What they measured is in [the live record](#folder-shelves--four-passes-2026-09-26-and-2026-09-27),
+and what each finding changed is in the subsections above. None of them measured the query's cost,
+which is the harness's figures above and nothing else.
 ## The page, and the drag payload's own key
 
 **History (2026-09-26):** the folder cards are headings now and wear the same two marks —
@@ -2923,7 +2991,7 @@ rather than what was in it.
 
 ## What driving the shipped window found
 
-### Folder shelves — a first pass, a fix wave and a re-check, 2026-09-26
+### Folder shelves — four passes, 2026-09-26 and 2026-09-27
 
 **All on the debug build** (`npm run tauri dev` in the branch's worktree), in a 1920×1080 window at
 DPR 1, driven with real CDP input and read back with DOM and rect probes, per-frame
@@ -2964,8 +3032,30 @@ answered in [Shelves](#shelves-2026-09-26): the sidebar's Wishlist entry taking 
 write (the status line keeps its slot), the drop animation flying the floating heading toward a
 stale slot for 2–4 frames (`animateDrop: false`), the table's landing mark lagging one pointer move,
 a heading left the target up to 16px after autoscroll carried it past a still pointer (the release
-check), and a focused tile left off-screen by a zoom (`keepInView`). **None of the final review's
-fixes had been driven in the shipped window when this was written.**
+check), and a focused tile left off-screen by a zoom (`keepInView`).
+
+**Re-check 2** (2026-09-27, the branch at `cf8553c0`, after the final review's fix wave and a merge
+of `main` that took the copy to user schema v52) drove thirteen items — the two fails above, the six
+new findings, the final review's table carry, both Tops, the path row's draft, Move to folder… and
+Delete…, the fold pause, and a regression sweep over everything that had passed — and passed
+**13 of 13**. Its figures are written into [Shelves](#shelves-2026-09-26), beside each mechanism.
+Beside the checklist it found three things:
+
+- **A, fixed.** A fold that needs room below a wall shorter than the row the docked search column
+  stretches clamped at scrollTop 222, and held the heading 78–126px under the pointer — on the
+  wishlist, and waiting on any short cabinet here.
+  [The fold section](#a-folder-drag-folds-the-wall-on-the-grid-only) has the cause and the fix,
+  `2ece040d`.
+- **B, known and accepted.** During autoscroll a heading becomes the target only after about 30px
+  of travel under a still pointer, so a release 14px into a passing heading files nowhere. It fails
+  safe.
+- **C, known and accepted.** One Escape, of the last heading in `Binder`'s level, came back 2px
+  short (897 against a pointer of 899); every other came back exact.
+
+**Re-check 3** (2026-09-27, at `2ece040d`) drove finding A's fix on the wishlist and on a short
+cabinet staged inside `Binder`, and re-drove the root's deep folds and drops: **3 of 3 pass**, with
+the slot on the pointer through every fold, hover, Escape and drop, and the page's height and the
+wall's end back to what they were before the press after every unfold.
 
 ### v25 and Collection Search — not driven yet
 

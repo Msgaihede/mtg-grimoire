@@ -606,8 +606,10 @@ Every one of these has its measurement and its story in
   the 40px row with ✓ / ✕ 3px above its centre line, and the caret on `<body>` whenever the
   heading had been virtualised away; after the fix the re-check read a 36px frame at 0px off the
   centre line on both pages and in the table, and the caret on the heading's own control in all 22
-  cases it tried. Where the caret lands after a path-row field's blur rests on focus calls the
-  suite pins and the window has not yet been asked about
+  cases it tried. The path-row field's blur, Move to folder… and Delete… were driven on
+  2026-09-27 (debug build, re-check 2): a click on a tile above the path row's draft opened that
+  tile's card with the scroll held and the caret on the tile, and neither Move to folder… nor
+  Delete… left the caret on `<body>`
   ([collection-folders.md](../docs/reference/collection-folders.md#what-driving-the-shipped-window-found)).
   Two rules carry it and both have a measured failure behind them
   ([frontend-design.md](../docs/reference/frontend-design.md)): the arrangement is **`order` plus
