@@ -1701,8 +1701,18 @@ once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in thi
   `a_copy_filed_into_a_binder_moved_under_one_this_device_deleted_survives_on_both` for the
   collection's cabinet; both red with the folder tables back in). For those the moot arm is what it
   was before the delete: consume the group and touch nothing, so the moved folder stays where it
-  was here while the peer's cascade takes it — a folder one device holds and the other does not,
-  with everything filed in it kept on both.
+  was here while the peer's cascade takes it — a folder one device holds and the other does not.
+  ⚠️ **That is a lasting loss, not a placement difference** (the second scoped re-review of #574,
+  read off the code and unmeasured). What was filed in the folder before the exchange is kept on
+  both; but the peer's cascade ran inside `apply`, under capture suppression, so it left no `del`
+  there and none ever reaches a page. **Anything this device files into that folder afterwards** —
+  a deck with its piles and cards, a copy, a wish, a sub-folder — names a parent the peer's `gone`
+  cannot see, waits out the bound there and is dropped, for as long as the folder stays on this
+  device's screen; a rename of it is skipped there with an `error_log` row each time. Deleting the
+  folder here instead (round 1) converged but lost what the peer filed into it before hearing about
+  the delete. **Neither is right, and the fix is a design change**: make a cascaded or moot delete
+  leave a trace `gone` can read — a captured or tombstoned delete — so a later child lands without
+  the parent, as `SET NULL` does. It is owed with the folder-delete stall under *What is still owed*.
   **A moot `deck_cards` row on the live list goes without `release_group_copies`**, so copies its
   deck's group held for it stay in the group, claimed by no row — which is what the peer's own
   cascade leaves too, since a foreign-key cascade releases nothing, so the two agree.
@@ -1900,9 +1910,10 @@ The cursor-carrying loop the limit needs must walk to the head, and only then ma
   keys (`identity::supersede` → `forget_superseded`, *One correction to the plan* below). The held
   page is sealed under the epoch before the removal, so once this device has adopted the rotation,
   `pull` cannot open those envelopes and steps over them as unreadable. Whether the cursor then
-  advances turns on what the newer device wrote since: if nothing, nothing is held any more and it
-  advances; if it went on writing at the new epoch, those batches still hold the cursor as newer
-  and apply after the upgrade. **The part sealed before the removal is lost either way**, and any
+  advances turns on what the newer device wrote since: new-epoch ops this build can apply are
+  applied and the cursor advances; it stays held only while a new-epoch batch still fails to parse
+  as newer or a group this build cannot write is held as newer, and those apply after the upgrade.
+  **The part sealed before the removal is lost either way**, and any
   other device's collateral held behind it. It is the documented *a removal costs the backlog
   behind it*, now as long as the hold: a hold that lasts until the reader updates can straddle any
   number of rotations, where an ordinary backlog is a few trips. It breaks spec §2's "nothing of
@@ -2918,6 +2929,15 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   `delete_folder` on one device and applied on the other — reproduced it. The moot row's delete
   never reaches a folder table and fences any refusal (it keeps the row); the applier's ordinary
   delete is not fenced.
+- ⚠️ **A folder moved under one deleted on another device diverges, and what is filed into it later
+  is lost on the device that deleted it** (the second scoped re-review of the holds' follow-up,
+  read off the code and unmeasured; the behaviour since #572, unchanged by it). The deleting
+  device's cascade takes the moved folder inside `apply`, under capture suppression, so no `del`
+  for it exists anywhere `gone` reads; the mover keeps it, and every later child of it — a deck, a
+  copy, a wish, a sub-folder — waits out the bound on the deleting device and is dropped. The fix is
+  one with the stall above: a cascaded or moot delete that leaves a readable trace (captured, or a
+  tombstone), so a later child lands without the parent the way `SET NULL` does. *Held while it can
+  resolve* has the two answers that were tried and what each lost.
 - **An open Sync panel can show a stale `pullHeld`.** `RelayStatus` is under `SYNC_KEY`, which
   `useDeviceSyncInvalidation` refreshes on `sync:applied` — and `live::trip` and `sync_now` emit that
   only when a trip pulled or pushed something, while `pulled` counts newly applied ops only, on
