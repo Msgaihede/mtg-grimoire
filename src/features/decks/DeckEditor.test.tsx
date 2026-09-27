@@ -24,6 +24,7 @@ import type {
   Printing,
   SyncStatus,
   TheorySlot,
+  TokenPrinting,
 } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import {
@@ -176,6 +177,10 @@ const deckTokenSetQuantity = vi.hoisted(() => vi.fn());
 // Remove printing's write (managed tokens spec §3.4) — hoisted for the case that presses it.
 const deckTokenRemove = vi.hoisted(() => vi.fn());
 const cardPrintings = vi.hoisted(() => vi.fn());
+// Every token in the game — the picker's other read, which `Add printing` on a deck that makes
+// nothing opens straight onto (managed tokens spec §3.6). Hoisted for the case that adds a first
+// token by hand there; answered with nothing otherwise.
+const tokenPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -212,6 +217,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // The printing picker's one read — the card modal's printings command, which is what a
     // token's printings are too. Answered with nothing unless a case says otherwise.
     cardPrintings,
+    tokenPrintings,
     // **The Notes band asks on every open too, for the tokens band's reason exactly** — its
     // header counts the deck's notes whether or not the band is drawn, because that number is
     // the reason to open it. Answered with an empty list: the band then draws its "no notes"
@@ -903,6 +909,7 @@ beforeEach(() => {
   deckTokenSetQuantity.mockReset().mockResolvedValue(undefined);
   deckTokenRemove.mockReset().mockResolvedValue(undefined);
   cardPrintings.mockReset().mockResolvedValue({ items: [], total: 0 });
+  tokenPrintings.mockReset().mockResolvedValue([]);
   // No notes unless a test says otherwise — which is what keeps the band silent and, since
   // 2026-09-10, keeps the note glyph off every card in every other case here.
   deckNotes.mockReset().mockResolvedValue([]);
@@ -8466,6 +8473,46 @@ describe("DeckEditor — the token pile (issue #507)", () => {
 
     const alert = await within(band()).findByRole("alert");
     expect(alert).toHaveTextContent("The database is busy with a sync.");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+  });
+
+  /**
+   * **A refused first Add printing on a deck that makes nothing is said** (managed tokens, the
+   * fan-in's carried minor). That deck is the one Add printing is offered on precisely to add a
+   * token by hand, and the press opens the band — so the banner, keyed on the band being open,
+   * stood down, while a band with no row draws no wall and so no line of its own. The refusal was
+   * said nowhere. Seeded open because that is the state the press itself leaves: this file's
+   * `deckUpdate` answers the old row, so a press from shut would never reach it.
+   */
+  it("says a refused first Add printing on a deck that makes nothing", async () => {
+    const soldier: TokenPrinting = {
+      ...printing("p-soldier"),
+      oracleId: "o-soldier",
+      name: "Soldier",
+      typeLine: "Token Creature — Soldier",
+      colors: "W",
+      power: "1",
+      toughness: "1",
+      oracleText: null,
+    };
+    deckTokens.mockResolvedValue([]);
+    tokenPrintings.mockResolvedValue([soldier]);
+    deckTokenAddPrinting.mockRejectedValue("The database is busy with a sync.");
+    deckWith({ tokensOpen: true });
+    const user = userEvent.setup();
+    await open();
+
+    await user.click(await within(band()).findByRole("button", { name: /^Add printing/i }));
+    const dialog = await screen.findByRole("dialog");
+    // The picker opens on every token in the game here, `All tokens` already pressed.
+    await user.click(await within(dialog).findByRole("button", { name: /^Soldier — TMH3/ }));
+    await waitFor(() =>
+      expect(calledWithAll(deckTokenAddPrinting, [4, "live", "p-soldier", "nonfoil"])).toBe(true),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The database is busy with a sync.");
+    // Said once: the band has no wall to say it above.
     expect(screen.getAllByRole("alert")).toHaveLength(1);
   });
 

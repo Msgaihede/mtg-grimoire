@@ -87,7 +87,7 @@ import { useDeckNotes } from "./useDeckNotes";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
-import { DeckTokensPanel } from "./DeckTokensPanel";
+import { DeckTokensPanel, tokenWallDrawn } from "./DeckTokensPanel";
 import { TokenArtPicker } from "./TokenArtPicker";
 import { entryRef, pileTokens, type DeckTokenView } from "./deckTokens";
 import { useDeckTokens } from "./useDeckTokens";
@@ -1549,16 +1549,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // failure is the failure of a press rather than of a background query. It is last in the
   // chain because a refused *write* is the more specific answer whenever both are standing.
   //
-  // **The token writes join this family exactly while the Tokens & Emblems band is shut** (token
-  // stacks PR 2). The band says their refusal itself — once, above its wall, the newest token
-  // write's sentence (`useDeckTokens`' `failure`) — but the wall is unmounted while the band is
-  // collapsed, which is every deck's default, and the views draw the pile on every deck that has
-  // counted a token. So a refused pile stepper or pile swap (a busy database, a deck deleted under the
-  // reader) would otherwise be a press that changed nothing and said nothing anywhere. Open, the
-  // band speaks and this banner leaves them out: two sentences for one refusal is the reason this
-  // family leaves the docked panel's add out too.
-  const bannerWrites =
-    row?.tokensOpen === true ? writes : ([...writes, ...deckTokens.writes] as const);
+  // **The token writes join this family exactly while the Tokens & Emblems wall is not drawn**
+  // (token stacks PR 2). The band says their refusal itself — once, above its wall, the newest
+  // token write's sentence (`useDeckTokens`' `failure`) — but the wall is unmounted while the band
+  // is collapsed, which is every deck's default, and the views draw the pile on every deck that has
+  // counted a token. So a refused pile stepper or pile swap (a busy database, a deck deleted under
+  // the reader) would otherwise be a press that changed nothing and said nothing anywhere. Drawn,
+  // the band speaks and this banner leaves them out: two sentences for one refusal is the reason
+  // this family leaves the docked panel's add out too.
+  //
+  // **The wall and not the band's open flag** (`tokenWallDrawn`, the band's own condition): an
+  // open band over a deck that makes nothing draws no wall, and since managed tokens that deck is
+  // the one Add printing is offered on precisely to add a first token by hand — the press opens
+  // the band, so a refused first add keyed on `tokensOpen` was said nowhere at all.
+  const bannerWrites = tokenWallDrawn(deckTokens, row?.tokensOpen === true)
+    ? writes
+    : ([...writes, ...deckTokens.writes] as const);
   /**
    * **The last batch of card writes, as one write** — a multi-card drop or Delete over a picked
    * set (issue #553). Each card in a batch is its own call on the same observer, so the observer
@@ -2177,15 +2183,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // **`setLabel` rides in through `writes`** and is live coverage for the same reason: nothing
   // in the app could reach it until that menu, and every one of the four views can now.
   //
-  // **The token writes ride here always, and in the banner only while the band is shut** (token
-  // stacks PR 2, spec §4.7). Here always, because each one is a journalled deck write now — a
-  // stepper press, a swap, an added printing, a removed one — so a success has to clear the
-  // redo stack below like any other, and a refusal (a deck deleted under the reader answers `GONE`
-  // from `touch_deck`) has to re-read the deck like any other. Not in `writes` itself, because
-  // the band says their refusal once, above its own wall (`useDeckTokens`' `failure`, the newest
-  // token write's sentence), and while it is open a banner too would be two sentences for one
-  // refusal; {@link bannerWrites} is what adds them while the band is shut. `planTokens`' writes
-  // are never pressed, so they are in neither list.
+  // **The token writes ride here always, and in the banner only while the band's wall is not
+  // drawn** (token stacks PR 2, spec §4.7). Here always, because each one is a journalled deck
+  // write now — a stepper press, a swap, an added printing, a removed one — so a success has to
+  // clear the redo stack below like any other, and a refusal (a deck deleted under the reader
+  // answers `GONE` from `touch_deck`) has to re-read the deck like any other. Not in `writes`
+  // itself, because the band says their refusal once, above its own wall (`useDeckTokens`'
+  // `failure`, the newest token write's sentence), and while that wall is drawn a banner too would
+  // be two sentences for one refusal; {@link bannerWrites} is what adds them while it is not.
+  // `planTokens`' writes are never pressed, so they are in neither list.
   const refetch = deck.query.refetch;
   const lastOfAny = newestWrite([
     ...writes,

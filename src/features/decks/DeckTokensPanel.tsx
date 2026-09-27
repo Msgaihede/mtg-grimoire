@@ -165,6 +165,21 @@ import type { DeckTokens } from "./useDeckTokens";
 export const TOKENS_HEADING = "Tokens & Emblems";
 
 /**
+ * Whether the band's wall is on screen — the band open, over a read that answered at least one
+ * row — and with it the one line that says a refused token write (`TokenWall`'s alert).
+ *
+ * **Exported because `DeckEditor` asks the same question and must get the same answer**: its
+ * banner carries the token writes exactly while this is false, so a refusal is said once and never
+ * nowhere. It keyed on `tokensOpen` alone until the fan-in of managed tokens, and that left one
+ * press saying nothing anywhere: **Add printing on a deck that makes nothing** opens the band, so
+ * the banner stood down — but a band with no row draws no wall, so a refused first add had no
+ * line to land in either.
+ */
+export function tokenWallDrawn(tokens: DeckTokens, open: boolean): boolean {
+  return open && (tokens.query.data?.length ?? 0) > 0;
+}
+
+/**
  * A tile's icon button — Remove printing, since managed tokens took the eye and the reset away —
  * the same 20px box the `xs` stepper beside it draws, **at the same zoom**.
  *
@@ -404,9 +419,11 @@ export function DeckTokensPanel({
       </div>
 
       {/* Always in the tree so `aria-controls` above always names something, and empty while the
-          area is shut so a closed band costs no picture, no tile and no state. */}
+          area is shut so a closed band costs no picture, no tile and no state. The condition is
+          `tokenWallDrawn`, the one `DeckEditor` reads to decide whether its banner speaks for a
+          refused token write instead. */}
       <div id={bodyId}>
-        {open && canOpen && (
+        {tokenWallDrawn(tokens, open) && (
           <TokenWall
             tokens={tokens}
             zoom={zoom}
