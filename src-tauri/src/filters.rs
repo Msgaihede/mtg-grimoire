@@ -103,19 +103,24 @@ pub const ART_WEIGHT_FLOOR_STRONG: &str = "strong";
 
 /// What one [`QueryPredicate`] is a statement about.
 ///
-/// **[`Self::TypeLine`] and [`Self::OracleText`] ride in the same list as the other ten and
-/// are emitted by [`fts_match`], never by [`push_card_filters`].** `LIKE` over either column
-/// measured **80x to 250x** slower than the FTS5 column filter they take instead, on the real
-/// corpus (spec §5.2), and a box that fires on a debounce cannot pay that. So the match in
-/// `push_card_filters` names all twelve variants and has no `_` arm: **a field handled by
-/// neither side is a filter that silently does nothing**, which is the one failure this split
-/// can produce and the reason there is a test per side.
+/// **[`Self::Name`], [`Self::TypeLine`] and [`Self::OracleText`] ride in the same list as the
+/// other ten and are emitted by [`fts_match`], never by [`push_card_filters`].** `LIKE` over
+/// either text column measured **80x to 250x** slower than the FTS5 column filter they take
+/// instead, on the real corpus (spec §5.2), and a box that fires on a debounce cannot pay that.
+/// So the match in `push_card_filters` names all thirteen variants and has no `_` arm: **a
+/// field handled by neither side is a filter that silently does nothing**, which is the one
+/// failure this split can produce and the reason there is a test per side.
 ///
 /// Closed, so the boundary is type-checked rather than stringly typed; the camelCase serde
 /// names are the contract `src/lib/ipc.ts` mirrors and `ipc.test.ts` fences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PredicateField {
+    /// The card's name and nothing else — Scryfall's `-bolt` and `-"lightning bolt"` (issue
+    /// #571). **No keyword produces it**: the grammar sends it only for a leading `-` on free
+    /// text, so it arrives negated, while a *positive* bare word stays [`CardFilters::text`] and
+    /// matches every FTS column. The two directions differ on purpose — see [`fts_match`].
+    Name,
     TypeLine,
     OracleText,
     Keyword,
@@ -290,8 +295,8 @@ pub struct CardFilters {
     /// field is two terms rather than one overwriting the other — which is the whole reason
     /// this is a list. See [`QueryPredicate`].
     ///
-    /// **Two of the twelve fields add no SQL here at all** and are picked up by [`fts_match`]
-    /// instead; [`PredicateField`] says which and why.
+    /// **Three of the thirteen fields add no SQL here at all** and are picked up by
+    /// [`fts_match`] instead; [`PredicateField`] says which and why.
     pub predicates: Option<Vec<QueryPredicate>>,
 }
 
@@ -331,12 +336,37 @@ impl Predicates {
 /// boundaries. Deleting punctuation inside a word would weld its halves into a token
 /// nothing indexes — `Ajani's` → `ajanis`, `God-Pharaoh` → `godpharaoh`.
 pub fn fts_query(text: &str) -> Option<String> {
-    let toks: Vec<String> = text
-        .split(|c: char| !c.is_alphanumeric())
+    let toks = fts_tokens(text);
+    (!toks.is_empty()).then(|| toks.join(" "))
+}
+
+/// [`fts_query`]'s tokens as one **ordered phrase** — `"lightning"* + "bolt"*` — or `None`
+/// when nothing indexable is left.
+///
+/// FTS5's `+` joins phrases into one whose tokens must stand adjacent and in order, and each
+/// keeps its own `*`. That is Scryfall's reading of a quoted name, measured live 2026-09-27:
+/// `t:instant -"lightning bolt"` drops 2 of 3,909 instants while `-"bolt lightning"` drops
+/// none. The unordered [`fts_query`] would drop Lightning Bolt for both. Measured on the dev
+/// corpus the same day, `name : ("guide"* + "goblin"*)` finds nothing where the unordered form
+/// finds Goblin Guide. Only [`PredicateField::Name`] reads this; `t:` and `o:` keep the
+/// unordered form they shipped with. A single word is the same string either way.
+///
+/// **One edge it cannot see**: a double-faced card's `name` is `Front // Back`, and `//` is not
+/// a token, so `"bolt" + "lightning"*` finds `Lightning Bolt // Lightning Bolt` across the
+/// seam. Scryfall's substring would not. Harmless in the direction it errs — it removes a card
+/// that *does* carry both words.
+pub fn fts_phrase(text: &str) -> Option<String> {
+    let toks = fts_tokens(text);
+    (!toks.is_empty()).then(|| toks.join(" + "))
+}
+
+/// The quoted, prefix-matched tokens both builders above join — the splitting rule and the
+/// reason for it are [`fts_query`]'s.
+fn fts_tokens(text: &str) -> Vec<String> {
+    text.split(|c: char| !c.is_alphanumeric())
         .filter(|t| !t.is_empty())
         .map(|t| format!("\"{t}\"*"))
-        .collect();
-    (!toks.is_empty()).then(|| toks.join(" "))
+        .collect()
 }
 
 /// The FTS side of a parsed query: the positive `MATCH` string, and one `MATCH` string per
@@ -361,6 +391,14 @@ pub fn fts_query(text: &str) -> Option<String> {
 /// (15 359 against 14 753 for `draw`) because it holds every face's name, type line and text —
 /// and it is the right column anyway, because `cards.oracle_text` is NULL for every
 /// double-faced card and the narrower column is wrong in a worse direction.
+///
+/// **[`PredicateField::Name`] is `name` alone, as an ordered phrase ([`fts_phrase`]), while the
+/// free text beside it has no column filter at all** — so `bolt` matches a name, a type line or
+/// rules text and `-bolt` removes only the names. That asymmetry is Scryfall's: `-bolt` is
+/// `-name:bolt` there (`t:instant` 3,909, both negations 3,891, measured 2026-09-27). Reading
+/// every column would make `-goblin` remove 2,224 printings on the dev corpus rather than the
+/// 969 actually called Goblin, taking every Goblin creature and every card that makes one with
+/// them.
 pub fn fts_match(text: Option<&str>, preds: &[QueryPredicate]) -> (Option<String>, Vec<String>) {
     let mut positive: Vec<String> = Vec::new();
     let mut negative: Vec<String> = Vec::new();
@@ -372,18 +410,19 @@ pub fn fts_match(text: Option<&str>, preds: &[QueryPredicate]) -> (Option<String
     }
 
     for pred in preds {
-        let column = match pred.field {
-            PredicateField::TypeLine => "type_line",
-            PredicateField::OracleText => "search_text",
+        let (column, query) = match pred.field {
+            PredicateField::Name => ("name", fts_phrase(&pred.value)),
+            PredicateField::TypeLine => ("type_line", fts_query(&pred.value)),
+            PredicateField::OracleText => ("search_text", fts_query(&pred.value)),
             // Every other field is SQL, and `push_card_filters` is where it is emitted.
             _ => continue,
         };
-        let Some(query) = fts_query(&pred.value) else {
+        let Some(query) = query else {
             continue;
         };
-        // FTS5's column filter, over the prefix-matched phrase list `fts_query` builds. The
-        // parentheses are what make `type_line : ("a"* "b"*)` two terms *in that column*
-        // rather than one term in it and one anywhere.
+        // FTS5's column filter, over the prefix-matched phrase list `fts_query` builds (or the
+        // one phrase `fts_phrase` does). The parentheses are what make `type_line : ("a"* "b"*)`
+        // two terms *in that column* rather than one term in it and one anywhere.
         let term = format!("{column} : ({query})");
         if pred.negated {
             negative.push(term);
@@ -869,7 +908,7 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     // The typed query terms, ANDed with each other and with everything above — `t:goblin
     // cmc>=3 -a:rebecca` is three of them and all three must hold.
     //
-    // **Two of the twelve fields come out of here as nothing at all**, because the FTS builder
+    // **Three of the thirteen fields come out of here as nothing at all**, because the FTS builder
     // owns them; [`predicate_clause`] returns `None` for those and [`PredicateField`] says
     // why. Every other `None` it can answer is a blank value, which is [`nonblank`]'s rule
     // one shape along: a term with nothing after its operator is no filter, never a filter
@@ -911,7 +950,8 @@ const RARITY_ORDER: [&str; 4] = ["common", "uncommon", "rare", "mythic"];
 /// fields whose default really is `:` return it unchanged and are matched by their own arms.
 fn default_op(field: PredicateField) -> PredicateOp {
     match field {
-        PredicateField::TypeLine
+        PredicateField::Name
+        | PredicateField::TypeLine
         | PredicateField::OracleText
         | PredicateField::Keyword
         | PredicateField::Artist => PredicateOp::Colon,
@@ -1098,8 +1138,9 @@ fn numeric_clause(
 ///
 /// There are exactly **two** ways to get `None` and they are different facts:
 ///
-/// * [`PredicateField::TypeLine`] and [`PredicateField::OracleText`] are the FTS builder's,
-///   and [`fts_match`] emits them. This is the `None` that is a hand-off rather than a gap.
+/// * [`PredicateField::Name`], [`PredicateField::TypeLine`] and [`PredicateField::OracleText`]
+///   are the FTS builder's, and [`fts_match`] emits them. This is the `None` that is a
+///   hand-off rather than a gap.
 /// * A **blank** value is no filter, which is [`nonblank`]'s rule and every other arm of
 ///   [`push_card_filters`] follows it: a term the reader has not finished typing must not
 ///   empty the wall under them.
@@ -1123,11 +1164,13 @@ fn predicate_clause(
         pred.op
     };
 
-    // **All twelve, and no `_` arm.** A thirteenth field added to the enum must fail this
+    // **All thirteen, and no `_` arm.** A fourteenth field added to the enum must fail this
     // match to compile rather than fall through into a filter that quietly does nothing.
     let (sql, params): (String, Vec<Box<dyn rusqlite::ToSql>>) = match pred.field {
-        // The FTS builder's two — see [`PredicateField`] and [`fts_match`].
-        PredicateField::TypeLine | PredicateField::OracleText => return None,
+        // The FTS builder's three — see [`PredicateField`] and [`fts_match`].
+        PredicateField::Name | PredicateField::TypeLine | PredicateField::OracleText => {
+            return None
+        }
 
         // **The two-arm bridge, and the measurement is what licenses it.** `cards.keywords`
         // is corpus schema 5 and reads NULL on every row until the next full ingest, so a
@@ -2093,8 +2136,9 @@ mod tests {
         }
     }
 
-    /// Every one of the twelve, so a census can walk them without naming them twice.
-    const EVERY_FIELD: [PredicateField; 12] = [
+    /// Every one of the thirteen, so a census can walk them without naming them twice.
+    const EVERY_FIELD: [PredicateField; 13] = [
+        PredicateField::Name,
         PredicateField::TypeLine,
         PredicateField::OracleText,
         PredicateField::Keyword,
@@ -2769,7 +2813,8 @@ mod tests {
                 {"field":"artist","op":"colon","value":"rebecca"},
                 {"field":"colors","op":"gte","value":"rg"},
                 {"field":"rarity","op":"eq","value":"rare"},
-                {"field":"format","op":"eq","value":"modern"}
+                {"field":"format","op":"eq","value":"modern"},
+                {"field":"name","op":"colon","value":"lightning bolt","negated":true}
             ]"#,
         )
         .expect("every name here is what the TypeScript mirror sends");
@@ -2863,10 +2908,49 @@ mod tests {
         // Every non-text field is the SQL builder's and contributes nothing here.
         let preds: Vec<QueryPredicate> = EVERY_FIELD
             .iter()
-            .filter(|f| !matches!(f, PredicateField::TypeLine | PredicateField::OracleText))
+            .filter(|f| {
+                !matches!(
+                    f,
+                    PredicateField::Name | PredicateField::TypeLine | PredicateField::OracleText
+                )
+            })
             .map(|f| pred(*f, PredicateOp::Colon, "goblin"))
             .collect();
         assert_eq!(fts_match(None, &preds), (None, Vec::new()));
+    }
+
+    /// **`-"lightning bolt"` is an ordered phrase on `name` alone, and the free text beside it
+    /// keeps reading every column** — issue #571, and the asymmetry is Scryfall's: `-bolt` is
+    /// `-name:bolt` there (both 3,891 of 3,909 instants, measured live 2026-09-27).
+    ///
+    /// The `+` is the whole of the ordering: `"lightning"* "bolt"*` would also remove a card
+    /// called *Bolt of Lightning*, while Scryfall's `-"bolt lightning"` removes nothing that
+    /// `-"lightning bolt"` does. `search::tests::a_negated_name_excludes_by_name_alone` hands
+    /// this string to a real index, which is what a shape assertion like this one cannot do.
+    #[test]
+    fn a_name_term_is_an_ordered_phrase_on_the_name_column_alone() {
+        let (m, neg) = fts_match(
+            Some("goblin"),
+            &[negated(
+                PredicateField::Name,
+                PredicateOp::Colon,
+                "Lightning Bolt",
+            )],
+        );
+        assert_eq!(
+            m.as_deref(),
+            Some("\"goblin\"*"),
+            "the free text has no column"
+        );
+        assert_eq!(neg, vec!["name : (\"Lightning\"* + \"Bolt\"*)"]);
+        // One word is the same string either builder would make.
+        assert_eq!(fts_phrase("bolt"), fts_query("bolt"));
+        // And the apostrophe splits rather than welds, as it does for the free text.
+        assert_eq!(
+            fts_phrase("God-Pharaoh's Gift").as_deref(),
+            Some("\"God\"* + \"Pharaoh\"* + \"s\"* + \"Gift\"*")
+        );
+        assert_eq!(fts_phrase("-!!"), None, "nothing indexable is no phrase");
     }
 
     /// All-punctuation leaves nothing to match on, and the answer is **no term**, not an

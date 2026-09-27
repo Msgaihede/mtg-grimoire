@@ -1898,6 +1898,26 @@ describe("useCardSearch, reading typed predicates out of the box", () => {
     ]));
   });
 
+  /**
+   * **`-"lightning bolt"` is a name to exclude, not two words to search for** — issue #571,
+   * where the `-` was tokenised away and the box searched *for* the card the reader asked to be
+   * rid of. The free text beside it stays free text, and the term draws a chip like any other.
+   */
+  it("sends a dash on a phrase as a name exclusion beside the free text", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText('lightning -"lightning bolt"'));
+
+    await waitFor(() => expect(lastSearchRequest().predicates).toEqual([
+      { field: "name", op: "colon", value: "lightning bolt", negated: true },
+    ]));
+    expect(lastSearchRequest().text).toBe("lightning");
+    expect(result.current.predicateChips).toEqual([
+      { key: "name|colon|lightning bolt", label: '"lightning bolt"', mode: "exclude" },
+    ]);
+  });
+
   /** Naming a filter the box does not hold leaves the query alone rather than rewriting it into
    *  something the reader never typed. */
   it("leaves the box alone when asked about a term that is not in it", async () => {

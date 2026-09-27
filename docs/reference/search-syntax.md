@@ -38,7 +38,9 @@ Fourteen of them. `:` is each keyword's **default operator**, and the defaults a
 | `atag` `arttag` `art` | art **tag** | `:` | `:` | `tag_resolve`, unchanged |
 
 A leading `-` negates any term, and terms **AND** together — this app's rule and Scryfall's
-alike (`t:goblin t:creature` = **557** there, measured). There is still **no `or` and no
+alike (`t:goblin t:creature` = **557** there, measured). On a bare word or a quoted phrase the
+same `-` excludes a card **by name** — `-bolt`, `-"lightning bolt"` — which has its own
+section below, because no keyword in the table produces it. There is still **no `or` and no
 parentheses**; the refusal and its reason are both unchanged and are two sections down.
 
 The keyword is matched with separators dropped and case folded (`queryLanguage.ts`'s
@@ -107,6 +109,8 @@ departure accepted, now paid in the other direction.
 - A leading `-` excludes: `-t:goblin`, `-atag:dragon`.
 - Everything unrecognised is free text for FTS. `bolt t:creature` searches the index for `bolt`
   alone and filters by the type line beside it.
+- **Unless it starts with `-`**, in which case it is a name to exclude rather than free text:
+  `-bolt`, `-"lightning bolt"`. See [A `-` on plain words excludes a name](#a---on-plain-words-excludes-a-name).
 
 **No `or`, no parentheses.** The backend cannot express them: predicates are composed by
 conjunction and every included tag becomes its own `EXISTS`, so boolean grouping would need new
@@ -309,6 +313,87 @@ OR (c.keywords IS NULL AND <oracle text contains the keyword>)
 Precise once ingested, over-inclusive before, never empty. `fill_unknown_produced_mana` is the
 same idea one column over.
 
+## A `-` on plain words excludes a name
+
+[Issue #571](https://github.com/Msgaihede/mtg-grimoire/issues/571), 2026-09-27. Until then
+`-bolt` was free text: the scanner found no keyword in it, and `fts_query` splits on everything
+non-alphanumeric, so the `-` vanished and the box searched **for** bolt — the opposite of what
+was typed, with nothing on screen to say so. `-"my name"` did the same with two words.
+
+It is now a predicate on a thirteenth field, `name`, always `negated: true`. **No keyword
+produces it**: `excludedName` in `queryLanguage.ts` reads any chunk that would have been free
+text and starts with `-`. So it rides everything a predicate already rides — all three searches
+through the one payload, and a chip under the box — and an unparseable negated term negates as
+the free text it would have been, `-cmc>=banana` included, which is Scryfall's reading too.
+
+### Name only, which is not what the free text reads
+
+A positive bare word has no column filter — `bolt` matches a name, a type line or rules text —
+while the negation reads **`name` alone**. The asymmetry is Scryfall's, measured live on
+2026-09-27:
+
+| query | cards |
+| --- | --- |
+| `t:instant` | 3,909 |
+| `t:instant bolt` | 18 |
+| `t:instant -bolt` | **3,891** |
+| `t:instant -name:bolt` | **3,891** |
+
+It is also what a reader means. Against the dev corpus (**118,610** printings) through
+`node:sqlite` the same day:
+
+| `MATCH` | every column | `name` alone |
+| --- | --- | --- |
+| `"goblin"*` | 2,224 | **969** |
+| `"bolt"*` | 171 | **161** |
+
+Read across every column, `-goblin` would take every Goblin creature and every card that makes
+one off the wall, where the reader asked to lose the 969 printings *called* Goblin.
+
+### A quoted phrase is ordered
+
+On Scryfall `t:instant -"lightning bolt"` answers 3,907 — two removed — and `-"bolt lightning"`
+answers 3,909, none removed. `fts_query`'s unordered token list would remove Lightning Bolt for
+both, so the name term is built by `filters::fts_phrase` instead: the same prefix-matched tokens
+joined by FTS5's `+`, which makes them one phrase that must stand adjacent and in order. On the
+dev corpus `name : ("lightn"* + "bolt"*)` finds Lightning Bolt, and `name : ("guide"* +
+"goblin"*)` finds nothing where the unordered form finds Goblin Guide. `t:` and `o:` keep the
+unordered form they shipped with; this changes neither.
+
+Two costs, both FTS's and both in the forgiving direction:
+
+- **Prefix, not substring.** `-bolt` does not remove *Thunderbolt*, which Scryfall's substring
+  would. The positive free text has had the same gap all along, so the two directions agree.
+- **A double-faced card's `//` is not a token**, so `"bolt" + "lightning"*` finds
+  `Lightning Bolt // Lightning Bolt` across the seam — a card that does carry both words.
+
+### Where it is answered
+
+- **The search and the collection**: `fts_match` puts it among the negatives, so it is
+  `c.rowid NOT IN (SELECT rowid FROM cards_fts WHERE cards_fts MATCH 'name : (…)')` — **14 ms**
+  over the whole corpus for `-bolt` (`node:sqlite`, 2026-09-27). In the collection an orphaned
+  row fails it, which is the existing orphan rule: `collection_entries` carries no name to answer
+  from.
+- **The wishlist** answers it from `wishlist_entries.name` with `NOT LIKE`, escaped through
+  `escape_like`, beside the positive free text's `LIKE` on the same column. Through `cards_fts`,
+  `NULL NOT IN (…)` over the LEFT JOIN would drop every orphaned wish for not being called Bolt,
+  which is exactly the row that column exists for. It is a substring there, as the free text is.
+- **Facets** discard it with every other negated text term, so the counts read high under
+  `-bolt` — the documented direction, below.
+
+### The chip, and the one press it does not survive
+
+`-bolt` draws `not bolt`. Its ✕ removes the term like any other; its include press writes
+`bolt` back, which is free text and draws no chip, because a positive name has no spelling in
+this box. Scryfall has one — `name:`, the `-name:bolt` above — and it was **not** added: the
+issue asked for the exclusion, and a keyword would spend a row of the F1 table on a positive that
+plain text already answers with the name among its columns. The panel's one line of prose names
+the form instead, `-"lightning bolt"`, beside `-t:land`.
+
+A lone `-`, `-"`, `--` or `-!!!` is **`"partial"`**, not a term: nothing indexable follows the
+dash. The first two are keystrokes on the way to one, and as a term any of the four would be a
+chip that narrows nothing, since `fts_phrase` answers `None` for a value with no word in it.
+
 ## Tag resolution: exact, through `slug_norm`
 
 `filters::picked_tags` matches `slug` byte for byte and case-sensitively, and its doc says why —
@@ -471,8 +556,9 @@ exactly one term.
 
 | file | what it owns |
 | --- | --- |
-| `src/features/search/queryLanguage.ts` | The grammar. `parseQuery`, `QUERY_KEYWORDS`, the source spans, and the three rewrites (`removeToken`, `setTokenNegated`, `setTokenValue`) |
-| `src-tauri/src/filters.rs` | `QueryPredicate` and the SQL — one arm per field in `push_card_filters`, and `fts_match` for the two that ride the index |
+| `src/features/search/queryLanguage.ts` | The grammar. `parseQuery`, `QUERY_KEYWORDS`, `excludedName`, the source spans, and the three rewrites (`removeToken`, `setTokenNegated`, `setTokenValue`) |
+| `src-tauri/src/filters.rs` | `QueryPredicate` and the SQL — one arm per field in `push_card_filters`, and `fts_match` (with `fts_phrase` for a name) for the three that ride the index |
+| `src-tauri/src/wishlist.rs` | The one search that answers a name term from its own column rather than from `cards_fts` |
 | `src-tauri/src/schema.rs` | Corpus schema 5, `cards.keywords` |
 | `src-tauri/src/tags/query.rs` | `run_tag_resolve` / `tag_resolve` — names to slugs, exact, through `slug_norm` |
 | `src/features/tags/tagFilters.ts` | `mergeTagTerms` — the caller's chips ANDed with the typed ones |
@@ -637,6 +723,8 @@ panel sits inside the window (`right` 1769 of 1920, `bottom` 726 of 1080).
 - **`or`, parentheses and nested boolean grouping.** The refusal is unchanged and so is its
   reason.
 - **A clean `oracle_all` FTS column.** The 4% over-match above is what would buy it.
+- **`name:` as a keyword.** Scryfall's, and the long spelling of `-bolt`; the reason it is not a
+  fifteenth row is in the name section above.
 - **`is:`, `ft:`, `game:`, `year:`, `border:`, `frame:` and the rest of Scryfall's long tail.**
   Each is a separate predicate with separate data questions; the fourteen in the table are the
   ones with a column behind them or one cheap rung.
