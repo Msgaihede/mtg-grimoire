@@ -1094,7 +1094,7 @@ static REFRESHING: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 /// Clears the claim however the refresh ends — an early return, an error, a dropped future.
 /// `sync::SyncingGuard`'s shape, for its reason: a latched flag locks the user out until they
 /// restart the app.
-struct RefreshGuard(&'static str);
+pub(crate) struct RefreshGuard(&'static str);
 
 #[cfg(not(target_family = "wasm"))]
 impl RefreshGuard {
@@ -1119,6 +1119,30 @@ impl Drop for RefreshGuard {
 /// Is a refresh of this marketplace in flight?
 fn is_refreshing(marketplace: &str) -> bool {
     crate::db::lock_plain(&REFRESHING).contains(&marketplace)
+}
+
+/// Is a refresh of **any** marketplace in flight?
+///
+/// **[`crate::reset::cache_clear`] is the one caller, and the question is about `data/tmp/`
+/// rather than about prices.** A refresh downloads into [`temp_path`] and then reopens that
+/// file to ingest it, so a cache sweep landing between the two fails the refresh — and since
+/// [`refresh_selected_if_due`] runs at every launch for the marketplace the reader picked, a
+/// reader pressing Clear in the first minute is not a contrived case. The claim is the answer because it is held for exactly the
+/// span the file is in use: taken before the download, dropped after the temp file is gone.
+#[cfg(not(target_family = "wasm"))]
+pub(crate) fn any_refresh_running() -> bool {
+    !crate::db::lock_plain(&REFRESHING).is_empty()
+}
+
+/// Hold a refresh claim under `name` until the guard is dropped, with no download behind it.
+///
+/// For a test in another module that needs [`any_refresh_running`] to answer `true`.
+/// **`name` must be one no provider uses** — the registry is process-wide and the tests run in
+/// parallel, so a test claiming `"cardkingdom"` would make this module's own refresh tests
+/// answer "already being refreshed" at random.
+#[cfg(test)]
+pub(crate) fn hold_refresh_for_test(name: &'static str) -> RefreshGuard {
+    RefreshGuard::claim(name).expect("a test-only name no other test claims")
 }
 
 #[cfg(not(target_family = "wasm"))]
