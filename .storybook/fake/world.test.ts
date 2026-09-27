@@ -592,8 +592,10 @@ describe("the seeded rows agree with the cards they name", () => {
       // at zero holds no condition, no price and no story.
       expect(row.quantity).toBeGreaterThan(0);
       // `schema::DECK_CARD_GRAIN`, and the category has to be one of this deck's — nothing in
-      // the DDL enforces that half, so a seed is exactly where it could go wrong unnoticed.
+      // the DDL enforces that half, so a seed is exactly where it could go wrong unnoticed. And
+      // one of this deck's piles **of the row's own list** since v53 — the same unenforced half.
       expect(categories.get(row.categoryId)?.deckId).toBe(row.deckId);
+      expect(categories.get(row.categoryId)?.variant).toBe(row.variant);
       // **`finish` is the fifth part since v18**, and the starter seed leans on it: deck 1 holds
       // one foil Urza's Saga beside three regular ones, which is a repeat on every *other*
       // column and the shape this whole feature is for. A key that forgot the finish would call
@@ -717,6 +719,10 @@ describe("the seeded rows agree with the cards they name", () => {
    * has no "Main deck" at all and any number of piles the reader named. A fixture with only the
    * migrated shape would let a story be written against the accident that its main pile sorts
    * second and is called that.
+   *
+   * **Per list since user schema v53** (issue #561): the shape above is the live list's, and a
+   * deck with a plan owns the same shape a second time in `theory` — the v53 rung's clone —
+   * while a deck without one owns no theory pile at all.
    */
   it("every deck owns the categories its own shape gives it, and no more", () => {
     const migrated = [
@@ -730,7 +736,13 @@ describe("the seeded rows agree with the cards they name", () => {
     for (const name of names) {
       const db = seed(name);
       for (const deck of db.decks) {
-        const mine = db.deckCategories.filter((c) => c.deckId === deck.id);
+        const mine = db.deckCategories.filter((c) => c.deckId === deck.id && c.variant === "live");
+        const plan = db.deckCategories.filter(
+          (c) => c.deckId === deck.id && c.variant === "theory",
+        );
+        const shape = (rows: typeof mine) =>
+          rows.map((c) => [c.kind, c.name, c.isActive, c.sortOrder, c.origin]);
+        expect(shape(plan)).toEqual(deck.theoryEnabled ? shape(mine) : []);
         expect(mine.map((c) => [c.kind, c.name, c.isActive, c.sortOrder])).toEqual(
           deck.id === 4
             ? [
