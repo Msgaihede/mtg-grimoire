@@ -17,6 +17,7 @@ import { PRESS } from "@/lib/motion";
 import { formatPrice, parsePurchasePrice, unreadablePriceNote } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { refreshCardSearches } from "@/lib/searchMarks";
 
 /** The printing a quick-add is about. Every surface that shows a card can build one. */
 export interface AddTarget {
@@ -379,18 +380,13 @@ function AddForm({
       // and `wishlisted` are the badge on every row and every tile, so a wall the reader
       // added a third copy from would go on saying "×2" until they searched again.
       //
-      // This used to carry `refetchType: "none"` for cost, and the cost is not small: an
-      // infinite search holds every page the reader scrolled through — up to 100 of them,
-      // ~53 ms each against the real database — and query-core refetches them in sequence,
-      // so a deep scroll is a multi-second worst case behind an open popup. What bounds it
-      // is that only *active* queries refetch: the search currently on screen, and this
-      // popup is only ever open over one of them. A badge that is visibly wrong is worse
-      // than background work nobody is waiting on.
-      //
-      // The upgrade is to stop asking rather than to ask more cheaply: patch
-      // `ownedQuantity`/`wishlisted` into the cached search pages in place, the way
-      // `WishlistPage`'s `patchWish` rewrites a wish, and refetch nothing at all.
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      // **Patched in place rather than refetched, since 2026-09-27** (issue #552). An infinite
+      // search holds every page the reader scrolled through — up to 100 of them, ~53 ms each
+      // against the real database — and an invalidation refetched them in sequence, about five
+      // seconds behind every "+". `refreshCardSearches` asks `search_marks` for the two badges of
+      // the ids already on screen, in one statement, and rewrites them; a search filtered by
+      // Owned, whose rows a write can add or drop, is still refetched.
+      void refreshCardSearches(queryClient);
     },
   });
 

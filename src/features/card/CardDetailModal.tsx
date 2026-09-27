@@ -91,6 +91,7 @@ import { pricesAsOf } from "@/lib/prices";
 import { useAppStore, type CardWalkStop } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { refreshCardSearches } from "@/lib/searchMarks";
 import { ACTION, ACTION_PRIMARY } from "./actionButtons";
 import { ownsArrowKeys } from "./arrowKeys";
 import { useOptionalAddCardToDeck } from "./cardMenu";
@@ -1089,7 +1090,7 @@ function Body({
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    void refreshCardSearches(queryClient);
   };
   const setOwned = useMutation({
     mutationFn: ({ id, quantity }: { id: number | null; quantity: number }) =>
@@ -1119,7 +1120,7 @@ function Body({
     // collection figure and no deck's arithmetic.
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
     onError: (e) => setRefusal(`Could not change your wishlist — ${ipcError(e)}`),
   });

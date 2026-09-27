@@ -22,7 +22,7 @@ import { departureFrom, type PaneDeparture } from "@/features/card/cardReturn";
 // card menu's collection add and this hook's quick add have to agree, and two spellings of a
 // default drift the first time either changes.
 import { MENU_CONDITION } from "@/lib/conditions";
-import { OWNED_WRITE_KEYS } from "@/lib/query";
+import { invalidateOwnedWrite, refreshCardSearches } from "@/lib/searchMarks";
 import { autoCategoryFor } from "./autoCategory";
 import { sameDeckSlot } from "./deckWalk";
 
@@ -1247,7 +1247,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     onSuccess: () => {
       invalidate();
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
   });
 
@@ -1288,7 +1288,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     onSuccess: () => {
       invalidate();
       invalidateCollection();
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
   });
 
@@ -1351,7 +1351,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
         wishId,
       ),
     onSuccess: () => {
-      for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
+      invalidateOwnedWrite(queryClient);
     },
   });
 
@@ -1393,7 +1393,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     mutationFn: ({ picks, clearWishes }: { picks: DeckMissingPick[]; clearWishes: boolean }) =>
       ipc.deckMissingToCollection(opened(id), picks, clearWishes),
     onSuccess: () => {
-      for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
+      invalidateOwnedWrite(queryClient);
     },
   });
 

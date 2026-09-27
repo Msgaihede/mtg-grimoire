@@ -7685,6 +7685,26 @@ export interface ShareRow {
  * refusal.** It arrives `false`, the publish succeeds, and the column the reader ticked is
  * missing from every card in the snapshot — which is why `ipc.test.ts` pins all three by name.
  */
+/**
+ * Which rows of a loaded search to re-read the badges of — mirrors `search::MarksRequest`.
+ *
+ * `collapse` and `availableForDeck` are the loaded search's own, because they decide the grain
+ * and the scope {@link CardSummary.ownedQuantity} was counted at; the ids stand in for every
+ * filter, which decided which rows a page holds and nothing about what a row's badge reads.
+ */
+export interface MarksRequest {
+  ids: string[];
+  collapse?: boolean;
+  availableForDeck?: number;
+}
+
+/** One row's badges, re-read — mirrors `search::CardMarks`. */
+export interface CardMarks {
+  id: string;
+  ownedQuantity: number;
+  wishlisted: boolean;
+}
+
 export interface ShareFields {
   /** The grade each copy is in, `NM` and friends. An **ungraded** copy still carries nothing —
    *  see `@/lib/shareSnapshot`'s header. */
@@ -7697,6 +7717,12 @@ export interface ShareFields {
 
 export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
+  /**
+   * The two badges of rows a search already holds, re-read after a write — what
+   * `@/lib/searchMarks` patches into the cached pages instead of refetching every one of them
+   * (issue #552). An id the corpus no longer holds is left out of the answer.
+   */
+  searchMarks: (req: MarksRequest) => invoke<CardMarks[]>("search_marks", { req }),
   /**
    * Facet counts for one search — the same request shape as `searchCards`, whose `sort`,
    * `offset` and `limit` are ignored. Its own command so a page turn does not recompute
