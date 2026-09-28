@@ -361,6 +361,15 @@ fn count_cards(conn: &Connection) -> i64 {
         .unwrap_or(0)
 }
 
+/// Does the corpus hold any card at all? The launch's question for whether this is a first run
+/// — `desktop::start` holds the optional feeds back until the card download is over when it is
+/// not. An `EXISTS` rather than [`count_cards`]'s `count(*)`, which walks 116 k rows to answer
+/// yes. A corpus that cannot answer reads as empty, which only defers the feeds.
+pub(crate) fn has_cards(conn: &Connection) -> bool {
+    conn.query_row("SELECT EXISTS (SELECT 1 FROM cards)", [], |r| r.get(0))
+        .unwrap_or(false)
+}
+
 /// Does `sets` owe a `/sets` fetch on a run that ingested nothing? A failed count reads as
 /// "no" — if the database cannot answer, a `/sets` fetch it cannot store either is not the fix.
 ///
@@ -629,7 +638,6 @@ pub async fn run_sync(
     // `Err` would drop exactly the lockouts nobody else records. An upsert of one integer is
     // not worth being clever about.
     persist_penalty(&state);
-    note_mirror_after_sync(&state, &result);
     if let Err(e) = &result {
         {
             let conn = lock_db(&state);
@@ -640,27 +648,26 @@ pub async fn run_sync(
     result
 }
 
-/// Tell the plain-text mirror that a sync finished, if it changed anything.
+/// Tell the plain-text mirror that the sync has swapped `cards`, so every mirrored CSV's
+/// `Price` column (and any corrected card name) is owed a pass.
 ///
 /// One of the four things that run a full mirror pass (spec §5). The update hook cannot carry
 /// this: `cards` maps to no surface on purpose, because a sync rewrites 116 700 rows and a
 /// per-row mark would be a hundred thousand hook fires and a rebuild every refresh.
 ///
-/// **Gated on `updated`, not on `Ok`.** A throttled run that downloaded nothing changed no card
-/// name and no printing, so marking there would spend a full render on every launch of the day
-/// over a corpus byte for byte the one the last pass already mirrored. Hash comparison means it
-/// would *write* nothing — the render is the cost, and it is avoidable.
+/// **Called from [`do_sync`] the moment the swap has landed, and it was once called from
+/// [`run_sync`] on `Ok` with `updated`** (issue #551). That gate was one step too late: a run
+/// that swapped the cards and then failed at `/sets` returned `Err`, so the mirror was never
+/// told — and every later run took the 304 path, which swaps nothing and marks nothing, so the
+/// mirrored prices stayed a corpus behind until Scryfall next rotated the bulk file. Marking
+/// where the swap lands covers that run and still spends nothing on a throttled or 304 run,
+/// which changed no card name and no price.
 ///
-/// A function rather than four lines inline in [`run_sync`] because [`run_sync`] takes a
-/// `tauri::AppHandle` and this crate has no mock-app harness, so nothing in the suite can enter
-/// it. This much is reachable, and the condition is the half worth testing; what stays untested
-/// is the single call above it.
-pub(crate) fn note_mirror_after_sync(state: &AppState, result: &Result<SyncOutcome, String>) {
-    if let Ok(outcome) = result {
-        if outcome.updated {
-            state.mirror.mark_all();
-        }
-    }
+/// A function rather than one line inline because [`do_sync`] takes a `tauri::AppHandle` and
+/// this crate has no mock-app harness, so the call site itself is unreachable from the suite —
+/// `mirror::watch`'s tests reach this instead, and the placement is what this doc records.
+pub(crate) fn note_mirror_after_swap(state: &AppState) {
+    state.mirror.mark_all();
 }
 
 /// Note a failed call to Scryfall in the error log.
@@ -727,7 +734,10 @@ pub(crate) fn note_database(state: &AppState, operation: &str, message: &str) {
 ///
 /// Best-effort throughout: this is bookkeeping about a refusal that has already happened,
 /// and failing a sync over it would be absurd.
-fn persist_penalty(state: &Arc<AppState>) {
+///
+/// **Every caller of the Scryfall API owes this, not only the sync** — `tags::refresh` runs it
+/// too, because its check shares the client's lockout (issue #551).
+pub(crate) fn persist_penalty(state: &AppState) {
     let until = state.client.penalty_until_unix();
     if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         let _ = crate::app_meta::set_app_meta(&conn, K_SCRYFALL_PENALTY_UNTIL, &until.to_string());
@@ -1077,7 +1087,7 @@ async fn do_sync(
         // server lying about sizes, a rotated file, a dead connection — must not leave
         // a partial behind that every future resume then argues with.
         if !matches!(e, scryfall::ScryfallError::SizeMismatch { .. }) {
-            let _ = std::fs::remove_file(&gz);
+            scryfall::discard_partial(&gz);
         }
         return Err(e.to_string());
     }
@@ -1103,14 +1113,14 @@ async fn do_sync(
         // no more use here than after any other ingest failure, and the module's rule is
         // that only a resumable partial survives a failed run.
         Err(e) => {
-            let _ = std::fs::remove_file(&gz);
+            scryfall::discard_partial(&gz);
             return Err(format!("ingest task failed: {e}"));
         }
         Ok(Err(e)) => {
             // The file is the right size but its contents are unusable (or the database
             // refused it). Either way this exact file will not ingest next time either,
             // and a resume would only re-verify a file that is already complete.
-            let _ = std::fs::remove_file(&gz);
+            scryfall::discard_partial(&gz);
             return Err(e.to_string());
         }
     };
@@ -1140,10 +1150,14 @@ async fn do_sync(
     // it: a clear on a failed ingest with nothing scheduled leaves the app cold for the rest
     // of the session. Named rather than fixed.
     crate::index::lifecycle::clear(state);
+    // And the mirror is owed a pass for the same reason, told here rather than at the end of
+    // the run so that a failure between here and there — `/sets` is the one that reaches the
+    // network again — cannot leave the mirrored prices a corpus behind for good.
+    note_mirror_after_swap(state);
 
     // Only now the unlink. 77 MB of blocking I/O, and until this line moved above it, it sat
     // inside the window the paragraph above is about.
-    let _ = std::fs::remove_file(&gz);
+    scryfall::discard_partial(&gz);
 
     reclaim_freed_pages(state, app).await;
 
@@ -1303,6 +1317,21 @@ mod tests {
 
     fn db() -> Connection {
         crate::schema::memory_pair()
+    }
+
+    /// **A corpus with no card in it is a first run**, which is what holds the optional feeds
+    /// back until the card download is over (issue #551); one card is not.
+    #[test]
+    fn a_corpus_with_no_cards_is_a_first_run() {
+        let conn = db();
+        assert!(!has_cards(&conn));
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
+             VALUES ('c1', 'Card', 'set', '1', 'en', 'normal', '{}')",
+            [],
+        )
+        .unwrap();
+        assert!(has_cards(&conn));
     }
 
     /// A real file with both connections on it — the shape `init_state` builds — because

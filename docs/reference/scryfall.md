@@ -24,6 +24,21 @@ collection`, **10 s** for `/cards/manifest`, **100 ms** for everything else — 
   repeat offenders are banned — so restarting must not be a way back in.
 - **Retry is for what is nobody's answer**: 5xx, timeouts, connect failures, 3 attempts,
   exponential backoff with jitter. **Never a 429** (the docs forbid exactly that) and never a 404.
+- **Every caller of the API writes the lockout down, and until 2026-09-28 only the sync did**
+  ([issue #551](https://github.com/Msgaihede/mtg-grimoire/issues/551)). The tag checks go through
+  the same client, so a 429 on `/bulk-data/oracle_tags` locked the application out — and a restart
+  forgot it, because only `run_sync` called `persist_penalty`. `tags::refresh` now persists it
+  whenever its run moved the deadline;
+  `tags::oracle::tests::a_429_on_the_tag_check_is_written_down_for_the_next_launch` is the fence.
+- **A resume continues only the file it began as.** The partial's name is fixed per dataset
+  (`tmp/default-cards.jsonl.gz`) and the resume decision was made on its length alone, so a restart
+  after Scryfall rotated the bulk file sent a `Range` for the *new* URI and appended it to the *old*
+  partial — a file of the right length that failed the ingest on a deflate or CRC error after the
+  whole download was paid for. `Client::download` records the URI in `<dest>.origin` when it starts
+  from byte zero (after the truncation is durable, so no crash can leave a record over another
+  file's bytes) and resumes only when the record matches. A partial with no record reads as a
+  mismatch: one download to discard a file of unknown provenance, against an ingest failure to keep
+  it. The record goes when the file is whole, and `discard_partial` takes it with the file.
 - **Bulk data is already the only card source, and that is the compliance story.**
   `default_cards` JSONL.gz feeds the 116 k corpus; there is no per-card API lookup anywhere.
   **Two more bulk datasets joined it**, both from Scryfall Tagger:
