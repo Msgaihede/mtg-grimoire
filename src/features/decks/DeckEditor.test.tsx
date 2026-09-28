@@ -3679,12 +3679,12 @@ describe("DeckEditor", () => {
       // sticky header the same number — as a length, because an unitless custom property makes
       // `top` invalid and drops the pinning without a word.
       const dock = screen.getByRole("region", { name: "Add cards" }).parentElement!;
-      expect(dock.style.top).toBe("66px");
+      expect(dock.style.top).toBe("41px");
       expect((dock.previousElementSibling as HTMLElement).style.getPropertyValue("--sticky-top")).toBe(
-        "66px",
+        "41px",
       );
       // And a caret scrolled to is parked below the bar rather than under it.
-      expect(screen.getByTestId("page").style.scrollPaddingTop).toBe("66px");
+      expect(screen.getByTestId("page").style.scrollPaddingTop).toBe("41px");
     });
 
     // Three cases rather than one walk through the bar, and one keystroke rather than a word: every

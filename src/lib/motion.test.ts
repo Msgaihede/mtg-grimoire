@@ -22,7 +22,7 @@ const SLOWEST = seconds(DURATION.slow);
 /**
  * Every `duration` reachable from a preset, with the path that got there.
  *
- * A deep walk over the **module namespace** rather than a hand-written list of the seven
+ * A deep walk over the **module namespace** rather than a hand-written list of the
  * presets, because the list is the thing that rots: a preset added next month is covered by
  * this the day it is exported, and a hand-written list is green about the six it still knows.
  * Functions are stepped over — `statusLineGap` is called explicitly below, and `seconds`,
@@ -46,8 +46,8 @@ describe("the motion scale", () => {
   /**
    * A tripwire before the two assertions below, both of which are vacuously green over an empty
    * list — a renamed export, a preset that stopped carrying its own `transition`, or a walk that
-   * stopped descending would all leave them passing while checking nothing. Seven presets carry
-   * at least a dozen durations between them; ten is a floor only a broken walk falls through.
+   * stopped descending would all leave them passing while checking nothing. The presets carry
+   * well over a dozen durations between them; ten is a floor only a broken walk falls through.
    */
   it("finds the durations the presets are built from", () => {
     expect(FOUND.length, FOUND.map(([p]) => p).join(", ")).toBeGreaterThan(10);
