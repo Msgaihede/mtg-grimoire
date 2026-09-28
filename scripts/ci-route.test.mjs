@@ -140,6 +140,7 @@ describe("the arms", () => {
     [".github/actions/rust-toolchain/action.yml", T, T, F, F],
     [".github/workflows/release.yml", T, F, F, F],
     [".github/workflows/scanner-bundle.yml", T, F, F, F],
+    [".github/dependabot.yml", T, F, F, F],
     [".nvmrc", T, F, F, T],
     ["src/lib/core/index.ts", T, F, F, T],
     ["docs/reference/ci-and-releases.md", F, F, F, F],

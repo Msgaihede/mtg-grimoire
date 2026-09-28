@@ -18,6 +18,11 @@ concurrency:
 permissions:
   contents: read
 
+# **Every third-party action is pinned by commit SHA, the tag it was on in the comment**, and every
+# checkout says `persist-credentials: false` — nothing here runs `git` against the remote after
+# checking out (`changes` diffs history it already fetched), so the token has no reason to stay in
+# `.git/config` for later steps to read. `release.yml` says why both matter; Dependabot keeps the
+# SHAs current and `scripts/actions-pinned.test.mjs` fails on a floating tag or a kept token.
 jobs:
   # Which jobs this change can possibly have broken. The decision is `scripts/ci-route.mjs`,
   # where every arm carries its reason; this job only finds the changed paths and hands them
@@ -41,14 +46,15 @@ jobs:
     steps:
       # The classification is a diff against the base, so this needs history, not a
       # depth-1 checkout. 188 commits of text — the full fetch costs a second or two.
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
 
       # The router is a dependency-free Node script, so no `npm ci` — only a pinned Node, because
       # whatever the runner image ships is not a contract. `.nvmrc` is that pin for every job and
       # workflow here, and for a contributor's machine.
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
 
@@ -131,9 +137,11 @@ jobs:
           - part: vitest 4/4
             shard: 4/4
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -172,9 +180,11 @@ jobs:
     if: needs.changes.outputs.storybook == 'true'
     runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -194,7 +204,9 @@ jobs:
       matrix:
         os: [windows-latest, ubuntu-22.04]
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Install Linux system dependencies
         if: matrix.os == 'ubuntu-22.04'
@@ -225,7 +237,7 @@ jobs:
       # `rust-toolchain.toml`'s pin, never `stable` — see that file.
       - uses: ./.github/actions/rust-toolchain
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: src-tauri
 
@@ -284,7 +296,9 @@ jobs:
     # would be a different and failing one.
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # No `npm ci`, no cargo, no toolchain setup: the test sets its own `MTG_LOCK_DIR`
       # (so it never touches the real lock directory or needs a git repo to find one) and

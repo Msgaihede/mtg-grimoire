@@ -7,7 +7,6 @@ import { languageCode } from "@/lib/languages";
 import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
-import { pickDecklist } from "../files";
 import type { ImportDestination } from "./destination";
 import { parseDecklist } from "./parse";
 import { PRIMARY } from "./shared/CommitBar";
@@ -189,10 +188,6 @@ function ImportBody({
 
   const [text, setText] = useState("");
   const [step, setStep] = useState<Step>("source");
-  /** The picker itself could not be opened, which is a different failure from a file the
-   *  backend could not read — and it belongs beside the button rather than in the footer. */
-  const [pickerFailure, setPickerFailure] = useState<string | null>(null);
-  const [picking, setPicking] = useState(false);
   /**
    * How the text in the box was read, while it is still the text a file read put there — `null`
    * from the first keystroke or paste on, because from then on it is the reader's text and a
@@ -235,37 +230,29 @@ function ImportBody({
     resolve.mutate(lines, { onSuccess: () => setStep("preview") });
   };
 
-  const choose = async () => {
-    setPickerFailure(null);
-    readFile.reset();
-    setPicking(true);
-    try {
-      // `dialog:allow-open` answers a *path* and `import_read_file` opens it in Rust, which is
-      // why no `fs:` permission is needed here — `../files` is where both halves live.
-      const path = await pickDecklist();
-      // A cancelled picker is not a failure — it is the most ordinary way to use a file dialog
-      // after changing your mind.
-      if (path !== null) {
-        readFile.mutate(path, {
-          onSuccess: (file) => {
-            setText(file.text);
-            setReadAs(file.encoding);
-          },
-        });
-      }
-    } catch (e) {
-      setPickerFailure(ipcError(e));
-    } finally {
-      setPicking(false);
-    }
+  const choose = () => {
+    // One command is the picker and the read (`import_pick_file`, via `../files`): Rust opens the
+    // dialog and the file, so no path ever reaches the page and none could be sent back to it
+    // (issue #545).
+    readFile.mutate(undefined, {
+      onSuccess: (file) => {
+        // A cancelled picker is not a failure — it is the most ordinary way to use a file dialog
+        // after changing your mind — and it leaves the box, and how its text was read, alone.
+        if (file === null) return;
+        setText(file.text);
+        setReadAs(file.encoding);
+      },
+    });
   };
 
-  const fileFailure =
-    pickerFailure !== null
-      ? `Could not open the file picker — ${pickerFailure}`
-      : readFile.isError
-        ? `Could not read that file — ${ipcError(readFile.error)}`
-        : null;
+  /** **One frame, true of both failures, and the backend's sentence says which it was** — "The
+   *  file picker could not be opened — …" or `import.rs`'s own about the file. The picker and the
+   *  read used to be two calls so the page could frame each; a frame naming either one would put
+   *  "that file is over 1 MB" behind a broken picker or the reverse, which is what the two calls
+   *  were for. */
+  const fileFailure = readFile.isError
+    ? `Could not read a decklist from a file — ${ipcError(readFile.error)}`
+    : null;
 
   const resolved = resolve.data ?? null;
 
@@ -320,11 +307,12 @@ function ImportBody({
             </label>
             <button
               type="button"
-              onClick={() => void choose()}
+              onClick={choose}
               // Both halves of the round trip — the picker being up and the file being
-              // read — because a second press does nothing useful in either. The label
-              // does not change: an action keeps its name through the whole flow.
-              disabled={picking || readFile.isPending}
+              // read, which are one command's wait now — because a second press does nothing
+              // useful in either. The label does not change: an action keeps its name through
+              // the whole flow.
+              disabled={readFile.isPending}
               className={cn(
                 "rounded-md border border-border px-2 py-0.5 text-[0.6875rem] text-dim",
                 "transition-colors duration-[var(--duration-fast)] ease-standard",

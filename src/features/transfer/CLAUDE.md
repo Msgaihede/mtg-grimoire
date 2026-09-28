@@ -14,20 +14,30 @@ the seven writers, the field registry. What it asks the backend for is `import_r
 three commits; the two *file handles* are the rest, and they live in `files.ts`. `ImportDialog`
 and `ExportDialog` call it and know nothing about how a file is picked or written.
 
-- **A picker answers a _name_ and Rust does the I/O.** `pickDecklist` answers the path
-  `tauri-plugin-dialog`'s `open()` chose, `readDecklist` hands it to `import_read_file`, and
-  `saveExport` asks `save()` for a path and hands it to `export_write_file`. No `fs:` permission
-  is granted anywhere, on purpose — a page that read or wrote the bytes itself would need one.
-- **Picking and reading stay two steps**, because the two failures are two sentences the reader
-  can act on — a picker that would not open, and a file that would not read. Collapsed into one
-  call, "that file is over 1 MB" arrives worded as a broken picker.
+- **Rust opens the dialog and does the I/O, and no path reaches the page** (issue #545,
+  2026-09-28). `chooseDecklist` is one command, `import_pick_file`, which shows the open dialog and
+  answers the chosen file's text (or `null` for Cancel); `saveExport` is `export_save_file`, which
+  shows the save dialog with the suggested name and answers whether it wrote. The page is granted
+  **no `dialog:` and no `fs:` permission** — and the page is no longer trusted to have asked the
+  reader: until that date each handle was the plugin's `open()`/`save()` answering a path here and
+  `import_read_file(path)`/`export_write_file(path, contents)` acting on it, which any script in
+  the page could call with any path. [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md)'s
+  capabilities section has the rule a new file command follows. The dialog's title, filter and
+  `DECKLIST_EXTENSIONS` are `import.rs`'s now, because the dialog is.
+- **The picker failing and the file failing are still two sentences**, because the reader can act
+  on each — a picker that would not open, and a file that would not read. They used to be kept
+  apart by making picking and reading two calls; they are one command now, so **the backend's
+  rejection says which** ("The file picker could not be opened — …" against `import.rs`'s "That
+  file could not be opened — …" or its 1 MB refusal), and `ImportDialog` frames either as "Could
+  not read a decklist from a file — …", which is true of both. A frame naming one stage would put
+  "that file is over 1 MB" behind a broken picker, or the reverse.
 - **The 1 MB cap is `import.rs`'s `MAX_IMPORT_BYTES`**, the same constant the paste path uses, so
   the two cannot disagree about how long a decklist may be.
 - **A file is never decoded lossily, and the read says how it was decoded** (issue #555). A
   byte-order mark is honoured (UTF-8, UTF-16 LE/BE), valid UTF-8 is read as such, and anything
   else is **Windows-1252** — Excel's CSV on a Western European Windows — through a hand-written
   32-entry table rather than `from_utf8_lossy`, which turned every `é` in such a file into
-  `U+FFFD`. `readDecklist` answers `{ text, encoding }` and the dialog draws
+  `U+FFFD`. `chooseDecklist` answers `{ text, encoding }` and the dialog draws
   `LEGACY_ENCODING_NOTICE` under the text box for `windows-1252`, because a file in some *other*
   legacy code page reads as mojibake under that guess and the reader is the only one who can tell.
 
@@ -314,8 +324,9 @@ Pathway` is one card and there are seven such names in the reference list alone,
   import changes: `deck_import_commit` grew no refusal and needed none, since its `replace` arm's
   `release_live_copies` walks an empty set on a deck with no group.
 - **The _native_ file picker's own half is unverified**, for the reason `deck_set_cover_image`'s
-  is: `dialog:allow-open` opens a native window CDP cannot reach. Path → text → preview is
-  tested; click → path is not.
+  was: the open dialog is a native window CDP cannot reach, and since 2026-09-28 Rust opens it
+  (`import_pick_file`). The read after it (`read_import_file`, over real files) and text →
+  preview are tested; click → chosen file is not.
 - **Driven in the shipped window 2026-08-12** (`npm run tauri dev`, a **debug** build): the
   gallery path end to end put **105 of 105** reference-list lines and all **117 copies** into a
   new deck, `import_resolve` cost **120.4 ms** and `deck_import_commit` **7.9 ms** through
@@ -651,12 +662,13 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   _reader_ empties arrives here as an empty array and needs no arm of its own**, since #390: the
   box's filter runs above `formatExport`, so a switched-off pile exported with the box unticked is
   a caller handing this function nothing, which it already had an answer for.
-- **Rust writes the file, and that is a permission decision rather than a division of labour.**
-  `save()` answers a _path_; writing bytes at it from the page would need an `fs:` permission this
-  app grants nowhere, so `export_write_file` takes the path and the text — the same shape
-  `deck_set_cover_image` has, for the same reason.
-  [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md) has both. `files.ts`'s `saveExport` makes
-  both calls, and this dialog hands it a name and the text and nothing else.
+- **Rust opens the save dialog and writes the file, and that is a permission decision rather than a
+  division of labour.** Writing bytes from the page would need an `fs:` permission this app grants
+  nowhere, and letting the page name the path would make the write command a write anywhere — so
+  `export_save_file` takes a *suggested name* and the text, opens the dialog itself and writes at
+  what it answered (issue #545; it was `export_write_file(path, contents)` until 2026-09-28).
+  [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md) has the rule. `files.ts`'s `saveExport` is
+  that one call, and this dialog hands it a name and the text and nothing else.
 - **The preview opens shut** (2026-08-18), which is `DeckSearchPanel`'s collapsed default one rung
   down: a decklist is the tallest thing this dialog draws and the least of what a reader came for,
   and the two presses that do the work are Copy and Save as…. Shut, the dialog is the format row,
@@ -677,9 +689,10 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   which still holds the last text copied — so the format radios clear it on every press. And the
   clipboard write can itself be refused, because it is a real Tauri plugin command rather than a
   browser API, so it reports through the same `role="alert"` line a refused save uses.
-- **The _native_ picker's own half is unverifiable**, exactly as the importer's `open` is:
-  `dialog:allow-save` opens a native window CDP cannot reach and no test or browser can drive.
-  Path → written file is covered; click → path is not.
+- **The _native_ picker's own half is unverifiable**, exactly as the importer's is: the save
+  dialog is a native window, opened by Rust, that CDP cannot reach and no test or browser can
+  drive. The write (`write_export`, over real files) and the suggested name's trimming
+  (`suggested_name`) are covered; click → chosen path is not.
 
 ## The golden fence, and the second writer in Rust
 

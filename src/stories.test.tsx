@@ -54,14 +54,14 @@ vi.mock("@tauri-apps/api/event", () => import("../.storybook/fake/event"));
 vi.mock("@tauri-apps/api/window", () => import("../.storybook/fake/window"));
 
 /**
- * The three Tauri **plugin** wrappers, re-pointed at the same fake — because **the two mocks
+ * The two Tauri **plugin** wrappers, re-pointed at the same fake — because **the two mocks
  * above do not reach inside `node_modules`.**
  *
- * `@tauri-apps/plugin-dialog`, `-clipboard-manager` and `-opener` are thin wrappers that each
- * import `invoke` from `@tauri-apps/api/core` *within their own package*. Vitest externalizes
+ * `@tauri-apps/plugin-clipboard-manager` and `-opener` are thin wrappers that each import
+ * `invoke` from `@tauri-apps/api/core` *within their own package*. Vitest externalizes
  * dependency ESM by default and `vite.config.ts` sets no `server.deps.inline`, so an externalized
  * package's own imports are never rewritten: `vi.mock` matches the specifier as this file's graph
- * resolves it, and the copy of `@tauri-apps/api/core` those three see is the **real** one. Its
+ * resolves it, and the copy of `@tauri-apps/api/core` those two see is the **real** one. Its
  * `invoke` reads `window.__TAURI_INTERNALS__`, which jsdom does not have.
  *
  * **Measured 2026-08-14, which is the only reason this paragraph is not a guess.** With the two
@@ -73,10 +73,10 @@ vi.mock("@tauri-apps/api/window", () => import("../.storybook/fake/window"));
  * So it belongs here, once, for every story.
  *
  * **Which suites those are is deliberately not listed.** It was, and the roster was wrong twice
- * over — it named three deck suites that stopped mocking the plugin when custom covers were
+ * over — it named three deck suites that stopped mocking the dialog plugin when custom covers were
  * removed on 2026-08-31, and it had never mentioned three others that always did.
- * `grep -rln 'vi.mock("@tauri-apps/plugin-dialog"' src/` is the question, and it answers about
- * the tree in front of you rather than the one somebody last edited this comment on.
+ * `grep -rln 'vi.mock("@tauri-apps/plugin-' src/` is the question, and it answers about the tree
+ * in front of you rather than the one somebody last edited this comment on.
  *
  * **Each stands in for the wrapper and not for the answer**, which is the whole point: the
  * command name and the argument names below are copied from the packages' own `dist-js` and the
@@ -84,18 +84,12 @@ vi.mock("@tauri-apps/api/window", () => import("../.storybook/fake/window"));
  * dispatch the Storybook browser does rather than a second, agreeing stub. That is `main.ts`'s
  * alias reasoning one layer out.
  *
- * `plugin:dialog|open` is deliberately answered by nothing, so it rejects with "No fake handler
- * registered" — the file *picker* opens a native window CDP cannot drive, and inventing a path
- * for it would invent the decklist behind it. `save` is the one that answers, and
- * `.storybook/CLAUDE.md` carries why the two differ.
+ * **`@tauri-apps/plugin-dialog` was the third, and it is not a dependency any more** (issue #545):
+ * every file dialog is opened by Rust, so the page's picker and save presses are this app's own
+ * commands — `import_pick_file`, `export_save_file`, `mirror_pick_root` — and reach the fake
+ * through the core mock above like every other command. `.storybook/CLAUDE.md` carries why the
+ * fake refuses the first and third and answers the second.
  */
-vi.mock("@tauri-apps/plugin-dialog", async () => {
-  const { invoke } = await import("../.storybook/fake/core");
-  return {
-    open: (options: unknown = {}) => invoke("plugin:dialog|open", { options }),
-    save: (options: unknown = {}) => invoke("plugin:dialog|save", { options }),
-  };
-});
 vi.mock("@tauri-apps/plugin-clipboard-manager", async () => {
   const { invoke } = await import("../.storybook/fake/core");
   return {

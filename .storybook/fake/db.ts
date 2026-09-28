@@ -1375,7 +1375,7 @@ export interface FakeUpdate {
  * columns would null them for every other story on the page. The taxonomy has no such
  * constraint — `oracle_tag_cards` is built per seed.
  *
- * **`exportWriteError`** is the disk at the other end of a save dialog: `export_write_file`
+ * **`exportWriteError`** is the disk at the other end of a save dialog: `export_save_file`
  * refuses, in `export.rs`' own words. The reader picked a path the process cannot write —
  * a read-only stick, a directory that has since gone — and **the dialog stays open with the
  * text still in it**, which is the whole of what that refusal has to show: an export the app
@@ -8866,14 +8866,23 @@ const IMPORT_REPLACE = IMPORT_MODES[1];
 const NOTHING_TO_IMPORT = "There is nothing to import.";
 
 /**
- * What {@link readHandlers}'s `import_read_file` says instead of inventing a decklist.
+ * What {@link readHandlers}'s `import_pick_file` says instead of inventing a decklist.
  *
- * **Not a Rust sentence, and the only handler in this file that has none.** The real command
- * takes a path the OS file picker answered, and there is no picker in a browser — so a fake
- * that returned text would be a story about a gesture no reader of that story can make. The
- * dialog's file arm is the live pass's to prove; a story that wants a decklist pastes one.
+ * **`file_dialog::did_not_open`'s own sentence, with the one tail no build of the crate writes.**
+ * The real command opens the OS file picker from Rust (issue #545) and there is no picker in a
+ * browser — so a fake that returned text would be a story about a gesture no reader of that
+ * story can make, and one that answered `null` would be a Cancel nobody pressed. What is left is
+ * the branch the crate really has for a picker that could not be shown, which the dialog frames
+ * like any other refusal. The dialog's file arm is the live pass's to prove; a story that wants
+ * a decklist pastes one.
  */
-const NO_FILE_PICKER = "No file picker in Storybook.";
+const NO_FILE_PICKER = "The file picker could not be opened — there is none in Storybook.";
+/**
+ * What {@link writeHandlers}' `mirror_pick_root` says, for {@link NO_FILE_PICKER}'s reason one
+ * picker over: the folder is the Backup panel's whole subject, so inventing one would be
+ * inventing the answer the panel exists to show.
+ */
+const NO_FOLDER_PICKER = "The folder picker could not be opened — there is none in Storybook.";
 
 /**
  * `import::fold_name`'s table, transcribed — every character it maps and no other.
@@ -11393,20 +11402,22 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `import::read_import_file`, which **throws here and always will**.
+     * `import::import_pick_file`, which **refuses here and always will** — as the picker, never
+     * as the file.
      *
-     * The real command takes a path `@tauri-apps/plugin-dialog`'s `open()` answered — a native
-     * window CDP cannot drive and a browser does not have. So there is no gesture in a story
-     * that reaches this, and a handler that invented a decklist would be a story about a thing
-     * that cannot happen: the file arm's refusal would be the only branch anyone ever saw, and
-     * it would be the wrong one. A story that wants a list pastes one, which is the same string
-     * travelling the same path from one line later.
+     * The real command opens the OS file picker from Rust and reads what it answered (issue
+     * #545) — a native window CDP cannot drive and a browser does not have. So there is no
+     * gesture in a story that reaches a file, and a handler that invented a decklist would be a
+     * story about a thing that cannot happen. What a press on Choose file… does reach is the
+     * crate's other branch, a picker that could not be shown — {@link NO_FILE_PICKER} — which is
+     * a real sentence the dialog has to draw. A story that wants a list pastes one, which is the
+     * same string travelling the same path from one line later.
      *
-     * **Typed `ImportFile` since issue #555** — the text and the encoding its bytes were read in
-     * — and still answering neither: the new field is about bytes on a disk, and there is no disk
-     * behind a story to have any.
+     * **Typed `ImportFile | null` since issue #545** — the text and the encoding its bytes were
+     * read in, or `null` for Cancel — and answering neither: there is no disk behind a story to
+     * have any bytes, and no reader behind the picker to cancel it.
      */
-    import_read_file: (): ImportFile => {
+    import_pick_file: (): ImportFile | null => {
       throw refuse(NO_FILE_PICKER);
     },
 
@@ -13357,6 +13368,9 @@ const CARD_NOTES_UNREADABLE = "the notes for this card could not be read: databa
  * than an invented one.
  */
 const exportDenied = (path: string) => `could not write ${path}: Access is denied. (os error 5)`;
+/** Where a story's save dialog pretends the reader put a file — `SYNC_DATA_DIR`'s drive, since
+ *  both are the same invented machine. */
+const SAVE_DIR = "D:\\Storybook\\";
 /**
  * `mirror::settings::DEFAULT_ROOT_NAME` under this invented machine's data folder.
  *
@@ -13365,20 +13379,6 @@ const exportDenied = (path: string) => `could not write ${path}: Access is denie
  * instead of being left behind on a machine the reader has stopped using.
  */
 const MIRROR_DEFAULT_ROOT = `${SYNC_DATA_DIR}\\export`;
-/**
- * `mirror::settings::set_root`'s first refusal, verbatim.
- *
- * The one of that function's three checks this fake can make. The other two — a parent that does
- * not exist, and a path that is already a file — are questions about a disk, and there is no
- * disk here; inventing an answer to them would be inventing the folder tree the whole feature is
- * about. This one is a property of the *string*, which is exactly why the crate checks it first:
- * a relative root resolves against wherever the app was started from, which for a portable
- * install is a different folder on Tuesday than on Monday.
- */
-const mirrorRootNotAbsolute = (path: string) =>
-  `"${path}" is not an absolute path. The mirror needs a full path — a drive letter or a ` +
-  `share — because a relative one is resolved against wherever the app was started from, ` +
-  `which is not the same folder twice.`;
 /**
  * What a pass says when the root has gone — the `mirrorRootUnwritable` fault's one sentence.
  *
@@ -19983,31 +19983,25 @@ export function writeHandlers(db: FakeDb) {
       const target = deckCardAt(db, args.deckId, args.toCardId, category.id, variant, finish);
       let landed: number;
       if (target) {
+        // The fold: the surviving row keeps its own label and takes the moved row's only where
+        // it has none — a label falls off when the reader removes it, never because the art
+        // changed (issue #643).
         target.quantity += quantity;
+        target.labelId ??= row.labelId;
         landed = target.quantity;
+        db.deckCards = db.deckCards.filter((dc) => dc !== row);
       } else {
-        // `add_card`'s insert, which means a **new row** — and then the old one is deleted.
-        // Same reason `move_card` above pushes rather than mutating: the rowid is what
-        // {@link takeFromDeckList} takes in.
-        db.deckCards.push({
-          id: nextId(db.deckCards),
-          deckId: args.deckId,
-          categoryId: category.id,
-          variant,
-          cardId: args.toCardId,
-          // `add_card`'s insert names no `label_id`, so the copies land unlabelled.
-          labelId: null,
-          quantity,
-          name: to.name,
-          setCode: to.setCode,
-          collectorNumber: to.collectorNumber,
-          lang: to.lang,
-          finish,
-          needsReview: null,
-        });
+        // The crate rewrites the row **in place**, so its id, its label and everything else the
+        // reader attached to it stay; only the printing changes. It was a new row plus a delete,
+        // and the new row landed unlabelled (issue #643).
+        row.cardId = args.toCardId;
+        row.name = to.name;
+        row.setCode = to.setCode;
+        row.collectorNumber = to.collectorNumber;
+        row.lang = to.lang;
+        row.needsReview = null;
         landed = quantity;
       }
-      db.deckCards = db.deckCards.filter((dc) => dc !== row);
       deck.updatedAt = stamp(db);
       // §2.2's sweep, after the rewrite rather than a targeted release before it: a swap can
       // *fold* into a line the deck already has, and reading the finished list against the
@@ -20024,7 +20018,8 @@ export function writeHandlers(db: FakeDb) {
      * `deck_swap_printing` one axis over, so it answers the same `SwapResult` and **folds** the
      * same way: setting a row to a finish the pile already holds adds the quantities and takes
      * the row that moved away, and the surviving row keeps its own id, its label and its sentence
-     * (`add_card`'s rule — the row that was already there is the one the reader labelled).
+     * (`add_card`'s rule — the row that was already there is the one the reader labelled) —
+     * taking the moved row's label only where it has none of its own (issue #643).
      *
      * Three refusals, and the second is the one worth having in the fake: the target finish is
      * checked against `cards.finishes`, so a story that points this at a printing sold only in
@@ -20061,6 +20056,8 @@ export function writeHandlers(db: FakeDb) {
       let result: SwapResult;
       if (target) {
         target.quantity += row.quantity;
+        // The survivor's own label stands; an unlabelled one takes the moved row's (issue #643).
+        target.labelId ??= row.labelId;
         db.deckCards = db.deckCards.filter((dc) => dc !== row);
         result = { folded: true, quantity: target.quantity };
       } else {
@@ -22660,7 +22657,21 @@ export function writeHandlers(db: FakeDb) {
     update_open_release_page: (): void => undefined,
 
     /**
-     * `export::export_write_file` — the decklist text, at the path the reader named.
+     * `export::export_save_file` — the OS save dialog and the write, which the crate does both of
+     * (issue #545): the decklist text, at a path the reader chose under the name the page
+     * suggested.
+     *
+     * **This handler stands in for the dialog's answer, and that is not the same decision as
+     * {@link import_pick_file} refusing.** Both stand in for a native window CDP cannot drive.
+     * The difference is what would be invented: a picked decklist would be the entire subject of
+     * the screen it feeds, so a story built on one would be a story about a thing that cannot
+     * happen. All this dialog produces is **a place to put text the reader is already looking
+     * at**, so a fixed folder ({@link SAVE_DIR}) under the suggested name invents nothing about
+     * the export and makes the one refusal that matters (`exportWriteError`) name a plausible
+     * file. The name is cut to its last component, `export::suggested_name`'s rule, so switching
+     * format really does change the file a refusal names, exactly as it does in the window.
+     * **Cancel (`false`) is deliberately not reachable from a story**: it draws nothing, and a
+     * fake that answered it would make every save story a story about Cancel.
      *
      * **It takes no `AppState` in the crate and honours no `busy` here, and that is a fidelity
      * point rather than an omission.** Every other write in this table opens with
@@ -22668,18 +22679,19 @@ export function writeHandlers(db: FakeDb) {
      * so a sync running underneath it cannot refuse it. A story that seeded `busy` to watch an
      * export fail would be watching a refusal the app cannot produce.
      *
-     * **Nothing is stored, for {@link import_read_file}'s reason turned around.** There is
-     * no disk here and no table this belongs in — the fake stores `cards` and the user's rows,
-     * and an export is neither — so what a story can observe is exactly what the app can: that
-     * the write was accepted, or the sentence it was refused with. `ExportDialog` draws no
-     * confirmation on success by design, so "no `role="alert"` appeared" is the whole of the
-     * happy path and is the right amount.
+     * **Nothing is stored.** There is no disk here and no table this belongs in — the fake stores
+     * `cards` and the user's rows, and an export is neither — so what a story can observe is
+     * exactly what the app can: that the save was accepted, or the sentence it was refused with.
+     * `ExportDialog` draws no confirmation on success by design, so "no `role="alert"` appeared"
+     * is the whole of the happy path and is the right amount.
      *
      * The `exportWriteError` fault is the other branch, and the dialog stays open on it holding
      * the text — a refused save must not cost the reader something they can still copy.
      */
-    export_write_file: (args: { path: string; contents: string }): void => {
-      if (db.fault === "exportWriteError") throw refuse(exportDenied(args.path));
+    export_save_file: (args: { fileName: string; contents: string }): boolean => {
+      const name = args.fileName.split(/[\\/]/).pop()?.trim() || "export.txt";
+      if (db.fault === "exportWriteError") throw refuse(exportDenied(`${SAVE_DIR}${name}`));
+      return true;
     },
 
     /**
@@ -22701,26 +22713,22 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `mirror::settings::mirror_set_root` — point the mirror at a folder.
+     * `mirror::settings::mirror_pick_root` — the folder picker and the save, which the crate does
+     * both of (issue #545) — and which **refuses here as the picker, always**, with
+     * {@link NO_FOLDER_PICKER}.
      *
-     * One of the crate's three refusals is reachable from here and the other two are not; see
-     * {@link mirrorRootNotAbsolute} for which and why. **The one that is reachable is the one
-     * worth having**, because `mirror_status` discards a bad root *silently*: without this
-     * check a relative path would look like it saved and then read back as `data/export`
-     * forever, with the reader watching a folder nothing is ever written to.
+     * **Not refusable by `busy`, and it is on the `unlocked` list in `db.test.ts` for it**: the
+     * crate opens the picker *before* it asks for the write connection, and there is no picker
+     * here to get past, so a story in the `busy` world would be watching a refusal this command
+     * never reaches. The panel's Change folder… is the one control on it that cannot work in a
+     * browser, and that is what `BackupPanel.stories.tsx`'s `PickerUnavailable` shows.
      *
-     * **The old folder is left alone**, exactly as the crate leaves it: those files are the
-     * reader's cards in plain text, and changing a setting is not consent to delete them. There
-     * is nothing to clean up here anyway — but a fake that *did* clear something would teach a
-     * reader a model the app does not have, which is this file's whole rule.
-     *
-     * The new root is stored **verbatim**, {@link FakeDb.marketplace}'s shape: what the reader
-     * chose, not what this build would narrow it to.
+     * It used to be `mirror_set_root(root)`, which this fake answered by validating the path and
+     * storing it; with no path to take there is nothing left of that to model. A story that wants
+     * the mirror somewhere else sets `db.mirror.root` on the world, as `mirrorRoot`'s tests do.
      */
-    mirror_set_root: (args: { root: string }): void => {
-      refuseIfBusy(db);
-      if (!isAbsolutePath(args.root)) throw refuse(mirrorRootNotAbsolute(args.root));
-      db.mirror.root = args.root;
+    mirror_pick_root: (): boolean => {
+      throw refuse(NO_FOLDER_PICKER);
     },
 
     /**
@@ -23179,9 +23187,11 @@ export function writeHandlers(db: FakeDb) {
      *
      * **All five `share_*` commands are in `writeHandlers`, and two of them are reads.** That is
      * `sync_relay_status`' call one feature over and it is the crate's own words rather than an
-     * inference: every one of the five goes through `on_the_write_connection`, so a running sync
-     * really does refuse them. Which table a handler sits in here is a fact about the *lock*,
-     * never about whether the command sounds like a read.
+     * inference: four of the five go through `on_the_write_connection`, so a running sync really
+     * does refuse them. Which table a handler sits in here is a fact about the *lock*, never
+     * about whether the command sounds like a read. **`share_open` is the fifth and the
+     * exception since 2026-09-28** (issue #545): it holds no connection while it fetches, so it
+     * answers through a sync — see its own doc below.
      *
      * **It reconciles first when it can and answers the cache either way**, which is the whole
      * point of `collection_shares` being a cache: a device with no membership makes no request at
@@ -23305,9 +23315,12 @@ export function writeHandlers(db: FakeDb) {
      *
      * **No membership and no token** (spec §9): viewing is open to everyone and the link is the
      * whole of the capability, so this is the one command here that never asks
-     * {@link refuseIfNotSharing}. It is still in `writeHandlers` because the crate still takes
-     * the write connection for it — `publish::open` records a failure in `error_log` like every
-     * other network path in that module.
+     * {@link refuseIfNotSharing}. **And it never answers BUSY, since 2026-09-28** (issue #545):
+     * the crate used to fetch inside `sync::with_write` only so a failure could reach
+     * `error_log`, which let a host that trickled one byte a minute hold the only write
+     * connection indefinitely. It fetches with no connection held now and writes the failure
+     * note afterwards, best effort — so this handler skips {@link refuseIfBusy} and sits in the
+     * busy sweep's `unlocked` list. It stays in `writeHandlers` because the note is a write.
      *
      * ⚠️ **It answers a `ShareSnapshot` where `ipc.shareOpen` declares `unknown`, and that is not
      * a mismatch.** The crate answers `serde_json::Value` on purpose — spec §10 wants a document
@@ -23317,7 +23330,6 @@ export function writeHandlers(db: FakeDb) {
      * a story still goes through the same parse the app does.
      */
     share_open: (args: { url: string }): ShareSnapshot => {
-      refuseIfBusy(db);
       const id = shareIdIn(args.url);
       // Before any request, exactly as the crate refuses it: this is the shape check, and it is
       // the refusal a reader produces by pasting the wrong thing.
@@ -23472,7 +23484,8 @@ function shareIdIn(url: string): string | null {
   } catch {
     return null;
   }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+  // `https:` alone, as the crate's `publish::open` refuses plain `http:` since 2026-09-28.
+  if (parsed.protocol !== "https:") return null;
   const segments = parsed.pathname.split("/").filter((s) => s !== "");
   if (segments.length < 2 || segments[segments.length - 2] !== "s") return null;
   return segments[segments.length - 1];
@@ -24148,35 +24161,28 @@ export function windowHandlers() {
   } satisfies Record<string, CommandHandler>;
 }
 
-/* --------------------------------------------------------------- the three plugins ---- */
-
-/** Where a story's save dialog pretends to put a file — `SYNC_DATA_DIR`'s drive, since both
- *  are the same invented machine. */
-const SAVE_DIR = "D:\\Storybook\\";
+/* ----------------------------------------------------------------- the two plugins ---- */
 
 /**
- * The three Tauri **plugin** commands the page reaches, which are not this app's commands and
+ * The two Tauri **plugin** commands the page reaches, which are not this app's commands and
  * are not mirrored from `src-tauri/src` at all.
  *
- * They are here because the fake `invoke` is the whole IPC layer in Storybook: `copyText`,
- * `openExternal` and `ExportDialog`'s Save as… each go through a plugin wrapper that calls
- * `invoke` with one of these names, so without them every one of those presses is answered
- * `No fake handler registered for command "plugin:…"` — a rejection about the workbench's
- * plumbing, drawn in a `role="alert"` the app wrote for a rejection about the reader's disk.
+ * They are here because the fake `invoke` is the whole IPC layer in Storybook: `copyText` and
+ * `openExternal` each go through a plugin wrapper that calls `invoke` with one of these names,
+ * so without them every one of those presses is answered `No fake handler registered for
+ * command "plugin:…"` — a rejection about the workbench's plumbing, drawn in a `role="alert"`
+ * the app wrote for a rejection about the reader's clipboard or browser.
  *
  * A third table rather than rows in either of the two above, for one reason each: they mirror
  * no Rust module, and `db.test.ts`'s busy sweep walks {@link writeHandlers} asserting that
- * everything in it can be refused by a running sync — which none of these can, because none of
- * them holds a connection.
+ * everything in it can be refused by a running sync — which neither of these can, because
+ * neither holds a connection.
  *
- * **`plugin:dialog|save` answers a path, and that is not the same decision as
- * `import_read_file` throwing.** Both stand in for a native window CDP cannot drive. The
- * difference is what would be invented: `open` + `read_import_file` would invent a *decklist*,
- * which is the entire subject of the screen it feeds, so a story built on one would be a story
- * about a thing that cannot happen. All this dialog produces is a **string naming a file**, and
- * the export it then writes is text the reader is already looking at — so a fixed directory
- * over the dialog's own `defaultPath` invents nothing about the export and makes the one
- * refusal that matters (`exportWriteError`) name a plausible file.
+ * **There were three until 2026-09-28**, and the third was `plugin:dialog|save`, answering a path
+ * for `ExportDialog`'s Save as…. The page opens no dialog now — `export_save_file` opens it in
+ * Rust and writes where it answered (issue #545), and the webview is granted no `dialog:`
+ * permission at all — so the path it invented is {@link writeHandlers}' `export_save_file`'s to
+ * invent, for the same reason it always was.
  */
 export function pluginHandlers() {
   return {
@@ -24196,21 +24202,6 @@ export function pluginHandlers() {
      *  `update_open_release_page`'s reason: it hands a URL to the OS, and there is no OS here
      *  to answer it. The URL is still *built* by the app, which is the half a story is about. */
     "plugin:opener|open_url": (): void => undefined,
-
-    /**
-     * The OS save dialog, answering a path under {@link SAVE_DIR}.
-     *
-     * The name is the dialog's own `defaultPath` — `ExportDialog` seeds it
-     * `${suggestedFileName}.${EXPORT_FORMAT_EXTENSION[format]}`, so switching format really does
-     * change the file this answers with, exactly as it does in the window.
-     *
-     * **`null` is the other real answer and is deliberately not reachable from a story.** A
-     * cancelled save resolves `null`, and writing *that* to disk is the trap `ExportDialog`'s
-     * own guard exists for — pinned in `ExportDialog.test.tsx`, where `save` is mocked
-     * directly, because a `null` here would make every save story a story about Cancel.
-     */
-    "plugin:dialog|save": (args: { options?: { defaultPath?: string } }): string =>
-      `${SAVE_DIR}${args.options?.defaultPath ?? "export.txt"}`,
   } satisfies Record<string, CommandHandler>;
 }
 

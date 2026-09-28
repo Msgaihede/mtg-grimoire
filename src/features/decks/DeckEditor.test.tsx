@@ -150,7 +150,7 @@ const deckFolderList = vi.hoisted(() => vi.fn());
 // "the card database is not filled in yet".
 const importResolve = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
-const importReadFile = vi.hoisted(() => vi.fn());
+const importPickFile = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
 // The editor warms the `art` its own views draw — the variant the deck builder renders, and
 // a different URL on the CDN from the `grid` the search wall warms. Fire-and-forget, so the
@@ -284,7 +284,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckFolderList,
     importResolve,
     deckImportCommit,
-    importReadFile,
+    importPickFile,
     syncStatus,
     cardDetail,
     collectionList,
@@ -1031,7 +1031,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 0 });
-  importReadFile.mockReset().mockResolvedValue("");
+  importPickFile.mockReset().mockResolvedValue(null);
   syncStatus.mockReset().mockResolvedValue(SYNCED);
   prefetchImages.mockClear();
 });
@@ -3679,12 +3679,12 @@ describe("DeckEditor", () => {
       // sticky header the same number — as a length, because an unitless custom property makes
       // `top` invalid and drops the pinning without a word.
       const dock = screen.getByRole("region", { name: "Add cards" }).parentElement!;
-      expect(dock.style.top).toBe("66px");
+      expect(dock.style.top).toBe("41px");
       expect((dock.previousElementSibling as HTMLElement).style.getPropertyValue("--sticky-top")).toBe(
-        "66px",
+        "41px",
       );
       // And a caret scrolled to is parked below the bar rather than under it.
-      expect(screen.getByTestId("page").style.scrollPaddingTop).toBe("66px");
+      expect(screen.getByTestId("page").style.scrollPaddingTop).toBe("41px");
     });
 
     // Three cases rather than one walk through the bar, and one keystroke rather than a word: every

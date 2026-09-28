@@ -115,8 +115,9 @@ const meta = {
           "name up and `deck_import_commit` really writes. **The workbench's corpus is 43 " +
           "printings**, not the app's 116 k, so a list of real cards mostly quotes itself back " +
           "here — which is why `PastedReferenceList` shows what it does. The one gesture no " +
-          "story can reach is the file picker: `open()` from `@tauri-apps/plugin-dialog` is " +
-          "the operating system's window, and outside the app there is nothing behind it.",
+          "story can reach is the file picker: `import_pick_file` opens the operating " +
+          "system's window from Rust, and outside the app there is nothing behind it — so " +
+          "**Choose file…** here ends in the picker's own refusal line, never in a decklist.",
       },
     },
   },

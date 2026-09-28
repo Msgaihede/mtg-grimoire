@@ -104,11 +104,14 @@ use serde::Deserialize;
 /// are handlers refusing rather than a router shrugging. **A device pointed at this host today
 /// reaches the whole membership flow and the whole key distribution.**
 ///
-/// **What is not deployed is the device roll this branch adds**, and it changes no route, so no
-/// path probe can see it: the tell is that the live `/token` accepts a body with **no `device`
-/// field**, where the code in this tree answers 400. `docs/reference/hosted-relay-deploy.md`'s
-/// step 0 is how to check any of this against the host rather than against this comment, and it
-/// exists because this comment was wrong.
+/// **The device roll and the pairing rendezvous are deployed too**, which this comment denied for
+/// the device roll until 2026-09-28. It changes no route, so no path probe can see it: the tell
+/// is a body — `POST /token {"refresh":"x"}` with **no `device` field** answers **400 `that is
+/// not a device id`**, and 401 once a `device` is added. The `{group, auth}` probe named here
+/// before could not tell: the group door refuses its short `auth` as `malformed` before it reads
+/// `device`, on either build. The last deploy was 2026-09-28, from `main` at `1512ea68`.
+/// `docs/reference/hosted-relay-deploy.md`'s step 0 is how to check any of this against the host
+/// rather than against this comment, and it exists because this comment was wrong.
 pub const RELAY_BASE: &str = "https://mtg-grimoire-relay.denmark-east.workers.dev";
 
 /// The OAuth client id, real since `a0eb0c6` (committed 2026-08-30, against the verification

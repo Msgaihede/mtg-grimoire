@@ -2323,10 +2323,12 @@ describe("ipc argument names match the Rust command signatures", () => {
   /**
    * The three import commands, and the one in the whole file that takes **no managed state**.
    *
-   * `import_read_file(path)` touches no database, so `path` is its only parameter — and it
-   * is a *path* rather than bytes, which is the contract that keeps `dialog:allow-open` the only
-   * capability this feature needs. A mirror that sent the file's contents under `path` would
-   * type-check perfectly and import a filename.
+   * `import_pick_file` touches no database and takes **no argument at all**, which is the whole
+   * of its contract (issue #545): Rust opens the dialog and the file, so nothing this side sends
+   * can name a path. It used to be `import_read_file(path)`, and a script in the page could hand
+   * that any path on the disk. A wrapper that grew an argument again would type-check perfectly
+   * and be the hole back — Tauri ignores an argument a command does not declare, so nothing at
+   * runtime would say so either.
    *
    * The other two break the module's own patterns in opposite directions: `import_resolve`
    * takes a bare `lines` array where every other list-shaped read in this file wraps its payload
@@ -2359,9 +2361,12 @@ describe("ipc argument names match the Rust command signatures", () => {
     // An object since issue #555 — the text and the encoding the backend read it in, which is
     // what lets the dialog say a file was read as Windows-1252 rather than decoded lossily.
     invoke.mockResolvedValue({ text: "1 Sol Ring\n", encoding: "utf-8" });
-    const file = await ipc.importReadFile("C:\\lists\\edh.txt");
-    expect(invoke).toHaveBeenCalledWith("import_read_file", { path: "C:\\lists\\edh.txt" });
+    const file = await ipc.importPickFile();
+    expect(invoke).toHaveBeenLastCalledWith("import_pick_file");
     expect(file).toEqual({ text: "1 Sol Ring\n", encoding: "utf-8" });
+    // Cancel is an answer, not a rejection.
+    invoke.mockResolvedValue(null);
+    expect(await ipc.importPickFile()).toBeNull();
   });
 
   /**
@@ -3481,23 +3486,25 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * `export_write_file(path, contents)` — the save-dialog path Rust writes at, since no `fs:`
-   * permission is granted anywhere for the webview to write it itself.
+   * `export_save_file(fileName, contents)` — a **suggested name** and the text, and never a path:
+   * Rust opens the save dialog and writes at what it answered (issue #545). `fileName` is the
+   * name to watch — the Rust parameter is `file_name`, Tauri camel-cases a command's arguments,
+   * and a `file_name` key on this side would arrive as nothing and fail the command.
    */
-  it("sends an export write under `path` and `contents`", async () => {
-    invoke.mockResolvedValue(undefined);
-    await ipc.exportWriteFile("C:\\decks\\out.txt", "1 Lightning Bolt\n");
-    expect(invoke).toHaveBeenCalledWith("export_write_file", {
-      path: "C:\\decks\\out.txt",
+  it("sends an export save under `fileName` and `contents`, and hears whether it saved", async () => {
+    invoke.mockResolvedValue(true);
+    expect(await ipc.exportSaveFile("out.txt", "1 Lightning Bolt\n")).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("export_save_file", {
+      fileName: "out.txt",
       contents: "1 Lightning Bolt\n",
     });
   });
 
   /**
-   * The plain-text mirror's four. Two of them carry an argument, and both names are the crate's
-   * parameter names — `mirror_set_enabled(enabled)` and `mirror_set_root(root)` — so a wrapper
-   * that spelled either differently would fail at runtime with a deserialization error and no
-   * type error anywhere.
+   * The plain-text mirror's four. One of them carries an argument, and its name is the crate's
+   * parameter name — `mirror_set_enabled(enabled)` — so a wrapper that spelled it differently
+   * would fail at runtime with a deserialization error and no type error anywhere. The folder is
+   * **not** an argument any more: `mirror_pick_root` opens the picker itself (issue #545).
    */
   it("asks for the mirror's state with no arguments", async () => {
     invoke.mockResolvedValue({
@@ -3522,10 +3529,10 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("mirror_set_enabled", { enabled: false });
   });
 
-  it("sends the mirror folder under `root`", async () => {
-    invoke.mockResolvedValue(undefined);
-    await ipc.mirrorSetRoot("E:\\Backups\\MTG");
-    expect(invoke).toHaveBeenCalledWith("mirror_set_root", { root: "E:\\Backups\\MTG" });
+  it("asks for the mirror folder picker with no arguments, and hears whether it moved", async () => {
+    invoke.mockResolvedValue(false);
+    expect(await ipc.mirrorPickRoot()).toBe(false);
+    expect(invoke).toHaveBeenLastCalledWith("mirror_pick_root");
   });
 
   it("asks for a rebuild with no arguments and gets the pass back", async () => {

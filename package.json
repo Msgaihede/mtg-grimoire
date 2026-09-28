@@ -1,7 +1,7 @@
 {
   "name": "mtg-grimoire",
   "private": true,
-  "version": "0.32.1",
+  "version": "0.33.0",
   "license": "AGPL-3.0-or-later",
   "type": "module",
   "types": ".design-sync/dist/.design-sync/entry.d.ts",
@@ -38,7 +38,6 @@
     "@tanstack/react-virtual": "^3.14.9",
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-clipboard-manager": "^2",
-    "@tauri-apps/plugin-dialog": "^2",
     "@tauri-apps/plugin-opener": "^2",
     "@tiptap/extension-heading": "^3.31.3",
     "@tiptap/extensions": "^3.31.3",

@@ -730,7 +730,15 @@ and one thing in it that asks — nothing is granted to a page that never asks, 
 camera light is on only while `QrScanner` is mounted, because the *stream* is what turns it on and
 that component stops every track it opens on every exit path. Making the grant conditional on the
 scanner being mounted would need state shared between the page and this handler and buys nothing
-against the threat a single-page desktop app has. The pipeline
+against the threat a single-page desktop app has. ⚠️ **"Exactly one page in this webview" was an
+assumption nothing enforced, and on 2026-09-28 it stopped being one** (issue #545): there was no
+navigation handler, and `dragDropEnabled: false` is also what keeps wry from calling
+`SetAllowExternalDrop(false)`, so a link dropped on the window should have loaded a remote page
+that was then handed a silent camera — reasoned from wry's source, not driven live. The handler now
+reads the request's `Uri` and grants `CAMERA` only to the app's own origin
+(`app_origin::AppOrigins` — the embedded frontend, or Vite in a dev build), and a navigation guard
+in the same module refuses any top-level navigation off it. Neither the kind rule nor the
+scanner-mounted argument above changed. The pipeline
 was then confirmed end to end under the *shipped* CSP: `devCsp` and the production `csp` differ
 only in `connect-src` and `style-src`, neither declares `media-src`, so both fall back to
 `default-src 'self'` — and a real camera frame through `<video srcObject>` → `canvas.drawImage` →
@@ -2549,15 +2557,18 @@ can meet, `claim.ts` and `patreon.ts` the OAuth hop, the webhook and the reconci
 `groupauth.ts` and `rotate.ts` the group-key store, its two routes and the device roll, `group.ts`
 and `log.ts` the object and who its floor waits for, and `wrangler.jsonc` a D1 binding and an
 hourly cron — `0 * * * *` since issue #546, `0 3 * * *` before it.
-**What is *not* deployed is this change's half** — the device cap, `/claim`'s rebind and the
-`group_devices` table. Settled by the same kind of probe rather than by reading this file:
-`POST /token {group, auth}` **with no `device` field** answers 401 from the entitlement lookup,
-where the code in this tree answers **400 `that is not a device id`** before it reads anything.
-**Nor is issue #546's half** — the push admission, `/keys?epoch=` and `removalStep`, the two-epoch
-removal, `/roster`, the hourly reconciliation and `membership_ended`. Its tell is a query:
-`/g/{group}/keys?device=…&epoch=x` with any well-formed bearer answers **400 `that is not an
-epoch`** from this tree and **401** from a Worker that ignores the parameter — read off
-`handleKeys`, not probed, because the sandbox it was written in could not reach the host on
+**The device cap, `/claim`'s rebind and the `group_devices` table are deployed too**, and so are
+the pairing rendezvous and the refresh-secret change — the last deploy was 2026-09-28, from `main`
+at `1512ea68`. Settled by the same kind of probe rather than by reading this file:
+`POST /token {"refresh":"x"}` **with no `device` field** answers **400 `that is not a device id`**,
+and **401** once a `device` is added. ⚠️ **This paragraph called that half undeployed until
+2026-09-28**, on a `{group, auth}` probe whose short `auth` is refused as `malformed` before
+`device` is read — a probe that answers the same on either build.
+**What is not deployed is issue #546's half** — the push admission, `/keys?epoch=` and
+`removalStep`, the two-epoch removal, `/roster`, the hourly reconciliation and `membership_ended`.
+Its tell is a query: `/g/{group}/keys?device=…&epoch=x` with any well-formed bearer answers **400
+`that is not an epoch`** from this tree and **401** from a Worker that ignores the parameter — read
+off `handleKeys`, not probed, because the sandbox it was written in could not reach the host on
 2026-09-28.
 **The rest of this section describes the hosted design in the present tense**, which is how this
 repository writes a design that is agreed and not yet a deployment; where a sentence is about what
@@ -2897,9 +2908,10 @@ to a GET (the route is there and wants POST), `/oauth/patreon/callback` **400**,
 bearer, and `/g/{group}/bogus` **404**. So the gate, the callback, the membership flow **and the
 key distribution** are all live — an earlier reading of this line, taken before the deploy, said
 `/rotate` and `/keys` were the two routes still missing, and that is history. `wrangler.jsonc`
-carries a real `database_id`, so the D1 exists too and may hold live rows. **What is missing today
-is the device roll**: the deployed `/token` accepts a body with no `device` field, where this
-tree's code refuses one with a 400. The next deploy is an update to a running service, and
+carries a real `database_id`, so the D1 exists too and may hold live rows. **The device roll and
+the pairing rendezvous are live too** — probed 2026-09-28, after this line had called the device
+roll missing for four weeks on a probe that could not tell — and the last deploy was that day,
+from `main` at `1512ea68`. The next deploy is an update to a running service, and
 [hosted-relay-deploy.md](hosted-relay-deploy.md)'s step 0 is how to check rather than assume —
 this paragraph is why it exists. **`PATREON_CLIENT_ID` is no longer the exception it was**: it was a placeholder until
 `a0eb0c6` (2026-08-30) and holds the real id now, verified live — `GET /oauth2/authorize` with it
@@ -3453,10 +3465,10 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   under §7.6. What it is still owed is the **live pass**: leaving on one device and watching
   another's roster lose it, which is the check that found the group-key migration gap on its first
   press.
-- **The device cap is not deployed.** `group_devices`, the `device` field on both `/token` doors
-  and on `/claim`, `/claim`'s rebind and `/rotate`'s `keepOnly` are all written and tested and
-  none of it is running: the live `/token` still accepts a body with no `device`. The migration
-  file and the order it goes in are in the runbook.
+- ~~**The device cap is not deployed.**~~ **Deployed** — found live on 2026-09-28, when
+  `POST /token {"refresh":"x"}` with no `device` answered `400 that is not a device id`; nobody
+  wrote down which of the 2026-08-30/31 deploys shipped it. What it is still owed is the runbook's
+  item 11: nothing has driven a real sixth device into the cap, or a real `keepOnly` free a slot.
 - ~~**No WebSocket fan-out for the rewrap either.**~~ **Partly built 2026-08-31** — `check_keys`
   runs at the top of every round trip, so a removal is now picked up by *whatever* wakes a device:
   a `head` frame, a local write, launch, a reconnect. ⚠️ **This bullet claimed "within a few
