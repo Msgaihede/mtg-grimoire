@@ -9,7 +9,7 @@ import { QuantityStepper } from "@/components/QuantityStepper";
 import { LabelColorButton, LabelColorPanel } from "@/features/decks/LabelColorPicker";
 import { DEFAULT_LABEL_COLOR } from "@/features/decks/labelColors";
 import { labelNameKey } from "@/features/decks/labelNames";
-import { META_FIELD, META_SUBMIT } from "@/features/decks/metaRows";
+import { META_FIELD, META_SUBMIT_TYPED } from "@/features/decks/metaRows";
 import { FOCUS } from "@/lib/focus";
 import type { CardDetail } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -495,7 +495,7 @@ function CreateRow({
         <LabelColorButton color={color} open={palette} onToggle={() => setPalette((o) => !o)} />
       )}
 
-      <button type="submit" disabled={trimmed === ""} className={META_SUBMIT}>
+      <button type="submit" aria-disabled={trimmed === ""} className={META_SUBMIT_TYPED}>
         {submitWord}
       </button>
       <button type="button" onClick={onCancel} className={CREATE_CANCEL}>

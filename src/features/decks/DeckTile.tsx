@@ -786,14 +786,17 @@ export function DeckTile({
               type="button"
               data-no-drag=""
               aria-label="Save name"
-              disabled={trimmed === "" || decks.update.isPending}
+              // `aria-disabled`, never the attribute: it greys as the reader types, and a
+              // `disabled` ✓ left the tab order, so Tab from the field skipped to Cancel (#558).
+              // `submitRename` refuses the same two states.
+              aria-disabled={trimmed === "" || decks.update.isPending}
               {...tip("Save", { describes: false })}
               onClick={submitRename}
               className={cn(
                 "grid size-[calc(1.5rem*var(--control-scale,1))] place-items-center rounded-md",
                 "text-accent transition-colors duration-150",
                 "hover:bg-accent hover:text-accent-foreground",
-                "disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-accent",
+                "aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-accent",
                 "motion-reduce:transition-none",
                 FOCUS,
               )}

@@ -593,8 +593,9 @@ export const EditingFromATile: Story = {
  * leaving the list is {@link Removed}, which drives the control that says the word.
  *
  * Both controls live in `CardGrid`'s action strip, which is revealed on hover and on
- * focus-within and is **never removed from the tab order**: "visible on hover" is not a state a
- * keyboard has, which is also why `userEvent` reaches them here with no hover of its own.
+ * focus-within and is **in the tab order on the wall's roving stop tile** (issue #558) — the
+ * arrows make any tile that stop: "visible on hover" is not a state a keyboard has, which is also
+ * why `userEvent` reaches them here with no hover of its own.
  */
 export const CopiesFromATile: Story = {
   play: async ({ canvasElement }) => {

@@ -19,10 +19,11 @@ import {
  */
 function press(
   key: string,
-  mods: { ctrl?: boolean; meta?: boolean; shift?: boolean; alt?: boolean } = {},
+  mods: { ctrl?: boolean; meta?: boolean; shift?: boolean; alt?: boolean; code?: string } = {},
 ): KeyboardEvent {
   return new KeyboardEvent("keydown", {
     key,
+    code: mods.code ?? "",
     ctrlKey: mods.ctrl === true,
     metaKey: mods.meta === true,
     shiftKey: mods.shift === true,
@@ -143,6 +144,50 @@ describe("matchesChord — the key itself", () => {
 
   it("does not match a different key", () => {
     expect(matchesChord({ key: "z", ctrl: true }, press("y", { ctrl: true }))).toBe(false);
+  });
+});
+
+describe("matchesChord — a digit is its physical key (issue #558)", () => {
+  // AZERTY's unshifted digit row prints `&`, `é`, `"`…; Shift is what reaches the digit, and the
+  // exactness rule refuses Shift on `Ctrl+1`. `e.code` names the key rather than the glyph.
+  it("matches Ctrl+1 on AZERTY, where the key prints &", () => {
+    expect(matchesChord({ key: "1", ctrl: true }, press("&", { ctrl: true, code: "Digit1" }))).toBe(
+      true,
+    );
+  });
+
+  it("matches Ctrl+2 on AZERTY, where the key prints é", () => {
+    expect(matchesChord({ key: "2", ctrl: true }, press("é", { ctrl: true, code: "Digit2" }))).toBe(
+      true,
+    );
+  });
+
+  it("still matches the numeric keypad, which prints the digit on every layout", () => {
+    expect(
+      matchesChord({ key: "1", ctrl: true }, press("1", { ctrl: true, code: "Numpad1" })),
+    ).toBe(true);
+  });
+
+  it("does not match a different digit's key", () => {
+    expect(matchesChord({ key: "1", ctrl: true }, press("é", { ctrl: true, code: "Digit2" }))).toBe(
+      false,
+    );
+  });
+
+  it("still requires the modifiers exactly", () => {
+    expect(
+      matchesChord(
+        { key: "1", ctrl: true },
+        press("1", { ctrl: true, shift: true, code: "Digit1" }),
+      ),
+    ).toBe(false);
+  });
+
+  it("does not match a letter on its physical key", () => {
+    // AZERTY's `KeyW` prints `z`; undo follows the letter the reader sees, not the position.
+    expect(matchesChord({ key: "w", ctrl: true }, press("z", { ctrl: true, code: "KeyW" }))).toBe(
+      false,
+    );
   });
 });
 

@@ -207,3 +207,37 @@ describe("the table's shelf bands", () => {
     expect(screen.getByRole("button", { name: "Manage Cheap" })).not.toBe(pressed);
   });
 });
+
+describe("the table's roving tab stop (issue #558)", () => {
+  /**
+   * A card row used to write `tabIndex={0}` over the table's own, so every wish with a printing
+   * was a Tab stop. It spreads the table's roving one now, which `rove` turns on without the
+   * table's all-or-nothing `onActivate`.
+   */
+  it("makes one wish the stop and the rest reachable only by the arrows", () => {
+    const LOTUS: WishRow = { ...BOLT, id: 8, cardId: "c2", name: "Black Lotus" };
+    const ANY: WishRow = { ...BOLT, id: 9, cardId: null, name: "Counterspell" };
+    render(
+      <WishlistTable
+        rows={[BOLT, LOTUS, ANY]}
+        total={3}
+        listKey="k"
+        sort={[{ key: "name", dir: "asc" }]}
+        onSort={noop}
+        folders={[]}
+        nodes={[]}
+        onNeedNextPage={noop}
+        onSetQuantity={noop}
+        onRemove={noop}
+        onSetFolder={noop}
+        onChangePrinting={noop}
+        onAnyPrinting={noop}
+        marketplace={MARKETPLACES.tcgplayer}
+      />,
+    );
+    const rows = screen.getAllByRole("row").filter((r) => r.hasAttribute("aria-rowindex"));
+    const stops = rows.filter((r) => r.getAttribute("tabindex") === "0");
+    expect(stops).toHaveLength(1);
+    expect(rows.filter((r) => r.getAttribute("tabindex") === "-1").length).toBeGreaterThan(0);
+  });
+});

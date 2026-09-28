@@ -60,7 +60,7 @@ import {
   CONFIRM_CANCEL,
   CONFIRM_DESTRUCTIVE,
   META_FIELD,
-  META_SUBMIT,
+  META_SUBMIT_TYPED,
   RenameField,
   RowAction,
   sectionFailure,
@@ -234,7 +234,7 @@ function LabelsBody({ deckId, variant }: { deckId: number; variant: DeckVariant 
           onSubmit={(e) => {
             e.preventDefault();
             const trimmed = name.trim();
-            if (!trimmed || clash !== undefined) return;
+            if (!trimmed || clash !== undefined || meta.createLabel.isPending) return;
             meta.createLabel.mutate(
               { name: trimmed, color },
               {
@@ -264,8 +264,8 @@ function LabelsBody({ deckId, variant }: { deckId: number; variant: DeckVariant 
           />
           <button
             type="submit"
-            disabled={meta.createLabel.isPending || name.trim() === "" || clash !== undefined}
-            className={META_SUBMIT}
+            aria-disabled={meta.createLabel.isPending || name.trim() === "" || clash !== undefined}
+            className={META_SUBMIT_TYPED}
           >
             Add label
           </button>

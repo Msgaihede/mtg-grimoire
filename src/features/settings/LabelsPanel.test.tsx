@@ -159,7 +159,11 @@ describe("LabelsPanel", () => {
 
     await userEvent.type(screen.getByRole("textbox", { name: /new label/i }), "cut candidate");
 
-    expect(screen.getByRole("button", { name: /add label/i })).toBeDisabled();
+    // `aria-disabled`, never the attribute (#558): it greys as the reader types and stays a stop.
+    expect(screen.getByRole("button", { name: /add label/i })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(screen.getByRole("status")).toHaveTextContent(/already exists/i);
   });
 

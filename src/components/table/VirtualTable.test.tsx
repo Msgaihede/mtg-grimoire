@@ -1503,3 +1503,212 @@ describe("VirtualTable's sticky band hands the caret on", () => {
     expect(document.activeElement).toBe(elsewhere);
   });
 });
+
+/**
+ * **The rows are one roving tab stop** (issue #558). Every activatable row was `tabIndex={0}`, so
+ * a keyboard reader tabbed through the whole loaded result set to get past the table. Now one data
+ * row is the stop, the rest are `-1`, and the arrows, Home, End and Page Up/Down move between
+ * them — heading bands skipped, and a control inside a row keeping its own keys.
+ */
+describe("VirtualTable's roving tab stop", () => {
+  const MANY: Row[] = Array.from({ length: 100 }, (_, i) => card(i));
+  const stops = () => screen.getAllByRole("row").filter((r) => r.getAttribute("tabindex") === "0");
+
+  it("makes exactly one row a stop, and none without onActivate", () => {
+    const { unmount } = render(
+      <VirtualTable {...BASE} rows={MANY} total={100} onActivate={() => {}} />,
+    );
+    const body = screen.getAllByRole("row").slice(1);
+    expect(body.length).toBeGreaterThan(1);
+    expect(stops()).toEqual([rowOf("Card 0")]);
+    for (const row of body.slice(1)) expect(row).toHaveAttribute("tabindex", "-1");
+    unmount();
+
+    render(<VirtualTable {...BASE} rows={MANY} total={100} />);
+    for (const row of screen.getAllByRole("row")) expect(row).not.toHaveAttribute("tabindex");
+  });
+
+  /** Tab from `<body>`: the table's own scroll stop, the two sort buttons, the rows' one stop,
+   *  then out. */
+  it("costs the rows one Tab press in all", async () => {
+    const user = userEvent.setup();
+    render(
+      <>
+        <VirtualTable {...BASE} rows={MANY} total={100} onActivate={() => {}} />
+        <button type="button">After</button>
+      </>,
+    );
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("table"));
+    await user.tab();
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Price" }));
+    await user.tab();
+    expect(document.activeElement).toBe(rowOf("Card 0"));
+    await user.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "After" }));
+  });
+
+  it("moves the caret and the stop with the arrow keys", async () => {
+    const user = userEvent.setup();
+    render(<VirtualTable {...BASE} rows={MANY} total={100} onActivate={() => {}} />);
+    act(() => rowOf("Card 0").focus());
+
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    expect(document.activeElement).toBe(rowOf("Card 2"));
+    expect(stops()).toEqual([rowOf("Card 2")]);
+    expect(rowOf("Card 0")).toHaveAttribute("tabindex", "-1");
+
+    await user.keyboard("{ArrowUp}");
+    expect(document.activeElement).toBe(rowOf("Card 1"));
+    expect(stops()).toEqual([rowOf("Card 1")]);
+  });
+
+  /** A click is a focus too, so the stop follows the pointer as well as the keys. */
+  it("moves the stop to a row the reader clicks", async () => {
+    const user = userEvent.setup();
+    render(<VirtualTable {...BASE} rows={MANY} total={100} onActivate={() => {}} />);
+    await user.click(rowOf("Card 4"));
+    expect(stops()).toEqual([rowOf("Card 4")]);
+  });
+
+  it("goes to the first and last rows on Home and End", async () => {
+    const user = userEvent.setup();
+    render(<VirtualTable {...BASE} rows={MANY} total={100} grow onActivate={() => {}} />);
+    act(() => rowOf("Card 5").focus());
+
+    await user.keyboard("{End}");
+    expect(document.activeElement).toBe(rowOf("Card 99"));
+    expect(stops()).toEqual([rowOf("Card 99")]);
+
+    await user.keyboard("{Home}");
+    expect(document.activeElement).toBe(rowOf("Card 0"));
+    expect(stops()).toEqual([rowOf("Card 0")]);
+  });
+
+  it("skips heading bands, and never makes one the stop", async () => {
+    const user = userEvent.setup();
+    const SHELVED = [shelf("Binder"), card(1), card(2), shelf("Trade"), card(3)];
+    render(<VirtualTable {...BASE} rows={SHELVED} total={3} band={bandOf} onActivate={() => {}} />);
+    // Row 0 is a band, so the first data row is the stop.
+    expect(stops()).toEqual([rowOf("Card 1")]);
+    act(() => rowOf("Card 2").focus());
+
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(rowOf("Card 3"));
+    await user.keyboard("{ArrowUp}");
+    expect(document.activeElement).toBe(rowOf("Card 2"));
+    await user.keyboard("{Home}");
+    expect(document.activeElement).toBe(rowOf("Card 1"));
+    // Nothing above the first card but its heading: the caret stays put.
+    await user.keyboard("{ArrowUp}");
+    expect(document.activeElement).toBe(rowOf("Card 1"));
+    expect(rowOf("Binder heading")).not.toHaveAttribute("tabindex");
+  });
+
+  /**
+   * The deck's table draws its piles through `renderRow` — a row with one cell spanning every
+   * column — so the table cannot know them from `band`. They are skipped the same way, and a
+   * stop that lands on one moves to the first data row.
+   */
+  it("treats a caller's own heading row the same way", async () => {
+    const user = userEvent.setup();
+    const PILED = [shelf("Creatures"), card(1), shelf("Lands"), card(2)];
+    render(
+      <VirtualTable
+        {...BASE}
+        rows={PILED}
+        total={4}
+        grow
+        onActivate={() => {}}
+        renderRow={(props, row) =>
+          row.shelf ? (
+            <div {...props} tabIndex={-1} onKeyDown={undefined}>
+              <span role="cell" aria-colspan={COLUMNS.length}>
+                {row.shelf} pile
+              </span>
+            </div>
+          ) : (
+            <div {...props} />
+          )
+        }
+      />,
+    );
+    expect(stops()).toEqual([rowOf("Card 1")]);
+    act(() => rowOf("Card 1").focus());
+    await user.keyboard("{ArrowDown}");
+    expect(document.activeElement).toBe(rowOf("Card 2"));
+  });
+
+  it("leaves a key pressed inside a row's control to that control", async () => {
+    const user = userEvent.setup();
+    const columns: TableColumn<Row>[] = [
+      ...COLUMNS.slice(0, 1),
+      {
+        key: "edit",
+        width: "4rem",
+        header: "Edit",
+        interactive: true,
+        cell: (r) => <button type="button">Edit {r.name}</button>,
+      },
+    ];
+    render(
+      <VirtualTable {...BASE} columns={columns} rows={MANY} total={100} onActivate={() => {}} />,
+    );
+    const edit = screen.getByRole("button", { name: "Edit Card 3" });
+    act(() => edit.focus());
+    await user.keyboard("{ArrowDown}{End}");
+    expect(document.activeElement).toBe(edit);
+    // Focus inside the row still moves the stop to that row, so Shift+Tab lands beside it.
+    expect(stops()).toEqual([rowOf("Card 3")]);
+  });
+
+  it("leaves a chorded arrow alone", async () => {
+    const user = userEvent.setup();
+    render(<VirtualTable {...BASE} rows={MANY} total={100} onActivate={() => {}} />);
+    act(() => rowOf("Card 0").focus());
+    await user.keyboard("{Control>}{ArrowDown}{/Control}{Shift>}{ArrowDown}{/Shift}");
+    expect(document.activeElement).toBe(rowOf("Card 0"));
+  });
+
+  /**
+   * **The virtualisation trap.** The stop's row can scroll out of the drawn window and unmount;
+   * with nothing else at `0` the rows would have no way in. The first data row in view stands in.
+   */
+  it("hands the stop to a row in view when its own row scrolls away", () => {
+    render(<VirtualTable {...BASE} rows={MANY} total={100} onActivate={() => {}} />);
+    act(() => rowOf("Card 0").focus());
+    const scroller = screen.getByRole("table");
+    scroller.scrollTop = 44 * 50;
+    fireEvent.scroll(scroller);
+    expect(screen.queryByText("Card 0")).toBeNull();
+    const [only] = stops();
+    expect(stops()).toHaveLength(1);
+    // In view, not merely drawn: the overscan above the scrollport is skipped, and so is Card 49,
+    // which is drawn at the scroller's top edge but wholly behind the 36px sticky header.
+    expect(only).toBe(rowOf("Card 50"));
+  });
+
+  /** A long move scrolls first, and the row takes the caret once the virtualiser draws it. */
+  it("scrolls to an undrawn row on End and focuses it once drawn", async () => {
+    const user = userEvent.setup();
+    render(<VirtualTable {...BASE} rows={MANY} total={100} onActivate={() => {}} />);
+    const scroller = screen.getByRole("table");
+    Object.defineProperty(scroller, "scrollHeight", { configurable: true, value: 44 * 100 + 36 });
+    Object.defineProperty(scroller, "clientHeight", { configurable: true, value: 600 });
+    Object.defineProperty(scroller, "scrollTo", {
+      configurable: true,
+      value: (options: ScrollToOptions) => {
+        if (options.top !== undefined) scroller.scrollTop = options.top;
+      },
+    });
+    act(() => rowOf("Card 0").focus());
+    expect(screen.queryByText("Card 99")).toBeNull();
+
+    await user.keyboard("{End}");
+    // The browser's `scroll` event arrives after the scroll; fire it as the page would get it.
+    fireEvent.scroll(scroller);
+    expect(document.activeElement).toBe(rowOf("Card 99"));
+    expect(stops()).toEqual([rowOf("Card 99")]);
+  });
+});
