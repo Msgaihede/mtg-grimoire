@@ -21,10 +21,12 @@ import type { Env } from "./index";
  * and walk back into the group that evicted it. So the fake tokenises the clause and evaluates
  * it, and the mutation is caught by the comparison actually being run.
  *
- * The dialect it covers is exactly the one this module writes and no more: five statement
- * shapes, `AND`, arithmetic, `coalesce`, and a `max()` or `count(*)` subquery. Anything else
- * throws by name, so a later statement that this harness cannot honour fails loudly here rather
- * than quietly passing.
+ * The dialect it covers is exactly the one the relay writes and no more: five statement shapes,
+ * `AND`/`OR` and parenthesised groups, `IS [NOT] NULL`, arithmetic, `coalesce`, quoted strings, an
+ * `IN` list of values, a `max()` or `count(*)` subquery, and on a `SELECT` an `ORDER BY` of one
+ * or more keys (NULL sorting first, as SQLite sorts it) and a `LIMIT` that may be bound. Anything
+ * else throws by name, so a later statement that this harness cannot honour fails loudly here
+ * rather than quietly passing.
  *
  * `@cloudflare/vitest-pool-workers` would run real D1 and is ruled out for the tree's reason
  * (`relay/README.md`): it drags wrangler and workerd into the tree and peers on an older vitest.
@@ -119,7 +121,14 @@ interface Reader {
 
 function tokenize(text: string): string[] {
   // `*` is here for `count(*)` and nothing else — there is no multiplication in this dialect.
-  return text.match(/>=|<=|<>|[<>=]|[()?,+*-]|\d+|[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
+  //
+  // **A quoted string is one token, and it was no token at all until `reconcile` needed one.**
+  // The quote matched nothing, so `status <> 'dead'` read `dead` as a *column name*, found none,
+  // compared NULL and was false for every row — silently, which is the one failure this harness
+  // exists to refuse. Every statement a suite ran before had bound its literals as `?` (the share
+  // Worker's `state <> ?` among them), so nothing that passed then reads differently now. `''` is
+  // SQL's escaped quote and stays inside the token.
+  return text.match(/'(?:[^']|'')*'|>=|<=|<>|[<>=]|[()?,+*-]|\d+|[A-Za-z_][A-Za-z0-9_]*/g) ?? [];
 }
 
 function peek(r: Reader): string {
@@ -145,6 +154,20 @@ function order(a: Value, b: Value): number {
   const left = String(a);
   const right = String(b);
   return left < right ? -1 : left > right ? 1 : 0;
+}
+
+/**
+ * `ORDER BY`'s ordering, which is `order` plus SQLite's rule for NULL: **smaller than every other
+ * value**, so first in an ascending sort and last in a descending one.
+ *
+ * A separate function rather than a change to `order`, whose other two callers never let a NULL
+ * reach it — `compare` answers false first and `subselect`'s `max` skips them. Before this,
+ * `order(null, x)` compared the string `"null"`, which no sort that ran here had a NULL to expose;
+ * `reconcile`'s `ORDER BY reconciled_at` is nothing but NULLs on a table that has never run it.
+ */
+function sortOrder(a: Value, b: Value): number {
+  if (a === null || b === null) return a === b ? 0 : a === null ? -1 : 1;
+  return order(a, b);
 }
 
 /**
@@ -207,6 +230,7 @@ function primary(r: Reader): Value {
     return typeof value === "number" ? -value : null;
   }
   if (/^\d+$/.test(word)) return Number(word);
+  if (token.startsWith("'")) return token.slice(1, -1).replaceAll("''", "'");
   if (word === "coalesce") {
     want(r, "(");
     const first = sum(r);
@@ -251,6 +275,23 @@ function compare(r: Reader): boolean {
     }
     want(r, "null");
     return negated ? left !== null : left === null;
+  }
+  // `x IN (?, ?, …)` — a list of values, never a subquery. `reconcile` stamps the rows it is about
+  // to attempt in one statement this way. Every element is read whatever an earlier one matched,
+  // for `conjunction`'s reason: an unread `?` would shift every parameter after it. A NULL on
+  // either side matches nothing, as SQLite's `IN` never answers true for one.
+  if (peek(r) === "in") {
+    r.at += 1;
+    want(r, "(");
+    let found = false;
+    for (;;) {
+      const candidate = sum(r);
+      if (left !== null && candidate !== null && order(left, candidate) === 0) found = true;
+      if (peek(r) !== ",") break;
+      r.at += 1;
+    }
+    want(r, ")");
+    return found;
   }
   const op = take(r);
   if (!COMPARISONS.has(op)) throw new Error(`fake sql: ${op} is not a comparison`);
@@ -562,28 +603,47 @@ function execute(
   if (select) {
     const [, columnList, table, tailText] = select;
     let tail = tailText;
-    let limit = Number.POSITIVE_INFINITY;
-    const limitClause = /\sLIMIT (\d+)$/i.exec(tail);
+    // `LIMIT ?` as well as a literal: `reconcile` binds its budget. Read here and resolved once
+    // the `WHERE` is known, because that parameter comes after every one of the `WHERE`'s.
+    let limitSource: string | null = null;
+    const limitClause = /\sLIMIT (\d+|\?)$/i.exec(tail);
     if (limitClause) {
-      limit = Number(limitClause[1]);
+      limitSource = limitClause[1];
       tail = tail.slice(0, limitClause.index);
     }
-    let orderColumn = "";
-    let descending = false;
-    const orderClause = /\sORDER BY (\w+)( DESC| ASC)?$/i.exec(tail);
+    // One key or several, each `ASC` or `DESC`. `reconcile` orders by two, and a second key the
+    // harness ignored would still pass every test whose first key happened to have no ties.
+    let keys: { column: string; descending: boolean }[] = [];
+    const orderClause =
+      /\sORDER BY (\w+(?: (?:ASC|DESC))?(?:\s*,\s*\w+(?: (?:ASC|DESC))?)*)$/i.exec(tail);
     if (orderClause) {
-      orderColumn = orderClause[1];
-      descending = /desc/i.test(orderClause[2] ?? "");
+      keys = orderClause[1].split(",").map((key) => {
+        const [column, direction = ""] = key.trim().split(" ");
+        return { column, descending: /^desc$/i.test(direction) };
+      });
       tail = tail.slice(0, orderClause.index);
     }
     const whereClause = /^\s*WHERE (.+)$/i.exec(tail);
 
+    let limit = Number.POSITIVE_INFINITY;
+    if (limitSource === "?") {
+      const holes = whereClause ? tokenize(whereClause[1]).filter((t) => t === "?").length : 0;
+      limit = Number(params[holes] ?? Number.NaN);
+      if (!Number.isInteger(limit)) throw new Error(`fake sql: LIMIT ? was bound ${params[holes]}`);
+    } else if (limitSource !== null) {
+      limit = Number(limitSource);
+    }
+
     const all = tables[table] ?? [];
     let rows = whereClause ? matching(whereClause[1], all, params, 0, tables) : [...all];
-    if (orderColumn !== "") {
-      rows = [...rows].sort(
-        (a, b) => (descending ? -1 : 1) * order(a[orderColumn] ?? null, b[orderColumn] ?? null),
-      );
+    if (keys.length > 0) {
+      rows = [...rows].sort((a, b) => {
+        for (const { column, descending } of keys) {
+          const relation = sortOrder(a[column] ?? null, b[column] ?? null);
+          if (relation !== 0) return descending ? -relation : relation;
+        }
+        return 0;
+      });
     }
     const columns = columnList.split(",").map((c) => c.trim());
     const results = rows.slice(0, limit).map((row) => {
@@ -648,6 +708,8 @@ export function fakeEnv(...groups: string[]): Env {
       checked_at: 0,
       group_epoch: null,
       group_auth: null,
+      // Never reconciled, which is every row on the day `reconciled_at` is added.
+      reconciled_at: null,
     })),
     group_keys: [],
     group_devices: [],
@@ -682,6 +744,7 @@ export function fakeTables(options: { groups: string[]; bound?: boolean }): Tabl
       checked_at: 0,
       group_epoch: null,
       group_auth: null,
+      reconciled_at: null,
     })),
     group_keys: [],
     // Seeded empty rather than left to `insertRow`'s `??= []`, so a test can assert on the table

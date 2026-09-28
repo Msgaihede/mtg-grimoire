@@ -793,7 +793,7 @@ mod tests {
         let db = mem_db();
         ingest(&db, &[&tag("a1", "ramp", &[], &["oid-1"])]).unwrap();
 
-        let missing = std::env::temp_dir().join("mtgtest-tags-does-not-exist.jsonl.gz");
+        let missing = crate::scratch::path("tags-does-not-exist.jsonl.gz");
         let _ = std::fs::remove_file(&missing);
         let err = ingest_gz(
             &ORACLE,
@@ -836,12 +836,12 @@ mod tests {
 
         // A file-backed database, as the app has: an in-memory one writes far faster than
         // the probe below can ask, which would make the count a measure of the fixture
-        // rather than of the locking. **In a directory of its own**: under the fixed name
-        // this used, two `cargo test` processes — two worktrees on one machine — deleted each
-        // other's database mid-run, and 40 runs of 40 died on `disk I/O error` at `convert`.
-        let dir = tempfile::tempdir().unwrap();
-        crate::split::convert(dir.path()).unwrap();
-        let db = Mutex::new(crate::db::open_write(dir.path()).unwrap());
+        // rather than of the locking.
+        let dir = crate::scratch::path("oracle-tags-chunked");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::split::convert(&dir).unwrap();
+        let db = Mutex::new(crate::db::open_write(&dir).unwrap());
 
         // The one line holding every tagging commits as one batch, because a line is folded
         // whole; the release points are the tags', the edges' and twenty batches of closure
@@ -888,8 +888,8 @@ mod tests {
              and took it {} times",
             taken.load(Ordering::SeqCst)
         );
-        // Closed before `dir` removes the folder it lives in.
         drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ---- the read path ---------------------------------------------------------------
@@ -1372,11 +1372,7 @@ mod tests {
     /// that is really a mock server — [`crate::marketplace_feed`]'s `test_state`, with the
     /// base URL injected, which is what lets the whole refresh be driven here.
     fn test_state(base_url: String) -> (Arc<AppState>, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "mtgtest-tags-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let dir = crate::scratch::path("tags-state");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::schema::prepare_data_dir(&dir).unwrap();

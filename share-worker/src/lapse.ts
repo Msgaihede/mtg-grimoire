@@ -8,8 +8,9 @@ import { LAPSED, LIVE } from "./shares";
  * **This is the share Worker's own cron and not an edit to the relay's**, which is §5.1's whole
  * point: the relay's source and deploy stay untouched, and a flip written into
  * `relay/src/claim.ts`'s `reconcile` would break exactly that claim. The free plan allows five
- * cron triggers per account and the relay uses one. `wrangler.jsonc` fires this at `30 3` rather
- * than `0 3` so the two passes do not contend on the same D1.
+ * cron triggers per account and the relay uses one. `wrangler.jsonc` fires this at `30 3` so the
+ * two passes do not contend on the same D1: the relay's fires at minute `0` — daily at `0 3` until
+ * 2026-09-28, hourly since — and never at `30`.
  *
  * **It reads the stored `status` and does not re-run `decide`.** `reconcile` is what moves a
  * subject through `active → grace → dead` against Patreon; duplicating that judgement here would

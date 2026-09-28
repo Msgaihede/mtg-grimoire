@@ -101,7 +101,7 @@ describe("WidgetSettingsPanel", () => {
     );
 
     const split = within(screen.getByRole("group", { name: "Split by" }));
-    expect(split.getByRole("button", { name: "Colour" })).toHaveAttribute("aria-pressed", "true");
+    expect(split.getByRole("button", { name: "Color" })).toHaveAttribute("aria-pressed", "true");
     expect(split.getByRole("button", { name: "Rarity" })).toHaveAttribute("aria-pressed", "false");
 
     await user.click(split.getByRole("button", { name: "Set" }));
@@ -215,7 +215,7 @@ describe("WidgetSettingsPanel", () => {
       />,
     );
     expect(screen.queryByRole("group", { name: "Show" })).toBeNull();
-    expect(screen.getByRole("group", { name: "Window" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Period" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Direction" })).toBeInTheDocument();
   });
 

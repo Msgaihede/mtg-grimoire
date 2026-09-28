@@ -515,17 +515,12 @@ pub(crate) mod fixtures {
     /// databases, so an in-memory state would build an index over an empty corpus and every
     /// count here would be zero.
     ///
-    /// `name` is a directory name rather than one shared path because `cargo test` runs these
-    /// in parallel — the brief's parameterless version had five tests sharing one path, where
-    /// each one's first act is to delete the directory the others are mid-build over.
-    ///
-    /// **Unique crate-wide, not merely within a module.** The name is the whole of the temp
-    /// directory, so two callers agreeing by accident is the same collision whatever files
-    /// they live in — and the failure it produces is a flaky test blaming a count. 15 names
-    /// across three modules today (`index::lifecycle`, `index::facets` via its own `state`
-    /// wrapper, and `collection`); `grep` for the call before inventing a sixteenth.
+    /// The directory is [`crate::scratch::path`]'s, private to the calling test and to this
+    /// `cargo test` process, so `name` only labels it. It used to be the whole of a shared temp
+    /// path and had to be unique crate-wide: the brief's parameterless version had five tests
+    /// sharing one directory, each one's first act deleting what the others were mid-build over.
     pub(crate) fn state_with_seeded_cards(name: &str) -> std::sync::Arc<crate::sync::AppState> {
-        let dir = std::env::temp_dir().join(format!("mtgtest-lifecycle-{name}"));
+        let dir = crate::scratch::path(&format!("lifecycle-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();

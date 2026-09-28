@@ -232,8 +232,8 @@ export function WidgetCatalogue({
     <Dialog
       open={open}
       title="Widget catalogue"
-      subtitle="A widget arrives at its own size, in the first free place on the grid."
-      closeLabel="Close the widget catalogue"
+      subtitle="New widgets are placed in the first free spot on the grid."
+      closeLabel="Close"
       size="w-[52rem]"
       onDismiss={onDismiss}
       onClose={onClose}

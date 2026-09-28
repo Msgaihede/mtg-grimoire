@@ -2551,13 +2551,7 @@ mod tests {
 
     fn gz_fixture(body: &str, tag: &str) -> PathBuf {
         use flate2::{write::GzEncoder, Compression};
-        let dir = std::env::temp_dir().join("mtgtest-combos");
-        std::fs::create_dir_all(&dir).unwrap();
-        let p = dir.join(format!(
-            "{tag}-{}-{:?}.json.gz",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let p = crate::scratch::path(&format!("combos-{tag}.json.gz"));
         let mut enc = GzEncoder::new(std::fs::File::create(&p).unwrap(), Compression::fast());
         enc.write_all(body.as_bytes()).unwrap();
         enc.finish().unwrap();
@@ -4525,11 +4519,7 @@ mod tests {
     // ---- the network ------------------------------------------------------------------
 
     fn scratch(tag: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "mtgtest-combos-{tag}-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let dir = crate::scratch::path(&format!("combos-{tag}"));
         let _ = std::fs::remove_dir_all(&dir);
         dir
     }

@@ -27,9 +27,10 @@ jobs:
   # Which jobs this change can possibly have broken. The decision is `scripts/ci-route.mjs`,
   # where every arm carries its reason; this job only finds the changed paths and hands them
   # over. **The two halves do read each other's files** — frontend tests read `src-tauri/` and
-  # `crates/` sources as text, Rust tests read `src/lib/userTables.json` and the transfer
-  # golden — so a crossing routes to both, and `scripts/ci-route.test.mjs` derives that census
-  # from the sources and fails when a crossing routes to only one side.
+  # `crates/` sources as text, Rust tests read `src/lib/userTables.json`,
+  # `src/lib/syncedTables.json` and the transfer golden — so a crossing routes to both, and
+  # `scripts/ci-route.test.mjs` derives that census from the sources and fails when a crossing
+  # routes to only one side.
   #
   # Deliberately NOT a workflow-level `paths:` filter: that skips the whole workflow,
   # `ci-ok` included, and a required check that never reports leaves every PR merge-blocked

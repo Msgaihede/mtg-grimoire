@@ -188,7 +188,7 @@ const OVER_WASH = "bg-accent/15";
 
 /* ----------------------------------------------------------------- the sentences ------- */
 
-const PENDING = "Reading your notes…";
+const PENDING = "Loading notes…";
 /** The heading over an empty board. */
 export const EMPTY_TITLE = "No notes yet";
 /** The one dim sentence under it — the artboard's, and it says what a note is *for* rather than
@@ -491,7 +491,7 @@ export function StickyNotesWidget({
   if (api.isError) {
     return (
       <WidgetMessage tone="destructive">
-        Could not read your notes — {ipcError(api.error)}
+        Couldn't load notes — {ipcError(api.error)}
       </WidgetMessage>
     );
   }

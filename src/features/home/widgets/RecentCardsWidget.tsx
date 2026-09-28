@@ -67,8 +67,8 @@ export const STRIP_BAR_PX = 10;
  *  card rather than a sliver; the body scrolls past it. */
 const MIN_ART_PX = 48;
 
-const PENDING = "Reading the cards you opened…";
-export const EMPTY = "Cards you open anywhere in the app will appear here.";
+const PENDING = "Loading recent cards…";
+export const EMPTY = "Cards you open will show up here.";
 
 /**
  * How many tiles a card of this footprint draws — the design's rule, verbatim: the reader's
@@ -98,7 +98,7 @@ export function RecentCardsWidget({ widget, fit, still }: WidgetBodyProps): Reac
   if (query.isError) {
     return (
       <WidgetMessage tone="destructive">
-        Could not read the cards you opened — {ipcError(query.error)}
+        Couldn't load recent cards — {ipcError(query.error)}
       </WidgetMessage>
     );
   }

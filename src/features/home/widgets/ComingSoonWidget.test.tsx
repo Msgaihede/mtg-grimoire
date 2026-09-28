@@ -339,7 +339,7 @@ describe("ComingSoonWidget", () => {
 
       draw();
 
-      expect(screen.getByText("Looking for announced sets…")).toBeInTheDocument();
+      expect(screen.getByText("Loading upcoming sets…")).toBeInTheDocument();
     });
 
     it("says a refusal in the backend's words", async () => {
@@ -348,7 +348,7 @@ describe("ComingSoonWidget", () => {
       draw();
 
       expect(
-        await screen.findByText("Could not read what is announced — The database is busy."),
+        await screen.findByText("Couldn't load upcoming sets — The database is busy."),
       ).toBeInTheDocument();
     });
 

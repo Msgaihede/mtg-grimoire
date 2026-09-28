@@ -421,7 +421,7 @@ describe("WidgetCard", () => {
   describe("removing the card", () => {
     /** The card asks before it goes — its settings go with it, which is not a thing to lose to a
      *  stray press on a page being rearranged. */
-    it("asks first, and Keep takes nothing off the page", async () => {
+    it("asks first, and Cancel takes nothing off the page", async () => {
       const user = userEvent.setup();
       const onRemove = vi.fn();
       render(<WidgetCard {...props({ editing: true, onRemove })} />);
@@ -431,12 +431,12 @@ describe("WidgetCard", () => {
       expect(onRemove).not.toHaveBeenCalled();
 
       const question = await screen.findByRole("dialog", { name: `Remove ${TITLE}?` });
-      expect(question).toHaveTextContent(`Take ${TITLE} off the page?`);
+      expect(question).toHaveTextContent(`Remove ${TITLE}?`);
       expect(question).toHaveTextContent(
-        "Its settings go with it. You can add it again from the catalogue.",
+        "Its settings are removed too. You can add it back from the catalogue.",
       );
 
-      await user.click(within(question).getByRole("button", { name: "Keep" }));
+      await user.click(within(question).getByRole("button", { name: "Cancel" }));
       await waitFor(() =>
         expect(screen.queryByRole("dialog", { name: `Remove ${TITLE}?` })).toBeNull(),
       );

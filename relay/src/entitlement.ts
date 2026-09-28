@@ -4,10 +4,10 @@
  * **Why this is its own module rather than a branch inside the webhook handler.** The same
  * question is asked from three places that share nothing else: the OAuth callback when a reader
  * first links their account, the webhook when Patreon tells us a membership changed, and the
- * daily reconciliation that re-reads every row in case a webhook was never delivered. Three
- * copies of a seven-day window is three places for it to be six days, and the one that drifts
- * would be the one nobody drives by hand. So the decision lives here, the three callers supply
- * `nowMs` and the row's stored `graceUntil`, and each writes back what it is handed.
+ * reconciliation that re-reads each live row about once a day in case a webhook was never
+ * delivered. Three copies of a seven-day window is three places for it to be six days, and the one
+ * that drifts would be the one nobody drives by hand. So the decision lives here, the three
+ * callers supply `nowMs` and the row's stored `graceUntil`, and each writes back what it is handed.
  *
  * **Nothing here touches D1, and that is the point.** `decide` cannot read the clock and cannot
  * read a row; it is a function of its three arguments, which is what makes the boundary case
@@ -68,7 +68,7 @@ export function decide(
       //
       // The window opens **once**: an existing deadline is kept and only a subject who has
       // never been in a window gets a fresh one. Patreon can fire this webhook several times
-      // over one retry cycle and the daily reconciliation asks again every day, so a branch
+      // over one retry cycle and the reconciliation asks again about once a day, so a branch
       // that always wrote `nowMs + GRACE_MS` would push the deadline forward on every sighting
       // and never arrive — an unbounded window, which is the same as no window.
       //

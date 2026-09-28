@@ -137,9 +137,9 @@ export const RemoveQuestion: Story = {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByRole("button", { name: "Remove Collection value" }));
     const question = await canvas.findByRole("dialog", { name: "Remove Collection value?" });
-    await expect(question).toHaveTextContent("Take Collection value off the page?");
+    await expect(question).toHaveTextContent("Remove Collection value?");
 
-    await userEvent.click(within(question).getByRole("button", { name: "Keep" }));
+    await userEvent.click(within(question).getByRole("button", { name: "Cancel" }));
     await waitFor(() =>
       expect(canvas.queryByRole("dialog", { name: "Remove Collection value?" })).toBeNull(),
     );

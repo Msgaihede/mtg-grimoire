@@ -29,10 +29,10 @@
   // The daily lapse pass (spec §6) — `src/lapse.ts`, which darkens a lapsed membership's links
   // and lights them again if the membership revives.
   //
-  // ⚠️ **`30 3` and not `0 3`, because `relay/wrangler.jsonc` already owns `0 3`.** The two
-  // Workers write the same D1 database, and there is nothing to be gained by having both passes
-  // start on the same minute. The free plan allows five cron triggers per account; this is the
-  // second.
+  // ⚠️ **Minute `30`, because `relay/wrangler.jsonc` owns minute `0`** — `0 3` daily until
+  // 2026-09-28, `0 * * * *` hourly since, and never `30`. The two Workers write the same D1
+  // database, and there is nothing to be gained by having both passes start on the same minute.
+  // The free plan allows five cron triggers per account; this is the second.
   //
   // **A trigger on this Worker rather than a second job inside the relay's `reconcile`**, for
   // spec §5.1's reason: the relay's source and deploy stay untouched, and a flip written there

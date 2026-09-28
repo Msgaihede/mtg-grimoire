@@ -106,7 +106,7 @@ export const Default: Story = {
       await card.findByRole("button", { name: /^Binder, collection folder, \d+ cards/ }),
     ).toBeInTheDocument();
     await expect(
-      await card.findByRole("button", { name: /^Ordered, wishlist folder, \d+ wish/ }),
+      await card.findByRole("button", { name: /^Ordered, wishlist folder, \d+ card/ }),
     ).toBeInTheDocument();
   },
 };
@@ -167,12 +167,12 @@ export const NoFoldersYet: Story = {
     const card = within(await canvas.findByRole("region", { name: "Folders" }));
     await expect(
       await card.findByText(
-        "No collection folders to show — make one in your collection, then pin it here from Customize.",
+        "No collection folders yet. Create one in your collection, then pin it here from Customize.",
       ),
     ).toBeInTheDocument();
     await expect(
       await card.findByText(
-        "No wishlist folders to show — make one in your wishlist, then pin it here from Customize.",
+        "No wishlist folders yet. Create one in your wishlist, then pin it here from Customize.",
       ),
     ).toBeInTheDocument();
   },

@@ -259,14 +259,14 @@ describe("StickyNotesWidget", () => {
   it("says it is reading while the read is out", () => {
     stickyNotes.mockImplementation(() => new Promise(() => {}));
     draw({ seed: false });
-    expect(screen.getByText("Reading your notes…")).toBeInTheDocument();
+    expect(screen.getByText("Loading notes…")).toBeInTheDocument();
   });
 
   it("says a refusal in the backend's words", async () => {
     stickyNotes.mockRejectedValue("the database is locked");
     draw({ seed: false });
     expect(
-      await screen.findByText("Could not read your notes — the database is locked"),
+      await screen.findByText("Couldn't load notes — the database is locked"),
     ).toBeInTheDocument();
   });
 

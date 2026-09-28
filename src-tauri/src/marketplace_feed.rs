@@ -1729,7 +1729,7 @@ mod tests {
         store(&db, &good, 1_800_000_000).unwrap();
         let before = stored_prices(&db, "cardkingdom");
 
-        let dir = std::env::temp_dir().join("mtgtest-marketplace-feed-failures");
+        let dir = crate::scratch::path("marketplace-feed-failures");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -1981,11 +1981,7 @@ mod tests {
     /// An `AppState` pointed at a scratch directory and a database of its own.
     fn test_state() -> (Arc<AppState>, PathBuf) {
         use std::sync::atomic::AtomicBool;
-        let dir = std::env::temp_dir().join(format!(
-            "mtgtest-feed-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let dir = crate::scratch::path("feed-state");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::schema::prepare_data_dir(&dir).unwrap();
@@ -2041,7 +2037,7 @@ mod tests {
             .await;
         let url: &'static str = Box::leak(server.url("/pricelist").into_boxed_str());
 
-        let dir = std::env::temp_dir().join("mtgtest-feed-download");
+        let dir = crate::scratch::path("feed-download");
         let _ = std::fs::remove_dir_all(&dir);
         let dest = dir.join("tmp").join("cardkingdom-prices.json");
         let mut seen: Vec<(u64, u64)> = Vec::new();
@@ -2069,7 +2065,7 @@ mod tests {
             .await;
         let url: &'static str = Box::leak(server.url("/pricelist").into_boxed_str());
 
-        let dir = std::env::temp_dir().join("mtgtest-feed-refused");
+        let dir = crate::scratch::path("feed-refused");
         let _ = std::fs::remove_dir_all(&dir);
         let dest = dir.join("tmp").join("cardkingdom-prices.json");
 

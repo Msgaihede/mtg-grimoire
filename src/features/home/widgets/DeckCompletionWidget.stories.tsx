@@ -98,7 +98,7 @@ const meta = {
           "against the copies filed in its own group — the deck editor's `Actual` tab, owned for " +
           "owned; `Theory` measures every deck that keeps a plan, virtual ones included, its " +
           "actual list against its theory list. Either way every active pile counts, on exact " +
-          "printing and exact finish. A row measured on the plan says **`Plan`** before its " +
+          "printing and exact finish. A row measured on the theory list says **`Theory`** before its " +
           "count.\n\n" +
           "**Complete is `missing === 0`**, never a price. A deck missing nothing leaves the list " +
           "unless `Complete decks` is on, and the footer counts it either way — over every deck " +
@@ -118,7 +118,7 @@ type Story = StoryObj<typeof meta>;
 
 /**
  * The default panel over `starter`: every deck's actual list against the collection, nearest done
- * first, with a track each — and no row saying `Plan`, since `Collection` measures none.
+ * first, with a track each — and no row saying `Theory`, since `Collection` measures none.
  */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
@@ -127,7 +127,7 @@ export const Default: Story = {
     await expect(
       await card.findByRole("button", { name: /^Modern Goodstuff · \d+ of \d+ · \d+ missing/ }),
     ).toBeInTheDocument();
-    await expect(card.queryByRole("button", { name: / · Plan · / })).not.toBeInTheDocument();
+    await expect(card.queryByRole("button", { name: / · Theory · / })).not.toBeInTheDocument();
   },
 };
 
@@ -142,7 +142,7 @@ export const Theory: Story = {
     const card = within(await canvas.findByRole("region", { name: "Deck completion" }));
     await expect(
       await card.findByRole("button", {
-        name: /^Rhystic Testbed · Plan · \d+ of \d+ · \d+ missing/,
+        name: /^Rhystic Testbed · Theory · \d+ of \d+ · \d+ missing/,
       }),
     ).toBeInTheDocument();
     await expect(card.queryByRole("button", { name: /^Modern Goodstuff/ })).not.toBeInTheDocument();
