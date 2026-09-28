@@ -226,7 +226,9 @@ everything not on it stays where its window put it.
 
 | Follows live | Stays per window |
 | --- | --- |
-| `["startView"]`, `["homeLayout"]`, `["marketplace"]`, `["markColors"]`, `["recentCards"]`, `["decks","lastFormat"]`, `["mirror"]`, `["scanner","trayCount"]` | `["navCollapsed"]`, `["searchOpen"]`, `["deckFolderPane"]`, `["deckSort"]`, `["deckSearchTab"]`, `["printingGroupBy"]`, `["shelfFolds"]` |
+| `["startView"]`, `["homeLayout"]`, `["marketplace"]`, `["markColors"]`, `["recentCards"]`, `["decks","lastFormat"]`, `["mirror"]`, `["scanner","trayCount"]` | `["navCollapsed"]`, `["searchOpen"]`, `["deckFolderPane"]`, `["deckSort"]`, `["deckSearchTab"]`, `["printingGroupBy"]`, `["shelfFolds"]`, `["hiddenStacks"]` |
+
+**`["hiddenStacks"]` joined it on 2026-09-28** (issue #618) — the `hidden_stacks` row, the stacks a reader hid in a deck's Stacks view, keyed `["hiddenStacks", deckId]` by `useHiddenStacks`, for the folds' reason below: which stacks a deck hides is a view preference.
 
 **`["shelfFolds"]` joined the per-window column on 2026-09-26** — the `shelf_folds` row, which
 records the collection's and the wishlist's shelves the reader folded away from their default.

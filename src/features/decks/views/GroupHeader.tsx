@@ -11,10 +11,13 @@
  * faked around them, because a token is never a deck card and a pile of them has no key, no
  * category id and no cards list to invent. Its count is said in its own words through `words`.
  *
- * **The count and the price are one block of figures on the name's own row** (spec §3.1): the
- * count is a {@link CountPill}, the price follows it with no separator — the pill's own edge is
- * the separator — and the row wraps the figures under the name where the column is too narrow
- * for both, rather than hanging them out of it.
+ * **The count sits on the left, straight after the name, and the price is alone on the right**
+ * (issue #618, 2026-09-28). The count is a {@link CountPill} in the name's own block; the price —
+ * and, in the Stacks view, a hidden stack's eye ({@link GroupHeader}'s `trailing`) — is the block
+ * of figures on the far side, which the row wraps under the name where the column is too narrow
+ * for both, rather than hanging it out of it. It was one block of pill and price on the right
+ * from token stacks' spec §3.1 until then; the reader asked for the count beside the name it
+ * counts.
  */
 import type { ReactNode } from "react";
 import { Gavel, PowerOff, type LucideIcon } from "lucide-react";
@@ -73,9 +76,10 @@ const RULE_KINDS: readonly CategoryKind[] = ["commander", "side", "companion"];
  * What each mark says to a screen reader — exported so a test or a story addresses a mark by the
  * words rather than by re-spelling them, which is `CountPill`'s `cardCountWords` arrangement.
  *
- * **Phrased to follow the pile's name**, because that is where they are heard: a name computed
- * over a heading reads `Sideboard Rules pile Switched off 3 cards $4.97`. `Rules pile` rather than
- * the canvas's bare `Rule`, which after a name reads as a verb; `Switched off` rather than
+ * **Phrased to follow the pile's name and its count**, because that is where they are heard: a
+ * name computed over a heading reads `Sideboard 3 cards Rules pile Switched off $4.97`.
+ * `Rules pile` rather than the canvas's bare `Rule`, which after a name reads as a verb;
+ * `Switched off` rather than
  * `Inactive`, because it is the word the heading's own tooltip and the category menu's
  * `Deactivate` row are both about — the pile's switch.
  */
@@ -132,6 +136,7 @@ export function GroupHeader({
   id,
   handle,
   actions,
+  trailing,
   className,
 }: {
   /** The pile being headed — a whole `CardGroup` from the four views and `CategoriesDialog`, and
@@ -195,6 +200,15 @@ export function GroupHeader({
    *   Sideboard and the switched-off Maybeboard, with the Sideboard's whole 60px name at 1× and
    *   18px of it at 0.8×; two rows below that, with `Card Draw and Selection` keeping 77px of
    *   name at 0.5×. The name span stays `min-w-0 truncate`, so the name is what gives way first.
+   *
+   *   **The floor is `min-w-24` since 2026-09-28 (issue #618), and the wrap point did not move.**
+   *   The pill left the figures for the name's block, so the block's chrome grew by the pill and
+   *   its gap — ~20–32px, 6px a digit — and the figures shrank by the same. A floor still at 4rem
+   *   would have let a switched-off Sideboard's grip, pill and two chips (~92px) run over the
+   *   price at 0.6× and 0.7×. 6rem covers that chrome with no name at all, and because the pill
+   *   moved *across* the row the sum the row breaks on — floor, gap, figures — is where it was:
+   *   one row from 0.8× up. **That is arithmetic over these classes, not a measurement**; every
+   *   figure above predates the move and none has been re-taken.
    */
   layout?: "spread" | "tight" | "stacked";
   /** So the section under this can be `aria-labelledby` it. */
@@ -217,6 +231,12 @@ export function GroupHeader({
   /** The group's own menu, where a view has one. A derived group has none — nothing can be
    *  renamed, reordered or switched off about "Mana value 3". */
   actions?: ReactNode;
+  /**
+   * Drawn after the price, at the far end of the row — the Stacks view's eye on a **hidden**
+   * stack (issue #618), which shows its cards again. Absent everywhere else, and on every stack
+   * that is drawn.
+   */
+  trailing?: ReactNode;
   className?: string;
 }) {
   const tip = useTooltip();
@@ -228,7 +248,7 @@ export function GroupHeader({
       <div
         className={cn(
           "flex items-center gap-1.5",
-          layout === "stacked" ? "min-w-16 flex-1" : "min-w-0",
+          layout === "stacked" ? "min-w-24 flex-1" : "min-w-0",
           layout === "spread" && "flex-1",
         )}
       >
@@ -244,9 +264,13 @@ export function GroupHeader({
         >
           {group.name}
         </span>
-        {/* Each chip is preceded by a `{" "}`: layout-inert between flex items, and what keeps
-            its words apart from the name's in a computed name (`Sideboard Rules pile`, never
-            `SideboardRules pile`). */}
+        {/* The count, straight after the name it counts (issue #618) — copies, not rows: a deck
+            is counted in cards, and the token pile in tokens. `shrink-0` inside the pill, so it is
+            the name that truncates. The `{" "}` before it, and before each chip below, is
+            layout-inert between flex items and is what keeps the words apart wherever a name is
+            computed over this heading — `TableView` draws it inside a `role="cell"`, which read
+            `Ramp3 cards` without it (`src/CLAUDE.md`'s `Missing2` rule). */}{" "}
+        <CountPill count={group.count} words={words(group.count)} />
         {rule && (
           <>
             {" "}
@@ -271,21 +295,17 @@ export function GroupHeader({
       </div>
 
       {/* `shrink-0`, so the figures are never squeezed: where they do not fit beside the name,
-          the name truncates — to nothing in `spread`, to its 4rem floor in `stacked` — and past
-          that floor, or in `tight`, the row wraps them under it. */}
+          the name truncates — to nothing in `spread`, to its floor in `stacked` — and past that
+          floor, or in `tight`, the row wraps them under it. The `{" "}` before it keeps the last
+          of the name block's words and the price apart in a computed name. */}{" "}
       <div className="flex shrink-0 items-center gap-1.5 font-mono text-[0.625rem] tabular-nums text-dim">
-        {/* Copies, not rows — a deck is counted in cards, and the token pile in tokens.
-            The `{" "}` after the pill is layout-inert (whitespace between flex items is not
-            rendered) and is what keeps the pill's words and the price apart wherever a name is
-            computed over this heading — `TableView` draws it inside a `role="cell"`, which read
-            `3 cards$4.97` without it (`src/CLAUDE.md`'s `Missing2` rule). */}
-        <CountPill count={group.count} words={words(group.count)} />{" "}
         {/* The as-of sentence rides here, as it does on every other price in the app: a price
             is never shown without saying when it was true — and, now that a reader can pick,
             whose price it is. */}
         <span {...tip(pricesAsOf(marketplace))}>
           {formatPrice(group.totalPrice, marketplace.currency)}
         </span>
+        {trailing}
       </div>
     </div>
   );

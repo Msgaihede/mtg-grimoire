@@ -87,6 +87,7 @@ import { DeckNameField } from "./DeckNameField";
 import { DeckNotesPanel, type DeckNoteRequest } from "./DeckNotesPanel";
 import { notedOracleIds } from "./deckNotes";
 import { useDeckNotes } from "./useDeckNotes";
+import { useHiddenStacks } from "./useHiddenStacks";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
@@ -3303,6 +3304,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const noted = useMemo(() => notedOracleIds(notes.notes), [notes.notes]);
 
   /**
+   * **Which stacks the reader hid in the Stacks view** (issue #618) — this device's, per window,
+   * one `app_meta` row (`useHiddenStacks`). Read up here, above `categoryMenu`, for the notes'
+   * reason just above: the menu's `useCallback` names it in its dependency array, which is
+   * evaluated during the render that declares it.
+   */
+  const { hidden: hiddenStacks, setHidden: setStackHidden } = useHiddenStacks(deckId);
+
+  /**
    * **A note act the card menu asked for, parked until the band can honour it** (issue #447).
    *
    * `quickCategory`'s arrangement one union over, and its reason: a menu row is a bare callback
@@ -3495,6 +3504,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * `undefined` for a category this deck does not have, which a derived heading never reaches
    * (`deckGroupMenuProps` refuses a `null` id first) but a pile deleted under an open menu could.
+   *
+   * **`Hide` / `Unhide` is offered in the Stacks view alone** (issue #618): `stackVisibility` is
+   * handed only there, because the other three views draw every card of a hidden stack and a row
+   * that changed nothing on screen would read as a broken control.
    */
   const categoryMenu = useCallback(
     (categoryId: number) => {
@@ -3532,6 +3545,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               focusDeckGroup(pile.id),
             );
           },
+          stackVisibility:
+            view === "stacks"
+              ? {
+                  hidden: hiddenStacks.has(category.id),
+                  setHidden: (pile, hidden) => setStackHidden(pile.id, hidden),
+                }
+              : undefined,
         });
       return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
     },
@@ -3544,7 +3564,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       setCategoryActive,
       resetCategoryClear,
       resetCategoryDelete,
+      view,
+      hiddenStacks,
+      setStackHidden,
     ],
+  );
+
+  /**
+   * The eye on a hidden stack's heading shows its cards again — and hands the caret to the pile,
+   * because the button it was on is gone with the press. Same element, so it is there to take it.
+   */
+  const showStack = useCallback(
+    (categoryId: number) => {
+      setStackHidden(categoryId, false);
+      focusDeckGroup(categoryId);
+    },
+    [setStackHidden],
   );
 
   /**
@@ -5601,7 +5636,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 packs nothing — every pile is a flex item that wraps on width — and `TextView`
                 still packs, to a fixed readable target rather than to the desk, which is as tall
                 as its own answer now. See that prop's own note. */}
-            {view === "stacks" && <StackView {...viewProps} />}
+            {view === "stacks" && (
+              // The hidden stacks are this view's alone (issue #618): the other three draw every
+              // card, so the two props ride here rather than in the shared `viewProps`.
+              <StackView {...viewProps} hiddenStacks={hiddenStacks} onShowStack={showStack} />
+            )}
             {view === "table" && <TableView {...viewProps} />}
             {view === "text" && <TextView {...viewProps} />}
             {view === "grid" && <GridView {...viewProps} />}

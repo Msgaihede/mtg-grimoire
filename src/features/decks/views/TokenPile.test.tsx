@@ -150,8 +150,11 @@ function renderWith(node: ReactElement) {
 function headingOf(group: HTMLElement): HTMLElement {
   const name = within(group).getByText(TOKENS_HEADING);
   const pill = within(group).getByText(/^\d+ tokens? (?:or|and) emblems?$/);
+  // The pill sits beside the name since issue #618, so the box holding both is only the name's
+  // block — climb one more level, to the row that also carries the price on its far side.
   let heading = name.parentElement;
   while (heading !== null && !heading.contains(pill)) heading = heading.parentElement;
+  heading = heading?.parentElement ?? null;
   if (heading === null) throw new Error("no heading holds both the name and the pill");
   expect(heading).not.toContainElement(within(group).getByRole("list", { name: TOKENS_HEADING }));
   return heading;

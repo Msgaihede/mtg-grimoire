@@ -152,6 +152,10 @@ pub mod sorting;
 /// **A pre-27 single-file `mtg.db`, taken apart into `user.db` and `corpus.db`.** Its one
 /// caller, [`schema::prepare_data_dir`], is reached only from `desktop::init_state`.
 pub mod split;
+/// **Which stacks the reader hid in a deck** (issue #618) — [`shelffolds`]' shape keyed by deck:
+/// one `app_meta` row, an infallible read and a write whose only refusal is an id that is not
+/// positive. No filesystem, no clock and no network.
+pub mod stackhide;
 /// **Whether the background startup has landed, as the webview asks it.** Managed Tauri state
 /// and one `#[tauri::command]`. See the module doc for why startup left the UI thread.
 pub mod startup;
