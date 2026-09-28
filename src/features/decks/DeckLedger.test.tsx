@@ -363,7 +363,7 @@ describe("DeckLedger", () => {
    * The press is `aria-pressed` and never a name that changes with it, and the crown is drawn in
    * **both** states, because here it is the chip's identity rather than its state.
    */
-  it("presses the game-changer chip as a toggle, and never in the accent", () => {
+  it("presses the game-changer chip as a toggle, and is gold only while pressed", () => {
     const presses: number[] = [];
     ledger([card({ name: "Bolt" })], {
       gameChangers: 6,
@@ -374,19 +374,21 @@ describe("DeckLedger", () => {
     const chip = screen.getByRole("button", { name: "6 game changers" });
     expect(chip).toHaveAttribute("aria-pressed", "false");
     expect(chip.querySelector("svg")).not.toBeNull();
-    // Never the accent's edge or words, which on this line already mean *a reading you can go and
-    // look at* — `FOCUS`'s `outline-accent` is the app's one focus ring and is not this chip's
-    // colour, which is why the claim names the two properties rather than the token.
-    expect(chip.className).toContain("border-border");
-    expect(chip.className).not.toContain("border-accent");
-    expect(chip.className).not.toContain("text-accent");
+    // At rest the chip is the line's dim mono with the common edge. The accent is what it wears
+    // pressed — the one gold since the crown's own was retired on 2026-09-28 — and on a hover or a
+    // caret. `classList.contains` rather than `className` substrings, because `hover:text-accent`
+    // contains the resting class's name and a substring test would pass or fail over the variant.
+    expect(chip.classList.contains("border-border")).toBe(true);
+    expect(chip.classList.contains("text-dim")).toBe(true);
+    expect(chip.classList.contains("border-accent")).toBe(false);
+    expect(chip.classList.contains("text-accent")).toBe(false);
 
     fireEvent.click(chip);
     expect(presses).toHaveLength(1);
   });
 
   /** Pressed: the same name, the same crown, and the gold the cards themselves wear. */
-  it("wears pie-gold when it is pressed, and says so through aria-pressed", () => {
+  it("wears the gold when it is pressed, and says so through aria-pressed", () => {
     ledger([card({ name: "Bolt" })], {
       gameChangers: 6,
       hasGameChangers: true,
@@ -396,7 +398,7 @@ describe("DeckLedger", () => {
     const chip = screen.getByRole("button", { name: "6 game changers" });
     expect(chip).toHaveAttribute("aria-pressed", "true");
     expect(chip).not.toHaveAttribute("aria-label");
-    expect(chip.className).toContain("border-pie-gold");
+    expect(chip.className).toContain("border-accent");
     expect(chip.querySelector("svg")).not.toBeNull();
   });
 

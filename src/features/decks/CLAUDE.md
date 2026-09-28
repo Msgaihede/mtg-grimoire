@@ -1215,7 +1215,8 @@ layer.
   the destructive token — Tailwind red-400, `oklch(0.704 0.191 22.216)`, outside sRGB and rendered
   as `#ff6467` — because a mark meaning *not in your plan* must not wear the app's *there is a
   problem here* colour, and a card off-plan is a note about the reader's own list rather than a
-  rule they have broken. It is **not** `--color-pie-r` `#d3202a`, the Ember label colour, because
+  rule they have broken. It is **not** the Ember label colour (then `#d3202a`, the retired red
+  deep; `#f9aa8f`, `--color-mana-r`, since 2026-09-28), because
   a card wearing an Ember label already draws that hue in a `QuantityTag` at the other end of the
   same strip — which is precisely what azure costs the name tier, and there was no reason to pay
   it twice. What it is instead is red-400's hue with the chroma pulled into gamut and taken a step
@@ -1482,10 +1483,9 @@ layer.
   word — a *deletion* rather than a second string, so the two can never drift. Three rules hold
   it:
   - **`--color-ok` is the app's first success colour and had to be a new token.** The palette's
-    two greens are `--color-mana-g` ("Mana UI only — chips, pips, the line. Never a panel, never
-    a border, never text") and `--color-pie-g`, a colour-identity deep that reads as grey at
-    16px on this background; a check mark in either says "green cards" to the one reader who has
-    learned what those colours mean here. It is a peer of `--destructive` — same lightness, less
+    other green is `--color-mana-g`, the green of a Magic colour (and when this was written, a
+    colour-identity deep that read as grey at 16px, retired on 2026-09-28); a check mark in it
+    says "green cards" to the one reader who has learned what those colours mean here. It is a peer of `--destructive` — same lightness, less
     chroma — and like it, it colours a glyph and never a panel.
   - **Nothing on this line may hang outside its own box, and that is a scrollbar rather than a
     taste.** The count used to be a bubble `absolute -top-1 right-0`, and the *right* half of that
@@ -1728,10 +1728,11 @@ layer.
     shared; what is left is the failure itself — a game changer rarely wears a label, so an `AND`
     would empty the wall on the commonest pair of presses there is and read as the filter having
     broken.
-  - **On is `pie-gold` for the edge and the words, and never the accent.** The accent on this line
-    already means something else — `DeckBracket`'s edge says *a reading you can go and look at* —
-    and this gold is what the crowns on the cards themselves are drawn in, so the chip and the
-    cards it leaves on screen are one fact in one colour. `GameChangerMark`'s rule one layer down,
+  - **On is the accent for the edge and the words** (2026-09-28; it was a gold deep of its own
+    until the deeps were retired). This gold is what the crowns on the cards themselves are drawn
+    in, so the chip and the cards it leaves on screen are one fact in one colour. It now matches
+    `DeckBracket`'s accent edge on the same line — *a reading you can go and look at* — and what
+    tells the two apart is the crown and `aria-pressed`, not the hue. `GameChangerMark`'s rule one layer down,
     reached from the filter's end. **The border is the half a later tidy is likeliest to take
     off**: it went with the handlers on 2026-09-09 for a good reason — a bordered span between two
     real buttons goes on making an offer nothing behind it can keep — and both are back together.
@@ -1774,8 +1775,9 @@ layer.
   that width back. Every word of that is still true and none of it applies to a disclosure on a
   full-width band, which trades **height a reader was going to scroll past anyway** and no width
   at all. What actually changed the answer is that the band stopped being four charts on one line
-  and became seven readouts in two columns: a finished deck is one a reader opens to look at,
-  and two screens of arithmetic under it is two screens to scroll past every time.
+  and became seven readouts in two columns (three on the widest bands since 2026-09-28): a
+  finished deck is one a reader opens to look at, and two screens of arithmetic under it is two
+  screens to scroll past every time.
   - **`DEFAULT 1`, which is the one place it does not copy `tokens_open`.** That band was new when
     its column landed, so a collapsed default cost nobody anything they had. This one has been on
     screen for every deck since 2026-08-14 with no way to hide it, so `DEFAULT 0` would not be a
@@ -1787,10 +1789,15 @@ layer.
   - **`shrink-0` is unchanged and is still the whole of why this editor scrolls** — it rides on
     the component's own root now. So is the placement: below the price strip, below Tokens &
     emblems, last on the page.
-  - **Nothing in the band is a control but the disclosure and the Collection card's three
-    presses.** The design it was built from makes every bar a button that narrows the deck list;
-    that is a cross-component feature reaching into all four views and is deliberately out of this
-    pass, which is why there is no filter chip beside the heading.
+  - **No bar in the band is a control.** The design it was built from makes every bar a button
+    that narrows the deck list; that is a cross-component feature reaching into all four views and
+    is deliberately out of this pass, which is why there is no filter chip beside the heading. What
+    the band does press is the disclosure, the Collection card's three presses, and the readouts'
+    own ways of reading themselves — Mana pips' `Hide`, the Mana curve's `Creatures`, Card
+    distribution's `by` and the odds' three numbers — none of which narrows anything outside its
+    own card. (This bullet said *nothing but the disclosure and the Collection card's three
+    presses* and was false before 2026-09-28: the `by` select, the odds and `Hide` were already
+    there.)
 
   Three consequences, each measured in the shipped window and none of them visible to a test —
   **and all three predate the redesign**, so they are the arithmetic of the band as four charts
@@ -1826,25 +1833,93 @@ layer.
   224 to 208. Without it the panel railed at 1280 with a card pane open (**602 − 400 = 202**), and
   `scrollbar-width: thin` is not an answer: it costs 10px instead of 15 and lands on **207**, one
   pixel short.
-- **The band is seven bordered readouts in two wrapping columns, and `stats/` is where each one
-  lives** (2026-09-10, issue #389). `DeckStats.tsx` keeps `deckStats` — the arithmetic — and the
-  composition; `stats/StatsCard.tsx` is the shared furniture (`StatsCard`, `BarChart`, `Track`,
-  `percent`) and the other six files are one readout each. Everything below has a way of being
-  quietly wrong behind it.
+- **The band is seven bordered readouts in two wrapping columns — three on the widest bands since
+  2026-09-28 — and `stats/` is where each one lives** (2026-09-10, issue #389). `DeckStats.tsx`
+  keeps `deckStats` — the arithmetic — and the composition; `stats/StatsCard.tsx` is the shared
+  furniture (`StatsCard`, `BarChart`, `Track`, `percent`) and every other component file is one
+  readout, except that Card distribution is composed of four: itself, `OpeningHandOdds`,
+  `CreatureSplitBar` and `TypeBreakdown` (the last two since 2026-09-28, their arithmetic in
+  `typeBreakdownCounts.ts`). Everything below has a way of being quietly wrong behind it.
+  - **Three columns when the band body is at least `THREE_COLUMN_MIN_PX` (1400) wide**
+    (2026-09-28, [issue #620](https://github.com/Msgaihede/mtg-grimoire/issues/620)):
+    `[Mana curve, Curve by color] [Mana pips, Figures] [Card distribution, Collection]`. Below it
+    the two columns are exactly what they were — `[Mana pips, Card distribution] [Mana curve,
+    Curve by color, Figures, Collection]`, each `min-w-[22rem]`, wrapping to one. 1400 sits between
+    a 1920 window's band (~1657) and a 1440 window's (~1184) on purpose: three columns of 22rem fit
+    from ~1080, and fitting is not the question — below 1400 a third column is three cramped
+    readouts where two roomy ones read better. **Measured on the band and never on the window**,
+    because the sidebar and the page padding come off the window first.
+  - **The width is `src/lib/useElementWidth` on the body `<div>`, and never a container query** —
+    the Collection card opens anchored layers and `container-type` would make the band the
+    containing block for every `fixed` descendant (the wrap's own comment, and
+    [`src/CLAUDE.md`](../../CLAUDE.md)'s `@container` rule). The hook is a callback ref whose
+    `ResizeObserver` callback is the only thing that sets state, so there is no `setState` in an
+    effect body and a box that arrives late is observed the moment it is drawn. **`0` is
+    unmeasured and `statsColumns(0)` is two** — what jsdom answers for ever and what the first
+    paint answers before the observer fires — so every test and story sees the two-column band.
+    It is on the body rather than the columns' box because the body is always in the tree, open or
+    shut, so the band opens straight into the right arrangement.
+  - **A readout that changes column is remounted, so no readout holds its own state.** A card
+    moved from one column container to another is a different parent to React; held in the card,
+    widening past 1400 would put colourless back in Mana pips, the cut back to `Types` and the odds
+    back to *at least one in seven*. So `DeckStats` holds `hideColorless`, `by` and the odds'
+    `OddsQuestion` (`DEFAULT_ODDS`), and hands each down with its setter. **For the session, not per
+    deck** — `DeckEditor` is keyed on the deck id, so another deck starts them over, which is what
+    each did while it lived in its readout. The seven readouts are built once and *placed* by the
+    arrangement, never re-derived per layout, so a prop added to a card reaches it in both.
+  - **The Mana curve's `Creatures` toggle is the one piece of readout state that is the deck's**:
+    `decks.curve_creatures` (user schema v56), `DeckStats`' `creatureSplit` /
+    `onCreatureSplitChange`, wired from `DeckEditor` exactly as `open` / `onToggle` are and written
+    through `deck_update`. A reader who splits their creature-heavy list's curve is saying
+    something about that deck; `Hide` and `by` are where they are looking right now. `DEFAULT 0`,
+    no history row, no undo step, not carried by a duplicate —
+    [decks-storage.md](../../../docs/reference/decks-storage.md) has the column. The toggle is
+    Mana pips' `Hide` box (`h-8`, bordered, `aria-pressed`, accent edge when on) left of the average, one
+    visible word in both states and one accessible name, `CREATURE_SPLIT_LABEL`; on, the chart
+    draws two parts per bar and a `Creatures N` / `Noncreatures N` legend under it, and off it is
+    exactly the unsplit chart.
   - **Three vertical bar charts draw through one `BarChart`, and the rule it exists for is the
-    number's placement**: a count is printed **above** its fill where the empty track leaves it
-    room and **inside** the fill's top where it does not. Three copies of that arithmetic is three
-    chances for one chart to clip a count at some zoom nobody tested. The threshold is the count's
-    own line height plus its air (24px at `md`, 19 at `sm`); the fill carries a foreground colour
-    only because of the second case.
+    number's placement**, which since 2026-09-28 comes in two variants. **The default** — Card
+    distribution's — prints a count **above** its fill where the empty track leaves it room and
+    **inside** the fill's top where it does not; the threshold is the count's own line height plus
+    its air (`HEADROOM`, 24px at `md`, 19 at `sm`), and the fill carries a foreground colour only
+    because of the second case. **`variant="mana"`** — the Mana curve and the six colour curves —
+    prints **every count above its own fill and never inside it**: `HEADROOM` is spent as a clear
+    strip drawn *over* the track (152 / 88 unchanged), so the tallest bar still fills its track and
+    its count lands in the strip, and the count is an absolute box whose `bottom` is the fill's
+    height in px — which is why every height in `ManaColumn` is computed rather than a percentage.
+    The axis labels are numerals in bordered circles (`CIRCLE_LABEL`: `min(100%, 36px)` in mono
+    20px bold on the curve, `min(100%, 22px)` in 13px bold on a colour curve), shrinking with a
+    narrow column rather than pushing its neighbours apart; Card distribution keeps its word boxes.
+    Zero draws no count in either variant. Three copies of any of that arithmetic is three chances
+    for one chart to clip a count at some zoom nobody tested, which is why the stacked chart below
+    is a mode of `BarChart` rather than a sibling.
+  - **`ChartBar.parts` stacks a bar, and only `variant="mana"` honours it.** Parts are listed foot
+    first, must sum to `count` (still the bar's height and the number over it), and each is floored
+    at `MIN_FILL` like a whole bar, with a 1px `--color-bg` rule on the upper part's foot. **A part
+    prints its own count inside itself only when it is at least `PART_COUNT_MIN_PX` (18) tall** —
+    a 12px line and its air; under that it is drawn silent and the sentence and the legend carry
+    the number. The total still rides over the whole stack. `spokenBar` reads a split bar as its
+    parts — *"5 creatures and 5 noncreatures at mana value 2"*, a zero part included.
+  - **The split is `DeckStatsSummary.curveCreatures` and `variableCostCreatures`, counted in the
+    same pass as `curve`**, so `curveCreatures[b] <= curve[b]` by construction and the noncreature
+    part is a subtraction rather than a third field to drift. A creature is `deckBuckets.isCreature`
+    — `typeBucket`'s own answer (the front face; `Creature` leads `TYPE_BUCKETS`), so an Artifact
+    Creature is one and a modal DFC with a creature back is not. Dryad Arbor answers `true` and is
+    in neither half, because the curve is over nonlands. The X bar splits too; the legend under the
+    split chart sums the drawn bars' parts, X included exactly when its bar is. The fills are
+    `--color-creature` / `--color-noncreature` (counts in `--color-creature-fg` / `--color-text`),
+    one violet at two weights, because every other hue on this screen already means something.
   - **`max` is the caller's and is required.** The six colour curves are each read against **their
     own** tallest bucket, never the deck's — normalise them against the largest and five of the
     six are a flat line. Defaulting it to the bars' own maximum would make that the easy mistake.
-  - **Chart fills are `MANA_FILL` (`--color-mana-*`) and never the pie deeps.** `mana.ts` is where
+  - **Chart fills are `MANA_FILL` (`--color-mana-*`)**, the app's only Magic-colour palette since
+    the pie deeps were retired on 2026-09-28. `mana.ts` is where
     that table now lives, which is [`src/CLAUDE.md`](../../CLAUDE.md)'s own "a third surface
     filling by colour key is the point at which all of them want one home" cashed in: the two pips
     bands, the six per-colour tracks and the six colour curves are that third surface several
-    times over. Everything that is not a colour is the accent.
+    times over — and since 2026-09-28 so is the Land pie. Everything that is not a colour is the
+    accent, **except the creature split**, which has its own violet pair for the reason above.
   - **A symbol printed _on_ one of those fills is the bare glyph, never `ManaText`** (2026-09-10).
     `ManaText` always adds `ms-cost`, the font's own pill — an opaque disc in `mana-font`'s
     palette (`#aca29a` for black, `#db8664` for red) with the glyph knocked out of it — which is
@@ -1871,12 +1946,76 @@ layer.
     `produced_mana` says *which* colours a card makes and never *how much*, so the two numbers are
     identical by construction and printing both is one figure twice. The Cost caption's two terms
     are real — a card asking `{B}{B}` is two pips on one card.
+  - **Mana pips sets every label above what it labels** (2026-09-28). `Cost` and `Sources` sit over
+    their 32px bands, which take the card's whole width (the band label is `aria-hidden`, because
+    the `sr-only` sentence opens with the same word). In a colour tile the separate symbol row is
+    gone and the symbol leads each header — `(U) Cost`, `(U) Sources`, through `ManaText` on the
+    tile's own surface — over an **18px track with the percentage inside it** (`ShareTrack`,
+    `ManaPips.tsx`' own rather than `StatsCard`'s bare `Track`). The figure is centred on the fill in black,
+    printed just past the fill in `text-text` when the share is under `INSIDE_MIN_SHARE` (0.2,
+    where an 11px mono `20%` stops fitting a fifth of a ~141px tile), and an em dash centred in the
+    empty track in `text-dim` when there is no share. **The Sources fill is thinned with
+    `color-mix(in srgb, <fill> 55%, transparent)` and never `opacity`**, because opacity on the
+    fill would take the number printed on it down with it. The fixed `w-13` word and `w-9` figure
+    columns went with this: they left the track ~45px at the band's floor, a proportion bar
+    nobody could read a proportion off.
   - **The `by` select drives the bars _and_ the odds table**, which is the one place this
     implementation departs from the design it was built from: that spec wires the select to the
     table alone and leaves the bars on card type, which reads as a control that does nothing to
     the chart it is drawn inside. **The two still count different rows**: bars over `activeCards`,
     odds over `sizedCards`, because a sideboard is cards you own and sleeve and is not in the
-    library the opening seven comes out of.
+    library the opening seven comes out of. **What sits between them answers to no control**
+    (2026-09-28): `Creatures vs noncreatures` and the Creature/Land breakdown are drawn under the
+    bars whatever `by` says, above the odds — they are composition, like the bars, and a reader who
+    set the cut to `Card name` has not stopped wanting either.
+  - **`Creatures vs noncreatures` is `CreatureSplitBar`, in the Mana pips `Cost` band's grammar** —
+    a 15px label over a 32px full-width bar in two parts, each holding `<count> creatures
+    <share>`. **Its counts are the curve's, read off `DeckStatsSummary` by `creatureSplit`**:
+    creatures `sum(curveCreatures) + (variableCostCreatures ?? 0)` over total `sum(curve) +
+    (variableCost ?? 0)`, so the band and the Mana curve's split legend are one number by
+    construction — and the parts therefore sum to nonlands with a mana value, not to the bars a few
+    pixels above. A part under `PART_TEXT_MIN_SHARE` (0.35, measured against a ~132px string at the
+    three- and two-column widths; the design's quarter clips the three-column case) prints its
+    words beside the bar under a swatch; only one part can ever be under it. A zero part is not
+    drawn, and a deck with no nonland spells draws no band at all.
+  - **The breakdown is `TypeBreakdown`, two panels side by side where the card allows two 15rem
+    columns and stacked where it does not**, both counted over `activeCards` — the bars' rows — by
+    `typeBreakdownCounts.typeBreakdown`:
+    - **Creature** — heading with the count (`isCreature` and **not** `isLand`, so Dryad Arbor is a
+      land here, a slice of the pie and not a creature row); one row per **subtype**, read off the
+      front face after the dash (Scryfall's em dash, or a spaced ` - ` from hand-typed lines — never
+      a bare hyphen, which is `Assembly-Worker`; `Time Lord` is the one two-word type), count
+      descending then name, with a 6px accent track scaled to the largest row. **At most
+      `CREATURE_ROW_LIMIT` (12, the bars' own fold) rows, then `And N more types.`** — never an
+      `Other` row, because subtypes overlap and a summed tail counts nothing in particular. A dim
+      note says *A creature with two types counts under both*, so the rows do not sum to the
+      heading.
+    - **Land** — heading with the count (`isLand` over active copies — `deckStats`' `lands`, the
+      ledger's figure, and never the `by Types` Land bar, which files Urza's Saga under
+      Enchantment), a 112px **pie** and a legend (swatch, name, count, share). **The lands are
+      partitioned by the set of basic land types each carries**, so the slices sum to the land
+      count exactly: `Island`, `Mountain`, `Island Mountain` for a dual (joined in WUBRG order
+      whatever the type line printed), and `No basic land type`. **Filled with `MANA_FILL`**: one
+      type is its fill, a slice with two or more is **striped** in each of
+      its fills (an SVG `<pattern>` whose id carries the instance's `useId`, so two pies — or one
+      drawn twice across a layout switch — never fill from each other's definition; the swatch is
+      the same stripes as a CSS gradient), and no basic type is `--color-mana-c`. The pie is
+      `aria-hidden`; the legend is the accessible story. **Modal DFCs with a land back are not in
+      the count or any slice** (`isMdfcLand`, `deckStats`' `mdfcLands`): a dim note under the panel
+      says *Plus N modal double-faced cards with a land back, counted as spells* — the ledger's
+      `+2 MDFC`, in words.
+  - **The land pie reverses half of 2026-09-10's "the two pies are gone".** `Colors` and `Lands`
+    answered *what is this deck made of* with circles whose legends were the only readable part,
+    and the colour half stays gone — the six colour curves answer it with the mana value attached.
+    The land pie that came back is not the one that left: it answers *which basic types do my lands
+    carry* — what a fetch land, a Nature's Lore or a Blood Moon reads — a question no bar on the
+    band asks. `DeckStats.tsx`'s header carries the amended paragraph.
+  - **The arithmetic is `stats/typeBreakdownCounts.ts`, and the name is load-bearing on Windows.**
+    It was planned as `typeBreakdown.ts`, which a case-insensitive file system resolves to the
+    same file as `TypeBreakdown.tsx` beside it (tsc's TS1149, a case-only collision) — the trap
+    `folderTree.ts` beside `FolderTree.tsx` and the planned `quickAdd.ts` beside `QuickAdd.tsx`
+    already set, met a third time. Name a pure module for what it computes, never for the
+    component that draws it.
   - **`foldBuckets` is what makes `by: Card name` usable** — the widest twelve **in the cut's own
     order** plus a trailing `Other`. The order half is the part a "simplification" breaks: types
     must stay in printed order and mana values ascending, and what the count decides is only
@@ -1899,7 +2038,8 @@ layer.
   - **The Collection card is gated on `missing > 0`**, and `Missing`'s `All N owned.` fallback was
     deleted rather than moved. Every control in that card was already gated on the shortfall, so
     without the gate it would be a heading over one sentence on every finished deck — and that
-    sentence is the Figures card's `every copy` note directly above it.
+    sentence is the Figures card's `every copy` note, directly above it in two columns and in the
+    column beside it in three, which is the three-column arrangement's price and a small one.
 - **The docked panel has two tabs and opens on _Collection_** (2026-08-23, spec §7.2). `Collection`
   searches the reader's own rows through `collection_list`; `All cards` is the card search this
   panel has always been. **Which one it opens on is the whole product decision**: a deck is built
@@ -3119,11 +3259,12 @@ layer.
   that more true rather than less** — a `mana-font` glyph is a `::before` on an empty `<i>`, so a
   band that dropped `aria-hidden` would announce six empty elements and still name no colour.
 - **The bar is a 20px band fused to the crop's bottom edge, and it is filled with the _fills_
-  (`--color-mana-*`) rather than the pie deeps** (2026-09-08). It was a 5px pill floating 4px under
-  the picture, filled from `--color-pie-*`; both halves changed together and the fills are the
+  (`--color-mana-*`) rather than the pie deeps** (2026-09-08; the deeps themselves were retired
+  from the app on 2026-09-28). It was a 5px pill floating 4px under
+  the picture, filled from the deeps; both halves changed together and the fills are the
   half that binds. `index.css` states the difference at the tokens: the deeps are "saturated enough
   to carry meaning at 1px", which is a hairline's demand, and the fills' own line is "Glyphs sit on
-  these in near-black, exactly like a real symbol". `ms-b` in near-black on `--color-pie-b`
+  these in near-black, exactly like a real symbol". `ms-b` in near-black on the black deep
   (#3b3a3e) is
   invisible, on the one colour a reader is likeliest to be checking for. **`FilterChips`' `ManaChip`
   is the shipped precedent and the band copies it character for character** — `text-black` over an
@@ -3982,9 +4123,9 @@ layer.
   theme that chose it, so a label picked against last year's palette comes back as a colour this
   app no longer uses. What overruled it is that a label is the one thing on a deck screen whose
   meaning is the reader's rather than the game's, and six words cannot say what a reader means.
-  Four consequences, none of them optional. **The six are still the quick row of the picker** and
-  are still `--color-pie-*`, so the common answer is unchanged and no new colour entered the
-  palette; they are **literal hexes** in `LABEL_COLORS` now rather than `var()`s, because these
+  Four consequences, none of them optional. **The six are still the quick row of the picker** —
+  the pie deeps when this was written, and since 2026-09-28 the mana fills plus the accent's gold
+  (`#d1a84b`), so no colour outside the palette entered it; they are **literal hexes** in `LABEL_COLORS` now rather than `var()`s, because these
   strings are written to a column and a `var()` in a column is a colour with no value outside this
   build — `labelColors.test.ts` compares them against `index.css` and is the only thing that would
   catch a palette edit leaving the picker behind. **Rows written before the change still read**,

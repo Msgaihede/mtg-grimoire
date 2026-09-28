@@ -190,12 +190,13 @@ function colorLabel(key: string): string {
  * with no token of their own (`special`, `bonus`, `unknown`) take `--color-border`, about 1.9:1
  * on the app background (`lib/rarity.ts`'s `hasRarityColor`) — a price in that ink is a price
  * nobody can read, where a 6px gem may wear it. `multi` has no mana fill
- * of its own — the six are the printed symbols — so it takes the app's gold, which is what
- * multicolour is on a real card frame.
+ * of its own — the six are the printed symbols — so it takes the app's gold, the accent, which is
+ * what multicolour is on a real card frame (and, being the accent, `WidgetBars` prints its money in
+ * dim ink rather than in the fill).
  */
 function bucketFill(dimension: BreakdownDimension, key: string): string {
   if (dimension === "color") {
-    if (key === "multi") return "var(--color-pie-gold)";
+    if (key === "multi") return NEUTRAL_FILL;
     if (key === "c") return MANA_FILL.C;
     return isManaKey(key) ? MANA_FILL[key] : "var(--color-border)";
   }

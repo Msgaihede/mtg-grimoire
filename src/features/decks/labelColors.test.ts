@@ -103,6 +103,8 @@ describe("labelFgCss", () => {
   const DARK_TEXT = "var(--color-accent-fg)";
   const LIGHT_TEXT = "var(--color-text)";
 
+  /** The six deeps the picker offered until 2026-09-28. They are no longer in its row, but every
+   *  label picked before then still stores one, so these screens still exist. */
   it("keeps the six palette answers it inherited", () => {
     expect(labelFgCss("#d9b95c")).toBe(DARK_TEXT); // gold
     expect(labelFgCss("#f8e7b9")).toBe(DARK_TEXT); // bone
@@ -110,6 +112,13 @@ describe("labelFgCss", () => {
     expect(labelFgCss("#0e68ab")).toBe(LIGHT_TEXT); // azure
     expect(labelFgCss("#d3202a")).toBe(LIGHT_TEXT); // ember
     expect(labelFgCss("#00733e")).toBe(LIGHT_TEXT); // moss
+  });
+
+  /** The mana colours are pale where three of the deeps were dark, so the count ink on Azure,
+   *  Ember and Moss flipped to near-black — and the flip is the formula's to make, not a
+   *  hand-kept column's. Light text on any of these reads 1.2–1.5:1. */
+  it("prints near-black on every quick pick", () => {
+    for (const c of LABEL_COLORS) expect(labelFgCss(c.hex), c.label).toBe(DARK_TEXT);
   });
 
   it("answers for a colour no palette has heard of", () => {
@@ -127,32 +136,67 @@ describe("labelFgCss", () => {
 });
 
 /**
+ * `oklch(L C h)` as the `#rrggbb` a browser paints it, for a colour inside the sRGB gamut: OKLCh
+ * to OKLab, OKLab to linear sRGB through Björn Ottosson's published matrices, the sRGB transfer
+ * curve, then 8 bits a channel. Nothing is clamped, because a colour outside the gamut has no one
+ * hex and the assertion should fail on it rather than agree with a clipped guess.
+ */
+function oklchHex(l: number, c: number, h: number): string {
+  const a = c * Math.cos((h * Math.PI) / 180);
+  const b = c * Math.sin((h * Math.PI) / 180);
+  const l3 = (l + 0.3963377774 * a + 0.2158037573 * b) ** 3;
+  const m3 = (l - 0.1055613458 * a - 0.0638541728 * b) ** 3;
+  const s3 = (l - 0.0894841775 * a - 1.291485548 * b) ** 3;
+  const linear = [
+    4.0767416621 * l3 - 3.3077115913 * m3 + 0.2309699292 * s3,
+    -1.2684380046 * l3 + 2.6097574011 * m3 - 0.3413193965 * s3,
+    -0.0041960863 * l3 - 0.7034186147 * m3 + 1.707614701 * s3,
+  ];
+  const channels = linear.map((v) => (v <= 0.0031308 ? 12.92 * v : 1.055 * v ** (1 / 2.4) - 0.055));
+  for (const v of channels) {
+    expect(v, `oklch(${l} ${c} ${h}) is outside sRGB`).toBeGreaterThanOrEqual(0);
+    expect(v, `oklch(${l} ${c} ${h}) is outside sRGB`).toBeLessThanOrEqual(1);
+  }
+  return `#${channels.map((v) => Math.round(v * 255).toString(16).padStart(2, "0")).join("")}`;
+}
+
+/**
  * **The six quick picks are duplicated from `src/index.css` and this is what keeps them honest.**
  *
- * They cannot be `var(--color-pie-*)` any more: these strings are written *to the database* when
- * a reader presses one, and a `var()` in a column is a colour with no value outside this build.
- * So the duplication is deliberate, and the cost of a duplicate is that it drifts — this reads
- * the stylesheet and compares, which is the only thing that would go red if a palette edit moved
- * one of the deeps and left the picker on last year's.
+ * They cannot be `var(--color-mana-*)`: these strings are written *to the database* when a reader
+ * presses one, and a `var()` in a column is a colour with no value outside this build. So the
+ * duplication is deliberate, and the cost of a duplicate is that it drifts — this reads the
+ * stylesheet and compares, which is the only thing that would go red if a palette edit moved one
+ * of the mana colours, or the accent, and left the picker on last year's.
  */
 describe("the quick picks against the palette", () => {
   const VARS: Record<string, string> = {
-    Gold: "--color-pie-gold",
-    Bone: "--color-pie-w",
-    Azure: "--color-pie-u",
-    Slate: "--color-pie-c",
-    Ember: "--color-pie-r",
-    Moss: "--color-pie-g",
+    Bone: "--color-mana-w",
+    Azure: "--color-mana-u",
+    Slate: "--color-mana-c",
+    Ember: "--color-mana-r",
+    Moss: "--color-mana-g",
   };
 
-  it.each(LABEL_COLORS.map((c) => [c.label, c.hex] as const))(
-    "%s is still the palette's own deep",
+  it.each(LABEL_COLORS.filter((c) => c.label !== "Gold").map((c) => [c.label, c.hex] as const))(
+    "%s is still the palette's own mana colour",
     (label, hex) => {
       const declared = new RegExp(`${VARS[label]}:\\s*(#[0-9a-f]{6})`, "i").exec(css);
       expect(declared, `${VARS[label]} is missing from index.css`).not.toBeNull();
       expect(declared?.[1].toLowerCase()).toBe(hex);
     },
   );
+
+  /** Gold has no mana colour, so it is the accent — declared in OKLCh, which a hex can only be
+   *  compared against once converted. `--color-ok`'s `#56bd78` checks the converter itself: that
+   *  is the one conversion `index.css` already quotes, so a converter that drifted fails there. */
+  it("Gold is still the accent, converted to sRGB", () => {
+    expect(oklchHex(0.72, 0.14, 152)).toBe("#56bd78");
+    const accent = /--color-accent:\s*oklch\(([\d.]+) ([\d.]+) ([\d.]+)\)/.exec(css);
+    expect(accent, "--color-accent is not an oklch() in index.css").not.toBeNull();
+    const [l, c, h] = accent!.slice(1).map(Number);
+    expect(LABEL_COLORS.find((pick) => pick.label === "Gold")?.hex).toBe(oklchHex(l, c, h));
+  });
 
   /** Lowercase `#rrggbb` throughout, because the picker compares stored colours by string —
    *  a swatch pressed has to read as pressed. */

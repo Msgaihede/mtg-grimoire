@@ -230,7 +230,8 @@ describe("TheoryMatchMark", () => {
   it("paints with no Tailwind colour utility, so the reader's choice is the only fill", () => {
     for (const tier of ["exact", "name", "unplanned"] as const) {
       const el = drawMark(<TheoryMatchMark mark={planMark(tier)} />);
-      expect(el.classList.contains("bg-pie-u")).toBe(false);
+      // The blue utility the name tier once wore needs no line here: its token was deleted on
+      // 2026-09-28 and `lib/tokens.test.ts` refuses the name anywhere in `src/`.
       expect(el.classList.contains("bg-destructive")).toBe(false);
       expect(el.classList.contains("text-text")).toBe(false);
     }
@@ -331,7 +332,6 @@ describe("TheoryMatchBadge", () => {
   it("paints with no Tailwind colour utility", () => {
     for (const tier of ["exact", "name", "unplanned"] as const) {
       const el = drawMark(<TheoryMatchBadge mark={planMark(tier)} />);
-      expect(el.classList.contains("text-pie-u")).toBe(false);
       expect(el.classList.contains("text-destructive")).toBe(false);
     }
   });
@@ -459,11 +459,13 @@ describe("QuantityTag", () => {
    * takes whatever `labelFgCss` computed to be legible on that fill. Three consequences, and the
    * loop is what makes them one claim rather than three coincidences:
    *
-   * - **Gold is the case that proves it.** `#d9b95c` is one of the six quick picks, and a fixed
-   *   gold crown on a Gold-labelled tag is a glyph nobody can see. Its luma clears the 0.55
-   *   threshold, so the crown is the dark `--color-accent-fg` printed on gold.
-   * - **A dark label goes the other way**, to `--color-text` on Azure's deep blue — so the answer
-   *   really is computed from the fill rather than fixed at one end.
+   * - **Gold is the case that proves it.** `#d1a84b` is the Gold quick pick — the accent itself,
+   *   converted — so a fixed gold crown on a Gold-labelled tag would be a glyph drawn in exactly
+   *   its own fill. Its luma clears the 0.55 threshold, so the crown is the dark
+   *   `--color-accent-fg` printed on gold.
+   * - **A dark label goes the other way**, to `--color-text` on a deep blue — the Azure pick until
+   *   2026-09-28, and still stored on every Azure label chosen before — so the answer really is
+   *   computed from the fill rather than fixed at one end.
    * - **Neither is a red**, which is the separation from `RuleBreakMark` that
    *   `CardMarks.tsx`'s header is written around and the one a reader could otherwise defeat by
    *   picking a colour.
@@ -475,7 +477,7 @@ describe("QuantityTag", () => {
   it("prints the crown in the tag's own foreground, never in gold and never in a red", () => {
     const cases = [
       // hex, the fill jsdom normalises it to, and what is legible printed on it.
-      ["#d9b95c", "rgb(217, 185, 92)", "var(--color-accent-fg)"],
+      ["#d1a84b", "rgb(209, 168, 75)", "var(--color-accent-fg)"],
       ["#0e68ab", "rgb(14, 104, 171)", "var(--color-text)"],
     ] as const;
     for (const [hex, fill, fg] of cases) {
@@ -490,11 +492,11 @@ describe("QuantityTag", () => {
     }
   });
 
-  /** An unlabelled card is the colourless deep with `CountTag`'s neutral foreground on it — never
-   *  the gold a missing token used to fall to, or gold would stop being something a label says. */
-  it("crowns an unlabelled card on the colourless deep", () => {
+  /** An unlabelled card is colourless with `CountTag`'s neutral foreground on it — never the gold
+   *  a missing token used to fall to, or gold would stop being something a label says. */
+  it("crowns an unlabelled card on colourless", () => {
     const tag = drawTag(<QuantityTag quantity={2} name={null} color={null} gameChanger />, "2");
-    expect(tag.style.backgroundColor).toBe("var(--color-pie-c)");
+    expect(tag.style.backgroundColor).toBe("var(--color-mana-c)");
     expect(tag.style.color).toBe("var(--color-accent-fg)");
     expect(tag.querySelector(".lucide-crown")).not.toBeNull();
   });
@@ -619,8 +621,8 @@ describe("QuantityTag", () => {
 
     /**
      * **No colour of its own, on either fill**, which is the design's own sentence made checkable.
-     * There was none available to give it — the `--color-pie-*` deeps are what a label means and
-     * gold is what a picked card wears — so the glyph is `currentColor` and takes whatever
+     * There was none available to give it — the label colours are what a label means and gold
+     * is what a picked card wears — so the glyph is `currentColor` and takes whatever
      * `labelFgCss` computed to be legible on the tag. Two fills, so this is a claim about the
      * glyph rather than a coincidence of one palette entry.
      */
@@ -878,8 +880,8 @@ describe("NoteMark", () => {
    * which is the file header's four separations with only this one available.
    *
    * The colour half is asserted as an **absence**, because that is what the design says: the
-   * `--color-pie-*` deeps are what a label means, so a note glyph that reached for one would be
-   * saying something it does not mean. It is `currentColor` — the row's own text — and carries no
+   * label colours are what a label means, so a note glyph that reached for one would be saying
+   * something it does not mean. It is `currentColor` — the row's own text — and carries no
    * colour utility at all.
    */
   it("separates from the label dot by shape, and takes no colour of its own", () => {

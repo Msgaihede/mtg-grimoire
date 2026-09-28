@@ -1234,13 +1234,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   before stops answering. ⚠️ **A delete applied from a peer before the upgrade is not recovered**:
   it ran behind the guard and recorded nothing anywhere. It owes its `USER_SCHEMA_SQL` lines and
   **`UNDO_V54`**, for `UNDO_V37`'s loud reason (a bare `CREATE TABLE`), in every rewind chain
-  ahead of `UNDO_V53` — at the head until v55's `UNDO_V55` landed above it. ⚠️ **`UNDO_V54` drops
+  ahead of `UNDO_V53` — at the head until v55's `UNDO_V55` landed above it, and v56's above
+  that. ⚠️ **`UNDO_V54` drops
   the table and leaves the `sync_gone_*` triggers standing**, because they belong to the parent
   tables: a fixture that ran `capture::install` and then rewinds finds a delete from any of those
   tables, and a `DROP COLUMN` or `RENAME` on one, refused with `no such table: main.sync_gone`
   (measured against 3.53.0) — which is why `UNDO_V55`'s `DROP COLUMN` on `wishlist_folders` runs
-  *before* it, while the table is still there — so such a fixture may rewind v55 and v54 and
-  nothing below them: `UNDO_V53` opens with a delete from
+  *before* it, while the table is still there, and so does `UNDO_V56`'s on `decks` — so such a
+  fixture may rewind v56, v55 and v54 and nothing below them: `UNDO_V53` opens with a delete from
   `deck_categories`, refused over `sync_gone_deck_categories` even when it matches no row
   (measured against 3.53.0 on 2026-09-27). No production path drops the table. **It was written
   as v53**, the number token stacks PR 3 had planned for a new `collection_folders.kind` word —
@@ -1256,12 +1257,31 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   EXISTS` would be on exactly the machines that climbed. A column and an index rebuilt under its own
   name, so neither figure at the top of this page moves. Not synced, v48's column's reason. It owes
   `UNDO_V55` — the index first, because SQLite refuses `DROP COLUMN` on a column an index names,
-  and v48's one-column index put back last — at the head of every chain. **Written as v54 and
+  and v48's one-column index put back last — at the head of every chain until `UNDO_V56` landed
+  above it. **Written as v54 and
   renumbered at the merge** with the folder-deletes branch, which had `main`'s v53 and its own v54.
   Two things the same build does are **not** rungs: an untouched token reads 0 rather than 1, which
   writes nothing, and `deck_tokens::retire_hidden` retires every pre-v55 dismissal at launch, which
   reads the corpus. [wishlist-folders.md](wishlist-folders.md) and [decks-storage.md](decks-storage.md)
   have both.
+  **v56 adds `decks.curve_creatures INTEGER NOT NULL DEFAULT 0`** (2026-09-28,
+  [the deck-stats band plan](../superpowers/plans/2026-09-28-deck-stats-band-redesign.md) §3) —
+  whether the Deck stats band's Mana curve splits each bar into creatures and noncreatures, the
+  `Creatures` toggle in that card's header, remembered per deck. It is v42's `stats_open` one
+  control further in and keeps every rule of that rung: per-deck view state riding `deck_update`,
+  **on the `decks` capture spec** (a split curve on one device must not draw whole on the next,
+  and `DEFAULT 0` keeps the old-peer direction safe — a v55 peer names no such field and the curve
+  arrives unsplit), on no history row and no `deck_undo::DECK_FIELDS`, and **not carried by
+  `duplicate_deck`**, so a copy takes the default. **`DEFAULT 0` is v43's `notes_open` answer
+  rather than v42's**: the split is new, so off is exactly the chart every deck already drew and
+  the upgrade changes nothing on screen. One `ADD COLUMN`, no index, so neither figure at the top
+  of this page moves. It owes **`UNDO_V56`**, for `UNDO_V13`'s loud reason, at the head of every
+  chain — and ⚠️ **that rewind drops the three `decks` capture triggers before the column**, v43's
+  move in the rewind direction: on a fixture that ran `capture::install` (the v54 rung's test,
+  which rewinds to 53), `sync_ins_decks` and `sync_upd_decks` read `NEW.curve_creatures` and SQLite
+  refuses the `DROP COLUMN` with `error in trigger sync_ins_decks after drop column`. `IF EXISTS`,
+  so a chain over a fixture that never installed them is unchanged, and `capture::install` rebuilds
+  all three whenever a launch runs it.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

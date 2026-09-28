@@ -45,7 +45,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** An unlabelled card, which is the colourless deep: a filled mark has to be *some* colour, and
+/** An unlabelled card, which is colourless: a filled mark has to be *some* colour, and
  *  if the neutral one were gold then gold would stop meaning "there is a label here". */
 export const Plain: Story = {
   args: { quantity: 3, name: null, color: null, gameChanger: false },
@@ -95,7 +95,7 @@ export const CrownedAndNotedUnlabelled: Story = {
  * `TableView` and `TextView` have no corners, so the note mark stands inline beside the card's
  * label dot: a stroked outline against an 8px filled square. That difference is what a reader
  * takes in before they read either mark, and it is the whole of what keeps the two apart — the
- * glyph takes no colour of its own, because the `--color-pie-*` deeps are what the dot beside it
+ * glyph takes no colour of its own, because the label colours are what the dot beside it
  * means.
  *
  * Unlike every mark on a card face, this one **names itself** — a `role="img"` whose accessible

@@ -130,7 +130,7 @@ function readColorTokens(): ColorToken[] {
  * of its group rather than vanishing from the page, because membership is still the live walk's
  * answer and not this list's.
  */
-const SUFFIX_ORDER = ["w", "u", "b", "r", "g", "c", "gold", "common", "uncommon", "rare", "mythic"];
+const SUFFIX_ORDER = ["w", "u", "b", "r", "g", "c", "common", "uncommon", "rare", "mythic"];
 
 /** The chrome group, in reading order: ground, panel, hairline, then text, then gold. */
 const CHROME_ORDER = [
@@ -171,17 +171,9 @@ const GROUPS: PaletteGroup[] = [
     id: "mana",
     title: "The five colours",
     blurb:
-      "Authentic printed-symbol fills, for mana UI only — chips, pips, the line. Never a panel, never a border, never text.",
+      "Authentic printed-symbol fills, and the app's only palette for anything that stands for a Magic colour — chips, pips, the line, chart fills, rails and marks alike. All pale: anything printed on one is near-black. Gold has no mana colour; a gold mark is the accent.",
     match: (name) => name.startsWith("--color-mana-"),
     rank: (name) => suffixRank(name, "--color-mana-"),
-  },
-  {
-    id: "pie",
-    title: "Frame and pie deeps",
-    blurb:
-      "Saturated enough to carry meaning at 1px: identity pips and the deck-stats pies. Not interchangeable with the fills above.",
-    match: (name) => name.startsWith("--color-pie-"),
-    rank: (name) => suffixRank(name, "--color-pie-"),
   },
   {
     id: "rarity",

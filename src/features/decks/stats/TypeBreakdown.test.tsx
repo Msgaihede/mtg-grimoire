@@ -48,7 +48,6 @@ describe("TypeBreakdown", () => {
   /**
    * A dual's slice is striped through an SVG pattern, and the pattern id is per instance — two
    * pies on one page sharing `#…-UR` would each fill from whichever `<pattern>` came first.
-   * The mana fills, never the pie deeps.
    */
   it("stripes a multi-type slice with a pattern of its fills, unique per pie", () => {
     const { container } = render(
@@ -68,7 +67,6 @@ describe("TypeBreakdown", () => {
     const fills = [...container.querySelectorAll("svg path")].map((p) => p.getAttribute("fill"));
     expect(fills).toContain(`url(#${patterns[0].id})`);
     expect(fills).toContain("var(--color-mana-c)");
-    expect(fills.join(" ")).not.toMatch(/--color-pie-/);
   });
 
   it("caps the creature rows and says how many more types there are", () => {

@@ -145,7 +145,7 @@ describe("LabelsPanel", () => {
     await waitFor(() =>
       expect(sent).toContainEqual([
         "deck_label_create",
-        { deckId: null, name: "Sideboard plan", color: "#d9b95c" },
+        { deckId: null, name: "Sideboard plan", color: "#d1a84b" },
       ]),
     );
   });
@@ -232,7 +232,7 @@ describe("LabelsPanel", () => {
     await waitFor(() =>
       expect(sent).toContainEqual([
         "deck_label_update",
-        { deckId: null, id: 10, name: "Cut candidate", color: "#0e68ab" },
+        { deckId: null, id: 10, name: "Cut candidate", color: "#aae0fa" },
       ]),
     );
 

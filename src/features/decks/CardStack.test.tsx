@@ -1251,9 +1251,9 @@ describe("CardStack cards", () => {
     ).toBeInTheDocument();
   });
 
-  /** An unlabelled card still needs a colour under its count, and it is the colourless deep —
+  /** An unlabelled card still needs a colour under its count, and it is colourless —
    *  never the gold a missing token falls to, or gold would stop being something a label says. */
-  it("draws an unlabelled card's count on the colourless deep", async () => {
+  it("draws an unlabelled card's count on colourless", async () => {
     render(
       <TooltipProvider>
         <CardStack cards={[card({ name: "Sol Ring" })]} label="Ramp" currency="usd" />
@@ -1261,7 +1261,7 @@ describe("CardStack cards", () => {
     );
 
     const tag = screen.getByText("1");
-    expect(tag.style.backgroundColor).toBe("var(--color-pie-c)");
+    expect(tag.style.backgroundColor).toBe("var(--color-mana-c)");
     expect(await openTooltip(tag)).toHaveTextContent("1 in this pile");
   });
 
@@ -1812,7 +1812,7 @@ describe("CardStack marks", () => {
    * weakened** — `CardMarks.tsx`'s header is where they are stated and this is written against
    * it. The game changer's drawing on this surface used to be a stamped `Game Changer` ribbon,
    * so *the words* were two spelled-out words against two other spelled-out words, and *the
-   * colour* was the pie gold against the destructive. Neither is available now: the fact is a
+   * colour* was a fixed gold against the destructive. Neither is available now: the fact is a
    * crown folded into {@link QuantityTag}, which spells nothing and carries no colour of its
    * own at all.
    *

@@ -57,7 +57,7 @@ const meta = {
           "beside the number in the two row views' quantity column. So there is one glyph " +
           "everywhere and the only difference left is what it is printed *on*.\n\n" +
           "**Which is also why gold is still right here and would be wrong there.** A crown " +
-          "floating over somebody's artwork has nothing but `text-pie-gold` saying which fact " +
+          "floating over somebody's artwork has nothing but `text-accent` saying which fact " +
           "it is. A crown printed on a filled quantity tag is standing on a colour that already " +
           "means something — the card's own **label** — so it takes that tag's foreground " +
           "instead, and a fixed gold would be the one mark in the strip ignoring what it stands " +

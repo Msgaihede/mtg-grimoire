@@ -11,10 +11,9 @@
  * is the accessible story — a real list with every count and share in it — so the circle is
  * decoration over numbers that are already text, like every drawing in this band.
  *
- * **Filled with the mana fills and never the pie deeps.** `MANA_FILL`'s `--color-mana-*` are how
- * a field with a mana meaning is filled here (`mana.ts` says why the `--color-pie-*` identity
- * palette is too hot at this size); a dual's slice is **striped** in each of its colours rather
- * than blended into a colour no land is, and a land with no basic type is colourless.
+ * **Filled with the mana fills.** `MANA_FILL`'s `--color-mana-*` are the app's only palette for a
+ * Magic colour (`mana.ts` says so, and why); a dual's slice is **striped** in each of its colours
+ * rather than blended into a colour no land is, and a land with no basic type is colourless.
  *
  * Both panels count over the same active copies the distribution bars count, and which of them
  * are lands and which creatures is `typeBreakdown`'s doc — the short version is `isLand` (so the

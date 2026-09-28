@@ -4078,6 +4078,35 @@ because `main` shipped its own v50 first — `price_snapshots.copies`. It rides
   place, Table not spending it at all, and the optimistic move — is
   [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md)'s *Tokens & Emblems*.
 
+### `decks.curve_creatures`, the Mana curve's creature split
+
+User schema **v56** (2026-09-28, [the deck-stats band plan](../superpowers/plans/2026-09-28-deck-stats-band-redesign.md)
+§3) is `decks.curve_creatures INTEGER NOT NULL DEFAULT 0` — whether the Deck stats band's **Mana
+curve** draws each bar as creatures and noncreatures, the `Creatures` toggle in that card's header.
+It is `stats_open`'s rules one control further in, and each of them is the reason for something:
+
+- **Storage only on this side.** What a creature *is* (`deckBuckets.isCreature`, the front face's
+  `typeBucket`) and how a split bar draws are TypeScript's; Rust keeps a boolean and never reads it.
+- **On `DeckPatch`, not `deck_set_view_state`**, because a toggle a reader sets once and leaves is
+  worth an `updated_at`, and it rides `DeckPatch.curveCreatures` / `DeckRow.curveCreatures` to
+  `useDeck`'s `update` with no per-field arm, beside `statsOpen`.
+- **No `deck_audit` row, no undo step, not on `deck_undo::DECK_FIELDS`** — how a chart is drawn is
+  not an edit anybody reads a history drawer for. `the_curve_split_round_trips_and_is_not_recorded`
+  pins the absence after a real edit in the same call, so the drawer is known to be reachable.
+- **On the `decks` capture `Spec`, after `stats_open`**, so a split curve on one device does not draw
+  whole on the next. `DEFAULT 0` is what keeps the old-peer direction safe: a v55 peer names no
+  such field and the curve arrives unsplit, which is all it can have drawn.
+- **`DEFAULT 0`, `notes_open`'s answer rather than `stats_open`'s** — the split is new, so off is
+  exactly the chart every deck already drew and the upgrade changes nothing on screen.
+- **`duplicate_deck` does not carry it**, the disclosures' note, so a copy's curve is unsplit.
+- **Positional reads, at the end as always.** `DECK_SELECT` appends `d.curve_creatures` after
+  `d.token_rail_index`; `deck_row` reads it at **30**, and `update_deck` binds it as `?24`. It is a
+  `bool` over an `INTEGER` like the three disclosures, so a crossed index would hand the split to a
+  band's open state with both fields still holding a `0` or a `1` — which is why the round-trip test
+  moves it against `stats_open`, the neighbour that defaults the other way.
+- **`UNDO_V56` drops the three `decks` capture triggers before the column** — v43's move in the
+  rewind direction; [data-and-sync.md](data-and-sync.md)'s v56 paragraph has why.
+
 ### Owed: known, parked, and not fixed
 
 - **A pre-reroute deck-card row naming a token printing collides with a token entry in

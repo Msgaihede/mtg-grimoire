@@ -290,7 +290,7 @@ export function TableView({
         // the quantities would step in and out down a column of eighty — `rowMarkColor`'s own
         // reasoning, which returns `transparent` rather than nothing for exactly that reason.
         //
-        // The crown carries the gold itself (`text-pie-gold`) rather than taking a colour from
+        // The crown carries the gold itself (`text-accent`) rather than taking a colour from
         // something it is printed on: there is no filled chip in a table row, so the mark *is*
         // the colour — the same gold the name's stripe is drawn in. Nothing in this view zooms,
         // so every size here is a plain fixed number and no `--mark-scale` reaches it.
@@ -307,7 +307,7 @@ export function TableView({
                 editable && "justify-center",
                 // The read-only arm inherits `text-dim` from `cellClassName` above; this is
                 // what overrides it, and it tints the crown and the digits as one mark.
-                gameChanger && "text-pie-gold",
+                gameChanger && "text-accent",
               )}
             >
               <span aria-hidden="true" className="flex w-[11px] shrink-0">
@@ -464,8 +464,8 @@ export function TableView({
         // and this is not one; what it is is the only place in a row view where a per-card mark
         // has room, and `CardMarks.tsx`'s argument is that a fifth mark had no corner of its own
         // left to take. It separates from the dot by **shape** rather than by colour — a stroked
-        // glyph against an 8px filled square — because the `--color-pie-*` deeps are spoken for
-        // by labels and gold is spoken for by selection.
+        // glyph against an 8px filled square — because the label colours are spoken for by
+        // labels and gold is spoken for by selection.
         //
         // A cell is not swallowed by a label, which is this view's standing difference from the
         // other three: `NoteMark` carries its own `role="img"` and its own name, so the fact

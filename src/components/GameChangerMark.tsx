@@ -44,9 +44,12 @@ export const GAME_CHANGER_HINT = "Game changer — one of the cards the Commande
  *
  * ## Gold here, and the tag's own colour there — which is the same rule, not an exception
  *
- * This glyph is `text-pie-gold`, and the deck's row views draw their crown in that same gold.
- * **A crown printed on `QuantityTag` takes the tag's foreground instead**, so it is white on a
- * blue label, dark on a gold one, and the neutral foreground on an unlabelled card.
+ * This glyph is `text-accent`, and the deck's row views draw their crown in that same gold. (It
+ * was a separate saturated gold until 2026-09-28, when the colour-identity deeps it belonged to
+ * were retired and the accent became the one gold for a Magic mark.) **A crown printed on
+ * `QuantityTag` takes the tag's foreground instead**, so it is dark on the pale label colours the
+ * picker offers, light on a dark colour a reader chose, and the neutral foreground on an
+ * unlabelled card.
  *
  * That is not two colours for one fact. Gold is what an *unfilled* mark laid over somebody's
  * artwork has to carry, because nothing else there says which fact it is. A filled tag already
@@ -102,7 +105,7 @@ export function GameChangerMark({ className }: { className?: string }) {
       // that; it changes nothing about which events fire.
       {...(tip(GAME_CHANGER_HINT, { describes: false }) as SVGProps<SVGSVGElement>)}
       className={cn(
-        "inline-block size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 text-pie-gold",
+        "inline-block size-[calc(0.75rem*var(--mark-scale,1))] shrink-0 text-accent",
         className,
       )}
     />

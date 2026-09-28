@@ -75,14 +75,16 @@ export function auditBand(entry: DeckAuditEntry): AuditBand {
  * What each band is called, what it is drawn with, and what colour its rail takes.
  *
  * **The glyph carries the meaning and the rail carries only emphasis**, which is a deliberate
- * departure from the visual direction's coloured glyphs. `--color-pie-g` on `--color-bg`
- * measures **3.26:1** — fine for a 3px bar, which WCAG 1.4.11 asks 3:1 of, and a fail for a
- * 12px character, which 1.4.3 asks 4.5:1 of. Colouring the `+` and leaving the `−` (7.4:1) as
- * the one legible sign would have been the worst of both. So every glyph is drawn in text
- * colour, the rail keeps the hue, and no reader depends on the hue for anything.
+ * departure from the visual direction's coloured glyphs. The green this was measured against —
+ * the saturated deep the rail wore until 2026-09-28 — read **3.26:1** on `--color-bg`: fine for a
+ * 3px bar, which WCAG 1.4.11 asks 3:1 of, and a fail for a 12px character, which 1.4.3 asks 4.5:1
+ * of. Colouring the `+` and leaving the `−` (7.4:1) as the one legible sign would have been the
+ * worst of both. So every glyph is drawn in text colour, the rail keeps the hue, and no reader
+ * depends on the hue for anything. The rail is `--color-mana-g` now (11.4:1), which would pass as
+ * a glyph too; the rule stands because it was never only about the ratio — a hue is not a word.
  */
 const BANDS = [
-  { id: "adds", label: "Adds", glyph: "+", rail: "bg-pie-g", hint: undefined },
+  { id: "adds", label: "Adds", glyph: "+", rail: "bg-mana-g", hint: undefined },
   { id: "removals", label: "Removals", glyph: "−", rail: "bg-destructive", hint: undefined },
   { id: "moves", label: "Moves", glyph: "→", rail: "bg-accent", hint: undefined },
   { id: "swaps", label: "Swaps", glyph: "⇄", rail: "bg-accent", hint: undefined },

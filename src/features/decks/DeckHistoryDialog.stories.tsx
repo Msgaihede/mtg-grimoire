@@ -21,9 +21,10 @@ import { DeckHistoryDialog } from "./DeckHistoryDialog";
  * lands in a sixth chip that exists only when such a row does. See {@link AnOlderBuild}.
  *
  * **The rail carries the hue and the glyph carries the meaning.** The visual direction colours
- * both; `--color-pie-g` on `--color-bg` measures 3.26:1, which passes WCAG 1.4.11 for a 3px bar
- * and fails 1.4.3 for a 12px character. So the glyphs are drawn in text colour and nothing on
- * this surface depends on hue.
+ * both; the saturated green the rail wore until 2026-09-28 measured 3.26:1 on `--color-bg`, which
+ * passes WCAG 1.4.11 for a 3px bar and fails 1.4.3 for a 12px character. So the glyphs are drawn
+ * in text colour and nothing on this surface depends on hue — which still holds now that the rail
+ * is the pale `--color-mana-g`.
  *
  * **Driven end to end by `.storybook/fake/`.** `deck_audit_list` is the fake's, and the rows are
  * `seeds.ts`' — the past those decks' writes wrote. `deck_audit.at` is the one timestamp in that

@@ -41,11 +41,13 @@ export function manaSymbolClass(key: ManaKey): string {
  * The token that fills a **field with a mana symbol on it** — a chip, a pip, a band segment, a
  * bar in the deck stats band.
  *
- * **`--color-mana-*` and never `--color-pie-*`**, and `index.css` states the split at the tokens
- * themselves: these six are how a printed symbol is filled, glyphs sit on them in near-black
- * exactly as on a real symbol, and they are *"never a panel, never a border, never text"*. The
- * pie deeps are the colour-**identity** palette — saturated enough to carry meaning at one pixel,
- * and far too hot at bar size.
+ * **`--color-mana-*` is the app's only palette for anything that stands for a Magic colour**
+ * (2026-09-28), and `index.css` says so at the tokens themselves: these six are how a printed
+ * symbol is filled, and they are what a chart fill, a rail, a count tag or a glyph on the dark
+ * ground is drawn in too. They are all pale, so a glyph *on* one is near-black exactly as on a
+ * real symbol, and light text on one is illegible. The rule that used to stand here — mana fills
+ * for symbols only, *"never a panel, never a border, never text"*, with a second, saturated
+ * colour-identity family for everything else — went when that second family was deleted.
  *
  * **This exists because a third surface asked for it, which is the condition
  * `src/features/decks/CLAUDE.md` already wrote down**: `DeckColorBar` filling its segments and
