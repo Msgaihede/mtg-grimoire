@@ -376,18 +376,18 @@ const RARITIES = ["common", "uncommon", "rare", "mythic"] as const;
  * list is ranked by relevance — and on a browse, with no query to rank against, by name — which
  * is neither ascending nor descending by any column the reader picked, and a button announcing
  * "ascending" over it would be describing a sort that is not there. **A `getByRole` on the exact
- * enabled string therefore fails on that row and reads as "the button is missing"**; match this
- * name on a prefix.
+ * enabled string therefore fails on that row and reads as "the button is missing"**; match it
+ * with a pattern that takes all three names.
  *
  * It names the *row* and not "no order picked", which is what it said while that row was called
  * `Default order`. `Best match` is a row a reader deliberately picks, so "no order picked" would
  * be the button contradicting the select beside it.
  */
 function sortDirectionName(dir: SortDir | undefined): string {
-  if (!dir) return "Sort direction: none for Best match";
+  if (!dir) return "Best match has no sort direction";
   return dir === "asc"
-    ? "Sort direction: ascending — press for descending"
-    : "Sort direction: descending — press for ascending";
+    ? "Sort ascending (click for descending)"
+    : "Sort descending (click for ascending)";
 }
 
 /** A word with its first letter raised — the rarities and the colours are stored lower-case. */

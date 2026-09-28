@@ -558,7 +558,7 @@ export const SortedDescending: Story = {
     // untouched row above and every assertion below would read a state this story is not about.
     // The name is what changes when the sort arrives, so it is what this waits on.
     const direction = await canvas.findByRole("button", {
-      name: "Sort direction: descending — press for ascending",
+      name: "Sort descending (click for ascending)",
     });
     await expect(direction).not.toBeDisabled();
     // The same sentence rides as the hover tooltip: there is no visible text on the button, so
@@ -570,7 +570,7 @@ export const SortedDescending: Story = {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
     await expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
-      "Sort direction: descending — press for ascending",
+      "Sort descending (click for ascending)",
     );
     await userEvent.unhover(direction);
 
@@ -627,10 +627,10 @@ export const DockedPanel: Story = {
     // an inheritance.** `layoutToggle={false}` says "no second layout to switch to", which names
     // exactly the panel with no table and therefore no header to sort by — so fencing the picker
     // on this prop would take it away from the only place it is the only control. The button is
-    // matched on a prefix: its name grows a reason when there is no order to flip, which is the
+    // matched on a pattern: its name becomes a reason when there is no order to flip, which is the
     // state this untouched row is in.
     await expect(canvas.getByLabelText("Sort results")).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: /^Sort direction/ })).toBeDisabled();
+    await expect(canvas.getByRole("button", { name: /^(Sort (ascending|descending) \(|Best match has no sort direction)/ })).toBeDisabled();
     // On the count, because the button no longer appears with the preset — it is already there.
     await expect(
       await canvas.findByRole("button", { name: "Reset all — 6 filters active" }),

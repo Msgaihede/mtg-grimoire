@@ -127,10 +127,10 @@ async function openTray(): Promise<HTMLElement> {
   return screen.getByRole("button", { name: /^Hide filters/ });
 }
 
-/** The direction button, matched on a **prefix**: its accessible name carries the direction and
- *  grows a reason when there is none to flip, so the exact enabled string fails on the row this
- *  suite opens with and would read as "the button is not there". */
-const dirButton = () => screen.getByRole("button", { name: /^Sort direction/ });
+/** The direction button, matched on a **pattern** over its three names: its accessible name
+ *  carries the direction and becomes a reason when there is none to flip, so the exact enabled
+ *  string fails on the row this suite opens with and would read as "the button is not there". */
+const dirButton = () => screen.getByRole("button", { name: /^(Sort (ascending|descending) \(|Best match has no sort direction)/ });
 
 /**
  * Records, for every Escape that reaches `window`'s bubble phase, whether something nearer the
@@ -205,7 +205,7 @@ describe("FilterBar, its sort direction tooltip binding", () => {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
     expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
-      "Sort direction: none for Best match",
+      "Best match has no sort direction",
     );
   });
 
@@ -236,7 +236,7 @@ describe("FilterBar, its sort direction tooltip binding", () => {
 
     await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull());
     expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
-      "Sort direction: ascending — press for descending",
+      "Sort ascending (click for descending)",
     );
   });
 });
@@ -1277,7 +1277,7 @@ describe("FilterBar, its sort picker", () => {
 
     const button = dirButton();
     expect(button).toBeDisabled();
-    expect(button).toHaveAccessibleName("Sort direction: none for Best match");
+    expect(button).toHaveAccessibleName("Best match has no sort direction");
   });
 
   /** The name says the state **and** what pressing does, because an arrow is the whole of what
@@ -1291,7 +1291,7 @@ describe("FilterBar, its sort picker", () => {
 
     const button = dirButton();
     expect(button).not.toBeDisabled();
-    expect(button).toHaveAccessibleName("Sort direction: ascending — press for descending");
+    expect(button).toHaveAccessibleName("Sort ascending (click for descending)");
   });
 
   it("says the other sentence when the list runs the other way", () => {
@@ -1301,7 +1301,7 @@ describe("FilterBar, its sort picker", () => {
       />,
     );
 
-    expect(dirButton()).toHaveAccessibleName("Sort direction: descending — press for ascending");
+    expect(dirButton()).toHaveAccessibleName("Sort descending (click for ascending)");
   });
 
   /** The press is `flipSortDir` and nothing else. That call rewrites the **first** term in place,
@@ -1370,7 +1370,7 @@ describe("FilterBar, its sort picker", () => {
     );
 
     expect(screen.getByRole("button", { name: "Sort results" })).toHaveTextContent("Rarity");
-    expect(dirButton()).toHaveAccessibleName("Sort direction: descending — press for ascending");
+    expect(dirButton()).toHaveAccessibleName("Sort descending (click for ascending)");
   });
 
   /**
@@ -1589,7 +1589,7 @@ describe("FilterBar, its tray", () => {
       manaValues: screen.getByRole("group", { name: "Mana value" }),
       layout: screen.getByRole("group", { name: "Result layout" }),
       sort: screen.getByRole("button", { name: "Sort results" }),
-      sortDirection: screen.getByRole("button", { name: /^Sort direction/ }),
+      sortDirection: screen.getByRole("button", { name: /^(Sort (ascending|descending) \(|Best match has no sort direction)/ }),
     };
     const offTheRow = Object.entries(onTheRow)
       .filter(([, el]) => !row.contains(el))
