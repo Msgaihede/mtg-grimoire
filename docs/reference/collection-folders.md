@@ -2061,13 +2061,32 @@ the only shelf that is not a folder. The button is **Add folder**, never "New fo
 all and Collapse all reach every shelf below the level, app-owned ones included, and skip the
 headless one, which has no chevron to reopen it with (`foldAll` in
 `collectionShelfModel.ts`). **A reader's-folder heading carries Add folder, Rename and `⋯`;
-a deck group or `Recently removed` heading carries its chevron, its title and its figures and
-nothing a press could be refused for**, because every folder write refuses those two kinds in words
+a deck group or `Recently removed` heading carries its chevron, its title, its figures and its
+`→` and nothing a press could be refused for**, because every folder write refuses those two kinds in words
 (`headingFor` in `CollectionPage.tsx`). Not sorted has a chevron and plain text. Add folder
 draws a heading whose name is the naming field, last among its siblings, under the id
 `NEW_FOLDER_SHELF` (`-1`, `collectionShelfModel.ts`), which never reaches the wire. The field is
 `FolderNameField` at `size="heading"`: a 36px frame inside the 40px row, with ✓ and ✕ on the
-row's centre line. **A create clears any fold stored under the id it answers** (the final
+row's centre line.
+
+**A heading's name folds its shelf, and the way into the folder is a `→` at the row's far right**
+(issue #599, 2026-09-28), which reverses the spec's decision 6 (*clicking a folder's title opens
+it; there is no Open button*). Readers aimed at the name to fold a shelf and were walked into the
+folder instead, and the 24px chevron beside it was the smaller target of the two. So the name is
+a second fold control — `aria-expanded`, refused with the chevron's `aria-disabled` and
+`FOLD_PAUSED_REASON` while a filter is on, but never dimmed, since greying every name under every
+filter costs the wall its legibility — and hovering it lights the chevron (a named `group/shelf` on
+the row, `group-has-[[data-shelf-title]:hover]` on the chevron), so the reader sees they are one
+control. **Open** is a ghost `SHELF_ICON_BUTTON`, named `Open <folder>` with the tooltip *Open
+folder*, drawn on every heading but Not sorted's — deck groups, `Recently removed` and managed
+wishlist folders included — and **last in the row, after the `⋯`**, so it stands in one column
+whether or not a heading carries Add folder, Rename and a menu. **The lead segments of a heading
+past the indent cap still open their ancestors**: they are a path rather than this shelf, and are
+underlined on hover as links where the name is not. **The chevron went from 24px to 32px** around a
+20px glyph — the most the 38px content box holds with a pixel either side — and
+`SHELF_RAIL_OFFSET_PX` moved from 11 to **21** with it (`1 + 4 + 16`: the row's border, its `px-1`
+and half the chevron). 11 had been written as *under the parent chevron's centre* and was 6px left
+of the 24px one's; it would have been 10px left of the new one. **A create clears any fold stored under the id it answers** (the final
 review's R-M2): `collection_folders.id` is `INTEGER PRIMARY KEY` without `AUTOINCREMENT`, so a new
 folder can be handed a deleted folder's id, and would otherwise open shut, or open, the way the
 deleted one was left. A create whose id has nothing stored writes nothing to the folds.

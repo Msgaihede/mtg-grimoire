@@ -311,7 +311,7 @@ export const Table: Story = {
  * **Shelves** (spec §3): every wish at and below the root, one shelf per folder, nested — `Ordered`
  * with `Backordered` under its rail, `Someday` over its dashed empty box, and deck 4's list shut
  * under Managed by decks. A heading's figures are its folder's recursive total — `Ordered` reads
- * three wishes: two of its own and `Backordered`'s one. **Its title opens it** (spec §3.7), and the
+ * three wishes: two of its own and `Backordered`'s one. **Its → opens it** (issue #599), and the
  * page then *is* that folder: the breadcrumb names it and its sub-folder is the top shelf.
  *
  * **The table, so the whole tree is near the top of the list.** `src/stories.test.tsx` lays a
@@ -331,7 +331,7 @@ export const Shelves: Story = {
     const backordered = headingNamed(canvas, "Backordered");
     await expect(follows(ordered, backordered)).toBe(true);
 
-    await userEvent.click(within(ordered).getByRole("button", { name: "Ordered" }));
+    await userEvent.click(within(ordered).getByRole("button", { name: "Open Ordered" }));
 
     const trail = await canvas.findByRole("navigation", { name: "Wishlist folders" });
     await expect(within(trail).getByText("Ordered")).toHaveAttribute("aria-current", "page");
@@ -512,8 +512,8 @@ export const DraggingAFolder: Story = {};
  * **A deck's managed wishlist** (user schema v48, issue #512) — a shelf of its own under
  * **Managed by decks**, wearing `Layers`, **shut by default** (spec §3.4: a derived list, not a
  * binder), and with nothing on its heading that writes: no Add folder, no Rename, no `⋯`, no drag.
- * Collapse all first, so its heading is near the top of a virtualised wall. Opening it by its title
- * says whose list it is, and draws no stepper, no pencil and no Add folder inside.
+ * Collapse all first, so its heading is near the top of a virtualised wall. Opening it by its `→`
+ * (issue #599) says whose list it is, and draws no stepper, no pencil and no Add folder inside.
  */
 export const ManagedWishlist: Story = {
   play: async ({ canvasElement }) => {
@@ -528,7 +528,7 @@ export const ManagedWishlist: Story = {
     await expect(within(deck).queryByRole("button", { name: /^Add folder/ })).toBeNull();
     await expect(within(deck).queryByRole("button", { name: /^Rename/ })).toBeNull();
 
-    await userEvent.click(within(deck).getByRole("button", { name: "Rhystic Testbed" }));
+    await userEvent.click(within(deck).getByRole("button", { name: "Open Rhystic Testbed" }));
 
     await expect(await canvas.findByText(/Follows the deck “Rhystic Testbed”/)).toBeInTheDocument();
     await expect(await canvas.findByAltText("Smuggler's Copter")).toBeInTheDocument();

@@ -762,9 +762,10 @@ const renameOf = (name: string) =>
 const manageOf = (name: string) =>
   within(heading(name)).queryByRole("button", { name: `Manage ${name}` });
 
-/** Open a folder the way a reader does now: its heading's title (spec §3.7). */
+/** Open a folder the way a reader does now: its heading's Open button (issue #599 — the title was
+ *  the way in under spec §3.7, and folds the shelf now). */
 async function openShelf(user: Clicker, name: string): Promise<void> {
-  await user.click(within(await findHeading(name)).getByRole("button", { name }));
+  await user.click(within(await findHeading(name)).getByRole("button", { name: `Open ${name}` }));
 }
 
 /** Open a heading's ⋯ — `menuClick`'s door, the one a pointer produces. */
@@ -6552,9 +6553,9 @@ describe("Escape walks out of a folder", () => {
 
   const filterBox = () => screen.getByRole("searchbox", { name: "Search your collection" });
 
-  /** Opened by its heading's title (spec §3.7), and Escape walks one level up — the breadcrumb's
-   *  own parent segment, unchanged. */
-  it("goes up one level after a folder is opened by its title, and the breadcrumb says so", async () => {
+  /** Opened by its heading's Open button (issue #599), and Escape walks one level up — the
+   *  breadcrumb's own parent segment, unchanged. */
+  it("goes up one level after a folder is opened from its heading, and the breadcrumb says so", async () => {
     collectionFolderList.mockResolvedValue([BINDER, FOILS]);
     wrap(<CollectionPage />);
     await openShelf(userEvent, "Trade binder");
