@@ -2284,7 +2284,7 @@ mod tests {
         fn new(name: &str) -> Fixture {
             // Wiped on the way in rather than out: these tests hold the database open, and
             // Windows will not delete a file that is.
-            let dir = std::env::temp_dir().join(format!("mtgtest-images-{name}"));
+            let dir = crate::scratch::path(&format!("images-{name}"));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
 
@@ -2738,7 +2738,7 @@ mod tests {
     /// card, which can be months away.
     #[tokio::test]
     async fn a_store_replaces_the_file_in_one_step_and_leaves_no_temporary_behind() {
-        let dir = std::env::temp_dir().join("mtgtest-images-store");
+        let dir = crate::scratch::path("images-store");
         let _ = std::fs::remove_dir_all(&dir);
         let path = dir.join("grid").join("00").join("bolt-0.webp");
         let left = |dir: &Path| -> Vec<String> {
@@ -3765,7 +3765,7 @@ mod tests {
     /// the stamp; it did, the first time it was written.
     #[test]
     fn stamping_a_picture_whose_file_has_gone_never_creates_one() {
-        let dir = std::env::temp_dir().join("mtgtest-images-upkeep-stamp");
+        let dir = crate::scratch::path("images-upkeep-stamp");
         let _ = std::fs::remove_dir_all(&dir);
         let cache = Cache::new(dir.clone());
         let k = key(A, 0, Variant::Display);

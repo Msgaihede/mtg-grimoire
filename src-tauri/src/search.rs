@@ -3320,7 +3320,7 @@ mod tests {
         use std::sync::atomic::AtomicBool;
         use std::sync::Mutex;
 
-        let dir = std::env::temp_dir().join("mtgtest-search-concurrent");
+        let dir = crate::scratch::path("search-concurrent");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();

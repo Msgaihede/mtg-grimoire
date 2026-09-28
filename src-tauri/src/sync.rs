@@ -1392,7 +1392,7 @@ mod tests {
     /// points somewhere else. (An in-memory pair cannot stand in: two in-memory
     /// connections are two different databases.)
     fn file_state(name: &str, syncing: bool) -> (AppState, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("mtgtest-sync-{name}"));
+        let dir = crate::scratch::path(&format!("sync-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();
