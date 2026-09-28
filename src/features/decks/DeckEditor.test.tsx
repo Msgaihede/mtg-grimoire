@@ -61,6 +61,8 @@ const deckSetCardQuantity = vi.hoisted(() => vi.fn());
 const deckToCollection = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
+// The card menu's `Add to actual` / `Add to theory` (issue #592): one copy into the other list.
+const deckAddCardToOtherList = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
 const deckPullPlan = vi.hoisted(() => vi.fn());
 const deckPullFromCollection = vi.hoisted(() => vi.fn());
@@ -193,6 +195,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckToCollection,
     deckMoveCard,
     deckAddCard,
+    deckAddCardToOtherList,
     deckMissingToWishlist,
     deckPullPlan,
     deckPullFromCollection,
@@ -930,6 +933,7 @@ beforeEach(() => {
     .mockResolvedValue({ entryId: 21, fromDeck: null, deckCardId: null, quantity: 1 });
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
+  deckAddCardToOtherList.mockReset().mockResolvedValue({ id: 10, quantity: 1, removed: false });
   deckMissingToWishlist.mockReset().mockResolvedValue(3);
   // **A plan of no rows, which is the ordinary answer rather than a failure** — a deck whose
   // shortfall is all cards the reader has never owned. Every test here is about the layer
@@ -5854,6 +5858,90 @@ describe("DeckEditor — a card's menu", () => {
     await waitFor(() =>
       expect(document.querySelector(`[${DECK_GROUP_ATTR}="${MAIN}"]`)).toHaveFocus(),
     );
+  });
+
+  /**
+   * **Add to actual, from the plan** (issue #592). The write names the pile the card is in *now*
+   * and the list it goes into, and Rust finds the pile there — so the editor never guesses at a
+   * list it is not drawing. The plan's Bolt is filed in the Sideboard, which is what tells its
+   * card apart from the Actual list's Main-deck Bolt while the tab changes over.
+   */
+  it("adds a theory card to the actual list from its menu", async () => {
+    const live = detail({ theoryEnabled: true, lastVariant: "theory" }, [bolt({ quantity: 4 })]);
+    const theory = detail({ theoryEnabled: true, lastVariant: "theory" }, [
+      bolt({ quantity: 2, variant: "theory", categoryKind: "side" }),
+    ]);
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? theory : live),
+    );
+    await open();
+
+    const planned = await waitFor(() => {
+      const el = document.querySelector<HTMLElement>(
+        `[${DECK_CARD_ATTR}="${deckCardSlot(SIDE, "c-Lightning Bolt", null)}"]`,
+      );
+      expect(el).not.toBeNull();
+      return el as HTMLElement;
+    });
+    fireEvent.contextMenu(planned);
+    await screen.findByRole("menu");
+
+    expect(screen.queryByRole("menuitem", { name: "Add to theory" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Add to actual" }));
+
+    // One copy, of that printing and finish, out of the pile it is in on the plan.
+    await waitFor(() =>
+      expect(deckAddCardToOtherList).toHaveBeenCalledWith(4, "c-Lightning Bolt", SIDE, "live", null, 1),
+    );
+    expect(deckAddCardToOtherList).toHaveBeenCalledTimes(1);
+    expect(deckAddCard).not.toHaveBeenCalled();
+  });
+
+  /** And the other way round: on the Actual list of a deck with a plan, the copy goes to theory. */
+  it("adds an actual card to the theory list from its menu", async () => {
+    deckGet.mockResolvedValue(detail({ theoryEnabled: true }, [bolt()]));
+    await open();
+    await rightClickCard("Lightning Bolt");
+
+    expect(screen.queryByRole("menuitem", { name: "Add to actual" })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("menuitem", { name: "Add to theory" }));
+
+    await waitFor(() =>
+      expect(deckAddCardToOtherList).toHaveBeenCalledWith(
+        4,
+        "c-Lightning Bolt",
+        MAIN,
+        "theory",
+        null,
+        1,
+      ),
+    );
+  });
+
+  /**
+   * **The menu has closed by the time a refusal lands**, so the banner is where it is said — the
+   * reason `useDeck.addToOtherList` sits in the editor's refused-write family.
+   */
+  it("says a refused add to the other list in the banner", async () => {
+    deckGet.mockResolvedValue(detail({ theoryEnabled: true }, [bolt()]));
+    deckAddCardToOtherList.mockRejectedValue(new Error("database is locked"));
+    await open();
+    await rightClickCard("Lightning Bolt");
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Add to theory" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("database is locked");
+  });
+
+  /** A deck with no plan has no other list, so the row is absent rather than greyed. */
+  it("offers no other list on a deck that keeps no plan", async () => {
+    await open();
+    await rightClickCard("Lightning Bolt");
+
+    expect(screen.getByRole("menuitem", { name: "Remove card" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("menuitem", { name: /^Add to (actual|theory)$/ }),
+    ).not.toBeInTheDocument();
   });
 
   /**

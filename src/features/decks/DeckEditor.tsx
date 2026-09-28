@@ -1571,6 +1571,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     // presses it straight from a card's right-click, whose menu has closed by the time a refusal
     // arrives. The stats band's dialog still says its own refusal inside its panel.
     deck.addMissingToCollection,
+    // **The card menu's `Add to actual` / `Add to theory`** (issue #592). An add like
+    // `deck.addCard`, which stays out of this list because the docked panel says its refusal
+    // beside its button — this one is pressed from a menu that has closed, so it is said here.
+    deck.addToOtherList,
   ] as const;
   // **The undo hook's own refusal joins this banner rather than drawing a second one.** Its
   // two mutations are writes to what is in the deck like any other, and its commonest refusal
@@ -2839,6 +2843,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const writeMove = deck.moveCard.mutateAsync;
   const writeAdd = deck.addCard.mutateAsync;
   const writeLabel = deck.setLabel.mutateAsync;
+  const writeOtherList = deck.addToOtherList.mutateAsync;
   const writeFinish = deck.setCardFinish.mutate;
 
   /**
@@ -3282,6 +3287,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       ),
     [writeLabel],
   );
+  /** **Add to actual / Add to theory** (issue #592): one copy of the row into the list this editor
+   *  is *not* showing — `useDeck.addToOtherList` sends it there, and Rust finds the pile. */
+  const addToOtherList = useCallback(
+    (card: DeckCard) =>
+      handled(
+        writeOtherList({ cardId: card.cardId, categoryId: card.categoryId, finish: card.finish }),
+      ),
+    [writeOtherList],
+  );
 
   /**
    * Every oracle id a deck note names — the per-card note mark, in every view at once.
@@ -3400,6 +3414,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           labels: deck.labels,
           addLabel: openAddLabel,
           remove: removeCard,
+          // **Add to actual / Add to theory** (issue #592) — the copy goes into the list this tab
+          // is not, and only on a deck that keeps a plan: a regular or virtual deck has no other
+          // list, so it passes nothing and the row is absent rather than greyed.
+          otherList: theoryEnabled
+            ? { variant: variant === "theory" ? "live" : "theory", add: addToOtherList }
+            : undefined,
           // The plural rows' outcomes, into the same record a multi-card drop and Delete use.
           batch: reportBatch,
           // **The `Collection ▸` submenu's three rows** (2026-09-03, issue #350). All three are
@@ -3475,6 +3495,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       setFinishAt,
       openAddLabel,
       removeCard,
+      theoryEnabled,
+      variant,
+      addToOtherList,
       reportBatch,
       tracks,
       quickAdd,

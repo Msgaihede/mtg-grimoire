@@ -7,6 +7,7 @@
  * Collection link      ▸  the three presses that answer this row's shortfall
  * ─────────────────────
  * Category             ▸  every category of the deck, in the reader's own order
+ * Add to actual           one copy into the deck's other list (only where the deck keeps a plan)
  * Label card           ▸  None / the deck's labels / More labels…
  * ─────────────────────
  * Set as commander        (only where the format has a command zone)
@@ -44,6 +45,7 @@
  */
 import {
   CircleMinus,
+  CopyPlus,
   Crown,
   FolderInput,
   Gem,
@@ -66,6 +68,7 @@ import type {
   DeckFinish,
   DeckLabel,
   DeckNote,
+  DeckVariant,
   FormatSpec,
 } from "@/lib/ipc";
 // `noteTitle` and `notesForCard` are `deckNotes.ts`'s, imported rather than respelled: a blank
@@ -203,11 +206,22 @@ export interface DeckCardMenuDeps {
    */
   remove: (card: DeckCard) => Press;
   /**
+   * **Add to actual / Add to theory** — one copy of this row's printing and finish into the deck's
+   * *other* list (issue #592). `variant` is the list the copy goes **into**; `add` is
+   * `useDeck.addToOtherList` at the surface, which leaves the backend to find the pile there that
+   * stands for this row's pile, or to make one as a copy of it. See {@link otherListItem}.
+   *
+   * **Absent takes the row with it, and that is how a deck with no plan offers nothing** — a
+   * regular or virtual deck has no other list, and a greyed row would name one that does not
+   * exist. `moveItem`'s absence rule, one dependency over.
+   */
+  otherList?: { variant: DeckVariant; add: (card: DeckCard) => Press };
+  /**
    * **Every outcome of a plural row's writes, handed back as one batch** (issue #553) — `Move N
-   * cards to`, `Label N cards` and `Remove N cards` each make one write per picked row, and the
-   * surface's banner can only hear a batch's refusals if it is shown all of them: each write is a
-   * call on one shared observer, which remembers the last card alone. Called with the promises
-   * the three writes above answered; a write that answered none is left out.
+   * cards to`, `Add N cards to …`, `Label N cards` and `Remove N cards` each make one write per
+   * picked row, and the surface's banner can only hear a batch's refusals if it is shown all of
+   * them: each write is a call on one shared observer, which remembers the last card alone. Called
+   * with the promises the writes above answered; a write that answered none is left out.
    *
    * Optional, because a surface with no banner to speak through has nothing to do with them — the
    * workbench's stories build this menu with bare `act` spies.
@@ -370,8 +384,9 @@ function manyCards(n: number): string {
  * ## Which rows go plural, and which cannot
  *
  * `Category`, `Label` and `Remove` act on **every** picked card when the right-clicked one is
- * in the set (issue #214). All three are per-row writes over an address the row already carries, so
- * plural is a loop and the label is the only thing that has to change.
+ * in the set (issue #214), and so does `Add to actual` / `Add to theory` (issue #592). All four are
+ * per-row writes over an address the row already carries, so plural is a loop and the label is the
+ * only thing that has to change.
  *
  * **`Finish`, `Set as commander` and `Set as companion` stay about the one card, and that is a
  * statement rather than an omission.** A finish is a property of a *printing* — the two-finish
@@ -416,6 +431,9 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
     // **`Category` and `Label card` are one group** (issue #505): both are how the reader *files*
     // this card inside the deck — which pile it sits in, and which of their own marks it wears.
     categoryItem(card, deps),
+    // Directly under `Category` because it is the other row about piles — the other list's pile
+    // that stands for this one (issue #592). Only on a deck that keeps a plan.
+    ...otherListItem(card, deps),
     {
       kind: "submenu",
       id: "label-card",
@@ -557,6 +575,44 @@ function categoryItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
       };
     }),
   };
+}
+
+/**
+ * **Add to actual** on the theory list, **Add to theory** on the actual one — one copy of this
+ * exact printing and finish into the deck's other list (issue #592). `live` is the stored variant
+ * and `Actual` the tab's word, so the label is spelled from the tab.
+ *
+ * **One action rather than a submenu of piles.** The backend files the copy into the other list's
+ * pile that stands for this row's pile, or makes one there as a copy of it, so there is no choice
+ * for a row to offer. **One copy rather than the row's quantity** — every other Add's rule, so a
+ * playset is four presses and a second press folds into a second copy.
+ *
+ * **An orphan printing is passed over, and the row greys only when nothing is left to add.** A row
+ * whose printing has left the card database (`oracleId === null` — `deckWalk.ts`' test) cannot be
+ * added anywhere; the backend refuses it. So the loop skips it, and a right-click on one — or a set
+ * of nothing else — greys the row **wordlessly**, {@link zoneItem}'s rule for a refusal that is a
+ * fact about the card rather than about the list. The plural label still counts the whole set,
+ * `Category`'s rule for the members it passes over.
+ */
+function otherListItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
+  const { otherList } = deps;
+  if (otherList === undefined) return [];
+  const rows = targets(card, deps);
+  const list = otherList.variant === "theory" ? "theory" : "actual";
+  const label = rows.length > 1 ? `Add ${manyCards(rows.length)} to ${list}` : `Add to ${list}`;
+  const addable = rows.filter((row) => row.oracleId !== null);
+  const item = { kind: "action", id: "add-to-other-list", label, Icon: CopyPlus } as const;
+  if (addable.length === 0) return [{ ...item, disabled: true, onSelect: () => {} }];
+  return [
+    {
+      ...item,
+      onSelect: () =>
+        reportBatch(
+          deps,
+          addable.map((row) => otherList.add(row)),
+        ),
+    },
+  ];
 }
 
 /**
