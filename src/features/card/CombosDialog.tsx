@@ -83,8 +83,7 @@ const PAGE_SIZE = 50;
  * for it anywhere in the app, so the honest instruction is that nothing needs a press.
  */
 const NEVER_FETCHED =
-  "No combos yet — Commander Spellbook's combo list has not been downloaded. " +
-  "The app fetches it in the background shortly after launch. Nothing here needs a press.";
+  "No combos yet. Commander Spellbook data has not been downloaded yet; it will sync automatically in the background.";
 
 /** An empty answer from a feed that *is* here: Spellbook lists no combo naming this card. The
  *  other half of {@link NEVER_FETCHED}'s split, and the claim that needs the status row. */
@@ -98,9 +97,7 @@ const NO_COMBOS = "No combos. Commander Spellbook has none on record naming this
  * question to put: `combos_for_card` matches on oracle id, so a null id has nothing to look up and
  * a call would only be this component asking the backend to confirm that zero is zero.
  */
-const NO_ORACLE_CARD =
-  "No combos. This printing is not linked to an oracle card, and a combo is a fact about the " +
-  "card rather than about the printing.";
+const NO_ORACLE_CARD = "No combos. This printing is not linked to an Oracle card.";
 
 /**
  * The **fourth** empty, and it must never borrow one of the three above.
@@ -994,8 +991,8 @@ function Pane({ combo }: { combo: CardCombo }) {
           surface over. */}
       {combo.templateCount > 0 && (
         <p className="mt-4 text-xs leading-snug text-dim">
-          Also needs {plural(combo.templateCount, "piece")} no card list can name — a creature with
-          flying, a way to sacrifice — so the cards above are not the whole combo.
+          Also requires {plural(combo.templateCount, "piece")} no card list can name (e.g. a creature with
+          flying or sacrifice outlet).
         </p>
       )}
 

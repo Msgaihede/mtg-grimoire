@@ -42,8 +42,7 @@ const ORACLE_TAG_STATUS_KEY = ["tags", "oracle", "status"];
  * app, so the honest instruction is that nothing needs a press.
  */
 const NEVER_FETCHED =
-  "No oracle tags yet — Scryfall's tagger data has not been downloaded. " +
-  "The app fetches it in the background. Nothing here needs a press.";
+  "No oracle tags yet. Scryfall tagger data has not been downloaded yet; it will sync automatically in the background.";
 
 /** An empty answer from a taxonomy that *is* here: Tagger's editors have not tagged this card.
  *  The other half of {@link NEVER_FETCHED}'s split, and the claim that needs the status row. */
@@ -57,9 +56,7 @@ const UNTAGGED = "No oracle tags. Scryfall's tagger has nothing on record for th
  * question to put: the read is keyed on an oracle id, so a null id has nothing to look up and a
  * call would only be this component asking the backend to confirm that `[]` is `[]`.
  */
-const NO_ORACLE_CARD =
-  "No oracle tags. This printing is not linked to an oracle card, and a tag is a fact about the " +
-  "card rather than about the printing.";
+const NO_ORACLE_CARD = "No oracle tags. This printing is not linked to an Oracle card.";
 
 /**
  * Where the tags came from and how old they are — the app's rule that data with an age says its
