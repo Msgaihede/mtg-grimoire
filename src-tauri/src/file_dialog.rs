@@ -113,7 +113,7 @@ mod tests {
     /// The ordinary answer, passed through as the path the reader chose and nothing else.
     #[test]
     fn a_chosen_path_is_answered_as_itself() {
-        let chosen = std::env::temp_dir().join("mtgtest-dialog-chosen.txt");
+        let chosen = crate::scratch::path("dialog-chosen.txt");
         let answer = chosen.clone();
         assert_eq!(
             run(move || Some(FilePath::Path(answer))).unwrap(),
@@ -132,7 +132,7 @@ mod tests {
     /// A `file://` URL is a path by another name, and is answered as one.
     #[test]
     fn a_file_url_is_answered_as_its_path() {
-        let chosen = std::env::temp_dir().join("mtgtest-dialog-url.txt");
+        let chosen = crate::scratch::path("dialog-url.txt");
         let url = tauri::Url::from_file_path(&chosen).unwrap();
         assert_eq!(run(move || Some(FilePath::Url(url))).unwrap(), Some(chosen));
     }

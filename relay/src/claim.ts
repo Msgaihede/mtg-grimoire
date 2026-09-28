@@ -26,7 +26,7 @@ import { mint, TOKEN_TTL_MS } from "./token";
 import type { Env } from "./index";
 
 /**
- * The entitlement layer's four routes and the daily reconciliation: the OAuth landing page,
+ * The entitlement layer's four routes and the cron's reconciliation: the OAuth landing page,
  * `/claim`, `/token` and the Patreon webhook.
  *
  * **Everything in this file counts in milliseconds, and the wire counts in seconds.** `decide`
@@ -156,6 +156,30 @@ const GROUP_FULL =
  */
 const DEVICE_LIMIT = "device_limit";
 
+/**
+ * The machine-readable half of the group door's one 401 that is a verdict rather than a doubt:
+ * the caller's auth was the group's current one and the membership behind the group has ended.
+ *
+ * **Why it has to be said at all.** A device that never pressed Connect holds no refresh secret,
+ * so the group door is the only door it ever reaches — and there every 401 was bare, which the app
+ * reads as a stale auth (`STALE_GROUP_AUTH`) rather than a lapse, because a rotation it has not
+ * caught up with is refused in exactly the same words. So it re-checked `/keys`, found itself
+ * still in the group, kept its grant, and its panel went on saying *Supporting since …* over a
+ * pledge that had ended (issue #546).
+ *
+ * **Why it is safe to say.** The caller presented the group's *current* auth, which only a device
+ * holding the group key can derive — it has already proved it is in the group, so telling it the
+ * group's membership ended tells it nothing it could not have learned by asking any other member.
+ * A stale auth is still a plain `unauthorized`: the relay cannot tell a device behind a rotation
+ * from one that was removed, and a removed device must learn nothing about the group it left.
+ *
+ * **A code rather than the sentence, for `DEVICE_LIMIT`'s reason**: `sync_engine::entitlement`
+ * matches this string, and `error` stays copy that can be reworded without breaking the app. Unlike
+ * that one, the pair is fenced — the Rust side's tests read this file for the quoted literal, so
+ * it stays spelled out here rather than built from parts.
+ */
+const MEMBERSHIP_ENDED = "membership_ended";
+
 /** Characters in a claim code, before the separators. Twelve, as three groups of four. */
 const CODE_CHARS = 12;
 
@@ -173,15 +197,45 @@ const CODE_TTL_MS = 10 * 60 * 1000;
 const SECRET_BYTES = 32;
 
 /**
- * How many entitlement rows the daily reconciliation reads at once, and how many pages it will
- * walk before it stops. The product is the ceiling on one pass, and it is deliberate: a cron
- * invocation has a wall-clock budget and each row costs two Patreon round trips, so a pass that
- * tried to walk an unbounded table would be killed part-way with no record of where it stopped.
- * A relay with more rows than this reconciles the rest tomorrow, which is what a backstop is
- * allowed to do — the webhook is the primary (spec §7.3).
+ * How many entitlement rows one cron invocation reconciles, at most — the whole of a pass.
+ *
+ * **The number is the free plan's subrequest ceiling divided by what a row spends against it.** A
+ * Worker on the free plan may make **50 external subrequests per invocation** (as search summaries
+ * of Cloudflare's limits page report it; the page itself could not be read from where this was
+ * written), and a row holding a Patreon token spends two — the token refresh and the identity
+ * read — so twenty rows is forty, with ten to spare. ⚠️ **The pass this replaced read up to a
+ * thousand rows** (fifty a page, twenty pages) and, by the same arithmetic, every `fetch` after
+ * the twenty-fifth row threw — each caught, logged and forgotten. That figure is derived, not
+ * measured against the host.
+ *
+ * **D1 is a second ceiling, and the pass stays under fifty there too, on the same unverified
+ * footing.** Cloudflare's 2026-02-11 changelog is reported to put calls to its own services —
+ * D1 and the Durable Object drop among them — on a separate allowance of 1 000 per invocation,
+ * while D1's own limits page is reported to list 50 queries per invocation on the free plan;
+ * neither page could be read from where this was written. So the pass is shaped to fit the
+ * smaller: one `SELECT`, one stamp, and at most two `UPDATE`s a row is 42 queries at this budget,
+ * and 43 with the rendezvous sweep `index.ts` runs after it.
+ *
+ * **Every row counts, token or not.** A row with no `patreon_refresh` asks Patreon nothing, but it
+ * is not free — a closed grace window still costs `revoke`'s `UPDATE` and a Durable Object drop —
+ * and the callback writes a token into every row it creates, so a token-less row is an anomaly
+ * rather than a population worth a second queue. One `LIMIT` is the simplest bound on everything
+ * a pass can spend.
  */
-const RECONCILE_PAGE = 50;
-const RECONCILE_PAGES = 20;
+export const RECONCILE_BUDGET = 20;
+
+/**
+ * How long a reconciled row rests before it is due again: a day, less four hours of slack.
+ *
+ * **The cron is hourly and this is what stops it asking Patreon about one subject twenty-four
+ * times a day.** It is shorter than a day so that cron jitter, or a row stamped at the end of a
+ * slow pass, can never push a subject's next turn past the same hour tomorrow: a relay whose due
+ * rows fit the budget reaches every subject at least once in any twenty-four hours. Capacity is
+ * `RECONCILE_BUDGET` × 24 = 480 attempts a day, which at one turn every ~21 hours is about 420 live
+ * memberships; past that the backstop slows — each subject every `rows / 480` days — rather than
+ * stopping, and the webhook stays the primary (spec §7.3).
+ */
+export const RECONCILE_INTERVAL_MS = 20 * 60 * 60 * 1000;
 
 /** The entitlement row, in SQLite's snake_case. Every timestamp is milliseconds. */
 type EntitlementRow = {
@@ -361,7 +415,7 @@ async function grantFor(
 }
 
 /**
- * Spec §7.1, in one place because it is reached from four: the webhook, the daily
+ * Spec §7.1, in one place because it is reached from four: the webhook, the hourly
  * reconciliation, `/token` when a grace window has closed, and the OAuth callback when a reader
  * who has already lapsed connects again.
  *
@@ -395,10 +449,10 @@ async function revoke(env: Env, subject: string, groupId: string | null): Promis
  * Empty a group's relay log.
  *
  * **The path is one the Worker builds and no device can reach.** `index.ts`'s `ROUTE` matches
- * `push|pull|ack|ws` and nothing else, so `/g/{group}/drop` is a 404 from the outside; the only
- * way to it is this function, which is called by the entitlement layer alone. That is the whole
- * of the authorisation — a `drop` behind the auth gate would still be a route a device holding
- * a valid token could aim at its own group.
+ * `push|pull|ack|ws|rotate|keys` and nothing else, so `/g/{group}/drop` is a 404 from the
+ * outside; the only way to it is this function, which is called by the entitlement layer alone.
+ * That is the whole of the authorisation — a `drop` behind the auth gate would still be a route a
+ * device holding a valid token could aim at its own group.
  */
 /**
  * The `device` field of a body, or `null` for "not a device id" — one reader for all three
@@ -548,7 +602,9 @@ export async function handleCallback(request: Request, env: Env): Promise<Respon
     // a webhook that may never have been delivered. `existing === null` is somebody who has
     // never connected at all: the upsert already wrote them dead and there is no group to drop,
     // so there is nothing left to revoke. The drop must not stop the page rendering — the
-    // reader is standing in front of it, and the daily pass will try again.
+    // reader is standing in front of it. What tries again is `/token`'s group door, whose
+    // `serveOrRevoke` revokes a dead row it is asked about; the cron does not, because it skips
+    // dead rows.
     try {
       if (existing !== null) await revoke(env, subject, existing.group_id);
     } catch (error) {
@@ -871,6 +927,9 @@ async function refreshDoor(env: Env, refresh: string, device: string): Promise<R
   // there is nothing to stamp into `grp`. Both are the same sentence to the app.
   if (row === null || row.group_id === null) return json({ error: "unauthorized" }, 401);
 
+  // Bare, unlike the group door's lapse: a 401 on this door has always meant the membership is
+  // over to the app, and the revoked secret a lapse leaves behind is refused by the lookup above
+  // in these same words, so a code here would mark one of two identical refusals.
   const status = await serveOrRevoke(env, row);
   if (status === null) return json({ error: "unauthorized" }, 401);
 
@@ -909,8 +968,9 @@ async function groupDoor(
 ): Promise<Response> {
   // A stale auth lands here after a rotation this device has not caught up with, which is not a
   // lapse — spec §2.5 has the app re-check `/keys` once before concluding anything from a 401 on
-  // this door. The relay cannot tell the two apart and does not try: it answers the same
-  // `unauthorized` to a device that is behind and to one that was removed.
+  // this door. The relay cannot tell the two apart and does not try: it answers the same bare
+  // `unauthorized` to a device that is behind and to one that was removed — and, being ahead of
+  // the row, says nothing about the membership to a caller that has not proved it is in the group.
   if (!(await authIsCurrent(env, group, auth))) return json({ error: "unauthorized" }, 401);
 
   const row = await env.DB.prepare(
@@ -925,8 +985,11 @@ async function groupDoor(
   // thing standing between a group with no membership and a token (spec §2.4).
   if (row === null) return json({ error: "unauthorized" }, 401);
 
+  // **The one 401 on either door that carries a code.** The auth above was current, so this
+  // caller holds the group key and the lapse is news about its own group; see `MEMBERSHIP_ENDED`.
+  // `serveOrRevoke` has already run §7.1 on the way here, exactly as it did before the code.
   const status = await serveOrRevoke(env, row);
-  if (status === null) return json({ error: "unauthorized" }, 401);
+  if (status === null) return json({ error: "unauthorized", code: MEMBERSHIP_ENDED }, 401);
 
   // **A device that inherited its sign-in from another grouped device is counted like any other,
   // which is item 3 of the request in the reader's own words.** This is the only door such a
@@ -949,10 +1012,11 @@ async function groupDoor(
  * out, and a group door that merely reported it would leave a declined reader's every paired
  * device syncing for ever on a membership that ended a week ago.
  *
- * §7.1 runs here rather than being left to tomorrow's cron, because the alternative is a row
+ * §7.1 runs here rather than being left to the cron, because the alternative is a row
  * this pass has already decided is dead whose log nothing will ever drop — the reconciliation
  * skips `dead` rows by design. A failure must not change the answer: the token is refused either
- * way, and the cron's local settle will try again.
+ * way. A status write that failed leaves the row for the cron's local settle; a drop that failed
+ * after it is retried by the next group-door request, which settles the dead row here again.
  */
 async function serveOrRevoke(env: Env, row: EntitlementRow): Promise<Status | null> {
   const now = Date.now();
@@ -1023,7 +1087,7 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
   // of being removed. Spec §7.1 makes `pledge:delete` dead immediately, so trusting the
   // attribute alone would leave a cancelled reader serving on any payload that still reads
   // `active_patron` — a possibility nothing here has ruled out, on a path where being wrong
-  // costs a free subscription until the next daily pass.
+  // costs a free subscription until the cron next reaches that subject.
   const event = request.headers.get("x-patreon-event") ?? "";
   const decision = event.endsWith(":delete")
     ? { status: "dead" as Status, graceUntil: null }
@@ -1043,52 +1107,80 @@ export async function handleWebhook(request: Request, env: Env): Promise<Respons
 }
 
 // ---------------------------------------------------------------------------------------
-// The daily reconciliation
+// The reconciliation — an hourly cron, a budget per pass
 // ---------------------------------------------------------------------------------------
 
 /**
- * The cron's work: re-ask Patreon about every subject that is not already dead, and close the
- * grace windows that have run out.
+ * The cron's work: re-ask Patreon about the subjects that are due, and close the grace windows
+ * that have run out. `wrangler.jsonc` fires it hourly; each invocation reaches at most
+ * `RECONCILE_BUDGET` rows, least recently reconciled first.
  *
  * **Two things only this pass can catch.** A webhook Patreon failed to deliver would otherwise
  * leave a cancelled membership syncing for ever; and a grace window closing is not an event at
  * all — nothing happens on the seventh day, so nothing fires.
  *
- * **Keyset paging, not `LIMIT/OFFSET`.** The window is `status <> 'dead'` and this pass writes
- * rows *to* dead, so under `OFFSET` the surviving rows shift left underneath it and every page
- * boundary skips one. Ordering by the primary key and asking for what is after the last subject
- * seen cannot skip.
+ * ⚠️ **This walked the table by `subject` from the beginning on every run, which reached the same
+ * first subjects every day.** Its doc said a relay with more rows than one pass "reconciles the
+ * rest tomorrow"; tomorrow started from `""` again, and the free plan's fifty external
+ * subrequests ran out about twenty-five rows in besides (see `RECONCILE_BUDGET`). A cancellation
+ * whose webhook was missed, behind those rows, kept syncing for as long as the relay ran. The pass
+ * carries no cursor now — the queue is the table, ordered by `reconciled_at`.
+ *
+ * **Ordered by `reconciled_at` and never by `checked_at`.** `serveOrRevoke` stamps `checked_at` on
+ * every `/token`, so the subjects actually syncing — the ones a missed cancellation costs — would
+ * be forever the most recently checked and never come up. `reconciled_at` is written by this pass
+ * alone. NULL is *never*, and SQLite sorts NULL below every value in ascending order, so a
+ * subject that has never been asked goes first with no `NULLS FIRST` to depend on.
+ *
+ * **The stamp lands before any attempt, success or throw, in one statement.** A row whose
+ * Patreon grant was revoked throws every time; stamped only on success it would head the queue
+ * for ever and take a slot of every pass with it. Stamped first, it goes to the back like
+ * everything else — and so does a row whose attempt outlives the invocation, which a stamp
+ * written afterwards would never record. What that costs is a row the invocation died before
+ * reaching waiting out a whole `RECONCILE_INTERVAL_MS` rather than an hour; a backstop can afford
+ * that, and a queue with a poisoned head cannot. If the stamp itself fails nothing is attempted,
+ * because an attempt that then failed to write back would lose the refresh token Patreon had just
+ * rotated.
  *
  * A row that fails is logged and the pass continues: one reader's revoked OAuth grant must not
  * stop everybody else's reconciliation.
  */
 export async function reconcile(env: Env): Promise<void> {
-  let after = "";
+  const now = Date.now();
 
-  for (let page = 0; page < RECONCILE_PAGES; page += 1) {
-    const rows = (
-      await env.DB.prepare(
-        `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at
-           FROM entitlements
-          WHERE status <> 'dead' AND subject > ?
-          ORDER BY subject
-          LIMIT ?`,
-      )
-        .bind(after, RECONCILE_PAGE)
-        .all<EntitlementRow>()
-    ).results;
-    if (rows.length === 0) return;
+  // `status <> 'dead'` is `entitlements_reconcile`'s own predicate spelled identically, with the
+  // literal rather than a bound `?`. SQLite uses a partial index only when the query implies its
+  // condition; given a parameter it can still see that by re-preparing once the value is bound —
+  // measured doing so on SQLite 3.45.1, never checked on D1 — and the literal needs no such help.
+  const due = (
+    await env.DB.prepare(
+      `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at
+         FROM entitlements
+        WHERE status <> 'dead' AND (reconciled_at IS NULL OR reconciled_at < ?)
+        ORDER BY reconciled_at, subject
+        LIMIT ?`,
+    )
+      .bind(now - RECONCILE_INTERVAL_MS, RECONCILE_BUDGET)
+      .all<EntitlementRow>()
+  ).results;
+  if (due.length === 0) return;
 
-    for (const row of rows) {
-      try {
-        await reconcileOne(env, row);
-      } catch (error) {
-        console.error(`reconcile ${row.subject}`, error);
-      }
+  // One placeholder per row rather than one statement per row, so the stamp costs a single D1
+  // query however full the pass is — see `RECONCILE_BUDGET` for the count this keeps under fifty.
+  // Only `?` is interpolated, and at most `RECONCILE_BUDGET` of them, well inside D1's hundred
+  // bound parameters a statement.
+  await env.DB.prepare(
+    `UPDATE entitlements SET reconciled_at = ? WHERE subject IN (${due.map(() => "?").join(", ")})`,
+  )
+    .bind(now, ...due.map((row) => row.subject))
+    .run();
+
+  for (const row of due) {
+    try {
+      await reconcileOne(env, row);
+    } catch (error) {
+      console.error(`reconcile ${row.subject}`, error);
     }
-
-    after = rows[rows.length - 1].subject;
-    if (rows.length < RECONCILE_PAGE) return;
   }
 }
 

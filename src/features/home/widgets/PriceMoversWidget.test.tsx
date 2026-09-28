@@ -143,7 +143,7 @@ describe("emptySentence", () => {
 
   it("says how far back prices go when the window reaches past them", () => {
     expect(emptySentence(answer({ movers: [], since: null, days: 3 }), "30d", "both")).toBe(
-      "Prices have been remembered for 3 days so far — not long enough to measure the last thirty days yet.",
+      "Only 3 days of price history so far. Not enough for the last thirty days yet.",
     );
   });
 
@@ -168,14 +168,14 @@ describe("PriceMoversWidget", () => {
   it("says it is reading while the read is out", async () => {
     priceMovers.mockImplementation(() => new Promise(() => {}));
     draw();
-    expect(await screen.findByText("Reading price history…")).toBeInTheDocument();
+    expect(await screen.findByText("Loading price history…")).toBeInTheDocument();
   });
 
   it("says a refusal in the backend's words", async () => {
     priceMovers.mockRejectedValue("no such marketplace");
     draw();
     expect(
-      await screen.findByText("Could not read price history — no such marketplace"),
+      await screen.findByText("Couldn't load price history — no such marketplace"),
     ).toBeInTheDocument();
   });
 
@@ -204,14 +204,14 @@ describe("PriceMoversWidget", () => {
     seed(answer(), "all");
     draw({ window: "all" });
     expect(
-      screen.getByText("Against the oldest price kept of TCGplayer prices."),
+      screen.getByText("TCGplayer prices since the oldest price kept."),
     ).toBeInTheDocument();
   });
 
   it("draws no footer on a narrow card", () => {
     seed(answer());
     draw(null, fitFor(3, 4));
-    expect(screen.queryByText(/^Against /)).not.toBeInTheDocument();
+    expect(screen.queryByText(/ prices (over|since) /)).not.toBeInTheDocument();
   });
 
   // The two sentences a reader must never confuse, drawn rather than only computed.

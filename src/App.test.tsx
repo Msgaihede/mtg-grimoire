@@ -774,7 +774,7 @@ it("opens the wishlist on the wishlist entry", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
 
-  expect(await screen.findByText(/nothing on your wishlist yet/i)).toBeInTheDocument();
+  expect(await screen.findByText(/your wishlist is empty/i)).toBeInTheDocument();
   expect(screen.queryByText(/import \(coming soon\)/i)).not.toBeInTheDocument();
 });
 

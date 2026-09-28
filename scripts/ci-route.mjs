@@ -106,9 +106,13 @@ export const ARMS = [
   // The TypeScript side's files that Rust tests read. `transfer::write` asserts the Rust export
   // writer reproduces every golden file byte for byte (with `card.rs` and `fields.rs` reading
   // `corpus.json` and `fields.json`), and `changes` asserts `userTables.json` is the user side
-  // of its table registry. **Above `src/*`.**
+  // of its table registry and `syncedTables.json` is `schema::SYNCED_TABLES`. **Above `src/*`.**
   {
-    match: ["src/features/transfer/__golden__/*", "src/lib/userTables.json"],
+    match: [
+      "src/features/transfer/__golden__/*",
+      "src/lib/userTables.json",
+      "src/lib/syncedTables.json",
+    ],
     jobs: ["frontend", "rust", "storybook"],
   },
 

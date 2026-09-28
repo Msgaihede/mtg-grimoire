@@ -245,7 +245,7 @@ function addWishes(into: WishTotals, under: WishTotals): WishTotals {
  * a second spelling of "12 cards · $340.00" is a second chance for two walls to disagree.
  */
 function wishFace(summary: WishTotals, currency: Currency): { shown: string; spoken: string } {
-  const wishes = plural(summary.wishes, "wish", "wishes");
+  const wishes = plural(summary.wishes, "card");
   if (summary.copies === 0) return { shown: wishes, spoken: wishes };
   const parts = [
     formatPrice(summary.cost > 0 ? summary.cost : null, currency),
@@ -493,7 +493,7 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
     ).map((folder) => {
       const totals = wishTotals.get(folder.id) ?? NO_WISHES;
       const face = wishFace(totals, currency);
-      const wishes = plural(totals.wishes, "wish", "wishes");
+      const wishes = plural(totals.wishes, "card");
       const managed = isManaged(folder);
       // A deck's `Tokens` child by its deck's folder, so two decks' pinned ones are two rows.
       const name = wishlistFolderName(folder, wishlist.folders);
@@ -552,17 +552,17 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
     if (each.kind === "error") {
       return [
         <WidgetMessage key={cabinet} tone="destructive">
-          Could not read your {cabinet} folders — {ipcError(each.error)}
+          Couldn't load {cabinet} folders — {ipcError(each.error)}
         </WidgetMessage>,
       ];
     }
     if (each.kind === "loading") {
-      return [<WidgetMessage key={cabinet}>Reading your {cabinet} folders…</WidgetMessage>];
+      return [<WidgetMessage key={cabinet}>Loading {cabinet} folders…</WidgetMessage>];
     }
     if (each.rows.length === 0) {
       return [
         <WidgetMessage key={cabinet}>
-          No {cabinet} folders to show — make one in your {cabinet}, then pin it here from
+          No {cabinet} folders yet. Create one in your {cabinet}, then pin it here from
           Customize.
         </WidgetMessage>,
       ];
@@ -717,7 +717,7 @@ export function FoldersWidgetSettings({ widget, onConfig }: WidgetSettingsProps)
   return (
     <div className="grid gap-3">
       <p className="m-0 text-xs text-dim">
-        With nothing pinned, a cabinet shows its top-level folders, yours first.
+        With nothing pinned, top-level folders are shown, yours first.
       </p>
       {cabinets !== "wishlist" && (
         <Picker

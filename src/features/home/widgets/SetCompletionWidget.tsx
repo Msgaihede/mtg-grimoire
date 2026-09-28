@@ -56,12 +56,12 @@ function rowPx(caption: boolean, track: boolean): number {
   return 36 + (caption ? 15 : 0) + (track ? 6 : 0);
 }
 
-const PENDING = "Counting your sets…";
-export const EMPTY = "No sets found. Sets for cards in your collection will appear here.";
+const PENDING = "Loading sets…";
+export const EMPTY = "No sets found. Sets for cards in your collection will show up here.";
 /** Not "Scryfall publishes none": a corpus that has not synced since the column arrived reads
  *  `null` for every set, so the hint says what is true in both cases. */
 export const NO_SIZE_HINT =
-  "No printed set size available; shows total cards owned from this set.";
+  "Set size unknown. Showing cards owned from this set.";
 
 /**
  * The sets in the order the reader picked.
@@ -119,7 +119,7 @@ export function SetCompletionWidget({ widget, fit }: WidgetBodyProps): ReactElem
   if (query.isError) {
     return (
       <WidgetMessage tone="destructive">
-        Could not count your sets — {ipcError(query.error)}
+        Couldn't load sets — {ipcError(query.error)}
       </WidgetMessage>
     );
   }

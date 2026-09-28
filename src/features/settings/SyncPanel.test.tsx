@@ -235,6 +235,8 @@ const OUTCOME: RelayOutcome = {
   // whole group, and no group so broken it has a moot child to consume.
   heldNewer: 0,
   dropped: 0,
+  moot: 0,
+  changed: true,
   // An ordinary trip, which is every trip but the first with a given device — so both baseline
   // counts are zero and the panel must say nothing at all about a first exchange.
   baselineOps: 0,
@@ -934,6 +936,23 @@ describe("delivery holds", () => {
           "receive its changes.",
       ),
     ).toBeInTheDocument();
+  });
+
+  it("says a device's clock runs ahead, verbatim, when a pull is held on the clock", async () => {
+    // Issue #546 item 8: a peer's changes stamped more than a day past this device's clock wait
+    // here rather than drag its clock forward for good. The sentence says "catches up" because
+    // fixing the peer's clock does not release what it already stamped.
+    syncRelayStatus.mockResolvedValue({ ...RELAY_ON, pullHeld: "clock" });
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(
+      await screen.findByText(
+        "A device in your group has its clock set more than a day ahead of this one. Its " +
+          "changes wait until this device's clock catches up — check the date and time on both.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/runs a newer version/i)).not.toBeInTheDocument();
   });
 
   it("says nothing when the hold is only a waiting one", async () => {

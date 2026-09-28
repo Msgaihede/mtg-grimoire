@@ -141,7 +141,7 @@ export function layoutFor(fit: WidgetFit): { figures: 1 | 2; rows: number } {
   return { figures: alone <= fit.bodyHeightPx ? 2 : 1, rows: 0 };
 }
 
-const PENDING = "Looking for announced sets…";
+const PENDING = "Loading upcoming sets…";
 
 /** A release day in words, in UTC — see the module doc. */
 const RELEASE_DAY = new Intl.DateTimeFormat("en-GB", {
@@ -292,7 +292,7 @@ export function ComingSoonWidget({ widget, fit, still }: WidgetBodyProps): React
   if (query.isError) {
     return (
       <WidgetMessage tone="destructive">
-        Could not read what is announced — {ipcError(query.error)}
+        Couldn't load upcoming sets — {ipcError(query.error)}
       </WidgetMessage>
     );
   }

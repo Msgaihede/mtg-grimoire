@@ -293,7 +293,7 @@ describe("SummaryWidget", () => {
   it("says the totals are still being read", () => {
     renderWidget();
 
-    expect(screen.getByText("Adding up your collection, decks and wishlist…")).toBeInTheDocument();
+    expect(screen.getByText("Loading totals…")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Collection:/ })).toBeNull();
   });
 
@@ -308,7 +308,7 @@ describe("SummaryWidget", () => {
     });
 
     expect(
-      screen.getByText(/Nothing to add up yet\. Collection cards, decks/),
+      screen.getByText(/Nothing to count yet\. Add cards to your collection, decks/),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Collection:/ })).toBeNull();
   });
@@ -330,7 +330,7 @@ describe("SummaryWidget", () => {
     renderWidget();
 
     expect(
-      await screen.findByText(/Your totals could not be read\. database is locked/),
+      await screen.findByText(/Couldn't load totals\. database is locked/),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Collection:/ })).toBeNull();
   });
@@ -391,7 +391,7 @@ describe("fitting the figures to the box", () => {
     renderWidget({ ...FULL, config: { hide: ["collection", "decks", "wishlist", "value"] } });
 
     expect(screen.queryAllByRole("button")).toEqual([]);
-    expect(screen.getByText(/Every figure is hidden\./)).toBeInTheDocument();
+    expect(screen.getByText(/All figures are hidden\./)).toBeInTheDocument();
   });
 });
 

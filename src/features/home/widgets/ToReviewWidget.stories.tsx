@@ -119,10 +119,10 @@ export const EverythingWaiting: Story = {
       await card.findByRole("button", { name: "Scanned cards · 1 card to pick · 6" }, LANDED),
     ).toBeInTheDocument();
     await expect(
-      card.getByRole("button", { name: "Binder entries · Flagged for review · 1" }),
+      card.getByRole("button", { name: "Collection entries · Flagged for review · 1" }),
     ).toBeInTheDocument();
     await expect(
-      card.getByRole("button", { name: "Wishes · Flagged for review · 1" }),
+      card.getByRole("button", { name: "Wishlist items · Flagged for review · 1" }),
     ).toBeInTheDocument();
     await expect(
       card.getByRole("button", { name: "Deck cards · Flagged for review · 1" }),
@@ -139,7 +139,7 @@ export const Tile: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "To review" }, LANDED));
     await expect(await card.findAllByText("1 flagged", {}, LANDED)).toHaveLength(3);
-    await expect(card.getByRole("button", { name: "Binder entries · 1 flagged" })).toBeInTheDocument();
+    await expect(card.getByRole("button", { name: "Collection entries · 1 flagged" })).toBeInTheDocument();
   },
 };
 
@@ -176,7 +176,7 @@ export const Still: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "To review" }, LANDED));
-    await expect(await card.findByText("Binder entries", {}, LANDED)).toBeInTheDocument();
-    await expect(card.queryByRole("button", { name: /^Binder entries/ })).toBeNull();
+    await expect(await card.findByText("Collection entries", {}, LANDED)).toBeInTheDocument();
+    await expect(card.queryByRole("button", { name: /^Collection entries/ })).toBeNull();
   },
 };

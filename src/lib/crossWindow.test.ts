@@ -2,21 +2,25 @@ import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { describe, expect, it, vi } from "vitest";
 import USER_TABLES from "./userTables.json";
 import {
+  DEVICE_SYNC_INVALIDATED,
   FOLLOW_LIVE_APP_META,
   PER_WINDOW_KEYS,
   SINGLE_WRITER_KEYS,
+  SYNCED_TABLES,
   TABLE_KEYS,
   isPerWindowKey,
   keysForTables,
   refreshForTables,
   registerUnsavedCheck,
 } from "./crossWindow";
+import { SYNC_KEY } from "./query";
 import { MARK_COLORS_KEY } from "./useMarkColors";
 import { MARKETPLACE_KEY } from "./useMarketplace";
 import { NAV_COLLAPSED_KEY } from "./useNavCollapsed";
 import { START_VIEW_KEY } from "./useStartView";
 import { HOME_LAYOUT_KEY } from "@/features/home/useHomeLayout";
-import { RECENT_CARDS_ROOT, scannerTrayCountKey } from "@/features/home/keys";
+import { RECENT_CARDS_ROOT, scannerTrayCountKey, stickyNotesKey } from "@/features/home/keys";
+import { HIDDEN_TAGS_KEY } from "@/features/settings/useHiddenTags";
 import { PRINTING_GROUP_BY_KEY } from "@/features/card/usePrintingGroupBy";
 import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
 import { FOLDER_PANE_KEY } from "@/features/decks/useFolderPane";
@@ -269,5 +273,78 @@ describe("the shelves' stored folds", () => {
     expect(PER_WINDOW_KEYS).toContainEqual(SHELF_FOLDS_KEY);
     expect(isPerWindowKey(SHELF_FOLDS_KEY)).toBe(true);
     expect(keysForTables(["app_meta"])).not.toContainEqual(SHELF_FOLDS_KEY);
+  });
+});
+
+/**
+ * A pull is a write no window here made, so nothing settles what it moved but
+ * `useDeviceSyncInvalidation` — `db:changed` is emitted only while two windows are open, and
+ * WebView2 never fires the `visibilitychange` a refetch on focus waits for. What it refreshes is
+ * this map read at the synced tables, and these are the fences that keep it the whole of them.
+ */
+describe("a pull from another device", () => {
+  /** The TypeScript half of the census; `changes.rs` holds the file to `schema::SYNCED_TABLES`. */
+  it("maps every synced table, and every one of them is a user table", () => {
+    expect(SYNCED_TABLES.length, "the premise: the file is not empty").toBeGreaterThan(0);
+    for (const table of SYNCED_TABLES) {
+      expect(Object.keys(TABLE_KEYS), `${table} has no entry in TABLE_KEYS`).toContain(table);
+      expect(USER_TABLES, `${table} is not a user table`).toContain(table);
+    }
+  });
+
+  /**
+   * By reach rather than by membership: the constant keeps only the outermost roots, so
+   * `["cards", "search"]` is refreshed through `["cards"]` rather than listed beside it.
+   */
+  it("reaches every root a synced table's write reaches, and the sync root", () => {
+    const owed = [...keysForTables(SYNCED_TABLES), SYNC_KEY];
+    const client = seeded(owed);
+    for (const queryKey of DEVICE_SYNC_INVALIDATED) void client.invalidateQueries({ queryKey });
+    for (const key of owed) expect(invalidated(client, key), JSON.stringify(key)).toBe(true);
+    // And nothing the map does not owe: every root is one of those keys, not a wider one.
+    const spelled = owed.map((key) => JSON.stringify(key));
+    for (const root of DEVICE_SYNC_INVALIDATED) expect(spelled).toContain(JSON.stringify(root));
+  });
+
+  /**
+   * **The bug this was, one query per table it missed.** The list used to be
+   * `[...OWNED_WRITE_KEYS, SYNC_KEY]`: a note written on the other device left the home page's
+   * copy as it was — and the next edit here saved a body built from it over theirs — a mute
+   * refreshed no tag root, and a copy filed there left the card modal's holdings where they were.
+   */
+  it("refreshes the sticky notes, the muted tags and a card's holdings", () => {
+    const holdings = ["card", "holdings", "some-oracle-id"];
+    const client = seeded([stickyNotesKey, HIDDEN_TAGS_KEY, holdings, ["sets"]]);
+    for (const queryKey of DEVICE_SYNC_INVALIDATED) void client.invalidateQueries({ queryKey });
+    expect(invalidated(client, stickyNotesKey)).toBe(true);
+    expect(invalidated(client, HIDDEN_TAGS_KEY)).toBe(true);
+    expect(invalidated(client, holdings)).toBe(true);
+    // The corpus is still out of reach: a pull writes the reader's rows, never the set list.
+    expect(invalidated(client, ["sets"])).toBe(false);
+  });
+
+  /**
+   * **Why the device sync can invalidate with no predicate** where `refreshForTables` needs one:
+   * no synced table is `app_meta`, so nothing a window keeps for itself, and neither of the
+   * scanner's single-writer entries, sits under a root a pull refreshes.
+   */
+  it("puts no per-window or single-writer key under a root a pull refreshes", () => {
+    for (const key of [...PER_WINDOW_KEYS, ...SINGLE_WRITER_KEYS]) {
+      for (const root of DEVICE_SYNC_INVALIDATED) {
+        const under = root.every((part, i) => key[i] === part);
+        expect(under, `${JSON.stringify(key)} sits under ${JSON.stringify(root)}`).toBe(false);
+      }
+    }
+  });
+
+  /** Each live query once: two roots reaching one would start its read twice. */
+  it("names only outermost roots, each once", () => {
+    for (const [i, key] of DEVICE_SYNC_INVALIDATED.entries()) {
+      for (const [j, root] of DEVICE_SYNC_INVALIDATED.entries()) {
+        if (i === j) continue;
+        const under = root.length <= key.length && root.every((part, k) => key[k] === part);
+        expect(under, `${JSON.stringify(key)} sits under ${JSON.stringify(root)}`).toBe(false);
+      }
+    }
   });
 });

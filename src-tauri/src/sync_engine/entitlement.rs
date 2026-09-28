@@ -29,7 +29,8 @@
 //! device would survive that device's removal and go on minting tokens for the group.
 //!
 //! **The two doors fail differently on the same status code**, which is the sharpest thing in
-//! this module: see [`STALE_GROUP_AUTH`].
+//! this module: see [`STALE_GROUP_AUTH`] — and [`MEMBERSHIP_ENDED`], the code that lets the relay
+//! say which of the two a group-door 401 is when it can tell.
 //!
 //! **Every request here also names this device, and a third status code answers that** (spec
 //! §4.2). One membership covers five devices, the relay is the fence, and it counts the ids on
@@ -39,11 +40,15 @@
 //! [`GROUP_IS_FULL`] rather than anything the 401 machinery touches: read that constant before
 //! moving this line.
 //!
-//! **A 401 is a sentence, not an `error_log` row** (spec §10). When the relay refuses the refresh
-//! secret **and then the group door as well**, the membership has ended: the grant is cleared and
-//! the panel offers the connect button again. The refresh door alone no longer proves it — every
-//! `/claim` mints a fresh secret, so another device's Connect press leaves this one holding a
-//! dead secret over a live membership (see [`refused_secret`]). Routing it through `errors::record` like a network failure would tell the reader their
+//! **A 401 is a sentence, not an `error_log` row** (spec §10). A membership has ended in two
+//! cases: the relay refuses the refresh secret **and then the group door as well**, or the group
+//! door answers a 401 carrying [`MEMBERSHIP_ENDED`] — which the relay sends only to a caller whose
+//! group auth was *current*, so it has proved it is in the group and is told outright. Either way
+//! the grant is [`revoke`]d and the panel offers the connect button again. The refresh door alone
+//! no longer proves it — every `/claim` mints a fresh secret, so another device's Connect press
+//! leaves this one holding a dead secret over a live membership (see [`refused_secret`]) — and a
+//! **bare** group-door 401 never did ([`STALE_GROUP_AUTH`]). Routing a lapse through
+//! `errors::record` like a network failure would tell the reader their
 //! sync is broken when in fact their pledge lapsed, which is the wrong sentence and points at the
 //! wrong fix. **Nothing in this module writes to `error_log` at all**, and that is the same
 //! argument widened rather than a second one: every path in here is a press — Settings' connect
@@ -211,7 +216,17 @@ pub const NO_GROUP: &str = "this device is in no sync group yet";
 /// So the two are told apart out of band rather than guessed at: the caller asks `/keys`, which
 /// accepts an auth up to eight epochs old, and learns which of the two it is — a device merely
 /// behind gets a blob and adopts it, a device that was removed is not on the manifest at all.
-/// Only a second refusal, with the epoch confirmed current, is a lapse.
+///
+/// ⚠️ **This said "only a second refusal, with the epoch confirmed current, is a lapse", and
+/// nothing ever asked that second question** (issue #546). A device that only ever used the group
+/// door — every paired device but the one that pressed Connect — met a lapse as this constant on
+/// every trip, and its panel went on saying *Supporting since …* over a pledge that had ended.
+/// **The relay answers it now instead of the client inferring it**: a group-door 401 whose auth
+/// *was* current and whose membership has settled dead carries [`MEMBERSHIP_ENDED`], and
+/// [`group_door`] [`revoke`]s on that. What still arrives **bare** is the refusal the relay cannot
+/// place — an auth it does not hold as current is behind a rotation *or* from a removed device,
+/// and only `/keys` tells those apart — and that is all this constant names now. A relay that
+/// predates the code sends every 401 bare, so against one this is still the whole answer.
 ///
 /// **Named so `client` can act on it without matching a sentence.** The wording is a reader's
 /// sentence and may be reworded; the comparison is against this constant.
@@ -513,9 +528,10 @@ pub fn membership_ended(conn: &Connection) -> bool {
 /// ⚠️ **`client::check_keys` deliberately calls [`clear`] instead**, and the two must not be
 /// collapsed. A device that finds itself off the manifest has been removed from a group; its
 /// reader's pledge is untouched, so `revoke`'s mark would draw *Membership ended* and §7.1's
-/// reassurance at somebody whose membership is fine. **A 401 from the *group* door is neither
+/// reassurance at somebody whose membership is fine. **A bare 401 from the *group* door is neither
 /// call** — see [`STALE_GROUP_AUTH`], which is a stale auth rather than a lapse and clears
-/// nothing at all.
+/// nothing at all — **and one carrying [`MEMBERSHIP_ENDED`] is this call**, because the relay
+/// only says that to a caller whose auth it accepted as current.
 pub fn revoke(conn: &Connection) -> Result<(), String> {
     clear(conn)?;
     store_status(conn, "dead", None)
@@ -593,6 +609,19 @@ fn this_device(conn: &Connection) -> Result<String, String> {
 /// broken today — so the pair is named on both sides and asserted in this module's tests.
 pub const DEVICE_LIMIT: &str = "device_limit";
 
+/// The relay's marker for the one 401 that is a lapse the relay has confirmed: the group door's,
+/// when the auth presented is current and the entitlement behind it has settled dead.
+///
+/// **Why the relay may say it at all**: a caller holding the *current* group auth has proved it
+/// is in the group, so telling it the group's membership ended discloses nothing to anybody
+/// outside the group. **Why only there**: an auth the relay does
+/// not hold as current is behind a rotation or from a removed device, and the relay cannot tell
+/// which — that 401 stays bare, and stays [`STALE_GROUP_AUTH`].
+///
+/// **It must equal the code `relay/src/claim.ts` stamps on that 401**, and unlike
+/// [`DEVICE_LIMIT`] something checks it: this module's tests read `claim.ts` for the literal.
+pub const MEMBERSHIP_ENDED: &str = "membership_ended";
+
 /// A refusal body, as every route on the relay writes one.
 ///
 /// `Default` so an unparseable or empty body is a refusal with no code and no sentence rather
@@ -606,13 +635,44 @@ struct Refusal {
     code: Option<String>,
 }
 
+/// A refusal's body, or [`Refusal::default`] when none arrived or it did not parse — see
+/// [`Refusal`] for why a missing body is still a refusal rather than an error of its own.
+async fn refusal_of(response: reqwest::Response) -> Refusal {
+    let text = response.text().await.unwrap_or_default();
+    serde_json::from_str(&text).unwrap_or_default()
+}
+
+/// What [`post_for_grant`] answers short of an `Err`: the grant, or one of **two** 401s.
+///
+/// **An enum where this was an `Option`, because a 401 stopped being one event** (issue #546). A
+/// `None` could only say *refused*, which left the group door unable to hear the one refusal that
+/// is a lapse; the relay now marks that one, and the mark has to survive as far as the caller that
+/// acts on it. Every caller but [`group_door`] reads the two alike — see each one.
+///
+/// **A 403 is in neither variant and cannot reach one**: it leaves [`post_for_grant`] as an `Err`,
+/// and every arm that clears or revokes matches on this type.
+enum Answer<T> {
+    /// A 2xx, and the grant it carried.
+    Grant(T),
+    /// A **bare** 401 — no code, or a code this build does not know. The relay did not accept
+    /// the credential and said nothing about why, which is every 401 an older relay sends.
+    Refused,
+    /// A 401 carrying [`MEMBERSHIP_ENDED`]: the relay accepted the credential as current and has
+    /// settled the membership behind it dead.
+    Ended,
+}
+
 /// `POST {base}{path}` with a JSON body, answering the grant the relay minted.
 ///
-/// `Ok(None)` is a **401 and nothing else**: the relay refused the credential. What that costs is
-/// the caller's decision, and no caller records it anywhere — and the three callers now disagree
-/// about that cost completely: `/claim`'s 401 is a refused press, `/token`'s refresh door is a
-/// dead secret that [`refused_secret`] takes to the group door, and `/token`'s group door is
-/// [`STALE_GROUP_AUTH`] — unless it is that second ask, where a refusal is the lapse.
+/// [`Answer::Refused`] and [`Answer::Ended`] are the **401s and nothing else**: the relay refused
+/// the credential. What that costs is the caller's decision, and no caller records it anywhere —
+/// and the three callers disagree about that cost completely: `/claim`'s 401 is a refused press
+/// whatever its code, `/token`'s refresh door is a dead secret that [`refused_secret`] takes to
+/// the group door whatever its code, and `/token`'s group door is [`STALE_GROUP_AUTH`] when bare
+/// and a lapse when it carries [`MEMBERSHIP_ENDED`] — unless it is [`refused_secret`]'s second
+/// ask, where either is the lapse.
+///
+/// **The code is read and never the sentence**, for the 403 arm's reason below: `error` is copy.
 ///
 /// **A 403 is [`GROUP_IS_FULL`] and is answered here rather than by any caller**, which is the
 /// one place in this module where all three agree: the relay admits a device on every token it
@@ -628,7 +688,7 @@ async fn post_for_grant<T: DeserializeOwned>(
     conn: &Connection,
     path: &str,
     body: String,
-) -> Result<Option<T>, String> {
+) -> Result<Answer<T>, String> {
     let url = format!("{}{path}", base(conn));
     let response = http()
         .post(&url)
@@ -641,11 +701,20 @@ async fn post_for_grant<T: DeserializeOwned>(
         .map_err(|e| e.to_string())?;
     let status = response.status().as_u16();
     if status == 401 {
-        return Ok(None);
+        // **Only the one code is special**, and anything else — no body, the relay's own bare
+        // `{"error":"unauthorized"}`, a code a newer relay invents — is `Refused`, which is what
+        // every 401 meant before the code existed. An old relay therefore changes nothing here.
+        let ended = refusal_of(response).await.code.as_deref() == Some(MEMBERSHIP_ENDED);
+        return Ok(if ended {
+            Answer::Ended
+        } else {
+            Answer::Refused
+        });
     }
-    // ⚠️ **Above the generic arm and never folded into the one above it.** `Ok(None)` is what
-    // every caller's lapse handling hangs off; a 403 arriving there would `revoke` a grant that
-    // is still good and tell a reader at their sixth device that their membership had ended.
+    // ⚠️ **Above the generic arm and never folded into the one above it.** `Answer::Refused` and
+    // `Answer::Ended` are what every caller's lapse handling hangs off; a 403 arriving there would
+    // `revoke` a grant that is still good and tell a reader at their sixth device that their
+    // membership had ended.
     if status == 403 {
         // ⚠️ **Not every 403 is the cap, and reading the status alone gets this wrong.**
         // `/claim` answered 403 to *that membership no longer exists* and *that membership is
@@ -658,8 +727,7 @@ async fn post_for_grant<T: DeserializeOwned>(
         //
         // **Matched on the code and never on `error`**, which is copy and is free to be
         // improved: a string comparison here would break the app on a wording change.
-        let text = response.text().await.unwrap_or_default();
-        let refusal: Refusal = serde_json::from_str(&text).unwrap_or_default();
+        let refusal = refusal_of(response).await;
         return Err(if refusal.code.as_deref() == Some(DEVICE_LIMIT) {
             GROUP_IS_FULL.to_owned()
         } else if refusal.error.trim().is_empty() {
@@ -673,7 +741,7 @@ async fn post_for_grant<T: DeserializeOwned>(
     }
     let text = response.text().await.map_err(|e| e.to_string())?;
     serde_json::from_str(&text)
-        .map(Some)
+        .map(Answer::Grant)
         .map_err(|e| e.to_string())
 }
 
@@ -686,7 +754,7 @@ async fn post_for_grant<T: DeserializeOwned>(
 /// device holding both a secret and a group takes the refresh door, because that is the door
 /// that can also re-mint the secret.
 ///
-/// Five answers, and only three of them are errors:
+/// Six answers, and only three of them are errors:
 ///
 /// * **`Ok(None)`, no refresh secret *and* no group** — sync is off. Not an error; it is where
 ///   every existing installation stands.
@@ -695,8 +763,11 @@ async fn post_for_grant<T: DeserializeOwned>(
 ///   which of the two silences this is, and no `error_log` row is written (spec §10). A refresh
 ///   door 401 that the group door answers is a superseded secret, not a lapse, and mints a token;
 ///   see [`refused_secret`].
-/// * **`Err(STALE_GROUP_AUTH)`, a 401 from the group door** — which is *not* the same event, and
-///   nothing is cleared. See that constant.
+/// * **`Ok(None)`, a 401 from the group door carrying [`MEMBERSHIP_ENDED`]** — the same lapse,
+///   said outright by the relay to a device that holds no refresh secret, and [`revoke`]d the same
+///   way. See [`group_door`].
+/// * **`Err(STALE_GROUP_AUTH)`, a bare 401 from the group door** — which is *not* the same event,
+///   and nothing is cleared. See that constant.
 /// * **`Err(GROUP_IS_FULL)`, a 403 from either door** — the account already holds five devices
 ///   and this one is the sixth. Nothing is cleared, and the status is deliberately not the 401:
 ///   see that constant.
@@ -747,7 +818,12 @@ pub async fn access_token(conn: &Connection) -> Result<Option<String>, String> {
 /// covers accounts inheriting the sign-in from another grouped device *too*.
 async fn refresh_door(conn: &Connection, refresh: &str) -> Result<Option<String>, String> {
     let body = serde_json::json!({ "refresh": refresh, "device": this_device(conn)? }).to_string();
-    let Some(grant) = post_for_grant::<Grant>(conn, "/token", body).await? else {
+    // **Either 401, and [`MEMBERSHIP_ENDED`] is not special on this door.** The relay stamps it
+    // only on the group door: a secret it no longer holds is a lapse *or* one a later Connect
+    // press superseded, and it cannot say which. Were the code to arrive here anyway, the group
+    // door that [`refused_secret`] asks next is where a lapse is decided, and it will say the
+    // same thing again if it is true.
+    let Answer::Grant(grant) = post_for_grant::<Grant>(conn, "/token", body).await? else {
         return refused_secret(conn).await;
     };
     store_grant(conn, &grant.access, &grant.refresh, grant.expires)?;
@@ -764,8 +840,10 @@ async fn refresh_door(conn: &Connection, refresh: &str) -> Result<Option<String>
 /// every paired device does. A **lapse** is refused there too: the relay's `revoke` sets the row
 /// `dead` and leaves its `group_auth` where it was, so this device's current auth reaches the row
 /// and `serveOrRevoke` answers 401 (as does a closed grace window, settled the same way on both
-/// doors). **Only both refusals together are [`revoke`]'d**, which keeps *Membership ended* for
-/// the one case that is one.
+/// doors) — carrying [`MEMBERSHIP_ENDED`] since issue #546, and bare from an older relay. **Only
+/// both refusals together are [`revoke`]'d**, which keeps *Membership ended* for the one case that
+/// is one; **either kind of 401 counts as the second**, because a bare one here is what the older
+/// relay's lapse looks like and this path has always read it so.
 ///
 /// **The secret is forgotten only on an answer, never on a failure.** A 200 from the group door
 /// drops it — the relay has refused it once and will for ever, and keeping it would send every
@@ -790,7 +868,7 @@ async fn refused_secret(conn: &Connection) -> Result<Option<String>, String> {
         revoke(conn)?;
         return Ok(None);
     };
-    let Some(grant) = request_group_grant(conn, &group).await? else {
+    let Answer::Grant(grant) = request_group_grant(conn, &group).await? else {
         revoke(conn)?;
         return Ok(None);
     };
@@ -808,28 +886,42 @@ async fn refused_secret(conn: &Connection) -> Result<Option<String>, String> {
 /// what lets a freshly paired device draw *Supporting since …* dated rather than the dateless
 /// line pairing used to leave it with.
 ///
-/// **A 401 is [`STALE_GROUP_AUTH`] and clears nothing** — read that constant before changing this
-/// line to a [`revoke`], because the two failures it conflates are a cancelled membership and a
-/// sibling device having removed somebody an hour ago.
+/// **A bare 401 is [`STALE_GROUP_AUTH`] and clears nothing** — read that constant before changing
+/// this arm to a [`revoke`], because the two failures it conflates are a cancelled membership and
+/// a sibling device having removed somebody an hour ago.
+///
+/// **A 401 carrying [`MEMBERSHIP_ENDED`] is the lapse, and is [`revoke`]d here** (issue #546) —
+/// `Ok(None)`, exactly the answer [`refused_secret`] gives a lapse on the other door, so
+/// [`membership_ended`] reads true, the panel draws *Membership ended* with §7.1's reassurance,
+/// and no caller writes an `error_log` row for it. Before the code existed nothing turned a lapse
+/// into that sentence for a device with no refresh secret: every paired device but the one that
+/// pressed Connect read [`STALE_GROUP_AUTH`] on every trip, and went on saying *Supporting since …*
+/// over a pledge that had ended. The relay can say it because the auth it accepted was current —
+/// see that constant — so this is the relay's conclusion carried across, not a guess made here.
 ///
 /// The grant is written through [`store_access`] and never [`store_grant`]: there is no refresh
 /// secret in this answer and this device must not appear to hold one.
 async fn group_door(conn: &Connection, group: &identity::Group) -> Result<Option<String>, String> {
-    let Some(grant) = request_group_grant(conn, group).await? else {
-        return Err(STALE_GROUP_AUTH.to_owned());
-    };
-    keep_group_grant(conn, grant)
+    match request_group_grant(conn, group).await? {
+        Answer::Grant(grant) => keep_group_grant(conn, grant),
+        Answer::Ended => {
+            revoke(conn)?;
+            Ok(None)
+        }
+        Answer::Refused => Err(STALE_GROUP_AUTH.to_owned()),
+    }
 }
 
-/// The group door's request, answering `Ok(None)` for a 401 and deciding nothing about it.
+/// The group door's request, answering its 401s as [`Answer`]s and deciding nothing about them.
 ///
-/// **Split out because its two callers read that 401 differently**: [`group_door`] alone cannot
-/// tell a stale auth from a lapse and says [`STALE_GROUP_AUTH`], while [`refused_secret`] has
-/// already been refused by the refresh door and reads a second refusal as the lapse it is.
+/// **Split out because its two callers read those 401s differently**: [`group_door`] cannot tell
+/// a stale auth from a lapse on a bare one and says [`STALE_GROUP_AUTH`], revoking only when the
+/// relay says [`MEMBERSHIP_ENDED`]; [`refused_secret`] has already been refused by the refresh door
+/// and reads a second refusal of either kind as the lapse it is.
 async fn request_group_grant(
     conn: &Connection,
     group: &identity::Group,
-) -> Result<Option<GroupGrant>, String> {
+) -> Result<Answer<GroupGrant>, String> {
     let auth = crypto::relay_auth(&group.group_key, &group.group_id, group.epoch);
     // **`device` is the only field here that names a machine.** The auth is derived from the
     // group key, so every device in the group sends the identical string and the relay could not
@@ -895,8 +987,9 @@ pub async fn claim(conn: &Connection, code: &str) -> Result<(), String> {
     })
     .to_string();
     // `/claim` answers the **full** [`Grant`]: a claim is the one moment the refresh secret is
-    // minted, so this is the door that must receive one.
-    let Some(grant) = post_for_grant::<Grant>(conn, "/claim", body).await? else {
+    // minted, so this is the door that must receive one. **Either 401 is this press refused** —
+    // the code is the group door's, and nothing a claim code is refused for ends a membership.
+    let Answer::Grant(grant) = post_for_grant::<Grant>(conn, "/claim", body).await? else {
         return Err("the relay refused that claim code".to_owned());
     };
     store_grant(conn, &grant.access, &grant.refresh, grant.expires)?;
@@ -2048,6 +2141,175 @@ mod tests {
         assert_eq!(
             client::get_state(&conn, SUPPORTER_SINCE).as_deref(),
             Some("1740000000")
+        );
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The group door's lapse - issue #546, item 6
+    //
+    // A device that only ever paired holds no refresh secret, so it never takes the refresh door
+    // and `refused_secret` never runs for it. Before the relay stamped `membership_ended`, a lapse
+    // reached such a device as `STALE_GROUP_AUTH` on every trip and its panel said *Supporting
+    // since ...* for ever. The bare 401 above must stay what it was; these pin the one that is not.
+    // -----------------------------------------------------------------------------------
+
+    /// `error_log` as `errors::record` writes it - the grain index included, because without it
+    /// the upsert's `ON CONFLICT` fails, `record` swallows the failure, and a test counting rows
+    /// would read zero under exactly the mutation it exists to catch.
+    fn with_an_error_log(conn: &rusqlite::Connection) {
+        conn.execute_batch(
+            "CREATE TABLE error_log (
+                 id INTEGER PRIMARY KEY,
+                 first_at INTEGER NOT NULL,
+                 last_at INTEGER NOT NULL,
+                 source TEXT NOT NULL,
+                 operation TEXT NOT NULL,
+                 kind TEXT NOT NULL,
+                 message TEXT NOT NULL,
+                 detail TEXT,
+                 count INTEGER NOT NULL DEFAULT 1
+             );
+             CREATE UNIQUE INDEX idx_error_log_grain
+                 ON error_log (source, operation, kind, message);",
+        )
+        .expect("error_log");
+    }
+
+    #[tokio::test]
+    async fn a_group_door_401_saying_the_membership_ended_is_a_lapse() {
+        // The relay says this only when the auth it was handed is CURRENT, so the caller has proved
+        // it is in the group and the refusal is about the membership rather than about this
+        // device's key. Believing it is the whole fix: `revoke`, so `membership_ended` reads true
+        // and the panel draws *Membership ended* with 7.1's reassurance.
+        //
+        // What makes it red: the `Ended` arm answering STALE_GROUP_AUTH (the bug), calling
+        // `clear` instead of `revoke` (the panel says *Not connected*), or answering `Err` (the
+        // connection manager records a lapse as a broken sync).
+        let server = MockServer::start_async().await;
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/token").json_body(group_body());
+            then.status(401)
+                .body(r#"{"error":"unauthorized","code":"membership_ended"}"#);
+        });
+        let conn = db_in_a_group(&server);
+        with_an_error_log(&conn);
+        // Entitled through its group: a token past its margin, so the door is really asked, and
+        // the `active` status a previous mint left, which is what `revoke` has to turn `dead`.
+        store_access(&conn, "a1", 0).expect("a stale token");
+        store_status(&conn, "active", Some(1_740_000_000)).expect("status");
+        assert!(
+            crate::sync_engine::commands::entitled(&conn),
+            "the fixture is a device entitled through its group, or this is about nothing"
+        );
+
+        let token = access_token(&conn)
+            .await
+            .expect("a lapse is a state, not an Err");
+
+        mock.assert();
+        assert_eq!(token, None);
+        assert!(
+            panel_says_membership_ended(&conn),
+            "the panel still says *Supporting since ...* over a membership the relay says ended"
+        );
+        assert_eq!(supporter_state(&conn), ("dead".to_owned(), None));
+        assert_eq!(client::get_state(&conn, ACCESS_TOKEN), None);
+        assert_eq!(
+            refresh_secret(&conn),
+            None,
+            "a lapse must not invent a secret"
+        );
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM error_log", [], |r| r.get(0))
+            .expect("count");
+        assert_eq!(rows, 0, "a lapse is a sentence, not an error_log row");
+    }
+
+    #[tokio::test]
+    async fn a_group_door_401_without_that_code_is_still_a_stale_auth() {
+        // The test above must not have widened into "any body on a 401 is a lapse". Two bodies
+        // `a_401_on_the_group_door_is_not_a_lapse_and_clears_nothing` does not send: the relay's
+        // own bare refusal - what an auth behind a rotation still gets, and what an older relay
+        // sends for everything - and a code that is somebody else's. Matched on the value.
+        for body in [
+            r#"{"error":"unauthorized"}"#,
+            r#"{"error":"unauthorized","code":"device_limit"}"#,
+        ] {
+            let server = MockServer::start_async().await;
+            let mock = server.mock(|when, then| {
+                when.method(POST).path("/token");
+                then.status(401).body(body);
+            });
+            let conn = db_in_a_group(&server);
+            store_access(&conn, "a1", 0).expect("a stale token");
+            store_status(&conn, "active", Some(1_740_000_000)).expect("status");
+
+            let error = access_token(&conn)
+                .await
+                .expect_err("a refusal, not a lapse");
+
+            mock.assert();
+            assert_eq!(error, STALE_GROUP_AUTH, "{body}");
+            assert!(!panel_says_membership_ended(&conn), "{body}");
+            assert_eq!(
+                supporter_state(&conn),
+                ("active".to_owned(), Some(1_740_000_000)),
+                "{body}"
+            );
+            assert_eq!(
+                client::get_state(&conn, ACCESS_TOKEN).as_deref(),
+                Some("a1"),
+                "{body}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn the_membership_ended_code_on_the_refresh_door_decides_nothing_by_itself() {
+        // The relay stamps the code only on the group door. Were it to arrive on the refresh door,
+        // the secret is still merely refused and the group door still decides - here it mints,
+        // because the membership is fine, and a revoke taken on the refresh door's word would have
+        // drawn *Membership ended* over it.
+        let server = MockServer::start_async().await;
+        let refresh_door = server.mock(|when, then| {
+            when.method(POST).path("/token").json_body(refresh_body());
+            then.status(401)
+                .body(r#"{"error":"unauthorized","code":"membership_ended"}"#);
+        });
+        let group_door = server.mock(|when, then| {
+            when.method(POST).path("/token").json_body(group_body());
+            then.status(200).body(
+                r#"{"access":"a2","expires":1900000000,
+                    "status":"active","since":1740000000}"#,
+            );
+        });
+        let conn = db_in_a_group(&server);
+        store_grant(&conn, "a1", "r1", 0).expect("store");
+        store_status(&conn, "active", Some(1_740_000_000)).expect("status");
+
+        let token = access_token(&conn).await.expect("minted through the group");
+
+        refresh_door.assert();
+        group_door.assert();
+        assert_eq!(token.as_deref(), Some("a2"));
+        assert!(!panel_says_membership_ended(&conn));
+        assert_eq!(
+            supporter_state(&conn),
+            ("active".to_owned(), Some(1_740_000_000))
+        );
+    }
+
+    /// The two spellings of the marker are one contract across two languages - and this one,
+    /// unlike [`DEVICE_LIMIT`]'s, is checked from here: the relay's source is read for the literal.
+    /// A red here means `relay/src/claim.ts` stopped stamping exactly this code on the group
+    /// door's lapse (or moved that 401 to another file, which is this test to follow it).
+    #[test]
+    fn the_membership_ended_marker_is_the_one_the_relay_stamps() {
+        assert_eq!(MEMBERSHIP_ENDED, "membership_ended");
+        let relay = include_str!("../../../relay/src/claim.ts");
+        assert!(
+            relay.contains(&format!("\"{MEMBERSHIP_ENDED}\"")),
+            "relay/src/claim.ts does not spell {MEMBERSHIP_ENDED:?}"
         );
     }
 

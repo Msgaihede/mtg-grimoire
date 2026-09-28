@@ -690,9 +690,9 @@ where a managed folder exists):
 
 | Mode | The box says |
 | --- | --- |
-| `all` | *The two lists agree. Everything requested by the plan is already in the deck.* |
-| `missing` | *Nothing missing. The deck includes every card in the plan.* |
-| `other` | *No substitutions. Every card matches the planned printing.* |
+| `all` | *Nothing missing. The deck matches the theory list.* |
+| `missing` | *Nothing missing. The deck includes every card in the theory list.* |
+| `other` | *No substitutions. Every card matches the printing in the theory list.* |
 | a deck's **Tokens** child, under any mode (v55; filled by the tokens switch since v57) | *No tokens missing — this deck counts every token its plan asks for.* (`MANAGED_TOKENS_EMPTY`) |
 | not known yet, or a deck this page cannot find | *Nothing here. This folder updates automatically with its deck.* (`MANAGED_EMPTY_UNKNOWN`) |
 
