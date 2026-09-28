@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { BUTTON_OVER_ART } from "@/components/QuantityStepper";
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -780,6 +781,19 @@ describe("DeckSearchPanel", () => {
     );
 
     expect(deckAddCard).toHaveBeenCalledWith(4, "1", MAIN.id, null, "live", null, 1);
+  });
+
+  /**
+   * Issue #645: the button stands over the tile's art, and as a bare outline it all but vanished
+   * there. It carries the backing the deck's own card steppers do. jsdom draws nothing, so the
+   * classes are what is pinned.
+   */
+  it("backs its Add button the way the deck's card steppers are backed", async () => {
+    await openPanel();
+
+    expect(
+      await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" }),
+    ).toHaveClass(...BUTTON_OVER_ART.split(" "));
   });
 
   it("adds to whichever category is picked, and says so on the button", async () => {

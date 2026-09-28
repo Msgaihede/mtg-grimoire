@@ -1,9 +1,22 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import {
+  Columns3Cog,
+  History,
+  SquareArrowRightEnter,
+  SquareArrowRightExit,
+  Tag,
+  Wrench,
+} from "lucide-react";
 import { expect, fn, userEvent, within } from "storybook/test";
 import type { MenuItem } from "@/components/menu/types";
 import type { DeckVariant } from "@/lib/ipc";
-import { DeckHeaderBar, type DeckHeaderBarProps } from "./DeckHeaderBar";
+import {
+  DeckHeaderBar,
+  type BarAction,
+  type BarWidth,
+  type DeckHeaderBarProps,
+} from "./DeckHeaderBar";
 
 /** The Display button's whole name — the three answers the glyph stands for. */
 const DISPLAY = "Display: Stacks, grouped by Category, sorted by Name";
@@ -28,17 +41,29 @@ const picker = (id: string, label: string, choices: readonly string[]): MenuItem
 /**
  * A stand-in for the rows `DeckEditor` builds. The real ones are the editor's — this component
  * draws whatever it is handed and decides none of them — so these only have to be the right
- * *shape*: the three pickers for Display, and the header's verbs for `⋯`.
+ * *shape*: the three pickers for Display.
  */
 const displayRows = (): MenuItem[] => [
   picker("view", "View", ["Stacks", "Grid", "Table", "Text"]),
   picker("group", "Group by", ["Category", "Mana value", "Type"]),
   picker("sort", "Sort", ["Name", "Mana cost", "Price", "Type"]),
 ];
-const actionRows = (): MenuItem[] =>
-  ["Categories", "Labels", "History", "Import cards", "Export deck", "Deck settings"].map(
-    (label) => ({ kind: "action", id: label, label, onSelect: () => {} }),
-  );
+
+/** One of the header's verbs as `DeckEditor` hands it over, with its own glyph. */
+const verb = (label: string, Icon: BarAction["Icon"], word = label): BarAction => ({
+  label,
+  word,
+  Icon,
+  expanded: false,
+  open: fn(),
+});
+
+/**
+ * The editor column's width at each rung — what `DeckEditor` measures for the rung it picks. The
+ * app's 1024px floor, its own 1280px window, 1920 and 2560, each less the sidebar, `main`'s
+ * padding and the page scrollbar.
+ */
+const COLUMN: Record<BarWidth, number> = { tight: 760, normal: 1017, wide: 1657, widest: 2297 };
 
 /**
  * The bar with the two pieces of state its host owns held here, so the switch and the filter
@@ -85,7 +110,7 @@ const meta = {
     // Undocked: the header has scrolled away, which is the only state this component draws
     // anything in. Docked, it renders nothing at all — there is no story for an empty box.
     undocked: true,
-    tight: false,
+    width: "normal",
     onTop: fn(),
     quickAddTarget: null,
     onQuickAdd: fn(),
@@ -97,40 +122,50 @@ const meta = {
     displayMenu: fn(displayRows),
     filter: "",
     onFilter: fn(),
-    actionsMenu: fn(actionRows),
+    actions: {
+      pair: [
+        verb("Import cards", SquareArrowRightEnter, "Import"),
+        verb("Export deck", SquareArrowRightExit, "Export"),
+      ],
+      rest: [
+        verb("Categories", Columns3Cog),
+        verb("Labels", Tag),
+        verb("History", History),
+        verb("Deck settings", Wrench),
+      ],
+    },
   },
   decorators: [
     /**
-     * The editor column the bar is pinned into, and the deck scrolling under it.
+     * The page scroller, the editor column the bar is pinned into, and the deck under it.
      *
-     * **`relative flex flex-col gap-3`, because that is the box the bar is designed for**: it is a
-     * zero-height `sticky` child with `-mb-3` cancelling the column's own gap, and its panel is
-     * `absolute inset-x-0` — so without a positioned column of a real width it would be as wide as
-     * the page, and without the gap the negative margin would pull the deck up by 12px. The width
-     * is the editor column's at the two sizes the bar is drawn for — 1020 roomy, 760 tight, the
-     * latter being the app's 1024px window floor — and the height leaves room under the bar for
-     * Quick add's five suggestions and its status chip.
+     * **The outer box is `AppShell`'s `main` in miniature** — `p-5` and a clip — because the
+     * docked panel reaches back across exactly that padding to meet the scroller's edges; drawn
+     * straight into a column with no padding around it, the story would clip the bar's first and
+     * last 20px. **The inner one is `relative flex flex-col gap-3` because that is the column**:
+     * the bar is a zero-height `sticky` child with `-mb-3` cancelling the column's own gap. The
+     * width is the column's at the rung the story draws ({@link COLUMN}), and the height leaves
+     * room under the bar for Quick add's five suggestions and its status chip.
      *
-     * The piles are stand-ins drawn in the app's own tokens, there so the panel's blur and shadow
-     * have something to read against: the bar is always drawn *over* the deck, never over glass.
+     * The piles are stand-ins drawn in the app's own tokens, there so the panel's shadow has
+     * something to fall on: the bar is always drawn *over* the deck, never over glass.
      */
     (Story, { args }) => (
-      <div
-        className="relative flex h-80 flex-col gap-3 overflow-hidden bg-bg"
-        style={{ width: args.tight ? 760 : 1020 }}
-      >
-        <Story />
-        <div aria-hidden="true" className="flex gap-2 px-2">
-          {[0, 1, 2, 3, 4].map((pile) => (
-            <div key={pile} className="flex w-48 flex-col">
-              {[0, 1, 2, 3].map((card) => (
-                <div
-                  key={card}
-                  className="-mb-[250px] h-[290px] rounded-lg border border-border bg-surface last:mb-0"
-                />
-              ))}
-            </div>
-          ))}
+      <div className="overflow-hidden bg-bg p-5" style={{ width: COLUMN[args.width] + 40 }}>
+        <div className="relative flex h-80 flex-col gap-3">
+          <Story />
+          <div aria-hidden="true" className="flex gap-2 px-2">
+            {[0, 1, 2, 3, 4, 5, 6, 7].map((pile) => (
+              <div key={pile} className="flex w-48 flex-col">
+                {[0, 1, 2, 3].map((card) => (
+                  <div
+                    key={card}
+                    className="-mb-[250px] h-[290px] rounded-lg border border-border bg-surface last:mb-0"
+                  />
+                ))}
+              </div>
+            ))}
+          </div>
         </div>
       </div>
     ),
@@ -139,22 +174,28 @@ const meta = {
     docs: {
       description: {
         component:
-          "The deck editor's header, folded into one line and pinned to the top of the page " +
-          "while the header itself is scrolled away (issue #577). Docked — the header's toolbar " +
-          "row on screen — it draws nothing; undocked, it carries the presses a reader makes " +
-          "while working down the deck: back to the top, quick add, the two lists and Compare, " +
-          "undo and redo, Display (View, Group by and Sort as one menu), the filter, and the " +
-          "header's other verbs behind `⋯`.\n\n" +
+          "The deck editor's header, folded into one line and docked across the top of the " +
+          "page while the header itself is scrolled away (issue #577). Docked — the header's " +
+          "toolbar row on screen — it draws nothing; undocked, it carries the presses a reader " +
+          "makes while working down the deck: back to the top, quick add, the two lists and " +
+          "Compare, undo and redo, Display (View, Group by and Sort as one menu), the filter, " +
+          "and the header's other verbs.\n\n" +
           "**It is a zero-height `sticky` box with the panel `absolute` inside**, `QuickZones`' " +
-          "arrangement, so appearing costs the deck no layout; `DECK_BAR_CLEARANCE_PX` is how far " +
-          "down the page it reaches, which is what the editor offsets its other sticky surfaces " +
-          "by. It is mounted only while shown, stays while the caret or a menu it opened is in " +
-          "it, and yields to a drag, when the quick zones take the same strip.\n\n" +
+          "arrangement, so appearing costs the deck no layout — and the panel reaches back " +
+          "across the scroller's 20px of padding, so it meets the top and both edges of the " +
+          "window with a shadow cast down over the deck (issue #646). `DECK_BAR_CLEARANCE_PX` " +
+          "is how far below the scroller's content edge it reaches, which is what the editor " +
+          "offsets its other sticky surfaces by. It is mounted only while shown, stays while the " +
+          "caret or a menu it opened is in it, and yields to a drag, when the quick zones take " +
+          "the same strip.\n\n" +
+          "**Four rungs, from the editor column's width**: `tight` and `normal` draw every press " +
+          "as its glyph; `wide` (a 1920px window) puts each word beside its glyph; `widest` (a " +
+          "2560px window) opens the `⋯` out into the header's six verbs as buttons.\n\n" +
           '**`role="group"`, not `role="toolbar"`**: a toolbar promises one tab stop and ' +
           "arrow keys between its controls, and two of these controls are text fields whose " +
           "arrows are the caret's.\n\n" +
           "**The stories cannot show the pinning.** A story has no page scroller for `sticky` to " +
-          "pin against, so the bar sits where it would at the moment it undocks; that, the 50px " +
+          "pin against, so the bar sits where it would at the moment it undocks; that, the 53px " +
           "box and the zero-height claim are the live pass's to prove.",
       },
     },
@@ -217,7 +258,7 @@ export const NoPlan: Story = {
  * narrow — Quick add to 176px, the filter to 148px — and every control still fits one line.
  */
 export const Tight: Story = {
-  args: { tight: true },
+  args: { width: "tight" },
   play: async ({ canvasElement }) => {
     const bar = barIn(canvasElement);
     await expect(bar.getByRole("combobox").classList.contains("w-44")).toBe(true);
@@ -226,5 +267,38 @@ export const Tight: Story = {
         .getByRole("searchbox", { name: "Filter this deck" })
         .parentElement?.classList.contains("w-37"),
     ).toBe(true);
+  },
+};
+
+/**
+ * A 1920px window's column: every press carries its word beside its glyph, and both fields widen
+ * to 320px — the room the icon-only bar left as an empty middle (issue #646). The names do not
+ * move, so nothing that addresses a control changes with the width.
+ */
+export const Wide: Story = {
+  args: { width: "wide" },
+  play: async ({ canvasElement }) => {
+    const bar = barIn(canvasElement);
+    await expect(bar.getByRole("button", { name: "Back to the top" })).toHaveTextContent("Top");
+    await expect(bar.getByRole("button", { name: "Compare" })).toHaveTextContent("Compare");
+    await expect(bar.getByRole("button", { name: DISPLAY })).toHaveTextContent("Display");
+    await expect(bar.getByRole("button", { name: "Deck actions" })).toHaveTextContent("Actions");
+    await expect(bar.getByRole("combobox").classList.contains("w-80")).toBe(true);
+  },
+};
+
+/**
+ * A 2560px window's column: the `⋯` opens out into the header's six verbs — the joined
+ * Import/Export pair and the four worded actions — each opening its layer back onto itself.
+ */
+export const Widest: Story = {
+  args: { width: "widest" },
+  play: async ({ args, canvasElement }) => {
+    const bar = barIn(canvasElement);
+    await expect(bar.queryByRole("button", { name: "Deck actions" })).toBeNull();
+    const history = bar.getByRole("button", { name: "History" });
+    await expect(history).toHaveTextContent("History");
+    await userEvent.click(history);
+    await expect(args.actions.rest[2].open).toHaveBeenCalledWith(history);
   },
 };

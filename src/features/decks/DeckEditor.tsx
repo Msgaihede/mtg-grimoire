@@ -138,7 +138,13 @@ import {
   missingPicks,
   type QuickAddTarget,
 } from "./quickCollection";
-import { DECK_BAR_CLEARANCE_PX, DeckHeaderBar } from "./DeckHeaderBar";
+import {
+  BAR_WIDEST_PX,
+  DECK_BAR_CLEARANCE_PX,
+  DeckHeaderBar,
+  type BarAction,
+  type BarWidth,
+} from "./DeckHeaderBar";
 import { QuickAdd } from "./QuickAdd";
 import { QuickUnwishDialog } from "./QuickUnwishDialog";
 import { QuickCategoryDialog, QuickZones } from "./QuickZones";
@@ -1298,10 +1304,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   useEffect(() => {
     const scroller = editorRef.current ? nearestScroller(editorRef.current) : null;
     if (!scroller || barClearance === 0) return;
-    // The bar's inset is measured from the scroller's content edge (a sticky inset always is) and
+    // The clearance is measured from the scroller's content edge (a sticky inset always is) and
     // scroll padding from its top edge, so the scroller's own padding sits between the two —
-    // `main`'s 20px. Without it the padding would be 66 while the bar's foot stands at 20 + 8 + 50
-    // = 78 below the top edge, so a card scrolled to would land 12px under the bar.
+    // `main`'s 20px. Without it the padding would be 41 while the docked bar's foot stands 53
+    // below the top edge, so a card scrolled to would land 12px under the bar.
     const edge = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
     scroller.style.scrollPaddingTop = `${edge + barClearance}px`;
     return () => {
@@ -2450,25 +2456,26 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   }, []);
 
   /**
-   * The bar's `⋯`: the header's Import/Export pair and its four worded actions, as the app's one
-   * context menu (issue #577). **Built from {@link TRANSFER} and {@link ACTIONS} rather than
-   * listed again**, so a seventh header action reaches the bar by being added once, and each row
-   * opens exactly the layer its header button does. In the header's own order, pair first; the
-   * separator is the hairline between the pair and the row in the header.
+   * The bar's deck-level verbs: the header's Import/Export pair and its four worded actions
+   * (issue #577) — behind the bar's `⋯` as the app's one context menu, or drawn out as buttons of
+   * their own where the column is widest (issue #646). **Built from {@link TRANSFER} and
+   * {@link ACTIONS} rather than listed again**, so a seventh header action reaches the bar by
+   * being added once, and each opens exactly the layer its header button does, with the same
+   * words: the pair's first word, the actions' whole label — the header's own `wideHeader` rule.
    */
-  const barActionsMenu = useCallback(
-    (trigger: HTMLElement): MenuItem[] => {
-      const row = ({ layer: target, label, Icon }: HeaderAction): MenuItem => ({
-        kind: "action",
-        id: label,
-        label,
-        Icon,
-        onSelect: () => openLayer(target, handBackToBar(trigger)),
-      });
-      return [...TRANSFER.map(row), { kind: "separator", id: "transfer" }, ...ACTIONS.map(row)];
-    },
-    [openLayer, handBackToBar],
-  );
+  const barAction =
+    (word: (label: string) => string) =>
+    ({ layer: target, label, Icon }: HeaderAction): BarAction => ({
+      label,
+      word: word(label),
+      Icon,
+      expanded: layerMatches(layer, target),
+      open: (trigger) => openLayer(target, handBackToBar(trigger)),
+    });
+  const barActions = {
+    pair: TRANSFER.map(barAction((label) => label.split(" ")[0])),
+    rest: ACTIONS.map(barAction((label) => label)),
+  };
 
   /**
    * **Pull from collection** — the one layer opened from the stats band at the foot of the page.
@@ -3767,6 +3774,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const wideHeader = deskWidth >= WIDE_HEADER_PX;
   const settingsIcon = deskWidth > 0 && deskWidth < SETTINGS_ICON_PX;
   const tightHeader = deskWidth > 0 && deskWidth < TIGHT_HEADER_PX;
+  /**
+   * The undocked bar's rung, off the same measurement and the same two thresholds, plus one of
+   * the bar's own: {@link BAR_WIDEST_PX}, where its `⋯` opens out into buttons. Unmeasured is the
+   * middle rung, for the header's reason.
+   */
+  const barWidth: BarWidth = tightHeader
+    ? "tight"
+    : deskWidth >= BAR_WIDEST_PX
+      ? "widest"
+      : wideHeader
+        ? "wide"
+        : "normal";
 
   /**
    * What the docked panel's **format filter** opens on — this deck's format, or `null` for
@@ -4864,7 +4883,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       {row && (
         <DeckHeaderBar
           undocked={undocked}
-          tight={tightHeader}
+          width={barWidth}
           onTop={backToTop}
           quickAddTarget={targetName}
           onQuickAdd={(card) => addTo(card.id, targetCategoryId, card.typeLine)}
@@ -4892,7 +4911,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           displayMenu={displayMenu}
           filter={filter}
           onFilter={setFilter}
-          actionsMenu={barActionsMenu}
+          actions={barActions}
         />
       )}
 
