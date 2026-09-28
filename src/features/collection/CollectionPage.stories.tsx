@@ -972,10 +972,10 @@ export const WithSearch: Story = {
     ).toBeInTheDocument();
 
     // And in a drawer it is the drawer. `Binder` is the seed's own top-level folder, opened from
-    // its heading's title — the way into a folder since the folder cards left (spec §3.7). Waited
+    // its heading's → — the way into a folder since issue #599 moved it off the title. Waited
     // for: the wall is its own reads, and nothing above has asked whether they have answered.
     const binder = await waitFor(() => headingNamed(canvas, "Binder"), SETTLED);
-    await userEvent.click(within(binder).getByRole("button", { name: "Binder" }));
+    await userEvent.click(within(binder).getByRole("button", { name: "Open Binder" }));
     await waitFor(async () => {
       await expect(
         within(panel).getByRole("button", { name: /^Add Ancient Tomb .* to Binder$/ }),

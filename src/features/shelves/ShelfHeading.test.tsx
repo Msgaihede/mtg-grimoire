@@ -136,31 +136,132 @@ describe("ShelfHeading", () => {
     await user.click(shut);
     expect(onToggle).not.toHaveBeenCalled();
 
+    // The name folds too, so it is refused the same way — in the same words, still a tab stop —
+    // and keeps its own colour rather than greying under every filter.
+    const title = screen.getByRole("button", { name: "Trade binder" });
+    expect(title).toHaveAttribute("aria-disabled", "true");
+    expect(title).not.toHaveAttribute("disabled");
+    expect(title).toHaveAccessibleDescription(FOLD_PAUSED_REASON);
+    expect(title.classList.contains("opacity-60")).toBe(false);
+    await user.click(title);
+    expect(onToggle).not.toHaveBeenCalled();
+    // …and the chevron is not lit from the name while it is refused.
+    expect(shut.className).not.toContain("group-has-");
+
     // Not folding, so not paused.
+    const open = screen.getByRole("button", { name: "Open Trade binder" });
+    expect(open).not.toHaveAttribute("aria-disabled");
+    await user.click(open);
+    expect(onOpen).toHaveBeenCalledWith(3);
     const add = screen.getByRole("button", { name: "Add folder in Trade binder" });
     expect(add).not.toHaveAttribute("aria-disabled");
     await user.click(add);
     expect(onAddFolder).toHaveBeenCalledTimes(1);
   });
 
-  /** Absent is today's chevron exactly: no mark and no description. */
+  /** Absent is today's chevron exactly: no mark and no description — on the name either. */
   it("carries no pause on its chevron without the prop", () => {
     mount();
     const chevron = screen.getByRole("button", { name: "Collapse Trade binder" });
     expect(chevron).not.toHaveAttribute("aria-disabled");
     expect(chevron).not.toHaveAccessibleDescription();
+    expect(screen.getByRole("button", { name: "Trade binder" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 
-  /** Spec §3.7 and decision 6: the title is the way in, and there is no separate Open button. */
-  it("draws the folder's name as the way into it, described as opening it", async () => {
-    const user = userEvent.setup();
+  /**
+   * Issue #599: the chevron is 32px around a 20px glyph, and hovering the name lights it — the
+   * variant is on the chevron, the named group on the row and the mark on the name, and all three
+   * have to be there for the rule to match anything. `classList.contains` rather than a substring:
+   * a substring passes on a `hover:` spelling of the same class.
+   */
+  it("draws a 32px chevron that the name's hover lights", () => {
     mount();
+    const chevron = screen.getByRole("button", { name: "Collapse Trade binder" });
+    expect(chevron.classList.contains("size-8")).toBe(true);
+    expect(chevron.querySelector("svg")!.classList.contains("size-5")).toBe(true);
+    for (const lit of [
+      "group-has-[[data-shelf-title]:hover]/shelf:bg-surface",
+      "group-has-[[data-shelf-title]:hover]/shelf:text-text",
+    ]) {
+      expect(chevron.classList.contains(lit)).toBe(true);
+    }
+    expect(row().classList.contains("group/shelf")).toBe(true);
+    expect(screen.getByRole("button", { name: "Trade binder" })).toHaveAttribute(
+      "data-shelf-title",
+    );
+  });
+
+  /**
+   * Issue #599, reversing spec decision 6: the name folds the shelf as the chevron does, and says
+   * whether it is open — so pressing it neither opens the folder nor asks the page to.
+   */
+  it("folds the shelf from the folder's name, and opens nothing", async () => {
+    const user = userEvent.setup();
+    const view = mount();
 
     const title = screen.getByRole("button", { name: "Trade binder" });
     expect(title).toHaveAccessibleName("Trade binder");
-    expect(title).toHaveAccessibleDescription("Open folder");
+    expect(title).not.toHaveAccessibleDescription();
+    expect(title).toHaveAttribute("aria-expanded", "true");
     await user.click(title);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+    expect(onOpen).not.toHaveBeenCalled();
+
+    view.show({ shelf: { ...BINDER, collapsed: true } });
+    const shut = screen.getByRole("button", { name: "Trade binder" });
+    expect(shut).toHaveAttribute("aria-expanded", "false");
+    await user.click(shut);
+    expect(onToggle).toHaveBeenCalledTimes(2);
+  });
+
+  /** The name is not a link, so it wears no underline — the lead segments beside it do. */
+  it("draws the name without the underline its ancestors wear", () => {
+    mount({ shelf: DEEP });
+    const title = screen.getByRole("button", { name: "Showcase" });
+    expect(title.classList.contains("hover:underline")).toBe(false);
+    expect(screen.getByRole("button", { name: "Foils" }).classList.contains("hover:underline")).toBe(
+      true,
+    );
+  });
+
+  /** Issue #599: the way in is its own button, at the row's far right, on every kind of folder. */
+  it("opens the folder from an Open button at the far right of the row", async () => {
+    const user = userEvent.setup();
+    const view = mount({ onAddFolder, onRename, menu: MENU });
+
+    const open = screen.getByRole("button", { name: "Open Trade binder" });
+    expect(open).toHaveAccessibleName("Open Trade binder");
+    const buttons = screen.getAllByRole("button");
+    expect(buttons[buttons.length - 1]).toBe(open);
+    await user.click(open);
     expect(onOpen).toHaveBeenCalledWith(3);
+    expect(onToggle).not.toHaveBeenCalled();
+
+    // A deck group, a managed folder and Recently removed are opened the same way.
+    const owned: [ShelfKind, Shelf["group"]][] = [
+      ["deck", "decks"],
+      ["removed", "decks"],
+      ["managed", "managed"],
+    ];
+    for (const [kind, group] of owned) {
+      view.show({ shelf: shelfOf({ id: 40, name: "Modern Goodstuff", kind, group }) });
+      await user.click(screen.getByRole("button", { name: "Open Modern Goodstuff" }));
+      expect(onOpen).toHaveBeenLastCalledWith(40);
+    }
+  });
+
+  it("offers no Open button while the folder is being renamed or named", () => {
+    const view = mount({ onRename, renaming: RENAMING });
+    expect(screen.queryByRole("button", { name: /^Open/ })).toBeNull();
+
+    view.show({
+      shelf: shelfOf({ id: -1, name: "" }),
+      stat: "",
+      renaming: { initial: "", onCommit, onCancel, mode: "create" },
+    });
+    expect(screen.queryByRole("button", { name: /^Open/ })).toBeNull();
   });
 
   it("opens each ancestor it draws before the name, with that ancestor's own id", async () => {
@@ -169,10 +270,11 @@ describe("ShelfHeading", () => {
 
     await user.click(screen.getByRole("button", { name: "Fetchlands" }));
     await user.click(screen.getByRole("button", { name: "Foils" }));
-    await user.click(screen.getByRole("button", { name: "Showcase" }));
+    await user.click(screen.getByRole("button", { name: "Open Showcase" }));
     expect(onOpen.mock.calls).toEqual([[21], [22], [23]]);
-    // Only the folder's own name is described as the door — the ancestors are steps on the way.
-    expect(screen.getByRole("button", { name: "Foils" })).not.toHaveAccessibleDescription();
+    // The ancestors are steps on a path, not this shelf, so they fold nothing.
+    expect(onToggle).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Foils" })).not.toHaveAttribute("aria-expanded");
   });
 
   /** The whole phrase, on the element — name computation trims each part, so asserting the parts
@@ -303,6 +405,7 @@ describe("ShelfHeading", () => {
       "Add folder in Trade binder",
       "Rename Trade binder",
       "Manage Trade binder",
+      "Open Trade binder",
     ]) {
       expect(screen.getByRole("button", { name })).toHaveAttribute("data-no-drag");
     }

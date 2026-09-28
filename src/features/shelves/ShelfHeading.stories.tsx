@@ -93,8 +93,8 @@ const meta = {
       description: {
         component:
           "One shelf's heading: the row above the cards filed directly in one folder. The chevron " +
-          "folds the shelf, the name opens the folder, and a reader's own folder offers Add folder, " +
-          "Rename and the ⋯ menu. Collapsed, it peeks at the shelf's first cards. It is also a drop " +
+          "and the name both fold the shelf, the → at the far right opens the folder, and a reader's " +
+          "own folder offers Add folder, Rename and the ⋯ menu. Collapsed, it peeks at the shelf's first cards. It is also a drop " +
           "target for cards and folders and a drag source for folders — the six marks are in " +
           "**Drop marks**.",
       },
@@ -114,7 +114,11 @@ export const Expanded: Story = {
       "true",
     );
     await expect(canvasElement.querySelector("[data-shelf-peek]")).toBeNull();
+    // The name folds (issue #599); the → opens.
     await userEvent.click(canvas.getByRole("button", { name: "Trade binder" }));
+    await expect(args.onToggle).toHaveBeenCalledTimes(1);
+    await expect(args.onOpen).not.toHaveBeenCalled();
+    await userEvent.click(canvas.getByRole("button", { name: "Open Trade binder" }));
     await expect(args.onOpen).toHaveBeenCalledWith(3);
   },
 };
@@ -236,7 +240,8 @@ export const NotSorted: Story = {
 /**
  * While a filter is on, collapse is suspended (spec §3.4): the chevron is refused in the open —
  * dimmed, still a tab stop, the reason on hover and as its description — and a press writes
- * nothing. The rest of the heading is not about folding and works as ever.
+ * nothing. The name folds too, so it is refused in the same words without dimming. The rest of the
+ * heading is not about folding and works as ever.
  */
 export const FoldPaused: Story = {
   args: { foldPaused: FOLD_PAUSED_REASON },
@@ -246,8 +251,9 @@ export const FoldPaused: Story = {
     await expect(chevron).toHaveAttribute("aria-disabled", "true");
     await expect(chevron).toHaveAccessibleDescription(FOLD_PAUSED_REASON);
     await userEvent.click(chevron);
-    await expect(args.onToggle).not.toHaveBeenCalled();
     await userEvent.click(canvas.getByRole("button", { name: "Trade binder" }));
+    await expect(args.onToggle).not.toHaveBeenCalled();
+    await userEvent.click(canvas.getByRole("button", { name: "Open Trade binder" }));
     await expect(args.onOpen).toHaveBeenCalledWith(3);
   },
 };

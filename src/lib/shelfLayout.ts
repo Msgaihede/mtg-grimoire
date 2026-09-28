@@ -53,7 +53,12 @@ export const SHELF_EMPTY_HEIGHT = 108; // 96 + 12 gap
 export const SHELF_STICKY_HEIGHT = 36;
 /** Indent per level, and where a level's 1px rail sits inside it — one pair for every wall (grid and tables). */
 export const SHELF_INDENT_PX = 32;
-export const SHELF_RAIL_OFFSET_PX = 11;
+/**
+ * Under the parent heading's chevron, at its centre: the heading's 1px border, its `px-1`, and
+ * half of `SHELF_CHEVRON`'s 32px — `1 + 4 + 16`. It read 11 until issue #599, which was 6px left
+ * of the old 24px chevron's centre and would have been 10px left of the 32px one.
+ */
+export const SHELF_RAIL_OFFSET_PX = 21;
 
 type TileRow = Extract<LayoutRow, { kind: "tiles" }>;
 

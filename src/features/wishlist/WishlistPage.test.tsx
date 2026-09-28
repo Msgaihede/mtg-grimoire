@@ -21,6 +21,7 @@ import type {
 } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
+import { SHELF_INDENT_PX, SHELF_RAIL_OFFSET_PX } from "@/lib/shelfLayout";
 import { boxed, pointerDrag, recordDrags, startPointerDrag } from "@/test-drag";
 import { openDropdown, pickOption } from "@/test-dropdown";
 
@@ -509,8 +510,11 @@ const heading = (id: number): HTMLElement => {
   return found;
 };
 const findHeading = (id: number) => waitFor(() => heading(id));
-/** The folder's own name on its heading — the press that opens it (spec §3.7). */
+/** The folder's own name on its heading — a press on it folds the shelf (issue #599). */
 const titleOf = (id: number, name: string) => within(heading(id)).getByRole("button", { name });
+/** The heading's Open button, at the row's far right — the press that opens it (issue #599). */
+const openOf = (id: number, name: string) =>
+  within(heading(id)).getByRole("button", { name: `Open ${name}` });
 /** The chevron, named "Collapse Binder" / "Expand Binder" (spec §3.2). */
 const chevronOf = (id: number, name: string) =>
   within(heading(id)).getByRole("button", { name: new RegExp(`^(Collapse|Expand) ${name}$`) });
@@ -2736,7 +2740,7 @@ describe("the shelves", () => {
       await moveOrderedDown(user);
       await waitFor(() => expect(rereads.waiting()).toBe(true));
       // Into Someday, and back out by the path row.
-      await user.click(titleOf(SOMEDAY.id, "Someday"));
+      await user.click(openOf(SOMEDAY.id, "Someday"));
       await waitFor(() => expect(levelAsked()).toBe(SOMEDAY.id));
       await waitFor(() => expect(queryHeading(ORDERED.id)).toBeNull());
       await user.click(
@@ -2768,7 +2772,7 @@ describe("the shelves", () => {
       rereads.hold();
       await moveOrderedDown(user);
       await waitFor(() => expect(rereads.waiting()).toBe(true));
-      await user.click(titleOf(SOMEDAY.id, "Someday"));
+      await user.click(openOf(SOMEDAY.id, "Someday"));
       await waitFor(() => expect(levelAsked()).toBe(SOMEDAY.id));
       (document.activeElement as HTMLElement | null)?.blur();
       await rereads.answer(PLANNED);
@@ -3112,7 +3116,10 @@ describe("the shelves", () => {
     const deep = rowOf(await screen.findByText("Force of Will"));
 
     expect(rails(deep)).toHaveLength(2);
-    expect(rails(deep).map((rail) => rail.style.left)).toEqual(["11px", "43px"]);
+    expect(rails(deep).map((rail) => parseFloat(rail.style.left))).toEqual([
+      SHELF_RAIL_OFFSET_PX,
+      SHELF_RAIL_OFFSET_PX + SHELF_INDENT_PX,
+    ]);
     expect(rails(rowOf(heading(SIGNED.id)))).toHaveLength(2);
     expect(rails(rowOf(heading(BACKORDERED.id)))).toHaveLength(1);
     expect(rails(rowOf(screen.getByText("Rhystic Study")))).toHaveLength(0);
@@ -3233,7 +3240,7 @@ describe("the folders", () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
 
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
 
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
     expect(lastQuery().shelves).toEqual([ORDERED.id, BACKORDERED.id]);
@@ -3273,7 +3280,7 @@ describe("the folders", () => {
     await findHeading(ORDERED.id);
     await waitFor(() => expect(figure("Wishes")).toHaveTextContent("3"));
 
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
 
     const theRootWhole = () => {
@@ -3343,9 +3350,9 @@ describe("the folders", () => {
   it("walks up one folder per Escape, after opening two by their titles", async () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await findHeading(BACKORDERED.id);
-    await userEvent.click(titleOf(BACKORDERED.id, "Backordered"));
+    await userEvent.click(openOf(BACKORDERED.id, "Backordered"));
     await waitFor(() => expect(levelAsked()).toBe(BACKORDERED.id));
 
     await userEvent.keyboard("{Escape}");
@@ -3387,7 +3394,7 @@ describe("the folders", () => {
   it("spends Escape on the filter box first, and on the folder next", async () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
 
     const box = screen.getByLabelText("Search your wishlist");
@@ -3412,7 +3419,7 @@ describe("the folders", () => {
     // BOLT and ANY loose, and FILED under Ordered — the wish the drill-down used to hide.
     await waitFor(() => expect(figure("Wishes")).toHaveTextContent("3"));
 
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
 
     await waitFor(() => expect(figure("Wishes")).toHaveTextContent("1"));
   });
@@ -3646,7 +3653,7 @@ describe("the folders", () => {
   it("creates a folder inside the one the reader is standing in, from the path row", async () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await screen.findByText("Rhystic Study");
 
     await userEvent.click(pathAddFolder());
@@ -3914,7 +3921,7 @@ describe("the folders", () => {
     await userEvent.keyboard("Paid for{Enter}");
     expect(wishlistFolderCreate).toHaveBeenCalledWith(null, "Paid for");
 
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
 
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
     await waitFor(() => expect(queryHeading(NEW_FOLDER_SHELF)).toBeNull());
@@ -3970,7 +3977,7 @@ describe("the folders", () => {
   it("un-files a wish dropped on the breadcrumb's root", async () => {
     const { container } = wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await screen.findByText("Rhystic Study");
 
     await wishOnto(
@@ -3989,9 +3996,9 @@ describe("the folders", () => {
   it("walks up one level from the breadcrumb's parent segment", async () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await findHeading(BACKORDERED.id);
-    await userEvent.click(titleOf(BACKORDERED.id, "Backordered"));
+    await userEvent.click(openOf(BACKORDERED.id, "Backordered"));
     await waitFor(() => expect(levelAsked()).toBe(BACKORDERED.id));
 
     await userEvent.click(within(crumbs()).getByRole("button", { name: "Ordered" }));
@@ -4140,7 +4147,7 @@ describe("the folders", () => {
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Close export" }));
 
-    await user.click(titleOf(ORDERED.id, "Ordered"));
+    await user.click(openOf(ORDERED.id, "Ordered"));
     await screen.findByText("Rhystic Study");
     await user.click(screen.getByRole("button", { name: "Export wishlist" }));
 
@@ -4517,7 +4524,7 @@ describe("rearranging the wishlist's cabinet", () => {
   it("moves a folder up a level when it is dropped on a breadcrumb segment", async () => {
     wrap(<WishlistPage />);
     await wall();
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await findHeading(BACKORDERED.id);
     const root = within(
       screen.getByRole("navigation", { name: "Wishlist folders" }),
@@ -4545,7 +4552,7 @@ describe("rearranging the wishlist's cabinet", () => {
   it("takes a folder anywhere on the segment, not only in its middle", async () => {
     wrap(<WishlistPage />);
     await wall();
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await findHeading(BACKORDERED.id);
     const root = within(
       screen.getByRole("navigation", { name: "Wishlist folders" }),
@@ -4861,7 +4868,7 @@ describe("the search column", () => {
   it("adds from the search into the folder on screen", async () => {
     wrap(<WishlistPage />, { searchOpen: true });
     await findHeading(ORDERED.id);
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
 
     await add("Ordered");
@@ -4962,7 +4969,7 @@ describe("a deck's managed wishlist", () => {
    *  names a tile by its art's `alt`, the table by a cell's text. */
   const openManaged = async () => {
     await findHeading(MANAGED.id);
-    await userEvent.click(titleOf(MANAGED.id, "Rhystic Testbed"));
+    await userEvent.click(openOf(MANAGED.id, "Rhystic Testbed"));
     await waitFor(() => expect(levelAsked()).toBe(MANAGED.id));
     await (useAppStore.getState().wishlistView === "grid"
       ? screen.findByAltText("Smuggler's Copter")
@@ -5115,7 +5122,7 @@ describe("a deck's managed wishlist", () => {
     await openManaged();
 
     await findHeading(TOKENS.id);
-    await userEvent.click(titleOf(TOKENS.id, "Tokens"));
+    await userEvent.click(openOf(TOKENS.id, "Tokens"));
     await waitFor(() => expect(levelAsked()).toBe(TOKENS.id));
     await screen.findByText("Treasure");
 
@@ -5612,7 +5619,7 @@ describe("the caret after the path row's Add folder, Move to folder… and Delet
     const user = userEvent.setup();
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await user.click(titleOf(ORDERED.id, "Ordered"));
+    await user.click(openOf(ORDERED.id, "Ordered"));
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
     await findHeading(BACKORDERED.id);
 

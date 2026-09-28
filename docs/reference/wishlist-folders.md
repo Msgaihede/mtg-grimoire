@@ -669,8 +669,10 @@ un-counted to own up to. `Total cost` reads `—` while the wall holds no wishes
 
 `toShelfFolder` (`wishShelfPlan.ts`) maps a folder with a `managedDeckId` to the kind `managed`,
 which `buildShelves` draws **at the root only**, under a `Managed by decks` label, by name, and shut
-by default. A managed heading draws its chevron, its title, a **Managed** pill (`ShelfHeading`) and
-its figures, and **nothing a hand write could be refused for** — no Add folder, no Rename, no `⋯`,
+by default. A managed heading draws its chevron, its title, a **Managed** pill (`ShelfHeading`),
+its figures and the `→` that opens it (issue #599 — the title folds now, as on every heading; see
+[collection-folders.md](collection-folders.md#shelves-2026-09-26)), and **nothing a hand write could
+be refused for** — no Add folder, no Rename, no `⋯`,
 no drag, and no card target that arms. `renderHeading` wires the first four only for a reader's own
 folder, and every heading's card target comes from `cardDrops`, which asks `canFile` — and
 `canFile` refuses a managed destination (all three in `WishlistPage.tsx`).
