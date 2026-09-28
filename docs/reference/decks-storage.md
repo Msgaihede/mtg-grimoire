@@ -3935,8 +3935,12 @@ User schema **v42** (2026-09-10, [issue #389](https://github.com/Msgaihede/mtg-g
 is `decks.stats_open INTEGER NOT NULL DEFAULT 1` — whether the editor's **Deck stats** band is
 expanded. Everything in the section above applies to it unchanged and by construction: it is on the
 `decks` capture `Spec`, it rides `DeckPatch` / `DeckRow` / `DECK_SELECT` with no per-field arm, it
-is the last *named* column of that select and the last positional read in `deck_row`, it writes no
-`deck_audit` row and no undo step, and it moves `updated_at` like every other `update_deck` write.
+was appended after `virtual_only` as the last *named* column of that select and the last
+positional read in `deck_row` when it landed, it writes no `deck_audit` row and no undo step, and it
+moves `updated_at` like every other `update_deck` write. **It has not been last since user schema
+v43**, which appended `notes_open` directly after it, and later rungs have appended more columns
+behind that — so read its position off `DECK_SELECT` and `deck_row`, never off this page. (This
+paragraph said "the last named column … the last positional read" until 2026-09-28.)
 
 **The default is the whole of the difference, and it is a decision rather than a copy that drifted.**
 `tokens_open` is `DEFAULT 0`: that band was new when its column landed, so a collapsed default cost

@@ -1786,7 +1786,9 @@ layer.
     `DeckTokensPanel` made the same call first and the two bands draw one grammar between them.
   - **`shrink-0` is unchanged and is still the whole of why this editor scrolls** — it rides on
     the component's own root now. So is the placement: below the price strip, below Tokens &
-    emblems, last on the page.
+    emblems — and above `DeckNotesPanel`, which renders after it in `DeckEditor.tsx` since user
+    schema v43 and is the band that is last on the page. (This read "last on the page" until
+    2026-09-28, long after the notes band landed under it.)
   - **Nothing in the band is a control but the disclosure and the Collection card's three
     presses.** The design it was built from makes every bar a button that narrows the deck list;
     that is a cross-component feature reaching into all four views and is deliberately out of this
@@ -1798,8 +1800,9 @@ layer.
   **(1)** the band sits **below the price strip**, because that strip is where the remove tray is
   drawn for the length of a drag (`-top-3` over the gap under the deck) and a band between them
   would put four charts between a card and the one drop that takes it out — and since 2026-09-08
-  it is also below the **Tokens & Emblems** band, so this is the last band on the page rather than
-  the last thing under the deck. **The figures in (2) and (3) below predate that band entirely**
+  it is also below the **Tokens & Emblems** band, so it no longer sits directly under the price
+  strip — and since user schema v43 it is not the last band on the page either: `DeckNotesPanel` renders
+  after it. **The figures in (2) and (3) below predate that band entirely**
   (2026-08-14 against 2026-09-07), so read them as the arithmetic of the deck, the strip and this
   band alone; nothing has been re-measured with a token wall open above it, and an open one is
   another `stackCardHeight`-and-change of column;
@@ -3130,10 +3133,12 @@ layer.
   inline `backgroundColor: var(--color-mana-…)` — so this is the app's existing arrangement at a
   new size, not a new one. The table stays a `Record` with `var(…)` spelled out per key: an
   interpolated `bg-mana-${key}` emits no rule at all.
-  **It is no longer keyed alongside `DeckStats`' `PIP_COLOR`, and that is not drift.** A pie slice
-  is a colour with nothing printed on it and a band segment is a field with a symbol on it — two
-  demands, two answers from one palette. A third surface filling by colour key is the point at
-  which all of them want one home in `mana.ts`.
+  **A third surface filling by colour key was the point at which all of them would want one home
+  in `mana.ts`, and the deck stats redesign was that surface.** Its charts fill from `mana.ts`'s
+  `MANA_FILL` — the same `--color-mana-*` family as this band — and the pie-deep table the old
+  stats band kept for its pips is gone, surviving only in historical comments. This table is still
+  a private keying of those six properties rather than an import of `MANA_FILL`; the tokens are
+  the shared fact.
   **Four numbers, and each answers its own question.** 20px of height, because that is what a 12px
   printed glyph needs with air either side — the symbol sets the floor, the band is not a thickness
   anybody chose. **26px of minimum width per segment**, because a 3%-of-the-pips splash is a

@@ -9620,19 +9620,22 @@ pub(crate) mod tests {
     const UNDO_V49: &str = "ALTER TABLE decks DROP COLUMN managed_wishlist_mode;
          ALTER TABLE decks ADD COLUMN managed_wishlist INTEGER NOT NULL DEFAULT 1;";
 
-    /// v48's managed wishlist — the rewind directly above [`UNDO_V47`], and like [`UNDO_V43`]
-    /// it runs first because every fixture rewinds newest first. Both `ADD COLUMN`s are not
-    /// idempotent, so a fixture that left them standing dies at `duplicate column name`.
+    /// v48's managed wishlist — the rewind directly under [`UNDO_V49`] and directly above
+    /// [`UNDO_V47`], because every fixture rewinds newest first. It read "it runs first" until
+    /// v49 landed above it. Both `ADD COLUMN`s are not idempotent, so a fixture that left them
+    /// standing dies at `duplicate column name`.
     const UNDO_V48: &str = "DROP INDEX IF EXISTS idx_wishlist_folders_managed;
          ALTER TABLE wishlist_folders DROP COLUMN managed_deck_id;
          ALTER TABLE decks DROP COLUMN managed_wishlist;";
 
-    /// v47's token pile setting — the newest rewind on the user ladder.
+    /// v47's token pile setting — the rewind directly under [`UNDO_V48`] and directly above
+    /// [`UNDO_V46`]. It read "the newest rewind on the user ladder" until v48 landed above it;
+    /// the newest is whichever `UNDO_V*` matches `USER_SCHEMA_VERSION`.
     ///
     /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V42`]'s exactly: `ALTER TABLE decks ADD
     /// COLUMN` is not idempotent, so a fixture that kept the column dies at `duplicate column
-    /// name` on the way back up. **It runs first, before [`UNDO_V46`]**, because a rewind walks
-    /// the ladder backwards.
+    /// name` on the way back up. **It runs before [`UNDO_V46`]**, because a rewind walks the
+    /// ladder backwards.
     const UNDO_V47: &str = "ALTER TABLE decks DROP COLUMN token_stack;";
 
     /// v46's sticky notes — the rewind directly under [`UNDO_V47`].
