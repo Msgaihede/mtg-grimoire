@@ -19,8 +19,8 @@ const ADDED = "Added to the deck";
  * *seventeen* of the corpus's paper cards, which is the only way to see the ceiling do anything.
  * It is a real query on both sides of the fake — `cards_fts` is `(name, type_line, search_text)`
  * (`schema.rs:1273`), so the shipped search reads type lines too — and it is the fake's own
- * simplification that decides the five that come back and their order. Nothing on this page
- * asserts *which* five; see the note on the page.
+ * simplification that decides the ten that come back and their order. Nothing on this page
+ * asserts *which* ten; see the note on the page.
  */
 const MANY = "creature";
 
@@ -125,12 +125,14 @@ const meta = {
           "third route is the field's *original* behaviour and the only one that survives a " +
           "reader who types a whole name and presses Enter faster than the debounce, which is " +
           "also why it is the only route that can report a miss ({@link NoMatch}).\n\n" +
-          "**Five suggestions, and the ceiling is the reader's rather than the backend's.** " +
+          "**Ten suggestions, and the ceiling is the reader's rather than the backend's.** " +
           "This is a shortcut over the docked panel's wall, not a second one: a list long " +
           "enough to need a scrollbar has stopped being a shortcut. The search is " +
           "`collapse: true`, so every row is the newest printing of that name — the same one " +
           "the panel offers first for the same text — and a reader who cares which printing " +
-          "they get has that panel open beside them.\n\n" +
+          "they get has that panel open beside them. What the ten leave out is **counted and " +
+          "never offered** — `+23 more` under the rows, off the count the same search already " +
+          "answered ({@link Suggestions}).\n\n" +
           "**The caret never leaves the field.** Arrows move `aria-activedescendant` rather " +
           "than focus, and a row's `onMouseDown` refuses the focus a click would take, so the " +
           "next name can be typed without going back for the input. Both are invisible on " +
@@ -141,7 +143,7 @@ const meta = {
           "rank with, so it is neither a prefix match nor `bm25`. The shipped search is " +
           "`cards_fts(name, type_line, search_text)` ranked by `bm25`, which is a different " +
           "answer to the same query. What these stories claim is what the *component* decides — " +
-          "that rows appear, that there are at most five, and where the highlight is — and " +
+          "that rows appear, that there are at most ten, and where the highlight is — and " +
           "never what the backend ranked.\n\n" +
           "**There is no story for `Could not search — …`, and it is not for want of trying.** " +
           "A refused *search* would need a fault, and none of the fake's ten touches " +
@@ -220,19 +222,25 @@ export const Resting: Story = {
 };
 
 /**
- * Typing, with the list up: **five rows, and seventeen cards match**.
+ * Typing, with the list up: **ten rows, and seventeen cards match**.
  *
- * `MAX_SUGGESTIONS` is imported rather than written as `5`, so this assertion moves with the
+ * `MAX_SUGGESTIONS` is imported rather than written as `10`, so this assertion moves with the
  * constant instead of quietly becoming a claim about a number nobody changed on purpose.
  *
  * There is no `scrollIntoView` in this component and there is one in `SetCombobox`, and the
- * reason is this shape: five rows are all visible at once, so the highlight can never move out of
+ * reason is this shape: ten rows are all visible at once, so the highlight can never move out of
  * the box. The first row is highlighted before any arrow is pressed — `aria-activedescendant`
  * points at it — which is what makes Enter mean something to a reader who has only typed.
  *
  * `aria-autocomplete` is `list` rather than `both`: the rows are the search's answer, not a
  * completion of what is being typed, and nothing is ever written into the field on the reader's
  * behalf.
+ *
+ * **Under the ten, the rest are counted and not offered** (issue #648): a `+N more` line off the
+ * same search's own `total`, describing the field — where the caret is — rather than sitting in
+ * the listbox, which may hold only options. The number is matched by shape rather than written
+ * out, for the note on this page: how many cards the fake's substring match finds is the fake's
+ * answer, not this component's claim.
  */
 export const Suggestions: Story = {
   play: async ({ canvasElement }) => {
@@ -249,6 +257,11 @@ export const Suggestions: Story = {
     // The id an option carries and the id `aria-activedescendant` points at are one spelling,
     // and a mismatch is invisible to the eye and total to a screen reader.
     await expect(document.getElementById(options[0].id)).toBe(options[0]);
+
+    const more = canvas.getByText(/^\+[\d,]+\+? more$/);
+    await expect(more).toBeVisible();
+    await expect(list).not.toContainElement(more);
+    await expect(field).toHaveAccessibleDescription(more.textContent ?? "");
   },
 };
 

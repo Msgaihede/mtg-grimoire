@@ -299,6 +299,8 @@ export function TagResults({ search }: { search: CardSearch }) {
               <AddToCollectionButton
                 align="start"
                 className={cn(REVEAL_ON_HOVER, "static")}
+                // Over the art, so backed — see `AddToCollectionButton`'s `tone`.
+                tone="art"
                 target={{
                   cardId: card.id,
                   name: card.name,

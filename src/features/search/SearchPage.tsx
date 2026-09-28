@@ -695,6 +695,8 @@ function Results({ search }: { search: CardSearch }) {
               <AddToCollectionButton
                 align="start"
                 className={cn(REVEAL_ON_HOVER, "static")}
+                // Over the art, so backed — the table row above is on a panel and is not.
+                tone="art"
                 target={{
                   cardId: card.id,
                   name: card.name,

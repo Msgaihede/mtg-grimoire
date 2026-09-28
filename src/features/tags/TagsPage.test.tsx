@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
+import { BUTTON_OVER_ART } from "@/components/QuantityStepper";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
 import type {
@@ -926,6 +927,17 @@ describe("the results wall", () => {
       ),
     );
     expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /** Issue #645, as the search wall's test of the same shape has it: the `+` stands over the art,
+   *  so it is backed the way the deck's card steppers are. jsdom draws nothing; the classes are
+   *  pinned. */
+  it("backs a tile's quick-add over the art", async () => {
+    wrap(<TagsPage />);
+
+    expect(
+      await screen.findByRole("button", { name: /^Add Lightning Bolt \(LEA 161\)/ }),
+    ).toHaveClass(...BUTTON_OVER_ART.split(" "));
   });
 
   /**
