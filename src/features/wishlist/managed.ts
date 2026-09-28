@@ -76,9 +76,9 @@ export function managedIds(folders: readonly WishlistFolder[]): ReadonlySet<numb
  * `Tokens` child sits inside; the child says {@link MANAGED_TOKENS_EMPTY} for itself.
  */
 export const MANAGED_EMPTY: Record<Exclude<ManagedWishlistMode, "off">, string> = {
-  all: "The two lists agree. Everything requested by the plan is already in the deck.",
-  missing: "Nothing missing. The deck includes every card in the plan.",
-  other: "No substitutions. Every card matches the planned printing.",
+  all: "Nothing missing. The deck matches the theory list.",
+  missing: "Nothing missing. The deck includes every card in the theory list.",
+  other: "No substitutions. Every card matches the printing in the theory list.",
 };
 
 /**
