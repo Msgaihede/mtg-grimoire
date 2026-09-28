@@ -11239,7 +11239,10 @@ describe("the busy fault", () => {
     // 122 → 123 on `main` when `collection_set_printing` (issue #564) met that removal — the
     // parse's answer over the merged table, not either side's literal plus one. 122 when managed
     // tokens met it, read from `left` after that merge.
-    expect(names).toHaveLength(122);
+    // 122 → 123 on 2026-09-28 with `set_stack_hidden` (issue #618) — an `app_meta` write through
+    // `sync::with_write`, whose read half `hidden_stacks` is not in this table. Count again after
+    // a merge rather than adding to the other side's figure.
+    expect(names).toHaveLength(123);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -18557,9 +18560,11 @@ describe("set completion", () => {
 });
 
 /**
- * `deck_completion` — owned against wanted, **counted the way the deck editor counts it**: a live
- * list against its own group, a plan-keeping deck's theory list against every copy it could use,
- * every active pile, exact `(card_id, finish)`, one shared pool per key.
+ * `deck_completion` — how far every deck is along, **counted the way the screen that answers the
+ * same question counts it**. Under `collection` (the default) a live list against its own group —
+ * a plan-keeping deck's included — as the editor's `Actual` tab counts it; under `theory` a plan
+ * against its deck's live list, as the Compare dialog counts it. Every active pile, exact
+ * `(card_id, finish)`, one shared pool per key.
  */
 describe("deck completion", () => {
   /** What the deck editor quotes one copy of deck 1's first row at. */
@@ -18598,15 +18603,18 @@ describe("deck completion", () => {
     expect(row.missingCost).toBeCloseTo(unit, 9);
   });
 
-  /** A deck that keeps a plan is measured by its plan, against the root, its own group and
-   *  Recently removed — never another deck's group. */
-  it("measures a theory deck's plan against every copy the deck could use", () => {
+  /**
+   * **A deck that keeps a plan is measured on its live list under `collection`** (issue #600),
+   * against its own group like any other deck — never by its plan, and never against the root or
+   * `Recently removed`, which are what the plan's own `ownedQuantity` would have counted.
+   */
+  it("measures a theory deck's live list against its own group under collection", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1, theoryEnabled: true }), deck({ id: 2, name: "Other" })],
       deckCards: [
+        // The plan is not what `collection` measures, however much bigger it is.
         deckCard({ id: 1, variant: "theory", quantity: 4 }),
-        // The live list is not what a plan-keeping deck is measured by.
-        deckCard({ id: 2, quantity: 1 }),
+        deckCard({ id: 2, quantity: 2 }),
       ],
       collectionEntries: [
         entry({ id: 1, quantity: 1 }),
@@ -18615,13 +18623,111 @@ describe("deck completion", () => {
         entry({ id: 4, folderId: groupId(2), quantity: 5 }),
       ],
     });
+    const rows = readHandlers(db).deck_completion({});
 
-    expect(readHandlers(db).deck_completion({}).find((r) => r.deckId === 1)).toMatchObject({
-      list: "theory",
-      wanted: 4,
-      owned: 3,
+    expect(rows.find((r) => r.deckId === 1)).toMatchObject({
+      list: "live",
+      wanted: 2,
+      owned: 1,
       missing: 1,
     });
+    // The default is the word, not the absence of one.
+    expect(readHandlers(db).deck_completion({ compare: "collection" })).toEqual(rows);
+  });
+
+  /**
+   * **`theory` measures the plan against the live list, and nothing else**: a copy counts only
+   * where the deck plays the exact printing in the exact finish, a switched-off pile on either
+   * side counts toward nothing, and the collection is not asked — the Compare dialog's arithmetic,
+   * which the last assertion holds it to.
+   */
+  it("measures a plan against the live list under theory, exact printing and finish", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, theoryEnabled: true })],
+      deckCards: [
+        // The plan: four regular Bolts in the main pile and two foils in the sideboard — both
+        // active, and one printing in two finishes, so two keys.
+        deckCard({ id: 1, variant: "theory", quantity: 4 }),
+        deckCard({ id: 2, variant: "theory", categoryKind: "side", finish: "foil", quantity: 2 }),
+        // Another printing of the same card: the exact key, so the live list's Bolts are no help.
+        deckCard({ id: 3, variant: "theory", cardId: BOLT_2X2.id, quantity: 1 }),
+        // The plan's Maybeboard wants nothing.
+        deckCard({ id: 4, variant: "theory", categoryKind: "maybe", quantity: 3 }),
+        // The live list: six regular Bolts — four for the plan's four and two spare, which the
+        // plan's foils cannot take — and a foil parked in its switched-off Maybeboard, which is
+        // not played and so fills nothing.
+        deckCard({ id: 10, quantity: 6 }),
+        deckCard({ id: 11, categoryKind: "maybe", finish: "foil", quantity: 5 }),
+      ],
+      collectionEntries: [
+        // Copies of every wanted key, in the deck's own group and at the root: irrelevant.
+        entry({ id: 1, folderId: groupId(1), finish: "foil", quantity: 9 }),
+        entry({ id: 2, cardId: BOLT_2X2.id, quantity: 9 }),
+      ],
+    });
+    const reads = readHandlers(db);
+
+    const [row] = reads.deck_completion({ compare: "theory", marketplace: "tcgplayer" });
+
+    expect(row).toMatchObject({
+      deckId: 1,
+      list: "theory",
+      wanted: 7,
+      owned: 4,
+      missing: 3,
+      unpricedMissing: 0,
+    });
+    const diff = reads.deck_theory_diff({ deckId: 1, marketplace: "tcgplayer" });
+    expect(row.missing).toBe(diff.reduce((n, r) => n + r.quantity, 0));
+    expect(row.missingCost).toBeCloseTo(
+      diff.reduce((n, r) => n + r.unitPrice! * r.quantity, 0),
+      9,
+    );
+  });
+
+  /**
+   * Under `theory` the question is only asked of a deck that has a plan — and **a virtual deck is
+   * not filtered out**, because the collection is never consulted: its live list is a list
+   * whatever the cardboard is. `deck_create` is what writes the pair; no patch can.
+   */
+  it("answers only plan-keeping decks under theory, a virtual one included", () => {
+    const db = makeDeckDb({
+      decks: [
+        deck({ id: 1 }),
+        deck({ id: 2, name: "Proxies", theoryEnabled: true, virtualOnly: true }),
+      ],
+      deckCards: [
+        deckCard({ id: 1, quantity: 4 }),
+        deckCard({ id: 2, deckId: 2, variant: "theory", quantity: 2 }),
+        deckCard({ id: 3, deckId: 2, quantity: 1 }),
+      ],
+    });
+    const reads = readHandlers(db);
+
+    expect(reads.deck_completion({ compare: "theory" })).toEqual([
+      expect.objectContaining({ deckId: 2, list: "theory", wanted: 2, owned: 1, missing: 1 }),
+    ]);
+    // And `collection` is the other way round: the virtual deck holds nothing to count.
+    expect(reads.deck_completion({}).map((r) => r.deckId)).toEqual([1]);
+  });
+
+  /** A word this build does not know measures the default rather than refusing — so does `null`. */
+  it("reads an unknown compare word as collection", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, theoryEnabled: true })],
+      deckCards: [
+        deckCard({ id: 1, variant: "theory", quantity: 4 }),
+        deckCard({ id: 2, quantity: 2 }),
+      ],
+      collectionEntries: [entry({ id: 1, folderId: groupId(1), quantity: 1 })],
+    });
+    const reads = readHandlers(db);
+    const collection = reads.deck_completion({ compare: "collection" });
+
+    expect(collection[0]).toMatchObject({ list: "live", wanted: 2, owned: 1 });
+    expect(reads.deck_completion({ compare: "sideways" })).toEqual(collection);
+    expect(reads.deck_completion({ compare: "Theory" })).toEqual(collection);
+    expect(reads.deck_completion({ compare: null })).toEqual(collection);
   });
 
   /** A virtual deck holds nothing by definition, so 0 % of it is not a finding. An archived or an
@@ -18702,8 +18808,9 @@ describe("deck completion", () => {
 
   /**
    * **The fence**: for every deck in the starter world — a live deck with copies in its group, a
-   * Commander deck, a deck with a plan — the numbers are the ones the editor's own `deckStats`
-   * draws over `deck_get` of the list that was measured.
+   * Commander deck, the two decks with a plan — the `collection` numbers are the ones the
+   * editor's own `deckStats` draws over `deck_get` of the **live** list, which is what the
+   * `Actual` tab shows whether or not the deck keeps a plan.
    */
   it("says what the deck editor says, for every deck in the starter world", () => {
     const db = seed("starter");
@@ -18716,11 +18823,12 @@ describe("deck completion", () => {
         .map((d) => d.id)
         .sort((a, b) => a - b),
     );
-    // Non-vacuity: a plan is measured, and something is missing somewhere.
-    expect(rows.some((r) => r.list === "theory")).toBe(true);
+    // Non-vacuity: a plan-keeping deck is among them, and something is missing somewhere.
+    expect(rows.some((r) => db.decks.find((d) => d.id === r.deckId)?.theoryEnabled)).toBe(true);
     expect(rows.some((r) => r.missing > 0)).toBe(true);
     for (const row of rows) {
-      const cards = reads.deck_get({ id: row.deckId, variant: row.list, marketplace: "tcgplayer" })!
+      expect(row.list, `deck ${row.deckId} list`).toBe("live");
+      const cards = reads.deck_get({ id: row.deckId, variant: "live", marketplace: "tcgplayer" })!
         .cards;
       const stats = deckStats(cards);
       expect(row.owned, `deck ${row.deckId} owned`).toBe(stats.owned);
@@ -18728,6 +18836,48 @@ describe("deck completion", () => {
       expect(row.wanted, `deck ${row.deckId} wanted`).toBe(stats.owned + stats.missing);
       if (stats.missingPrice === null) expect(row.missingCost).toBeNull();
       else expect(row.missingCost).toBeCloseTo(stats.missingPrice, 9);
+    }
+  });
+
+  /**
+   * **The second fence**: under `theory`, every plan-keeping deck in the starter world — the
+   * archived deck whose plan is its live list copy for copy, and the Testbed whose plan is not —
+   * is missing exactly the copies the Compare dialog lists, tokens aside.
+   */
+  it("says what the Compare dialog says, for every plan in the starter world", () => {
+    const db = seed("starter");
+    const reads = readHandlers(db);
+    const rows = reads.deck_completion({ compare: "theory", marketplace: "tcgplayer" });
+
+    expect(rows.map((r) => r.deckId)).toEqual(
+      db.decks
+        .filter((d) => d.theoryEnabled)
+        .map((d) => d.id)
+        .sort((a, b) => a - b),
+    );
+    // Non-vacuity: both plans answer, one of them complete and one of them not.
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    expect(rows.some((r) => r.missing === 0 && r.wanted > 0)).toBe(true);
+    expect(rows.some((r) => r.missing > 0)).toBe(true);
+    for (const row of rows) {
+      expect(row.list, `deck ${row.deckId} list`).toBe("theory");
+      const diff = reads
+        .deck_theory_diff({ deckId: row.deckId, marketplace: "tcgplayer" })
+        .filter((r) => !r.isToken);
+      expect(row.missing, `deck ${row.deckId} missing`).toBe(
+        diff.reduce((n, r) => n + r.quantity, 0),
+      );
+      expect(row.owned + row.missing, `deck ${row.deckId} wanted`).toBe(row.wanted);
+      const priced = diff.filter((r) => r.unitPrice !== null);
+      expect(row.unpricedMissing, `deck ${row.deckId} unpriced`).toBe(
+        diff.filter((r) => r.unitPrice === null).reduce((n, r) => n + r.quantity, 0),
+      );
+      if (row.missingCost !== null) {
+        expect(row.missingCost).toBeCloseTo(
+          priced.reduce((n, r) => n + r.unitPrice! * r.quantity, 0),
+          9,
+        );
+      }
     }
   });
 });
@@ -20234,6 +20384,30 @@ describe("shelves", () => {
     const busy = makeDb({ fault: "busy" });
     expect(() =>
       writeHandlers(busy).set_shelf_folds({ page: "collection", changes: { "11": true } }),
+    ).toThrow(/busy/i);
+  });
+
+  it("round-trips hidden_stacks through set_stack_hidden, per deck, and showing the last removes the entry", () => {
+    const db = makeDb();
+    const r = readHandlers(db);
+    const w = writeHandlers(db);
+    expect(r.hidden_stacks({ deckId: 4 })).toEqual([]);
+
+    w.set_stack_hidden({ deckId: 4, categoryId: 12, hidden: true });
+    w.set_stack_hidden({ deckId: 4, categoryId: 9, hidden: true });
+    w.set_stack_hidden({ deckId: 4, categoryId: 9, hidden: true });
+    w.set_stack_hidden({ deckId: 5, categoryId: 3, hidden: true });
+    expect(r.hidden_stacks({ deckId: 4 })).toEqual([9, 12]);
+    expect(r.hidden_stacks({ deckId: 5 })).toEqual([3]);
+
+    w.set_stack_hidden({ deckId: 5, categoryId: 3, hidden: false });
+    expect(r.hidden_stacks({ deckId: 5 })).toEqual([]);
+    expect(db.hiddenStacks).toEqual({ "4": [12, 9] });
+
+    expect(() => w.set_stack_hidden({ deckId: 0, categoryId: 3, hidden: true })).toThrow(/deck id/);
+    const busy = makeDb({ fault: "busy" });
+    expect(() =>
+      writeHandlers(busy).set_stack_hidden({ deckId: 4, categoryId: 12, hidden: true }),
     ).toThrow(/busy/i);
   });
 });

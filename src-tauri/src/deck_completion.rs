@@ -1,37 +1,67 @@
 //! The home page's **Deck completion** read: for every deck, how many copies its measured list
-//! wants, how many the reader holds, and what the rest would cost — and, at the foot of the file,
-//! **To review**'s count of deck rows flagged for review ([`review_count`]).
+//! wants, how many of them a pool covers, and what the rest would cost — and, at the foot of the
+//! file, **To review**'s count of deck rows flagged for review ([`review_count`]).
 //!
-//! **Owned is exactly what the deck editor calls owned**, rule for rule — a widget reading
-//! *4 missing* over a deck that opens reading *6 missing* is a bug report (spec
-//! `2026-09-26-home-widgets-round-two-design.md` §3.1):
+//! **Two comparisons and one arithmetic** ([issue #600](https://github.com/Msgaihede/mtg-grimoire/issues/600)).
+//! The widget's setting is a [`Compare`], and a mode decides exactly three things: which decks
+//! answer, which list is measured, and what that list is measured against. Everything after the
+//! choice is [`measure`], shared, so the two modes cannot come to count differently.
 //!
-//! * A deck without a theory plan measures its **live** list against its own group,
-//!   [`crate::deck::owned_by_printing`]. A deck with `theory_enabled` measures its **theory**
-//!   list against every copy it could be built from, [`crate::deck::available_by_printing`] —
-//!   the same choice `get_deck` makes by variant.
-//! * **Every active pile counts**, sideboard and companion included: this is `DeckStats`'
-//!   `missing`, and deliberately not [`crate::deck::deck_values_for`]'s narrower
-//!   main + commander + maybe.
+//! * **[`Compare::Collection`], the default: every non-virtual deck's _actual_ (live) list
+//!   against the copies filed in that deck's own group**, [`crate::deck::owned_by_printing`] —
+//!   what the editor's Actual tab calls owned, rule for rule. A widget reading *4 missing* over a
+//!   deck that opens reading *6 missing* is a bug report (spec
+//!   `2026-09-26-home-widgets-round-two-design.md` §3.1). **A deck with a plan is measured on its
+//!   live list here too, and that reverses what this read did until issue #600**: it measured the
+//!   plan against every copy the deck could be built from
+//!   ([`crate::deck::available_by_printing`], the Theory tab's pool), `get_deck`'s choice by
+//!   variant. One figure meaning two things depending on a flag the widget does not draw made
+//!   every row ambiguous — *83%* of the cardboard, or of the plan? — and the plan's progress is a
+//!   mode of its own now. **Virtual decks answer no row**: they hold nothing by definition, and
+//!   0% of every deck is not a finding.
+//! * **[`Compare::Theory`]: every deck with `theory_enabled` — virtual ones included — its
+//!   _theory_ list against its _actual_ one**: how much of the plan is already sleeved. The plan
+//!   is what is wanted and the live list is the pool, so a planned copy counts only where the
+//!   actual list plays that exact printing in that exact finish. That is
+//!   [`crate::deck_theory::theory_diff`]'s subtraction summed — `missing` is the Compare dialog's
+//!   card lines added up, `missing_cost` those lines priced — and it is fenced against that
+//!   function rather than restated beside it. **Virtual decks answer here** because
+//!   actual-against-plan is a question about two lists and never about cardboard: a proxy pile
+//!   the reader is sleeving toward a plan has a perfectly good answer. **A deck without the
+//!   switch answers no row**, theory rows or not — rows kept from before the switch went off are
+//!   a plan the editor no longer draws.
+//!
+//! What holds in both modes:
+//!
+//! * **Every active pile counts, on both sides**, sideboard and companion included: this is
+//!   `DeckStats`' `missing`, and deliberately not [`crate::deck::deck_values_for`]'s narrower
+//!   main + commander + maybe. An inactive pile wants nothing and, in Theory, sleeves nothing —
+//!   `theory_diff`'s `diff_select` drops it from both lists for the same reason.
 //! * The key is `(card_id, finish)`, the finish being the one each row plays in the collection's
 //!   spelling — [`crate::deck::entry_finish`], so a NULL deck finish is
 //!   [`crate::schema::FINISHES`]`[0]` on a printing sold in it and the sole finish on one that is
-//!   not. `attribute_owned` hands a scarce pool down the read order, so summed over one key it owns
-//!   `min(Σ wanted, pool)` — and this read walks the same scarce pool, because an unsaid row and a
-//!   `foil` row of one foil-only printing are two SQL groups and one key.
+//!   not. Every pool is keyed the same way. `attribute_owned` hands a scarce pool down the read
+//!   order, so summed over one key it owns `min(Σ wanted, pool)` — and this read walks the same
+//!   scarce pool, because an unsaid row and a `foil` row of one foil-only printing are two SQL
+//!   groups and one key. Over one key that is also `theory_diff`'s `max(0, wanted − held)`, which
+//!   is why one walk serves both modes.
 //! * A missing copy costs its row's own price, [`crate::sorting::deck_card_price_expr`], which
 //!   depends on the key alone. `missing_cost` is `None` exactly when nothing on the measured list
-//!   is priced — `DeckStats`' `missingPrice`, `priced === 0 ? null : …`.
+//!   is priced — `DeckStats`' `missingPrice`, `priced === 0 ? null : …`. In Theory the price is
+//!   the **plan's** row's: the plan names what would be bought.
 //!
-//! **The pools are read through `deck.rs`'s own two functions, one statement per deck, and not
-//! restated as one correlated statement over every deck.** [`crate::collection_source`]'s
-//! `ForDeck` arm interpolates a literal deck id, so a single statement would need a second
-//! spelling of "what this deck can use" — the drift that module exists to prevent. What is
-//! aggregated in SQL is what can be: the wanted copies and the price per key, in one statement.
+//! **The measured lists are one statement across every deck** ([`lists_by_deck`]), and so is
+//! Theory's pool, because the live list is a `deck_cards` read of the same shape. **Collection's
+//! pool is read through `deck.rs`'s own function, one statement per deck, and not restated as one
+//! correlated statement over every deck** — a second spelling of "what is in this deck's box" is
+//! the drift [`crate::deck::owned_by_printing`]'s callers exist to avoid. **All of it is one read
+//! transaction**, `theory_diff`'s arrangement: in autocommit each statement is its own snapshot,
+//! and a card write landing between the plan's read and the live list's would put a copy on one
+//! side of the subtraction and not the other.
 //!
-//! **Virtual decks answer no row** — they hold nothing by definition, and 0% of every deck is not
-//! a finding. **Tokens never count**: they are `deck_tokens`, which nothing here reads. A deck
-//! with nothing on its measured list answers a row of zeros and reads no pool at all.
+//! **Tokens never count**: a token or emblem is a `deck_token_printings` entry, which nothing here
+//! reads — so Theory's `missing` is `theory_diff`'s card lines and never its `is_token` ones. A
+//! deck with nothing on its measured list answers a row of zeros and reads no pool at all.
 
 use crate::sorting::Marketplace;
 use crate::sync::AppState;
@@ -45,16 +75,65 @@ const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 /// `deck_cards.variant` for the plan.
 const THEORY: &str = crate::schema::DECK_VARIANTS[1];
 
+/// Which comparison the widget asks for — see the module doc for the two in full.
+///
+/// **A word on the wire and forgiving about it**, [`Marketplace::from_opt`]'s shape: `"theory"`
+/// is [`Self::Theory`] and anything else — absent, a typo, a mode a newer build added — is
+/// [`Self::Collection`]. A layout document written by a newer build must draw the default rather
+/// than fail the whole widget.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Compare {
+    /// Every non-virtual deck's live list against the copies in its own group.
+    #[default]
+    Collection,
+    /// Every deck with a plan switched on, its theory list against its live list.
+    Theory,
+}
+
+impl Compare {
+    /// The command argument, which may simply not be there.
+    pub fn from_opt(word: Option<&str>) -> Compare {
+        match word {
+            Some("theory") => Compare::Theory,
+            _ => Compare::Collection,
+        }
+    }
+
+    /// Which decks answer — a `WHERE` over `decks d`, and **the one spelling of it**:
+    /// [`measured_decks`] and [`lists_by_deck`] both splice this, so the rows answered and the
+    /// lists read cannot come to name different decks. `virtual_only = 0` also drops the
+    /// kindless `1/1` pair, which `deckKind.ts` reads as virtual; `theory_enabled = 1` keeps it,
+    /// because a plan is a plan whatever else the deck says.
+    fn decks(self) -> &'static str {
+        match self {
+            Compare::Collection => "d.virtual_only = 0",
+            Compare::Theory => "d.theory_enabled = 1",
+        }
+    }
+
+    /// The list that is measured — and so `DeckCompletion::list`.
+    fn measured(self) -> &'static str {
+        match self {
+            Compare::Collection => LIVE,
+            Compare::Theory => THEORY,
+        }
+    }
+}
+
 /// One deck's completion.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckCompletion {
     pub deck_id: i64,
-    /// `live` | `theory` — which list was measured.
+    /// `live` | `theory` — which list was measured, and so which [`Compare`] asked: `live` is
+    /// [`Compare::Collection`]'s, measured against the deck's own group, and `theory` is
+    /// [`Compare::Theory`]'s, measured against the live list. Never both for one mode, which is
+    /// what issue #600 changed: a plan used to be measured under the default.
     pub list: String,
     /// Copies the measured list asks for, active piles only.
     pub wanted: i64,
-    /// Of those, copies the pool covers.
+    /// Of those, copies the pool covers — the deck's group under [`Compare::Collection`], the
+    /// live list's copies of the exact printing and finish under [`Compare::Theory`].
     pub owned: i64,
     /// `wanted − owned`.
     pub missing: i64,
@@ -69,7 +148,7 @@ pub struct DeckCompletion {
     pub unpriced_missing: i64,
 }
 
-/// One key of one deck's measured list: the copies wanted and what one costs.
+/// One key of one deck's list: the copies it holds and what one costs.
 struct Want {
     card_id: String,
     finish: String,
@@ -77,55 +156,71 @@ struct Want {
     unit_price: Option<f64>,
 }
 
-/// Every non-virtual deck's completion at `marketplace`, ascending by id.
+/// Every answering deck's completion at `marketplace`, ascending by id.
 pub fn deck_completion_for(
     conn: &Connection,
     marketplace: Marketplace,
+    compare: Compare,
 ) -> Result<Vec<DeckCompletion>, String> {
-    let decks = measured_decks(conn)?;
-    let mut wants = wanted_by_deck(conn, marketplace)?;
+    // Deferred, so it takes the read snapshot at the first statement and writes nothing — see the
+    // module doc. No caller holds a transaction here.
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let decks = measured_decks(&tx, compare)?;
+    let mut wants = lists_by_deck(&tx, Some(marketplace), compare, compare.measured())?;
+    // Theory's pool is the live list, read once for every deck. The price is not asked for: a
+    // copy the deck already plays costs nothing to find.
+    let mut sleeved = match compare {
+        Compare::Theory => lists_by_deck(&tx, None, compare, LIVE)?,
+        Compare::Collection => HashMap::new(),
+    };
     let mut out = Vec::with_capacity(decks.len());
-    for (deck_id, theory) in decks {
+    for deck_id in decks {
         let wants = wants.remove(&deck_id).unwrap_or_default();
-        // The editor's one line (`get_deck`, deck.rs:4932-4936): the list picks the pool.
         let pool = if wants.is_empty() {
             HashMap::new()
-        } else if theory {
-            crate::deck::available_by_printing(conn, deck_id)?
         } else {
-            crate::deck::owned_by_printing(conn, deck_id)?
+            match compare {
+                Compare::Collection => crate::deck::owned_by_printing(&tx, deck_id)?,
+                Compare::Theory => pool_of(sleeved.remove(&deck_id).unwrap_or_default()),
+            }
         };
-        out.push(measure(deck_id, theory, &wants, &pool));
+        out.push(measure(deck_id, compare.measured(), &wants, &pool));
     }
     Ok(out)
 }
 
-/// Every deck this read answers for, and whether it measures its plan. `virtual_only = 0` also
-/// drops the kindless `1/1` pair, which `deckKind.ts` reads as virtual.
-fn measured_decks(conn: &Connection) -> Result<Vec<(i64, bool)>, String> {
-    let mut stmt = conn
-        .prepare("SELECT id, theory_enabled FROM decks WHERE virtual_only = 0 ORDER BY id")
-        .map_err(|e| e.to_string())?;
+/// Every deck `compare` answers for, ascending by id.
+fn measured_decks(conn: &Connection, compare: Compare) -> Result<Vec<i64>, String> {
+    let sql = format!(
+        "SELECT d.id FROM decks d WHERE {} ORDER BY d.id",
+        compare.decks()
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_map([], |r| r.get(0))
         .map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|e| e.to_string())
 }
 
-/// The copies every deck's measured list wants, per `(card_id, finish)`, with the key's price.
+/// The copies one list of every deck `compare` answers for holds, per `(card_id, finish)`, with
+/// the key's price at `marketplace` — or no price at all when `marketplace` is `None`, which is
+/// what Theory's pool asks for.
 ///
 /// **The pile filter sits in the join**, `deck_values_for`'s arrangement: only active piles, and
-/// only rows of the list the deck is measured by. The price is a bare column beside the `sum()`
-/// — every row of a group shares `dc.card_id` and `dc.finish`, and so the `cards` row and the
-/// price. `GROUP BY dc.finish` groups the NULLs together; the key each group is measured under is
-/// [`crate::deck::entry_finish`] of that finish and the printing's `finishes`, folded in Rust, so a
-/// group's price stays the one its own rows are quoted at.
-fn wanted_by_deck(
+/// only rows of `variant`. The price is a bare column beside the `sum()` — every row of a group
+/// shares `dc.card_id` and `dc.finish`, and so the `cards` row and the price. `GROUP BY dc.finish`
+/// groups the NULLs together; the key each group is measured under is [`crate::deck::entry_finish`]
+/// of that finish and the printing's `finishes`, folded in Rust, so a group's price stays the one
+/// its own rows are quoted at — and, on the pool side, [`pool_of`] sums two groups that fold to
+/// one key.
+fn lists_by_deck(
     conn: &Connection,
-    marketplace: Marketplace,
+    marketplace: Option<Marketplace>,
+    compare: Compare,
+    variant: &str,
 ) -> Result<HashMap<i64, Vec<Want>>, String> {
-    let price = crate::sorting::deck_card_price_expr(marketplace);
+    let price = marketplace.map_or_else(|| "NULL".to_owned(), crate::sorting::deck_card_price_expr);
     let sql = format!(
         "SELECT dc.deck_id, dc.card_id, dc.finish, c.finishes, sum(dc.quantity),
                 {price}
@@ -136,14 +231,15 @@ fn wanted_by_deck(
            JOIN deck_cards dc
              ON dc.category_id = cat.id
             AND dc.deck_id = d.id
-            AND dc.variant = CASE WHEN d.theory_enabled = 1 THEN '{THEORY}' ELSE '{LIVE}' END
+            AND dc.variant = ?1
            LEFT JOIN cards c ON c.id = dc.card_id
-          WHERE d.virtual_only = 0
-          GROUP BY dc.deck_id, dc.card_id, dc.finish"
+          WHERE {decks}
+          GROUP BY dc.deck_id, dc.card_id, dc.finish",
+        decks = compare.decks()
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map([], |r| {
+        .query_map([variant], |r| {
             let finish: Option<String> = r.get(2)?;
             let finishes: Option<String> = r.get(3)?;
             Ok((
@@ -165,16 +261,29 @@ fn wanted_by_deck(
     Ok(out)
 }
 
+/// One deck's live list as a pool, keyed as [`crate::deck::owned_by_printing`]'s map is.
+///
+/// **Summed rather than inserted**, `fold_by_played_finish`'s reason one table over: an unsaid
+/// row and a `foil` row of one foil-only printing are two SQL groups and one key, and a pool that
+/// kept only the second would let the plan's foil ask for a copy the live list already plays.
+fn pool_of(list: Vec<Want>) -> HashMap<(String, String), i64> {
+    let mut pool = HashMap::new();
+    for held in list {
+        *pool.entry((held.card_id, held.finish)).or_insert(0) += held.wanted;
+    }
+    pool
+}
+
 /// One deck's numbers from its wanted keys and its pool — `deckStats`' loop at the key's grain.
 fn measure(
     deck_id: i64,
-    theory: bool,
+    list: &str,
     wants: &[Want],
     pool: &HashMap<(String, String), i64>,
 ) -> DeckCompletion {
     let mut row = DeckCompletion {
         deck_id,
-        list: if theory { THEORY } else { LIVE }.to_owned(),
+        list: list.to_owned(),
         wanted: 0,
         owned: 0,
         missing: 0,
@@ -209,18 +318,21 @@ fn measure(
     row
 }
 
-/// Every deck's completion, for the home page. **Read-only** connection, blocking pool, as every
-/// read in this app is — [`crate::deck::deck_values`]' shape exactly, marketplace and fallback
-/// included: anything this build does not recognise quotes TCGplayer rather than failing.
+/// Every answering deck's completion, for the home page. **Read-only** connection, blocking
+/// pool, as every read in this app is — [`crate::deck::deck_values`]' shape exactly, marketplace
+/// and fallback included: anything this build does not recognise quotes TCGplayer rather than
+/// failing, and anything that is not `"theory"` compares against the collection.
 #[tauri::command]
 pub async fn deck_completion(
     state: tauri::State<'_, Arc<AppState>>,
     marketplace: Option<String>,
+    compare: Option<String>,
 ) -> Result<Vec<DeckCompletion>, String> {
     let state = state.inner().clone();
     let marketplace = Marketplace::from_opt(marketplace.as_deref());
+    let compare = Compare::from_opt(compare.as_deref());
     tauri::async_runtime::spawn_blocking(move || {
-        deck_completion_for(&crate::sync::lock_db_read(&state), marketplace)
+        deck_completion_for(&crate::sync::lock_db_read(&state), marketplace, compare)
     })
     .await
     .map_err(|e| format!("the deck completion could not be read: {e}"))?
@@ -459,13 +571,14 @@ mod tests {
         }
     }
 
-    /// **The fence (spec §3.1).** For every deck, this read's `missing` and `missing_cost` are what
-    /// `get_deck` plus the editor's arithmetic answer — over a live deck, a theory deck, a foil
-    /// and a NULL-finish row of one printing, a foil-only printing on a NULL row, an inactive
-    /// pile, a sideboard sharing the main pile's pool, a copy in `Recently removed`, copies in
-    /// another deck's group, a locked folder, an unpriced printing, an empty deck and a virtual
-    /// one. The numbers are pinned as well as compared, because a comparison alone passes over a
-    /// fixture that built something other than what it says.
+    /// **The fence (spec §3.1), in [`Compare::Collection`].** For every deck, this read's
+    /// `missing` and `missing_cost` are what `get_deck` of the **live** list plus the editor's
+    /// arithmetic answer — over a live deck, a theory deck (measured on its live list since issue
+    /// #600, its plan ignored), a foil and a NULL-finish row of one printing, a foil-only printing
+    /// on a NULL row, an inactive pile, a sideboard sharing the main pile's pool, a copy in
+    /// `Recently removed`, copies in another deck's group, a locked folder, an unpriced printing,
+    /// an empty deck and a virtual one. The numbers are pinned as well as compared, because a
+    /// comparison alone passes over a fixture that built something other than what it says.
     #[test]
     fn every_deck_answers_what_its_editor_draws() {
         let conn = seeded();
@@ -491,7 +604,7 @@ mod tests {
         put(&conn, a, a_cuts, LIVE, "bird", None, 4);
         put(&conn, a, a_cuts, LIVE, "bolt", None, 1);
 
-        // B — the plan is measured; its one live row is not.
+        // B — a deck with a plan, measured on its one live row: the plan is Theory's question.
         let b_main = pile(&conn, b, THEORY, "Main deck");
         let b_live = pile(&conn, b, LIVE, "Main deck");
         put(&conn, b, b_main, THEORY, "bolt", None, 4);
@@ -500,7 +613,7 @@ mod tests {
         put(&conn, b, b_main, THEORY, "bolt", Some("foil"), 1);
         put(&conn, b, b_live, LIVE, "bird", None, 1);
 
-        // C — complete, and its group holds copies B may not count.
+        // C — complete, and its group holds copies no other deck may count.
         let c_main = pile(&conn, c, LIVE, "Main deck");
         put(&conn, c, c_main, LIVE, "ring", None, 2);
 
@@ -532,7 +645,7 @@ mod tests {
         crate::collection_folders::set_folder_locked(&conn, vault, true).unwrap();
         copies(&conn, "angel", "nonfoil", 1, None);
 
-        let rows = deck_completion_for(&conn, Marketplace::Tcgplayer).unwrap();
+        let rows = deck_completion_for(&conn, Marketplace::Tcgplayer, Compare::Collection).unwrap();
         assert_eq!(
             rows.iter().map(|r| r.deck_id).collect::<Vec<_>>(),
             [a, b, c, e],
@@ -556,8 +669,10 @@ mod tests {
         );
         assert_money(got.missing_cost, Some(17.0), "A: 2×2.00 + 1×10.00 + 1×3.00");
 
-        // B: its own group, Recently removed and the binder give 3 Bolts; the root gives the
-        // Angel; A's and C's groups and the locked vault give nothing.
+        // B: its live list is one Birds of Paradise, and its own group holds a Bolt and no Bird —
+        // A's group has one, which is not B's box. Its seven planned copies are not counted, and
+        // neither is the wider pool the plan was measured against before issue #600 (its group,
+        // Recently removed, the binder and the root owned four of them).
         let got = row(b);
         assert_eq!(
             (
@@ -567,9 +682,9 @@ mod tests {
                 got.missing,
                 got.unpriced_missing
             ),
-            ("theory", 7, 4, 3, 0)
+            ("live", 1, 0, 1, 0)
         );
-        assert_money(got.missing_cost, Some(15.0), "B: 1×2.00 + 1×3.00 + 1×10.00");
+        assert_money(got.missing_cost, Some(0.5), "B: 1×0.50");
 
         // C: complete, and priced, so the money is a zero rather than nothing.
         let got = row(c);
@@ -599,11 +714,13 @@ mod tests {
         );
         assert_eq!(got.missing_cost, None);
 
-        // And the fence itself, at a shop that quotes these cards and at one that quotes none.
+        // And the fence itself, at a shop that quotes these cards and at one that quotes none —
+        // every row against the editor's **Actual** tab, the theory deck's included.
         for market in [Marketplace::Tcgplayer, Marketplace::Cardmarket] {
-            for got in deck_completion_for(&conn, market).unwrap() {
-                let want = editor(&conn, got.deck_id, &got.list, market);
+            for got in deck_completion_for(&conn, market, Compare::Collection).unwrap() {
                 let what = format!("deck {} at {market:?}", got.deck_id);
+                assert_eq!(got.list, LIVE, "{what}");
+                let want = editor(&conn, got.deck_id, LIVE, market);
                 assert_eq!(
                     (got.wanted, got.owned, got.missing, got.unpriced_missing),
                     (want.wanted, want.owned, want.missing, want.unpriced_missing),
@@ -628,7 +745,7 @@ mod tests {
         put(&conn, d, side, LIVE, "shiny", Some("foil"), 1);
         copies(&conn, "shiny", "foil", 1, Some(group(&conn, d)));
 
-        let got = deck_completion_for(&conn, Marketplace::Tcgplayer).unwrap();
+        let got = deck_completion_for(&conn, Marketplace::Tcgplayer, Compare::Collection).unwrap();
         let got = got.iter().find(|r| r.deck_id == d).unwrap();
         assert_eq!((got.wanted, got.owned, got.missing), (2, 1, 1));
         assert_money(got.missing_cost, Some(7.0), "one foil Shiny Relic to buy");
@@ -638,6 +755,159 @@ mod tests {
             (want.wanted, want.owned, want.missing),
             "and the editor agrees"
         );
+    }
+
+    /// **The fence in [`Compare::Theory`]: every plan against its own actual list, and
+    /// [`crate::deck_theory::theory_diff`] is the other side of it.** For every row, `missing` is
+    /// the Compare dialog's card lines summed, `unpriced_missing` its unpriced ones, and
+    /// `missing_cost` its priced ones at their own price — `None` only where the diff has no
+    /// priced line either. Over a planned Bolt the live list plays in full and then some, a foil
+    /// Bolt it plays only in the *regular* finish, a foil-only printing planned unsaid and played
+    /// as `foil`, a Sol Ring sleeved only in a switched-off pile, a Serra Angel (unpriced) half
+    /// played from the sideboard, a switched-off plan pile, a Treasure planned as a token, a
+    /// virtual deck with a plan, a plan with nothing priced on it, and a deck with no plan
+    /// switched on. Pinned as well as compared, for the Collection fence's reason.
+    ///
+    /// The collection is filled to show it is not asked: T's own group holds every foil Bolt the
+    /// plan wants, and they own nothing here.
+    #[test]
+    fn every_plan_answers_what_its_compare_dialog_lists() {
+        let conn = seeded();
+        conn.execute_batch(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,type_line,power,toughness,prices,finishes,raw)
+               VALUES ('treasure','o-treasure','Treasure','tmom','12','en','token','common',
+                       'Token Artifact — Treasure',NULL,NULL,'{"usd":"0.25"}','["nonfoil"]',
+                       '{}');"#,
+        )
+        .unwrap();
+        let t = make_deck(&conn, "Plan", true, false);
+        let w = make_deck(&conn, "Proxy plan", true, true);
+        let n = make_deck(&conn, "No plan", false, false);
+        let u = make_deck(&conn, "Unpriced plan", true, false);
+
+        // T — the plan, and an actual list that plays part of it.
+        let t_plan = pile(&conn, t, THEORY, "Main deck");
+        let t_plan_cuts = pile(&conn, t, THEORY, "Cuts");
+        crate::deck_meta::set_category_active(&conn, t_plan_cuts, false).unwrap();
+        put(&conn, t, t_plan, THEORY, "bolt", None, 4);
+        put(&conn, t, t_plan, THEORY, "bolt", Some("foil"), 2);
+        put(&conn, t, t_plan, THEORY, "ring", None, 1);
+        put(&conn, t, t_plan, THEORY, "angel", None, 2);
+        put(&conn, t, t_plan, THEORY, "shiny", None, 1);
+        // A token printing handed to `add_card` is filed as a token entry, never a deck card —
+        // so it is a line of the diff (`is_token`) and wants nothing here.
+        put(&conn, t, t_plan, THEORY, "treasure", None, 3);
+        // Switched off: the plan does not ask for these.
+        put(&conn, t, t_plan_cuts, THEORY, "bird", None, 3);
+        let t_live = pile(&conn, t, LIVE, "Main deck");
+        let t_side = seeded_pile(&conn, t, "side");
+        let t_live_cuts = pile(&conn, t, LIVE, "Cuts");
+        crate::deck_meta::set_category_active(&conn, t_live_cuts, false).unwrap();
+        // Five regular Bolts: four answer the plan's four, and the fifth is not a foil one.
+        put(&conn, t, t_live, LIVE, "bolt", None, 5);
+        // The foil the plan's unsaid Shiny Relic can only be.
+        put(&conn, t, t_live, LIVE, "shiny", Some("foil"), 1);
+        put(&conn, t, t_side, LIVE, "angel", None, 1);
+        // Not played: a switched-off pile sleeves nothing.
+        put(&conn, t, t_live_cuts, LIVE, "ring", None, 1);
+        // Played and not planned — a cut the plan made, and no line.
+        put(&conn, t, t_live, LIVE, "bird", None, 2);
+        copies(&conn, "bolt", "foil", 2, Some(group(&conn, t)));
+
+        // W — virtual (`1/1`, which `create_deck` does not cross-check), and still answers.
+        let w_plan = pile(&conn, w, THEORY, "Main deck");
+        let w_live = pile(&conn, w, LIVE, "Main deck");
+        put(&conn, w, w_plan, THEORY, "ring", None, 2);
+        put(&conn, w, w_plan, THEORY, "angel", None, 1);
+        put(&conn, w, w_live, LIVE, "ring", None, 1);
+
+        // N — no plan switched on, so no row, whatever theory rows it keeps.
+        let n_plan = pile(&conn, n, THEORY, "Main deck");
+        let n_live = pile(&conn, n, LIVE, "Main deck");
+        put(&conn, n, n_plan, THEORY, "bolt", None, 1);
+        put(&conn, n, n_live, LIVE, "ring", None, 1);
+
+        // U — a plan with nothing priced on it, and nothing sleeved.
+        let u_plan = pile(&conn, u, THEORY, "Main deck");
+        put(&conn, u, u_plan, THEORY, "angel", None, 1);
+
+        let rows = deck_completion_for(&conn, Marketplace::Tcgplayer, Compare::Theory).unwrap();
+        assert_eq!(
+            rows.iter().map(|r| r.deck_id).collect::<Vec<_>>(),
+            [t, w, u],
+            "every deck with a plan, the virtual one included, by id"
+        );
+        let row = |id: i64| rows.iter().find(|r| r.deck_id == id).unwrap();
+        let numbers = |got: &DeckCompletion| {
+            (
+                got.list.clone(),
+                got.wanted,
+                got.owned,
+                got.missing,
+                got.unpriced_missing,
+            )
+        };
+
+        // T: wanted 4+2+1+2+1 over the active plan pile. Owned: 4 regular Bolts, 0 foil Bolts,
+        // 0 Sol Rings, 1 Angel, 1 Shiny Relic. Missing 2 foil Bolts, 1 Sol Ring and 1 Angel —
+        // the Angel unpriced. The Treasure and the switched-off Birds want nothing.
+        assert_eq!(numbers(row(t)), (THEORY.to_owned(), 10, 6, 4, 1));
+        assert_money(row(t).missing_cost, Some(23.0), "T: 2×10.00 + 1×3.00");
+
+        // W: two Sol Rings and an Angel planned, one Sol Ring sleeved.
+        assert_eq!(numbers(row(w)), (THEORY.to_owned(), 3, 1, 2, 1));
+        assert_money(row(w).missing_cost, Some(3.0), "W: 1×3.00");
+
+        // U: nothing on the plan is priced, so the money is nothing rather than a zero.
+        assert_eq!(numbers(row(u)), (THEORY.to_owned(), 1, 0, 1, 1));
+        assert_eq!(row(u).missing_cost, None);
+
+        // The fence is about something: T's diff carries a token line, and it counts for nothing.
+        let diff = crate::deck_theory::theory_diff(&conn, t, Marketplace::Tcgplayer).unwrap();
+        assert!(
+            diff.iter()
+                .any(|r| r.is_token && r.card_id == "treasure" && r.quantity == 3),
+            "the planned Treasures are a token line: {diff:?}"
+        );
+
+        for market in [Marketplace::Tcgplayer, Marketplace::Cardmarket] {
+            for got in deck_completion_for(&conn, market, Compare::Theory).unwrap() {
+                let what = format!("deck {} at {market:?}", got.deck_id);
+                assert_eq!(got.list, THEORY, "{what}");
+                assert_eq!(got.owned + got.missing, got.wanted, "{what}");
+                let diff = crate::deck_theory::theory_diff(&conn, got.deck_id, market).unwrap();
+                let cards = diff.iter().filter(|r| !r.is_token);
+                let missing: i64 = cards.clone().map(|r| r.quantity).sum();
+                let unpriced: i64 = cards
+                    .clone()
+                    .filter(|r| r.unit_price.is_none())
+                    .map(|r| r.quantity)
+                    .sum();
+                let priced: Vec<f64> = cards
+                    .filter_map(|r| r.unit_price.map(|p| p * r.quantity as f64))
+                    .collect();
+                assert_eq!(
+                    (got.missing, got.unpriced_missing),
+                    (missing, unpriced),
+                    "{what}: {diff:?}"
+                );
+                match got.missing_cost {
+                    Some(cost) => assert_money(Some(cost), Some(priced.iter().sum()), &what),
+                    None => assert!(priced.is_empty(), "{what}: nothing priced, {diff:?}"),
+                }
+            }
+        }
+    }
+
+    /// The widget's word, forgiving: only `theory` is Theory, and anything else — nothing at all,
+    /// the default's own name, a word from a newer build — compares against the collection.
+    #[test]
+    fn compare_reads_theory_and_nothing_else_as_theory() {
+        assert_eq!(Compare::from_opt(None), Compare::Collection);
+        assert_eq!(Compare::from_opt(Some("collection")), Compare::Collection);
+        assert_eq!(Compare::from_opt(Some("theory")), Compare::Theory);
+        assert_eq!(Compare::from_opt(Some("bogus")), Compare::Collection);
     }
 
     /// The wire names the page reads — `ipc.test.ts`' struct table cannot see whether serde

@@ -7021,23 +7021,37 @@ export interface NewPrintings {
 }
 
 /**
- * How much of one deck the reader owns — `deck_completion.rs`'s `DeckCompletion`, one row per deck
- * that is not virtual (archived ones included; which decks to draw is the widget's decision).
+ * Which comparison the Deck completion widget asks for — `deck_completion.rs`'s `Compare`, sent as
+ * the word. **Anything Rust does not recognise reads as `collection`**, `Marketplace`'s forgiving
+ * shape, so a word a newer build wrote measures the default rather than refusing.
+ *
+ * * `collection` — every deck that is not virtual, its **actual** (live) list against the copies
+ *   the collection files in that deck's own group: the editor's `Actual` tab, owned for owned.
+ * * `theory` — every deck that keeps a plan, virtual ones included, its **actual** list against
+ *   its **theory** list: how much of the plan is already sleeved, in the exact printing and finish.
+ *   `theory_diff`'s arithmetic, so the missing copies are the Compare dialog's own lines.
+ */
+export type DeckCompletionCompare = "collection" | "theory";
+
+/**
+ * How far one deck is along — `deck_completion.rs`'s `DeckCompletion`, one row per deck the
+ * {@link DeckCompletionCompare} asked about (archived ones included; which decks to draw is the
+ * widget's decision).
  *
  * **Counted exactly as the deck editor counts**, which is the whole point of the read: a widget
- * saying "4 missing" about a deck that opens saying "6 missing" is a bug report. So a deck with no
- * plan measures its live list against its own group, a deck with `theoryEnabled` measures its plan
- * against every copy it could use, every active pile counts — sideboard and companion included,
- * unlike {@link DeckValue}'s narrower pile — and ownership is exact printing and finish.
+ * saying "4 missing" about a deck that opens saying "6 missing" is a bug report. Every active pile
+ * counts — sideboard and companion included, unlike {@link DeckValue}'s narrower pile — and a copy
+ * matches on exact printing and finish.
  */
 export interface DeckCompletion {
   deckId: number;
-  /** Which list was measured — `live` against the deck's own group, or `theory` for a deck that
-   *  keeps a plan. The editor's `Actual`/`Theory` tab the numbers agree with. */
+  /** Which list the figure is a fraction *of* — `live` under `collection`, measured against the
+   *  deck's own group, and `theory` under `theory`, measured against the actual list. */
   list: "live" | "theory";
   /** Copies the measured list asks for, over every active pile. */
   wanted: number;
-  /** Of those, copies the pool covers. Never more than `wanted`. */
+  /** Of those, copies the pool covers — the group's copies, or the actual list's. Never more than
+   *  `wanted`. */
   owned: number;
   /** `wanted − owned`. Never negative. */
   missing: number;
@@ -8845,6 +8859,21 @@ export const ipc = {
    */
   deckTheorySlots: (deckId: number) => invoke<TheorySlot[]>("deck_theory_slots", { deckId }),
   /**
+   * The printings of one deck, in either list, that answer every typed term of the editor's
+   * `Filter this deck` box — `t:goblin`, `cmc>=3`, `-kw:flying`, a resolved `otag:` slug
+   * (issue #621). Sorted, deduplicated card ids; a deck that is not there answers `[]`.
+   *
+   * **The terms and nothing else**: the box's free text is matched in the webview as it always
+   * was, so there is deliberately no `text` here and Rust would ignore one. The filters are the
+   * search's own (`filters::push_card_filters`, `filters::fts_match`), which is the whole reason
+   * this is a round trip rather than a test over `DeckCard` — a deck row carries no keywords, no
+   * artist and no tags, and a second implementation of the thirteen fields would drift.
+   */
+  deckQueryCards: (
+    deckId: number,
+    filters: Pick<CardFilters, "predicates" | "oracleTags" | "artTags">,
+  ) => invoke<string[]>("deck_query_cards", { deckId, filters }),
+  /**
    * Everything the **plan** is short of, onto the wishlist. Answers how many wishes were
    * touched, like its live twin.
    *
@@ -9649,6 +9678,23 @@ export const ipc = {
   setShelfFolds: (page: ShelfFoldPage, changes: Record<string, boolean | null>) =>
     invoke<void>("set_shelf_folds", { page, changes }),
   /**
+   * The category ids of the stacks the reader hid in one deck's Stacks view, ascending (issue
+   * #618). {@link shelfFolds}' contract keyed by deck: **infallible by signature** — an
+   * unreadable row answers `[]`, which is every stack drawn. `app_meta` is not synced, so a stack
+   * hidden here is this device's alone, which was the reader's call.
+   *
+   * **A stale id is answered, not pruned**: a pile deleted since stays in the list until it is
+   * shown again, and the editor ignores an id no pile of the deck carries.
+   */
+  hiddenStacks: (deckId: number) => invoke<number[]>("hidden_stacks", { deckId }),
+  /**
+   * Hide or show one stack, leaving every other stack and deck alone. Refuses an id that is not
+   * positive; answers `collection::BUSY` under a running sync, which the caller swallows —
+   * {@link setShelfFolds}' trade: the stack stays as the reader left it for this session.
+   */
+  setStackHidden: (deckId: number, categoryId: number, hidden: boolean) =>
+    invoke<void>("set_stack_hidden", { deckId, categoryId, hidden }),
+  /**
    * How the decks page's folder tree was last left — how wide the reader dragged it, and whether
    * it is folded to its rail.
    *
@@ -9893,11 +9939,11 @@ export const ipc = {
   /** Move the *seen* cursor to `at`, in Unix seconds. **The clock is the caller's.** */
   markNewPrintingsSeen: (at: number) => invoke<void>("mark_new_printings_seen", { at }),
   /**
-   * How much of every deck the reader owns, priced at `marketplace` — see {@link DeckCompletion}.
-   * `deck_values`' shape: one argument, and the marketplace belongs in the caller's query key.
+   * How far every deck is along under `compare`, priced at `marketplace` — see
+   * {@link DeckCompletion} and {@link DeckCompletionCompare}. Both belong in the caller's query key.
    */
-  deckCompletion: (marketplace: MarketplaceId) =>
-    invoke<DeckCompletion[]>("deck_completion", { marketplace }),
+  deckCompletion: (marketplace: MarketplaceId, compare: DeckCompletionCompare) =>
+    invoke<DeckCompletion[]>("deck_completion", { marketplace, compare }),
   /**
    * How many `deck_cards` rows carry a `needs_review` sentence — rows, not copies, and only that
    * one table. Its own read rather than `sync_relay_status`' `reviewCount`, which sums six tables,

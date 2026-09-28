@@ -25,6 +25,7 @@ import {
   collectionBreakdownKey,
   collectionTotalKey,
   deckCompletionKey,
+  deckCompletionRoot,
   deckListKey,
   deckReviewCountKey,
   deckValuesKey,
@@ -196,13 +197,22 @@ describe("shape", () => {
   // window because the window is the question — and the two review counts under the table each
   // counts, which is also the root Needs review's clear now fires.
   it("files round two's reads under the roots their writes already invalidate", () => {
-    expect(deckCompletionKey("cardkingdom")).toEqual(["decks", "completion", "cardkingdom"]);
+    expect(deckCompletionKey("cardkingdom", "theory")).toEqual([
+      "decks",
+      "completion",
+      "cardkingdom",
+      "theory",
+    ]);
+    // The bridge's one invalidation reaches every marketplace and both comparisons.
+    expect(deckCompletionKey("tcgplayer", "collection").slice(0, 2)).toEqual([
+      ...deckCompletionRoot,
+    ]);
     expect(upcomingSetsKey(90)).toEqual(["decks", "upcoming", 90]);
     expect(deckReviewCountKey).toEqual(["decks", "reviewCount"]);
     expect(wishlistReviewCountKey).toEqual(["wishlist", "reviewCount"]);
     expect(scannerTrayCountKey).toEqual(["scanner", "trayCount"]);
     // Not the gallery's value key: that one is the narrower main + commander + maybe pile.
-    expect(deckCompletionKey("tcgplayer")).not.toEqual(deckValuesKey("tcgplayer"));
+    expect(deckCompletionKey("tcgplayer", "collection")).not.toEqual(deckValuesKey("tcgplayer"));
   });
 
   // **The savings widget and the Wishlist page's hand-off dialog plan one question, so they are

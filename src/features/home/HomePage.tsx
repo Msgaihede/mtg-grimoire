@@ -123,7 +123,10 @@ import type { WidgetKind } from "./widgets";
 import { ActivityWidget } from "./widgets/ActivityWidget";
 import { CollectionValueWidget } from "./widgets/CollectionValueWidget";
 import { ComingSoonWidget } from "./widgets/ComingSoonWidget";
-import { DeckCompletionWidget } from "./widgets/DeckCompletionWidget";
+import {
+  DeckCompletionWidget,
+  DeckCompletionWidgetSettings,
+} from "./widgets/DeckCompletionWidget";
 import { DecksWidget, DecksWidgetSettings } from "./widgets/DecksWidget";
 import { FoldersWidget, FoldersWidgetSettings } from "./widgets/FoldersWidget";
 import { NewPrintingsWidget, NewPrintingsWidgetSettings } from "./widgets/NewPrintingsWidget";
@@ -270,11 +273,10 @@ function renderExtraSettings(widget: HomeWidget, onConfig: ConfigPatch): ReactNo
       return <FoldersWidgetSettings widget={widget} onConfig={onConfig} />;
     case "newPrintings":
       return <NewPrintingsWidgetSettings widget={widget} onConfig={onConfig} />;
-    // **The Decks widget's pin checklist, reused rather than copied** (spec §2.1): Deck completion
-    // reads its scope and its pins through `DecksWidget`'s own `deckScope` and `pinnedDeckIds`, so
-    // the checklist writes exactly what that body reads, and a fix to one is a fix to both.
+    // Its own checklist since issue #600, no longer the Decks widget's: it offers only the decks
+    // the card's comparison can measure, which a checklist of every deck cannot.
     case "deckCompletion":
-      return <DecksWidgetSettings widget={widget} onConfig={onConfig} />;
+      return <DeckCompletionWidgetSettings widget={widget} onConfig={onConfig} />;
     case "wishlistSavings":
       return <WishlistSavingsWidgetSettings widget={widget} onConfig={onConfig} />;
     default:

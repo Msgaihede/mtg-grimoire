@@ -130,7 +130,8 @@ export function CardArt({
   hoverZoom?: boolean;
   /**
    * The finish this object *is*, drawn as a holo sheen and a corner chip. `null` — the
-   * default — draws neither.
+   * default — draws neither, and so does `nonfoil`: {@link FoilOverlay} maps the regular copy's
+   * word away itself, so a row's stored finish can be handed through as it is.
    *
    * "Is", not "could be": a printing sold in both finishes passes `null`, because the mark
    * describes the cardboard and not a choice at the checkout. `soleFinish` in `@/lib/finish`
@@ -340,11 +341,20 @@ export function FoilOverlay({
   mark?: boolean;
 }) {
   const tip = useTooltip();
+  // **`nonfoil` is the regular copy and draws exactly what `null` draws** — no sheen, and no chip
+  // on its account. The word arrives here from every column that stores a finish rather than a
+  // preference (`collection_entries.finish`, `deck_cards.finish`, and a managed wish's
+  // `preferred_finish`, which the token and deck reconciles always fill), and a caller that
+  // handed it through raw put a holo sheen over plain cardboard: issue #566 on the deck editor's
+  // Collection tab, then issue #616 on every tile of the managed wishlist's Tokens folder. Mapped
+  // here, once, so the next caller cannot reopen it. `FinishMark` and `CardChin` already read the
+  // word this way; a treatment still draws its chip on a nonfoil copy through `named`.
+  const drawn = finish === "nonfoil" ? null : finish;
   // Two marks, one chip, and either of them is reason enough to draw it — but only if the
   // caller wanted a chip at all.
   const named = treatments !== undefined && treatments.length > 0;
-  const chip = mark && (finish !== null || gameChanger || named);
-  if (!finish && !chip) return null;
+  const chip = mark && (drawn !== null || gameChanger || named);
+  if (!drawn && !chip) return null;
   // What the chip's own padding says on hover, covering the gap between the two glyphs as
   // well as each glyph's own tooltip (bound separately, in `FinishMark`/`GameChangerMark`
   // themselves, since those components are also drawn standalone — a data line, a table row —
@@ -357,7 +367,7 @@ export function FoilOverlay({
   // "Foil" over the same chip.
   const chipTitle = [
     gameChanger ? GAME_CHANGER_LABEL : null,
-    named ? treatmentTitle(treatments) : finish ? FINISH_LABEL[finish] : null,
+    named ? treatmentTitle(treatments) : drawn ? FINISH_LABEL[drawn] : null,
   ]
     .filter((word) => word !== null)
     .join(" · ");
@@ -381,7 +391,7 @@ export function FoilOverlay({
     // `pointer-events-none` for the second half of the same idea: a full-bleed overlay inside
     // a button would swallow every click on it.
     <span aria-hidden="true" className="pointer-events-none">
-      {finish && (
+      {drawn && (
         <span
           data-foil-sheen
           // No opacity class: in `screen` the gradient's own alphas are the strength, and a
@@ -444,7 +454,7 @@ export function FoilOverlay({
           )}
         >
           {gameChanger && <GameChangerMark />}
-          {(finish || named) && <FinishMark finish={finish ?? "nonfoil"} treatments={treatments} />}
+          {(drawn || named) && <FinishMark finish={drawn ?? "nonfoil"} treatments={treatments} />}
         </span>
       )}
     </span>

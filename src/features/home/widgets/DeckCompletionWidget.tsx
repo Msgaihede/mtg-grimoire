@@ -1,20 +1,27 @@
 /**
- * How much of each deck the reader already owns, and what the rest would cost — a row per deck,
- * with a track under the name and the missing cards' price at the right.
+ * How far each deck is along, and what the rest would cost — a row per deck, with a track under the
+ * name and the missing cards' price at the right.
  *
- * **A body, not a card.** `WidgetCard` draws the title, the `Order` chip, the settings popover and
- * the Customize tray; this draws the rows and the footer, cut to the box `fit` describes. The
- * `Pinned` checklist at the foot of the popover is `DecksWidgetSettings`, **reused rather than
- * copied** — `HomePage.tsx`'s `renderExtraSettings` hands it to this kind — which is why the scope
- * and the pins are read through `DecksWidget`'s own `deckScope` and `pinnedDeckIds`: the checklist
- * writes exactly what those two read.
+ * **A body, not a card.** `WidgetCard` draws the title, the `Compare against` chip, the settings
+ * popover and the Customize tray; this draws the rows and the footer, cut to the box `fit`
+ * describes. The `Chosen…` checklist at the foot of the popover is
+ * {@link DeckCompletionWidgetSettings}, which `HomePage.tsx`'s `renderExtraSettings` hands to this
+ * kind — and it writes exactly what {@link completionScope} and `pinnedDeckIds` read.
  *
- * ## Owned is the deck editor's word, and Rust's
+ * ## Two comparisons, one arithmetic (issue #600)
  *
- * `deck_completion` answers one row per non-virtual deck with the editor's own arithmetic — a live
- * deck against its own group, a theory deck's plan against every copy it can use, every active
- * pile, exact printing and exact finish (spec §3.1, fenced in Rust against `get_deck`). **Nothing
- * here re-derives a count.** A card saying "4 missing" about a deck that opens saying "6 missing"
+ * `Compare against` is the question, and each answer is Rust's (`deck_completion.rs`):
+ *
+ * * **Collection** — every deck that is not virtual, its **actual** list against the copies filed
+ *   in its own group: the deck editor's `Actual` tab, owned for owned (spec §3.1, fenced in Rust
+ *   against `get_deck`). A virtual deck holds nothing by definition, so it is neither answered nor
+ *   offered.
+ * * **Theory** — every `Theory + Actual` deck, its **actual** list against its **theory** list:
+ *   how much of the plan is already sleeved, exact printing and finish, and what the Compare
+ *   dialog's shopping list would cost. A virtual deck keeps a plan like any other and is answered;
+ *   a deck with no plan has nothing to compare and is not.
+ *
+ * Either way every active pile counts and **nothing here re-derives a count.** A card saying "4 missing" about a deck that opens saying "6 missing"
  * is a bug report, so this file draws the numbers it is handed and decides only which decks, in
  * what order, and how many fit.
  *
@@ -26,12 +33,12 @@
  * **A figure measured on the plan says `Plan` wherever the row is drawn** — {@link countCaption},
  * the tile's shortfall and the press's name all lead with it, and a compact panel, which draws no
  * count at all, keeps the word alone as the row's caption: its price and its track are still the
- * plan's. The list is counted at one height — the tallest row it may draw, since `rowsFit` takes
+ * plan's. Under `Theory` that is every row, and the chip says so too; the word stays on each row
+ * because a row read aloud, or a card whose chip is cut, has nothing else to say it. The list is counted at one height — the tallest row it may draw, since `rowsFit` takes
  * one — so once any listed row is a plan's, a compact panel counts every row at the captioned
- * height, and a live row beside it draws bare in room counted for more. A theory deck's
- * `81 of 100` is its plan against every copy it could use, not its sleeved list, and a reader who
- * opens a deck holding sixty cards beside a card saying "of 100" would read the two as
- * disagreeing. The hint says it in full; the word is what survives without a pointer. The press is
+ * height, and a live row beside it draws bare in room counted for more. A theory row's
+ * `81 of 100` is its plan's hundred against the sleeved list, and a reader who opens a deck holding
+ * sixty cards beside a card saying "of 100" would otherwise read the two as disagreeing. The hint says it in full; the word is what survives without a pointer. The press is
  * unchanged: it opens the deck exactly as every other row's does, and which list the editor then
  * shows is the editor's own decision.
  *
@@ -43,12 +50,14 @@
  * It is neither complete nor in progress; there is nothing to measure. {@link completionRows}
  * leaves it out, **once, before anything orders, counts or decides the card is empty**, so none of
  * those three can come to disagree about it. A scope holding only such decks draws
- * {@link NO_DECKS} under `Most recent` and {@link PINS_UNMEASURABLE} under `Pinned`.
+ * {@link emptyAll} under `All decks` and {@link CHOSEN_UNMEASURABLE} under `Chosen…`.
  *
  * ## Which decks is a filter; order is a display decision
  *
- * `Most recent` is `deck_list`'s own order with archived and virtual decks taken out — a filter,
- * never a sort, `DecksWidget`'s rule. `Pinned` is the reader's `deckIds`. {@link sortCompletions}
+ * `All decks` is `deck_list`'s own order with archived decks and every deck the comparison cannot
+ * measure taken out — a filter, never a sort, `DecksWidget`'s rule. `Chosen…` is the reader's
+ * `deckIds`, less the decks {@link measurableBy} refuses: a choice made under one comparison is
+ * **kept** under the other, and simply not drawn where it cannot be measured. {@link sortCompletions}
  * then orders what is left, because the registry's three orders are three readings of one answer
  * (`SetCompletionWidget.sortSets`' argument) and a command per order would be three places one
  * count is written. Every tie is settled by name through `sortOptions`.
@@ -79,7 +88,7 @@
  *
  * `missingCost` is priced at the marketplace in the key, so a switch re-issues the read and the
  * card says it is measuring rather than drawing the last marketplace's figure beside the new
- * one's symbol.
+ * one's symbol. The comparison is in the key for the same reason.
  *
  * **No `@container` here or on the page that draws this**, and no z-index that is not from
  * `LAYER` — `fit.ts`'s module doc has the argument.
@@ -87,24 +96,40 @@
 import { useEffect, type ReactElement } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { MultiDropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import { count, plural } from "@/lib/counts";
-import { ipc, ipcError, type DeckCompletion, type DeckRow } from "@/lib/ipc";
-import { DEFAULT_MARKETPLACE, type Currency, type Marketplace } from "@/lib/marketplace";
+import {
+  ipc,
+  ipcError,
+  type DeckCompletion,
+  type DeckCompletionCompare,
+  type DeckRow,
+  type HomeWidget,
+} from "@/lib/ipc";
+import type { Currency, Marketplace } from "@/lib/marketplace";
 import { sortOptions } from "@/lib/options";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 
 import { footerLinePx } from "../fit";
-import { deckCompletionKey, deckListKey } from "../keys";
+import { deckCompletionKey, deckCompletionRoot, deckListKey } from "../keys";
+import { widgetConfig } from "../layout";
 import { WidgetFooterLine, WidgetMessage, WidgetRow, WidgetRowList } from "../WidgetParts";
-import type { WidgetBodyProps } from "../widgetProps";
+import type { WidgetBodyProps, WidgetSettingsProps } from "../widgetProps";
 import { pickOf, toggleOnOf } from "../widgetSettings";
 import { widgetMeta } from "../widgets";
-import { deckScope, decksToShow, pinnedDeckIds } from "./DecksWidget";
+import { pinnedDeckIds } from "./DecksWidget";
 
 /** The three orders the registry's `order` pick offers. */
 export type CompletionOrder = "done" | "cheapest" | "name";
+
+/** The registry's `scope` pick: every measurable deck, or the reader's checklist. */
+export type CompletionScope = "all" | "chosen";
+
+/** Stable identity for "the deck list has not answered", so nothing downstream re-runs on it. */
+const NO_DECK_ROWS: readonly DeckRow[] = [];
 
 /** One deck's answer with the name it is drawn under. `deck_completion` carries ids only; the name
  *  is `deck_list`'s, joined here, so a rename lands with the gallery's own refetch. */
@@ -138,21 +163,64 @@ function completeWord(): string {
   );
 }
 
+/** A pick's row label and one option's label, read off the registry — `NewPrintingsWidget`'s
+ *  `pickWords`, so the checklist's hint names the control this card really has. */
+function pickWords(key: string, optionId: string): { row: string; option: string } {
+  const pick = widgetMeta("deckCompletion").picks.find((entry) => entry.key === key);
+  return {
+    row: pick?.label ?? key,
+    option: pick?.options.find((option) => option.id === optionId)?.label ?? optionId,
+  };
+}
+
 const PENDING = "Measuring your decks…";
-/** `Most recent` with nothing to measure. Names every kind of deck that scope leaves out, so a
- *  reader holding one of each is told why none of them is here — an empty deck included, which is
- *  the one they are least likely to guess. **Never drawn under `Pinned`**, where an archived pin is
- *  kept and the reader has decks by definition: that is {@link PINS_UNMEASURABLE}. */
+/** `All decks` under `Collection` with nothing to measure. **Never drawn under `Chosen…`**, where
+ *  an archived choice is kept and the reader has decks by definition: that is
+ *  {@link CHOSEN_UNMEASURABLE}. */
 export const NO_DECKS =
   "No decks to measure. Build a deck on the Decks page to track completion.";
-export const NOTHING_PINNED =
-  "No pinned decks. Pin decks in this widget's settings.";
-export const PINS_UNMEASURABLE =
-  "Pinned decks cannot be measured. Choose active decks in this widget's settings.";
+/** `All decks` under `Theory` with nothing to compare — which is every reader who has never set a
+ *  deck's kind to `Theory + Actual`, so it names the setting that makes one. */
+export const NO_PLANS =
+  "No theory lists to compare. Set a deck's kind to Theory + Actual to track it here.";
+export const NOTHING_CHOSEN = "No decks chosen. Choose decks in this widget's settings.";
+export const CHOSEN_UNMEASURABLE =
+  "The chosen decks cannot be measured this way. Choose other decks in this widget's settings.";
 export const ALL_COMPLETE = `All decks are complete. Enable ${completeWord()} in settings to view them.`;
+
+/** What `All decks` says when nothing is in scope, by comparison. */
+export function emptyAll(compare: DeckCompletionCompare): string {
+  return compare === "theory" ? NO_PLANS : NO_DECKS;
+}
 
 function orderOf(value: string | number | undefined): CompletionOrder {
   return value === "cheapest" || value === "name" ? value : "done";
+}
+
+/** The comparison this card asks for. Anything but `theory` is `collection`, which is also what
+ *  Rust answers for a word it does not know. */
+export function completionCompare(widget: HomeWidget): DeckCompletionCompare {
+  return pickOf(widget, "compare") === "theory" ? "theory" : "collection";
+}
+
+/**
+ * Which decks this card draws. **`pinned` is `chosen`**: the pick was `Most recent` / `Pinned`
+ * until issue #600 renamed it, and a card stored under the old word keeps its checklist rather
+ * than reading as `All decks` — `pickOf` alone would call a word no option carries the default.
+ */
+export function completionScope(widget: HomeWidget): CompletionScope {
+  const stored = widgetConfig(widget, { scope: "" }).scope;
+  return stored === "chosen" || stored === "pinned" ? "chosen" : "all";
+}
+
+/**
+ * Can this comparison measure this deck? `Collection` is every deck that holds cardboard — not a
+ * virtual one, which owns nothing by definition; `Theory` is every deck that keeps a plan. The one
+ * rule the body's rows and the checklist's options both read, so a deck the picker offers is a deck
+ * the card can draw.
+ */
+export function measurableBy(deck: DeckRow, compare: DeckCompletionCompare): boolean {
+  return compare === "theory" ? deck.theoryEnabled : !deck.virtualOnly;
 }
 
 /** How much of the deck is held, `0..=1`. The guard is against a division by zero only: a deck
@@ -162,26 +230,52 @@ function share(row: DeckCompletion): number {
 }
 
 /**
- * The decks in scope, each with its answer — `deck_list`'s order, filtered.
+ * The decks in scope, in the order they are considered — before anything sorts or cuts them.
  *
- * `decksToShow` is `DecksWidget`'s own judgement (archived out under `recent`, the reader's order
- * and no duplicates under `pinned`), and a virtual deck is taken out here as well as by the join:
- * Rust answers no row for one, and saying so twice is what keeps a future answer from drawing a
- * pile that owns nothing by definition. **A deck with no answer is dropped in silence** — the
- * beat between a deck being created and this read refetching. **So is a deck whose measured list
- * asks for nothing**, in either scope, and this is the one place that happens — the module doc's
- * *A deck that asks for nothing is not on the card*.
+ * `all` is `deck_list`'s order less archived decks; `chosen` is the reader's order, a duplicate id
+ * once, and an id no deck answers to dropped in silence — `DecksWidget.decksToShow`'s two rules.
+ * Either way a deck {@link measurableBy} refuses is out: Rust answers no row for it, and saying so
+ * here too is what keeps a future answer from drawing a deck the comparison cannot measure.
+ */
+export function decksInScope(
+  decks: readonly DeckRow[],
+  scope: CompletionScope,
+  deckIds: readonly number[],
+  compare: DeckCompletionCompare,
+): DeckRow[] {
+  if (scope === "all") {
+    return decks.filter((deck) => !deck.archived && measurableBy(deck, compare));
+  }
+  const byId = new Map(decks.map((deck) => [deck.id, deck]));
+  const seen = new Set<number>();
+  const chosen: DeckRow[] = [];
+  for (const id of deckIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const deck = byId.get(id);
+    if (deck !== undefined && measurableBy(deck, compare)) chosen.push(deck);
+  }
+  return chosen;
+}
+
+/**
+ * The decks in scope, each with its answer — {@link decksInScope}, joined to the read.
+ *
+ * **A deck with no answer is dropped in silence** — the beat between a deck being created and this
+ * read refetching. **So is a deck whose measured list asks for nothing**, in either scope, and this
+ * is the one place that happens — the module doc's *A deck that asks for nothing is not on the
+ * card*.
  */
 export function completionRows(
   decks: readonly DeckRow[],
   completions: readonly DeckCompletion[],
-  scope: "recent" | "pinned",
+  scope: CompletionScope,
   deckIds: readonly number[],
+  compare: DeckCompletionCompare,
 ): CompletionRow[] {
   const byDeck = new Map(completions.map((answer) => [answer.deckId, answer]));
   const rows: CompletionRow[] = [];
-  for (const deck of decksToShow(decks, scope, deckIds)) {
-    if (deck.virtualOnly) continue;
+  for (const deck of decksInScope(decks, scope, deckIds, compare)) {
     const answer = byDeck.get(deck.id);
     if (answer === undefined || answer.wanted <= 0) continue;
     rows.push({ ...answer, name: deck.name });
@@ -308,9 +402,7 @@ function tileCaption(row: DeckCompletion, price: string): string {
 export function rowHint(row: DeckCompletion, marketplace: Marketplace): string | undefined {
   const parts: string[] = [];
   if (row.list === "theory") {
-    parts.push(
-      "Measured against this deck's theory list using eligible copies in your collection.",
-    );
+    parts.push("This deck's actual list, measured against its theory list.");
   }
   if (row.missing > 0 && row.missingCost === null) {
     parts.push(`Nothing on this deck's list has a price at ${marketplace.label}.`);
@@ -354,9 +446,9 @@ function useCollectionBridge(enabled: boolean): void {
 
   useEffect(() => {
     if (!enabled) return;
-    // Every marketplace's entry: the key less its last segment, derived from the one definition in
-    // `keys.ts` so this line cannot come to spell it differently.
-    const root = deckCompletionKey(DEFAULT_MARKETPLACE).slice(0, -1);
+    // Every marketplace's and both comparisons' entries, from the one definition in `keys.ts` so
+    // this line cannot come to spell it differently.
+    const root = [...deckCompletionRoot];
     let queued = false;
     return client.getQueryCache().subscribe((event) => {
       if (event.type !== "updated" || event.action.type !== "invalidate") return;
@@ -372,9 +464,8 @@ function useCollectionBridge(enabled: boolean): void {
 }
 
 export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): ReactElement {
-  // `deckScope` knows a third word, `archived`, which only the Decks widget's registry offers —
-  // `pickOf` can never answer it for this kind, so anything but `pinned` is `recent`.
-  const scope = deckScope(widget) === "pinned" ? "pinned" : "recent";
+  const compare = completionCompare(widget);
+  const scope = completionScope(widget);
   const deckIds = pinnedDeckIds(widget);
   const order = orderOf(pickOf(widget, "order"));
   const showComplete = toggleOnOf(widget, "complete");
@@ -387,8 +478,8 @@ export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): R
 
   const decksQuery = useQuery({ queryKey: deckListKey, queryFn: () => ipc.deckList() });
   const completionQuery = useQuery({
-    queryKey: deckCompletionKey(marketplace.id),
-    queryFn: () => ipc.deckCompletion(marketplace.id),
+    queryKey: deckCompletionKey(marketplace.id, compare),
+    queryFn: () => ipc.deckCompletion(marketplace.id, compare),
   });
 
   // The refusal is read before the emptiness: a failed read has no rows either, and calling it
@@ -404,15 +495,17 @@ export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): R
   if (decksQuery.data === undefined || completionQuery.data === undefined) {
     return <WidgetMessage>{PENDING}</WidgetMessage>;
   }
-  if (scope === "pinned" && deckIds.length === 0) {
-    return <WidgetMessage>{NOTHING_PINNED}</WidgetMessage>;
+  if (scope === "chosen" && deckIds.length === 0) {
+    return <WidgetMessage>{NOTHING_CHOSEN}</WidgetMessage>;
   }
 
   // Every deck that can be measured, and nothing else: a deck asking for nothing is already out,
   // so the empty state below, the footer's count and the order all see the same rows.
-  const inScope = completionRows(decksQuery.data, completionQuery.data, scope, deckIds);
+  const inScope = completionRows(decksQuery.data, completionQuery.data, scope, deckIds, compare);
   if (inScope.length === 0) {
-    return <WidgetMessage>{scope === "pinned" ? PINS_UNMEASURABLE : NO_DECKS}</WidgetMessage>;
+    return (
+      <WidgetMessage>{scope === "chosen" ? CHOSEN_UNMEASURABLE : emptyAll(compare)}</WidgetMessage>
+    );
   }
   const listed = showComplete ? inScope : inScope.filter((row) => row.missing > 0);
   if (listed.length === 0) return <WidgetMessage>{ALL_COMPLETE}</WidgetMessage>;
@@ -496,5 +589,84 @@ export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): R
       </WidgetRowList>
       {footerShown && <WidgetFooterLine line={footer.line} said={footer.text} />}
     </>
+  );
+}
+
+/**
+ * This kind's own settings, under the rows the registry declares: the deck checklist behind
+ * `Which decks → Chosen…`.
+ *
+ * **It offers only the decks the current comparison can measure** ({@link measurableBy}) — every
+ * deck that is not virtual under `Collection`, every `Theory + Actual` deck under `Theory` — so no
+ * tick can name a deck the card will never draw. A choice made under one comparison that the other
+ * cannot measure is **kept** in the stored set rather than dropped: it is simply not offered here,
+ * and comes back ticked when the reader switches back.
+ *
+ * **Drawn only while the scope is `Chosen…`**, with a sentence in its place otherwise — a picker
+ * under `All decks` would be a control whose every press changes nothing on the card.
+ */
+export function DeckCompletionWidgetSettings({
+  widget,
+  onConfig,
+}: WidgetSettingsProps): ReactElement {
+  const decksQuery = useQuery({ queryKey: deckListKey, queryFn: () => ipc.deckList() });
+  const compare = completionCompare(widget);
+  const deckIds = pinnedDeckIds(widget);
+  const words = pickWords("scope", "chosen");
+
+  if (completionScope(widget) !== "chosen") {
+    return (
+      <p className="m-0 text-xs text-dim">
+        Choose {words.option} under {words.row} to pick the decks this card measures.
+      </p>
+    );
+  }
+
+  const eligible = (decksQuery.data ?? NO_DECK_ROWS).filter((deck) =>
+    measurableBy(deck, compare),
+  );
+  const offered = new Set(eligible.map((deck) => deck.id));
+  const ticked = deckIds.filter((id) => offered.has(id));
+  /** Sorted by the deck's **name** rather than the row's label, so the `(archived)` suffix does
+   *  not file a retired deck under A — `DecksWidgetSettings`' reason verbatim. */
+  const options: DropdownOption[] = sortOptions(eligible, (deck) => deck.name).map((deck) => ({
+    value: String(deck.id),
+    label: deck.archived ? `${deck.name} (archived)` : deck.name,
+    hint: deck.formatName ?? deck.formatKey,
+  }));
+
+  /**
+   * Add at the end, remove in place, and **every id this list does not offer is carried through**
+   * — the other comparison's choices. The patch writes `scope: "chosen"` beside the ids, which is
+   * also what retires a stored `pinned`.
+   */
+  const toggle = (value: string) => {
+    const id = Number(value);
+    const next = deckIds.includes(id) ? deckIds.filter((each) => each !== id) : [...deckIds, id];
+    onConfig({ deckIds: next, scope: "chosen" });
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <MultiDropdown
+        fill
+        size="sm"
+        label="Decks to measure"
+        searchable={options.length > 8}
+        searchLabel="Search decks"
+        options={options}
+        selected={ticked.map(String)}
+        onToggle={toggle}
+        triggerLabel={ticked.length === 0 ? "None chosen" : plural(ticked.length, "deck")}
+      />
+      {!decksQuery.isPending && options.length === 0 && !decksQuery.isError && (
+        <p className="m-0 text-xs text-dim">{emptyAll(compare)}</p>
+      )}
+      {decksQuery.isError && (
+        <p className="m-0 text-xs text-destructive">
+          Could not read your decks — {ipcError(decksQuery.error)}
+        </p>
+      )}
+    </div>
   );
 }

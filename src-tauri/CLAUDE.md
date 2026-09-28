@@ -76,7 +76,10 @@ picks it up from any directory under the root.
   (`PredicateField`, `PredicateOp`, a value and `negated`), and one match arm per field in
   `push_card_filters` is what reaches **all three** card searches — `search_cards`,
   `collection_list` and `wishlist_list` already call that one function with the same `"c"` alias,
-  so a predicate costs one edit rather than three. **Three of the thirteen fields emit no SQL at
+  so a predicate costs one edit rather than three. **A fourth caller since 2026-09-28 is
+  `deck_query::query_cards`** (issue #621), the deck editor's filter box over `deck_cards`, which
+  copies `collection::scope`'s FTS subquery and passes no free text — the box keeps that in the
+  webview. **Three of the thirteen fields emit no SQL at
   all**: `Name`, `TypeLine` and `OracleText` ride the FTS `MATCH` string instead, because `LIKE`
   measured 82× and 277× slower on the two warm probes. **`Name` has no keyword** — it is what a
   `-` on free text becomes (`-bolt`, `-"lightning bolt"`, issue #571), an ordered phrase on the

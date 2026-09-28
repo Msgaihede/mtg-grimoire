@@ -168,7 +168,7 @@ stores nothing). All of it lives in `config` — the extension rule below.
 | `priceMovers` | owned printings whose price moved most over a window | `{ window: 7d·30d·all, direction: both·up·down }` |
 | `stickyNotes` | the reader's own notes, as a board of tinted tiles or a pad of stacked sheets | `{ layout: board·pad, dates, strip, pinned }` |
 | `newPrintings` | reprints of cards the watched decks hold, in release-day groups | `{ scope: all·chosen, deckIds, window: 30·90·365, langs: en·all·chosen, langIds, virtual, theory, basics }` |
-| `deckCompletion` | each deck's owned-against-wanted, with the cost of the rest | `{ scope: recent·pinned, deckIds, order: done·cheapest·name, complete }` |
+| `deckCompletion` | each deck's actual list against the collection or against its plan, with the cost of the rest | `{ compare: collection·theory, scope: all·chosen, deckIds, order: done·cheapest·name, complete }` |
 | `toReview` | scanned cards waiting, flagged binder entries, wishes and deck cards, and Recently removed — each row opening its list | `{ removed }` |
 | `wishlistSavings` | pinned wishes with a cheaper printing, biggest saving first | `{ scope: all·chosen, folderIds, managed }` |
 | `comingSoon` | unreleased sets, how many of their cards are previewed, and how many are already in your decks | `{ window: 30·90·365 }` |
@@ -547,7 +547,7 @@ Each goes **in the module its data lives in** — `search.rs` is the pattern.
 | `price_history` | `price_history.rs` | `{ points, now, today }` — one copy's kept snapshots, for the mover popup (§11) |
 | `collection_value_history` | `value_history.rs` | `{ buckets, points, today }` — the collection's value per kept period plus a live point for today, split one way, each point carrying its price-only part (§14) |
 | `sticky_notes` and its four writes | `sticky_notes.rs` | every note by `sort_order`, then create, update, delete and reorder (§12) |
-| `deck_completion` | `deck_completion.rs` | `[{ deckId, list, wanted, owned, missing, missingCost, unpricedMissing }]` — every deck that is not virtual, measured as its editor measures it (§15) |
+| `deck_completion` | `deck_completion.rs` | `[{ deckId, list, wanted, owned, missing, missingCost, unpricedMissing }]` — under `compare: collection` every deck that is not virtual, its live list against its own group; under `theory` every deck that keeps a plan, its live list against that plan (§15) |
 | `deck_review_count` | `deck_completion.rs` | how many `deck_cards` rows carry a `needs_review` sentence (§15) |
 | `upcoming_sets` | `upcoming_sets.rs` | `{ today, sets: [{ code, name, releasedAt, previewed, inDecks }] }` — sets not yet out, soonest first (§15) |
 
@@ -1618,19 +1618,29 @@ that draw footers; To review and Coming soon draw none. **The older kinds' foote
 
 ### Deck completion — `deck_completion.rs`, `DeckCompletionWidget.tsx`
 
-`deck_completion(marketplace)` answers one row per deck that is not virtual —
+`deck_completion(marketplace, compare)` answers one row per deck the comparison can measure —
 `{ deckId, list, wanted, owned, missing, missingCost, unpricedMissing }` — and the body decides
 only which decks, in what order, and how many fit. **Nothing in the body re-derives a count.**
 
-**It measures what the deck editor measures, rule for rule**, because a card reading *4 missing*
-over a deck that opens reading *6 missing* is a bug report, and the reader chose that over any
-simpler count (spec §1):
+**Two comparisons since 2026-09-28** ([issue #600](https://github.com/Msgaihede/mtg-grimoire/issues/600)),
+the registry's `Compare against` pick and the card's chip. Until then the list a deck was measured
+by followed its kind — a theory deck's *plan* against every copy it could be built from
+(`deck::available_by_printing`), everything else its live list — which answered neither question a
+reader asked of a deck that keeps a plan: *have I got the cards for what I sleeve*, and *how far
+is what I sleeve from what I planned*. Now each is a mode, and a deck's kind decides only whether
+the mode can measure it:
 
-* **The list picks the pool, as `get_deck` does.** A deck without a theory plan measures its live
-  list against its own group (`deck::owned_by_printing`); a deck with `theory_enabled` measures its
-  theory list against every copy it could be built from (`deck::available_by_printing` — the
-  collection root, its own group and `Recently removed`, never another deck's group or a locked
-  drawer). `list` says which was measured.
+* **`Collection`** (the default, `options[0]`) — every deck that is not virtual, its **live** list
+  against its own group (`deck::owned_by_printing`): the editor's `Actual` tab, owned for owned,
+  whether or not the deck also keeps a plan. `list` is always `live`.
+* **`Theory`** — every deck with `theory_enabled`, **virtual ones included** (actual-against-plan
+  asks nothing of cardboard), its **theory** list wanted against its **live** list as the pool,
+  keyed and walked exactly as below. So `missing` is `theory_diff`'s card rows summed — the Compare
+  dialog's shopping list — and the Rust fence asserts that. `list` is always `theory`.
+
+**Each mode measures what the deck editor measures, rule for rule**, because a card reading
+*4 missing* over a deck that opens reading *6 missing* is a bug report, and the reader chose that
+over any simpler count (spec §1):
 * **Every active pile counts, sideboard and companion included** — `DeckStats`' `missing`, and
   **deliberately not** `deck_values`' main + commander + maybe (§6). The two counts disagreeing
   inside the editor is an existing fact this kind did not change; matching the number the editor
@@ -1646,9 +1656,14 @@ simpler count (spec §1):
 * **Virtual decks answer no row** — they hold nothing by definition, and 0% of every one of them
   is not a finding — and tokens never count, being `deck_tokens`, which nothing here reads.
 
-**The fence asks both questions of one fixture.**
-`deck_completion::tests::every_deck_answers_what_its_editor_draws` runs `get_deck` and the
-editor's own copies-and-money loop over a live deck, a theory deck, a foil and a NULL-finish row of
+**Each mode has its fence.** `every_plan_answers_what_its_compare_dialog_lists` holds `Theory` to
+`theory_diff`'s non-token rows — a plan partly sleeved, a foil the regular copies do not cover, a
+switched-off pile on either side, a virtual deck with a plan, a deck with no plan answering no
+row, and a token on the plan the diff lists and the widget never counts. The collection one asks
+both questions of one fixture:
+`deck_completion::tests::every_deck_answers_what_its_editor_draws` runs `get_deck` on the live
+list and the editor's own copies-and-money loop over a live deck, a deck with a plan (measured on
+its live list), a foil and a NULL-finish row of
 one printing, an inactive pile, a sideboard sharing the main pile's pool, a copy in `Recently
 removed`, copies in another deck's group, a locked folder, an unpriced printing, an empty deck and a
 virtual one — and **pins the numbers as well as comparing them**, because a comparison alone passes
@@ -1667,15 +1682,19 @@ complete, listed it under `Complete decks`, counted it in the footer, and let a 
 but fresh shells say *every deck here is complete*. It is neither complete nor in progress.
 `completionRows` drops it **once, before anything orders, counts or decides the card is empty**, so
 those three cannot come to disagree about it; a scope holding only such decks draws `NO_DECKS`
-under `Most recent` and `PINS_UNMEASURABLE` under `Pinned` — a sentence of its own, because a pin
-can also name a deck that is gone or virtual, and the useful answer then points at the choosing.
+(or, under `Theory`, `NO_PLANS`, which names the `Theory + Actual` kind) under `All decks` and
+`CHOSEN_UNMEASURABLE` under `Chosen…` — a sentence of its own, because a choice can also name a
+deck that is gone or that the comparison cannot measure, and the useful answer then points at the
+choosing.
 
 **A figure measured on the plan says `Plan` at every density.** `countCaption`, the tile's
 shortfall and the press's accessible name all lead with the word, and a compact panel — which
 draws no count at all — keeps it alone as the row's caption, because its price and its track are
-still the plan's. The reason is the list the reader meets: a theory deck's count is its plan
-against every copy it could use, not its sleeved list, and a reader who opens that deck on a
-shorter live list reads the card and the editor as disagreeing. The hint says it in full; the word
+still the plan's. Under `Theory` that is every row, and the chip says so too; the word stays on
+each row because a row read aloud, or a card whose chip is cut, has nothing else to say it. The
+reason is the list the reader meets: a theory row's count is its plan's size, not its sleeved
+list's, and a reader who opens that deck on a shorter live list reads the card and the editor as
+disagreeing. The hint says it in full; the word
 is what survives without a pointer. **The press does not change** — it opens the deck like every
 other row, `setActiveView("decks")` then `setOpenDeckId(id)`, and which list the editor shows is
 the editor's decision. **The live pass met that cost on its first press** (Bruna, above): the row
@@ -1693,10 +1712,14 @@ a backend measurement of every deck, all but the last thrown away. An event now 
 invalidation, and a `queueMicrotask` sends it once the burst is over. `ActivityWidget` still
 answers event by event (§8).
 
-**Which decks is a filter; order is a display decision.** `Most recent` is `deck_list`'s order
-with archived and virtual decks taken out, never a sort — `DecksWidget`'s rule, read through its
-own `deckScope`, `pinnedDeckIds` and `decksToShow`, because `Pinned` draws `DecksWidgetSettings`'
-checklist **reused rather than copied** and the checklist writes exactly what those read.
+**Which decks is a filter; order is a display decision.** `All decks` is `deck_list`'s order with
+archived decks and every deck the comparison cannot measure (`measurableBy`) taken out, never a
+sort — `DecksWidget`'s rule. `Chosen…` is the reader's `deckIds` through
+`DeckCompletionWidgetSettings`, **its own checklist since issue #600** rather than the Decks
+widget's reused one, because it offers **only the decks the current comparison can measure**. A
+choice the other comparison cannot measure is kept in the config and simply not drawn, so
+switching back brings it back ticked; a card stored under the old `Most recent` / `Pinned` words
+reads `pinned` as `chosen` (`completionScope`), so nobody's picks are lost.
 `sortCompletions` orders what is left (*Nearest done*, *Cheapest to finish* with a `null` cost
 last, *Name*), because the three orders are three readings of one answer and a command per order
 would be three places one count is written.
