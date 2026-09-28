@@ -248,9 +248,9 @@ export const Default: Story = {
       if (box === null) throw new Error("no Not sorted shelf");
       return box;
     });
-    await expect(loose).toHaveTextContent("5 wishes · $163.96 · 1 unpriced");
+    await expect(loose).toHaveTextContent("5 cards · $163.96 · 1 unpriced");
     await waitFor(async () => {
-      await expect(figureValue(canvas, "Wishes")).toHaveTextContent("13");
+      await expect(figureValue(canvas, "Cards")).toHaveTextContent("13");
     });
     await expect(canvas.getByText("Total cost (USD)")).toBeInTheDocument();
     await expect(figureValue(canvas, "Total cost (USD)")).not.toHaveTextContent("—");
@@ -326,7 +326,7 @@ export const Shelves: Story = {
     const canvas = within(canvasElement);
     const ordered = await waitFor(() => headingNamed(canvas, "Ordered"));
     await waitFor(async () => {
-      await expect(ordered).toHaveTextContent(/3 wishes/);
+      await expect(ordered).toHaveTextContent(/3 cards/);
     });
     const backordered = headingNamed(canvas, "Backordered");
     await expect(follows(ordered, backordered)).toBe(true);
@@ -362,14 +362,14 @@ export const EverythingFiled: Story = {
     const canvas = within(canvasElement);
     const ordered = await waitFor(() => headingNamed(canvas, "Ordered"));
     await waitFor(async () => {
-      await expect(figureValue(canvas, "Wishes")).toHaveTextContent("12");
+      await expect(figureValue(canvas, "Cards")).toHaveTextContent("12");
     });
     await expect(headingNamed(canvas, "Not sorted")).toBeInTheDocument();
     await waitFor(async () => {
-      await expect(ordered).toHaveTextContent(/7 wishes/);
+      await expect(ordered).toHaveTextContent(/7 cards/);
     });
     await expect(await canvas.findByText("×4")).toBeInTheDocument();
-    await expect(canvas.queryByText(/Nothing on your wishlist yet/)).toBeNull();
+    await expect(canvas.queryByText(/Your wishlist is empty/)).toBeNull();
   },
 };
 
@@ -400,7 +400,7 @@ export const DeepNesting: Story = {
 
 /**
  * **A search suspends collapse** (spec §3.4, decision 4). Deck 4's list is shut by default; typing
- * a card in it opens its shelf, reads `1 of 5 wishes` on the heading, and hides every shelf with no
+ * a card in it opens its shelf, reads `1 of 5 cards` on the heading, and hides every shelf with no
  * match. Emptying the box shuts it again — nothing about the stored folds was written.
  *
  * It waits on **Not sorted** before typing rather than on the deck's heading, which is at the
@@ -420,7 +420,7 @@ export const Filtering: Story = {
       within(deck).getByRole("button", { name: "Collapse Rhystic Testbed" }),
     ).toHaveAttribute("aria-expanded", "true");
     await waitFor(async () => {
-      await expect(deck).toHaveTextContent("1 of 5 wishes");
+      await expect(deck).toHaveTextContent("1 of 5 cards");
     });
     await expect(canvasElement.querySelector('[data-shelf-heading="0"]')).toBeNull();
   },
@@ -490,7 +490,7 @@ export const RenamingAFolder: Story = {
 
     const field = await within(ordered).findByRole("textbox");
     await expect(field).toHaveValue("Ordered");
-    await expect(ordered).toHaveTextContent(/3 wishes/);
+    await expect(ordered).toHaveTextContent(/3 cards/);
   },
 };
 
@@ -530,7 +530,7 @@ export const ManagedWishlist: Story = {
 
     await userEvent.click(within(deck).getByRole("button", { name: "Open Rhystic Testbed" }));
 
-    await expect(await canvas.findByText(/Follows the deck “Rhystic Testbed”/)).toBeInTheDocument();
+    await expect(await canvas.findByText(/Managed by the deck “Rhystic Testbed”/)).toBeInTheDocument();
     await expect(await canvas.findByAltText("Smuggler's Copter")).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: /^Add folder/ })).toBeNull();
     await expect(canvas.queryByRole("spinbutton", { name: /^Copies wanted of/ })).toBeNull();
@@ -727,7 +727,7 @@ export const NoCollectionFilter: Story = {
 /**
  * A shopping list nobody has written on yet.
  *
- * "Nothing on your wishlist yet. Add cards from search with the + on any row or tile." — a
+ * "Your wishlist is empty. Add cards from search with the + button." — a
  * statement about the wishlist, naming the control that fills it. `statusOf` chooses it on
  * `activeCount === 0`; with a filter on, the same empty list says "No wishes match these
  * filters", which is a statement about the filters instead.
@@ -741,7 +741,7 @@ export const Empty: Story = {
     const canvas = within(canvasElement);
     await expect(
       await canvas.findByText(
-        "Nothing on your wishlist yet. Add cards from search with the + on any row or tile.",
+        "Your wishlist is empty. Add cards from search with the + button.",
       ),
     ).toBeInTheDocument();
   },
@@ -821,7 +821,7 @@ export const Busy: Story = {
 
     const alert = await canvas.findByRole("alert");
     await expect(alert).toHaveTextContent(
-      "Could not change your wishlist — The card database is busy finishing a sync. " +
+      "Couldn't change your wishlist — The card database is busy finishing a sync. " +
         "Try that again in a moment.",
     );
     await waitFor(async () => {

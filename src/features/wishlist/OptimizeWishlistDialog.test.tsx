@@ -186,11 +186,11 @@ describe("OptimizeWishlistDialog", () => {
     });
     const unpriced = rowFor("Sol Ring");
     expect(within(unpriced).getByText("—")).toBeInTheDocument();
-    expect(within(unpriced).getByText("No saving to count")).toBeInTheDocument();
+    expect(within(unpriced).getByText("No savings")).toBeInTheDocument();
     expect(within(unpriced).getByRole("checkbox")).not.toBeChecked();
     // The priced one beside it did open ticked, so this is the row and not the dialog.
     expect(within(rowFor("Lightning Bolt")).getByRole("checkbox")).toBeChecked();
-    expect(applyButton()).toHaveAccessibleName("Switch 1 wish");
+    expect(applyButton()).toHaveAccessibleName("Switch 1 card");
   });
 
   it("moves the total and the button's own count when a row is unticked", async () => {
@@ -201,12 +201,12 @@ describe("OptimizeWishlistDialog", () => {
         move(2, { name: "Rhystic Study", perCopy: 5 }),
       ]),
     });
-    expect(applyButton()).toHaveAccessibleName("Switch 2 wishes");
+    expect(applyButton()).toHaveAccessibleName("Switch 2 cards");
     expect(within(footer()).getByText("$17.00")).toBeInTheDocument();
 
     await user.click(within(rowFor("Lightning Bolt")).getByRole("checkbox"));
 
-    expect(applyButton()).toHaveAccessibleName("Switch 1 wish");
+    expect(applyButton()).toHaveAccessibleName("Switch 1 card");
     expect(within(footer()).getByText("$5.00")).toBeInTheDocument();
     expect(screen.queryByText("$17.00")).not.toBeInTheDocument();
   });
@@ -275,14 +275,14 @@ describe("OptimizeWishlistDialog", () => {
     });
     expect(screen.getByText("Nothing to change.")).toBeInTheDocument();
     expect(
-      screen.getByText("Checked 12 wishes · 11 already cheapest · 1 skipped."),
+      screen.getByText("Checked 12 cards · 11 already cheapest · 1 skipped."),
     ).toBeInTheDocument();
     unmount();
 
     draw({ plan: planOf([], { considered: 0 }) });
     expect(screen.getByText("Nothing to check.")).toBeInTheDocument();
     expect(
-      screen.getByText("Checked 0 wishes · 0 already cheapest · 0 skipped."),
+      screen.getByText("Checked 0 cards · 0 already cheapest · 0 skipped."),
     ).toBeInTheDocument();
   });
 
@@ -325,17 +325,17 @@ describe("OptimizeWishlistDialog", () => {
     );
 
     expect(
-      within(body()).getByText("Switched 2 wishes to the cheapest printing, saving $11.00."),
+      within(body()).getByText("Switched 2 cards to the cheapest printing, saving $11.00."),
     ).toBeInTheDocument();
     // The announcement carries the same sentence, which is what makes it an announcement.
     expect(within(footer()).getByRole("status")).toHaveTextContent(
-      "Switched 2 wishes to the cheapest printing, saving $11.00.",
+      "Switched 2 cards to the cheapest printing, saving $11.00.",
     );
     expect(
-      within(body()).getByText(/folded into a wish you already had in the same folder/),
+      within(body()).getByText(/merged with an existing entry in the same folder/),
     ).toBeInTheDocument();
     expect(
-      within(body()).getByText(/^Ancestral Recall — its printing had already changed/),
+      within(body()).getByText(/^Ancestral Recall — printing already changed/),
     ).toBeInTheDocument();
   });
 
@@ -345,14 +345,14 @@ describe("OptimizeWishlistDialog", () => {
       apply: outcomeWrite([result(1, "stale"), result(2, "missing")]),
     });
     expect(
-      within(body()).getByText("Nothing moved — every wish had already changed since the preview."),
+      within(body()).getByText("Nothing changed. All items were modified since the preview."),
     ).toBeInTheDocument();
   });
 
   it("reports a refused write beside the button that was pressed", () => {
     draw({ apply: idleWrite({ isError: true, error: new Error("database is locked") }) });
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Could not switch those wishes — database is locked",
+      "Couldn't update those items — database is locked",
     );
   });
 
@@ -395,7 +395,7 @@ describe("OptimizeWishlistDialog", () => {
     expect(screen.getByText("Sol Ring")).toBeInTheDocument();
     expect(screen.queryByRole("checkbox", { name: /Sol Ring/ })).toBeNull();
     expect(
-      screen.getByText("In a deck's managed wishlist — change the printing in the deck."),
+      screen.getByText("Managed by a deck. Change the printing in the deck."),
     ).toBeInTheDocument();
     expect(screen.getByText("1 of 1 selected")).toBeInTheDocument();
 

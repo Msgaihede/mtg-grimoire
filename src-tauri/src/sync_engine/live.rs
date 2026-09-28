@@ -684,7 +684,7 @@ mod tests {
     /// [`push_now`] takes `db`, and an in-memory pair cannot stand in for either — two
     /// `:memory:` connections are two different databases.
     fn file_state(name: &str) -> Arc<AppState> {
-        let dir = std::env::temp_dir().join(format!("mtgtest-live-{name}"));
+        let dir = crate::scratch::path(&format!("live-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();
