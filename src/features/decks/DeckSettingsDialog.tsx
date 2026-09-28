@@ -420,6 +420,12 @@ function Settings({ deckId }: { deckId: number }) {
     // The managed wishlist rides the same `deck_update`; the backend creates, refills or removes
     // the folder in that write, so this host does nothing more than relay the press.
     if (patch.managedWishlist !== undefined) update({ managedWishlist: patch.managedWishlist });
+    // Its tokens toggle (user schema v57, issue #617) is a field of its own and a write of its
+    // own, for the marks' reason: the view and the tokens are two answers, and the form only
+    // ever hands back the one that was pressed — so a view picked never rewrites the toggle, and
+    // `Off` leaves it stored for the next view picked.
+    if (patch.managedWishlistTokens !== undefined)
+      update({ managedWishlistTokens: patch.managedWishlistTokens });
     // A select, so it settles in one act and writes here. **`0` is a value and not an absence**,
     // which is why this needs no `deckSetFolder`-shaped escape below it: `AUTO_CATEGORY` is a
     // number the patch can carry, so "back to filing by what the card does" is an ordinary
@@ -479,6 +485,7 @@ function Settings({ deckId }: { deckId: number }) {
               theoryMarkName: row.theoryMarkName,
               theoryMarkUnplanned: row.theoryMarkUnplanned,
               managedWishlist: row.managedWishlist,
+              managedWishlistTokens: row.managedWishlistTokens,
               folderId: row.folderId,
               defaultCategoryId: row.defaultCategoryId,
             }}

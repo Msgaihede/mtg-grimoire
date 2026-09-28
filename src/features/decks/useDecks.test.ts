@@ -51,6 +51,7 @@ const BURN: DeckRow = {
   theoryMarkName: true,
   theoryMarkUnplanned: true,
   managedWishlist: "off",
+  managedWishlistTokens: false,
   // How the editor was last read — written by `deckSetViewState` and by nothing this hook
   // offers, since looking at a deck is not editing one.
   lastVariant: "live",

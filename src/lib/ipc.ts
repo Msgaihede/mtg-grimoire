@@ -3382,11 +3382,15 @@ export interface DeckInput {
  * schema v49), and `managed_wishlist::MODES` in the crate. `other` is the dialog's
  * `Different printing`. The words and their order are `features/decks/managedWishlist.ts`'s.
  *
- * **`tokens` since user schema v55** (managed tokens spec §3.8): All and Tokens fill a `Tokens`
- * subfolder inside the deck's folder with the plan's missing tokens, Tokens puts nothing in the
- * folder itself, and Missing and Different printing leave tokens out.
+ * **Four words, and tokens are not one of them since user schema v57** (issue #617). v55 made
+ * `tokens` a fifth mode and had All file the plan's tokens too, which tied two questions into one
+ * press: *which card copies does this folder want* and *does it want the tokens at all*. A reader
+ * who wanted Missing cards and the tokens had no word for it. The token half is its own switch
+ * now — {@link DeckRow.managedWishlistTokens} — and fills the `Tokens` subfolder under any of the
+ * three views; v57 turned every `tokens` deck into `missing` with that switch on, and every `all`
+ * deck kept its tokens by the same switch.
  */
-export type ManagedWishlistMode = "off" | "all" | "missing" | "other" | "tokens";
+export type ManagedWishlistMode = "off" | "all" | "missing" | "other";
 
 /**
  * How a deck keeps its tokens — `decks.token_mode`, user schema v52, `NOT NULL DEFAULT
@@ -3493,6 +3497,11 @@ export interface DeckPatch {
    *  {@link DeckRow.managedWishlist}; `decks.managed_wishlist_mode`, schema v49. A word outside the
    *  four is refused by name. */
   managedWishlist?: ManagedWishlistMode;
+  /** Whether this deck's managed wishlist also files the plan's **tokens**, in a `Tokens`
+   *  subfolder. See {@link DeckRow.managedWishlistTokens}; `decks.managed_wishlist_tokens`,
+   *  schema v57. Absent leaves it, as every field here does — and it is written whatever the mode,
+   *  so a deck whose mode is `off` can hold it on for the day a view is picked again. */
+  managedWishlistTokens?: boolean;
   /**
    * Gather this deck's `{X}` spells under a heading of their own instead of counting each at
    * the mana value Scryfall gives it. See {@link DeckRow.separateXGroup} — a **reading**
@@ -3981,6 +3990,22 @@ export interface DeckRow {
    * word it does not know as `off`.
    */
   managedWishlist: ManagedWishlistMode;
+  /**
+   * Whether this deck's managed wishlist files the plan's **tokens** as well as its cards —
+   * `decks.managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0`, user schema v57
+   * ([issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617)). On, every token row the
+   * Compare dialog's Tokens view lists is a wish in a **`Tokens` subfolder** inside the deck's
+   * folder, at its whole quantity, **whichever of the three views {@link managedWishlist}
+   * names**; off, the deck's folder holds card wishes and nothing else.
+   *
+   * **It is a switch beside the mode and not a fifth mode**, which is what it was from v55 to v56:
+   * the card view and the tokens are two answers a reader gives separately, and one word could only
+   * give both at once. **A mode of `off` makes no folder whatever this says**, and the column is
+   * kept rather than cleared, so picking a view again brings the tokens back as they were. v57
+   * set it on for every `all` deck (All used to carry tokens) and every `tokens` one (which
+   * became `missing`); a new deck starts with it off.
+   */
+  managedWishlistTokens: boolean;
   /**
    * How this deck keeps its tokens — `decks.token_mode TEXT NOT NULL DEFAULT 'managed'`, user
    * schema v52, closed by a `CHECK` on the three words of {@link TokenMode}. It replaced v47's

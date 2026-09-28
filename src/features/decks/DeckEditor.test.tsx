@@ -359,6 +359,7 @@ const DECK: DeckRow = {
   // does not name wears the X. Every real row carries it, so the fixture does too.
   theoryMarkUnplanned: true,
   managedWishlist: "off",
+  managedWishlistTokens: false,
   // How the editor was last read. The defaults, so a test that says nothing about them opens on
   // Live, grouped by category, sorted alphabetically — and a test about the memory overrides the
   // one field it is about through `detail()`.

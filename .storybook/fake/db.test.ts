@@ -16780,8 +16780,9 @@ describe("Compare's token rows", () => {
     ).toBe(1);
     expect(db.wishlistEntries.some((wish) => wish.cardId === GONE)).toBe(false);
 
-    // And the managed folder under All, whose settle reads the same rows.
-    w.deck_update({ id: 4, patch: { managedWishlist: "all" } });
+    // And the managed folder under All with its tokens switch on, whose settle reads the same
+    // rows.
+    w.deck_update({ id: 4, patch: { managedWishlist: "all", managedWishlistTokens: true } });
     expect(db.wishlistEntries.some((wish) => wish.cardId === GONE)).toBe(false);
     expect(
       db.wishlistEntries.some(
@@ -16834,11 +16835,12 @@ describe("Compare's token rows", () => {
 });
 
 /**
- * **The managed wishlist files tokens in a `Tokens` subfolder** (managed tokens spec §3.8,
- * user schema v55). All and Tokens fill it with the token rows' wishes, Missing and Different
- * printing leave tokens out, and Tokens puts nothing in the parent. The subfolder's identity is a
- * column (`managedTokens`), not its name, and it carries the deck's `managedDeckId`, so every
- * guard on a managed folder covers it.
+ * **The managed wishlist files tokens in a `Tokens` subfolder** (managed tokens spec §3.8, user
+ * schema v55) — **while its tokens switch is on, under any of the three views** (user schema v57,
+ * issue #617). From v55 to v56 the tokens rode the mode: All and a fifth `tokens` word filled the
+ * subfolder, and Missing and Different printing could not. The subfolder's identity is a column
+ * (`managedTokens`), not its name, and it carries the deck's `managedDeckId`, so every guard on a
+ * managed folder covers it.
  */
 describe("the managed wishlist's Tokens subfolder", () => {
   /** Deck 4 with a plan counting two Treasures more than the deck holds. */
@@ -16858,6 +16860,8 @@ describe("the managed wishlist's Tokens subfolder", () => {
       id: 4,
       patch: { managedWishlist: managedWishlist as FakeDeck["managedWishlist"] },
     });
+  const tokens = (db: FakeDb, managedWishlistTokens: boolean) =>
+    writeHandlers(db).deck_update({ id: 4, patch: { managedWishlistTokens } });
   const parentOf = (db: FakeDb) =>
     db.wishlistFolders.find((f) => f.managedDeckId === 4 && f.managedTokens !== true);
   const tokensOf = (db: FakeDb) =>
@@ -16870,10 +16874,42 @@ describe("the managed wishlist's Tokens subfolder", () => {
     quantity: 2,
   });
 
+  /** A deck that has never been asked holds the column's `DEFAULT 0`, and a patch round-trips
+   *  it — the mode left alone, as every absent `DeckPatch` field is. */
+  it("reads the tokens switch off by default and round-trips a patch of it", () => {
+    const db = world();
+    const row = () => readHandlers(db).deck_list().find((d) => d.id === 4);
+    expect(row()).toMatchObject({ managedWishlistTokens: false });
+
+    tokens(db, true);
+    expect(row()).toMatchObject({ managedWishlistTokens: true, managedWishlist: "missing" });
+    // A patch that does not name it leaves it.
+    mode(db, "other");
+    expect(row()).toMatchObject({ managedWishlistTokens: true, managedWishlist: "other" });
+
+    const created = writeHandlers(db).deck_create({ deck: { name: "Fresh", formatKey: "" } });
+    expect(created.managedWishlistTokens).toBe(false);
+  });
+
+  /** Its own history row under `deck.rs`'s word, written only on a change. */
+  it("audits the switch under its own field, and only when it changes", () => {
+    const db = world();
+    const edits = () =>
+      db.deckAudit
+        .filter((a) => a.deckId === 4 && a.kind === "deck")
+        .map((a) => JSON.parse(a.payload) as Record<string, unknown>)
+        .filter((p) => p.field === "managedWishlistTokens");
+    tokens(db, false);
+    expect(edits()).toEqual([]);
+    tokens(db, true);
+    expect(edits()).toEqual([{ field: "managedWishlistTokens", from: false, to: true }]);
+  });
+
   /** `all_fills_a_tokens_subfolder_with_the_plans_missing_tokens`. */
-  it("fills a Tokens subfolder inside the deck's folder under All", () => {
+  it("fills a Tokens subfolder inside the deck's folder under All with the switch on", () => {
     const db = world();
     mode(db, "all");
+    tokens(db, true);
 
     const parent = parentOf(db)!;
     const child = tokensOf(db)!;
@@ -16894,18 +16930,26 @@ describe("the managed wishlist's Tokens subfolder", () => {
     });
   });
 
-  /** `tokens_mode_fills_only_the_subfolder`. */
-  it("fills only the subfolder under Tokens", () => {
-    const db = world();
-    mode(db, "tokens");
-
-    expect(wishesIn(db, parentOf(db)!.id)).toEqual([]);
-    expect(wishesIn(db, tokensOf(db)!.id)).toEqual([TREASURE_WISH]);
+  /** The point of issue #617: the switch reaches all three views, the two card readings
+   *  included, and the parent keeps that view's cards beside it. */
+  it("fills the subfolder under Missing and Different printing too while the switch is on", () => {
+    for (const word of ["missing", "other"]) {
+      const db = world();
+      mode(db, word);
+      tokens(db, true);
+      expect(parentOf(db), word).toBeDefined();
+      expect(wishesIn(db, tokensOf(db)?.id), word).toEqual([TREASURE_WISH]);
+      expect(
+        wishesIn(db, parentOf(db)!.id).some((w) => w.oracleId === TOKEN_ORACLE.treasure),
+        word,
+      ).toBe(false);
+    }
   });
 
-  /** `missing_mode_has_no_tokens_subfolder`. */
-  it("has no Tokens subfolder under Missing or Different printing", () => {
-    for (const word of ["missing", "other"]) {
+  /** `missing_mode_has_no_tokens_subfolder` — read now as *the switch off has none*, under every
+   *  view, All included. */
+  it("has no Tokens subfolder under any view while the switch is off", () => {
+    for (const word of ["all", "missing", "other"]) {
       const db = world();
       mode(db, word);
       expect(parentOf(db), word).toBeDefined();
@@ -16916,25 +16960,29 @@ describe("the managed wishlist's Tokens subfolder", () => {
     }
   });
 
-  /** Review Focus 5, `switching_from_all_to_missing_removes_the_subfolder_and_keeps_the_card_wishes`. */
-  it("takes the subfolder and its wishes away when All becomes Missing, and keeps the cards", () => {
+  /** Review Focus 5, re-read for v57: turning the switch off takes the subfolder and its wishes,
+   *  and keeps the parent and its card wishes where they were. */
+  it("takes the subfolder and its wishes away when the switch goes off, and keeps the cards", () => {
     const db = world();
     mode(db, "all");
+    tokens(db, true);
     const parent = parentOf(db)!.id;
     const child = tokensOf(db)!.id;
+    const cards = wishesIn(db, parent).length;
 
-    mode(db, "missing");
+    tokens(db, false);
 
     expect(tokensOf(db)).toBeUndefined();
     expect(db.wishlistEntries.some((w) => w.folderId === child)).toBe(false);
     expect(parentOf(db)!.id).toBe(parent);
-    expect(wishesIn(db, parent).length).toBeGreaterThan(0);
+    expect(wishesIn(db, parent)).toHaveLength(cards);
   });
 
   /** `a_token_step_re_settles_the_wishlist` — the dirty triggers watch the two token tables. */
   it("re-settles the subfolder after a token step", () => {
     const db = world();
     mode(db, "all");
+    tokens(db, true);
 
     writeHandlers(db).deck_token_set_quantity({
       deckId: 4,
@@ -16948,22 +16996,21 @@ describe("the managed wishlist's Tokens subfolder", () => {
     ]);
   });
 
-  /** `no_token_wants_no_subfolder` — a plan counting no tokens under All draws no empty one. */
+  /** `no_token_wants_no_subfolder` — a plan counting no tokens draws no empty one, switch on. */
   it("makes no subfolder when the plan wants no token", () => {
     const db = seed("starter");
     mode(db, "all");
+    tokens(db, true);
     expect(parentOf(db)).toBeDefined();
     expect(tokensOf(db)).toBeUndefined();
   });
 
-  /** The mode's fifth word is accepted and audited, and a word outside the five is refused. */
-  it("accepts Tokens as a mode and refuses a word it does not know", () => {
+  /** **`tokens` is no mode since v57** — refused in the crate's four-word sentence, verbatim. */
+  it("refuses Tokens as a mode, and any word outside the four", () => {
     const db = world();
-    mode(db, "tokens");
-    expect(readHandlers(db).deck_list().find((d) => d.id === 4)).toMatchObject({
-      managedWishlist: "tokens",
-    });
-    expect(() => mode(db, "everything")).toThrow(/^A managed wishlist follows /);
+    const BAD = /^A managed wishlist follows All, Missing, Different printing or nothing\.$/;
+    expect(() => mode(db, "tokens")).toThrow(BAD);
+    expect(() => mode(db, "everything")).toThrow(BAD);
   });
 
   /** The subfolder is the deck's like its parent: every hand write to it is refused in the
@@ -16971,6 +17018,7 @@ describe("the managed wishlist's Tokens subfolder", () => {
   it("refuses a hand write to the Tokens subfolder", () => {
     const db = world();
     mode(db, "all");
+    tokens(db, true);
     const child = tokensOf(db)!.id;
     const w = writeHandlers(db);
     const NOT_BY_HAND = /^A managed wishlist follows its deck, so it can't be edited by hand\.$/;
@@ -16981,10 +17029,13 @@ describe("the managed wishlist's Tokens subfolder", () => {
   });
 
   /** A deck that stops being eligible takes the child's wishes, then the child, then the
-   *  parent's, then the parent — `settle_deck`'s delete path — and leaves no wish at the root. */
-  it("deletes both folders and every wish in them when the deck goes off", () => {
+   *  parent's, then the parent — `settle_deck`'s delete path — and leaves no wish at the root.
+   *  **Whatever the switch says**, and the switch is kept: a view picked again brings the
+   *  subfolder back without asking. */
+  it("deletes both folders when the deck goes off, keeps the switch, and restores on a view", () => {
     const db = world();
     mode(db, "all");
+    tokens(db, true);
     const ids = [parentOf(db)!.id, tokensOf(db)!.id];
     const wishes = db.wishlistEntries.length;
     const held = ids.reduce((n, id) => n + wishesIn(db, id).length, 0);
@@ -16997,6 +17048,13 @@ describe("the managed wishlist's Tokens subfolder", () => {
     expect(db.wishlistEntries.some((w) => w.folderId !== null && ids.includes(w.folderId))).toBe(
       false,
     );
+    expect(readHandlers(db).deck_list().find((d) => d.id === 4)).toMatchObject({
+      managedWishlist: "off",
+      managedWishlistTokens: true,
+    });
+
+    mode(db, "missing");
+    expect(wishesIn(db, tokensOf(db)?.id)).toEqual([TREASURE_WISH]);
   });
 });
 

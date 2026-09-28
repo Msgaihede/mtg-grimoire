@@ -17,7 +17,7 @@ import { finishLabel } from "@/lib/finish";
 import type { DeckAuditEntry, DeckAuditKind } from "@/lib/ipc";
 import { TOKENS_HEADING } from "./DeckTokensPanel";
 import { listName } from "./listNames";
-import { MANAGED_WISHLIST_LABEL, managedWishlistMode } from "./managedWishlist";
+import { managedWishlistHistoryLabel } from "./managedWishlist";
 import { gameLabel } from "./useFormatSpecs";
 
 /** One line of `DeckHistoryDialog`: the sentence, and the quieter half under it. */
@@ -981,16 +981,32 @@ function deckLine(p: Record<string, unknown>): AuditLine {
     // The managed wishlist (user schema v49, issue #512): `deck.rs` records the mode under this
     // word, and the sentence names the Compare view by the group's own label. No `detail`, for
     // the marks' reason.
+    //
+    // The word is named through `managedWishlistHistoryLabel` rather than the four-word fence,
+    // because a log written between v55 and v56 can hold the retired `tokens` mode — v57 moved
+    // it on the deck and cannot move it here — and the fence would print that row as the
+    // wishlist being turned off.
     case "managedWishlist": {
-      const to = typeof p.to === "string" ? managedWishlistMode(p.to) : "off";
+      const to = managedWishlistHistoryLabel(p.to);
       return {
-        text:
-          to === "off"
-            ? "Turned the managed wishlist off"
-            : `Set the managed wishlist to ${MANAGED_WISHLIST_LABEL[to]}`,
+        text: to === null ? "Turned the managed wishlist off" : `Set the managed wishlist to ${to}`,
         detail: null,
       };
     }
+    // `decks.managed_wishlist_tokens` (user schema v57, issue #617): the switch beside the mode
+    // that files the plan's tokens in a `Tokens` subfolder. `deck.rs` records it under this
+    // word, `camelCase` like `managedWishlist` beside it — `xGroup`'s paragraph applies, and only
+    // `auditText.test.ts` holds the spelling. **Its own arm rather than a clause of the one
+    // above**, `record_deck_edit`'s reason for the marks: the two are independent and one Save
+    // can move both, so two rows is what happened. It says "tokens" and never "Tokens mode",
+    // because a mode is exactly what this is not any more. No `detail`, for the marks' reason.
+    case "managedWishlistTokens":
+      return {
+        text: flag(p.to)
+          ? "Started filing tokens in the managed wishlist"
+          : "Stopped filing tokens in the managed wishlist",
+        detail: null,
+      };
     // `decks.token_rail_index` (user schema v51): the Tokens & Emblems pile moved in the rail.
     // `deck.rs` records it as **`tokenRail`** — not the column's `tokenRailIndex` — and `xGroup`'s
     // paragraph applies word for word: the `default` arm below never fails, so only

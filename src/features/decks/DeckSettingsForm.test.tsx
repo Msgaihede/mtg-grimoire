@@ -53,6 +53,7 @@ const VALUE: DeckSettingsValue = {
   theoryMarkName: true,
   theoryMarkUnplanned: true,
   managedWishlist: "off",
+  managedWishlistTokens: false,
   folderId: null,
   defaultCategoryId: AUTO_CATEGORY,
 };
@@ -599,8 +600,9 @@ describe("DeckSettingsForm", () => {
   /**
    * The managed wishlist (issue #512) sits under both of the marks' gates — it keeps a view of
    * the difference between the two lists, so a deck with no plan has nothing for it to hold, and
-   * the create host has no column to write it to — and is a five-way choice: `Off` and the
-   * Compare dialog's four views, `Tokens` last since user schema v55 (managed tokens spec §3.8).
+   * the create host has no column to write it to — and is a four-way choice: `Off` and the
+   * Compare dialog's three card views. `Tokens` was a fifth press in it from user schema v55 and
+   * is a toggle beside it since v57 (issue #617), tested below.
    */
   it("draws the managed wishlist group only for a Theory + Actual deck in the edit host", async () => {
     form({ value: { ...VALUE, theoryEnabled: false } });
@@ -619,12 +621,10 @@ describe("DeckSettingsForm", () => {
       "All",
       "Missing",
       "Different Printing",
-      "Tokens",
     ]);
     // `off` is the default, and the only pressed one.
     expect(buttons.map((b) => b.getAttribute("aria-pressed"))).toEqual([
       "true",
-      "false",
       "false",
       "false",
       "false",
@@ -635,16 +635,59 @@ describe("DeckSettingsForm", () => {
     expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "missing" });
     await userEvent.click(within(group).getByRole("button", { name: "Different Printing" }));
     expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "other" });
-    // The token rows' own folder, and its caption under the group — a `Tokens` subfolder the
-    // reader would otherwise meet in the wishlist with nothing here having named it.
-    await userEvent.click(within(group).getByRole("button", { name: "Tokens" }));
-    expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "tokens" });
-    expect(within(group).getByRole("button", { name: "Tokens" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    const tokensCaption = /with a Tokens subfolder that holds the token printings/;
-    expect(screen.getByText(tokensCaption)).toBeVisible();
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Tokens are a toggle beside the group, not a press in it** (issue #617): the three things the
+   * issue asks for, one assertion each — drawn only while the wishlist is not `Off`, outside the
+   * `role="group"` element, and in the same row as it.
+   *
+   * "The same row" is asserted as a shared parent, because jsdom lays nothing out: the group and
+   * the toggle are siblings of one flex box, which is the only thing that can put them on one
+   * line — and a toggle drawn anywhere else in the panel would fail it.
+   */
+  it("draws the Tokens toggle beside the group, outside it, only while a view is picked", async () => {
+    const { onChange, onCommit } = form({ value: { ...VALUE, theoryEnabled: true } });
+    // `Off`: no folder, so no toggle — not a greyed one.
+    expect(screen.queryByRole("button", { name: "Tokens" })).not.toBeInTheDocument();
+
+    const group = screen.getByRole("group", { name: "Managed wishlist" });
+    await userEvent.click(within(group).getByRole("button", { name: "Missing" }));
+    const toggle = screen.getByRole("button", { name: "Tokens" });
+    expect(group).not.toContainElement(toggle);
+    expect(toggle.parentElement).toBe(group.parentElement);
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    // The caption is the view's alone while the toggle is off.
+    expect(screen.queryByText(/Tokens subfolder/)).not.toBeInTheDocument();
+
+    await userEvent.click(toggle);
+    expect(onChange).toHaveBeenLastCalledWith({ managedWishlistTokens: true });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    // The view's line, then the tokens' — one caption for the one folder.
+    expect(
+      screen.getByText(
+        /the cards the deck doesn't play in any printing\..*Its Tokens subfolder holds the token printings the plan is short of\./,
+      ),
+    ).toBeVisible();
+    // Picking a different view leaves the toggle as it was: the two are independent.
+    await userEvent.click(within(group).getByRole("button", { name: "All" }));
+    expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "all" });
+    expect(screen.getByRole("button", { name: "Tokens" })).toHaveAttribute("aria-pressed", "true");
+
+    // Back to `Off`: the toggle goes, and so does its sentence — but nothing is written to it,
+    // so the stored answer is there for the next view picked.
+    await userEvent.click(within(group).getByRole("button", { name: "Off" }));
+    expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "off" });
+    expect(screen.queryByRole("button", { name: "Tokens" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Tokens subfolder/)).not.toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalledWith({ managedWishlistTokens: false });
+
+    await userEvent.click(within(group).getByRole("button", { name: "Different Printing" }));
+    expect(screen.getByRole("button", { name: "Tokens" })).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(screen.getByRole("button", { name: "Tokens" }));
+    expect(onChange).toHaveBeenLastCalledWith({ managedWishlistTokens: false });
     expect(onCommit).not.toHaveBeenCalled();
   });
 

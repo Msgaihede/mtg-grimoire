@@ -680,10 +680,20 @@ pub struct DeckPatch {
     /// Which Compare view this deck's **managed wishlist** follows — one of
     /// [`crate::managed_wishlist::MODES`], `off` for none. See [`DeckRow::managed_wishlist`].
     ///
-    /// **Refused by name outside the five words** ([`crate::managed_wishlist::BAD_MODE`]), where
+    /// **Refused by name outside the four words** ([`crate::managed_wishlist::BAD_MODE`]), where
     /// a read is lenient: a stored word this build does not know came from a newer peer and reads
     /// as `off`, but a *patch* naming one is this build's own mistake.
     pub managed_wishlist: Option<String>,
+    /// Whether this deck's managed wishlist also files the token printings the plan is short of,
+    /// in a **Tokens** subfolder — user schema v57, issue #617. See
+    /// [`DeckRow::managed_wishlist_tokens`].
+    ///
+    /// [`Self::managed_wishlist`]'s rules, less the words: an arm in [`record_deck_edit`]
+    /// (`managedWishlistTokens`), a place on `deck_undo::DECK_FIELDS`, carried by
+    /// [`duplicate_deck`]. Written whatever the mode says, because the settings form offers it
+    /// only beside a mode that is not `off` and a patch that set it under `off` is still the
+    /// reader's answer for when a mode comes back.
+    pub managed_wishlist_tokens: Option<bool>,
     /// Which of this deck's categories an add that names none lands in — the editor's "Add to"
     /// answer, asked in the deck's settings.
     ///
@@ -975,19 +985,29 @@ pub struct DeckRow {
     /// See [`DeckPatch::token_rail_index`] for why it has a history row where v47's
     /// `token_stack` had none.
     pub token_rail_index: i64,
-    /// Which of the Compare dialog's four views this deck's **managed wishlist** follows —
-    /// `all`, `missing`, `other` (Different printing) or `tokens` — or `off` for no folder at all
-    /// (`decks.managed_wishlist_mode`, schema v49, `DEFAULT 'off'`; issue #512; `tokens` since the
-    /// token-improvements spec §3.8, whose **All** and **Tokens** also fill a **Tokens** subfolder).
+    /// Which of the Compare dialog's card views this deck's **managed wishlist** follows —
+    /// `all`, `missing` or `other` (Different printing) — or `off` for no folder at all
+    /// (`decks.managed_wishlist_mode`, schema v49, `DEFAULT 'off'`; issue #512). Whether it also
+    /// fills a **Tokens** subfolder is [`Self::managed_wishlist_tokens`], since user schema v57;
+    /// from v55 to v56 it was a fifth word here, `tokens`.
     /// The folder is rewritten by [`crate::managed_wishlist`] after every write that changes the
     /// deck.
     ///
     /// **Only a theory deck acts on it.** A regular deck has no plan to be short of and a
     /// virtual one owns no cardboard, so the column is stored for both and ignored — switching a
     /// deck to either kind takes its folder away, and switching it back brings it back, because
-    /// the folder is derived rather than remembered. Always one of the five words: a stored value
+    /// the folder is derived rather than remembered. Always one of the four words: a stored value
     /// this build does not know reads as `off` ([`crate::managed_wishlist::read_mode`]).
     pub managed_wishlist: String,
+    /// Whether the managed wishlist also files the plan's missing tokens in a **Tokens**
+    /// subfolder — `decks.managed_wishlist_tokens`, user schema v57, `DEFAULT 0` (issue #617).
+    ///
+    /// **A switch beside the mode rather than a word in it**: until v57 tokens were a fact about
+    /// the view (All counted them, Missing and Different printing did not, and a fifth word
+    /// `tokens` meant them alone), so a deck could not want its missing cards and its tokens at
+    /// once. **Stored whatever the mode says and acted on only when it is not `off`** — so a mode
+    /// switched off and on again keeps the reader's answer.
+    pub managed_wishlist_tokens: bool,
     /// Which of this deck's categories an add that names none lands in — schema v16, and `0`
     /// for **Auto**, where the card's own text decides.
     ///
@@ -1300,7 +1320,7 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
             d.virtual_only, d.stats_open, d.notes_open, d.token_mode, d.managed_wishlist_mode,
-            d.token_rail_index, d.curve_creatures
+            d.token_rail_index, d.curve_creatures, d.managed_wishlist_tokens
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -1442,6 +1462,12 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // theirs read once more: a crossed index would hand the split to a band's open state and
         // both fields would still hold a `0` or a `1`.
         curve_creatures: r.get(30)?,
+        // 31, at the end of the named list, same rule — user schema v57's managed-wishlist tokens
+        // switch. Another `bool` over an `INTEGER`, and the column it most reads like a neighbour
+        // of is `managed_wishlist_mode` at 28 — a TEXT, so a crossed read there fails loudly; the
+        // silent trap is `curve_creatures` one to the left, where a crossed index would file a
+        // deck's tokens because the reader split a chart.
+        managed_wishlist_tokens: r.get(31)?,
     })
 }
 
@@ -2139,6 +2165,8 @@ struct DeckBefore {
     token_rail_index: i64,
     /// User schema v52's token mode, for the history row.
     token_mode: String,
+    /// User schema v57's managed-wishlist tokens switch, for the history row.
+    managed_wishlist_tokens: bool,
 }
 
 /// What a `deck`/`cover` history row records as the cover: the card's id, and the word
@@ -2261,7 +2289,8 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     archived, folder_id, theory_enabled, separate_x_group,
                     default_category_id, game_key, bracket,
                     theory_mark_exact, theory_mark_name, theory_mark_unplanned,
-                    virtual_only, managed_wishlist_mode, token_rail_index, token_mode
+                    virtual_only, managed_wishlist_mode, token_rail_index, token_mode,
+                    managed_wishlist_tokens
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -2323,6 +2352,9 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     // 18, at the end, same rule — TEXT like `managed_wishlist` at 16, so a
                     // crossed index records one mode moving where the other did.
                     token_mode: r.get(18)?,
+                    // 19, at the end, same rule — a `bool` over an `INTEGER` like the eight
+                    // above it, so a crossed index records the wrong switch moving.
+                    managed_wishlist_tokens: r.get(19)?,
                 })
             },
         )
@@ -2446,6 +2478,11 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- `?19` and `?20`, so a crossed number is an UPDATE that succeeds and opens a
                 -- band where the reader pressed a chart toggle.
                 curve_creatures = coalesce(?24, curve_creatures),
+                -- `?25`, the next number at the **end**, same rule one rung later. User schema
+                -- v57's managed-wishlist tokens switch is an `Option<bool>` like `?24` beside it,
+                -- so a crossed number is an UPDATE that succeeds and splits a chart where the
+                -- reader asked for tokens.
+                managed_wishlist_tokens = coalesce(?25, managed_wishlist_tokens),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -2475,6 +2512,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 managed_wishlist,
                 patch.token_rail_index,
                 patch.curve_creatures,
+                patch.managed_wishlist_tokens,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -3075,6 +3113,19 @@ fn record_deck_edit(
     {
         field("managedWishlist", json!(before.managed_wishlist), json!(to))?;
     }
+    // `managedWishlistTokens`, camelCase, booleans on both sides — the theory marks' shape.
+    // User schema v57's switch (issue #617) decides whether a folder the reader reads fills with
+    // tokens, which is `managedWishlist`'s reason for a row.
+    if let Some(to) = patch
+        .managed_wishlist_tokens
+        .filter(|t| *t != before.managed_wishlist_tokens)
+    {
+        field(
+            "managedWishlistTokens",
+            json!(before.managed_wishlist_tokens),
+            json!(to),
+        )?;
+    }
     // `tokenRail`, camelCase — `xGroup`'s rule — and the **numbers** on both sides, `-1` for
     // last: which pile that slot fell beside is a fact about the rail at the moment of the drag,
     // and `auditText.ts` words the move without it. An arrangement the reader dragged earns its
@@ -3548,17 +3599,20 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
             // happened to have open — and its `DEFAULT 'managed'` would bring a hidden pile back
             // on the copy. **`token_rail_index` (user schema v51) comes with it**: where the pile
             // sits is an arrangement of the deck, like its categories' order, and a copy whose
-            // pile jumped back to last would not be a copy.
+            // pile jumped back to last would not be a copy. **`managed_wishlist_tokens` (user
+            // schema v57) travels with `managed_wishlist_mode`**, which was already here: the
+            // two together are one answer about what the deck's folder holds.
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 folder_id, theory_enabled,
                                 separate_x_group, bracket, theory_mark_exact, theory_mark_name,
                                 theory_mark_unplanned, virtual_only, token_mode, token_rail_index,
-                                managed_wishlist_mode, archived, created_at, updated_at)
+                                managed_wishlist_mode, managed_wishlist_tokens, archived,
+                                created_at, updated_at)
              SELECT name || ' (copy)', format_key, description, cover_kind, cover_card_id,
                     folder_id, theory_enabled, separate_x_group,
                     bracket, theory_mark_exact, theory_mark_name, theory_mark_unplanned,
                     virtual_only, token_mode, token_rail_index, managed_wishlist_mode,
-                    0, unixepoch(), unixepoch()
+                    managed_wishlist_tokens, 0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
              RETURNING id, name, virtual_only",
             params![id],
@@ -10545,6 +10599,10 @@ mod tests {
             theory_mark_unplanned: false,
             // `false`, the column's non-default, for `bracket`'s reason below.
             managed_wishlist: "missing".to_owned(),
+            // `true` rather than the column's `DEFAULT 0`, the rule the comments below state —
+            // and `true` where `curve_creatures`' neighbour at 30 is also `true`, so it is the
+            // key below, not the value, that separates the two.
+            managed_wishlist_tokens: true,
             last_variant: "theory".to_owned(),
             last_group_by: "manaValue".to_owned(),
             last_sort_by: "price".to_owned(),
@@ -10608,6 +10666,11 @@ mod tests {
                 // Schema v48, off because `DEFAULT 1` would read correct on a field that never
                 // left Rust.
                 "managedWishlist": "missing",
+                // User schema v57, and `managedWishlistTokens` rather than
+                // `managed_wishlist_tokens`: Deck settings reads this key to draw the Tokens
+                // toggle, and a snake-cased one would be `undefined` — falsy, so a switch the
+                // reader turned on would draw off.
+                "managedWishlistTokens": true,
                 // The two mode fields carry TypeScript's own vocabulary, so the fixture spells
                 // real editor words rather than placeholders: this crate never parses them, and
                 // a test written with `"x"` would hide that they are meant to round-trip.
@@ -10715,7 +10778,7 @@ mod tests {
         let patch: DeckPatch = serde_json::from_str(
             r#"{"coverCardId":"bolt-lea","archived":true,"separateXGroup":true,"gameKey":"mtgo",
                 "virtualOnly":true,"tokenMode":"hidden","tokenRailIndex":-1,
-                "curveCreatures":true}"#,
+                "curveCreatures":true,"managedWishlistTokens":true}"#,
         )
         .expect("the patch payload");
         assert_eq!(patch.cover_card_id.as_deref(), Some("bolt-lea"));
@@ -10734,6 +10797,10 @@ mod tests {
         // User schema v56. The Mana curve's `Creatures` toggle sends this, and a misspelled key
         // would be read by `#[serde(default)]` as an omitted one — a press that saves nothing.
         assert_eq!(patch.curve_creatures, Some(true));
+        // User schema v57. Deck settings' Tokens toggle sends this beside the managed wishlist's
+        // mode, and a misspelled key would be read as an omitted one — a press that saves
+        // nothing.
+        assert_eq!(patch.managed_wishlist_tokens, Some(true));
         assert!(patch.name.is_none(), "an omitted field means leave it");
 
         // And the third: `deck_set_view_state`'s `viewState`, which the editor sends one
@@ -11906,6 +11973,109 @@ mod tests {
             read_deck(&conn, deck.id).unwrap().unwrap().token_rail_index,
             -1,
             "one Ctrl+Z puts the pile back where it was"
+        );
+    }
+
+    /// The managed wishlist's **tokens switch**, end to end (user schema v57, issue #617): off on
+    /// a new deck, a patch turns it on beside a mode, an absent field leaves it, **the change is a
+    /// history row and one Ctrl+Z puts it back**, and a copy keeps it with its mode.
+    ///
+    /// Patched beside `curve_creatures` — the `bool` one column to its left in `DECK_SELECT` and
+    /// one hole below it in the UPDATE — set the other way, so a crossed index or number changes
+    /// what this reads.
+    #[test]
+    fn managed_wishlist_tokens_round_trips_audits_and_undoes() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        assert!(
+            !deck.managed_wishlist_tokens,
+            "a new deck files no tokens — the column's own DEFAULT"
+        );
+
+        let on = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                managed_wishlist: Some("missing".to_owned()),
+                managed_wishlist_tokens: Some(true),
+                curve_creatures: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(on.managed_wishlist_tokens, "the readback is the write");
+        let read = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert_eq!(
+            (
+                read.managed_wishlist.as_str(),
+                read.managed_wishlist_tokens,
+                read.curve_creatures
+            ),
+            ("missing", true, false),
+            "…including through `DECK_SELECT`'s positional reads, the neighbours untouched"
+        );
+
+        let payloads: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 20)
+            .unwrap()
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::DECK)
+            .map(|r| serde_json::from_str(&r.payload).unwrap())
+            .collect();
+        assert!(
+            payloads.contains(&json!({
+                "field": "managedWishlistTokens", "from": false, "to": true
+            })),
+            "the switch is named in the drawer, from and to: {payloads:?}"
+        );
+
+        let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
+        assert!(
+            after.managed_wishlist_tokens,
+            "an absent field means leave it"
+        );
+
+        // The same value again is no change, and a no-change is no row.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                managed_wishlist_tokens: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            crate::deck_audit::list(&conn, deck.id, 20)
+                .unwrap()
+                .iter()
+                .filter(|r| r.payload.contains("managedWishlistTokens"))
+                .count(),
+            1,
+            "re-sending the switch the deck already holds records nothing"
+        );
+
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
+        assert_eq!(
+            (copy.managed_wishlist.as_str(), copy.managed_wishlist_tokens),
+            ("missing", true),
+            "a copy's folder holds what its original's does"
+        );
+
+        // `apply_reversal` itself, the path Ctrl+Z takes. It reads the columns to put back off
+        // `deck_undo::DECK_FIELDS`, which is where `managed_wishlist_tokens` has to be for this
+        // to pass.
+        let cursor = crate::deck_undo::next_undo(&conn, deck.id)
+            .unwrap()
+            .unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck.id, cursor, true).unwrap();
+        let undone = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert_eq!(
+            (
+                undone.managed_wishlist.as_str(),
+                undone.managed_wishlist_tokens
+            ),
+            ("off", false),
+            "one Ctrl+Z puts the mode and the switch back together"
         );
     }
 
