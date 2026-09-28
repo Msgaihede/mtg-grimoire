@@ -534,16 +534,37 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
     picks: [],
     toggles: [{ key: "removed", label: "Recently removed" }],
   },
-  /** The price sweep's own plan over the whole wishlist, read and never written. No settings:
-   *  the question is fixed, which is what lets its press open the same sweep. */
+  /**
+   * The price sweep's own plan over the wishlist, read and never written.
+   *
+   * **Two settings since issue #598, and both are the question rather than its drawing** — which
+   * is why a press still opens the same sweep: the widget hands its scope to the Wishlist page with
+   * the press (`store.ts`'s `pendingOptimize`), so the dialog plans exactly what the card counted.
+   *
+   * * `managed` — the decks' managed wishlists. **On by default**, because they are still
+   *   wishlists: a card a deck is short of is money the reader has yet to spend, and the saving on
+   *   it is as real as on any other wish. The dialog draws their moves and offers none, since only
+   *   the deck can change its printing.
+   * * `scope` — every wishlist, or the ones the reader chose in `WishlistSavingsWidgetSettings`'
+   *   checklist. `All wishlists` first, so a card nobody has configured counts everything.
+   */
   wishlistSavings: {
     label: "Wishlist savings",
     description: "Potential savings by switching wishlist items to cheapest printings.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 6],
-    picks: [],
-    toggles: [],
+    picks: [
+      {
+        key: "scope",
+        label: "Which wishlists",
+        options: [
+          { id: "all", label: "All wishlists" },
+          { id: "chosen", label: "Chosen" },
+        ],
+      },
+    ],
+    toggles: [{ key: "managed", label: "Deck-managed wishlists" }],
   },
   /**
    * Sets not released yet, soonest first. `window`'s options, words and `dflt: 90` are

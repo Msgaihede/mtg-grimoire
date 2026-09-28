@@ -168,8 +168,13 @@ export const Tile: Story = {
   },
 };
 
-/** `starter` as it is: every pinned wish is already on its cheapest printing. */
+/**
+ * `starter` as it is, less its decks' managed wishlists: every pinned wish the reader filed is
+ * already on its cheapest printing. The switch is off here because `starter`'s managed wishes are
+ * ones TCGplayer does not price — {@link CountsDeckManagedWishlists} is that card.
+ */
 export const EveryWishCheapest: Story = {
+  args: { widget: savings(3, 3, { managed: false }) },
   render: (args) => <Framed {...args} />,
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -181,9 +186,11 @@ export const EveryWishCheapest: Story = {
  * A pinned wish the plan could not compare: a foil Sol Ring, where no printing of the card is
  * quoted foil at TCGplayer. The plan answers no move and `skipped: 1` beside `starter`'s eight
  * already-cheapest wishes — so the card says there was no price to compare, and **not** that every
- * pinned wish is already cheapest, which is what it said before `skipped` was read.
+ * pinned wish is already cheapest, which is what it said before `skipped` was read. The managed
+ * wishlists are switched off so the one skipped wish is this one.
  */
 export const NothingToCompare: Story = {
+  args: { widget: savings(3, 3, { managed: false }) },
   render: (args) => (
     <WithWishes
       name="nothing-to-compare"
@@ -196,6 +203,22 @@ export const NothingToCompare: Story = {
     const canvas = within(canvasElement);
     await expect(
       await canvas.findByText(skippedOnly(1, MARKETPLACES.tcgplayer), {}, LANDED),
+    ).toBeInTheDocument();
+    await expect(canvas.queryByText(ALL_CHEAPEST)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * **The decks' managed wishlists are counted by default** (issue #598) — they are still wishlists.
+ * `starter`'s two are wishes TCGplayer quotes no price for, so with them in the count the card that
+ * read *already cheapest* with the switch off says two have no price to compare against.
+ */
+export const CountsDeckManagedWishlists: Story = {
+  render: (args) => <Framed {...args} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      await canvas.findByText(skippedOnly(2, MARKETPLACES.tcgplayer), {}, LANDED),
     ).toBeInTheDocument();
     await expect(canvas.queryByText(ALL_CHEAPEST)).not.toBeInTheDocument();
   },

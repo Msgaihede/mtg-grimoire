@@ -12,6 +12,7 @@ import { applySelect, EMPTY_SELECTION, type Selection, type SelectModifiers } fr
 import { defaultFields } from "@/features/transfer/fields";
 import type { TransferFieldId, TransferSurface } from "@/features/transfer/fields";
 import type { ExportFormat } from "@/features/transfer/formats";
+import type { SweepScope } from "@/features/wishlist/wholeWishlistQuery";
 import type { DeckFinish, DeckVariant, PriceMoverWindow, ScannerTrayChoice } from "./ipc";
 
 /**
@@ -798,20 +799,21 @@ interface AppState {
   /** Spend it — `SettingsPage`, on the commit it read it. */
   clearPendingSettingsPanel: () => void;
   /**
-   * **Whether a press somewhere else asked the Wishlist to open its price sweep over the whole
-   * list** — the home page's Wishlist savings widget, which counted what every pinned wish would
-   * save and has to open a dialog planning the same wishes.
+   * **The price sweep a press somewhere else asked the Wishlist to open, or `null`** — the home
+   * page's Wishlist savings widget, which counted what its pinned wishes would save and has to open
+   * a dialog planning the same wishes.
    *
-   * `WishlistPage` answers it with a **scope override** on the dialog — every wish in every
-   * folder, no filters — and never by writing a filter or the folder the reader stands in: those
-   * are the reader's, and closing the dialog leaves the page exactly as they left it. A boolean because there is nothing
-   * else to say; the widget only ever asks about the whole list. Cleared by {@link setActiveView};
-   * written after it.
+   * `WishlistPage` answers it with a **scope override** on the dialog — `wholeWishlistQuery` over
+   * this scope, no filters — and never by writing a filter or the folder the reader stands in:
+   * those are the reader's, and closing the dialog leaves the page exactly as they left it. **A
+   * scope rather than a flag since issue #598**, because the widget can now be set to count the
+   * decks' managed wishlists and only some folders, and the dialog has to plan what it counted.
+   * Cleared by {@link setActiveView}; written after it.
    */
-  pendingOptimize: boolean;
-  /** Ask the Wishlist to open the sweep over everything. **Call {@link setActiveView} before
+  pendingOptimize: SweepScope | null;
+  /** Ask the Wishlist to open the sweep over this scope. **Call {@link setActiveView} before
    *  this, never after.** */
-  setPendingOptimize: () => void;
+  setPendingOptimize: (scope: SweepScope) => void;
   /** Spend it — `WishlistPage`, on the commit it opened the dialog. */
   clearPendingOptimize: () => void;
   /**
@@ -1333,7 +1335,7 @@ export const useAppStore = create<AppState>((set) => ({
         // written after the view change that carries it, so this clears only one nobody read.
         pendingReviewFilter: null,
         pendingSettingsPanel: null,
-        pendingOptimize: false,
+        pendingOptimize: null,
       };
     }),
   // Nothing until a reader pastes a link, which is what keeps the rail row off the screen of
@@ -1620,9 +1622,9 @@ export const useAppStore = create<AppState>((set) => ({
   pendingSettingsPanel: null,
   setPendingSettingsPanel: (pendingSettingsPanel) => set({ pendingSettingsPanel }),
   clearPendingSettingsPanel: () => set({ pendingSettingsPanel: null }),
-  pendingOptimize: false,
-  setPendingOptimize: () => set({ pendingOptimize: true }),
-  clearPendingOptimize: () => set({ pendingOptimize: false }),
+  pendingOptimize: null,
+  setPendingOptimize: (scope) => set({ pendingOptimize: scope }),
+  clearPendingOptimize: () => set({ pendingOptimize: null }),
   printingsRequest: null,
   // One field, and that is the whole point — see the interface. Its predecessor wrote six in
   // this `set` because it was a navigation; a modal drawn over the app is not one, so nothing

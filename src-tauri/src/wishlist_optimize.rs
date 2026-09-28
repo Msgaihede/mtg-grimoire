@@ -14,6 +14,15 @@
 //! equals the `total` the page header shows and the preview cannot quietly stop at the end of
 //! page one.
 //!
+//! **A managed wishlist is out of that scope by default, and in it only when asked.** A wish in
+//! a theory deck's managed folder (or that folder's **Tokens** child) is the deck's printing,
+//! derived by [`crate::managed_wishlist`], whose guard refuses a hand-made repoint — so the
+//! Wishlist page's Optimise button, which exists to press [`apply`], never sees one. The home
+//! page's Wishlist savings widget asks [`plan`] with `include_managed`
+//! ([issue #598](https://github.com/Msgaihede/mtg-grimoire/issues/598)): a managed wish is still
+//! a wish and its saving is still money, so it is classified like any other and each such move
+//! comes back marked [`WishOptimizeMove::managed`] — informational, never sent to [`apply`].
+//!
 //! **Only *pinned* wishes can move.** A wish with `card_id IS NULL` is already drawn and priced
 //! at the cheapest printing of its oracle card by that join, so there is nothing to find; it is
 //! counted in [`WishlistOptimizePlan::already_cheapest`] and never offered.
@@ -70,6 +79,18 @@ pub struct WishOptimizeMove {
     /// Where the wish is filed; `None` is the root. On the row rather than implied by the query
     /// because a flattened preview has to say which drawer each row is in.
     pub folder_id: Option<i64>,
+    /// The wish is filed in a **managed** folder — a theory deck's own, or its **Tokens** child
+    /// (`managed_tokens = 1`), both of which carry the deck's `managed_deck_id`. Only ever `true`
+    /// when [`plan`] was asked with `include_managed`; without it such a wish is not in scope at
+    /// all.
+    ///
+    /// **A managed move is informational, and the frontend never sends one to [`apply`].** The
+    /// wish is the deck's printing, derived by `crate::managed_wishlist`, and a repoint is a
+    /// hand-made edit that module's TEMP guard refuses with `MANAGED` — which, inside `apply`'s
+    /// one transaction, rolls the **whole** batch back rather than skipping the one row. The
+    /// saving is real all the same, which is why the Wishlist savings widget counts it: the way
+    /// to take it is to change the printing in the deck, and the managed folder follows.
+    pub managed: bool,
     pub from: OptimizePrinting,
     pub to: OptimizePrinting,
     /// `from.price - to.price`, per copy — and `None` **exactly when `from.price` is**.
@@ -162,6 +183,8 @@ struct Scanned {
     quantity: i64,
     preferred_finish: Option<String>,
     folder_id: Option<i64>,
+    /// Filed in a managed folder — [`WishOptimizeMove::managed`], read in the same statement.
+    managed: bool,
     /// `None` is an **any-printing** wish, and it is the first thing [`plan`] branches on.
     card_id: Option<String>,
     oracle_id: Option<String>,
@@ -177,7 +200,19 @@ struct Scanned {
 /// What re-pricing the list on screen would change. **Writes nothing.**
 ///
 /// Two passes, and the second is one prepared statement reused per wish.
-pub fn plan(conn: &Connection, q: &WishlistQuery) -> Result<WishlistOptimizePlan, String> {
+///
+/// **`include_managed` widens the scope and changes nothing else.** `false` is the Wishlist
+/// page's Optimise button, and leaves every wish in a managed folder out of scope entirely — out
+/// of `considered` and all three of its parts, exactly as before the flag existed. `true` is the
+/// home page's Wishlist savings widget
+/// ([issue #598](https://github.com/Msgaihede/mtg-grimoire/issues/598)): those wishes join the
+/// scope and go through the very same classification as any other, each move marked
+/// [`WishOptimizeMove::managed`] so the caller can tell which of them [`apply`] would refuse.
+pub fn plan(
+    conn: &Connection,
+    q: &WishlistQuery,
+    include_managed: bool,
+) -> Result<WishlistOptimizePlan, String> {
     // The same expression [`crate::wishlist::WishRow::unit_price`] is, over the wish's own
     // finish column handed across **bare**: `row_price_expr` has to be able to tell "the reader
     // has not said" from "the reader said nonfoil", which on a printing sold only in foil are
@@ -190,16 +225,34 @@ pub fn plan(conn: &Connection, q: &WishlistQuery) -> Result<WishlistOptimizePlan
     // The money sorts order by output aliases (`unit_price`, `owned_quantity`) this statement
     // does not select, so honouring `q.sort` here would mean selecting columns the preview has
     // no use for; a preview is a list of changes rather than a second rendering of the page.
+    //
+    // **A managed wishlist's wishes are its deck's printings, and repointing one is a hand-made
+    // edit `crate::managed_wishlist` refuses** — so by default they are out of scope, and the
+    // clause below is what keeps them out. It is the default rather than the rule since issue
+    // #598: the home page's savings widget asks with `include_managed`, because a managed wish is
+    // still a wish and "buy the cheapest printing instead of the deck's" is still a saving. It
+    // gets the moves and never presses them — see [`WishOptimizeMove::managed`].
+    // `managed_deck_id IS NOT NULL` rather than `managed_tokens = 0`: *any* managed folder, the
+    // deck's own and its Tokens child alike, which is the lookup the v55 rule says keeps that
+    // spelling.
+    let managed_only_when_asked = if include_managed {
+        ""
+    } else {
+        "AND (w.folder_id IS NULL OR w.folder_id NOT IN
+               (SELECT id FROM wishlist_folders WHERE managed_deck_id IS NOT NULL))"
+    };
+    // `managed` is selected **last**, so the eleven positional reads below it keep the indices
+    // they had before it existed. `EXISTS` rather than `IN`, because it answers 0 for a wish at
+    // the root where `NULL IN (…)` answers NULL, and a NULL is not a `bool`.
     let sql = format!(
         "SELECT w.id, w.name, w.quantity, w.preferred_finish, w.folder_id,
                 w.card_id, w.oracle_id,
                 c.id, c.set_code, c.collector_number, c.lang,
-                ({price}) AS cur_price
+                ({price}) AS cur_price,
+                EXISTS (SELECT 1 FROM wishlist_folders mf
+                         WHERE mf.id = w.folder_id AND mf.managed_deck_id IS NOT NULL) AS managed
            FROM {from} WHERE ({where_sql})
-            -- A managed wishlist's wishes are its deck's printings, and repointing one is a
-            -- hand-made edit `crate::managed_wishlist` refuses — so they are never offered.
-            AND (w.folder_id IS NULL OR w.folder_id NOT IN
-                  (SELECT id FROM wishlist_folders WHERE managed_deck_id IS NOT NULL))
+            {managed_only_when_asked}
           ORDER BY w.name ASC, w.id ASC"
     );
     // Collected whole rather than classified as the rows arrive: a wishlist is tens of rows, so
@@ -224,6 +277,7 @@ pub fn plan(conn: &Connection, q: &WishlistQuery) -> Result<WishlistOptimizePlan
                     quantity: r.get(2)?,
                     preferred_finish: r.get(3)?,
                     folder_id: r.get(4)?,
+                    managed: r.get(12)?,
                     card_id: r.get(5)?,
                     oracle_id: r.get(6)?,
                     printing,
@@ -337,6 +391,7 @@ pub fn plan(conn: &Connection, q: &WishlistQuery) -> Result<WishlistOptimizePlan
             quantity: row.quantity,
             preferred_finish: row.preferred_finish,
             folder_id: row.folder_id,
+            managed: row.managed,
             from: OptimizePrinting {
                 card_id: from_card_id,
                 set_code,
@@ -422,15 +477,23 @@ pub fn apply(
 
 /// The preview. **Read-only** connection, blocking pool — `wishlist_list`'s shape, because it is
 /// the same question asked about the same rows.
+///
+/// `include_managed` is the JS `includeManaged`, and **absent reads as `false`**, so a caller
+/// written before issue #598 — the Wishlist page's Optimise button, which sends no such argument
+/// — keeps the answer it always had. Only the home page's savings widget sends `true`.
 #[tauri::command]
 pub async fn wishlist_optimize_plan(
     state: tauri::State<'_, Arc<AppState>>,
     query: WishlistQuery,
+    include_managed: Option<bool>,
 ) -> Result<WishlistOptimizePlan, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || plan(&crate::sync::lock_db_read(&state), &query))
-        .await
-        .map_err(|e| format!("the wishlist could not be read: {e}"))?
+    let include_managed = include_managed.unwrap_or(false);
+    tauri::async_runtime::spawn_blocking(move || {
+        plan(&crate::sync::lock_db_read(&state), &query, include_managed)
+    })
+    .await
+    .map_err(|e| format!("the wishlist could not be read: {e}"))?
 }
 
 /// The press. `wishlist_set_printing`'s shape — plain [`with_write`], because a wish is
@@ -545,7 +608,7 @@ mod tests {
         let conn = dear_and_cheap();
         let id = pin(&conn, "dear", None, 3);
 
-        let out = plan(&conn, &root()).unwrap();
+        let out = plan(&conn, &root(), false).unwrap();
 
         assert_eq!(out.considered, 1);
         assert_eq!(out.already_cheapest, 0);
@@ -574,7 +637,7 @@ mod tests {
         seed(&conn, "new", Some("o1"), "2024-01-01", r#"{"usd":"5.00"}"#);
         pin(&conn, "old", None, 1);
 
-        let out = plan(&conn, &root()).unwrap();
+        let out = plan(&conn, &root(), false).unwrap();
 
         assert!(out.moves.is_empty(), "a tie is not an improvement");
         assert_eq!(out.already_cheapest, 1);
@@ -597,7 +660,7 @@ mod tests {
         seed(&conn, "nothing", Some("o1"), "2024-01-01", "{}");
         pin(&conn, "priced", None, 1);
 
-        let out = plan(&conn, &root()).unwrap();
+        let out = plan(&conn, &root(), false).unwrap();
 
         assert!(out.moves.is_empty());
         assert_eq!(out.already_cheapest, 1);
@@ -625,7 +688,7 @@ mod tests {
         );
         pin(&conn, "dear-foil", Some("foil"), 2);
 
-        let out = plan(&conn, &root()).unwrap();
+        let out = plan(&conn, &root(), false).unwrap();
 
         assert_eq!(out.moves.len(), 1);
         let m = &out.moves[0];
@@ -659,7 +722,7 @@ mod tests {
         );
         pin(&conn, "plain", Some("nonfoil"), 1);
 
-        let out = plan(&conn, &root()).unwrap();
+        let out = plan(&conn, &root(), false).unwrap();
 
         assert!(
             out.moves.is_empty(),
@@ -675,7 +738,7 @@ mod tests {
         let conn = dear_and_cheap();
         any_printing(&conn, "o1");
 
-        let out = plan(&conn, &root()).unwrap();
+        let out = plan(&conn, &root(), false).unwrap();
 
         assert!(out.moves.is_empty());
         assert_eq!(out.already_cheapest, 1);
@@ -697,7 +760,7 @@ mod tests {
         );
         pin(&conn, "orphan", None, 1);
 
-        let out = plan(&conn, &root()).unwrap();
+        let out = plan(&conn, &root(), false).unwrap();
 
         assert!(out.moves.is_empty());
         assert_eq!(out.skipped, 1);
@@ -714,7 +777,7 @@ mod tests {
         conn.execute("DELETE FROM cards WHERE id = 'dear'", [])
             .unwrap();
 
-        let out = plan(&conn, &root()).unwrap();
+        let out = plan(&conn, &root(), false).unwrap();
 
         assert!(out.moves.is_empty());
         assert_eq!(out.skipped, 1);
@@ -730,7 +793,7 @@ mod tests {
         seed(&conn, "b", Some("o1"), "2019-01-01", "{}");
         pin(&conn, "a", None, 1);
 
-        let out = plan(&conn, &root()).unwrap();
+        let out = plan(&conn, &root(), false).unwrap();
 
         assert!(out.moves.is_empty());
         assert_eq!(out.skipped, 1);
@@ -747,7 +810,7 @@ mod tests {
         pin(&conn, "lonely", None, 1); // skipped: no oracle id
         any_printing(&conn, "o1"); // already cheapest: any printing
 
-        let out = plan(&conn, &root()).unwrap();
+        let out = plan(&conn, &root(), false).unwrap();
 
         assert_eq!(out.moves.len(), 1);
         assert_eq!(out.already_cheapest, 2);
@@ -766,7 +829,7 @@ mod tests {
         folder(&conn, 1, "Ordered");
         pin_in(&conn, "dear", None, 1, Some(1));
 
-        let at_root = plan(&conn, &root()).unwrap();
+        let at_root = plan(&conn, &root(), false).unwrap();
         assert_eq!(at_root.considered, 0);
         assert!(at_root.moves.is_empty());
 
@@ -776,6 +839,7 @@ mod tests {
                 folder_id: Some(1),
                 ..root()
             },
+            false,
         )
         .unwrap();
         assert_eq!(in_folder.moves.len(), 1);
@@ -787,6 +851,7 @@ mod tests {
                 flatten: true,
                 ..root()
             },
+            false,
         )
         .unwrap();
         assert_eq!(flattened.moves.len(), 1);
@@ -836,6 +901,7 @@ mod tests {
                 offset: 2,
                 ..root()
             },
+            false,
         )
         .unwrap();
 
@@ -859,7 +925,7 @@ mod tests {
         );
         pin(&conn, "unlisted", None, 4);
 
-        let out = plan(&conn, &root()).unwrap();
+        let out = plan(&conn, &root(), false).unwrap();
 
         assert_eq!(out.moves.len(), 1);
         let m = &out.moves[0];
@@ -867,6 +933,161 @@ mod tests {
         assert_eq!(m.to.price, Some(2.0));
         assert_eq!(m.saved_per_copy, None);
         assert_eq!(m.saved, None);
+    }
+
+    // ── managed wishes (issue #598) ─────────────────────────────────────────────────────
+
+    /// A theory deck's own managed folder.
+    const DECK_FOLDER: i64 = 10;
+    /// That folder's **Tokens** child (`managed_tokens = 1`), under the same `managed_deck_id`.
+    const TOKENS_FOLDER: i64 = 11;
+
+    /// [`DECK_FOLDER`] and [`TOKENS_FOLDER`], written straight into the table with no guard
+    /// armed on this connection — `crate::managed_wishlist` is what makes the real pair, and
+    /// these tests need nothing from it but the two rows its guard and this module's scope read.
+    /// `managed_deck_id` has no foreign key, so no deck row is owed.
+    fn managed_folders(conn: &Connection) {
+        conn.execute_batch(
+            "INSERT INTO wishlist_folders
+                 (id, parent_id, name, sort_order, created_at, updated_at, managed_deck_id)
+             VALUES (10, NULL, 'Izzet plan', 0, 0, 0, 7);
+             INSERT INTO wishlist_folders
+                 (id, parent_id, name, sort_order, created_at, updated_at,
+                  managed_deck_id, managed_tokens)
+             VALUES (11, 10, 'Tokens', 0, 0, 0, 7, 1);",
+        )
+        .unwrap();
+    }
+
+    /// An any-printing wish for `oracle`, filed in `folder_id`.
+    fn any_printing_in(conn: &Connection, oracle: &str, folder_id: i64) {
+        add_wish(
+            conn,
+            &WishInput {
+                oracle_id: Some(oracle.to_owned()),
+                quantity: 1,
+                folder_id: Some(folder_id),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+
+    /// Every folder at once — the widget's question, and the only query that reaches both a root
+    /// wish and a managed one.
+    fn everywhere() -> WishlistQuery {
+        WishlistQuery {
+            flatten: true,
+            ..root()
+        }
+    }
+
+    /// The Wishlist page's Optimise button: a managed wish is **out of scope**, not merely left
+    /// unoffered — it is in none of the four counts, and naming its folder outright reaches it
+    /// no more than Flatten does.
+    #[test]
+    fn without_include_managed_a_managed_wish_is_out_of_scope_entirely() {
+        let conn = dear_and_cheap();
+        managed_folders(&conn);
+        pin_in(&conn, "dear", None, 2, Some(DECK_FOLDER));
+        any_printing_in(&conn, "o1", DECK_FOLDER);
+
+        let out = plan(&conn, &everywhere(), false).unwrap();
+        assert_eq!(out.considered, 0);
+        assert!(out.moves.is_empty());
+        assert_eq!(out.already_cheapest, 0);
+        assert_eq!(out.skipped, 0);
+
+        let in_folder = plan(
+            &conn,
+            &WishlistQuery {
+                folder_id: Some(DECK_FOLDER),
+                ..root()
+            },
+            false,
+        )
+        .unwrap();
+        assert_eq!(in_folder.considered, 0);
+        assert!(in_folder.moves.is_empty());
+    }
+
+    /// The savings widget: the same two wishes are in scope and classified like any other — the
+    /// pinned one a move worth its difference, the any-printing one already cheapest — and the
+    /// move says it is managed, under that key on the wire.
+    #[test]
+    fn with_include_managed_a_managed_wish_on_a_dearer_printing_is_a_move_marked_managed() {
+        let conn = dear_and_cheap();
+        managed_folders(&conn);
+        let id = pin_in(&conn, "dear", None, 2, Some(DECK_FOLDER));
+        any_printing_in(&conn, "o1", DECK_FOLDER);
+
+        let out = plan(&conn, &everywhere(), true).unwrap();
+
+        assert_eq!(out.considered, 2);
+        assert_eq!(out.already_cheapest, 1, "the any-printing managed wish");
+        assert_eq!(out.skipped, 0);
+        assert_eq!(out.moves.len(), 1);
+        let m = &out.moves[0];
+        assert_eq!(m.wish_id, id);
+        assert!(m.managed);
+        assert_eq!(m.folder_id, Some(DECK_FOLDER));
+        assert_eq!(m.from.card_id, "dear");
+        assert_eq!(m.to.card_id, "cheap");
+        assert_eq!(m.saved, Some(6.0));
+        assert_eq!(
+            serde_json::to_value(m).unwrap()["managed"],
+            serde_json::json!(true)
+        );
+    }
+
+    /// The Tokens child carries its deck's `managed_deck_id`, so it is managed too — the scope's
+    /// lookup means *any* managed folder, not the deck's own (`managed_tokens = 0`) alone.
+    #[test]
+    fn a_wish_in_a_decks_tokens_child_is_managed_too() {
+        let conn = dear_and_cheap();
+        managed_folders(&conn);
+        pin_in(&conn, "dear", None, 1, Some(TOKENS_FOLDER));
+
+        let excluded = plan(&conn, &everywhere(), false).unwrap();
+        assert_eq!(excluded.considered, 0);
+
+        let included = plan(&conn, &everywhere(), true).unwrap();
+        assert_eq!(included.considered, 1);
+        assert_eq!(included.moves.len(), 1);
+        assert!(included.moves[0].managed);
+        assert_eq!(included.moves[0].folder_id, Some(TOKENS_FOLDER));
+    }
+
+    /// A wish at the root and one in a reader's own folder are never managed, in either mode —
+    /// and asking with `include_managed` adds the managed wish beside them without disturbing
+    /// either. The root row is the `NULL` case `EXISTS` is there for.
+    #[test]
+    fn an_ordinary_wish_is_never_marked_managed_in_either_mode() {
+        let conn = dear_and_cheap();
+        managed_folders(&conn);
+        folder(&conn, 1, "Ordered");
+        let at_root = pin(&conn, "dear", None, 1);
+        let in_drawer = pin_in(&conn, "dear", None, 1, Some(1));
+        let managed = pin_in(&conn, "dear", None, 1, Some(DECK_FOLDER));
+
+        let without = plan(&conn, &everywhere(), false).unwrap();
+        assert_eq!(without.considered, 2);
+        let got: Vec<(i64, bool)> = without
+            .moves
+            .iter()
+            .map(|m| (m.wish_id, m.managed))
+            .collect();
+        assert_eq!(got.len(), 2);
+        assert!(got.contains(&(at_root, false)));
+        assert!(got.contains(&(in_drawer, false)));
+
+        let with = plan(&conn, &everywhere(), true).unwrap();
+        assert_eq!(with.considered, 3);
+        let got: Vec<(i64, bool)> = with.moves.iter().map(|m| (m.wish_id, m.managed)).collect();
+        assert_eq!(got.len(), 3);
+        assert!(got.contains(&(at_root, false)));
+        assert!(got.contains(&(in_drawer, false)));
+        assert!(got.contains(&(managed, true)));
     }
 
     // ── apply ───────────────────────────────────────────────────────────────────────────

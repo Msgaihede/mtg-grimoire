@@ -134,7 +134,10 @@ import { StickyNotesWidget } from "./widgets/StickyNotesWidget";
 import { SummaryWidget, SummaryWidgetSettings } from "./widgets/SummaryWidget";
 import { ToReviewWidget } from "./widgets/ToReviewWidget";
 import { ValueHistoryWidget } from "./widgets/ValueHistoryWidget";
-import { WishlistSavingsWidget } from "./widgets/WishlistSavingsWidget";
+import {
+  WishlistSavingsWidget,
+  WishlistSavingsWidgetSettings,
+} from "./widgets/WishlistSavingsWidget";
 import { WishlistValueWidget } from "./widgets/WishlistValueWidget";
 
 /**
@@ -272,6 +275,8 @@ function renderExtraSettings(widget: HomeWidget, onConfig: ConfigPatch): ReactNo
     // the checklist writes exactly what that body reads, and a fix to one is a fix to both.
     case "deckCompletion":
       return <DecksWidgetSettings widget={widget} onConfig={onConfig} />;
+    case "wishlistSavings":
+      return <WishlistSavingsWidgetSettings widget={widget} onConfig={onConfig} />;
     default:
       return undefined;
   }

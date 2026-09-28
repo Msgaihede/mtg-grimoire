@@ -69,7 +69,10 @@ vi.mock("./widgets/PriceMoversWidget", () => ({ PriceMoversWidget: stubs.body })
 vi.mock("./widgets/StickyNotesWidget", () => ({ StickyNotesWidget: stubs.body }));
 vi.mock("./widgets/DeckCompletionWidget", () => ({ DeckCompletionWidget: stubs.body }));
 vi.mock("./widgets/ToReviewWidget", () => ({ ToReviewWidget: stubs.body }));
-vi.mock("./widgets/WishlistSavingsWidget", () => ({ WishlistSavingsWidget: stubs.body }));
+vi.mock("./widgets/WishlistSavingsWidget", () => ({
+  WishlistSavingsWidget: stubs.body,
+  WishlistSavingsWidgetSettings: stubs.settings,
+}));
 vi.mock("./widgets/ComingSoonWidget", () => ({ ComingSoonWidget: stubs.body }));
 
 /**

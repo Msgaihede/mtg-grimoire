@@ -115,6 +115,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { WishlistPage } from "./WishlistPage";
 import { MANAGED_EMPTY, MANAGED_EMPTY_UNKNOWN } from "./managed";
 import { NEW_FOLDER_SHELF } from "./wishShelfPlan";
+import { WHOLE_WISHLIST } from "./wholeWishlistQuery";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
 import { SHELF_FOLDS_KEY } from "@/features/shelves/useShelfFolds";
@@ -706,7 +707,7 @@ beforeEach(() => {
     // **The two other hand-offs this page consumes**, for the folder's reason: a case that left
     // either written would open the next case on the flagged wishes or inside the price sweep.
     pendingReviewFilter: null,
-    pendingOptimize: false,
+    pendingOptimize: null,
   });
 });
 
@@ -4621,6 +4622,7 @@ describe("the price sweep", () => {
     to: { cardId: "c2", setCode: "2x2", collectorNumber: "117", lang: "en", price: 2 },
     savedPerCopy: 3,
     saved: 6,
+    managed: false,
   };
   const SECOND: WishOptimizeMove = {
     ...MOVE,
@@ -5375,7 +5377,7 @@ describe("a needs-review hand-off over a filed wishlist", () => {
  */
 describe("a price sweep another page asked for", () => {
   it("opens the dialog over every wish, flattened and unfiltered, and spends the hand-off", async () => {
-    useAppStore.setState({ pendingOptimize: true });
+    useAppStore.setState({ pendingOptimize: WHOLE_WISHLIST });
     wrap(<WishlistPage />);
 
     const dialog = await screen.findByRole("dialog");
@@ -5388,7 +5390,7 @@ describe("a price sweep another page asked for", () => {
     expect(asked).toEqual({ flatten: true, marketplace: "tcgplayer", limit: 0, offset: 0 });
     // The scope sentence says so, rather than naming the root the page is standing at.
     expect(within(dialog).getByText("Every folder")).toBeInTheDocument();
-    await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBe(false));
+    await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBeNull());
     // **A scope override and never a write**: the list behind the dialog is still the page's own
     // shelves, never read flat. (It also asserted the reader's persisted Flatten switch was left
     // off, until Flatten went with the shelves.)
@@ -5396,13 +5398,39 @@ describe("a price sweep another page asked for", () => {
     expect(lastQuery().shelves).toBeDefined();
   });
 
+  /**
+   * **Issue #598: the widget can count the decks' managed wishlists and only some folders**, so the
+   * hand-off carries its scope and the dialog plans exactly that — the managed switch and the
+   * shelves included, and the subtitle naming how many folders rather than "Every folder".
+   */
+  it("plans the widget's own scope — its managed switch and its folders", async () => {
+    useAppStore.setState({ pendingOptimize: { includeManaged: true, shelves: [0, 7] } });
+    wrap(<WishlistPage />);
+
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(wishlistOptimizePlan).toHaveBeenCalled());
+    const asked = wishlistOptimizePlan.mock.calls[
+      wishlistOptimizePlan.mock.calls.length - 1
+    ][0] as WishlistQuery;
+    expect(asked).toEqual({
+      flatten: true,
+      marketplace: "tcgplayer",
+      includeManaged: true,
+      shelves: [0, 7],
+      limit: 0,
+      offset: 0,
+    });
+    expect(within(dialog).getByText("2 folders")).toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBeNull());
+  });
+
   /** The override is the hand-off's alone: the page's own button plans the page's own list. */
   it("plans the page's own list again when the Optimise button is pressed afterwards", async () => {
     const user = userEvent.setup();
-    useAppStore.setState({ pendingOptimize: true });
+    useAppStore.setState({ pendingOptimize: WHOLE_WISHLIST });
     wrap(<WishlistPage />);
     await screen.findByRole("dialog");
-    await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBe(false));
+    await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBeNull());
 
     await user.click(screen.getByRole("button", { name: "Close the price check" }));
     wishlistOptimizePlan.mockClear();

@@ -1,8 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ipc,
+  type OptimizePlanQuery,
   type WishlistOptimizePlan,
-  type WishlistQuery,
   type WishOptimizeApplyItem,
 } from "@/lib/ipc";
 import { refreshCardSearches } from "@/lib/searchMarks";
@@ -16,9 +16,10 @@ import { refreshCardSearches } from "@/lib/searchMarks";
  * {@link WishlistOptimizePlan}'s own promise, and what makes `considered` equal the `Wishes`
  * figure in the header), and it answers a *set* rather than a list — so a reader flipping the
  * table's sort must not refetch a plan that cannot come back different. `useWishlist`'s `filters`
- * satisfies this exactly, and is handed over whole.
+ * satisfies this exactly, and is handed over whole — with no `includeManaged`, so the page's own
+ * sweep never plans a managed wish it could not apply. Only `wholeWishlistQuery` sends one.
  */
-export type OptimizeQuery = Omit<WishlistQuery, "limit" | "offset" | "sort">;
+export type OptimizeQuery = Omit<OptimizePlanQuery, "limit" | "offset" | "sort">;
 
 /**
  * The key the plan is cached under.

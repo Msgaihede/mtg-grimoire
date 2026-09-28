@@ -10042,17 +10042,27 @@ export function readHandlers(db: FakeDb) {
      * so it answers through every second of a sync like every other read in this table, and every
      * figure in it was quoted at the marketplace the query carried. A second copy of that fact
      * travelling back is one more thing that can disagree with the hook the dialog renders with.
+     *
+     * **A deck's managed wishlist is out of scope unless `includeManaged` asks for it** (issue
+     * #598). Absent or `false` is the crate's `NOT IN` clause: a wish filed in a folder carrying a
+     * `managedDeckId` — the deck's own folder or its `Tokens` child, which carries the deck's id
+     * too — is left out of the scope rather than skipped, so it is counted nowhere. `true` puts
+     * those wishes in scope and classifies them exactly like any other wish, and every move says
+     * which it is in `managed`: `true` for a wish filed in a managed folder, and never `true` when
+     * the switch is off, because no such wish is in scope then. **A managed move is information
+     * and never an instruction** — the wish is the deck's printing, applying it is a hand edit
+     * refused in {@link MANAGED_WISHLIST}'s words, and the dialog never sends one.
      */
-    wishlist_optimize_plan: (args: { query: WishlistQuery }): WishlistOptimizePlan => {
+    wishlist_optimize_plan: (args: {
+      query: WishlistQuery;
+      includeManaged?: boolean;
+    }): WishlistOptimizePlan => {
       const q = args.query;
       const mp = marketplaceOf(q.marketplace);
-      // Never a wish in a deck's managed wishlist (user schema v48) — `wishlist_optimize::plan`'s
-      // own `NOT IN` clause: that wish is the deck's printing, and repointing it is a hand edit
-      // refused in {@link MANAGED_WISHLIST}'s words. Left out of the scope rather than skipped,
-      // exactly as the crate's `WHERE` leaves it out, so it is not counted anywhere either.
-      const rows = wishlistScope(db, q).filter(
-        (w) => w.folderId === null || (wishFolderById(db, w.folderId)?.managedDeckId ?? null) === null,
-      );
+      const includeManaged = args.includeManaged === true;
+      const isManaged = (w: FakeWish): boolean =>
+        w.folderId !== null && (wishFolderById(db, w.folderId)?.managedDeckId ?? null) !== null;
+      const rows = wishlistScope(db, q).filter((w) => includeManaged || !isManaged(w));
       const moves: WishOptimizeMove[] = [];
       let alreadyCheapest = 0;
       let skipped = 0;
@@ -10116,6 +10126,9 @@ export function readHandlers(db: FakeDb) {
           // dialog can leave such a row unticked without lying about what it would save.
           savedPerCopy: fromPrice === null ? null : fromPrice - best.price,
           saved: fromPrice === null ? null : (fromPrice - best.price) * w.quantity,
+          // Only ever `true` under `includeManaged`, since the filter above leaves every managed
+          // wish out otherwise — the header's last paragraph.
+          managed: isManaged(w),
         });
       }
       return { moves, considered: rows.length, alreadyCheapest, skipped };
