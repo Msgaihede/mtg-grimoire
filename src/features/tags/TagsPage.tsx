@@ -419,7 +419,7 @@ function TaxonomyGaps() {
       {/* Direction rather than mood, and it is the whole of what a reader can do: there is no
           button for this anywhere in the app. The backend asks Scryfall for both files on every
           launch that is due one, so the honest instruction is to leave it running or come back. */}
-      <p className="mt-1">The app fetches them in the background. Nothing here needs a press.</p>
+      <p className="mt-1">The app fetches them in the background automatically.</p>
     </div>
   );
 }
