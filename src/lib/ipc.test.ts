@@ -3263,9 +3263,13 @@ describe("ipc argument names match the Rust command signatures", () => {
       );
 
     invoke.mockResolvedValue([]);
-    await ipc.deckCompletion("cardkingdom");
-    expect(invoke).toHaveBeenCalledWith("deck_completion", { marketplace: "cardkingdom" });
+    await ipc.deckCompletion("cardkingdom", "theory");
+    expect(invoke).toHaveBeenCalledWith("deck_completion", {
+      marketplace: "cardkingdom",
+      compare: "theory",
+    });
     declares(deckCompletionRs, "deck_completion", "marketplace");
+    declares(deckCompletionRs, "deck_completion", "compare");
 
     invoke.mockResolvedValue(2);
     await ipc.deckReviewCount();

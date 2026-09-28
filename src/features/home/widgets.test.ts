@@ -251,17 +251,18 @@ describe("WIDGETS", () => {
         toggles: { virtual: false, theory: true, basics: false },
         chip: "window",
       },
-      // Round two (2026-09-26). `scope` is the `decks` row's two of three words — no `Archived
-      // too`, because a deck put away is not one a reader is finishing — and `complete` is the
-      // second switch in the registry that starts off: finished decks are counted in the footer
-      // and listed only when asked for.
+      // Round two (2026-09-26), and issue #600. `compare` is sent to Rust and each word is a
+      // `Compare` arm there; `scope` is `newPrintings`' two words, a checklist of the decks the
+      // comparison can measure; and `complete` is the second switch in the registry that starts
+      // off: finished decks are counted in the footer and listed only when asked for.
       deckCompletion: {
         picks: {
-          scope: { ids: ["recent", "pinned"], dflt: undefined },
+          compare: { ids: ["collection", "theory"], dflt: undefined },
+          scope: { ids: ["all", "chosen"], dflt: undefined },
           order: { ids: ["done", "cheapest", "name"], dflt: undefined },
         },
         toggles: { complete: false },
-        chip: "order",
+        chip: "compare",
       },
       // On by default: Recently removed is a holding area rather than a problem, and the switch
       // exists for the reader who uses it as an archive.
@@ -346,20 +347,19 @@ describe("WIDGETS", () => {
   });
 
   /**
-   * **`deckCompletion`'s `Pinned` checklist is `DecksWidgetSettings`, reused rather than copied**,
-   * and that component words its hint off the *decks* row — `Choose Pinned under Which decks…`.
-   * So this card's `scope` row has to say the same words, or the reused sentence names a control
-   * this card does not have.
+   * **`deckCompletion`'s scope row is `newPrintings`' words** (issue #600): `All decks` and a
+   * `Chosen…` checklist, since its checklist offers only measurable decks and is no longer the
+   * Decks widget's. The two cards say one thing the same way.
    */
-  it("gives deck completion's scope row the decks widget's own words", () => {
+  it("gives deck completion's scope row the new printings widget's own words", () => {
     const labelOf = (pick: WidgetPick, id: string) =>
       pick.options.find((option) => option.id === id)?.label;
-    const decks = widgetMeta("decks").picks.find((pick) => pick.key === "scope")!;
+    const printings = widgetMeta("newPrintings").picks.find((pick) => pick.key === "scope")!;
     const completion = widgetMeta("deckCompletion").picks.find((pick) => pick.key === "scope")!;
 
-    expect(completion.label).toBe(decks.label);
-    expect(labelOf(completion, "pinned")).toBe(labelOf(decks, "pinned"));
-    expect(labelOf(completion, "recent")).toBe(labelOf(decks, "recent"));
+    expect(completion.label).toBe(printings.label);
+    expect(labelOf(completion, "all")).toBe(labelOf(printings, "all"));
+    expect(labelOf(completion, "chosen")).toBe(labelOf(printings, "chosen"));
   });
 
   /**
