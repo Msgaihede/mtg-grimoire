@@ -412,7 +412,7 @@ describe("AllPrintingsDialog", () => {
 
     const dialog = await screen.findByRole("dialog", { name: /Sol Ring/ });
     await waitFor(() =>
-      expect(within(dialog).getByRole("button", { name: /Sort printings by/ })).toHaveTextContent(
+      expect(within(dialog).getByRole("button", { name: "Sort printings by" })).toHaveTextContent(
         "Release date",
       ),
     );
@@ -592,14 +592,18 @@ describe("AllPrintingsDialog", () => {
     cardPrintings.mockResolvedValue(
       page([p("a", "lea"), { ...p("b", "leb"), lang: "ja" }, { ...p("c", "lec"), lang: "ph" }]),
     );
+    const user = userEvent.setup();
     renderDialog();
     open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
 
-    expect(await screen.findByRole("checkbox", { name: "Japanese — 1 printing" })).toBeVisible();
-    expect(screen.getByRole("checkbox", { name: "Phyrexian — 1 printing" })).toBeVisible();
-    // The visible column is still the code — 128px of box, and a column of full names would
-    // truncate to nothing.
-    expect(screen.getByText("JA")).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: "Language" }));
+    const listbox = within(await screen.findByRole("listbox"));
+    // Presence rather than visibility: the popup is a `motion` surface — see the set picker's
+    // test below for why its first frame fails `toBeVisible`.
+    expect(listbox.getByRole("option", { name: /Japanese/ })).toBeInTheDocument();
+    expect(listbox.getByRole("option", { name: /Phyrexian/ })).toBeInTheDocument();
+    // The code still rides beside the name, because it is what the wall's own tiles print.
+    expect(listbox.getByText("JA")).toBeInTheDocument();
   });
 
   /**
@@ -649,10 +653,10 @@ describe("AllPrintingsDialog", () => {
     await user.type(await screen.findByRole("searchbox", { name: "Filter printings" }), "zzz");
     expect(await screen.findByText(/No printings match/)).toBeVisible();
 
-    // **`Clear all` is the filter bar's, and it is the only one.** The empty state says why the
+    // **`Reset all` is the filter bar's, and it is the only one.** The empty state says why the
     // wall is empty and points at that control rather than drawing a second one — two buttons
     // whose names both match /Clear/ would make this line throw on an ambiguous match.
-    await user.click(screen.getByRole("button", { name: "Clear all" }));
+    await user.click(screen.getByRole("button", { name: /^Reset all/ }));
     expect(await screen.findByText("1 printing")).toBeVisible();
   });
 

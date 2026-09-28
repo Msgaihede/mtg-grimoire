@@ -470,20 +470,33 @@ export const Default: Story = {
     // {@link SetPicker}'s subject rather than this story's.
     await expect(modal.getByRole("button", { name: "Set" })).toHaveTextContent("Any set");
 
-    // Out of reach, and saying so in all three channels the chip owns.
-    const promo = modal.getByRole("button", { name: "Promo — 0 printings" });
-    await expect(promo).toHaveAttribute("aria-disabled", "true");
-    // …while a treatment this card really has is an ordinary offer beside it.
-    await expect(modal.getByRole("button", { name: "Foil — 3 printings" })).not.toHaveAttribute(
-      "aria-disabled",
+    // The two other pickers at rest say the same thing the set picker does: nothing narrowed.
+    await expect(modal.getByRole("button", { name: "Language" })).toHaveTextContent(
+      "Any language",
+    );
+    await expect(modal.getByRole("button", { name: "Treatment" })).toHaveTextContent(
+      "Any treatment",
     );
 
-    // The one non-English printing, counted rather than merely present: `JA 1` is what makes the
-    // row worth pressing on a card whose other seven rows are the same language — and the row is
-    // *named* `Japanese`, because the two letters are the column's width rather than the fact.
-    await expect(
-      modal.getByRole("checkbox", { name: "Japanese — 1 printing" }),
-    ).toBeInTheDocument();
+    // Opened, a treatment no printing carries is out of reach and says so…
+    await userEvent.click(modal.getByRole("button", { name: "Treatment" }));
+    const treatments = within(await canvas.findByRole("listbox"));
+    await expect(treatments.getByRole("option", { name: /Promo/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    // …while a treatment this card really has is an ordinary offer beside it.
+    await expect(treatments.getByRole("option", { name: /Foil/ })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+    await userEvent.keyboard("{Escape}");
+
+    // The one non-English printing, counted rather than merely present — and the row is *named*
+    // `Japanese`, because two letters are a column's width rather than the fact.
+    await userEvent.click(modal.getByRole("button", { name: "Language" }));
+    const langs = within(await canvas.findByRole("listbox"));
+    await expect(langs.getByRole("option", { name: /Japanese/ })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
 
     // A tile, by the name that tells it from the other seven. **The first one in artist order**
     // rather than a count of them: jsdom lays nothing out, so how many tiles a virtualised wall
@@ -552,19 +565,20 @@ export const NamedFoils: Story = {
     // `nph 9` is sold in both finishes and is neither.
     await expect(modal.queryByRole("img", { name: "Foil" })).toBeNull();
 
-    // The eighth chip, counting the two — an ordinary offer rather than a greyed one, unlike
-    // `Etched` beside it, which no printing of this card has.
-    await expect(
-      modal.getByRole("button", { name: "Special foil — 2 printings" }),
-    ).not.toHaveAttribute("aria-disabled");
-    await expect(modal.getByRole("button", { name: "Etched — 0 printings" })).toHaveAttribute(
+    // The treatment picker's `Special foil` row, counting the two — an ordinary offer rather than
+    // a greyed one, unlike `Etched` below it, which no printing of this card has.
+    await userEvent.click(modal.getByRole("button", { name: "Treatment" }));
+    const treatments = within(await canvas.findByRole("listbox"));
+    const special = treatments.getByRole("option", { name: /Special foil/ });
+    await expect(special).not.toHaveAttribute("aria-disabled");
+    await expect(treatments.getByRole("option", { name: /Etched/ })).toHaveAttribute(
       "aria-disabled",
       "true",
     );
 
     // Pressing it narrows the wall to them, and the plain row is **gone** rather than merely
     // uncounted.
-    await userEvent.click(modal.getByRole("button", { name: "Special foil — 2 printings" }));
+    await userEvent.click(special);
     await expect(await modal.findByText("showing 2 of 3 printings")).toBeInTheDocument();
     await expect(modal.queryByAltText("Elesh Norn, Grand Cenobite (NPH 9)")).toBeNull();
     await expect(
@@ -815,7 +829,7 @@ export const RefusedSwap: Story = {
  * cannot. Saying them in one sentence would tell a reader with a typo in the box that their card
  * had left the database.
  *
- * **Neither state draws a control of its own.** `Clear all` is the filter bar's and appears
+ * **Neither state draws a control of its own.** `Reset all` is the filter bar's and is live
  * exactly when there is something to clear — which is exactly when this sentence is on screen —
  * so a second button with the same job would be one more thing to keep in step and an ambiguous
  * target for anything addressing it by name. The play asserts that there is precisely one of
@@ -839,7 +853,7 @@ export const NoMatches: Story = {
     await expect(modal.getByText("showing 0 of 8 printings")).toBeInTheDocument();
 
     // One way out, not two.
-    const clear = modal.getAllByRole("button", { name: /Clear/ });
+    const clear = modal.getAllByRole("button", { name: /Reset all|Clear/ });
     await expect(clear).toHaveLength(1);
     await userEvent.click(clear[0]);
 

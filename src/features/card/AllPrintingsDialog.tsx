@@ -85,6 +85,7 @@
  * sixth, with the wall's ring, the card pane and this modal all naming one card.
  */
 import { useCallback, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
@@ -265,6 +266,17 @@ export function AllPrintingsDialog() {
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
   const selectCard = useAppStore((s) => s.setSelectedCardId);
+  /**
+   * The header's subtitle, as a node the body writes its count line into.
+   *
+   * **The count is drawn up here and owned down there.** It is worded from the filter, and the
+   * filter is {@link Body}'s state for the reason the `key` below gives — a session that ends with
+   * the modal, with nothing anywhere resetting it. Lifting the filter to reach the shell's
+   * `subtitle` would trade that for an effect clearing it on close, so the shell draws an empty
+   * slot and the body portals its sentence into it. A callback ref rather than `useRef`, because
+   * the body has to re-render once the node exists, and a ref's assignment tells nobody.
+   */
+  const [countSlot, setCountSlot] = useState<HTMLSpanElement | null>(null);
 
   /**
    * The deck row a swap made, held for the caret — `null` whenever this modal has written nothing.
@@ -458,6 +470,10 @@ export function AllPrintingsDialog() {
       // filter that survives a close, and then an effect out here to clear it — which is exactly
       // what `Dialog`'s doc says a host must not need.
       title={request?.name ?? ""}
+      // Mono and tabular, because it is a count — the data face, as it was on its own line. The
+      // slot is drawn before the query answers, so the header's height is fixed from the first
+      // frame and the line arriving moves nothing below it.
+      subtitle={<span ref={setCountSlot} className="font-mono tabular-nums" />}
       closeLabel="Close printings"
       // **Three quarters of the window, floored at the window floor and ceilinged at the column
       // the shell reserves.**
@@ -553,6 +569,7 @@ export function AllPrintingsDialog() {
         <Body
           key={request.oracleId}
           request={request}
+          countSlot={countSlot}
           onDone={close}
           onSwapped={(row) => {
             swapped.current = row;
@@ -571,10 +588,14 @@ export function AllPrintingsDialog() {
  */
 function Body({
   request,
+  countSlot,
   onDone,
   onSwapped,
 }: {
   request: PrintingsRequest;
+  /** The header's subtitle node, which the count line is portalled into — `null` for the one
+   *  render before the shell's ref lands. */
+  countSlot: HTMLElement | null;
   /** Close the modal — pressed on a successful swap or repoint, and on a press that opens the
    *  card detail modal. */
   onDone: () => void;
@@ -992,11 +1013,10 @@ function Body({
     // scrolls: `CardGrid` owns its own scroller and virtualiser and needs a bounded parent, which
     // is what `min-h-0 flex-1` on this column and on the wall's wrapper make it.
     <div className="flex min-h-0 flex-1 flex-col gap-3 px-5 pb-5 pt-4">
-      {/* A count, so it is set in the data face — and above the controls rather than below them,
-          because it is what the controls are read against. */}
-      {query.data && (
-        <p className="shrink-0 font-mono text-xs tabular-nums text-dim">{countLine}</p>
-      )}
+      {/* The count, under the card's name in the header rather than on a line of its own above the
+          controls — it reads as the title's caption there, and the body keeps one less row. See
+          the shell's `countSlot` for why it is portalled rather than passed up. */}
+      {query.data && countSlot && createPortal(countLine, countSlot)}
 
       <div className="shrink-0">
         <PrintingsFilterBar
@@ -1077,8 +1097,8 @@ function Body({
       {/* Two empty states, because they are two different facts. One is about the filter and the
           reader can undo it; the other is about the card and they cannot.
 
-          **Neither draws a control of its own.** `PrintingsFilterBar` renders `Clear all`
-          whenever the filter is active, which is exactly when the first sentence is on screen —
+          **Neither draws a control of its own.** `PrintingsFilterBar` renders `Reset all`,
+          live whenever the filter is active, which is exactly when the first sentence is on screen —
           a second button with the same job would be one more thing to keep in step and an
           ambiguous target for anything addressing it by name. */}
       {items.length > 0 && shown.length === 0 && (

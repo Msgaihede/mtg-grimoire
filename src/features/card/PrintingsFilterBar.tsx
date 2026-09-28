@@ -10,28 +10,29 @@
  * would either pass everything or nothing. What differs is the set, the language, the treatment
  * and the collector number, and those are exactly the four below.
  *
- * **It is built out of `@/components/FilterChips` rather than beside it.** That module is what
- * keeps the search's row and the collection's row one row rather than two lookalikes, and this is
- * the third surface in the app that asks a reader to narrow a list of cards. A chip here that
- * invented its own height would sit 2px off the line it shares with the text box; one that
- * invented its own focus mark would be the only control in the window a keyboard reader loses.
+ * **One centred toolbar of 36px controls, the search page's own shape** (2026-09-28). This row
+ * used to be five differently shaped things under captions — a bare text box, a captioned set
+ * picker, a checkbox list up to 160px tall, a wrapping row of eight chips and a 32px sort picker —
+ * laid out `items-start`, so the one uncaptioned box floated 20px above its neighbours and the
+ * tallest control set the height of the whole band. Every picker is a {@link MultiDropdown} now,
+ * which is what `SetCombobox` already was: a trigger that says `Any language` or `2 languages`,
+ * turns gold while it narrows, and opens a list with each option's count beside it. One shape,
+ * one height, and the row is centred because nothing in it is taller than anything else.
  *
- * **And the sets are `SetCombobox`, the search's own picker, for one rung further up the same
- * argument.** This row used to draw them two ways — toggle chips up to eight sets, a scrolling
- * checkbox list past that — which made the control's *shape* a fact about the card: a printing in
- * eight sets got a wide wrapping chip row, one in nine got a 160px box, and the row changed height
- * between two cards a chevron apart. One picker at every size settles that, and it is the picker a
- * reader has already learnt on the search page and the collection: type a name or a code, read the
- * set's own keyrune glyph, tick several without the list moving under the press. What is passed to
- * it is this card's sets and only those — see the `options` prop, which also turns its `list_sets`
- * query off, so the wall's own rows stay the only source of what is offered here.
+ * **It is built out of `@/components/FilterChips` rather than beside it.** That module is what
+ * keeps the search's row and the collection's row one row rather than two lookalikes: the box is
+ * `FILTER_FIELD`, the reset is `ResetAll`, and the filters that are on are stated as
+ * `ActiveFilterChip`s on a line of their own, drawn only while something is on — the search bar's
+ * arrangement, so a reader who has learnt one has learnt this.
+ *
+ * **And the sets are `SetCombobox`, the search's own picker.** What is passed to it is this card's
+ * sets and only those — see the `options` prop, which also turns its `list_sets` query off, so the
+ * wall's own rows stay the only source of what is offered here.
  */
-import { useId, useMemo, type ReactNode } from "react";
-import { X } from "lucide-react";
-import { Dropdown } from "@/components/Dropdown/Dropdown";
+import { useId, useMemo } from "react";
+import { Dropdown, MultiDropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
-import { FILTER_CONTROL, FILTER_FIELD, ToggleChip } from "@/components/FilterChips";
-import { useTooltip } from "@/components/tooltip/useTooltip";
+import { ActiveFilterChip, FILTER_FIELD, FILTER_LABEL, ResetAll } from "@/components/FilterChips";
 import { SetCombobox } from "@/features/search/SetCombobox";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
@@ -39,170 +40,14 @@ import type { SetSummary } from "@/lib/ipc";
 import { languageName } from "@/lib/languages";
 import { cn } from "@/lib/utils";
 import {
+  activePrintingFilterCount,
   EMPTY_PRINTING_FILTER,
-  isFilterActive,
   type LangOption,
   type PrintingFilter,
   type SetOption,
   type TreatmentOption,
 } from "./printingFilters";
 import { isPrintingGroupBy, PRINTING_GROUP_BY_OPTIONS, type PrintingGroupBy } from "./printings";
-
-/**
- * The word above one group of controls.
- *
- * 11px and uppercase — the deck editor toolbar's caption, which is the nearest control row in the
- * app that labels its pickers rather than letting a placeholder do it. This row needs them where
- * the search's row does not: three of its groups draw **codes** (`LEA`, `EN`) or bare words, and a
- * column of three-letter codes beside a column of two-letter codes is a puzzle without a heading.
- */
-const CAPTION = "text-[0.6875rem] uppercase tracking-wide text-dim";
-
-/**
- * One control with its caption, and the accessible group the caption names.
- *
- * **The visible caption is `aria-hidden` and the name is spelled on the group instead.** A
- * `role="group"` takes no name from its contents, so the two would not merge on their own — the
- * caption would simply be read out as a stray line of text before the controls it belongs to. One
- * fact, said once, in each of the two channels.
- */
-function Field({ name, children }: { name: string; children: ReactNode }) {
-  return (
-    <div role="group" aria-label={name} className="flex flex-col gap-1">
-      <span aria-hidden="true" className={CAPTION}>
-        {name}
-      </span>
-      {children}
-    </div>
-  );
-}
-
-/** One row of a {@link CheckList}: what the filter sends, what the reader reads, and how many. */
-interface CheckOption {
-  /** The value handed back to `onToggle` — a set code, a language code. */
-  key: string;
-  /** What is drawn on the row. */
-  text: string;
-  /**
-   * What the row is called in words, where {@link text} is an abbreviation — a language code.
-   *
-   * The row's accessible name and its tooltip are built from this rather than from what is
-   * drawn, so `JA` is announced and hovered as `Japanese`; a set row, whose text is already the
-   * set's name, leaves it unset and the two are the same string. The visible column stays the
-   * code because the box is 128px wide and a column of full names would truncate to nothing.
-   */
-  name?: string;
-  /** How many printings it would leave. */
-  count: number;
-}
-
-/**
- * A scrolling list of checkboxes — the shape the language picker takes.
- *
- * **One caller, and it stays a component rather than being inlined into it.** It was written for
- * two, and the sets moved to `SetCombobox`; what is left is not a generic list looking for a
- * second user but the boundary between *what a language row is* and *where the row's data comes
- * from*, which is what keeps the accname note below attached to the markup it is about. A language
- * is a two-letter code and could not have gone the sets' way: a combobox whose rows read `JA`,
- * `PT`, `RU` is a control with nothing to type into it.
- *
- * The count is right-aligned in the data face rather than run into the label with a separator, so
- * a reader scans one column of names and one column of numbers instead of parsing every row.
- *
- * **The bare number is named in the row's own accessible name rather than left to stand alone.**
- * Nothing beside it says what is being counted — the caption says what the *names* are — so the
- * checkbox is labelled `Japanese — 41 printings` and the same sentence is the row's tooltip.
- * **The name in it is the language's, not the two letters the row draws** (`CheckOption.name`):
- * the sentence is the one place either reader is given room for the words, and a hover that
- * answered `JA — 41 printings` would have repeated the abbreviation rather than explained it. The `<label>` still wraps the input, so the whole row is a hit target; the `aria-label`
- * is what stops the two spans being concatenated into `Limited Edition Alpha12`, which is what the
- * accname algorithm does to inline boxes with nothing between them (measured on `ResetAll`,
- * 2026-08-09).
- *
- * The options arrive in the order `printingFilters` built them — **English first, then by count**
- * — and that order is deliberately not run through `sortOptions`. It is one of the two exemptions
- * this app grants: the order *is* the information. English is what the rest of the app is in and
- * what a reader narrowing a wall of 862 Forests to "the normal ones" is reaching for, and on a
- * heavily reprinted card it is not the largest group — so neither the alphabet nor the count would
- * put it where it belongs.
- *
- * The sets no longer take this exemption and lost something real to it: `SetCombobox` sorts by
- * name, so the set a card was printed in *most* is no longer the first row. It is the trade the
- * picker was chosen for — one shape at every size, a needle to type, and the count still on the
- * row's tooltip — and the wall's own `Sort printings by` control answers the "which set has the
- * most" question directly.
- */
-function CheckList({
-  options,
-  selected,
-  onToggle,
-  mono = false,
-  className,
-}: {
-  options: readonly CheckOption[];
-  /** The keys currently on. */
-  selected: readonly string[];
-  onToggle: (key: string) => void;
-  /** Whether the label is a code rather than a word — a language, not a set name. */
-  mono?: boolean;
-  /** The box's width, which its caller knows and it does not. */
-  className?: string;
-}) {
-  const tip = useTooltip();
-  return (
-    <ul
-      className={cn(
-        // `relative`, because a scroll container has to be the containing block for its own
-        // absolutely positioned content: `overflow` clips a descendant only when the scroller
-        // lies between it and that descendant's containing block, so anything absolute in here
-        // without it would be laid out against the *document* and stretch that instead.
-        "relative max-h-40 overflow-y-auto rounded-md border border-border bg-surface",
-        // 6px of padding rather than none, and it is the focus mark's room rather than taste.
-        // `overflow` clips at the padding box and `FOCUS` is a 2px outline standing 2px off the
-        // control — 4px proud — so a checkbox flush against the content edge would lose that
-        // side of its indicator: a WCAG 2.4.7 failure that nothing in the box tree reports and
-        // jsdom cannot see. The same 6px `DROP_MARK_ROOM` spends on the deck's grow-views.
-        "p-1.5",
-        className,
-      )}
-    >
-      {options.map((option) => {
-        const on = selected.includes(option.key);
-        const name = `${option.name ?? option.text} — ${plural(option.count, "printing")}`;
-        return (
-          <li key={option.key}>
-            <label
-              {...tip(name, { describes: false })}
-              className={cn(
-                "flex cursor-pointer items-center gap-2 rounded px-1 py-0.5 text-sm",
-                // The two states the chips beside them are told apart by, in the same two
-                // colours: on is bright, off is dim and brightens under the mouse so the row
-                // answers a pointer. No fill — the direction's colour budget is spent on the
-                // mana chips and the card art below, and a list of filled rows would out-shout
-                // the wall it is narrowing.
-                on ? "text-text" : "text-dim hover:text-text",
-              )}
-            >
-              <input
-                type="checkbox"
-                checked={on}
-                onChange={() => onToggle(option.key)}
-                aria-label={name}
-                className={cn("shrink-0 accent-accent", FOCUS)}
-              />
-              <span className={cn("min-w-0 flex-1 truncate", mono && "font-mono")}>
-                {option.text}
-              </span>
-              <span aria-hidden="true" className="shrink-0 font-mono text-xs tabular-nums text-dim">
-                {option.count}
-              </span>
-            </label>
-          </li>
-        );
-      })}
-    </ul>
-  );
-}
 
 /**
  * One value added to a list of them, or taken out of it.
@@ -213,6 +58,17 @@ function CheckList({
  */
 function toggleIn<T>(list: readonly T[], value: T): T[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
+}
+
+/**
+ * What a multi-picker's trigger says: `Any language`, `1 language`, `3 languages`.
+ *
+ * A count and never a value, which is `MultiDropdown.triggerLabel`'s own contract and the reason
+ * the trigger keeps one width while the reader ticks — a trigger naming `Japanese, Phyrexian`
+ * would push every control to its right along the row mid-press.
+ */
+function countLabel(n: number, noun: string): string {
+  return n === 0 ? `Any ${noun}` : plural(n, noun);
 }
 
 /**
@@ -240,18 +96,17 @@ export function PrintingsFilterBar({
   setOptions: readonly SetOption[];
   /** The languages they are in, with counts — English first. */
   langOptions: readonly LangOption[];
-  /** All seven treatments with their counts, **including the ones at zero**. */
+  /** All the treatments with their counts, **including the ones at zero**. */
   treatmentOptions: readonly TreatmentOption[];
   /** The ordering the wall is drawn in — the pane's persisted preference, shared with it. */
   sort: PrintingGroupBy;
   /** Every change to the four filters, as a whole replacement value. */
   onFilterChange: (next: PrintingFilter) => void;
-  /** A change to the ordering alone. A second channel deliberately — see the Clear control. */
+  /** A change to the ordering alone. A second channel deliberately — see `Reset all`. */
   onSortChange: (next: PrintingGroupBy) => void;
 }) {
   const sortId = useId();
   const sortLabelId = `${sortId}-label`;
-  const active = isFilterActive(filter);
   /**
    * This card's sets in the shape the search's picker takes, and the counts it draws them with.
    *
@@ -260,10 +115,7 @@ export function PrintingsFilterBar({
    * to offer*, and a `SetSummary` is what that picker's rows are built from — `setType` and
    * `releasedAt` are `null` because a `Printing` does not carry them and the picker draws neither,
    * so inventing a value would be worse than admitting there is none. `counts` is *how many rows
-   * each one holds in this search*, which is what `facetTitle` writes into the row's tooltip
-   * (`Limited Edition Alpha — 12 printings`) and what the greying rule reads. They happen to carry
-   * the same number here and are not the same fact: on the search page the first comes from a
-   * session-cached `list_sets()` and the second from the facet index.
+   * each one holds in this search*, which is what `facetTitle` writes into the row's tooltip.
    *
    * Neither can be zero, because both are counted off the very rows being filtered — so unlike
    * the treatments below, nothing here is ever drawn out of reach and no greyed state can arise.
@@ -284,178 +136,198 @@ export function PrintingsFilterBar({
     [setOptions],
   );
 
+  /**
+   * The languages, **named in words with the code beside them.** The row is the language's name
+   * because a column of two-letter codes is a puzzle (`PH` needed its words — issue #161); the
+   * code stays as a mono prefix because it is what the wall's own tiles print, so a reader can
+   * match one to the other.
+   *
+   * In `langOptions`' order — English first, then by count — and deliberately not through
+   * `sortOptions`: the order is the information, the language nearly every printing is in at the
+   * head and the rarities under it.
+   */
+  const langDropdownOptions = useMemo<DropdownOption[]>(
+    () =>
+      langOptions.map((o) => ({
+        value: o.lang,
+        label: languageName(o.lang),
+        icon: (
+          <span aria-hidden="true" className="w-6 shrink-0 font-mono text-xs text-dim">
+            {o.lang.toUpperCase()}
+          </span>
+        ),
+        hint: String(o.count),
+        title: `${languageName(o.lang)} — ${plural(o.count, "printing")}`,
+      })),
+    [langOptions],
+  );
+
+  /**
+   * The treatments, in `TREATMENTS`' order and deliberately not alphabetical — the other of the
+   * two exemptions from `sortOptions`, the order *is* the information: it runs from what the card
+   * is **printed in** (foil, etched) through what the printing **is** (promo, full art) to what its
+   * **frame** does (borderless, showcase, extended art).
+   *
+   * **A treatment no printing of this card carries is drawn greyed rather than dropped**, which is
+   * `facets.ts`' rule and its reason: an option that vanishes reads as a control that broke, where
+   * a greyed one reads as a fact about the card. `DropdownOption.disabled` is the shell's
+   * `aria-disabled`, so the row stays announced and refuses the press.
+   */
+  const treatmentDropdownOptions = useMemo<DropdownOption[]>(
+    () =>
+      treatmentOptions.map((o) => ({
+        value: o.id,
+        label: o.label,
+        hint: String(o.count),
+        title: `${o.label} — ${plural(o.count, "printing")}`,
+        disabled: o.count === 0,
+      })),
+    [treatmentOptions],
+  );
+
+  /**
+   * The filters that are on, as statements — one chip per kind, `Treatment: Borderless, Foil`,
+   * which is the search's `ActiveFilterChip` contract (`Colour: Blue, Red`). A press clears that
+   * kind. The typed text is not stated: it is still in the box it was typed into, and the box's
+   * own ✕ is its way out.
+   */
+  const stated = [
+    filter.sets.length > 0 && {
+      label: `Set: ${filter.sets.map((c) => c.toUpperCase()).join(", ")}`,
+      remove: () => onFilterChange({ ...filter, sets: [] }),
+    },
+    filter.langs.length > 0 && {
+      label: `Language: ${filter.langs.map(languageName).join(", ")}`,
+      remove: () => onFilterChange({ ...filter, langs: [] }),
+    },
+    filter.treatments.length > 0 && {
+      label: `Treatment: ${filter.treatments
+        .map((id) => treatmentOptions.find((o) => o.id === id)?.label ?? id)
+        .join(", ")}`,
+      remove: () => onFilterChange({ ...filter, treatments: [] }),
+    },
+  ].filter((chip) => chip !== false);
+
   return (
-    // One wrapping row, aligned to its **top**: the language picker is a box up to 160px tall and
-    // everything else is a 36px control, so centring would leave the text box floating in the
-    // middle of a tall row rather than at the head of it. It takes one box to need this rather
-    // than the two that used to be here, and the set picker becoming a 36px trigger is what makes
-    // the row's resting height that box's alone. `flex-wrap` is not optional — a row of
-    // fixed-width controls is sized by the narrowest surface that draws it, and a flex item
-    // cannot shrink below its own min-content, so an unwrapped row hangs out of its container and
-    // the nearest `overflow-y-auto` ancestor turns the overhang into a horizontal scrollbar.
-    <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
-      {/* **The four fields it matches are in the placeholder**, because a search box that
-          silently ignores what you typed is worse than no box: the card's own name is identical
-          on every row of this list and is the one thing typing it here will not find.
+    <div className="flex flex-col gap-2">
+      {/* **Centred, because every control on it is 36px.** `flex-wrap` is still not optional — a
+          row of controls that cannot shrink below their own min-content hangs out of its box at
+          a narrow enough window, and the nearest `overflow` ancestor turns the overhang into a
+          horizontal scrollbar. Wrapped, the sort group's `ml-auto` holds it against the right
+          edge of whichever line it lands on. */}
+      <div className="flex flex-wrap items-center gap-x-2.5 gap-y-2">
+        {/* **The four fields it matches are in the placeholder**, because a search box that
+            silently ignores what you typed is worse than no box: the card's own name is identical
+            on every row of this list and is the one thing typing it here will not find.
 
-          A fixed width rather than `flex-1`, and that is what lets the Clear control at the far
-          end be drawn only when there is something to clear. `ResetAll` is drawn always and
-          greyed at zero for the opposite reason: the search's row opens with a `flex-1` box, so a
-          button arriving mid-row takes its whole width out of that box and slides every chip to
-          its right left, under the finger that just pressed one. Nothing here grows, so the free
-          space at the end of the row is what the button appears into and nothing moves. */}
-      <input
-        type="search"
-        aria-label="Filter printings"
-        value={filter.text}
-        onChange={(e) => onFilterChange({ ...filter, text: e.target.value })}
-        placeholder="Set, number or artist"
-        // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and a
-        // box the reader types into must not, or the native ✕ slides out from under the pointer
-        // clearing it. Issue #179 — the reason is on the constant. This box is `w-64`, where the
-        // press still caught 7 of the button's 10 pixels — the row's `flex-1` boxes caught none.
-        className={cn(
-          FILTER_FIELD,
-          FOCUS,
-          "w-64 min-w-0 border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
-        )}
-      />
+            `flex-1` and capped, as the search bar's box is. It could not be while `Clear all`
+            appeared at the row's end only with something to clear — a growing box beside an
+            arriving button slides every control between them — but `Reset all` is drawn always
+            now, so the free space is spent up front and nothing moves when a filter goes on.
 
-      {/* The picker is 36px and the language box beside it is up to 160px, which is what the row's
-          `items-start` is for — and what makes the caption above it worth keeping even though the
-          combobox already names itself. Without it the button would sit 20px above the first row
-          of every field beside it. */}
-      <Field name="Sets">
+            `FILTER_FIELD` and not `FILTER_CONTROL`: the row's controls dip 3% under the press and
+            a box the reader types into must not, or the native ✕ slides out from under the
+            pointer clearing it. Issue #179 — the reason is on the constant. */}
+        <input
+          type="search"
+          aria-label="Filter printings"
+          value={filter.text}
+          onChange={(e) => onFilterChange({ ...filter, text: e.target.value })}
+          placeholder="Set, number or artist"
+          className={cn(
+            FILTER_FIELD,
+            FOCUS,
+            "min-w-48 max-w-[27.5rem] flex-1 basis-48 border-border bg-surface px-3",
+            "placeholder:text-dim focus:border-accent",
+          )}
+        />
+
         <SetCombobox
           selected={filter.sets}
           options={sets}
           counts={setCounts}
-          // Second in the row rather than at the end of it, which is where both search-shaped
-          // callers put it — so the listbox is pinned to the trigger's *left* edge and opens
-          // rightwards, into the row it belongs to instead of back across the text box beside it.
+          // Its list is pinned to the trigger's *left* edge and opens rightwards, into the row it
+          // belongs to instead of back across the text box beside it.
           align="start"
           onToggle={(code) => onFilterChange({ ...filter, sets: toggleIn(filter.sets, code) })}
         />
-      </Field>
 
-      {/* Always the list, at every size, unlike the sets above. A language is a two-letter code,
-          and a row of them as chips would be a row of unlabelled squares; the list gives each one
-          its count on the same line, which is what makes `JA 41` worth pressing. */}
-      <Field name="Languages">
-        <CheckList
-          options={langOptions.map((o) => ({
-            key: o.lang,
-            text: o.lang.toUpperCase(),
-            // The words the code stands for, which is what the row is hovered and announced as —
-            // see `CheckOption.name`, and `languages.ts` for why `PH` needed them (issue #161).
-            name: languageName(o.lang),
-            count: o.count,
-          }))}
+        <MultiDropdown
+          label="Language"
+          triggerLabel={countLabel(filter.langs.length, "language")}
+          options={langDropdownOptions}
           selected={filter.langs}
-          mono
-          className="w-32"
+          active={filter.langs.length > 0}
+          align="start"
           onToggle={(lang) => onFilterChange({ ...filter, langs: toggleIn(filter.langs, lang) })}
         />
-      </Field>
 
-      {/* In `TREATMENTS`' order and deliberately not alphabetical — the other of the two
-          exemptions from `sortOptions`, the order *is* the information: it runs from what the
-          card is **printed in** (foil, etched) through what the printing **is** (promo, full art)
-          to what its **frame** does (borderless, showcase, extended art), which is also the order
-          of the fields each one is read off. An alphabet would interleave the three. */}
-      <Field name="Treatments">
-        <div className="flex flex-wrap gap-1">
-          {treatmentOptions.map((option) => {
-            /**
-             * No printing of this card carries it. Drawn greyed rather than dropped, which is
-             * `facets.ts`' rule and its reason: an option that vanishes reads as a control that
-             * broke, where a greyed one reads as a fact about the card — and the row keeps a
-             * fixed shape instead of reflowing as the reader narrows.
-             */
-            const empty = option.count === 0;
-            return (
-              <ToggleChip
-                key={option.id}
-                label={option.label}
-                pressed={filter.treatments.includes(option.id)}
-                // The count is in the name as well as in the state, so the fact reaches a reader
-                // who is hearing the row rather than looking at it: `Showcase — 0 printings`.
-                title={`${option.label} — ${plural(option.count, "printing")}`}
-                // **`ToggleChip.disabled` was written for this caller.** The prop's own doc used
-                // to record its absence as deliberate, on the grounds that the only faceted chip
-                // of this kind was the search's `Owned` — a cycle, which greying would strand
-                // mid-way. These are not a cycle: each is one independent option over one card's
-                // printings. The chip owns the whole of what greyed means (the dimming, the
-                // dropped hover and press responses, `aria-disabled`, and refusing the click), so
-                // nothing about it is spelled out here and nothing can drift.
-                disabled={empty}
-                onClick={() =>
-                  onFilterChange({
-                    ...filter,
-                    treatments: toggleIn(filter.treatments, option.id),
-                  })
-                }
-              />
-            );
-          })}
-        </div>
-      </Field>
-
-      {/* **`Sort`, never `Group by`** — the pane's four modes are the same four orderings here,
-          but this wall draws no headings: `CardGrid` positions its rows absolutely inside a
-          virtualiser, so a heading cannot be interleaved without owning the virtualisation. The
-          ordering is shared with the pane and so is the reader's choice of it; only the word
-          differs, because only what it does differs.
-
-          **The visible caption supplies the accessible name directly, through `labelledBy`,
-          rather than a second `aria-label` spelling the same words.** A `<select>` needed the
-          words written twice — once as the caption's text, once as its own `aria-label` —
-          because nothing tied the two together; `Dropdown`'s `labelledBy` ties the trigger's
-          name to the caption itself, so the two cannot drift the way a hand-copied string could,
-          and the name still *contains* the visible label (WCAG 2.5.3) rather than widening past
-          it — which is the trap in the shorter `Sort by` this row could have drawn instead. */}
-      <div className="flex flex-col gap-1">
-        <label id={sortLabelId} htmlFor={sortId} className={CAPTION}>
-          Sort printings by
-        </label>
-        <Dropdown
-          id={sortId}
-          labelledBy={sortLabelId}
-          size="sm"
-          value={sort}
-          options={SORT_DROPDOWN_OPTIONS}
-          onChange={(value) => {
-            // `SORT_DROPDOWN_OPTIONS` is built from nothing but `PRINTING_GROUP_BY_OPTIONS`'s
-            // own four values, so `value` here can only ever be one of them — the same
-            // guarantee a native `<select>`'s event gave for free. Kept as a real check rather
-            // than a cast because `Dropdown`'s `onChange` is typed as a bare `string` and cannot
-            // see that provenance on its own.
-            if (isPrintingGroupBy(value)) onSortChange(value);
+        <MultiDropdown
+          label="Treatment"
+          triggerLabel={countLabel(filter.treatments.length, "treatment")}
+          options={treatmentDropdownOptions}
+          selected={filter.treatments}
+          active={filter.treatments.length > 0}
+          align="start"
+          onToggle={(id) => {
+            const option = treatmentOptions.find((o) => o.id === id);
+            if (option)
+              onFilterChange({ ...filter, treatments: toggleIn(filter.treatments, option.id) });
           }}
-          className="text-text"
+        />
+
+        {/* **`Sort`, never `Group by`** — the pane's four modes are the same four orderings
+            here, but this wall draws no headings: `CardGrid` positions its rows absolutely inside
+            a virtualiser, so a heading cannot be interleaved without owning the virtualisation.
+
+            **The caption sits beside the trigger rather than over it**, in the tray's 11px
+            caption face, so it costs the row no height. **It supplies the accessible name
+            through `labelledBy`** rather than a second `aria-label` spelling the same words, so
+            the two cannot drift — and the name is still `Sort printings by`, the rest of it
+            `sr-only`: a bare verb names an action and not the thing it acts on (the search bar's
+            `Sort results` is the same call). The name *starts with* the visible word, which is
+            what WCAG 2.5.3 asks of it. */}
+        <div className="ml-auto flex items-center gap-2">
+          <label id={sortLabelId} htmlFor={sortId} className={FILTER_LABEL}>
+            Sort{" "}
+            <span className="sr-only">printings by</span>
+          </label>
+          <Dropdown
+            id={sortId}
+            labelledBy={sortLabelId}
+            value={sort}
+            options={SORT_DROPDOWN_OPTIONS}
+            align="end"
+            onChange={(value) => {
+              // `SORT_DROPDOWN_OPTIONS` is built from nothing but `PRINTING_GROUP_BY_OPTIONS`'s
+              // own four values, so `value` here can only ever be one of them. Kept as a real
+              // check rather than a cast because `Dropdown`'s `onChange` is typed as a bare
+              // `string` and cannot see that provenance on its own.
+              if (isPrintingGroupBy(value)) onSortChange(value);
+            }}
+            className="text-text"
+          />
+        </div>
+
+        {/* **It clears the four filters and never the sort.** Clearing what you are looking at
+            must not change the order you chose to read it in — the two are separate channels for
+            that reason, and it is `useCardSearch`'s own rule for its sort. Drawn always and
+            greyed at zero, `ResetAll`'s rule, so its arrival never moves the row. */}
+        <ResetAll
+          count={activePrintingFilterCount(filter)}
+          onReset={() => onFilterChange(EMPTY_PRINTING_FILTER)}
         />
       </div>
 
-      {/* **It clears the four filters and never the sort.** Clearing what you are looking at must
-          not change the order you chose to read it in — the two are separate channels for that
-          reason, and it is `useCardSearch`'s own rule for its sort.
-
-          Drawn only while there is something to clear, which this row may do and the search's row
-          may not: nothing to the left of it grows, so `ml-auto` puts it in free space at the far
-          end and its arrival moves nothing. */}
-      {active && (
-        <button
-          type="button"
-          onClick={() => onFilterChange(EMPTY_PRINTING_FILTER)}
-          className={cn(
-            FILTER_CONTROL,
-            FOCUS,
-            "ml-auto inline-flex items-center gap-1.5 border-border px-2.5 text-dim hover:text-text",
-          )}
-        >
-          <X className="size-4" aria-hidden="true" />
-          Clear all
-        </button>
+      {/* Drawn only while something is on, as the search bar's line is: an appearing chip line
+          moves only the wall under it, which has just been re-filtered and is moving anyway. */}
+      {stated.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2">
+          <span className={cn(FILTER_LABEL, "shrink-0")}>Filtering by</span>
+          {stated.map((chip) => (
+            <ActiveFilterChip key={chip.label} label={chip.label} onRemove={chip.remove} />
+          ))}
+        </div>
       )}
     </div>
   );
