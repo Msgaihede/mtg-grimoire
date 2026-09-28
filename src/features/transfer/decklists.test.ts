@@ -426,6 +426,26 @@ describe("a real decklist round-trips through every format this app can read", (
   });
 });
 
+/** A card filed in a named pile, for the two hand-built decks below — the 105-line corpus holds
+ *  no pile name either of them is about. */
+function filed(
+  name: string,
+  quantity: number,
+  categoryName: string,
+  over: Partial<TransferCard> = {},
+): TransferCard {
+  return transferCard({
+    name,
+    quantity,
+    setCode: "C21",
+    collectorNumber: "1",
+    categoryName,
+    categoryKind: "main",
+    categoryActive: true,
+    ...over,
+  });
+}
+
 /**
  * Issue #555: the reader's own pile names, when a name holds a character Archidekt's syntax
  * reads — a comma (the bracket's first entry is the pile), braces (a flag) or square brackets
@@ -441,28 +461,11 @@ describe("a real decklist round-trips through every format this app can read", (
  * brackets included. A heading ending in `(x) (y)` is a printing hint to `parse.ts`'s heading
  * rule, which then reads the line as a card and leaves the pile's own cards in whatever section
  * came before — here, behind the Commander pile, the command zone. `<x> <y>` is nothing to it. A
- * pile whose *own* name ends in parentheses (`Removal (cheap)`) or opens with a count (`2 Drops`)
- * still trips that rule, and is the heading rule's to answer rather than this writer's, so none is
- * in this fixture.
+ * pile whose *own* name ends in parentheses (`Removal (cheap)`) is the heading rule's to answer
+ * rather than this writer's, and it does — see the next block.
  */
 describe("a pile name Archidekt's own syntax cannot carry", () => {
   const RAMP = "Ramp, Fixing {x} [y]";
-  const filed = (
-    name: string,
-    quantity: number,
-    categoryName: string,
-    over: Partial<TransferCard> = {},
-  ): TransferCard =>
-    transferCard({
-      name,
-      quantity,
-      setCode: "C21",
-      collectorNumber: "1",
-      categoryName,
-      categoryKind: "main",
-      categoryActive: true,
-      ...over,
-    });
   const cards = [
     filed("Bruna, Light of Alabaster", 1, "Commander", { categoryKind: "commander" }),
     filed("Sol Ring", 1, RAMP),
@@ -510,5 +513,44 @@ describe("a pile name Archidekt's own syntax cannot carry", () => {
     const twice = formatExport(exportCardsFor(once), format, DECK_FIELDS(format));
 
     expect(twice, format).toBe(once);
+  });
+});
+
+/**
+ * A pile name Archidekt carries exactly and the heading rule used to refuse: `Removal (cheap)`
+ * ends in a printing-hint shape, so its heading was read as a card called `Removal` from set
+ * `CHEAP` and every card under it stayed behind the `Commander` heading, in the command zone. The
+ * writer leaves the name alone — rewriting a character the reader typed would be inventing a
+ * spelling — and the parser reads the heading because the bracket on the line below names it.
+ */
+describe("a pile name ending in a parenthesis, behind the Commander pile", () => {
+  const CHEAP = "Removal (cheap)";
+  const cards = [
+    filed("Bruna, Light of Alabaster", 1, "Commander", { categoryKind: "commander" }),
+    filed("Swords to Plowshares", 1, CHEAP),
+    filed("Path to Exile", 2, CHEAP),
+    filed("Sol Ring", 1, "Ramp"),
+  ];
+
+  it("reads the heading as a heading and files its cards out of the command zone", () => {
+    const text = formatExport(cards, "archidekt", DECK_FIELDS("archidekt"));
+    const parsed = parseDecklist(text);
+
+    expect(text).toContain(`\n\n${CHEAP}\n`);
+    expect(parsed.issues).toEqual([]);
+    expect(parsed.lines.map((line) => [line.name, line.section])).toEqual([
+      ["Bruna, Light of Alabaster", "commander"],
+      ["Swords to Plowshares", "deck"],
+      ["Path to Exile", "deck"],
+      ["Sol Ring", "deck"],
+    ]);
+    expect(pilesOf(text)).toEqual({ Commander: 1, [CHEAP]: 3, Ramp: 1 });
+  });
+
+  it("is a fixed point through archidekt", () => {
+    const once = formatExport(cards, "archidekt", DECK_FIELDS("archidekt"));
+    const twice = formatExport(exportCardsFor(once), "archidekt", DECK_FIELDS("archidekt"));
+
+    expect(twice).toBe(once);
   });
 });

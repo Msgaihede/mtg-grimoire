@@ -110,8 +110,15 @@ and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
   lines to a per-line reader and a category name can be a real card (`Fog`, `Wrath`, `Duress`).
   **Its four clauses each protect a hand-written list `parse.test.ts` carries as its own test**: a
   candidate has **no quantity, no printing hint and no bracket** (a heading is a bare word, and
-  every card line in an export that writes headings carries at least one of the three); **the next
-  line that makes a claim carries a count**, which is what leaves `Sol Ring` / `Arcane Signet` /
+  every card line in an export that writes headings carries at least one of the three) — **except
+  that the hint gives way when the next claim's bracket names the candidate exactly** (issue #555's
+  follow-up): `Removal (cheap)` is a real pile name and a hint shape at once, and read as a card
+  it left every card under it in the zone above, the command zone after `Commander`. **Equality,
+  never "the next line has a bracket"**, because Deckbox and MTGGoldfish write `[SET]` in that
+  place and a set code holds no parenthesis, so it can never admit a hint-shaped line — an
+  uncounted `Sol Ring (C21)` above `4 Lightning Bolt [M10]` stays a card. **The count never gives
+  way**: `1 Sol Ring` above a bracketed line is a card, and so is a pile called `2 Drops`; **the
+  next line that makes a claim carries a count**, which is what leaves `Sol Ring` / `Arcane Signet` /
   `Path to Exile` alone _and_ what makes a heading over an empty section impossible, so "nothing is
   ever silently dropped" stays true — a line consumed as a heading always opened at least one card;
   **it is preceded by a blank line**, without which `Sol Ring` / `4 Shock` loses its first card;
@@ -119,7 +126,8 @@ and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
   Archidekt deck with no commander opens on a heading with nothing above it while a hand-written
   list writes no brackets at all. **The failure it keeps, named rather than hidden**: a
   hand-written list with a blank line, then a bare card name, then a counted line, loses that name.
-  No exporter in scope emits that shape.
+  No exporter in scope emits that shape. **So does a pile called `2 Drops`**, read as two copies of
+  a card called `Drops` — its cards still reach the deck, by the bracket rule below.
 - **The first bracket entry is the pile, and `{flag}`s come off.**
   `[Land,Maybe (New){noDeck}{noPrice}]` is `Land`. **Verified 105/105 against a real Archidekt
   export** (re-counted 2026-08-16): in every one of its 105 lines the first entry is the heading
@@ -180,6 +188,19 @@ and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
   the same `SECTIONS` map a `Commander` heading goes through, so nothing downstream has to know
   which of the two a line arrived by, and only a name the section vocabulary has never heard of
   becomes a `categoryName`.
+- **A bracket naming a _pile_ puts its line in the deck proper — but only under a zone whose own
+  brackets have named it, and never over the line's own `SB:`** (issue #555's follow-up). It is
+  the bracket's half of what a pile heading does to `section`, and what files a card back out of
+  the command zone when the heading above it was missed (`2 Drops` still reads as a card). **The
+  gate is `zoneBracketed`, cleared at every heading and set by a bracket naming the open heading's
+  own zone** — Archidekt writes `[Commander{top}]` under `Commander`, `[Sideboard]` under
+  `Sideboard`, and this app's writer the same. **An ungated rule would move `Sideboard` /
+  `2 Duress [M19]` into the main deck**, and `Commander` / `1 Atraxa [C16]` out of the command
+  zone: a `[SET]` list's bracket is a set code, which is never a zone word and so never opens the
+  gate, so those keep their zones (and are still filed in a pile named after the set, which is
+  the out-of-scope misreading it always was). `SB:` outranks the bracket for the precedence
+  chain's reason below — a zone is a rules fact and a pile is filing, so a bracket moves a card
+  out of the *open heading's* zone and never out of one the line names itself.
 - **`ParsedLine.categoryName` is `null` whenever the section is not `deck`**, enforced on the way
   out of the loop rather than left to whoever reads it. That invariant is the whole of what makes
   `categoryFor` **three** rungs rather than four: no reachable line carries a zone and a free-form
@@ -508,8 +529,10 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   of a heading matches `HINT_TAIL`, so the heading would be read as a card line — and after a
   `Commander` heading, every card under it would stay in the command zone. The rewrite is lossy on
   purpose and **CSV is exempt** (its quoted Category cell carries all five). A pile whose *own*
-  name ends in a one-word parenthesis (`Removal (cheap)`) or starts with a count (`2 Drops`) still
-  trips the heading rule, and that predates this.
+  name ends in a one-word parenthesis (`Removal (cheap)`) is written as the reader typed it and
+  the parser reads its heading because the bracket below names it; one that starts with a count
+  (`2 Drops`) still reads as a card called `Drops`, and its cards reach the deck through their
+  bracket — both in the `## Import` section above.
 - **Every CSV cell a spreadsheet would read as a formula gets a leading apostrophe** (issue #555,
   `formula.ts`'s `escapeFormula`): `=`, `+`, `-`, `@`, tab and CR, after any run of apostrophes, so
   a note already starting `'=` is written `''=` and `unescapeFormula` on read gives it back

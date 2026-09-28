@@ -398,6 +398,89 @@ describe("parseDecklist", () => {
     expect(lines.map((l) => l.name)).toEqual(["Sol Ring", "Removal"]);
   });
 
+  it("reads a heading ending in a parenthesis when the bracket below names it", () => {
+    // `Removal (cheap)` ends in a printing-hint shape, which used to refuse it as a heading — so
+    // it was read as a card called `Removal` from set `CHEAP`, and the pile's own cards stayed
+    // behind in the command zone. The bracket naming the line exactly is what lets it through.
+    const { lines, issues } = parseDecklist(
+      "Commander\n1x Bruna, Light of Alabaster (avr) 5 [Commander]\n\n" +
+        "Removal (cheap)\n1x Swords to Plowshares (ice) 54 [Removal (cheap)]",
+    );
+    expect(issues).toEqual([]);
+    expect(lines.map((l) => [l.name, l.section, l.categoryName])).toEqual([
+      ["Bruna, Light of Alabaster", "commander", null],
+      ["Swords to Plowshares", "deck", "Removal (cheap)"],
+    ]);
+    // And on the first line of the file, where the bracket was already required.
+    const first = parseDecklist("Removal (cheap)\n1x Swords to Plowshares (ice) 54 [Removal (cheap)]");
+    expect(first.lines.map((l) => l.name)).toEqual(["Swords to Plowshares"]);
+  });
+
+  it("keeps a hinted line a card when the bracket below names anything else", () => {
+    // Deckbox and MTGGoldfish write `[SET]` where Archidekt writes `[Category]`. A set code holds
+    // no parenthesis, so it can never be the hint-shaped line above it — which is what keeps an
+    // uncounted `Sol Ring (C21)` over a `[SET]` line the card it is.
+    const { lines } = parseDecklist("Deck\n4 Shock\n\nSol Ring (C21)\n4 Lightning Bolt [M10]");
+    expect(lines.map((l) => [l.name, l.setCode])).toEqual([
+      ["Shock", null],
+      ["Sol Ring", "C21"],
+      ["Lightning Bolt", null],
+    ]);
+  });
+
+  it("never reads a counted line as a heading, even when the bracket below names it", () => {
+    // The failure it keeps, named rather than hidden: a pile called `2 Drops` is read as two
+    // copies of a card called `Drops`. The count refusal is what keeps `1 Sol Ring` above a
+    // bracketed line a card, and it is not relaxed for a bracket.
+    const { lines } = parseDecklist(
+      "Deck\n1 Sol Ring\n\n2 Drops\n1x Goblin Guide (zen) 126 [2 Drops]",
+    );
+    expect(lines.map((l) => [l.name, l.quantity])).toEqual([
+      ["Sol Ring", 1],
+      ["Drops", 2],
+      ["Goblin Guide", 1],
+    ]);
+  });
+
+  it("files a bracket naming a pile into the deck, under a zone its brackets named", () => {
+    // `2 Drops` is still read as a card, so the heading that should close the command zone never
+    // does. Bruna's `[Commander]` is what says this file's brackets name piles, so the bracket on
+    // the line below the missed heading puts its card back in the deck proper.
+    const { lines } = parseDecklist(
+      "Commander\n1x Bruna, Light of Alabaster (avr) 5 [Commander]\n\n" +
+        "2 Drops\n1x Goblin Guide (zen) 126 [2 Drops]",
+    );
+    expect(lines.map((l) => [l.name, l.section, l.categoryName])).toEqual([
+      ["Bruna, Light of Alabaster", "commander", null],
+      ["Drops", "commander", null],
+      ["Goblin Guide", "deck", "2 Drops"],
+    ]);
+  });
+
+  it("keeps a [SET] list's zones, whose brackets never name one", () => {
+    // The same bracket with the opposite meaning: no set code is a zone word, so nothing under
+    // these headings ever says the brackets here are piles, and each card keeps its heading's
+    // zone. The pile name is still the set code — out of scope, and wrong before this.
+    const { lines } = parseDecklist(
+      "Commander\n1 Atraxa, Praetors' Voice [C16]\n\nDeck\n4 Lightning Bolt [M10]\n\n" +
+        "Sideboard\n2 Duress [M19]",
+    );
+    expect(lines.map((l) => [l.name, l.section])).toEqual([
+      ["Atraxa, Praetors' Voice", "commander"],
+      ["Lightning Bolt", "deck"],
+      ["Duress", "sideboard"],
+    ]);
+  });
+
+  it("lets a line's own SB: outrank its own bracket", () => {
+    // A zone is a rules fact and a pile is filing, so the line saying both keeps the zone — the
+    // bracket moves a card out of the *open heading's* zone, never out of the one it names itself.
+    const { lines } = parseDecklist(
+      "Commander\n1x Bruna, Light of Alabaster (avr) 5 [Commander]\nSB: 1x Duress (m19) 94 [Ramp]",
+    );
+    expect(lines[1]).toMatchObject({ name: "Duress", section: "sideboard", categoryName: null });
+  });
+
   it("reads the sectioned Archidekt export whole", () => {
     const { lines, issues, totalCards } = parseDecklist(ARCHIDEKT_SECTIONED);
     expect(issues).toEqual([]);

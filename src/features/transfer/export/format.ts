@@ -175,11 +175,13 @@ function finishMark(card: TransferCard): string {
  * cannot tell apart share one heading rather than printing the same line twice. It changes
  * nothing for a name holding none of the five, which is every pile a deck had before this.
  *
- * **What it leaves alone is a pile whose own name already trips the heading rule** — a native
- * `Removal (cheap)` ends in a hint shape and `2 Drops` opens with a count — because rewriting a
- * character the reader typed and Archidekt can carry would be this writer inventing a spelling.
- * That is `parse.ts`'s heading rule to answer, and the bracket on every line under it still names
- * the pile exactly.
+ * **What it leaves alone is a pile whose own name reads like syntax the heading rule cares
+ * about** — a native `Removal (cheap)` ends in a hint shape and `2 Drops` opens with a count —
+ * because rewriting a character the reader typed and Archidekt can carry would be this writer
+ * inventing a spelling. Both are `parse.ts`'s to answer, from the bracket on every line under the
+ * heading: it reads `Removal (cheap)` as a heading because that bracket names it exactly, and it
+ * still reads `2 Drops` as two copies of a card called `Drops` — but the pile's own cards reach
+ * the deck through their bracket rather than staying in the zone above.
  *
  * A **lossy** rewrite and deliberately so: Archidekt has no escape for any of the five, and a
  * name that comes back one character different is a pile the reader can rename, where a name
