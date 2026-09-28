@@ -1585,24 +1585,31 @@ mod tests {
             }));
         });
         let (state, dir) = test_state(server.base_url());
-        let now = crate::tags::unix_now();
         assert!(
-            crate::tags::due_at_launch(&ORACLE, &state, now),
+            crate::tags::due_at_launch(&ORACLE, &state, crate::tags::unix_now()),
             "a dataset never fetched is due"
         );
 
         refresh(&ORACLE, &state, false, &mut |_, _, _| {})
             .await
             .expect_err("a file with no tag in it is refused");
+        // **Asked at the stamp the refusal wrote, never at a clock read before the refresh.**
+        // The refresh stamps with its own `unix_now()`, and `backoff::resting` reads a stamp
+        // later than `now` as a clock that went backwards — so a refresh that crossed a second
+        // boundary failed the next assertion (2 runs in 100 on Linux debug, and
+        // `rust (windows-latest)` on PR #663). A real launch always asks later than the stamp.
+        let refused_at =
+            crate::feed::backoff::failed_at(&crate::db::lock_blocking(&state.db), BULK_NAME)
+                .expect("the refusal is written down");
         assert!(
-            !crate::tags::due_at_launch(&ORACLE, &state, now),
+            !crate::tags::due_at_launch(&ORACLE, &state, refused_at),
             "the next launch must not fetch the same broken file again"
         );
         assert!(
             crate::tags::due_at_launch(
                 &ORACLE,
                 &state,
-                now + crate::feed::backoff::FAILURE_BACKOFF_SECS
+                refused_at + crate::feed::backoff::FAILURE_BACKOFF_SECS
             ),
             "but a day later it tries again"
         );
