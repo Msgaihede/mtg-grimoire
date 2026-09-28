@@ -2875,7 +2875,8 @@ tokens), which the reader dropped the same day. **An untouched token reads 0**, 
 `deck_token_state` and `deck_token_reset` left the IPC surface — and **`deck_token_remove`** takes
 one entry away instead, while a launch pass, `retire_hidden`, turns every old dismissal back into
 an ordinary token at zero. **A token added by hand is drawn only in a list that holds an entry of
-it.** **`token_printings`** lists every token in the game for the picker's `All tokens`. The
+it.** **`token_printings`** lists every token in the game, and the game helpers, for the picker's
+`All tokens`. The
 Compare read and the managed wishlist each gained a token arm (the wishlist's Tokens subfolder is
 the one rung: `wishlist_folders.managed_tokens`, [wishlist-folders.md](wishlist-folders.md)).
 `decks.token_mode` stays in the schema with nothing reading it. The subsections below say which
@@ -3260,7 +3261,7 @@ Bolt"* — neither suite caught it, because both names were **correct** and mere
 | `deck_token_swap(deckId, variant, oracleId, from, to)` | rule 4: `from` as above, `to` always a printing and a finish; folds onto a held grain (the history row says `folded`) |
 | `deck_token_add_printing(deckId, variant, cardId, finish)` | rule 5, one copy, through `add_printing_in`: the token is read off the printing, which must be a token or an emblem (`NOT_A_TOKEN`); a `null` finish is the printing's default |
 | `deck_token_remove(deckId, variant, oracleId, entry)` | **v55** — Remove printing: `entry` is `{ cardId, finish }`, always a stored entry and never `null`; deletes it unconditionally (above), `ENTRY_GONE` where it is not there |
-| `token_printings(marketplace)` | **v55** — every paper token and emblem printing in the corpus, for the picker's `All tokens` (*`token_printings`*, below). A read, on the read connection |
+| `token_printings(marketplace)` | **v55** — every paper token, emblem and game-helper printing in the corpus, for the picker's `All tokens` (*`token_printings`*, below). A read, on the read connection |
 
 **Retired at v52: `deck_token_set`, `deck_token_clear` and `deck_token_add`** — the last had no
 caller at all (measured 2026-09-26). **Retired at v55: `deck_token_state`** (dismiss, restore,
@@ -3303,19 +3304,37 @@ went with it: no write is a triple now.
 ### `token_printings`: every token in the game, for `All tokens` (v55)
 
 `deck_tokens::list_token_printings(conn, market)` answers **every paper printing
-`is_token_printing` says yes to**, as `TokenPrinting` — the picker's own `card::Printing`,
+`is_listed_token` says yes to** — every token and emblem, and the game helpers a deck brings to
+the table (*What All tokens lists*, below) — as `TokenPrinting`: the picker's own `card::Printing`,
 `#[serde(flatten)]`ed so its tile code draws one with no branch, with the token's `oracle_id`,
 `name`, `type_line`, `colors`, `power`, `toughness` and `oracle_text` beside it for grouping and
 `tokenSubtitle`. **No `layout` of its own**: the flattened printing already carries one, and a
 second field would write the key twice. Ordered by name, then `oracle_id` (two tokens share a
 name), then newest printing first by `list_printings`' tail; a row with no `oracle_id` is skipped.
 
-- **One statement with the predicate in SQL, both halves** — a token layout on its own, or a
-  `flip` / `reversible_card` whose type line or any ` // ` face begins `Token` or `Emblem` — with
-  the layout lists interpolated from `TOKEN_LAYOUTS` and `TWO_SIDED_LAYOUTS` rather than retyped,
-  and `token_printings_answers_every_token_and_nothing_else` holding the SQL to the Rust function
-  over a fixture of every shape. `LIKE` is ASCII-case-insensitive where `starts_with` is not; on
-  the debug corpus that changes nothing (measured with `node:sqlite`, 2026-09-27).
+- **One statement with the predicate in SQL, both arms**, every word interpolated from the
+  module's constants rather than retyped, and
+  `token_printings_answers_every_token_and_nothing_else` and
+  `token_printings_keeps_the_game_helpers_and_leaves_out_other_games` holding the SQL to the Rust
+  function over a fixture of every shape. `LIKE` is ASCII-case-insensitive where `starts_with` is
+  not; on the debug corpus that changes nothing (measured with `node:sqlite`, 2026-09-27). The
+  helper arm is `instr`, case-sensitive like its Rust.
+- **What All tokens lists** (the reader's rule, 2026-09-28): **a token or an emblem** — a token
+  or two-sided layout with a type line or any ` // ` face beginning `Token` or `Emblem` — **or a
+  game helper**: a `token` / `double_faced_token` printing outside a `memorabilia` or `minigame`
+  set (a subquery on `sets`, so a set `sets` does not list is kept) that either has a face whose
+  type line is exactly `Card` and no checklist's `this card to represent `, or says `face-down`
+  in its text. So The Monarch, The Initiative, Day // Night, City's Blessing, Energy Reserve,
+  Radiation, Plot, Foretell, On an Adventure, Start Your Engines, the OTC Bounties, Punchcard and
+  the face-down Manifest, Morph and Cyberman cards are listed, and the World Championship decks'
+  ads, bios and decklists, the set checklists, the booster minigames, the Theros challenge decks
+  and the TMNT arena's bosses and events are not. Anything in doubt is kept: one card too many
+  costs a scroll, one hidden costs a card the reader cannot add. Measured over a copy of the debug
+  corpus that day: **3 303 printings over 1 096 tokens** while the layout decided alone, **3 023
+  over 911** for the day the list took only `Token` and `Emblem` faces (after the live pass found
+  the wall opening on two deck ads), and **3 110 over 940** with the helpers back — 87 printings
+  of 29 helpers returned, 193 still left out, and no token or emblem lost at either step. The
+  function's doc says why no name list is needed and what `all_parts` would have said.
 - **No index is added, and `NOT INDEXED` is deliberate**: it runs on a press, never per keystroke,
   and SQLite's own plan walked `idx_cards_name` to skip the sort at a table lookup per corpus row,
   which a plain scan with a sort of the matches beat in both paired runs that day. The figures are

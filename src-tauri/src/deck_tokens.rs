@@ -131,6 +131,29 @@ const TWO_SIDED_LAYOUTS: [&str; 2] = ["flip", "reversible_card"];
 /// [`list_token_printings`] asks SQL for, so the two cannot be spelled apart.
 const TOKEN_LINE_WORDS: [&str; 2] = ["Token", "Emblem"];
 
+/// The layouts a **game helper** is filed under — [`is_listed_token`]'s second half. The two
+/// [`TOKEN_LAYOUTS`] a card with no `Token` face can wear; every helper on the debug corpus is one
+/// of them (measured 2026-09-28), and an `emblem` row always names its `Emblem`.
+const HELPER_LAYOUTS: [&str; 2] = ["token", "double_faced_token"];
+
+/// The `sets.set_type`s whose helper cards belong to **another game** than the one a deck is
+/// played in — the World Championship decks' ads, bios and decklists and the Theros challenge
+/// decks (`memorabilia`), and the booster minigames (`minigame`). [`is_listed_token`] leaves their
+/// helpers out; a real token in such a set is listed like any other.
+const OTHER_GAME_SET_TYPES: [&str; 2] = ["memorabilia", "minigame"];
+
+/// The type line a helper face carries — `Card`, exactly, on one ` // ` face or the only one: The
+/// Monarch, Day // Night, Undercity // The Initiative, Punchcard.
+const HELPER_FACE: &str = "Card";
+
+/// The words every face-down reminder card's text carries — Manifest, Morph, A Mysterious Creature
+/// and the Doctor Who Cyberman, whose type line is a creature's rather than [`HELPER_FACE`].
+const FACE_DOWN_WORDS: &str = "face-down";
+
+/// The words only the set checklists' text carries (`You can mark this card to represent a
+/// double-faced card in your library`) — the one `Card` helper the reader chose to leave out.
+const CHECKLIST_WORDS: &str = "this card to represent ";
+
 /// The three words `deck_tokens.state` may hold, in the order the DDL's `CHECK` spells them.
 ///
 /// * `auto` — the row exists only to carry a legacy quantity for a token the deck derives anyway.
@@ -1138,29 +1161,72 @@ fn line_names_a_token(type_line: Option<&str>) -> bool {
     })
 }
 
-/// **Whether All tokens lists a printing** — narrower than [`is_token_printing`], and on purpose:
-/// a layout [`is_token_printing`] trusts on its own ([`TOKEN_LAYOUTS`]) or a two-sided one
-/// ([`TWO_SIDED_LAYOUTS`]), **and** a type line naming a `Token` or `Emblem` face, whatever the
-/// layout.
+/// **Whether All tokens lists a printing: a real token or emblem, or a game helper** — narrower
+/// than [`is_token_printing`], and on purpose. Two arms:
 ///
-/// **Why the layout alone is not enough for the list.** Scryfall files its helper cards under
-/// `token` and `double_faced_token` too: measured on the debug corpus (`node:sqlite` over a copy,
-/// 2026-09-28), 280 of the 3 303 paper printings the layout half admits name no `Token` or `Emblem`
-/// face — World Championships deck ads and set checklists (`Card`), The Monarch, City's Blessing,
-/// Energy Reserve, Radiation, Plot, Foretell and On an Adventure (`Card`), Day // Night and the
-/// minigames (`Card // Card`), Undercity // The Initiative (`Dungeon — Undercity // Card`), the
-/// face-down helpers Manifest, Morph and A Mysterious Creature (`Creature`), and the Horde and
-/// Hydra decks' creatures. Not one is a `component: "token"` of any card's `all_parts` (the 63 that
-/// some card names at all, it names as a `combo_piece`), so no deck derives one and no reader is
-/// missing a token by their absence. Every token and emblem the keep rule can derive has a
-/// `Token` or `Emblem` face, the six two-sided Role tokens and Mechtitan included.
+/// 1. **A token or an emblem** — a layout [`is_token_printing`] trusts on its own
+///    ([`TOKEN_LAYOUTS`]) or a two-sided one ([`TWO_SIDED_LAYOUTS`]), **and** a type line naming a
+///    `Token` or `Emblem` face, whatever the layout. Every token and emblem the keep rule can
+///    derive has one, the six two-sided Role tokens and Mechtitan included.
+/// 2. **A game helper** ([`is_game_helper`]) — a card a deck brings to the table during an
+///    ordinary game: The Monarch, The Initiative, Day // Night, City's Blessing, Energy Reserve,
+///    Radiation, the face-down Manifest and Morph cards. The reader's rule (2026-09-28): keep
+///    those, leave out advertising, checklists, standalone minigames and other games' cards, and
+///    keep anything in doubt — a list with one card too many costs a scroll, one that hides a card
+///    the reader needs costs a card they cannot add.
+///
+/// **Why the layout alone is not enough.** Scryfall files every helper under `token` or
+/// `double_faced_token` — measured on the debug corpus (`node:sqlite` over a copy, 2026-09-28),
+/// 280 of the 3 303 paper printings the layout admits name no `Token` or `Emblem` face — and the
+/// same layouts carry the World Championship decks' ads, bios and decklists, the set checklists,
+/// the booster minigames, the Theros challenge decks' Minotaurs, Revelers and Hydra heads, and the
+/// TMNT arena's bosses and events. The list went from 3 303 printings over 1 096 tokens (the layout
+/// alone), to 3 023 over 911 (the first arm alone), to **3 110 over 940** with the helpers back.
+///
+/// **What separates the two sides is structural, not a list of names.** The other games' cards
+/// sit in `memorabilia` and `minigame` sets ([`OTHER_GAME_SET_TYPES`]) — the TMNT arena is the
+/// exception, a `token` set, and its `Boss`, `Event` and `Creature — Ninja` lines are neither a
+/// helper face nor a face-down card. The best signal, which card names which in `all_parts`, is not
+/// in a column: every helper this keeps but the Bounties, Punchcard, Companion and Enduring Story
+/// is named by real cards (Morph by 402, The Monarch by 131), and nothing it leaves out is but the
+/// checklists, which double-faced cards name as the proxy they are — left out by the reader's
+/// choice ([`CHECKLIST_WORDS`]).
 ///
 /// **Not the routing question.** [`is_token_printing`] still decides where an add of one of these
-/// is filed — a picker listing only real tokens changes nothing about what `deck::add_card` does
-/// with a Monarch card someone searches for — so that predicate is left as it is.
-pub fn is_listed_token(layout: &str, type_line: Option<&str>) -> bool {
-    (is_token_layout(layout) || TWO_SIDED_LAYOUTS.contains(&layout))
-        && line_names_a_token(type_line)
+/// is filed — a helper picked here is added as a token entry, which is what it is on the table —
+/// so that predicate is left as it is. `set_type` is the printing's `sets.set_type`, `None` where
+/// the set is not in `sets`, which lists it.
+pub fn is_listed_token(
+    layout: &str,
+    type_line: Option<&str>,
+    oracle_text: Option<&str>,
+    set_type: Option<&str>,
+) -> bool {
+    let token_shaped = is_token_layout(layout) || TWO_SIDED_LAYOUTS.contains(&layout);
+    (token_shaped && line_names_a_token(type_line))
+        || is_game_helper(layout, type_line, oracle_text, set_type)
+}
+
+/// [`is_listed_token`]'s second arm: a [`HELPER_LAYOUTS`] printing outside the
+/// [`OTHER_GAME_SET_TYPES`], which either has a [`HELPER_FACE`] (and is not a checklist,
+/// [`CHECKLIST_WORDS`]) or is a face-down reminder ([`FACE_DOWN_WORDS`]).
+///
+/// **Case-sensitive, as the SQL is** — `instr`, not `LIKE` — so
+/// `token_printings_keeps_the_game_helpers_and_leaves_out_other_games` holds the two to one answer.
+fn is_game_helper(
+    layout: &str,
+    type_line: Option<&str>,
+    oracle_text: Option<&str>,
+    set_type: Option<&str>,
+) -> bool {
+    if !HELPER_LAYOUTS.contains(&layout)
+        || set_type.is_some_and(|t| OTHER_GAME_SET_TYPES.contains(&t))
+    {
+        return false;
+    }
+    let text = oracle_text.unwrap_or("");
+    let helper_face = type_line.is_some_and(|line| line.split(" // ").any(|f| f == HELPER_FACE));
+    (helper_face && !text.contains(CHECKLIST_WORDS)) || text.contains(FACE_DOWN_WORDS)
 }
 
 /// [`is_token_printing`] over the row `card_id` names — the one read the two add paths make.
@@ -2821,19 +2887,26 @@ fn sql_words(words: &[&str]) -> String {
 /// tokens toggle's list, grouped by token: ordered by name, then `oracle_id` (two tokens can share
 /// a name), then newest printing first by `list_printings`' own tail.
 ///
-/// **One statement with the predicate in SQL**: a token or two-sided layout, and a type line — or
-/// any ` // ` face of it — beginning `Token` or `Emblem`, whatever the layout.
-/// `token_printings_answers_every_token_and_nothing_else` holds the SQL to the Rust function over
-/// fixtures of every shape, so the two cannot come to disagree about what the picker offers.
-/// `LIKE` is ASCII-case-insensitive where `starts_with` is not, and on the debug corpus that
-/// changes nothing (checked with a case-sensitive `GLOB`, `node:sqlite`, 2026-09-27).
+/// **One statement with the predicate in SQL**, both of [`is_listed_token`]'s arms: a token or
+/// two-sided layout with a type line — or any ` // ` face of it — beginning `Token` or `Emblem`;
+/// or a game helper, a [`HELPER_LAYOUTS`] row outside a set of [`OTHER_GAME_SET_TYPES`] with a
+/// face that is exactly [`HELPER_FACE`] and no [`CHECKLIST_WORDS`], or with [`FACE_DOWN_WORDS`] in
+/// its text. `token_printings_answers_every_token_and_nothing_else` and
+/// `token_printings_keeps_the_game_helpers_and_leaves_out_other_games` hold the SQL to the Rust
+/// function over fixtures of every shape, so the two cannot come to disagree about what the picker
+/// offers. `LIKE` is ASCII-case-insensitive where `starts_with` is not, and on the debug corpus
+/// that changes nothing (checked with a case-sensitive `GLOB`, `node:sqlite`, 2026-09-27); the
+/// helper arm is `instr`, case-sensitive like its Rust.
 ///
-/// **The type line is asked of every layout since 2026-09-28**, where it was asked only of the two
-/// two-sided ones: the live pass found the wall opening on two World Championships deck ads, which
-/// Scryfall files under `token` with the type line `Card`. Measured over a copy of the debug corpus
-/// the same day, the list went from **3 303 printings over 1 096 oracle ids to 3 023 over 911** —
-/// the 280 dropped are the helper cards [`is_listed_token`]'s doc names, and none is a token any
-/// card's `all_parts` makes.
+/// **The set type is a subquery rather than a join**: `sets` is a thousand rows keyed by code, so
+/// the other games' codes are read once and every card row is a membership test — and a card whose
+/// set `sets` does not list is kept, as a helper in doubt is.
+///
+/// **The list, measured over a copy of the debug corpus on 2026-09-28**: 3 303 printings over 1 096
+/// oracle ids while the layout decided alone; 3 023 over 911 for one day, when only a `Token` or
+/// `Emblem` face was listed and the live pass's World Championships ads went with every helper; and
+/// **3 110 over 940** with the game helpers back — 87 printings of 29 helpers returned, and the
+/// 193 still left out are the other games' cards, the minigames and the checklists.
 ///
 /// **No index is added**, because this runs on a press and not per keystroke: the toggle asks
 /// once and the picker's search box narrows the answer in the page. **And `NOT INDEXED` keeps
@@ -2857,17 +2930,30 @@ pub fn list_token_printings(
         .map(|word| format!("c.type_line LIKE '{word}%' OR c.type_line LIKE '% // {word}%'"))
         .collect::<Vec<_>>()
         .join(" OR ");
+    // `' // ' || line || ' // '` holds ` // Card // ` exactly when one face is `Card` — the
+    // Rust's `split(" // ").any(…)` without a JSON parse or a recursive query.
     let sql = format!(
         "SELECT c.oracle_id, c.name, c.type_line, c.colors, c.power, c.toughness, c.oracle_text,
                 {printing}
            FROM cards c NOT INDEXED
           WHERE c.is_paper = 1
-            AND c.layout IN ({tokens}, {two_sided})
-            AND ({lines})
+            AND ((c.layout IN ({tokens}, {two_sided}) AND ({lines}))
+                 OR (c.layout IN ({helpers})
+                     AND c.set_code NOT IN
+                         (SELECT code FROM sets WHERE set_type IN ({other_games}))
+                     AND ((instr(' // ' || COALESCE(c.type_line, '') || ' // ',
+                                 ' // {helper_face} // ') > 0
+                           AND instr(COALESCE(c.oracle_text, ''), '{checklist}') = 0)
+                          OR instr(COALESCE(c.oracle_text, ''), '{face_down}') > 0)))
           ORDER BY c.name, c.oracle_id, c.released_at DESC, c.set_code, c.collector_number, c.id",
         printing = crate::card::printing_columns(market),
         tokens = sql_words(&TOKEN_LAYOUTS),
         two_sided = sql_words(&TWO_SIDED_LAYOUTS),
+        helpers = sql_words(&HELPER_LAYOUTS),
+        other_games = sql_words(&OTHER_GAME_SET_TYPES),
+        helper_face = HELPER_FACE,
+        checklist = CHECKLIST_WORDS,
+        face_down = FACE_DOWN_WORDS,
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -7449,7 +7535,13 @@ mod tests {
             let answered = got.iter().find(|p| p.printing.id == card.id);
             assert_eq!(
                 answered.is_some(),
-                card.id != digital.id && is_listed_token(card.layout, Some(card.type_line)),
+                card.id != digital.id
+                    && is_listed_token(
+                        card.layout,
+                        Some(card.type_line),
+                        Some(card.oracle_text),
+                        None
+                    ),
                 "`{}` must be answered exactly when the predicate says it is a paper token",
                 card.name
             );
@@ -7465,17 +7557,40 @@ mod tests {
         );
     }
 
-    /// **A card Scryfall files under a token layout is not a token unless its type line says so**
-    /// (the live pass of 2026-09-28: the All tokens wall opened on two World Championships ad
-    /// cards). The corpus files 280 paper printings under `token` or `double_faced_token` whose type
-    /// line names no `Token` or `Emblem` face — deck ads and checklists (`Card`), The Monarch, City's
-    /// Blessing, Energy Reserve and Day // Night (`Card`, `Card // Card`), the face-down helpers
-    /// Manifest and Morph (`Creature`), Horde and minigame cards — and not one of them is a
-    /// `component: "token"` of any card's `all_parts`. So each shape below is out, while a real
-    /// token, emblem and double-faced token of the same layouts are in.
+    /// **All tokens keeps the game helpers and leaves out other games' cards** — the reader's rule
+    /// of 2026-09-28, after a day on which it listed only `Token` and `Emblem` faces and so lost
+    /// The Monarch with the World Championships ads (the live pass had found the wall opening on
+    /// two of those). Each fixture is a shape off the debug corpus, text and set type included:
+    ///
+    /// - **In:** The Monarch (`Card`), Day // Night (`Card // Card`), a face-down Manifest
+    ///   (`Creature`, kept by its reminder text), and a real double-faced token, Treasure, an
+    ///   emblem and Mechtitan beside them.
+    /// - **Out:** a deck ad and a challenge deck's Minotaur (both `memorabilia` sets), a minigame
+    ///   (`minigame`), a set checklist (`Card`, but its text is a proxy's), and a TMNT arena boss (a
+    ///   `token` set, whose `Boss` line is neither a helper face nor a face-down card).
+    ///
+    /// Every fixture is also asked of [`is_listed_token`], so the SQL and the Rust stay one rule.
     #[test]
-    fn token_printings_leaves_out_the_helper_cards_a_token_layout_carries() {
+    fn token_printings_keeps_the_game_helpers_and_leaves_out_other_games() {
         let conn = open();
+        let set_types = [
+            ("wc97", "memorabilia"),
+            ("tbth", "memorabilia"),
+            ("mkhm", "minigame"),
+            ("tcmm", "token"),
+            ("tmid", "token"),
+            ("tc18", "token"),
+            ("tisd", "token"),
+            ("ttmc", "token"),
+        ];
+        for (code, set_type) in set_types {
+            conn.execute(
+                "INSERT INTO sets (code, name, set_type) VALUES (?1, ?1, ?2)",
+                params![code, set_type],
+            )
+            .unwrap();
+        }
+        let set_type_of = |code: &str| set_types.iter().find(|(c, _)| *c == code).map(|(_, t)| *t);
         let ad = Card {
             id: "c-wc97-ad",
             oracle_id: "o-wc97-ad",
@@ -7486,12 +7601,64 @@ mod tests {
             collector_number: "0",
             ..Card::default()
         };
+        let minotaur = Card {
+            id: "c-minotaur",
+            oracle_id: "o-minotaur",
+            name: "Minotaur Goreseeker",
+            type_line: "Creature — Minotaur",
+            layout: "token",
+            oracle_text: "Haste\nMinotaur Goreseeker attacks each turn if able.",
+            set_code: "tbth",
+            ..Card::default()
+        };
+        let minigame = Card {
+            id: "c-booster-sleuth",
+            oracle_id: "o-booster-sleuth",
+            name: "Booster Sleuth // Booster Sleuth (cont'd)",
+            type_line: "Card // Card",
+            layout: "double_faced_token",
+            set_code: "mkhm",
+            ..Card::default()
+        };
+        let checklist = Card {
+            id: "c-isd-checklist",
+            oracle_id: "o-isd-checklist",
+            name: "Innistrad Checklist",
+            type_line: "Card",
+            layout: "token",
+            oracle_text: "(You can mark this card to represent a double-faced card in your \
+                          library. Put the double-faced card aside until it enters the battlefield.)",
+            set_code: "tisd",
+            ..Card::default()
+        };
+        let boss = Card {
+            id: "c-shredder",
+            oracle_id: "o-shredder",
+            name: "Shredder, Foot Clan Overlord",
+            type_line: "Boss",
+            layout: "token",
+            oracle_text: "Whenever a creature the bosses control dies, the heroes lose 1 life.",
+            set_code: "ttmc",
+            ..Card::default()
+        };
+        let monarch = Card {
+            id: "c-monarch",
+            oracle_id: "o-monarch",
+            name: "The Monarch",
+            type_line: "Card",
+            layout: "token",
+            oracle_text: "At the beginning of your end step, draw a card.\nWhenever a creature \
+                          deals combat damage to you, its controller becomes the monarch.",
+            set_code: "tcmm",
+            ..Card::default()
+        };
         let day_night = Card {
             id: "c-day-night",
             oracle_id: "o-day-night",
             name: "Day // Night",
             type_line: "Card // Card",
             layout: "double_faced_token",
+            set_code: "tmid",
             ..Card::default()
         };
         let manifest = Card {
@@ -7500,14 +7667,12 @@ mod tests {
             name: "Manifest",
             type_line: "Creature",
             layout: "token",
-            ..Card::default()
-        };
-        let horde = Card {
-            id: "c-minotaur",
-            oracle_id: "o-minotaur",
-            name: "Minotaur Goreseeker",
-            type_line: "Creature — Minotaur",
-            layout: "token",
+            power: Some("2"),
+            toughness: Some("2"),
+            oracle_text: "(You can cover a face-down manifested creature with this reminder \
+                          card. A manifested creature card can be turned face up any time for \
+                          its mana cost.)",
+            set_code: "tc18",
             ..Card::default()
         };
         let dfc = Card {
@@ -7518,16 +7683,21 @@ mod tests {
             layout: "double_faced_token",
             ..Card::default()
         };
-        for card in [
-            &ad,
-            &day_night,
-            &manifest,
-            &horde,
-            &dfc,
-            &treasure(),
-            &elspeth_emblem(),
-            &mechtitan(),
-        ] {
+        let all = [
+            ad.clone(),
+            minotaur.clone(),
+            minigame.clone(),
+            checklist.clone(),
+            boss.clone(),
+            monarch.clone(),
+            day_night.clone(),
+            manifest.clone(),
+            dfc.clone(),
+            treasure(),
+            elspeth_emblem(),
+            mechtitan(),
+        ];
+        for card in &all {
             card.insert(&conn);
         }
 
@@ -7536,18 +7706,27 @@ mod tests {
         assert_eq!(
             names,
             vec![
+                "Day // Night",
                 "Elspeth, Sun's Champion Emblem",
                 "Human Soldier // Spirit",
+                "Manifest",
                 "Mechtitan // Mechtitan",
+                "The Monarch",
                 "Treasure",
             ],
-            "the ad, the designation, the face-down helper and the Horde card are not tokens"
+            "the helpers in, and the ad, the Minotaur, the minigame, the checklist and the boss out"
         );
-        for helper in [&ad, &day_night, &manifest, &horde] {
-            assert!(
-                !is_listed_token(helper.layout, Some(helper.type_line)),
-                "{} under a token layout is still not listed",
-                helper.name
+        for card in &all {
+            assert_eq!(
+                got.iter().any(|p| p.printing.id == card.id),
+                is_listed_token(
+                    card.layout,
+                    Some(card.type_line),
+                    Some(card.oracle_text),
+                    set_type_of(card.set_code),
+                ),
+                "`{}`: the SQL and the Rust must give one answer",
+                card.name
             );
         }
     }

@@ -189,11 +189,11 @@ const SELECT = `
          c.legalities, c.prices, c.price_usd, c.finishes, c.faces,
          c.artist, c.illustration_id, c.released_at, c.image_status,
          c.promo, c.promo_types, c.full_art, c.frame_effects, c.border_color, c.game_changer,
-         c.is_paper, c.digital,
+         c.is_paper, c.digital, s.set_type,
          CAST(c.raw AS BLOB) AS raw,
          EXISTS(SELECT 1 FROM cards u
                  WHERE u.oracle_id = c.oracle_id AND u.rarity = 'uncommon') AS ever_uncommon
-    FROM cards c
+    FROM cards c LEFT JOIN sets s ON s.code = c.set_code
    WHERE c.name = ?1 AND c.set_code = ?2 AND c.collector_number = ?3 AND c.lang = ?4`;
 
 const db = new DatabaseSync(dbPath, { readOnly: true });
@@ -233,6 +233,8 @@ function toFakeCard(r, label) {
     name: r.name,
     setCode: r.set_code,
     setName: r.set_name,
+    // `sets.set_type`, joined in the SELECT above — `null` for a set `sets` does not list.
+    setType: r.set_type,
     collectorNumber: r.collector_number,
     lang: r.lang,
     rarity: r.rarity,
@@ -361,6 +363,16 @@ export interface FakeCard {
   name: string;
   setCode: string;
   setName: string;
+  /**
+   * The set's \`sets.set_type\` — \`expansion\`, \`token\`, \`memorabilia\` — joined in on
+   * {@link FakeCard.setCode} as the crate joins it, \`null\` for a set \`sets\` does not list.
+   *
+   * **A column of \`sets\`, not of \`cards\`**, carried on the row because this fixture has no
+   * \`sets\` table. Its one reader is \`token_printings\`, which leaves other games' helper cards out
+   * of All tokens by it (\`isListedToken\`); \`list_sets\` still answers \`null\` and
+   * \`upcoming_sets\` does not read it (\`db.ts\`' simplification 2).
+   */
+  setType: string | null;
   collectorNumber: string;
   lang: string;
   rarity: string | null;

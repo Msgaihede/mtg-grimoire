@@ -47,8 +47,9 @@
  * 2. **`list_sets` is derived from the cards**, because there is no `sets` table in the
  *    fixture. The real one reads every set Scryfall knows, so it can answer a set with no
  *    printings at all; this one cannot produce a set with no rows, only one whose rows are
- *    all digital. Its `setType` is therefore always `null` — `FakeCard` has no `set_type`
- *    column, and nothing renders one.
+ *    all digital. Its `setType` is still always `null`. `FakeCard.setType` has carried the
+ *    joined `sets.set_type` since 2026-09-28, for `token_printings` alone; answering it here
+ *    would regroup every set picker in the workbench, so it waits for a story that wants it.
  * 3. **Both lists' `added` key orders by row id alone** — `collection_list`'s and
  *    `wishlist_list`'s — because neither row type carries a `created_at`. `collection.rs` and
  *    `wishlist.rs` write `created_at, id` in whichever direction was asked for; the id is that
@@ -2982,9 +2983,9 @@ const MAX_UPCOMING_DAYS = 365;
  * double-faced token and an emblem. **All five**, `front_card` included, which the widget's spec
  * did not name and the crate's shared list carries.
  *
- * Where `sets` has rows the crate also drops four `set_type`s. **This fake has no `set_type`**
- * ({@link readHandlers.list_sets} answers `null` for it), so here this fence is the whole of the
- * layout rule.
+ * Where `sets` has rows the crate also drops four `set_type`s. **This fake does not read them**
+ * ({@link readHandlers.list_sets} answers `null` for it, and `FakeCard.setType` has one reader,
+ * `token_printings`), so here this fence is the whole of the layout rule.
  */
 const UPCOMING_SKIPPED_LAYOUTS: ReadonlySet<string> = new Set([
   "art_series",
@@ -9521,7 +9522,7 @@ export function readHandlers(db: FakeDb) {
         const row = found ?? {
           code: c.setCode,
           name: c.setName,
-          // `sets.set_type` has no column in `FakeCard`; nothing renders it today.
+          // `FakeCard.setType` is `token_printings`' alone — simplification 2.
           setType: null,
           releasedAt: c.releasedAt,
           cardCount: 0,
@@ -9702,12 +9703,14 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_tokens::token_printings` — **every paper printing that is a token or an emblem**, the
-     * read behind Add printing's `All tokens` (managed tokens spec §3.6): `isListedToken` over
-     * {@link FakeDb.cards} — the crate's one statement with `is_listed_token`'s predicate in SQL —
-     * so a `flip` Role token is in by its type line, an ordinary card is out whatever its line
-     * says, and a helper card Scryfall files under a token layout (a deck ad, The Monarch) is out
-     * because its line names no `Token` or `Emblem` face.
+     * `deck_tokens::token_printings` — **every paper printing that is a token, an emblem or a game
+     * helper**, the read behind Add printing's `All tokens` (managed tokens spec §3.6):
+     * `isListedToken` over {@link FakeDb.cards} — the crate's one statement with
+     * `is_listed_token`'s predicate in SQL — so a `flip` Role token is in by its type line, an
+     * ordinary card is out whatever its line says, a helper a deck brings to the table (The
+     * Monarch, the corpus's `Start Your Engines! // Max Speed`) is in by its `Card` face, and a
+     * deck ad or a minigame is out by its set's type, `FakeCard.setType` standing in for the
+     * crate's `sets` subquery.
      *
      * Each row is {@link toPrinting}'s, **the same row `card_printings` answers** — priced per
      * finish at the marketplace asked, `imageUris` omitted for this file's reason — with the
@@ -9723,7 +9726,7 @@ export function readHandlers(db: FakeDb) {
     token_printings: (args: { marketplace?: string }): TokenPrinting[] => {
       const mp = marketplaceOf(args.marketplace);
       return db.cards
-        .filter((c) => c.isPaper && isListedToken(c.layout, c.typeLine))
+        .filter((c) => c.isPaper && isListedToken(c.layout, c.typeLine, c.oracleText, c.setType))
         .sort(
           (a, b) =>
             cmp(a.name, b.name) ||

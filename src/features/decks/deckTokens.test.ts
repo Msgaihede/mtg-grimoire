@@ -7,6 +7,7 @@ import {
   entryRef,
   isEmblem,
   isHandAdded,
+  isListedToken,
   isTokenLayout,
   isTokenPrinting,
   NOT_MADE_BY_DECK,
@@ -548,6 +549,59 @@ describe("isTokenPrinting", () => {
     expect(isTokenPrinting("flip", undefined)).toBe(false);
     expect(isTokenPrinting("flip", "")).toBe(false);
     expect(isTokenPrinting("flip", "token Creature — Spirit")).toBe(false);
+  });
+});
+
+describe("isListedToken", () => {
+  /**
+   * `deck_tokens::is_listed_token`'s twin over the shapes the crate's
+   * `token_printings_keeps_the_game_helpers_and_leaves_out_other_games` holds: every real token
+   * and emblem, and the game helpers a deck brings to the table — while other games' cards, the
+   * minigames and the checklists stay out. Lines, texts and set types off the debug corpus.
+   */
+  it("lists tokens, emblems and game helpers, and nothing from another game", () => {
+    const FACE_DOWN = "(You can cover a face-down manifested creature with this reminder card.)";
+    const CHECKLIST = "(You can mark this card to represent a double-faced card in your library.)";
+    const yes: [string, string, string | null, string | null][] = [
+      ["token", "Token Artifact — Treasure", null, "token"],
+      ["emblem", "Emblem — Elspeth", null, "token"],
+      ["flip", "Token Enchantment — Aura Role // Token Enchantment — Aura Role", null, "token"],
+      // A real token is listed from any set, an other game's included.
+      ["token", "Token Creature — Soldier", null, "memorabilia"],
+      ["token", "Card", "At the beginning of your end step, draw a card.", "token"], // The Monarch
+      ["double_faced_token", "Card // Card", null, "token"], // Day // Night
+      ["double_faced_token", "Dungeon — Undercity // Card", null, "token"], // The Initiative
+      ["token", "Creature", FACE_DOWN, "token"], // Manifest
+      ["token", "Artifact Creature — Cyberman", "(You can cover a face-down creature…)", "token"],
+      ["token", "Card", null, "masters"], // The List's City's Blessing
+      ["token", "Card", null, null], // a set `sets` does not list: in doubt, kept
+    ];
+    for (const [layout, line, text, setType] of yes) {
+      expect(isListedToken(layout, line, text, setType), `${layout} ${line} ${setType}`).toBe(
+        true,
+      );
+    }
+    const no: [string, string, string | null, string | null][] = [
+      ["token", "Card", null, "memorabilia"], // a World Championships ad
+      ["token", "Creature — Minotaur", "Haste", "memorabilia"], // Battle the Horde
+      ["double_faced_token", "Card // Card", null, "minigame"], // Booster Sleuth
+      ["token", "Card", CHECKLIST, "token"], // Innistrad Checklist
+      ["token", "Boss", "Whenever a creature the bosses control dies…", "token"], // TMNT arena
+      ["token", "Event", "Destroy all Turtles.", "token"],
+      ["token", "Creature — Ninja", "This creature can't block.", "token"],
+      // The helper arm is `token` and `double_faced_token` only, and never a real card.
+      ["emblem", "Card", null, "token"],
+      ["normal", "Card", null, "token"],
+      ["flip", "Creature — Human Monk // Legendary Creature — Spirit", null, "expansion"],
+      // Case-sensitive, as the crate's `instr` is.
+      ["token", "card", null, "token"],
+    ];
+    for (const [layout, line, text, setType] of no) {
+      expect(isListedToken(layout, line, text, setType), `${layout} ${line} ${setType}`).toBe(
+        false,
+      );
+    }
+    expect(isListedToken(null, "Card", null, "token")).toBe(false);
   });
 });
 

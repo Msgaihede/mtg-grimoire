@@ -16265,54 +16265,89 @@ describe("token_printings", () => {
     const answer = readHandlers(db).token_printings({ marketplace: "tcgplayer" });
     const ids = answer.map((p) => p.id);
     const expected = db.cards
-      .filter((c) => c.isPaper && isListedToken(c.layout, c.typeLine))
+      .filter((c) => c.isPaper && isListedToken(c.layout, c.typeLine, c.oracleText, c.setType))
       .map((c) => c.id);
     expect([...ids].sort()).toEqual([...expected].sort());
     expect(ids).toContain(role.id);
     expect(ids).not.toContain(digital.id);
     expect(ids).not.toContain(BOLT.id);
-    // Six token printings in the corpus, and the Role token beside them. (Seven until 2026-09-28:
-    // the corpus's `Start Your Engines! // Max Speed` is a `double_faced_token` whose faces are
-    // `Card // Card`, a helper rather than a token, and the listing leaves it out now.)
-    expect(ids).toHaveLength(7);
+    // Six token printings and one game helper in the corpus — `Start Your Engines! // Max Speed`,
+    // a `Card // Card` from a `masters` set — and the Role token beside them. (Seven for a day on
+    // 2026-09-28, while the listing named only `Token` and `Emblem` faces.)
+    expect(ids).toHaveLength(8);
   });
 
   /**
-   * `token_printings_leaves_out_the_helper_cards_a_token_layout_carries` — a card Scryfall files
-   * under a token layout is listed only when its type line names a `Token` or `Emblem` face. The
-   * All tokens wall opened on two World Championships deck ads (layout `token`, type line `Card`)
-   * until 2026-09-28; the fake answered them the same way the crate did.
+   * `token_printings_keeps_the_game_helpers_and_leaves_out_other_games` — a card Scryfall files
+   * under a token layout is listed when it is a token, an emblem or a helper a deck brings to the
+   * table, and left out when it belongs to another game: a deck ad (`memorabilia`), a minigame
+   * (`minigame`), a set checklist (its text is a proxy's) or a TMNT arena boss. The All tokens
+   * wall opened on two World Championships deck ads until 2026-09-28; for a day after it listed
+   * only `Token` and `Emblem` faces, and lost The Monarch and Day // Night with them.
    */
-  it("leaves out a helper card a token layout carries", () => {
+  it("keeps the game helpers and leaves out other games' cards", () => {
     const db = seed("starter");
     const base = db.cards.find((c) => c.id === TOKEN_PRINTING.construct)!;
-    const ad: FakeCard = {
+    const card = (over: Partial<FakeCard> & Pick<FakeCard, "id">): FakeCard => ({
       ...base,
+      oracleId: `o-${over.id}`,
+      oracleText: null,
+      ...over,
+    });
+    const ad = card({
       id: "c-wc97-ad",
-      oracleId: "o-wc97-ad",
       name: "1997 World Championships Ad",
       typeLine: "Card",
-      layout: "token",
-    };
-    const dayNight: FakeCard = {
-      ...base,
+      setType: "memorabilia",
+    });
+    const sleuth = card({
+      id: "c-booster-sleuth",
+      name: "Booster Sleuth // Booster Sleuth (cont'd)",
+      typeLine: "Card // Card",
+      layout: "double_faced_token",
+      setType: "minigame",
+    });
+    const checklist = card({
+      id: "c-isd-checklist",
+      name: "Innistrad Checklist",
+      typeLine: "Card",
+      oracleText: "(You can mark this card to represent a double-faced card in your library.)",
+    });
+    const boss = card({
+      id: "c-shredder",
+      name: "Shredder, Foot Clan Overlord",
+      typeLine: "Boss",
+      oracleText: "Whenever a creature the bosses control dies, the heroes lose 1 life.",
+    });
+    const monarch = card({
+      id: "c-monarch",
+      name: "The Monarch",
+      typeLine: "Card",
+      oracleText: "At the beginning of your end step, draw a card.",
+    });
+    const dayNight = card({
       id: "c-day-night",
-      oracleId: "o-day-night",
       name: "Day // Night",
       typeLine: "Card // Card",
       layout: "double_faced_token",
-    };
-    db.cards = [...db.cards, ad, dayNight];
+    });
+    const manifest = card({
+      id: "c-manifest",
+      name: "Manifest",
+      typeLine: "Creature",
+      oracleText: "(You can cover a face-down manifested creature with this reminder card.)",
+    });
+    db.cards = [...db.cards, ad, sleuth, checklist, boss, monarch, dayNight, manifest];
 
     const ids = readHandlers(db)
       .token_printings({ marketplace: "tcgplayer" })
       .map((p) => p.id);
-    expect(ids).not.toContain(ad.id);
-    expect(ids).not.toContain(dayNight.id);
-    // Nor the corpus's own helper of the same shape, `Start Your Engines! // Max Speed`.
-    expect(ids).not.toContain("c287becf-fc36-4c58-9d53-7b5870174c7d");
-    // The corpus's six real tokens and emblems are all still answered.
-    expect(ids).toHaveLength(6);
+    for (const out of [ad, sleuth, checklist, boss]) expect(ids, out.name).not.toContain(out.id);
+    for (const kept of [monarch, dayNight, manifest]) expect(ids, kept.name).toContain(kept.id);
+    // And the corpus's own helper of the Day // Night shape, `Start Your Engines! // Max Speed`.
+    expect(ids).toContain("c287becf-fc36-4c58-9d53-7b5870174c7d");
+    // The corpus's six real tokens and emblems, its one helper, and the three added here.
+    expect(ids).toHaveLength(10);
   });
 
   /** Each printing carries the token's own facts, so the picker can group and subtitle it, and
@@ -18457,8 +18492,8 @@ describe("deck review count", () => {
 
 /**
  * `upcoming_sets` — sets with paper printings released after today and inside the window, read
- * over `cards`. The fake has no `set_type` at all, so the layout fence and the released-set rule
- * are the whole of it here.
+ * over `cards`. The fake does not read a `set_type` here (`FakeCard.setType` is `token_printings`'
+ * alone), so the layout fence and the released-set rule are the whole of it.
  */
 describe("upcoming sets", () => {
   const TODAY = new Date(CLOCK_BASE * 1_000).toISOString().slice(0, 10);

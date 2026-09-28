@@ -131,23 +131,47 @@ function lineNamesAToken(typeLine: string | null | undefined): boolean {
     .some((face) => face.startsWith("Token") || face.startsWith("Emblem"));
 }
 
+/** `deck_tokens::HELPER_LAYOUTS` — the layouts a game helper is filed under. */
+const HELPER_LAYOUTS: ReadonlySet<string> = new Set(["token", "double_faced_token"]);
+
+/** `deck_tokens::OTHER_GAME_SET_TYPES` — the set types whose helpers belong to another game. */
+const OTHER_GAME_SET_TYPES: ReadonlySet<string> = new Set(["memorabilia", "minigame"]);
+
 /**
- * **Whether All tokens lists a printing** — the TypeScript twin of `deck_tokens::is_listed_token`,
- * for the one reader that answers `token_printings` itself: the Storybook fake.
+ * **Whether All tokens lists a printing: a real token or emblem, or a game helper** — the
+ * TypeScript twin of `deck_tokens::is_listed_token`, for the one reader that answers
+ * `token_printings` itself: the Storybook fake.
  *
- * Narrower than {@link isTokenPrinting} on purpose: a token or two-sided layout **and** a type line
- * naming a `Token` or `Emblem` face. Scryfall files its helper cards under `token` and
- * `double_faced_token` too — World Championships deck ads and checklists (`Card`), The Monarch and
- * Day // Night, the face-down Manifest and Morph (`Creature`) — and none of them is a token any
- * card makes; the crate's doc has the corpus count. {@link isTokenPrinting} stays the routing
- * question.
+ * Two arms, in the crate's order:
+ *
+ * 1. **A token or an emblem** — a token or two-sided layout **and** a type line naming a `Token` or
+ *    `Emblem` face.
+ * 2. **A game helper** — a `token` or `double_faced_token` printing outside a `memorabilia` or
+ *    `minigame` set, with a face whose type line is exactly `Card` (The Monarch, Day // Night,
+ *    Undercity // The Initiative) and no checklist's `this card to represent `, **or** a face-down
+ *    reminder whose text says `face-down` (Manifest, Morph, the Cyberman).
+ *
+ * The reader's rule (2026-09-28): keep what a deck brings to the table in an ordinary game, leave
+ * out advertising, checklists, minigames and other games' cards, and keep anything in doubt. The
+ * crate's doc has the corpus counts and why no name list is needed. Case-sensitive throughout, as
+ * the crate's `instr` is. `setType` is the set's `set_type`, `null` where it is unknown, which
+ * lists a helper. {@link isTokenPrinting} stays the routing question.
  */
 export function isListedToken(
   layout: string | null | undefined,
   typeLine: string | null | undefined,
+  oracleText: string | null | undefined,
+  setType: string | null | undefined,
 ): boolean {
   if (layout === null || layout === undefined) return false;
-  return (isTokenLayout(layout) || TWO_SIDED_LAYOUTS.has(layout)) && lineNamesAToken(typeLine);
+  if ((isTokenLayout(layout) || TWO_SIDED_LAYOUTS.has(layout)) && lineNamesAToken(typeLine)) {
+    return true;
+  }
+  if (!HELPER_LAYOUTS.has(layout)) return false;
+  if (setType !== null && setType !== undefined && OTHER_GAME_SET_TYPES.has(setType)) return false;
+  const text = oracleText ?? "";
+  const helperFace = (typeLine ?? "").split(" // ").some((face) => face === "Card");
+  return (helperFace && !text.includes("this card to represent ")) || text.includes("face-down");
 }
 
 /**

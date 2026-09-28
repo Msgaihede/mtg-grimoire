@@ -4823,8 +4823,11 @@ already effective, and `viewOf` copies them.
   - **`All tokens`** (managed tokens spec §3.6), a `ToggleChip` at the far end of the search row —
     beside the box rather than in the dialog's header as the spec drew it, because it answers the
     box's own question, *which* tokens — swaps the deck's tokens for **every token and emblem in
-    the game**: one read of `token_printings(marketplace)`, keyed `["tokenPrintings", marketplace]`
-    and made only while that wall is mounted (a scan of the corpus behind a press, never a
+    the game, and the game helpers** (The Monarch, Day // Night, the face-down Manifest — never a
+    deck ad, a checklist, a minigame or another game's card; `is_listed_token`, and
+    `decks-storage.md` has the rule and its counts): one read of `token_printings(marketplace)`,
+    keyed `["tokenPrintings", marketplace]` and made only while that wall is mounted (a scan of the
+    corpus behind a press, never a
     keystroke — the box narrows the answer in hand), grouped by **`oracleId`**, never the name,
     under each token's name and `tokenSubtitle`, every printing a tile in every finish it is sold
     in, and a pick the same `{ cardId, finish }` — a token the deck does not make becomes a
