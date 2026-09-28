@@ -21,12 +21,9 @@
 //!   rather than a number that would be a lie.
 
 use crate::filters;
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What the UI asks for.
@@ -151,9 +148,9 @@ pub struct SearchRequest {
     /// copies count as theirs, for [`Self::owned`] and [`CardSummary::owned_quantity`] alike.
     ///
     /// Absent is [`crate::collection_source::Availability::Everything`], which is what every
-    /// caller written before it asked for without saying so — the search page, the Tags page
-    /// and the web route all still count every copy wherever it is filed, because none of them
-    /// has a deck to be relative to.
+    /// caller written before it asked for without saying so — the search page and the Tags page
+    /// both still count every copy wherever it is filed, because neither has a deck to be
+    /// relative to.
     ///
     /// **Why the deck builder is different** ([#349](https://github.com/Msgaihede/mtg-grimoire/issues/349)):
     /// a badge reading `×4` over a card whose four copies are all sleeved into other decks is
@@ -347,61 +344,6 @@ pub struct CardSummary {
     /// range that pretended otherwise would be inventing a number.
     pub price_low: Option<f64>,
     pub price_high: Option<f64>,
-    /// The front face's image URL, resolved by the same precedence `images::resolve` applies:
-    /// the face's own entry first, the top-level `image_uris` as the fallback, and a
-    /// non-fetchable URI treated as no image at all. All three rules are
-    /// [`crate::image_uri`]'s and none of them is respelled here.
-    ///
-    /// **Two keys, [`crate::image_uri::LIST_VARIANT`] (`display`) and
-    /// [`crate::image_uri::ART_VARIANT`] (`art`), and the pair is a decision rather than a
-    /// first instalment.** `display` is the size `WALL_CARD_VARIANT` draws and `CardArt`
-    /// defaults to, so it is what every wall reads. `art` was carried by nothing until
-    /// 2026-08-31 and is now read by five surfaces in the deck feature — a deck tile's cover, a
-    /// folder card's member strip, both halves of `DeckCoverPicker` and `TheoryDiffDialog`'s
-    /// row — every one of which drew a blank frame in a browser until it arrived. `thumb` and
-    /// `grid` still have no caller on any wall, and this repo adds a field together with the
-    /// thing that reads it.
-    ///
-    /// **Widening cost no type change on either side**, which was the point of the map: the
-    /// shape is a map, TypeScript's mirror is already a
-    /// `Partial<Record<ImageVariant, string>>`, and a name added to
-    /// [`crate::image_uri::LIST_VARIANTS`] was the whole of it.
-    ///
-    /// **Face 0 only, and that is the scope rather than an omission.** The walls draw the
-    /// front; the flip control lives in the card pane, which is not routed on web.
-    ///
-    /// **It was on this DTO and on no other until 2026-08-31, and the argument for that was
-    /// simply wrong about `web/route.rs`'s `COMMANDS` list.** `search_cards` is not the one
-    /// card-bearing command a browser can call: `collection_list`, `wishlist_list` and
-    /// `deck_get` are all routed too, so the collection, the wishlist and the deck editor each
-    /// drew named, artless frames on web while the search wall beside them drew pictures. The
-    /// device pass of 2026-08-30 could not see it because both lists were empty (`Cards 0`,
-    /// `Wishes 0`). The three now carry the same field, built from the same helpers:
-    /// [`crate::collection::CollectionRow::image_uris`],
-    /// [`crate::wishlist::WishRow::image_uris`] and [`crate::deck::DeckCardRow::image_uris`].
-    ///
-    /// What the old note had right is the rest of it: `mtgimg://` is a Tauri custom protocol
-    /// and wasm cannot register a URL scheme with a browser, so the URL travels with the row or
-    /// the browser has no picture at all — and on the desktop every one of these is ignored,
-    /// because `cardArtSrc` takes the local cache.
-    ///
-    /// `None` when the printing has no fetchable image — the same answer
-    /// `images::Placeholder::NoImage` stands for, in a shape a DTO can carry. 162 of the live
-    /// corpus's 117 606 rows are that, and the `soon.jpg` fence can make any row that.
-    ///
-    /// **The price, measured rather than assumed** (2026-08-29, debug build, against a byte
-    /// copy of the 117 606-row dev corpus, one collapsed 50-row page): **23 199 B → 29 349 B,
-    /// +6 150 B — +26.5%, 123 B a row**, one URL of ~108 B plus its key.
-    /// All four variants would have been +21 600 B, +93.1%, 432 B a row — affordable, since
-    /// this crosses a Worker `postMessage` or a Tauri IPC hop and never a network, which is
-    /// why the count is *not* what settled the shape. `front_face_selects` carries the third
-    /// option that was weighed and declined: the URL is derivable from the row's id, at ~10 B.
-    ///
-    /// **The second variant was re-measured the same way on 2026-08-31 and cost +5 050 B on
-    /// top of that — +17.2%, 101 B a row.** The whole ladder and the arithmetic that made the
-    /// two runs comparable are on [`crate::image_uri::LIST_VARIANTS`], which is where the
-    /// decision lives; this note exists so the figure above is not read as current on its own.
-    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// A page of results plus the size of the whole match set, for the pager.
@@ -1126,23 +1068,11 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             )
         };
 
-        // The owned badge, by **oracle card** because the row stands for a whole group of
-        // printings — built by [`crate::collection_source`] rather than written out, so the
-        // wall and the Collection page cannot disagree about what the reader has.
-        //
-        // Counted at [`SearchRequest::availability`]'s scope, the same one the `owned` filter
-        // above was pushed at: in the deck builder this number is *what this deck can use*,
-        // everywhere else it is what the reader owns.
-        let owned_by_oracle =
-            crate::collection_source::copies_of_oracle(conn, "c.oracle_id", req.availability());
-        // The front face's picture, as `image_uri::FRONT_FACE_COLUMNS` `json_extract`s off the
-        // `cards` row the query already has in hand — no join and no second statement. Built by
-        // [`crate::image_uri::front_face_selects`] rather than written out, because the
-        // *precedence* between the two columns is applied in Rust by
-        // [`crate::image_uri::front_face_map`], and a `COALESCE` spelled here would be a
-        // second copy of it. Shared by both branches, and placed **before** the three
-        // collapse-only aggregates so the two row mappings stay one mapping.
-        let image_uris = crate::image_uri::front_face_selects("c").join(", ");
+        // The two badges at the oracle grain — see [`marks_selects`]. Counted at
+        // [`SearchRequest::availability`]'s scope, the same one the `owned` filter above was
+        // pushed at: in the deck builder this number is *what this deck can use*, everywhere
+        // else it is what the reader owns.
+        let marks = marks_selects(conn, true, req.availability());
         format!(
             "{cte} g AS (
                 SELECT {COLLAPSE_KEY} AS oid, count(*) AS printings,
@@ -1164,12 +1094,7 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                     -- either branch adds goes in both, at the same index, and the three
                     -- collapse-only aggregates stay last of all.
                     c.game_changer,
-                    {owned_by_oracle},
-                    EXISTS (SELECT 1 FROM wishlist_entries w
-                             WHERE (w.oracle_id IS NOT NULL AND w.oracle_id = c.oracle_id)
-                                OR w.card_id IN (SELECT id FROM cards
-                                                  WHERE oracle_id = c.oracle_id)),
-                    {image_uris},
+                    {marks},
                     g.printings, g.lo, g.hi
              FROM g JOIN cards c ON c.id = g.rep
              ORDER BY {final_order}"
@@ -1177,20 +1102,12 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
     } else {
         // The same badge, by **printing**: an uncollapsed row is one printing, so the count
         // beside it is that printing's.
-        let owned_by_printing =
-            crate::collection_source::copies_of_printing(conn, "c.id", req.availability());
-        // The same columns, in the same place: the branches share one row mapping.
-        let image_uris = crate::image_uri::front_face_selects("c").join(", ");
+        let marks = marks_selects(conn, false, req.availability());
         format!(
             "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
                     c.type_line, c.mana_cost, {price} AS price, c.layout,
                     c.oracle_id, c.finishes, c.promo_types, c.game_changer,
-                    {owned_by_printing},
-                    EXISTS (SELECT 1 FROM wishlist_entries w
-                             WHERE w.card_id = c.id
-                                OR (w.card_id IS NULL AND w.oracle_id IS NOT NULL
-                                    AND w.oracle_id = c.oracle_id)),
-                    {image_uris}
+                    {marks}
              FROM {from_sql} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
         )
     };
@@ -1205,13 +1122,12 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         ))
         .map_err(|e| e.to_string())?;
 
-    // Where the shared columns past `wishlisted` begin, and where the three collapse-only
-    // aggregates begin after them. Written down rather than spelled as literals because both
-    // branches feed one row mapping and the two blocks move together: a number left behind
-    // reads a URL as a price, which is an `InvalidColumnType` at best and a wrong number at
+    // Where the three collapse-only aggregates begin, one past `wishlisted`. Written down
+    // rather than spelled as literals because both branches feed one row mapping: a column
+    // added to both ahead of the aggregates moves this, and a number left behind reads the
+    // wrong column as a price, which is an `InvalidColumnType` at best and a wrong number at
     // worst.
-    const IMAGE_COL: usize = 16;
-    const COLLAPSE_COL: usize = IMAGE_COL + crate::image_uri::FRONT_FACE_COLUMNS;
+    const COLLAPSE_COL: usize = 16;
 
     let mut items = Vec::new();
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
@@ -1255,12 +1171,6 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             } else {
                 row.get(8).map_err(|e| e.to_string())?
             },
-            // The face-first precedence and the `soon.jpg` fence are both applied in here,
-            // by the module `images::resolve` reads them out of.
-            image_uris: crate::image_uri::front_face_map(|i| {
-                row.get::<_, Option<String>>(IMAGE_COL + i)
-                    .map_err(|e| e.to_string())
-            })?,
         });
     }
     Ok(SearchResponse {
@@ -1268,6 +1178,129 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         total,
         total_is_capped,
     })
+}
+
+/// A result row's two badge columns — `ownedQuantity`, then `wishlisted` — for a row whose
+/// printing is `c`, as SQL a statement splices in.
+///
+/// **Written once for [`run_search`]'s two branches and [`run_search_marks`]**, because the
+/// second exists to patch the first's rows in place: a mark computed by a different expression
+/// from the one the page was fetched with would be a badge that changed meaning on a "+".
+///
+/// `collapse` picks the grain, and the two are not one rule with a flag. A collapsed row stands
+/// for every printing of its oracle card, so it counts the copies of any of them and is
+/// wishlisted by a wish on any of them; an uncollapsed row is one printing, so it counts that
+/// printing's copies and is wishlisted by a wish pinned to it or an unpinned wish on its card.
+/// Both counts are taken at `scope` — see [`SearchRequest::availability`].
+fn marks_selects(
+    conn: &Connection,
+    collapse: bool,
+    scope: crate::collection_source::Availability,
+) -> String {
+    if collapse {
+        // The owned badge, by **oracle card** because the row stands for a whole group of
+        // printings — built by [`crate::collection_source`] rather than written out, so the
+        // wall and the Collection page cannot disagree about what the reader has.
+        let owned = crate::collection_source::copies_of_oracle(conn, "c.oracle_id", scope);
+        format!(
+            "{owned},
+             EXISTS (SELECT 1 FROM wishlist_entries w
+                      WHERE (w.oracle_id IS NOT NULL AND w.oracle_id = c.oracle_id)
+                         OR w.card_id IN (SELECT id FROM cards
+                                           WHERE oracle_id = c.oracle_id))"
+        )
+    } else {
+        // The same badge, by **printing**: an uncollapsed row is one printing, so the count
+        // beside it is that printing's.
+        let owned = crate::collection_source::copies_of_printing(conn, "c.id", scope);
+        format!(
+            "{owned},
+             EXISTS (SELECT 1 FROM wishlist_entries w
+                      WHERE w.card_id = c.id
+                         OR (w.card_id IS NULL AND w.oracle_id IS NOT NULL
+                             AND w.oracle_id = c.oracle_id))"
+        )
+    }
+}
+
+/// Which rows of a loaded search to re-read the badges of, and at which grain and scope.
+///
+/// The three fields are exactly the ones [`marks_selects`] reads off a [`SearchRequest`] —
+/// `ids` stands in for the filters, which decided *which* rows a page holds and have nothing to
+/// say about what a row's badge reads.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MarksRequest {
+    /// The `CardSummary.id` of every row to re-read. For a collapsed row that is the
+    /// representative printing, whose oracle id names the group.
+    pub ids: Vec<String>,
+    /// The loaded search's own `collapse`: absent or `false` is per printing.
+    #[serde(default)]
+    pub collapse: Option<bool>,
+    /// The loaded search's own [`SearchRequest::available_for_deck`].
+    #[serde(default)]
+    pub available_for_deck: Option<i64>,
+}
+
+/// One row's badges, re-read.
+#[derive(Debug, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CardMarks {
+    pub id: String,
+    pub owned_quantity: i64,
+    pub wishlisted: bool,
+}
+
+/// The two badges of the rows a search already holds, re-read after a write (issue #552).
+///
+/// **What a collection or wishlist write changes about a loaded search is these two columns and
+/// nothing else** — every other field of a `CardSummary` is the corpus's, and a write to the
+/// reader's own tables cannot move it. So rather than refetch every page an infinite search has
+/// loaded — up to 100 of them at ~53 ms each, in sequence, behind a "+" — the page asks for the
+/// badges of the ids on screen in one statement and patches them in. The one search this cannot
+/// serve is one filtered by `owned`, where a write changes which rows *belong*; the caller
+/// refetches that one instead.
+///
+/// An id that names no row in `cards` is left out of the answer rather than answered `0`: the
+/// row it stood for came from a corpus that has since been swapped, and a sync refetches the
+/// whole search anyway.
+pub fn run_search_marks(conn: &Connection, req: &MarksRequest) -> Result<Vec<CardMarks>, String> {
+    if req.ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let scope = req.available_for_deck.map_or(
+        crate::collection_source::Availability::Everything,
+        crate::collection_source::Availability::ForDeck,
+    );
+    let marks = marks_selects(conn, req.collapse.unwrap_or(false), scope);
+    let sql = format!(
+        "SELECT c.id, {marks} FROM cards c
+          WHERE c.id IN (SELECT j.value FROM json_each(?) AS j)"
+    );
+    let ids = serde_json::to_string(&req.ids).map_err(|e| e.to_string())?;
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([ids], |row| {
+            Ok(CardMarks {
+                id: row.get(0)?,
+                owned_quantity: row.get(1)?,
+                wishlisted: row.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<Result<_, _>>().map_err(|e| e.to_string())
+}
+
+/// [`run_search_marks`] over the read connection, for [`search_cards`]' reasons.
+#[tauri::command]
+pub async fn search_marks(
+    state: tauri::State<'_, Arc<AppState>>,
+    req: MarksRequest,
+) -> Result<Vec<CardMarks>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || run_search_marks(&lock_db_read(&state), &req))
+        .await
+        .map_err(|e| format!("search marks could not be read: {e}"))?
 }
 
 /// Search the card database.
@@ -1284,7 +1317,6 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
 /// `async` + `spawn_blocking`, not a plain sync command: a sync command body runs inline
 /// on the IPC thread, and SQLite work is blocking. `lock_db_read` is shared with `sync`
 /// so poison recovery has one definition.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn search_cards(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1354,7 +1386,6 @@ pub fn run_list_sets(conn: &Connection) -> Result<Vec<SetSummary>, String> {
 
 /// The set list, for the search filter. Read-only connection, blocking pool — as
 /// [`search_cards`] is, and for the same reason.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn list_sets(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<SetSummary>, String> {
     let state = state.inner().clone();
@@ -2054,13 +2085,6 @@ mod tests {
                 printings: 1,
                 price_low: Some(400.5),
                 price_high: Some(400.5),
-                // An object rather than `null`, because the shape is what the mirror in
-                // `src/lib/ipc.ts` has to agree with: the keys are the app's own variant
-                // names and the values are whole URLs, not a blob to be parsed.
-                image_uris: Some(BTreeMap::from([(
-                    "display".to_owned(),
-                    "https://cards.scryfall.io/display/x.webp?1".to_owned(),
-                )])),
             }],
             total: 5000,
             total_is_capped: true,
@@ -2080,8 +2104,7 @@ mod tests {
                     "gameChanger": true,
                     "ownedQuantity": 0, "wishlisted": false,
                     "printings": 1,
-                    "priceLow": 400.5, "priceHigh": 400.5,
-                    "imageUris": {"display": "https://cards.scryfall.io/display/x.webp?1"}
+                    "priceLow": 400.5, "priceHigh": 400.5
                 }],
                 "total": 5000,
                 "totalIsCapped": true
@@ -4080,6 +4103,97 @@ mod tests {
         assert!(!helix.wishlisted);
     }
 
+    /// **The re-read a write patches in must answer exactly what the page was fetched with**
+    /// (issue #552): same number, same grain, for every row, collapsed or not, and at the scope
+    /// the search was made at. A mark computed differently would change a badge's meaning on a
+    /// "+" rather than bring it up to date.
+    #[test]
+    fn search_marks_answer_what_the_search_itself_answers() {
+        let conn = filed_for_two_decks();
+        // The collapsed grain counts by oracle card, and the fixture's rows carry none.
+        conn.execute_batch(
+            "UPDATE cards SET oracle_id = 'o-' || id;
+             INSERT INTO wishlist_entries (oracle_id,card_id,name,quantity,created_at,updated_at)
+             VALUES (NULL,'2','Lightning Helix',1,unixepoch(),unixepoch());",
+        )
+        .unwrap();
+        for collapse in [None, Some(true)] {
+            for for_deck in [None, Some(1), Some(2)] {
+                let page = run_search(
+                    &conn,
+                    &SearchRequest {
+                        collapse,
+                        available_for_deck: for_deck,
+                        limit: 50,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+                let ids: Vec<String> = page.items.iter().map(|c| c.id.clone()).collect();
+                let mut marks = run_search_marks(
+                    &conn,
+                    &MarksRequest {
+                        ids,
+                        collapse,
+                        available_for_deck: for_deck,
+                    },
+                )
+                .unwrap();
+                marks.sort_by(|a, b| a.id.cmp(&b.id));
+                let mut expected: Vec<CardMarks> = page
+                    .items
+                    .iter()
+                    .map(|c| CardMarks {
+                        id: c.id.clone(),
+                        owned_quantity: c.owned_quantity,
+                        wishlisted: c.wishlisted,
+                    })
+                    .collect();
+                expected.sort_by(|a, b| a.id.cmp(&b.id));
+                assert_eq!(marks, expected, "{collapse:?} {for_deck:?}");
+                assert!(
+                    expected.iter().any(|m| m.owned_quantity > 0),
+                    "the fixture must own something, or the equality proves nothing"
+                );
+            }
+        }
+    }
+
+    /// A write moves the marks and nothing else, and the re-read sees it; an id the corpus no
+    /// longer holds is left out rather than answered `0`, and no ids is no statement at all.
+    #[test]
+    fn search_marks_see_a_write_and_skip_an_unknown_id() {
+        let conn = seeded();
+        let ask = |ids: &[&str]| {
+            run_search_marks(
+                &conn,
+                &MarksRequest {
+                    ids: ids.iter().map(|s| s.to_string()).collect(),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        assert_eq!(ask(&["1"])[0].owned_quantity, 0);
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,created_at,updated_at)
+             VALUES ('1','lea','161','en','nonfoil','NM',2,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+        let after = ask(&["1", "no-such-card"]);
+        assert_eq!(
+            after,
+            [CardMarks {
+                id: "1".into(),
+                owned_quantity: 2,
+                wishlisted: false
+            }]
+        );
+        assert!(ask(&[]).is_empty());
+    }
+
     /// Four copies of the Bolt in four places, and one Helix sleeved into somebody else's deck
     /// — the shape [#349](https://github.com/Msgaihede/mtg-grimoire/issues/349) is about.
     ///
@@ -4289,135 +4403,6 @@ mod tests {
             assert_eq!(bolt.name, "Lightning Bolt", "{collapse:?}");
             assert_eq!(bolt.owned_quantity, 0, "{collapse:?}");
             assert!(!bolt.wishlisted, "{collapse:?}");
-        }
-    }
-
-    /// The front face's picture, on the row, because the web build has no other way to get
-    /// one: `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme
-    /// with a browser, and `card_image_uri` lives in `card.rs`, which is gated out of that
-    /// build entirely.
-    ///
-    /// Three rows, because the rule has three parts and each one fails silently on its own:
-    /// a plain printing carries its top-level blob, a **meld** printing carries its *face's*
-    /// URL and not the top-level one, and a `soon.jpg` printing carries no map at all rather
-    /// than a URL that answers `200` with Scryfall's error page. And the key set itself, which
-    /// is the fourth: two of the schema's four variants is a decision, so a widening has to
-    /// edit a test. The fixtures carry all four, so an accidental widening comes back as real
-    /// URLs under real keys and only this assertion can see it.
-    ///
-    /// Both query shapes, for `results_say_which_cards_are_game_changers`' reason: two select
-    /// lists feed one row mapping, and columns added to one of them or at a different
-    /// position come back as another column's value rather than as an error.
-    #[test]
-    fn results_carry_the_front_faces_image_urls() {
-        let conn = seeded();
-        // A normal printing: all four variants in the top-level blob, no faces.
-        conn.execute(
-            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,image_uris,raw)
-             VALUES ('img-plain','Plain Card','m21','1','en','normal',1,
-                     json_object(
-                       'thumb','https://cards.scryfall.io/thumb/p.webp?7',
-                       'grid','https://cards.scryfall.io/grid/p.webp?7',
-                       'display','https://cards.scryfall.io/display/p.webp?7',
-                       'art','https://cards.scryfall.io/art/p.webp?7'),'{}')",
-            [],
-        )
-        .unwrap();
-        // A `meld` printing: **both** columns carry **both** variants, which is the only shape
-        // that can tell the orders apart. Reversed, this row draws the melded card where its
-        // front belongs and nothing on screen says so; paired up wrong, it draws the crop where
-        // the card belongs, and that is a URL too.
-        conn.execute(
-            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
-                                image_uris,face_image_uris,raw)
-             VALUES ('img-meld','Bruna','emn','15','en','meld',1,
-                     json_object('display','https://cards.scryfall.io/display/top.webp?3',
-                                 'art','https://cards.scryfall.io/art/top.webp?3'),
-                     json_array(json_object(
-                                 'display','https://cards.scryfall.io/display/face0.webp?3',
-                                 'art','https://cards.scryfall.io/art/face0.webp?3')),
-                     '{}')",
-            [],
-        )
-        .unwrap();
-        // One of the eight live rows publishing Scryfall's error page as its artwork.
-        conn.execute(
-            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,image_uris,raw)
-             VALUES ('img-soon','Ghouls'' Night Out','mic','57','en','normal',1,
-                     json_object(
-                       'thumb','https://errors.scryfall.com/soon.jpg',
-                       'grid','https://errors.scryfall.com/soon.jpg',
-                       'display','https://errors.scryfall.com/soon.jpg',
-                       'art','https://errors.scryfall.com/soon.jpg'),'{}')",
-            [],
-        )
-        .unwrap();
-
-        for collapse in [None, Some(true)] {
-            let r = run_search(
-                &conn,
-                &SearchRequest {
-                    collapse,
-                    limit: 50,
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-            let pick = |id: &str| r.items.iter().find(|c| c.id == id).unwrap();
-
-            let plain_row = pick("img-plain");
-            let plain = plain_row.image_uris.as_ref().unwrap();
-            assert_eq!(
-                plain[crate::image_uri::LIST_VARIANT],
-                "https://cards.scryfall.io/display/p.webp?7",
-                "a top-level blob answers ({collapse:?})"
-            );
-            assert_eq!(
-                plain[crate::image_uri::ART_VARIANT],
-                "https://cards.scryfall.io/art/p.webp?7",
-                "and the crop, under its own key ({collapse:?})"
-            );
-            // The narrowing to two of the schema's four, fenced on the DTO as well as in the
-            // module: a row that grew back to four would pass every other assertion here, and
-            // this fixture carries all four so the extra keys would be real URLs.
-            // Spelled out rather than read off `LIST_VARIANTS`: an assertion that reads the
-            // constant it is fencing can never fail when that constant moves.
-            assert_eq!(
-                plain.keys().map(String::as_str).collect::<Vec<_>>(),
-                ["art", "display"],
-                "the row carries what a list row carries and nothing else ({collapse:?})"
-            );
-
-            let meld = pick("img-meld").image_uris.as_ref().unwrap();
-            assert_eq!(
-                meld[crate::image_uri::LIST_VARIANT],
-                "https://cards.scryfall.io/display/face0.webp?3",
-                "the face wins over the top-level image ({collapse:?})"
-            );
-            assert_eq!(
-                meld[crate::image_uri::ART_VARIANT],
-                "https://cards.scryfall.io/art/face0.webp?3",
-                "for the second variant too, at its own offset ({collapse:?})"
-            );
-
-            assert_eq!(
-                pick("img-soon").image_uris,
-                None,
-                "an error page is no image at all, never a URL ({collapse:?})"
-            );
-            assert_eq!(
-                pick("1").image_uris,
-                None,
-                "a printing with neither column carries nothing ({collapse:?})"
-            );
-
-            // The neighbours on either side of the image columns still land in their own
-            // fields — the failure a shifted index actually produces.
-            let bolt = pick("1");
-            assert!(!bolt.wishlisted, "{collapse:?}");
-            assert_eq!(bolt.printings, 1, "{collapse:?}");
-            assert_eq!(bolt.price_low, Some(400.5), "{collapse:?}");
-            assert_eq!(bolt.price_high, Some(400.5), "{collapse:?}");
         }
     }
 

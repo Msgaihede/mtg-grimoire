@@ -33,13 +33,8 @@
 //!   at a time and every image URL is dropped with the raw variant that carried it.
 //!   `from_str` on 639 MB is not available, and neither is `serde_json::Value`.
 //!
-//!   **The framing is push-shaped on purpose, and that is a change from what shipped.** This
-//!   module used to drive `serde_json::Deserializer::from_reader` with a [`DeserializeSeed`]
-//!   over the array, which is a *pull* parser: it calls `read()` when it wants more and blocks
-//!   until it gets it. A browser stream is push and async with no thread to block, so it could
-//!   not be driven from one at all. [`read_file`] and the seed below stay — they are still the
-//!   file-shaped entry point the tests use — but [`ingest_gz`] now goes through
-//!   [`read_stream`].
+//!   [`ingest_gz`] goes through [`read_stream`], which is push-shaped. [`read_file`] and the
+//!   [`DeserializeSeed`] over the array below are the file-shaped entry point the tests use.
 //! * **A size guard, against the declared length *and* the streamed total.** [`MAX_FEED_BYTES`]
 //!   is a bound on what a host that is not the one we think it is can make this process spend,
 //!   not a budget. A chunked response declares nothing, which is why the running total is
@@ -89,22 +84,14 @@ use crate::sync::AppState;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 use std::io::Read;
 use std::path::Path;
-#[cfg(not(target_family = "wasm"))]
 use std::path::PathBuf;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::{Arc, OnceLock};
-// `SystemTime::now()` **panics** on `wasm32-unknown-unknown`. Gating the import rather
-// than only its callers is the fence: on the web target the name is not in scope, so a
-// clock cannot be reached for by accident from a module the map says compiles there.
-#[cfg(not(target_family = "wasm"))]
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
-#[cfg(not(target_family = "wasm"))]
 use tauri::Emitter;
 
 // ---------------------------------------------------------------------------------------
@@ -160,7 +147,6 @@ const MAX_FEED_BYTES: u64 = 128 * 1024 * 1024;
 /// Bytes of download between progress events. reqwest's chunk callback fires thousands of
 /// times over 27.5 MB, which is far more than a progress bar can use —
 /// [`crate::marketplace_feed`]'s number, for its reason.
-#[cfg(not(target_family = "wasm"))]
 const PROGRESS_EMIT_BYTES: u64 = 1_000_000;
 
 /// How long an ingested combo database stays fresh.
@@ -178,13 +164,11 @@ const PROGRESS_EMIT_BYTES: u64 = 1_000_000;
 pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 
 /// The connect timeout. This is an ordinary web host, not a CDN this app has measured.
-#[cfg(not(target_family = "wasm"))]
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// The longest gap between two chunks of the body before the connection is called dead.
 /// Deliberately *not* an overall timeout: 27.5 MB legitimately runs for a minute on a slow
 /// line, and a `timeout()` would kill it partway every time — [`crate::scryfall`]'s rule.
-#[cfg(not(target_family = "wasm"))]
 const READ_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// Rows per transaction on the way into staging.
@@ -196,21 +180,11 @@ const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const BATCH: usize = 2_000;
 
 /// Let a waiting writer see the connection is free. **Call it with no guard in scope.**
-#[cfg(not(target_family = "wasm"))]
 const YIELD_BETWEEN_BATCHES: Duration = Duration::from_millis(5);
 
-#[cfg(not(target_family = "wasm"))]
 fn stand_aside() {
     std::thread::sleep(YIELD_BETWEEN_BATCHES);
 }
-
-/// **Nothing to stand aside for.** The web target runs the whole database in one dedicated
-/// Worker, so there is no second thread that could be holding a button down waiting for this
-/// connection — and `std::thread::sleep` has no meaning on `wasm32-unknown-unknown` anyway.
-/// [`store`] goes on calling this every batch, so the batching itself is one code path on
-/// both targets and only the pause between batches differs.
-#[cfg(target_family = "wasm")]
-fn stand_aside() {}
 
 /// The largest deck a combo check will accept in one call.
 ///
@@ -522,11 +496,8 @@ pub fn read_file(body: &mut dyn Read) -> Result<ComboFile, ComboError> {
     Ok(file)
 }
 
-/// Reading the `variants` array as an object the caller pushes into.
-///
-/// [`read_stream`]'s `Iterator` is the desktop shape; this is the shape a browser can
-/// drive, for [`crate::ingest::StreamIngest`]'s reason — an awaited `Stream` has no
-/// blocking `next()` to hand an iterator.
+/// Reading the `variants` array as an object the caller pushes into — the sink
+/// [`read_stream`] hands each chunk to.
 ///
 /// Peak memory is one element plus the reduced list, and [`StreamRead::peak_buffer`] is how
 /// a caller checks that claim. That is not diagnostics: the spike's first framer found
@@ -556,8 +527,8 @@ impl StreamRead {
 
     /// The largest the element framer's buffer has ever been, in bytes.
     ///
-    /// Measured at **2.01 MB against the real 610.2 MB document**, on both a desktop and a
-    /// OnePlus 12. Anything approaching the document's own size means the framer has
+    /// Measured at **2.01 MB against the real 610.2 MB document**, on a desktop. Anything
+    /// approaching the document's own size means the framer has
     /// desynchronised and is silently accumulating rather than draining.
     pub fn peak_buffer(&self) -> usize {
         self.elements.peak_buffer()
@@ -600,14 +571,10 @@ impl Default for StreamRead {
 
 /// Read `{ timestamp, version, variants: [ … ] }` from a stream of byte chunks.
 ///
-/// **Why this exists beside [`read_file`].** That one streams with
-/// `serde_json::Deserializer::from_reader` plus a `DeserializeSeed` - a *pull* parser,
-/// which calls `read()` when it wants more and blocks until it gets it. A browser stream
-/// is push and async with no thread to block, so `from_reader` cannot be driven from one
-/// at all. This frames each element by brace depth and hands it whole to `from_slice`,
-/// which keeps serde doing the part serde is good at.
+/// This frames each element by brace depth and hands it whole to `from_slice`, which keeps
+/// serde doing the part serde is good at.
 ///
-/// Peak memory is one element plus the reduced list, the same as `read_file`'s.
+/// Peak memory is one element plus the reduced list, the same as [`read_file`]'s.
 pub fn read_stream(
     chunks: impl Iterator<Item = std::io::Result<Vec<u8>>>,
 ) -> Result<ComboFile, ComboError> {
@@ -640,10 +607,6 @@ fn take_element(file: &mut ComboFile, el: &[u8]) {
 /// starts at the first `[`. `None` for a document that omits the key, which is what
 /// [`read_file`] also produces - `ComboFile::stamp` is `Option<String>` precisely because
 /// a file without one is a real state rather than an error.
-///
-/// **The scraper itself lives in [`crate::feed::frame`]**, because `marketplace_feed` wants
-/// exactly this for Card Kingdom's `meta.created_at` and two copies of a five-line parser
-/// are two chances to fix one of them.
 fn stamp_from_head(head: &[u8]) -> Option<String> {
     crate::feed::frame::scrape_string(head, "timestamp")
 }
@@ -1003,18 +966,12 @@ pub fn clear_combos(conn: &Connection) -> rusqlite::Result<()> {
 
 /// Clear the combos and answer what is left, on a connection the caller already holds.
 ///
-/// **The shape both targets call**, so neither holds a second copy of what "clear the combos"
-/// means: `web::route` hands it to `crate::sync::with_write`, and [`combos_clear`] runs it on
-/// the blocking pool under the same lock. The work is [`clear_combos`] above; what this adds is
-/// the answer.
+/// [`combos_clear`] runs it on the blocking pool under the write lock. The work is
+/// [`clear_combos`] above; what this adds is the answer.
 ///
 /// It answers a [`ComboStatus`] rather than nothing because the page that pressed this would
 /// otherwise have to ask a second time to learn what it did — and the answer is always
 /// [`status_of`]'s never-ingested one: two zeros, three nulls and `stale: true`.
-///
-/// **Its clock comes off the connection**, [`status_of`]'s reason exactly: `SystemTime::now()`
-/// *panics* on `wasm32-unknown-unknown` rather than failing, and this function is on the
-/// Worker's path.
 pub fn clear(conn: &Connection) -> Result<ComboStatus, String> {
     clear_combos(conn).map_err(|e| format!("could not clear the combos: {e}"))?;
     let now = conn
@@ -1032,7 +989,6 @@ pub fn clear(conn: &Connection) -> Result<ComboStatus, String> {
 /// and an arm in the frontend's total `SOURCE_LABEL` map. The `operation` carries the feed's
 /// name instead — that field is free text precisely so a new call site can report a failure
 /// without a migration first.
-#[cfg(not(target_family = "wasm"))]
 fn note_failure(db: &Mutex<Connection>, err: &ComboError) {
     // Skipped rather than waited for if the connection is busy: this describes a failure that
     // has already happened, on a path that is already returning an error.
@@ -1057,7 +1013,6 @@ fn note_failure(db: &Mutex<Connection>, err: &ComboError) {
 /// **Deliberately not [`crate::scryfall::Client`]** — see the module header. The user agent is
 /// shared because it is accurate here too: it names this app, its version and its repository,
 /// which is what a public bulk endpoint is owed.
-#[cfg(not(target_family = "wasm"))]
 fn client() -> &'static reqwest::Client {
     static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
@@ -1089,7 +1044,6 @@ pub enum Fetch {
 /// **A refusal leaves nothing at `dest`** — including a size refusal that trips mid-stream,
 /// where the partial is deleted before returning. There is no resume here, and a half-written
 /// body would only fail to decompress next time.
-#[cfg(not(target_family = "wasm"))]
 pub async fn download(
     url: &str,
     dest: &Path,
@@ -1100,7 +1054,6 @@ pub async fn download(
 }
 
 /// [`download`] with the bound handed in, which is the seam the size-guard tests drive.
-#[cfg(not(target_family = "wasm"))]
 async fn download_capped(
     url: &str,
     dest: &Path,
@@ -1168,7 +1121,6 @@ async fn download_capped(
 
 /// Where the file is downloaded to. Beside the bulk file's and the price feeds' `tmp/`, and
 /// deleted either way.
-#[cfg(not(target_family = "wasm"))]
 fn temp_path(state: &AppState) -> PathBuf {
     state
         .data_dir
@@ -1237,7 +1189,6 @@ fn read_meta(conn: &Connection) -> Option<ComboMeta> {
 /// `tags::closure_is_populated`'s rule, for its reason: metadata can outlive the rows it
 /// describes, and replaying an `If-None-Match` for a file whose rows are gone earns a 304 that
 /// no amount of refreshing can get past.
-#[cfg(not(target_family = "wasm"))]
 fn is_populated(conn: &Connection) -> bool {
     conn.query_row("SELECT EXISTS(SELECT 1 FROM combos)", [], |r| {
         r.get::<_, i64>(0)
@@ -1289,11 +1240,7 @@ pub fn read_status(conn: &Connection, now: i64) -> ComboStatus {
     }
 }
 
-/// **Ungated, and its clock comes off the connection.** `web::route` answers `combos_status`
-/// with this, and `SystemTime::now()` — which [`unix_now`] below uses — *panics* on
-/// `wasm32-unknown-unknown` rather than failing, so calling that here would take the Worker
-/// down instead of returning an error. `crate::tags::now_from` reached the same conclusion on
-/// the same day, for the same command shape.
+/// [`read_status`] over the read-only connection, with the clock read off that connection.
 pub(crate) fn status_of(state: &AppState) -> ComboStatus {
     let conn = crate::sync::lock_db_read(state);
     let now = conn
@@ -1304,7 +1251,6 @@ pub(crate) fn status_of(state: &AppState) -> ComboStatus {
 
 /// Seconds since the Unix epoch. A clock before 1970 reads as 0, which makes the combo
 /// database stale — [`crate::sync`]'s choice, for its reason.
-#[cfg(not(target_family = "wasm"))]
 fn unix_now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -1459,10 +1405,6 @@ pub struct ComboPiece {
     /// error — see [`Self::name`]. A piece in that state still carries its name, its quantity
     /// and its [`owned`](Self::owned) count, because none of those came from `cards`.
     pub card_id: Option<String>,
-    /// The front face's picture for that printing, per variant. `None` alongside a `None`
-    /// [`card_id`](Self::card_id), and also for a printing the corpus has no fetchable image
-    /// for — [`crate::image_uri::front_face_map`]'s rule, not one respelled here.
-    pub image_uris: Option<BTreeMap<String, String>>,
     /// Copies of this card the reader owns, across **every printing and every finish**.
     ///
     /// `0` is an answer rather than a gap: this panel exists to tell a reader which of a
@@ -1811,14 +1753,6 @@ fn page_sql(owned_only: bool) -> String {
     }
 }
 
-/// Where [`pieces_sql`]'s image expressions start — one past `card_id`, the last named column.
-///
-/// Named rather than inlined for [`crate::deck_tokens`]' reason, and it carries that module's
-/// failure too: the pair is (top-level, face) and `for_face` prefers the face, so a read one
-/// column out still answers a perfectly real URL — the right picture from the wrong slot. It
-/// moves with every column added to the list above it.
-const PIECE_IMAGE_COL: usize = 7;
-
 /// Every card of every combo on one page, in one statement.
 ///
 /// **One statement over the page's ids, and the pieces are matched back to their combos by
@@ -1837,8 +1771,7 @@ const PIECE_IMAGE_COL: usize = 7;
 ///   id. Verbatim on purpose: the art in this panel and the art of a token derived from the
 ///   same oracle card must not disagree about which printing *is* that card, and two orderings
 ///   that mean to be the same are two orderings that will not be. A `LEFT JOIN`, so a piece the
-///   corpus has never synced answers `NULL` for the id and for all four picture columns rather
-///   than dropping the piece.
+///   corpus has never synced answers `NULL` for the id rather than dropping the piece.
 /// * **The owned count is [`crate::collection_source::copies_of_oracle`]** under
 ///   [`Availability::Everything`](crate::collection_source::Availability::Everything), which is
 ///   this crate's single definition of *copies of an oracle card*. **`Everything` and not
@@ -1853,7 +1786,7 @@ const PIECE_IMAGE_COL: usize = 7;
 fn pieces_sql(conn: &Connection, holes: &str) -> String {
     format!(
         "SELECT p.combo_id, p.oracle_id, p.name, p.quantity, p.must_be_commander,
-                {owned}, d.id, {images}
+                {owned}, d.id
            FROM combo_cards p
            LEFT JOIN cards d
              ON d.id = (SELECT n.id FROM cards n WHERE n.oracle_id = p.oracle_id
@@ -1867,7 +1800,6 @@ fn pieces_sql(conn: &Connection, holes: &str) -> String {
             "p.oracle_id",
             crate::collection_source::Availability::Everything,
         ),
-        images = crate::image_uri::front_face_selects("d").join(", "),
     )
 }
 
@@ -2045,9 +1977,6 @@ pub fn card_combos(
                         must_be_commander: r.get(4)?,
                         owned: r.get(5)?,
                         card_id: r.get(6)?,
-                        image_uris: crate::image_uri::front_face_map(|i| {
-                            r.get::<_, Option<String>>(PIECE_IMAGE_COL + i)
-                        })?,
                     },
                 ))
             })
@@ -2079,16 +2008,13 @@ pub fn card_combos(
 /// exists so an art refresh does not refuse because an oracle one is running, and there is no
 /// second dataset here to be refused by. Module-level rather than a field on `AppState` because
 /// it is this module's concern alone.
-#[cfg(not(target_family = "wasm"))]
 static REFRESHING: AtomicBool = AtomicBool::new(false);
 
 /// Clears the claim however the refresh ends — an early return, an error, a dropped future.
 /// `sync::SyncingGuard`'s shape, for its reason: a latched flag locks the reader out until they
 /// restart the app.
-#[cfg(not(target_family = "wasm"))]
 struct RefreshGuard;
 
-#[cfg(not(target_family = "wasm"))]
 impl RefreshGuard {
     /// Claim the refresh, or `None` if one is already running.
     fn claim() -> Option<RefreshGuard> {
@@ -2099,7 +2025,6 @@ impl RefreshGuard {
     }
 }
 
-#[cfg(not(target_family = "wasm"))]
 impl Drop for RefreshGuard {
     fn drop(&mut self) {
         REFRESHING.store(false, Ordering::SeqCst);
@@ -2117,7 +2042,6 @@ impl Drop for RefreshGuard {
 /// the two fails the refresh and costs another 27.5 MB at the next launch. Named for its
 /// siblings in [`crate::marketplace_feed`] and [`crate::tags`], which answer the same question
 /// over a list of names; here there is one file, so it is the flag.
-#[cfg(not(target_family = "wasm"))]
 pub(crate) fn any_refresh_running() -> bool {
     REFRESHING.load(Ordering::SeqCst)
 }
@@ -2132,7 +2056,6 @@ pub(crate) fn any_refresh_running() -> bool {
 ///
 /// Its own function rather than an inline `filter` so the rule can be asserted without a
 /// network in the way.
-#[cfg(not(target_family = "wasm"))]
 fn conditional_etag(etag: Option<&str>, populated: bool) -> Option<&str> {
     etag.filter(|_| populated)
 }
@@ -2149,7 +2072,6 @@ fn conditional_etag(etag: Option<&str>, populated: bool) -> Option<&str> {
 ///
 /// The function survives the collapse to a single expression because the rule is worth being
 /// able to assert on its own; that is the split every other helper in this module uses.
-#[cfg(not(target_family = "wasm"))]
 fn due_at_startup(meta: Option<&ComboMeta>, now: i64) -> bool {
     is_stale(meta.and_then(|m| m.checked_at), now)
 }
@@ -2160,7 +2082,6 @@ fn due_at_startup(meta: Option<&ComboMeta>, now: i64) -> bool {
 /// stamp costs is one more conditional request a week from now. **Nothing is written when there
 /// is no row**, which is the never-ingested state: a watermark with no rows behind it is exactly
 /// what would make the next run 304 past an empty database.
-#[cfg(not(target_family = "wasm"))]
 fn mark_checked(state: &Arc<AppState>) {
     let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) else {
         return;
@@ -2182,7 +2103,6 @@ fn mark_checked(state: &Arc<AppState>) {
 ///
 /// Every failure leaves the previous combos exactly where they were and is written to
 /// `error_log`.
-#[cfg(not(target_family = "wasm"))]
 pub async fn refresh(
     state: &Arc<AppState>,
     force: bool,
@@ -2292,7 +2212,6 @@ pub async fn refresh(
 /// or, on a first run that fails, the three signals the estimate had before this feed existed.
 /// A failed first fetch leaves no watermark at all, because [`mark_checked`] updates a row that
 /// is not there, so it is retried at the next launch rather than throttled out for a week.
-#[cfg(not(target_family = "wasm"))]
 pub async fn refresh_if_due(state: &Arc<AppState>, app: &tauri::AppHandle) {
     let due = {
         let conn = crate::sync::lock_db_read(state);
@@ -2328,7 +2247,6 @@ pub struct ComboProgress {
 /// Emit one progress event. Dropped if nobody is listening, which is Tauri's behaviour and is
 /// why [`combos_status`] exists: the event is the fast path, the tables are what a reader can
 /// still consult a minute later.
-#[cfg(not(target_family = "wasm"))]
 fn emit(app: &tauri::AppHandle, phase: &str, done: u64, total: u64) {
     debug_assert!(PHASES.contains(&phase), "unknown combo phase `{phase}`");
     let _ = app.emit(
@@ -2353,7 +2271,6 @@ fn emit(app: &tauri::AppHandle, phase: &str, done: u64, total: u64) {
 ///
 /// `async`, and answered on the blocking pool, because a sync command body runs inline on the
 /// IPC thread and this takes `db_read`'s mutex.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn combos_status(state: tauri::State<'_, Arc<AppState>>) -> Result<ComboStatus, String> {
     let state = state.inner().clone();
@@ -2368,7 +2285,6 @@ pub async fn combos_status(state: tauri::State<'_, Arc<AppState>>) -> Result<Com
 /// `force` skips the weekly throttle, not the ETag check. Long-running by nature (27.5 MB), so
 /// it reports itself through [`PROGRESS_EVENT`]. A failure leaves the previous combos in place,
 /// and the reason is in the error log.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn combos_refresh(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2398,14 +2314,12 @@ pub async fn combos_refresh(
 ///
 /// `async`, and answered on the blocking pool, for [`combos_status`]'s reason: a sync command
 /// body runs inline on the IPC thread, and this one takes the write lock. The body itself is
-/// [`clear`], which is also what `web::route` hands to `crate::sync::with_write` — this is that
-/// same function on a pool thread, and not a second answer to the same question.
+/// [`clear`].
 ///
 /// **A lock it could not have is reported rather than swallowed**, which is the difference
 /// between this and [`mark_checked`]. That one is a best-effort watermark nobody is waiting on;
 /// this is a press somebody is watching, and a clear that quietly did nothing would read as a
 /// database that refuses to empty.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn combos_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<ComboStatus, String> {
     let state = state.inner().clone();
@@ -2426,7 +2340,6 @@ pub async fn combos_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<Comb
 /// [`MAX_CARD_IDS`] of them; see [`match_combos`] for why the list length is a real bound.
 ///
 /// `async`, and answered on the blocking pool, for [`combos_status`]'s reason.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn combos_for_cards(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2463,9 +2376,7 @@ pub async fn combos_for_cards(
 ///
 /// `async`, and answered on the blocking pool, for [`combos_status`]'s reason: a sync command
 /// body runs inline on the IPC thread and this one takes `db_read`'s mutex. The body is
-/// [`card_combos`], which is also what the web target's router calls — one answer to the
-/// question, reached two ways.
-#[cfg(not(target_family = "wasm"))]
+/// [`card_combos`].
 #[tauri::command]
 pub async fn combos_for_card(
     state: tauri::State<'_, Arc<AppState>>,
@@ -3165,7 +3076,7 @@ mod tests {
             .unwrap();
         assert_eq!((combos, cards), (0, 0), "both tables, not just the parent");
 
-        // And the half both targets actually call answers that same status, rather than
+        // And `clear`, which the command calls, answers that same status, rather than
         // leaving the page to ask a second time what the press did.
         assert_eq!(
             clear(&conn).unwrap(),
@@ -3435,9 +3346,7 @@ mod tests {
 
     // ---- one card's combos ------------------------------------------------------------
 
-    /// A `cards` row carrying everything the default-printing tie-break sorts on **and** a
-    /// picture in both variants, so an assertion about which printing was named is also an
-    /// assertion about whose art came back with it.
+    /// A `cards` row carrying everything the default-printing tie-break sorts on.
     fn seed_printing(
         conn: &Connection,
         id: &str,
@@ -3449,14 +3358,8 @@ mod tests {
     ) {
         conn.execute(
             "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
-                                released_at, image_uris, raw)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'en', 'normal', ?6,
-                     json_object(
-                       'display',
-                       'https://cards.scryfall.io/display/front/0/0/' || ?1 || '.webp?1',
-                       'art',
-                       'https://cards.scryfall.io/art/front/0/0/' || ?1 || '.webp?1'),
-                     '{}')",
+                                released_at, raw)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'en', 'normal', ?6, '{}')",
             params![id, oracle, name, set_code, collector_number, released_at],
         )
         .unwrap();
@@ -3801,15 +3704,13 @@ mod tests {
         let orb = &c3b.pieces[1];
         assert_eq!(orb.oracle_id, "o-nothing");
         assert_eq!(orb.card_id, None, "no `cards` row to name a printing from");
-        assert_eq!(orb.image_uris, None, "and therefore no picture");
         assert_eq!(orb.owned, 0, "which is an answer, not a gap");
         assert_eq!(orb.quantity, 1);
     }
 
     /// **The default printing is [`crate::deck_tokens`]' tie-break, and both halves of it are
     /// measured.** The Basalt pair differ on release date; the Curio pair were released the
-    /// same day and can only be split by set code. The art comes off the row that won, so this
-    /// is also the assertion that the picture and the id describe the same printing.
+    /// same day and can only be split by set code.
     #[test]
     fn a_pieces_default_printing_is_the_token_resolvers_tie_break() {
         let db = card_combo_db();
@@ -3828,19 +3729,6 @@ mod tests {
             by_oracle("o-curio").card_id.as_deref(),
             Some("p-curio-a"),
             "released the same day, so the lowest set code wins"
-        );
-        assert_eq!(
-            by_oracle("o-basalt").image_uris.as_ref().unwrap()["display"],
-            "https://cards.scryfall.io/display/front/0/0/p-basalt-new.webp?1",
-            "the art belongs to the printing that was named"
-        );
-        assert!(
-            by_oracle("o-basalt")
-                .image_uris
-                .as_ref()
-                .unwrap()
-                .contains_key("art"),
-            "both list variants, folded up by `front_face_map`"
         );
     }
 
@@ -4108,10 +3996,10 @@ mod tests {
 
     /// [`card_combos`] over [`search_combo_db`] with the three narrowings named.
     ///
-    /// **`None, None` at a call site is the positional trap `deck::IMAGE_COL` warns about, read
-    /// one module over**: `search` and `card_count` are adjacent and both `Option`, so the one
-    /// spelling that swaps them silently is exactly the one every default call uses. Every
-    /// assertion below goes through this, and the compiler checks the order once.
+    /// **`None, None` at a call site is a positional trap**: `search` and `card_count` are
+    /// adjacent and both `Option`, so the one spelling that swaps them silently is exactly the
+    /// one every default call uses. Every assertion below goes through this, and the compiler
+    /// checks the order once.
     fn ask(
         conn: &Connection,
         search: Option<&str>,
@@ -4412,10 +4300,6 @@ mod tests {
                     quantity: 1,
                     must_be_commander: false,
                     card_id: Some("p-altar".into()),
-                    image_uris: Some(BTreeMap::from([(
-                        "art".to_owned(),
-                        "https://cards.scryfall.io/art/front/0/0/p-altar.webp?1".to_owned(),
-                    )])),
                     owned: 2,
                 }],
             }],
@@ -4446,9 +4330,6 @@ mod tests {
                         "quantity": 1,
                         "mustBeCommander": false,
                         "cardId": "p-altar",
-                        "imageUris": {
-                            "art": "https://cards.scryfall.io/art/front/0/0/p-altar.webp?1"
-                        },
                         "owned": 2,
                     }],
                 }],
@@ -4979,8 +4860,7 @@ mod tests {
 
     /// The regression the spike paid for: a framer that stops draining still returns rows
     /// for a while and then quietly holds the whole document. The row count cannot see it;
-    /// `peak_buffer` can, and the browser is where the real 610 MB document lives, so the
-    /// sink has to expose it.
+    /// `peak_buffer` can, so the sink has to expose it.
     #[test]
     fn the_combo_sink_exposes_a_peak_buffer_that_stays_small() {
         let doc = many_variants(2000);
@@ -5042,7 +4922,7 @@ mod tests {
         }
     }
 
-    /// The browser case: already-decompressed bytes must ingest like gzipped ones.
+    /// Already-decompressed bytes must ingest like gzipped ones.
     #[test]
     fn read_stream_accepts_plain_and_gzipped_alike() {
         use flate2::{write::GzEncoder, Compression};

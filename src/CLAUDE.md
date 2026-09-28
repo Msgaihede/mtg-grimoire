@@ -100,12 +100,15 @@ Every one of these has its measurement and its story in
   to pass `decoding="async"` by hand no longer pass anything. Every figure and both A/Bs:
   [image-cache.md](../docs/reference/image-cache.md).
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
-  no-art fallback and the foil marking, in one place. **Every wall of card faces draws it**: the
-  search's, the collection's, the wishlist's and the three docked search columns — all of them
-  `features/search/CardGrid`, which is the one wall. Grep `from "@/components/CardArt"` for the
-  census rather than trusting a list here. **This sentence named two callers that are not that
-  wall — the deck's own `DeckTokensPanel` and `TokenArtPicker`, which draw tokens rather than deck
-  rows — and that was never the whole census**: the views' token pile was a third until
+  no-art fallback and the foil marking, in one place. **Its picture is the `mtgimg://` protocol's,
+  built by `cardImageUrl` from the card id, unless the caller passes `remoteSrc` — and only the
+  share viewer's `share/ShareTile.tsx` does**, because that page has no protocol to ask.
+  **Every wall of card faces draws it**: the search's, the collection's, the wishlist's and the
+  three docked search columns — all of them `features/search/CardGrid`, which is the one wall.
+  Grep `from "@/components/CardArt"` for the census rather than trusting a list here. **This
+  sentence named two callers that are not that wall — the deck's own `DeckTokensPanel` and
+  `TokenArtPicker`, which draw tokens rather than deck rows — and that was never the whole
+  census**: the views' token pile was a third until
   2026-09-26, and the home page's widgets, `CombosDialog` and the shared binder draw `CardArt`
   outside the wall too. The two it named are still the **deck's** only ones; the token pile left
   for the second list below (token stacks, spec §3.2). A surface
@@ -243,16 +246,16 @@ Every one of these has its measurement and its story in
   exactly what a broken name still passes. jsdom trims the same way, so the fence is cheap:
   `toHaveAccessibleName`, on the element, with the whole phrase.
 - **A view whose guarantee is "it cannot write" needs a source sweep, because there is no
-  read-only mode on this app's data path.** `lock_db_read` returns the *write* connection on
-  wasm, and `@/lib/writes` is only about which mutation owns the error banner — so a flag would
-  be a claim. `src/features/share/readOnly.test.ts` is the shape to copy: an `import.meta.glob`
-  over the subtree, `ipc.<name>` matched against two enumerated lists, four back doors
-  (`ipc["…"]`, a binding taken off `ipc`, `ipc` passed as an argument, a namespace import)
-  refused outright, and an anti-vacuity guard so a moved directory cannot turn the guarantee into
-  a green build over an empty set. **The permitted write goes on its own list** — `WRITES`, not
-  two more entries on `READS` — so a diff that touches it is a diff about the view's promise. It stays total only while the calls are made **in** the swept
-  files, which is why that view writes its own paging loop rather than importing a helper that
-  would take the callback elsewhere.
+  read-only mode on this app's data path.** `@/lib/writes` is only about which mutation owns the
+  error banner — so a flag would be a claim. `src/features/share/readOnly.test.ts` is the shape
+  to copy: an `import.meta.glob` over the subtree, `ipc.<name>` matched against two enumerated
+  lists, four back doors (`ipc["…"]`, a binding taken off `ipc`, `ipc` passed as an argument, a
+  namespace import) refused outright, and an anti-vacuity guard so a moved directory cannot turn
+  the guarantee into a green build over an empty set. **The permitted write goes on its own
+  list** — `WRITES`, not two more entries on `READS` — so a diff that touches it is a diff about
+  the view's promise. It stays total only while the calls are made **in** the swept files, which
+  is why that view writes its own paging loop rather than importing a helper that would take the
+  callback elsewhere.
 - **This app starts no native drag, and `lib/nativeDrag.ts` refuses every one the page would
   begin** (issue #473, 2026-09-19). Every drag is dnd-kit's pointer gesture and `CardImage` is
   `draggable={false}`, so the native drags left were accidents: a **text selection** pulled out of
@@ -282,11 +285,9 @@ Every one of these has its measurement and its story in
   that traps nothing as well as on one that traps both. **Do not "simplify" this by mounting a
   hint inside a deck table row**: the trap is a property of the caller, and a hook whose placement
   depended on which caller drew it would be four answers to one question. **The
-  sweep is done**: every real tooltip in the app binds through `useTooltip()`. **Two native
-  `title`s survive on purpose, and they are the same one drawn twice** — the drag-inert entry in
-  `AppShell.tsx`'s rail and its twin in `BottomTabBar.tsx` (added 2026-08-29 with the phone's tab
-  bar; the *row* is duplicated on purpose while the drop wiring is shared through
-  `useSidebarDropTarget`) — because Chromium
+  sweep is done**: every real tooltip in the app binds through `useTooltip()`. **One native
+  `title` survives on purpose** — the drag-inert entry in `AppShell.tsx`'s rail, whose twin in
+  `BottomTabBar.tsx` went with the phone layout on 2026-09-27 — because Chromium
   freezes `:hover` at a drag's origin for the whole drag, so the attribute's sentence is never
   seen mid-drag and is read instead through the accname spec's description fallback. Everything
   else `title=` still finds in the tree is a component **prop** — drawn as a heading
@@ -360,7 +361,14 @@ Every one of these has its measurement and its story in
   once for the boxes that share it. **jsdom does not implement the native clear**, so the suite
   can never see the half this exists to prevent; the shipped window is the only witness. Not for
   a field inside a dialog or a popup — an `"inner"` layer consumes the press in the capture phase
-  before the field's own handler runs, so a call there is a line that cannot execute.
+  before the field's own handler runs, so a call there does nothing.
+  **A press a capture rung already spent is never the box's, and the helper asks
+  `defaultPrevented` rather than trusting its caller's state** (2026-09-28). A trusted keypress
+  gets a microtask checkpoint after every listener, React flushes a capture rung's close in it, so
+  a field's `onKeyDown` can run from a render where its own popup is already shut: `QuickAdd`
+  guarded on its `listOpen` and one Escape closed the list **and** emptied the field. jsdom and an
+  untrusted `dispatchEvent` never checkpoint between listeners, so neither can see it unaided —
+  `features/decks/CLAUDE.md`'s quick add has the measurement.
 - **A surface opened from a view is a centred modal over a scrim, not a docked column — unless
   the reader works _out of_ it while editing beside it.** Width is the scarce thing in this app:
   the deck editor's desk row measures **602px** at the app's own 1280×800 with the card pane
@@ -434,10 +442,13 @@ Every one of these has its measurement and its story in
   `Dialog` paragraph above. **jsdom has no layout engine, so nothing in the suite can go red
   for this** — build a modal on `Dialog` rather than beside it, and check a new one in the
   running window at a short viewport with more content than fits.
-  **What it is clamped _to_ is 90vh above the phone fold and the whole window below it, and a host
-  spells neither** (2026-09-08). `Dialog`'s scrim is `p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]`: 24px
-  across, 5vh down, so a dialog whose body outgrows the window leaves glass above and below and
-  reads as a panel over the app rather than as a page. It is stated as an **inset** rather than as
+  **What it is clamped _to_ is 90vh at `sm` (640px) and above and the whole window below it, and a
+  host spells neither** (2026-09-08). `Dialog`'s scrim is `p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]`:
+  24px across, 5vh down, so a dialog whose body outgrows the window leaves glass above and below
+  and reads as a panel over the app rather than as a page. The below-`sm` rung is under the
+  desktop floor and no shipped window draws it; it stays on purpose (the owner's call, 2026-09-27,
+  when the phone layout went) because it is correct at any width — never read it as a phone
+  target. It is stated as an **inset** rather than as
   a `max-h` on the panel for two reasons that are both load-bearing. The scrim is where this shell
   states insets, so `max-h-full` stays the one height rule and only the box it is a percentage of
   moves; and a `sm:max-h-…` would sit on the same property as `CardDetailModal`'s
@@ -445,7 +456,7 @@ Every one of these has its measurement and its story in
   ones** — so the shell would have silently replaced that host's own ceiling at every width ≥640.
   Two things follow for a host. **Do not name a `max-h` in `size`**: `cn`'s `tailwind-merge`
   deletes the shell's `max-h-full` the moment you do, and below `sm` — where every dialog fills
-  the phone's glass — yours alone would float. And **a host that genuinely needs a tighter ceiling
+  the window — yours alone would float. And **a host that genuinely needs a tighter ceiling
   spells it as `min-[640px]:max-h-…`**, matching the card modal's family, never `sm:`.
 - **An anchored popup is pinned to, and grows from, the corner nearest its trigger's own edge**
   — `right-0`/`origin-top-right` at the right end of a row, `left-0`/`origin-top-left` at the
@@ -814,12 +825,14 @@ Every one of these has its measurement and its story in
   a `transform` is. `Dialog`'s scrim is a bare `fixed inset-0` and corrects for nothing, so a
   dialog opened from inside a container box stretches to **that box** rather than to the window:
   the scrim covers the row it came out of and the panel is clamped to a filter bar. Found
-  2026-08-29 building the phone's filter sheet, where `FilterBar`'s root became a **fragment** so
-  the sheet is the container box's *sibling*. **jsdom applies no stylesheet and computes no
-  containment**, so nothing in the suite can see the failure — pin the *structure* instead (the
-  dialog is not a descendant of the container), which is what `FilterBar.test.tsx` does. The
-  dropdowns escape this a different way and their own comment says so: `usePopupPlacement`
-  measures a zero-size frame precisely to subtract whatever containing block it landed in.
+  2026-08-29 building the phone's filter sheet, when `FilterBar`'s root became a **fragment** so
+  the sheet could be the container box's *sibling*; the sheet and the test pinning that went with
+  the phone layout on 2026-09-27, the root is one `@container/fb` element again, and the note over
+  it says nothing that must cover the window may mount inside it. **jsdom applies no stylesheet
+  and computes no containment**, so nothing in the suite can see the failure — pin the
+  *structure* instead: the dialog is not a descendant of the container. The dropdowns escape
+  this a different way and their own comment says so: `usePopupPlacement` measures a zero-size
+  frame precisely to subtract whatever containing block it landed in.
   **Settings met the same rule from the inside on 2026-09-03, and the lesson is where a container
   may not go rather than where a dialog may not.** That page's panels mount their dialogs inline —
   grep `ConfirmDialog` under `src/features/settings/` for the census, since none of them writes
@@ -1078,47 +1091,13 @@ Every one of these has its measurement and its story in
   reference to something the palette decides later.
 - Card images arrive over `mtgimg://`; `mtgimg:` is an `img-src` and nothing else — **read images
   with `<img>`, never with `fetch`** (a `fetch()` at it fails CORS by design).
-- **`src/lib/platform.ts` is the only place the page asks what platform it is on**, and it asks
-  the **user agent** — `src/lib/images.ts`'s `imageOrigin()` is the shipped precedent, and a
-  reader needs the answer synchronously during its first render. It answers `false` for
-  anything it does not recognise, which is what keeps jsdom and Storybook on the desktop shape
-  without either of them having to say so; the token is `Android` and not `Linux` or `Mobile`,
-  because an Android agent is a Linux one with one extra word. **Name a reader, never count
-  them** — a count is a fact about a tree and every branch has a different one;
-  `grep -n "isAndroid(" src/` is the census — **and since 2026-09-20 that grep is no longer the
-  whole of it**, because the module exports a second answer built on the first. `isDesktop()` is
-  `!isWebTarget() && !isAndroid()`, the question *a second window exists here*, and its readers
-  reach `isAndroid` only through it, so they do not appear in that sweep at all:
-  `grep -n "isDesktop()" src/` is theirs. Both readers are one chord —
-  `AppShell` binds `Ctrl+Shift+N` behind it and `KeyMap` filters `desktopOnly` rows with the same
-  call, so the panel cannot list a chord this build does not bind (see
-  [keyboard-shortcuts.md](../docs/reference/keyboard-shortcuts.md)). `AppShell` reads `isAndroid`
-  itself for the caption (three of
-  `TitleBar`'s four verbs are `#[cfg(desktop)]` in tauri and `capabilities/mobile.json` grants
-  none of them); `BackupPanel` reads it to fold the panel away (the mirror is desktop-only by
-  decision); and `ipc.ts`'s `scannerFrame` / `scannerCapture` read it to choose a body shape.
-  **That last one is the reader the note here used to ask to justify itself, and the answer is
-  that it does not belong behind the core boundary**: a core is a fact about the *build* and both
-  legs are the Tauri build, so a core split could not see the difference. The difference is
-  Tauri's own, per OS — raw IPC bytes "on all platforms except Android" — and it is met in the
-  one wrapper that meets it. `UpdatePanel` is deliberately *not* a reader: it branches on the
-  backend's own `installKind`, because two independent answers to one question are free to
-  disagree. See [android-target.md](../docs/reference/android-target.md).
-- **`useNarrowWindow` is the app's one viewport branch, and a new consumer is a _reader_ of it
-  rather than a second branch.** `viewports.ts` demands a reason at the site of any branch on
-  width; consuming an answer the shell has already decided needs no new one, and the test for a
-  genuinely *second* branch is unchanged — name the box the question is about, and if it is not
-  the window, this is not the mechanism. `ScannerPage` is the case that settled the wording: a
-  phone stacks the camera above the verdict where a desk stands them side by side, which is the
-  shell's own question. **The hook's doc names its readers rather than counting them**, for the
-  reason above, and `grep -n "useNarrowWindow()" src/` is that census too.
+- **There is no viewport branch in the app.** The desktop window's floor is `DESKTOP_FLOOR_PX`
+  (1024, quoted from `tauri.conf.json`) and every fold answers its own box; the one branch there
+  was, `useNarrowWindow`, went with the phone layout on 2026-09-27.
 - **`Core.call` takes `(command, args?: CallArgs, options?: CallOptions)`**, where `CallArgs` is
   `Record<string, unknown> | Uint8Array`. It widened for one *shape* of call, which two wrappers
   make — `ipc.scannerFrame` and `ipc.scannerCapture`, the only two that pass raw bytes and
-  headers — and **the browser core rejects a `Uint8Array` with `RAW_CALL_UNAVAILABLE` before it
-  reaches the Worker**. That constant is also the sentence the Scanner's web view draws,
-  imported rather than respelled, so a reader who somehow pressed Scan gets the message the page
-  already showed them.
+  headers.
 - **A JSON header value must be written with `asciiJson`, never with bare `JSON.stringify`.** A
   header value is bytes, and three layers disagree about which bytes are allowed: `JSON.stringify`
   leaves non-ASCII as itself, a browser sends 0x80–0xFF as Latin-1 and throws outright above
@@ -1304,4 +1283,4 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
 | `features/decks/` | Has its own `CLAUDE.md` — the deck domain rules live there |
 | `features/tags/` | Browse by what a card **is of**. Storied under `Tags/*`; the wall is `features/search`'s, reused with collapse off |
 | `features/share/` | Somebody else's binder, read-only — the guarantee is structural and `readOnly.test.ts` is the fence. [collection-sharing.md](../docs/reference/collection-sharing.md) |
-| `share/` (repo root) | **Not part of this program's bundle** — the *public* web viewer, a second Vite entry over the same `src/` components, with no `ipc`, no core, no wasm and no service worker. In `tsconfig.json`'s `include`, built by `npm run share:build`, which **neither `verify` nor CI runs** |
+| `share/` (repo root) | **Not part of this program's bundle** — the *public* web viewer, a second Vite entry over the same `src/` components, with no `ipc` and no core. In `tsconfig.json`'s `include`, built by `npm run share:build`, which **neither `verify` nor CI runs** |

@@ -74,9 +74,9 @@ const CONDITION_OPTIONS: readonly DropdownOption[] = CONDITIONS.map((c) => ({
  * and a refusal comes back through `filterError`; this row holds nothing but which popover is
  * open. That is what lets a story draw every state of it from arguments alone.
  *
- * **It wraps rather than scrolls**, for `src/CLAUDE.md`'s narrowest-surface rule: on a phone the
- * row is the window's width, and a flex row of fixed-width controls that cannot wrap puts a
- * horizontal scrollbar across the whole view.
+ * **It wraps rather than scrolls**, for `src/CLAUDE.md`'s narrowest-surface rule: the row spans the
+ * page, so it is whatever the rail leaves of the window, and a flex row of fixed-width controls that
+ * cannot wrap puts a horizontal scrollbar across the whole view.
  */
 export function ScanBar({
   mode,

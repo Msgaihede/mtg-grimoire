@@ -6,6 +6,7 @@ import { dndManager } from "@/lib/dndManager";
 import { useDndDropTarget } from "@/lib/dndTarget";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
+import { refreshCardSearches } from "@/lib/searchMarks";
 
 /**
  * How long a drop's sentence stays up when nothing takes it down first.
@@ -86,7 +87,7 @@ export function useSidebarDrops() {
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       // A result row draws `wishlisted`, so the heart on every printing of this card has
       // just changed. No `["collection"]`: a wish moves no copies.
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
       setReport({ at: "wishlist", text: "Added to wishlist." });
     },
     // No invalidation on the way out, where the deck's write has one: a refused wish wrote
@@ -198,12 +199,11 @@ export function useSidebarDrops() {
  * One navigation entry as a place to let a card go — the registration, and the two facts the
  * entry draws itself from.
  *
- * **It is here rather than in either drawing of navigation, because there are two of them now.**
- * `AppShell`'s `NavItem` is the rail's row and `BottomTabBar`'s tab is the phone's, and they are
- * two drawings rather than one component with a flag — a rail entry is a full-width button with a
- * left-anchored icon and a tab is a square with its word under the glyph. What they must *not*
- * be is two registrations, because everything below is a rule about the drag rather than about
- * the row, and a second copy of it would be a second place for the rule to move.
+ * **It is here rather than in `AppShell`'s `NavItem`, because it is a rule about the drag rather
+ * than about the row.** `NavItem` decides what the rail's entry looks like — a full-width button
+ * with a left-anchored icon, a tooltip while the rail is collapsed — and this decides what a card
+ * in the air may do to it. Keeping the two apart is what lets the row be redrawn without the
+ * drag's reasoning moving with it.
  *
  * **Every card the drag is carrying** (issue #214) — `readCards`, which answers with one payload
  * for an ordinary drag, several for a multi-select one, and `null` for a drag this app did not put

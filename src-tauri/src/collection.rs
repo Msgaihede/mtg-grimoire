@@ -14,12 +14,9 @@
 use crate::collection_folders::{FOLDER_NOT_YOURS, USER_KIND};
 use crate::deck_meta::FOLDER_GONE;
 use crate::schema::{COLLECTION_GRAIN, FINISHES};
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The NA condition scale, in descending order, with the **not-set sentinel in front of it**.
@@ -388,7 +385,6 @@ fn folder_named(conn: &Connection, folder_id: Option<i64>, kinds: &[&str]) -> Re
 /// `removed` folder named here is a stale client or a bug.
 const READER_FOLDERS: &[&str] = &[USER_KIND];
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// …and what a **deck-driven write** may file into, which is the reader's drawers plus the group
 /// of the deck that same press answers for.
 ///
@@ -416,7 +412,6 @@ const READER_FOLDERS: &[&str] = &[USER_KIND];
 /// write naming it would be cardboard that arrives already discarded.
 pub(crate) const DECK_WRITE_FOLDERS: &[&str] = &[USER_KIND, DECK_KIND];
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// `COLLECTION_FOLDER_KINDS[1]` — the one folder that stands for a deck.
 ///
 /// By index rather than by spelling, [`crate::collection_alloc`]'s rule: the word here and the
@@ -516,8 +511,8 @@ fn card_name_of(conn: &Connection, card_id: &str) -> Result<Option<String>, Stri
 /// [`add_entry_filed`] deliberately is not.** The two callers that reach past this door are a
 /// bulk import — which records one row carrying its count — and `deck_quick_add::quick_add`,
 /// which writes a `deck_audit` row and by the feed's first rule must not write a second line
-/// about the same press. Both production callers of *this* function (`collection_add` and the
-/// web target's route) are the reader's own gesture, which is what makes this the right rung.
+/// about the same press. The production caller of *this* function, `collection_add`, is the
+/// reader's own gesture, which is what makes this the right rung.
 ///
 /// **The upsert and its feed row are one savepoint** ([`crate::db::in_savepoint`], issue #550).
 /// Neither command wrapper opens a transaction, so until then the upsert autocommitted on its
@@ -728,7 +723,6 @@ pub struct ImportCommitOutcome {
     pub removed: i64,
 }
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// [`add_entry`] with one clause changed: the grain's quantity is **written**, not accumulated.
 /// A `set` import means "this file's number is the truth", not "add these copies to what is
 /// already there" — the collection's own asymmetry [`set_quantity`] already carries, reused here
@@ -848,9 +842,6 @@ fn set_entry(
 /// is "nothing was updated", which is exactly what happened. Clamped rather than restructured:
 /// `added` and `removed` each name statements that ran, and making `updated` the subtraction of
 /// two counts that can overlap is what costs the invariant, not the counters themselves.
-/// **`pub(crate)` since 2026-08-29**, with the one-PR `allow(dead_code)` gone: `web::route`
-/// is the second caller. The *file read* stayed behind — this takes already-parsed items, so
-/// it is an ordinary port where `import_read_file` is not.
 pub(crate) fn commit_import(
     conn: &Connection,
     items: &[CollectionImportItem],
@@ -1751,7 +1742,6 @@ pub(crate) fn fold_entry(tx: &Connection, target: i64, source: i64) -> rusqlite:
     Ok(())
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_add(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1765,7 +1755,6 @@ pub async fn collection_add(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_set_quantity(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1780,7 +1769,6 @@ pub async fn collection_set_quantity(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1802,7 +1790,6 @@ pub async fn collection_update(
 /// `wishlist_set_printing`: the facet index's `owned` dimension is keyed by printing, so moving
 /// copies from one printing to another changes what it counts, where a wish changes nothing the
 /// index knows about. It is `collection_update`'s wrapper for `collection_update`'s reason.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_set_printing(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1817,7 +1804,6 @@ pub async fn collection_set_printing(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_remove(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1839,7 +1825,6 @@ pub async fn collection_remove(
 /// import dialog sends the group of the deck it just wrote a list into, so the list and the
 /// copies backing it agree the moment the dialog closes — see [`DECK_WRITE_FOLDERS`], which is the
 /// only place in the crate that fence is wider than the reader's own drawers.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_import_commit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1994,9 +1979,9 @@ pub struct CollectionQuery {
     ///
     /// **Who asks: the deck builder's Collection Search tab, and nothing else** — the surface
     /// whose question is "what can I build with today", which is the one thing a set-aside
-    /// drawer is not part of. Who does not: the mirror, the export sweep, the web route's
-    /// passthrough, and `a_query_that_never_asks_still_sees_a_locked_folders_copies` is the
-    /// fence around that silence.
+    /// drawer is not part of. Who does not: the mirror and the export sweep, and
+    /// `a_query_that_never_asks_still_sees_a_locked_folders_copies` is the fence around that
+    /// silence.
     ///
     /// **The collection page was on that first list until 2026-09-09 and is on the second now**
     /// ([#436](https://github.com/Msgaihede/mtg-grimoire/issues/436)). Its list and its header
@@ -2149,25 +2134,6 @@ pub struct CollectionRow {
     /// whose name I could not find" — `collection_entries.folder_id` is a real foreign key, so
     /// the id and the name arrive together or not at all.
     pub folder_name: Option<String>,
-    /// The front face's picture on `cards.scryfall.io`, by variant — **the only art a browser
-    /// can reach**, and `None` when this printing has none worth fetching.
-    ///
-    /// [`crate::search::CardSummary::image_uris`] carries the argument in full and it is not
-    /// repeated here. One variant ([`crate::image_uri::LIST_VARIANT`]), face 0 only, the
-    /// face-first precedence, and the `soon.jpg` fence — every one of them applied by
-    /// [`crate::image_uri::front_face_map`] and none of them respelled on this row.
-    ///
-    /// **It is here because `collection_list` is routed on web** (`web/route.rs`'s `COMMANDS`)
-    /// and `mtgimg://` is a Tauri custom protocol wasm cannot register with a browser. Without
-    /// it the collection wall draws named, artless frames in a browser while the search wall
-    /// beside it draws pictures — which is exactly what shipped, and what the device pass of
-    /// 2026-08-30 could not see because the collection was empty. On the desktop it is
-    /// *ignored*: `cardArtSrc` takes the local cache, whose bytes are already re-encoded to
-    /// the variant's exact size.
-    ///
-    /// `None` for an orphan, whose printing has left `cards` — the same answer, in the same
-    /// shape, as every other card-derived field on this row.
-    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2617,9 +2583,6 @@ fn list_statements(q: &CollectionQuery) -> ListStatements {
     // should mean it.
     let count = format!("SELECT count(*) FROM {from} WHERE {where_sql}");
 
-    // The front face's picture, as two `json_extract`s off the `cards` row this statement
-    // already holds — no join and no second query. `c` is [`from_sql`]'s alias for it.
-    let image_uris = crate::image_uri::front_face_selects("c").join(", ");
     let sorted = crate::sorting::order_by(
         q.sort.as_deref(),
         &crate::sorting::sorts_for(COLLECTION_SORTS, COLLECTION_PRICE_SORTS, UNIT_PRICE_ALIAS),
@@ -2648,14 +2611,7 @@ fn list_statements(q: &CollectionQuery) -> ListStatements {
                 e.serial_number, e.altered, e.signed, e.proxy, e.misprint, e.grading,
                 e.tags, e.notes, e.needs_review, e.updated_at, c.oracle_id, c.promo_types,
                 c.legalities, e.folder_id,
-                (SELECT f.name FROM collection_folders f WHERE f.id = e.folder_id),
-                -- From 35, on the end like every appended column above them, and as many as
-                -- `image_uri::FRONT_FACE_COLUMNS` says — two per variant a list row carries.
-                -- Built by
-                -- `image_uri::front_face_selects` rather than written out, because the
-                -- precedence between the two columns is applied in Rust by `front_face_map`
-                -- and a `COALESCE` spelled here would be a second copy of it.
-                {image_uris}
+                (SELECT f.name FROM collection_folders f WHERE f.id = e.folder_id)
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH),
     );
@@ -2678,12 +2634,6 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
-
-    // Where the image pair begins — the count of every column before it, which is what makes
-    // it last. Written down rather than spelled inside the closure below, for the reason the
-    // five appended `r.get(N)`s carry: a number left behind reads a URL as a folder name, and
-    // nothing errors.
-    const IMAGE_COL: usize = 35;
 
     let mut stmt = conn.prepare(&s.page).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -2739,13 +2689,6 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                     // so two of them swapping would still hand back a plausible string.
                     folder_id: r.get(33)?,
                     folder_name: r.get(34)?,
-                    // From 35 — the (top-level, face) pairs `front_face_selects` added, one per
-                    // variant, folded back up by the module that added them. The face-first
-                    // precedence and the `soon.jpg` fence both live in there, so this mapping
-                    // applies no rule of its own.
-                    image_uris: crate::image_uri::front_face_map(|i| {
-                        r.get::<_, Option<String>>(IMAGE_COL + i)
-                    })?,
                 })
             },
         )
@@ -2792,7 +2735,6 @@ pub fn summarise(conn: &Connection, q: &CollectionQuery) -> Result<CollectionSum
 
 /// The collection list. **Read-only** connection, blocking pool — as every read in this
 /// app is, so a list never queues behind a sync.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2806,7 +2748,6 @@ pub async fn collection_list(
     .map_err(|e| format!("the collection could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_summary(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2981,7 +2922,6 @@ pub fn shelf_counts(conn: &Connection, q: &CollectionQuery) -> Result<Vec<ShelfC
 
 /// The Shelves wall's per-shelf figures. **Read-only** connection, blocking pool, like
 /// [`collection_list`] beside it.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_shelf_counts(
     state: tauri::State<'_, Arc<AppState>>,
@@ -3151,7 +3091,6 @@ pub fn breakdown(
 /// [`crate::collection_folders::collection_folder_summary`]'s spelling for the same argument:
 /// an id this build does not know lands on TCGplayer through
 /// [`crate::sorting::Marketplace::from_opt`] rather than failing the whole request.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_breakdown(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4093,9 +4032,8 @@ mod tests {
             "the backup's own header counts them too"
         );
 
-        // The wire's spelling and its default, which is where this is really decided: the web
-        // route's passthrough hands `scope` whatever JSON arrived, so an omitted field has to
-        // parse to `false` rather than to a narrowing or an error.
+        // The wire's spelling and its default, which is where this is really decided: an
+        // omitted field has to parse to `false` rather than to a narrowing or an error.
         let bare: CollectionQuery = serde_json::from_str("{}").unwrap();
         assert!(
             !bare.exclude_locked,
@@ -6971,131 +6909,6 @@ mod tests {
         );
     }
 
-    /// **A collection row carries the front face's image URL, at the index the appended pair
-    /// put it at** — the field the web build's wall has no other way to get a picture from.
-    ///
-    /// `mtgimg://` is a Tauri custom protocol and wasm cannot register one with a browser, so
-    /// in a browser a tile draws this or draws the no-art frame. Four printings, because the
-    /// four ways this can be wrong fail apart: a missing
-    /// [`crate::image_uri::is_fetchable`] lands Scryfall's error page under `display`; a
-    /// printing with neither image column must answer `None` and not an empty map; a reversed
-    /// precedence draws a `meld` card's melded picture where its front belongs; and the pair
-    /// being read at the **wrong offset** is the one that needs the `meld`-shaped row to be
-    /// visible at all — with only top-level pictures in the fixture, a read one column early
-    /// lands the top-level URL in the `face` slot and every other case here still passes. It
-    /// did, and the mutation survived, until this row was added.
-    #[test]
-    fn a_collection_row_carries_the_front_faces_image_url() {
-        let conn = seeded();
-        conn.execute(
-            "UPDATE cards SET image_uris = json_object(
-                 'thumb','https://cards.scryfall.io/thumb/front/0/0/x.webp?17',
-                 'grid','https://cards.scryfall.io/grid/front/0/0/x.webp?17',
-                 'display','https://cards.scryfall.io/display/front/0/0/x.webp?17',
-                 'art','https://cards.scryfall.io/art/front/0/0/x.webp?17')
-             WHERE id = 'bolt-lea'",
-            [],
-        )
-        .unwrap();
-        // Scryfall's own error page, in the shape eight live printings publish it: no
-        // `?<epoch>` to invalidate, on a host that does not serve card art.
-        conn.execute(
-            "UPDATE cards SET image_uris = json_object(
-                 'display','https://errors.scryfall.com/soon.jpg')
-             WHERE id = 'bolt-jp'",
-            [],
-        )
-        .unwrap();
-        // The `meld` shape: **both** columns, carrying different pictures. See the doc above
-        // for what only this row can catch.
-        conn.execute(
-            "UPDATE cards SET
-                 image_uris = json_object(
-                     'display','https://cards.scryfall.io/display/top.webp?1',
-                     'art','https://cards.scryfall.io/art/top.webp?1'),
-                 face_image_uris = json_array(json_object(
-                     'display','https://cards.scryfall.io/display/face0.webp?1',
-                     'art','https://cards.scryfall.io/art/face0.webp?1'))
-             WHERE id = 'card-1'",
-            [],
-        )
-        .unwrap();
-        // Neither column — the ordinary state of 162 of the live corpus's 117 606 rows.
-        conn.execute(
-            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
-                rarity,finishes,prices,raw)
-             VALUES ('artless','o9','Artless','tst','2','en','normal','common',?1,?2,'{}')",
-            params![r#"["nonfoil"]"#, r#"{"usd":"1.00"}"#],
-        )
-        .unwrap();
-        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
-        add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap();
-        add_entry(&conn, &input("card-1", "nonfoil", 1)).unwrap();
-        add_entry(&conn, &input("artless", "nonfoil", 1)).unwrap();
-
-        let rows = list_entries(&conn, &CollectionQuery::default())
-            .unwrap()
-            .items;
-        let of = |card: &str| {
-            rows.iter()
-                .find(|r| r.card_id == card)
-                .unwrap_or_else(|| panic!("no row for {card}"))
-        };
-
-        let art = of("bolt-lea")
-            .image_uris
-            .as_ref()
-            .expect("a versioned URL on the image host is a picture");
-        assert_eq!(
-            art[crate::image_uri::LIST_VARIANT],
-            "https://cards.scryfall.io/display/front/0/0/x.webp?17"
-        );
-        assert_eq!(
-            art[crate::image_uri::ART_VARIANT],
-            "https://cards.scryfall.io/art/front/0/0/x.webp?17",
-            "the crop, under its own key -- a pairing read wrong swaps these two"
-        );
-        // Two keys, not four: the narrowing is a decision, and an accidental widening lands
-        // here rather than in a payload nobody measures.
-        // Spelled out rather than read off `LIST_VARIANTS`: an assertion that reads the
-        // constant it is fencing can never fail when that constant moves.
-        assert_eq!(
-            art.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["art", "display"]
-        );
-        // The two neighbours an off-by-one would have reached, both still plausible strings.
-        assert_eq!(of("bolt-lea").folder_name, None);
-        assert_eq!(of("bolt-lea").legalities, None);
-
-        // The precedence **and** the offset, on the one row that can tell either from its
-        // opposite: a pair read a column early answers `top.webp` here.
-        let meld = of("card-1")
-            .image_uris
-            .clone()
-            .expect("a meld-shaped printing has a front face");
-        assert_eq!(
-            meld[crate::image_uri::LIST_VARIANT],
-            "https://cards.scryfall.io/display/face0.webp?1",
-            "the face wins over the top-level blob, and the pair is read at its own offset"
-        );
-        assert_eq!(
-            meld[crate::image_uri::ART_VARIANT],
-            "https://cards.scryfall.io/art/face0.webp?1",
-            "and the second variant's pair is read at its own offset too"
-        );
-
-        assert_eq!(
-            of("bolt-jp").image_uris,
-            None,
-            "an error page is a gap, not a picture"
-        );
-        assert_eq!(
-            of("artless").image_uris,
-            None,
-            "a printing with neither image column carries nothing"
-        );
-    }
-
     /// The hand-mirrored wire contract, pinned whole so a field added on this side and
     /// never mirrored in `src/lib/ipc.ts` fails here rather than rendering as `undefined`.
     #[test]
@@ -7138,10 +6951,6 @@ mod tests {
             legalities: Some(r#"{"timeless":"legal","standard":"not_legal"}"#.into()),
             folder_id: Some(3),
             folder_name: Some("Trade binder".into()),
-            image_uris: Some(BTreeMap::from([(
-                crate::image_uri::LIST_VARIANT.to_owned(),
-                "https://cards.scryfall.io/display/front/0/0/x.webp?17".to_owned(),
-            )])),
         })
         .unwrap();
 
@@ -7160,10 +6969,7 @@ mod tests {
                 "tags": "[]", "notes": null, "needsReview": null,
                 "updatedAt": 1800000000, "promoTypes": "[\"surgefoil\"]",
                 "legalities": "{\"timeless\":\"legal\",\"standard\":\"not_legal\"}",
-                "folderId": 3, "folderName": "Trade binder",
-                "imageUris": {
-                    "display": "https://cards.scryfall.io/display/front/0/0/x.webp?17"
-                }
+                "folderId": 3, "folderName": "Trade binder"
             })
         );
 

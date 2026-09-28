@@ -14,8 +14,8 @@ import { StartupScreen } from "./StartupScreen";
 export const STARTUP_POLL_MS = 150;
 
 /**
- * The desktop and Android root, and `WebBoot`'s counterpart: nothing that queries is mounted
- * until the native side says the data folder is open.
+ * The app's root: nothing that queries is mounted until the native side says the data folder is
+ * open.
  *
  * **Why a gate at all.** Opening and migrating the two databases runs on a background thread, so
  * the window paints and the taskbar draws its icon instead of the process sitting "Not

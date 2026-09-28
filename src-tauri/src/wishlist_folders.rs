@@ -48,12 +48,10 @@ use crate::collection::EntryChange;
 // `FOLDER_GONE` for exactly this reason, so this is the crate's habit and not a new one.
 use crate::deck_meta::{FOLDER_CYCLE, FOLDER_GONE};
 use crate::sorting::Marketplace;
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{lock_db_read, with_write, AppState};
 use crate::wishlist::WISH_PREFERRED_FINISH;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What a write says when the wish it names is not there — [`crate::wishlist`]'s own sentence,
@@ -795,10 +793,19 @@ pub fn set_wish_folder(
 ///
 /// [`set_wish_folder`] is where the rule is argued; the paragraph above it is the one to read.
 ///
-/// **It records no [`crate::activity`] row**: its two callers are [`set_wish_folder`], which
-/// records the `move` itself, and [`delete_folder`], which records one `folder` line for the
-/// whole press rather than one per wish it re-filed.
-fn refile_wish(tx: &Connection, id: i64, folder_id: Option<i64>) -> Result<EntryChange, String> {
+/// **`pub(crate)` for a third caller, `sync_engine::apply::rehome`**, which re-homes the wishes a
+/// peer's folder delete would drop onto the root's grain — the same un-filing on the receiving
+/// side, where a second copy of the merge would be the disagreement this function exists to rule
+/// out.
+///
+/// **It records no [`crate::activity`] row**: of its callers, [`set_wish_folder`] records the
+/// `move` itself, [`delete_folder`] records one `folder` line for the whole press rather than one
+/// per wish it re-filed, and the re-homing is a consequence of a delete another device recorded.
+pub(crate) fn refile_wish(
+    tx: &Connection,
+    id: i64,
+    folder_id: Option<i64>,
+) -> Result<EntryChange, String> {
     // The three grain terms this write does *not* touch, plus the quantity the merge moves.
     // Read before anything is decided, because "is that wish still there?" is answered by the
     // same statement — an `UPDATE` that changed no rows cannot tell a missing row apart from a
@@ -953,13 +960,11 @@ pub fn folder_summary(
 /// What a write here says when its worker thread died under it — never a user's problem, the
 /// write itself answers [`crate::db::BUSY`] when the database is busy.
 /// [`crate::deck_meta`]'s helper of the same name, named for this list instead.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the wishlist's folders could not be written: {e}")
 }
 
 /// **Read-only** connection, like every list in the app.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_folder_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -970,7 +975,6 @@ pub async fn wishlist_folder_list(
         .map_err(|e| format!("the wishlist folders could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_folder_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -985,7 +989,6 @@ pub async fn wishlist_folder_create(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_folder_rename(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1000,7 +1003,6 @@ pub async fn wishlist_folder_rename(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_folder_move(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1019,7 +1021,6 @@ pub async fn wishlist_folder_move(
 /// write. It answers the **whole** folder list rather than the rows it moved, like
 /// [`crate::deck_meta::deck_category_reorder`]: every sibling's number changed, so a caller
 /// handed only the moved rows would have to guess at the rest.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_folder_reorder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1037,7 +1038,6 @@ pub async fn wishlist_folder_reorder(
 /// The wishes inside surface at the root and the sub-folders go too — see [`delete_folder`],
 /// where the sub-folders are the DDL's work and the wishes are emphatically not.
 /// [`wishlist_folder_delete_with_wishes`] is the sibling press that takes the wishes as well.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_folder_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1052,7 +1052,6 @@ pub async fn wishlist_folder_delete(
 /// Empty one drawer of the wishes filed directly in it, and answer how many went — see
 /// [`clear_folder`] for why its sub-folders are untouched and why a drawer that has gone is a
 /// refusal rather than a zero.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_folder_clear(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1066,7 +1065,6 @@ pub async fn wishlist_folder_clear(
 
 /// Delete a drawer, its sub-tree and every wish in it, and answer how many wishes went — see
 /// [`delete_folder_and_wishes`]. [`wishlist_folder_delete`] is the press that keeps them.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_folder_delete_with_wishes(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1082,7 +1080,6 @@ pub async fn wishlist_folder_delete_with_wishes(
 
 /// "Move to …", and "Move to the wishlist" — see [`set_wish_folder`] for the merge, which is
 /// why this answers an [`EntryChange`] whose `id` is not always the `id` it was given.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_set_folder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1099,7 +1096,6 @@ pub async fn wishlist_set_folder(
 
 /// **Read-only**, and priced at the marketplace the caller names — anything the app does not
 /// know is TCGplayer, [`crate::sorting::Marketplace::from_opt`]'s rule for every list query.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_folder_summary(
     state: tauri::State<'_, Arc<AppState>>,

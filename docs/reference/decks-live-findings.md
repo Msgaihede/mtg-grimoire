@@ -188,7 +188,7 @@ rows went on reading as open until 2026-09-27:
 
    **What made the feature worth removing — after it had been repaired — is that the broken
    tile's behaviour was already the behaviour every other device had.** The file lived beside one
-   database and only its absolute path synced, so a phone or a second desktop had nothing to draw
+   database and only its absolute path synced, so a second desktop had nothing to draw
    and fell back to the card art, which is exactly what this gallery had been doing by accident.
    Repairing the tile made one device disagree with the rest of the group; deleting the feature
    made them agree. Custom covers are gone; a cover

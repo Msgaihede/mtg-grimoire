@@ -20,7 +20,7 @@
 //!
 //! **`update_hook` has two blind spots, and a command marks by hand for each.**
 //!
-//! * **`WITHOUT ROWID` tables.** Six user tables are, and the hook never fires for them. Their
+//! * **`WITHOUT ROWID` tables.** Seven user tables are, and the hook never fires for them. Their
 //!   write sites take a bare `&Connection` in modules that have no business with this mask, so the
 //!   mark is made by the *command* that a reader's press reaches, after its write — see
 //!   [`MARKED_BY_COMMAND`] and [`WRITTEN_BY_THE_APP`], and the test that holds `sqlite_master` to
@@ -68,7 +68,13 @@ pub const MARKED_BY_COMMAND: &[&str] =
 /// The `WITHOUT ROWID` user tables no window's press writes — the app writes them itself: a day's
 /// prices (`price_history`) and a peer watermark (`sync_engine`). Every window is equally current
 /// about them, so nothing marks them.
-pub const WRITTEN_BY_THE_APP: &[&str] = &["price_snapshots", "sync_peers"];
+///
+/// **`sync_gone` is here on a slightly different footing** (user schema v54). A press does reach
+/// it — deleting a folder or a deck — but only through `sync_engine::capture`'s tombstone trigger,
+/// as a side effect of the app's own write rather than as anything the reader asked to change,
+/// and no window draws a tombstone: it is read by `sync_engine::apply` alone. So there is no
+/// window to be behind about it, and a mark would ring for nothing.
+pub const WRITTEN_BY_THE_APP: &[&str] = &["price_snapshots", "sync_gone", "sync_peers"];
 
 /// One bit per user table, and the bell the commit hook rings.
 pub struct Changes {
@@ -188,7 +194,7 @@ pub struct DbChanged {
     pub tables: Vec<&'static str>,
 }
 
-/// Start the task that turns rings into events. Desktop only: a phone has one window.
+/// Start the task that turns rings into events.
 ///
 /// **The write lock is taken before the read and held across it, and that is a barrier, not a
 /// use.** It buys two things, and the second is why the take is inside the lock rather than after
@@ -212,7 +218,6 @@ pub struct DbChanged {
 ///
 /// On timeout it emits what is pending and clears nothing — see [`take_settled`]. A refetch of
 /// data that did not change costs one read, and silence would cost a stale window.
-#[cfg(desktop)]
 pub fn spawn_emitter(app: tauri::AppHandle, state: std::sync::Arc<crate::sync::AppState>) {
     use tauri::{Emitter, Manager};
     tauri::async_runtime::spawn(async move {
@@ -251,7 +256,6 @@ pub fn spawn_emitter(app: tauri::AppHandle, state: std::sync::Arc<crate::sync::A
 ///
 /// Its own function so a test can hold the lock and watch it: the emitter itself needs an
 /// `AppHandle`, and this crate has no mock-app harness.
-#[cfg(any(desktop, test))]
 fn take_settled(
     db: &std::sync::Mutex<rusqlite::Connection>,
     changes: &Changes,
@@ -430,7 +434,7 @@ mod tests {
     }
 
     /// `update_hook` cannot see these, so each one is a decision — marked by the command that
-    /// writes it, or written only by the app. A seventh goes red here until somebody decides.
+    /// writes it, or written only by the app. An eighth goes red here until somebody decides.
     #[test]
     fn every_without_rowid_user_table_has_been_decided_about() {
         let conn = crate::schema::memory_pair();

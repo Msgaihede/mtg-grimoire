@@ -305,7 +305,6 @@ forgotten.
 | file | what it owns |
 | --- | --- |
 | `src-tauri/src/card.rs` | `TcgplayerIds`, `tcgplayer_ids`, and the `card_tcgplayer_ids` command — both ids out of `cards.raw`, unread |
-| `src-tauri/src/web/route.rs` | The same command on the browser build, over the same function |
 | `src/lib/externalLinks.ts` | The *shapes*: `tcgplayerProductUrl`, `TcgplayerPrinting`, and `marketplaceSearchUrl` for the other four |
 | `src/features/card/openMarketplace.ts` | The decision table, `linkFinish`, and the fallback for both call sites |
 | `src/features/card/CardModalRail.tsx` | The modal's last rail row |

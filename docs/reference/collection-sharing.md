@@ -227,17 +227,17 @@ rotation through four sets, three finishes and five grades.
 > second.**
 
 The same fixture round produced a second lesson of its own: the plan's fixture keyed `image_uris`
-on `'normal'`, a key this app does not store (`image_uri::LIST_VARIANT` is `display`). Every `img`
-would have been **silently absent**, all nine planned tests would still have passed, and the
-41.3 B/card figure would have been measured over a document missing its longest field. **A fixture
-can make a whole column untested without failing anything.**
+on `'normal'`, a key this app does not store (`image_uri::FRONT_FACE_VARIANT` is `display`).
+Every `img` would have been **silently absent**, all nine planned tests would still have passed,
+and the 41.3 B/card figure would have been measured over a document missing its longest field.
+**A fixture can make a whole column untested without failing anything.**
 
 ---
 
 ## The publisher, and the two `collection.rs` traps
 
-`src-tauri/src/share/` compiles for wasm as well as desktop — it reads SQLite and formats JSON;
-only the upload is gated.
+`src-tauri/src/share/` reads SQLite and formats JSON; `publish.rs` is the one file of it that
+reaches the network.
 
 **A share does not ride on `collection::list_entries`, and that is the whole of its safety.** The
 two reasons are both defaults that are right for the app and wrong here:
@@ -349,8 +349,7 @@ Three of the five are worth a sentence each:
   Spec §4.3 has a second device inherit the owner's name from the relay's list, and every other
   command needs an id or a name that device does not yet have — so this is the only press that
   could ever learn the group's shares. No membership means no request at all; a failure answers
-  the cache. `web/route.rs` routes the **pure** cache read alone, so the browser build gets no
-  network command.
+  the cache.
 * **`share_open` answers `serde_json::Value`**, not a typed struct. `ShareSnapshot` cannot
   implement `Deserialize` — `fields: Vec<&'static str>` has no owned form — and spec §10 wants a
   newer `v` **told about** rather than refused, which a strict Rust struct turns into a parse error
@@ -660,23 +659,20 @@ is a business decision rather than an engineering one.
 
 ### The public one — `share/`, built by `vite.share.config.ts`
 
-A third Vite build importing from `src/` — the card tile, the image helpers, the design tokens —
-and importing **nothing** from `src/lib/core`, `src/lib/ipc`, `src/workers`, `src/features` or
-`@tauri-apps/`. It never opens OPFS, never loads wasm, and never registers a service worker.
-**It has no core at all**: it fetches one JSON document and renders it. `SharePage.test.tsx`
-walks the real import graph — resolving `./foo` against the **importing file's** own directory, so
-relative-only modules are reachable — and counts a side-effect and a dynamic import as imports.
+A second Vite build importing from `src/` — the card tile, the image helpers, the design tokens —
+and importing **nothing** from `src/lib/core`, `src/lib/ipc`, `src/features` or `@tauri-apps/`.
+**It has no core at all**: it fetches one
+JSON document and renders it. `SharePage.test.tsx` walks the real import graph — resolving `./foo`
+against the **importing file's** own directory, so relative-only modules are reachable — and
+counts a side-effect and a dynamic import as imports.
 
-That is not stylistic. A stranger following a Discord link into the *web target* would meet a
-75 MB corpus ingest, a 2.64 MB wasm module, and an OPFS pool that is exclusive per origin and
-refuses a second tab. All three at once.
-
-⚠️ **Spec §7 also says `src/pwa`, and the shipped fence deliberately does not.** `@/lib/images`
-imports `@/pwa/target`'s `isWebTarget`, so the graph reaches one pure function in that directory;
-`vite.share.config.ts` defines `__CORE__` as `"web"`, and the reviewer confirmed neither
-`__CORE__` nor `"web"` survives into the built JS, so the branch is folded away. Nothing about a
-service worker or a core reaches the bundle. Do not "fix" the sweep to match the spec sentence
-without re-reading this paragraph.
+⚠️ **The picture comes through `CardArt`'s `remoteSrc`, and `ShareTile` is its only caller.**
+`CardArt` draws `remoteSrc` when the prop is present and otherwise asks the `mtgimg://` protocol
+for `cardId` — a protocol this page has no Tauri behind it to answer. So the tile passes
+`cardId={null}` and `remoteSrc={card.img ?? null}`, **never bare `card.img`**: an absent
+`remoteSrc` means *the cache* and a present `null` means *no picture*, which `CardArt` draws as a
+named frame. No other `CardArt` in `src/` passes it. `vite.share.config.ts` merges the app's
+config and adds no `define` of its own.
 
 **Measured 2026-09-08** by `vite build --config vite.share.config.ts` on this branch:
 `dist-share/assets/share.js` is **486.74 kB, 141.49 kB gzipped**, one chunk, with the fonts as
@@ -729,13 +725,12 @@ A new top-level view; `ViewId` gains `"shared"`, and the rail row appears only o
 opened at least one share (decision 6), so nobody who never uses the feature pays a rail slot for
 it.
 
-**It is opened by pasting a link.** The app reads no launch intent and declares no URL scheme;
-`relay/src/pair.ts` carries the whole argument for why adding one is a separate piece of work with
-an Android trap in it.
+**It is opened by pasting a link.** The app registers no URL scheme and reads no launch argument,
+and adding one is a separate piece of work.
 
 **The read-only guarantee is structural, and it has to be.** There is no read-only mode anywhere on
-this app's data path — `lock_db_read` returns the *write* connection on wasm, and `src/lib/writes.ts`
-is only about which mutation owns the error banner — so a flag would be a claim rather than a fence.
+this app's data path — `src/lib/writes.ts` is only about which mutation owns the error banner — so
+a flag would be a claim rather than a fence.
 What this view has instead is that it renders a **fetched document**, and every command it names
 is enumerated in one file.
 
@@ -971,7 +966,8 @@ prose-only edit routes to neither CI job, so nothing goes red when one rots.
 The third row is the one that gets violated with good intentions. When `BottomTabBar` went from six
 destinations to eight, its 65×52 tab measurement was **not** renumbered: the arithmetic changed
 (390px ÷ 8 = 48.75) but nobody had re-measured what the row actually does at that width, so the
-figure keeps its date and the open question is named beside it.
+figure keeps its date and the open question is named beside it. (The tab bar itself went with the
+phone layout on 2026-09-27; the example stays because the rule does.)
 
 ---
 
@@ -984,7 +980,7 @@ figure keeps its date and the open question is named beside it.
   the bundle**, so `dist-share/` existing at all is a manual step, and `wrangler deploy` fails
   naming that directory until it has been taken.
 * **`share/` and `share-worker/` match no arm of CI's `changes` router**, so they fall to the `*)`
-  fail-safe and run **every** job — frontend, rust, wasm and android. That is the cheap direction
+  fail-safe and run **every** build job — frontend, rust and storybook. That is the cheap direction
   to be wrong in and it is deliberate design of that router; it does mean a Worker-only edit runs
   the whole clippy-and-test matrix on two platforms.
 * ⚠️ **A directory `vite.config.ts`'s test globs do not name is collected by nothing**, and
@@ -1006,11 +1002,15 @@ Share control, both are fixed, and both are recorded here because neither suite 
   **390** — `Import` cut mid-word, `Export` entirely off screen and **unreachable by scrolling**,
   because the overflow was in a box the page does not scroll. Two changes: the actions box lost
   `shrink-0`, so a block whose content wraps falls onto two lines at any width; and below the phone
-  fold both groups draw as glyph pairs (`ImportExportPair`'s own *the word gives way, never the
-  control*, and `ShareFolderMenu` reads the same fold). Re-measured over the built stylesheet at a
+  fold both groups drew as glyph pairs (`ImportExportPair`'s *the word gives way, never the
+  control*, and `ShareFolderMenu` read the same fold). Re-measured over the built stylesheet at a
   **335px** row: compact, sharing **74** + transfer **74** on **one** line with the `<dl>` keeping
   **155px**; worded, **251.78** + **155.70** on **two** lines with the `<dl>` on its own; and
-  `scrollWidth === clientWidth === 335` with no button past the right edge in either.
+  `scrollWidth === clientWidth === 335` with no button past the right edge in either. **The
+  glyph-pair half went with the phone layout on 2026-09-27** — `ImportExportPair` lost its
+  `compact` prop and `ShareFolderMenu` draws its words at every width — so the worded figures are
+  the shape the tree draws, and the `shrink-0` removal is the fix that stands. 390px is below the
+  desktop floor, so no shipped window reaches the row this defect was found in.
 * 🟠 **The *Open a shared collection* dialog dropped the caret on `<body>`**, reproduced by Escape
   and by the ✕. `Dialog` says the host owes the caret and this host draws **two** openers — and the
   shared `back()` focuses the *Share* button, which is not drawn at all for a reader who has
@@ -1031,39 +1031,18 @@ much as about a different tree, which is exactly the failure mode a dated measur
 to prevent, so it is struck rather than renumbered: **nothing on the current bar has been driven by
 chord.**
 
-**`BottomTabBar` was driven at eight destinations and it truncates rather than overflowing** —
-**and eight is not what a reader has now.** The row is `flex` with no wrap, so a 390px window
-divides by whatever it is given: the 65px-per-tab figure was measured at **six** tabs on
-2026-08-29, and eight gives **48.75px**. Driven at 390×844 (2026-09-08, WebView2, **before the
-final `origin/main` merge**): every tab drew at exactly **48.75 × 52**, `nav.scrollWidth ===
-clientWidth === 390`, and `documentElement`/`body` likewise — **nothing overflowed**, and the 44px
-`--target-min` never bound. **Exactly one label truncated**: `Collection`, 55 against 49, drawn as
-`Collecti…`; every other span reported `scrollWidth === clientWidth`.
-
-⚠️ **The bar draws nine now, and ten with a share open, and neither has been driven.** Trade and
-Playtesting arrived from `main`, so the ordinary bar is **nine** tabs at 43.33px — `BottomTabBar.tsx`
-records four labels truncating there (`Collection` 55.23, `Playtesting` 61.97, `Scanner` 45.73,
-`Settings` 45.42, against a 44px content box) — and a reader who has opened somebody's binder gets
-the **tenth**, at 39px per box. That component's own header is honest about the tenth and this page
-was not, which is why the figures above keep their date and are described as the bar they were taken
-on rather than being arithmetically renumbered. The rule stands as `BottomTabBar` states it: the
-row was at its floor at nine already, and what to do about a phone with ten destinations is a
-question about what a phone's navigation *is*, not about what a tenth tab costs.
-
-The same pass settled the two figures the tree carried for that ink width. Re-measured at 12px
-Geist Variable: Search 38.67, Tagger 37.50, Decks 34.27, **Collection 55.23**, Wishlist 43.30,
-Shared 39.06, Scanner 45.73, Settings 45.42 — and `Search` reproduces the 2026-08-29 headless
-figure exactly, which is the cross-check that the face is the right one. So **`BottomTabBar.tsx`'s
-55.23 was correct and `BottomTabBar.stories.tsx`'s 54.98 was not**; the story is corrected and
-dated. (Eight labels, so **Trade and Playtesting are not on that list** — the widths are per-label
-and do not move with the tab count, but the census is a tree's.)
+**The same pass drove `BottomTabBar`, and the tab bar went with the phone layout on 2026-09-27**,
+taking its figures with it: at 390×844 and eight destinations every tab drew at **48.75 × 52**,
+nothing overflowed, and `Collection` was the one label truncated. The rail, which draws the same
+`Shared` row the tab bar did, is unchanged. [frontend-design.md](frontend-design.md)'s record of the removal has what
+went and why.
 
 **The action row at 1280 with the search column docked does neither of the two things this page
 predicted.** The premise that the inner `flex-wrap` is inert was right — `FigureRow` used to size
 the actions at max-content — but the `<dl>` beside it is `min-w-0 flex-1` and absorbed the whole
 cost: the wrapper drew **421.67** flush to the row's right edge, the `<dl>` was squeezed to
 **571.33**, both children stayed on one line, and nothing overflowed at 1280 **or** at the 1024
-floor. It broke only below a row width of **445.67**, which is the phone defect above.
+floor. It broke only below a row width of **445.67**, which is the 390×844 defect above.
 
 **Automatic refresh is deliberately not built, and no plan task ever assigned it.** Spec §4.1 used
 to promise *"on app launch and after a sync that touched a shared folder, debounced, plus a manual
@@ -1114,9 +1093,9 @@ branch acquires an unrelated red.
 | Path | Holds |
 | --- | --- |
 | `src-tauri/src/share/snapshot.rs` | `ShareSnapshot`, the subtree read, the gzip, the three refusals |
-| `src-tauri/src/share/cache.rs` | `collection_shares` reads, writes and `reconcile`. Every target |
-| `src-tauri/src/share/publish.rs` | The two-step upload and the sentences. Desktop and Android only |
-| `src-tauri/src/share/commands.rs` | The five commands and `ShareRow`. The module is every-target; the commands are not |
+| `src-tauri/src/share/cache.rs` | `collection_shares` reads, writes and `reconcile` |
+| `src-tauri/src/share/publish.rs` | The two-step upload and the sentences |
+| `src-tauri/src/share/commands.rs` | The five commands and `ShareRow` |
 | `src-tauri/src/share/__golden__/` | The committed snapshot both TypeScript suites read |
 | `share-worker/` | The Worker — `index.ts` (router and gate), `shares.ts`, `blob.ts`, `page.ts`, `lapse.ts`, `env.ts`, `schema.sql`, `README.md` |
 | `share/` | The public viewer bundle; `vite.share.config.ts` builds it into `dist-share/` |
@@ -1133,4 +1112,3 @@ branch acquires an unrelated red.
 | [sync.md](sync.md) | The relay, the group, the bearer token this Worker verifies, and the entitlement that gates a publish |
 | [hosted-relay-deploy.md](hosted-relay-deploy.md) | The other Worker's runbook, and the *ask the host, never a document* rule this page inherits |
 | [data-and-sync.md](data-and-sync.md) | The schema ladder v41 sits on |
-| [web-target.md](web-target.md) | The browser build the public viewer deliberately is not |

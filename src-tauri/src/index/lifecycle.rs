@@ -108,6 +108,13 @@ fn publish_build(state: &AppState, generation: u64, ix: CardIndex) -> bool {
 /// the only thing that can supersede an amendment. Two collection writes racing each other
 /// clone the same base, and without this the slower one's re-read wins and the faster one's
 /// row is lost until the next write.
+///
+/// **A refusal is not the end of an amendment, and until 2026-09-27 it was** (issue #552). The
+/// check above stops a stale copy landing; it cannot tell *whose* write was stale. Two quick
+/// "+" presses clone one base, the first to commit reads `owned` before the second's row is in
+/// the database and publishes, and the second — whose re-read held both rows — was refused here
+/// and dropped, so the Owned chip greyed out over a card the search still returned. The refusal
+/// is now [`amend_owned`]'s cue to re-clone whatever is live and read again.
 fn publish_amendment(state: &AppState, base: &Arc<CardIndex>, ix: CardIndex) -> bool {
     let mut slot = crate::db::lock_write(&state.index);
     if !slot
@@ -121,7 +128,7 @@ fn publish_amendment(state: &AppState, base: &Arc<CardIndex>, ix: CardIndex) -> 
     true
 }
 
-/// Read the corpus through `conn` and publish a new index, **clearing the old one first**.
+/// Read the corpus and publish a new index, **clearing the old one first**.
 ///
 /// Clearing first is the whole contract and not tidiness: the caller is a swap that has just
 /// renumbered every rowid, so from the moment it lands the published index answers about
@@ -129,11 +136,15 @@ fn publish_amendment(state: &AppState, base: &Arc<CardIndex>, ix: CardIndex) -> 
 /// user cannot click because a facet said it was empty. It is also what makes a *failed*
 /// build safe — the app is left with no index rather than the last one.
 ///
-/// **Which connection** is [`build_now`]'s question, and splitting it out is what lets the
-/// two platforms answer it differently without a second copy of the build.
-pub fn build_from(state: &AppState, conn: &rusqlite::Connection) -> Result<(), String> {
+/// **It opens a connection of its own**, never `AppState.db_read`: this is a full pass over
+/// `cards`, and holding the read connection for it would queue every search behind it at
+/// launch — which is the exact failure that second connection exists to prevent.
+pub fn build_now(state: &AppState) -> Result<(), String> {
+    // Spelled here and in `desktop.rs`'s `init_state`, which is the one that creates it.
+    let conn =
+        crate::db::open_read(&state.data_dir).map_err(|e| format!("index connection: {e}"))?;
     let generation = clear(state);
-    let ix = CardIndex::build(conn).map_err(|e| format!("index build: {e}"))?;
+    let ix = CardIndex::build(&conn).map_err(|e| format!("index build: {e}"))?;
     if !publish_build(state, generation, ix) {
         // Not an error: something cleared while this ran, and whatever cleared owes a rebuild
         // of its own. Said out loud because it is also the trace of the two-rebuild
@@ -141,35 +152,6 @@ pub fn build_from(state: &AppState, conn: &rusqlite::Connection) -> Result<(), S
         eprintln!("a card index build was superseded while it ran and was dropped");
     }
     Ok(())
-}
-
-/// [`build_from`] over whichever connection this platform can spare.
-///
-/// **Desktop and Android open one of their own**, never `AppState.db_read`: this is a full
-/// pass over `cards`, and holding the read connection for it would queue every search behind
-/// it at launch — which is the exact failure that second connection exists to prevent.
-///
-/// **Web has nothing to spare.** Not because the pool refuses a second handle — measured
-/// 2026-08-28, it hands one out and that handle reads and writes — but because the whole
-/// database lives in one Worker and a Worker is one thread. A second connection there could
-/// never be *used* while this build ran, and under the rollback journal the pool forces it
-/// would contend at the file level rather than sail past on a WAL snapshot. So the browser
-/// builds over the write connection and a search really does queue behind the build, for the
-/// ~767 ms of it, once per corpus swap. [`build_from`]'s own test is what proves the two
-/// builds publish the same index.
-pub fn build_now(state: &AppState) -> Result<(), String> {
-    #[cfg(not(target_family = "wasm"))]
-    {
-        // Spelled here and in `desktop.rs`'s `init_state`, which is the one that creates it.
-        let conn =
-            crate::db::open_read(&state.data_dir).map_err(|e| format!("index connection: {e}"))?;
-        build_from(state, &conn)
-    }
-    #[cfg(target_family = "wasm")]
-    {
-        let conn = crate::db::lock_blocking(&state.db);
-        build_from(state, &conn)
-    }
 }
 
 /// [`build_now`] off the calling thread, going cold **before** it returns.
@@ -181,7 +163,6 @@ pub fn build_now(state: &AppState) -> Result<(), String> {
 ///
 /// The handle is returned so a test can join it; the three production call sites drop it and
 /// let the thread run detached. A failure is logged and nothing else — see the module docs.
-#[cfg(not(target_family = "wasm"))]
 pub fn spawn_build(state: &Arc<AppState>) -> std::thread::JoinHandle<()> {
     clear(state);
     let state = state.clone();
@@ -214,23 +195,47 @@ pub fn invalidate_owned(state: &AppState) {
     let Some(base) = current(state) else {
         return;
     };
-    // [`build_now`]'s split, for its reason: a connection of its own on desktop, the only one
-    // there is in a Worker.
-    #[cfg(not(target_family = "wasm"))]
+    // A connection of its own, for [`build_now`]'s reason.
     let Ok(conn) = crate::db::open_read(&state.data_dir) else {
         return;
     };
-    #[cfg(target_family = "wasm")]
-    let conn = crate::db::lock_blocking(&state.db);
-    let mut next = (*base).clone();
-    if let Err(e) = next.rebuild_owned(&conn) {
-        eprintln!("the owned facet could not be refreshed: {e}");
-        crate::sync::note_database(state, "index_owned_refresh", &e.to_string());
-        return;
+    amend_owned(state, &conn, base);
+}
+
+/// How many times [`amend_owned`] re-clones after a refusal before it lets the amendment go.
+///
+/// Each retry re-reads `owned` *after* the write that asked for it committed, so one retry is
+/// enough for the two-write race; the rest is headroom for a burst of writes. A bound rather
+/// than a loop until it lands, because the thing on the other side of a refusal is another
+/// writer making progress, and one that keeps winning has published a read at least as new as
+/// ours.
+const AMEND_ATTEMPTS: usize = 4;
+
+/// Clone `base`, re-read `owned` into the copy and publish it — and **on a refusal, re-clone
+/// whatever is live now and read again**, rather than dropping the amendment.
+///
+/// A refusal has two causes and only one of them ends the attempt. **Cold** — a sync cleared
+/// the index — stops here in silence: the sync's own rebuild is the answer, and a quick-add is
+/// not the place to spend a build. **Replaced** — a sibling amendment or a build landed first —
+/// retries, because the index that won may have read `owned` before this write committed; see
+/// [`publish_amendment`] for the race that cost.
+fn amend_owned(state: &AppState, conn: &rusqlite::Connection, mut base: Arc<CardIndex>) {
+    for _ in 0..AMEND_ATTEMPTS {
+        let mut next = (*base).clone();
+        if let Err(e) = next.rebuild_owned(conn) {
+            eprintln!("the owned facet could not be refreshed: {e}");
+            crate::sync::note_database(state, "index_owned_refresh", &e.to_string());
+            return;
+        }
+        if publish_amendment(state, &base, next) {
+            return;
+        }
+        let Some(live) = current(state) else {
+            return;
+        };
+        base = live;
     }
-    // Dropped in silence if the base is gone: a sync taking the index cold underneath a
-    // quick-add is ordinary, and the sync's own rebuild is the answer to it.
-    publish_amendment(state, &base, next);
+    eprintln!("the owned facet refresh lost {AMEND_ATTEMPTS} races in a row and was dropped");
 }
 
 #[cfg(test)]
@@ -245,33 +250,6 @@ mod tests {
     fn an_unbuilt_index_reads_as_absent_rather_than_empty() {
         let state = state_with_seeded_cards("cold");
         assert!(current(&state).is_none());
-    }
-
-    /// A build over a caller-supplied connection publishes exactly what [`build_now`]'s own
-    /// connection does. That equality is what makes the browser's single-connection build
-    /// legitimate rather than a second, unproven code path.
-    #[test]
-    fn a_build_over_a_supplied_connection_matches_one_over_its_own() {
-        let state = state_with_seeded_cards("build-from-supplied");
-
-        build_now(&state).unwrap();
-        let by_itself = current(&state).expect("build_now must publish an index");
-
-        let conn = crate::db::open_read(&state.data_dir).unwrap();
-        build_from(&state, &conn).unwrap();
-        let by_supply = current(&state).expect("build_from must publish an index");
-
-        // `capacity` is the doc count and `set_codes` the set vocabulary — both public
-        // fields of `CardIndex`, which has no `len()`.
-        assert_eq!(
-            by_itself.capacity, by_supply.capacity,
-            "same corpus, same doc count"
-        );
-        assert_eq!(by_itself.set_codes, by_supply.set_codes);
-        assert!(
-            !std::sync::Arc::ptr_eq(&by_itself, &by_supply),
-            "the second build must have published a new index, not left the first in place"
-        );
     }
 
     #[test]
@@ -456,6 +434,55 @@ mod tests {
             3,
             "the live index is left exactly as it was"
         );
+    }
+
+    /// **Two quick collection writes must both land in `owned`** (issue #552). The race, laid
+    /// out by hand at the point [`amend_owned`] decides it: the second write cloned the base
+    /// *before* the first published, so its publish is refused — and until the retry, that
+    /// refusal dropped the only read that held both rows, leaving the Owned chip greyed over a
+    /// card the search returned until the next write.
+    #[test]
+    fn a_refused_amendment_is_read_again_over_the_live_index_rather_than_dropped() {
+        let state = state_with_seeded_cards("amend-retry");
+        build_now(&state).unwrap();
+        // The second write's clone, taken before the first write's amendment publishes.
+        let stale = current(&state).unwrap();
+
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            own(&conn, "1", 1);
+        }
+        invalidate_owned(&state);
+        assert_eq!(
+            current(&state).unwrap().owned.count(),
+            1,
+            "the first write landed"
+        );
+
+        {
+            let conn = crate::db::lock_blocking(&state.db);
+            own(&conn, "2", 1);
+        }
+        let conn = crate::db::open_read(&state.data_dir).unwrap();
+        amend_owned(&state, &conn, stale);
+        assert_eq!(
+            current(&state).unwrap().owned.count(),
+            2,
+            "the refused amendment re-read over the live index instead of vanishing"
+        );
+    }
+
+    /// A refusal because the index went **cold** is the one that must stay dropped: a sync
+    /// cleared it, and its rebuild is the answer. Retrying would have nothing to clone.
+    #[test]
+    fn a_refused_amendment_over_a_cold_index_leaves_it_cold() {
+        let state = state_with_seeded_cards("amend-cold");
+        build_now(&state).unwrap();
+        let base = current(&state).unwrap();
+        clear(&state);
+        let conn = crate::db::open_read(&state.data_dir).unwrap();
+        amend_owned(&state, &conn, base);
+        assert!(current(&state).is_none());
     }
 
     /// The wrapper the three call sites actually use: it must run the build, and it must not

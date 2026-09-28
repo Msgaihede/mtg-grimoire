@@ -1,10 +1,5 @@
 //! The doorbell: one long-lived socket per device, and the task that acts on it.
 //!
-//! **Native only.** `sync_engine` compiles for `wasm32-unknown-unknown` (see `lib.rs`'s module
-//! doc) and `tokio-tungstenite` does not, so this module and every reference to it carries
-//! `cfg(not(target_family = "wasm"))`. The web target has no relay commands at all, so nothing
-//! is lost there.
-//!
 //! **Thin on purpose.** Every decision about *when* lives in [`super::schedule`] as a pure state
 //! machine with tests — the debounces, the single flight, the backoff, and since the review that
 //! followed this file's first cut, the whole reconnect classification. What is left here is the
@@ -15,9 +10,8 @@
 //! [`client::run_once`], which is the same round trip the Sync Now button has always made. So
 //! there is exactly one code path that can change this database, and the socket only decides
 //! *when* it runs.
-#![cfg(not(target_family = "wasm"))]
 
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
 
 use futures_util::{SinkExt, StreamExt};
@@ -83,24 +77,8 @@ struct HeadFrame {
     cursor: i64,
 }
 
-/// Android's foreground gate. `true` while the app may hold a socket.
-///
-/// Desktop never clears it: an idle hibernated socket costs nothing, so there is no reason to
-/// drop one when the window is minimised. Android does, because Doze severs a background socket
-/// anyway and a phone that *looks* connected while being hours stale is worse than one that
-/// knows it is offline.
-static FOREGROUND: AtomicBool = AtomicBool::new(true);
-
 /// [`current`]'s backing store — a [`LiveState`] discriminant.
 static STATE: AtomicU8 = AtomicU8::new(LiveState::Off as u8);
-
-pub fn resume() {
-    FOREGROUND.store(true, Ordering::Relaxed);
-}
-
-pub fn pause() {
-    FOREGROUND.store(false, Ordering::Relaxed);
-}
 
 /// What the socket is doing right now.
 ///
@@ -152,7 +130,7 @@ async fn run(app: tauri::AppHandle, state: Arc<AppState>, writes: Arc<Notify>) {
         // The same conditions under which `run_once` already answers `Ok(None)` with no traffic.
         // An installation that has connected nothing opens no socket, which is every
         // installation today.
-        if !FOREGROUND.load(Ordering::Relaxed) || !in_a_group(&state).await {
+        if !in_a_group(&state).await {
             signal.set(&app, LiveState::Off);
             tokio::time::sleep(IDLE_POLL).await;
             continue;
@@ -281,7 +259,7 @@ async fn connect_once(
     };
     let url = format!("{}/g/{group}/ws?device={device}", ws_origin(&base));
     // `tokio-tungstenite` builds an arbitrary upgrade request, so the bearer gate the relay
-    // already has at `index.ts:169-181` works unchanged. **A browser could not do this** — its
+    // already has at `index.ts:169-181` works unchanged. **The webview could not do this** — its
     // `WebSocket` constructor cannot set a header — which is one of the reasons the socket lives
     // in Rust rather than in the page.
     let request = tokio_tungstenite::tungstenite::http::Request::builder()
@@ -342,14 +320,6 @@ async fn connect_once(
             }
 
             _ = tick.tick() => {
-                // **The foreground gate, read here and not only at the top of `run`.** `pause()`
-                // sets a flag, and without this arm the task would sit in this `select!` until
-                // the socket died of its own accord — so an Android app sent to the background
-                // would keep the connection the gate exists to drop, until Doze severed it in a
-                // way this side does not control and cannot time.
-                if !FOREGROUND.load(Ordering::Relaxed) {
-                    break (Disconnect::Paused, None);
-                }
                 if sched.take_due(now_ms()) {
                     trip(app, state, sched).await;
                 }
@@ -541,10 +511,6 @@ async fn in_a_group(state: &Arc<AppState>) -> bool {
 }
 
 /// Now, in unix milliseconds — the clock every [`Scheduler`] call is a pure function of.
-///
-/// `SystemTime::now()` is safe here for the reason `sync_pair::pairing`'s copy of this gives: it
-/// panics on `wasm32-unknown-unknown`, and this file has no wasm target to panic on. The
-/// every-target halves of `sync_engine` read `unixepoch()` off the connection instead.
 fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -708,6 +674,7 @@ pub async fn push_now(state: Arc<AppState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
 
     /// A real `AppState` on a real file. [`crate::sync::tests::file_state`]'s shape, kept here

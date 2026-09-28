@@ -13,7 +13,6 @@ import { StartViewPanel } from "@/features/settings/StartViewPanel";
 import { SyncPanel } from "@/features/settings/SyncPanel";
 import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
-import { WebStoragePanel, useWebStorage } from "@/features/settings/WebStoragePanel";
 import {
   PANELS,
   visiblePanels,
@@ -35,7 +34,6 @@ import { useMarketplace } from "@/lib/useMarketplace";
 import { useReleaseHistory } from "@/lib/useReleaseHistory";
 import { useWindowCount } from "@/lib/useWindowCount";
 import { cn } from "@/lib/utils";
-import { isWebTarget } from "@/pwa/target";
 
 /**
  * What the Data folder section says about card images that could not be written to the cache.
@@ -83,7 +81,7 @@ function asPanelId(word: string): PanelId | null {
  *
  * **`nav.ts` decides what is drawn and this file only draws it.** Which panels a group holds and
  * which panels a query matches are both decidable with no DOM, so they are a pure module with a
- * suite of its own; `visiblePanels(group, query, isWeb)` is the whole of that decision and
+ * suite of its own; `visiblePanels(group, query)` is the whole of that decision and
  * nothing here re-derives any part of it. What this page still owns is the two pieces of state
  * the decision is taken over — the current group and the query — plus every hook the panels are
  * fed from.
@@ -214,17 +212,13 @@ export function SettingsPage({ update }: { update: Update }) {
   const cache = useLocalCache();
   const danger = useDangerZone();
   const hidden = useHiddenTags();
-  // Called unconditionally, `useLocalCache`'s shape, and inert on desktop: every read inside
-  // it is behind `isWebTarget()`, which is a build-time constant.
-  const webStorage = useWebStorage();
   /**
    * The two facts the Data folder section below draws, read here rather than through a second
    * `useSync()`.
    *
    * **A query and not that hook**, which is `useErrorLog`'s shape and its argument: `useSync`
    * runs a chained poll of its own — 30 s idle, 1 s mid-sync — and a second instance would be
-   * two loops describing one database, which is the reason `useWebStorageLifecycle` gives at
-   * its own site for not calling it either. Nothing here needs a loop: the folder cannot move
+   * two loops describing one database. Nothing here needs a loop: the folder cannot move
    * while the process runs, and the counter only moves while the reader is looking at cards
    * rather than at this page. It loads when Settings opens, and `query.ts`'s 30 s `staleTime`
    * is what a reader who leaves and comes back is re-reading against.
@@ -256,7 +250,7 @@ export function SettingsPage({ update }: { update: Update }) {
     errors: log.entries.length,
   };
 
-  const visible = visiblePanels(group, query, isWebTarget());
+  const visible = visiblePanels(group, query);
   const shown = (id: PanelId) => visible.includes(id);
 
   /**
@@ -309,34 +303,6 @@ export function SettingsPage({ update }: { update: Update }) {
           ~232px when wrapped-and-full-width is not in play either, and the query could not tell
           the two states apart. This is the first thing a reviewer will want to change back. */}
       <div className="flex min-w-0 flex-[999_1_480px] flex-col gap-8">
-        {/* **Drawn on every target again, and this reverses half of PR #315.** That change hid
-            the whole panel behind `!isWebTarget()`, which was right while nothing on it worked:
-            `update_status` and `update_history` answered `unknown command` in a browser, and the
-            panel's own `installKind === "managed"` test could not save it, because that reads an
-            answer from `update_status` — so on web it read the *absence* as "not managed" and
-            drew the controls anyway. Driven on the phone 2026-08-30, that was the last
-            `unknown command` in the app.
-
-            What it cost was the nearest thing to an About screen, which #315 said out loud was
-            worth having and was a different thing to build. This is that thing: `update_status`
-            and `update_history` are routed by `web::route` now, the browser answers
-            `installKind: "web"`, and the panel draws the mark, the name and the version and
-            names the service worker in place of a Download button. **The gate moved from the
-            build target onto a backend answer**, which is the general lesson #315 wrote down.
-
-            **`update_check` followed on 2026-08-31, and the download did not** — "check and
-            notes, no download". It is still *absent* from `COMMANDS` rather than unrouted:
-            `web::route::call` is synchronous, so no `async` command can be an arm there at all.
-            It is `glue::update_check`, a `#[wasm_bindgen]` entry beside the four feed ingests,
-            with the name diverted in `src/lib/core/browser.ts` — which is why nothing on this
-            page took a branch for it. What it buys is the panel's other half: only a check ever
-            writes the `app_meta` row `update_history` reads, so routing that command without
-            this one was a version history that answered `[]` for ever.
-
-            `update_download`, `update_apply` and `update_open_release_page` stay desktop's —
-            they verify a checksum, unpack a zip beside a running `.exe` and relaunch it — and
-            `update::pick_asset` answers `None` for `web` and `managed`, so the panel offers no
-            button that reaches one. */}
         {shown("updates") && (
           <UpdatePanel update={update} history={history} windows={windows} />
         )}
@@ -444,11 +410,7 @@ export function SettingsPage({ update }: { update: Update }) {
             below the error log*, because a failed image **fetch** is a row in that log while a
             failed image **write** is this line. Those two are now in different groups, so the
             pairing only happens when a reader searches; `nav.ts` keeps them one apart in the
-            global order, which is the most that arrangement can still buy.
-
-            **No platform gate, because every target answers `dataDir`**: the web build reports
-            `OPFS:/…` (`src-tauri/src/web/glue.rs:92`), which is still the true answer to "where
-            does this keep my data". */}
+            global order, which is the most that arrangement can still buy. */}
         {shown("data-folder") && (
           <SettingsSection id="data-folder" title="Data folder">
             <p className="text-sm text-dim">
@@ -475,34 +437,10 @@ export function SettingsPage({ update }: { update: Update }) {
         {/* Beside the cache because the two are this group's only panels about the folder on disk
             — one says what is kept there and the other what can be swept out of it. Above it
             rather than below for the ordering rule, which is what survives the regrouping intact:
-            the mirror deletes nothing a reader owns, and Clear cache does.
-
-            **On every platform since 2026-08-31, and the `!isAndroid()` that used to stand here is
-            the interesting part of the history.** The mirror's whole point is a folder a reader
-            opens in a text editor, syncs with Dropbox or greps; on Android that directory is
-            reachable mainly through a file-manager app and often not by other apps at all, and
-            `tauri-plugin-dialog`'s manifest records the platform as having no folder picker, so
-            the root could not even be chosen. All of that is still true — so the panel was hidden
-            outright, which took the *feature* away along with the folder.
-
-            It is back because the folder and the backup are not the same thing. `BackupPanel`
-            now dispatches on the platform itself: the folder where there is one, and everywhere
-            else a button that renders the same files and hands over one archive. The gate that
-            matters moved inside it, where a component can pick which backend it reads —
-            `mirror_status` is not routed on the web target at all, and on Android it answers
-            about a thread `lib.rs` never starts. */}
+            the mirror deletes nothing a reader owns, and Clear cache does. */}
         {shown("backup") && <BackupPanel />}
 
         {shown("cache") && <CachePanel cache={cache} />}
-
-        {/* Web only: none of these rows means anything in a window that owns its own disk.
-            `panelsOn` filters it out on every other build off `isWebTarget()`, a build-time
-            constant, so on desktop this subtree is not merely hidden - nothing under it is ever
-            constructed.
-
-            Beside the cache because these are the group's two panels about where the bytes
-            live, and this one throws nothing away either. */}
-        {shown("web-storage") && <WebStoragePanel storage={webStorage} />}
 
         {shown("errors") && <ErrorLogPanel log={log} />}
 

@@ -13,9 +13,12 @@
 //! * **Every active pile counts**, sideboard and companion included: this is `DeckStats`'
 //!   `missing`, and deliberately not [`crate::deck::deck_values_for`]'s narrower
 //!   main + commander + maybe.
-//! * The key is `(card_id, finish)`, a NULL deck finish meaning [`crate::schema::FINISHES`]`[0]`.
-//!   `attribute_owned` hands a scarce pool down the read order, so summed over one key it owns
-//!   `min(Σ wanted, pool)` — which is what this read computes directly.
+//! * The key is `(card_id, finish)`, the finish being the one each row plays in the collection's
+//!   spelling — [`crate::deck::entry_finish`], so a NULL deck finish is
+//!   [`crate::schema::FINISHES`]`[0]` on a printing sold in it and the sole finish on one that is
+//!   not. `attribute_owned` hands a scarce pool down the read order, so summed over one key it owns
+//!   `min(Σ wanted, pool)` — and this read walks the same scarce pool, because an unsaid row and a
+//!   `foil` row of one foil-only printing are two SQL groups and one key.
 //! * A missing copy costs its row's own price, [`crate::sorting::deck_card_price_expr`], which
 //!   depends on the key alone. `missing_cost` is `None` exactly when nothing on the measured list
 //!   is priced — `DeckStats`' `missingPrice`, `priced === 0 ? null : …`.
@@ -29,24 +32,18 @@
 //! **Virtual decks answer no row** — they hold nothing by definition, and 0% of every deck is not
 //! a finding. **Tokens never count**: they are `deck_tokens`, which nothing here reads. A deck
 //! with nothing on its measured list answers a row of zeros and reads no pool at all.
-//!
-//! Connection in, DTO out, no clock and no network, so it answers in a browser as on the desktop.
 
 use crate::sorting::Marketplace;
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::collections::HashMap;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// `deck_cards.variant` for the list that is sleeved up.
 const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 /// `deck_cards.variant` for the plan.
 const THEORY: &str = crate::schema::DECK_VARIANTS[1];
-/// What a NULL deck-row finish is on the collection side — `attribute_owned`'s translation.
-const REGULAR: &str = crate::schema::FINISHES[0];
 
 /// One deck's completion.
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -121,14 +118,16 @@ fn measured_decks(conn: &Connection) -> Result<Vec<(i64, bool)>, String> {
 /// **The pile filter sits in the join**, `deck_values_for`'s arrangement: only active piles, and
 /// only rows of the list the deck is measured by. The price is a bare column beside the `sum()`
 /// — every row of a group shares `dc.card_id` and `dc.finish`, and so the `cards` row and the
-/// price. `GROUP BY dc.finish` groups the NULLs together, which is the regular copy's one key.
+/// price. `GROUP BY dc.finish` groups the NULLs together; the key each group is measured under is
+/// [`crate::deck::entry_finish`] of that finish and the printing's `finishes`, folded in Rust, so a
+/// group's price stays the one its own rows are quoted at.
 fn wanted_by_deck(
     conn: &Connection,
     marketplace: Marketplace,
 ) -> Result<HashMap<i64, Vec<Want>>, String> {
     let price = crate::sorting::deck_card_price_expr(marketplace);
     let sql = format!(
-        "SELECT dc.deck_id, dc.card_id, coalesce(dc.finish, '{REGULAR}'), sum(dc.quantity),
+        "SELECT dc.deck_id, dc.card_id, dc.finish, c.finishes, sum(dc.quantity),
                 {price}
            FROM decks d
            JOIN deck_categories cat
@@ -145,13 +144,15 @@ fn wanted_by_deck(
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map([], |r| {
+            let finish: Option<String> = r.get(2)?;
+            let finishes: Option<String> = r.get(3)?;
             Ok((
                 r.get::<_, i64>(0)?,
                 Want {
                     card_id: r.get(1)?,
-                    finish: r.get(2)?,
-                    wanted: r.get(3)?,
-                    unit_price: r.get(4)?,
+                    finish: crate::deck::entry_finish(finish.as_deref(), finishes.as_deref()),
+                    wanted: r.get(4)?,
+                    unit_price: r.get(5)?,
                 },
             ))
         })
@@ -182,13 +183,16 @@ fn measure(
     };
     let mut priced = false;
     let mut cost = 0.0;
+    // Scarce, as `attribute_owned`'s is: two groups can share a key — an unsaid row and a `foil`
+    // row of one foil-only printing — and one copy must not own a copy in each.
+    let mut left = pool.clone();
     for want in wants {
-        let held = pool
-            .get(&(want.card_id.clone(), want.finish.clone()))
-            .copied()
-            .unwrap_or(0);
-        // `attribute_owned`'s `min(remaining, quantity).max(0)`, summed over the key.
-        let have = held.min(want.wanted).max(0);
+        let remaining = left
+            .entry((want.card_id.clone(), want.finish.clone()))
+            .or_insert(0);
+        // `attribute_owned`'s `min(remaining, quantity).max(0)`.
+        let have = (*remaining).min(want.wanted).max(0);
+        *remaining -= have;
         let short = want.wanted - have;
         row.wanted += want.wanted;
         row.owned += have;
@@ -208,7 +212,6 @@ fn measure(
 /// Every deck's completion, for the home page. **Read-only** connection, blocking pool, as every
 /// read in this app is — [`crate::deck::deck_values`]' shape exactly, marketplace and fallback
 /// included: anything this build does not recognise quotes TCGplayer rather than failing.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_completion(
     state: tauri::State<'_, Arc<AppState>>,
@@ -227,7 +230,7 @@ pub async fn deck_completion(
 ///
 /// **`sync_engine/commands.rs:111`'s count for this one table**, so To review's row and the Needs
 /// review panel it opens say one number. Not `sync_relay_status.reviewCount` itself: that sums six
-/// tables into one figure, is desktop-only and takes the write lock (spec §4.1).
+/// tables into one figure and takes the write lock (spec §4.1).
 pub fn review_count(conn: &Connection) -> Result<i64, String> {
     conn.query_row(
         "SELECT count(*) FROM deck_cards WHERE needs_review IS NOT NULL",
@@ -238,7 +241,6 @@ pub fn review_count(conn: &Connection) -> Result<i64, String> {
 }
 
 /// To review's deck-card count. **Read-only** connection, blocking pool.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_review_count(state: tauri::State<'_, Arc<AppState>>) -> Result<i64, String> {
     let state = state.inner().clone();
@@ -259,8 +261,9 @@ mod tests {
     ///   two keys at two rates.
     /// * `angel` has **no price** anywhere — the unpriced printing.
     /// * `shiny` is foil-only: a NULL-finish row of it is priced through the chain at its foil
-    ///   rate and keyed at `nonfoil`, so the foil copy filed in that deck's own group does not own
-    ///   it — the one copy the deck could reach, in the one finish its row does not ask for.
+    ///   rate and keyed at `foil` — the finish it plays, `deck::entry_finish` — so the foil copy
+    ///   filed in that deck's own group owns it. (It was keyed at `nonfoil` until issue #563's
+    ///   follow-up, and the copy in the deck's own box owned nothing.)
     fn seeded() -> Connection {
         let conn = crate::schema::memory_pair();
         conn.execute_batch(
@@ -510,7 +513,7 @@ mod tests {
         copies(&conn, "bolt", "foil", 1, Some(group(&conn, a)));
         copies(&conn, "ring", "nonfoil", 1, Some(group(&conn, a)));
         copies(&conn, "bird", "nonfoil", 1, Some(group(&conn, a)));
-        // In A's own box and in the wrong finish: A's `shiny` row names none, which is `nonfoil`.
+        // In A's own box, and the finish A's unsaid `shiny` row plays: foil is all it is sold in.
         copies(&conn, "shiny", "foil", 1, Some(group(&conn, a)));
         copies(&conn, "bolt", "nonfoil", 1, Some(group(&conn, b)));
         copies(&conn, "ring", "nonfoil", 5, Some(group(&conn, c)));
@@ -537,9 +540,9 @@ mod tests {
         );
         let row = |id: i64| rows.iter().find(|r| r.deck_id == id).unwrap();
 
-        // A: wanted 4+2+2+2+1 over its active piles; its group owns 2 Bolts, 1 foil Bolt and
-        // 1 Sol Ring. Its foil Shiny Relic owns nothing — the row wants the regular copy — and
-        // Recently removed, the binder and the root are not its box.
+        // A: wanted 4+2+2+2+1 over its active piles; its group owns 2 Bolts, 1 foil Bolt, 1 Sol
+        // Ring and the foil Shiny Relic its unsaid row can only be. Recently removed, the binder
+        // and the root are not its box.
         let got = row(a);
         assert_eq!(
             (
@@ -549,13 +552,9 @@ mod tests {
                 got.missing,
                 got.unpriced_missing
             ),
-            ("live", 11, 4, 7, 2)
+            ("live", 11, 5, 6, 2)
         );
-        assert_money(
-            got.missing_cost,
-            Some(24.0),
-            "A: 2×2.00 + 1×10.00 + 1×3.00 + 1×7.00",
-        );
+        assert_money(got.missing_cost, Some(17.0), "A: 2×2.00 + 1×10.00 + 1×3.00");
 
         // B: its own group, Recently removed and the binder give 3 Bolts; the root gives the
         // Angel; A's and C's groups and the locked vault give nothing.
@@ -613,6 +612,32 @@ mod tests {
                 assert_money(got.missing_cost, want.missing_cost, &what);
             }
         }
+    }
+
+    /// **An unsaid row and a `foil` row of one foil-only printing are one key with one pool**, so
+    /// one foil copy owns one of the two, never one each. `attribute_owned` walks a scarce pool
+    /// down the read; a per-key `min(wanted, pool)` taken once per SQL group would have handed the
+    /// same copy to both rows the moment they stopped being two keys.
+    #[test]
+    fn two_spellings_of_one_foil_only_printing_share_one_pool() {
+        let conn = seeded();
+        let d = make_deck(&conn, "Bling", false, false);
+        let main = pile(&conn, d, LIVE, "Main deck");
+        let side = seeded_pile(&conn, d, "side");
+        put(&conn, d, main, LIVE, "shiny", None, 1);
+        put(&conn, d, side, LIVE, "shiny", Some("foil"), 1);
+        copies(&conn, "shiny", "foil", 1, Some(group(&conn, d)));
+
+        let got = deck_completion_for(&conn, Marketplace::Tcgplayer).unwrap();
+        let got = got.iter().find(|r| r.deck_id == d).unwrap();
+        assert_eq!((got.wanted, got.owned, got.missing), (2, 1, 1));
+        assert_money(got.missing_cost, Some(7.0), "one foil Shiny Relic to buy");
+        let want = editor(&conn, d, LIVE, Marketplace::Tcgplayer);
+        assert_eq!(
+            (got.wanted, got.owned, got.missing),
+            (want.wanted, want.owned, want.missing),
+            "and the editor agrees"
+        );
     }
 
     /// The wire names the page reads — `ipc.test.ts`' struct table cannot see whether serde

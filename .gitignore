@@ -1,12 +1,12 @@
 node_modules/
 dist/
 
-# The web target's bundle, and the directory it is served from. `web/public/` is generated in
-# FULL by `scripts/build-wasm.mjs` - the wasm module, its glue, and a copy of the favicon -
-# which is what keeps a 2 MB wasm module out of the desktop bundle and therefore out of the
-# portable exe.
+# Output of the web build, removed on 2026-09-27. A checkout that ever ran it still holds the
+# generated wasm and its glue on disk, and nothing deletes an ignored file when its ignore goes —
+# so these stay until no checkout has them. `eslint.config.js` ignores the same two.
 dist-web/
 web/public/
+
 # The shared-collection viewer's bundle. `share-worker/wrangler.jsonc` declares an `assets`
 # binding over it, so a deploy needs it on disk and nothing needs it in the history.
 dist-share/
@@ -60,8 +60,7 @@ ds-bundle/
 .dev.vars.*
 .wrangler/
 
-# Build transcripts from `tauri android build`, redirected so they can be grepped.
-apk*.txt
+# Transcripts from `tauri dev`, redirected so they can be grepped.
 devlog*.txt
 
 # The card scanner's standalone crate builds into its own target dir — it is not a member of

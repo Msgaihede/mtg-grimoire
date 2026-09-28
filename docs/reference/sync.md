@@ -25,8 +25,8 @@ still no password and nothing to log into. Which account does what is settled in
 
 PR 6 carries both of the blobs that protocol produces **by hand**: the invite as a QR code or a
 typed code, and the sealed group key as a second blob. There is no network of any kind. Two
-windows side by side, or a phone photographing a laptop, complete a pairing with the app
-offline.
+windows side by side, or one machine's camera reading another's screen, complete a pairing with
+the app offline.
 
 That split is not a compromise. **A pairing that never touches a network cannot be attacked by a
 network**, so every test here is about the protocol rather than about the transport, and PR 7
@@ -48,7 +48,7 @@ is documented where the relay's other routes are.
 ## The protocol, step by step
 
 **Rewritten 2026-08-31 for one-sided pairing.** Until this branch B's response and A's sealed key
-were both retyped by hand — the second one phone→PC, the hard direction — through
+were both retyped by hand — the second one back the other way, the hard direction — through
 `sync_pairing_respond` and `sync_pairing_complete`. Both commands are gone from the IPC surface;
 `sync_pairing_poll` reads either blob back from the relay's rendezvous and runs their old bodies
 internally, so the crypto they perform is unchanged and only how it is invoked moved.
@@ -258,10 +258,7 @@ fragment is load-bearing rather than cosmetic.**
 fragment is never sent to a server, so the relay still never learns the invite — the whole reason
 the code stayed 105 characters instead of shrinking to the ~16 the public key alone would need.
 Put the code in the path instead and the relay would hold A's public key and the one-time token,
-and the six digits would become the sole defence by the back door. It also sidesteps a web-target
-problem: the app shell answers any navigation once its service worker is installed, but a QR scan
-is by definition a first visit, and a path-shaped deep link would need a server rewrite that does
-not exist — the server only ever sees `/pair`.
+and the six digits would become the sole defence by the back door.
 
 **Measured: 162 bytes, a version-9 QR at error-correction level M** (176-byte capacity; version 8
 holds 152 and does not fit) — 53×53 modules, 61 with the four-module quiet zone `QrCode.tsx` draws.
@@ -283,19 +280,10 @@ enough to read across a desk, and a copy button. **That is the fallback for a re
 with their phone's own camera app; the primary path is the app's own scanner, which reads the QR
 directly and never opens a URL at all.**
 
-⚠️ **This paragraph named a third thing — an `intent://` link into the Android app, "gated on
-`/.well-known/assetlinks.json`" — and both halves were wrong, so both are gone (2026-08-31).**
-`assetlinks.json` gates an `https` **App Link**; it has never gated a custom scheme, and the app
-declared no `mtggrimoire` scheme, so that button was dead on arrival. Worse, the App Link it was
-paired with was a *trap*: nothing in this app reads a launch intent, so the day a real signing
-fingerprint went up, Android would have started handing `https://…/pair#<code>` to the app instead
-of the browser — the app opening on its ordinary window with the code nowhere, and this page,
-which is the only thing that shows a camera-app scan to the reader, unreachable from a scan. The
-button, the `autoVerify` intent-filter and the `assetlinks.json` route are all removed;
-`relay/src/pair.ts` and `gen/android/app/src/main/AndroidManifest.xml` each carry the argument at
-their own site, and [the deploy runbook](hosted-relay-deploy.md) records that its step 9 was
-deleted rather than deferred. Deep-linking into the app is a coherent follow-up whose *first* step
-is the intent handling.
+**The page offers no link into the app.** Nothing in the app reads a launch argument, so a link
+would open its ordinary window with the code nowhere; `relay/src/pair.ts` carries that argument at
+its own site. Deep-linking into the app is a coherent follow-up whose *first* step is the launch
+handling.
 
 ---
 
@@ -369,19 +357,17 @@ pair on 2026-08-29, which is where [the baseline design](../superpowers/specs/20
 ```
 
 Two identical rows with a Remove button each, and nothing on the screen saying which press
-removed the phone. `identity::mint_name` is the fix, called from `ensure` on the insert and on
+removed which machine. `identity::mint_name` is the fix, called from `ensure` on the insert and on
 no other path.
 
 | Target | What it reads | Where it comes from |
 | --- | --- | --- |
 | Windows | `MAIN-PC` | `COMPUTERNAME`. Measured on this machine, 2026-08-29, debug |
 | Linux / macOS | `HOSTNAME`, or `Desktop` | a shell variable that a process usually does **not** inherit, so the fallback is the ordinary answer there rather than the exceptional one |
-| Android | `OnePlus 12` | `android.os.Build.MODEL` over JNI. **Not a hostname** — Android answers `localhost` on every handset, which would be the same bug one platform over |
-| Web | `Chrome on Windows` | `navigator.userAgent`, read by reflection off the global so it answers in a Worker as well as in a page. A browser has no hostname and nothing to ask for one |
 
-**Three arms because they are three different questions**, and every one of them is infallible:
-failing to read a name must never stop a device minting an identity, so each falls back to a word
-rather than returning an error.
+**One question — the machine's hostname — and it is infallible**: failing to read a name must
+never stop a device minting an identity, so it falls back to a word rather than returning an
+error.
 
 **The privacy trade was made knowingly and is the reader's, not this file's.** The comment on the
 old constant argued the other way — a hostname is often a person's own name and it would travel
@@ -390,15 +376,6 @@ to every paired device without anybody choosing to send it — and that cost is 
 pays for it is that a roster a reader cannot act on is the worse failure, and that
 `sync_device_rename` is still one press away on every row the panel draws, this device's own
 included. That press is why the panel keeps **Rename** beside the pill rather than replacing it.
-
-**Two dependency notes, because the obvious route for the Android arm does not work here.**
-`jni` was already in `Cargo.lock` through `tao`, `wry` and `tauri`, so `Cargo.toml`'s line is a
-direct edge rather than a new crate — `tauri-plugin-fs`'s case. **`ndk-context` is not in this
-tree at all** and was deliberately not added: nothing calls `initialize_android_context`, so
-`android_context()` would answer a null VM pointer and the model lookup would fall back on every
-phone forever — code that compiles, ships and can never run. The VM comes from
-`tauri::tao::platform::android::prelude::main_android_context` instead, which is where the runtime
-this app is actually built on keeps the pointer the activity handed it.
 
 **`ensure` mints on absence only, and that is what makes the change safe to ship.** An existing
 install keeps whatever name it has — including "This device" — and a reader who renamed is never
@@ -410,8 +387,7 @@ exactly that mutation.
 
 **Nothing here asserts a literal hostname.** The value differs on every desk and CI is nobody's
 desk, so the tests assert the shape: a non-empty name, not the placeholder every install used to
-share, and the same answer twice. Only `browser_label` is checkable by value, because it is a pure
-function over a string and the desktop suite is the one place it can run at all.
+share, and the same answer twice.
 
 ---
 
@@ -576,7 +552,7 @@ a tree.
 > It keeps whatever it already synced — this app cannot reach into it and take that back, and no
 > server has a copy to delete.
 
-A dialog that said only "Remove" would imply a lost phone had been wiped, which is the opposite
+A dialog that said only "Remove" would imply a lost laptop had been wiped, which is the opposite
 of what happens.
 
 **There is still no "Rotate key now", and its reason has expired.** `identity::rotate_key` was
@@ -692,8 +668,7 @@ Here is what replaced each, and — for the scanner — the wrong reasoning this
 what chasing it cost.
 
 **The scanner exists, and it is a component rather than a native plugin.** One `<QrScanner
-onCode={…} />` opens the camera, draws frames to a `<canvas>`, and decodes with `jsQR` — desktop,
-Android and the later web build all get one implementation rather than three, because
+onCode={…} />` opens the camera, draws frames to a `<canvas>`, and decodes with `jsQR`, because
 `BarcodeDetector` is `undefined` in WebView2 (measured below) and a platform decoder was never on
 the table. The raw string it reads goes through the same `Invite::decode` a pasted code always
 did: `decode` takes everything after the last `#` before it filters, so a URL and a bare code both
@@ -856,8 +831,7 @@ that process shares the one `AppState`, the one write connection and therefore t
 `sync_identity` — so two windows pairing would be one device reading its own invite. The
 crossed halves ([§the two blobs](#the-two-blobs)) are covered by
 `two_databases_pair_and_agree_on_the_key`, which drives two connections in one process; that is
-the strongest evidence available until a second device exists, and the Android build merged on
-the same day is the obvious one.
+the strongest evidence available until a second device exists.
 
 **Also not shown here: the upgrade.** A worktree is a fresh install, so this pass exercised
 `USER_SCHEMA_SQL` and never ran the `migrate_user` rung. The `split::extract_user_file` fix — the
@@ -1136,10 +1110,14 @@ row was gone, with no tombstone check, so a peer's entry announcement for a deck
 deleted was deferred — and dropped, together with that peer's later ops in the page — as every
 child op of a deleted parent was. It is **moot** now: a `del` for the deck in this device's own
 `sync_ops`, or in the page, makes the child consumed silently, since `deck_token_printings.deck_id`
-cascades and the delete would have taken it anyway; a deck deleted on a third device waits out the
-bound and is skipped, recorded. **`apply::find_row`'s uid rename was unchecked**: it renamed the
-local row to the lower uid without asking whether another local row already held it, and derived
-names make that reachable — a v51 device re-picks art Y2 while the other device holds Y2 as a
+cascades and the delete would have taken it anyway; a deck deleted on a third device waited out the
+bound and was skipped, recorded, until user schema v54's `sync_gone` made that moot too, for a
+delete applied here from then on — `gone` has read that table since (tombstones as rows saying a
+parent went, not the `del` ops of this paragraph), and not `sync_ops` (*Held while it can
+resolve*, below).
+**`apply::find_row`'s uid rename was unchecked**: it renamed the local row to the lower uid
+without asking whether another local row already held it, and derived names make that reachable
+— a v51 device re-picks art Y2 while the other device holds Y2 as a
 separate entry, which case 1 declined to move — at which point the `UNIQUE(sync_uid)` error escaped
 the group's savepoint and failed the whole `apply` on every pull, about half the time by uid order.
 The rename is made inside the savepoint now, after a check that the uid is free, and a taken one is
@@ -1157,6 +1135,25 @@ the_registry` holds to `schema::TABLES` — and `src/lib/crossWindow.ts`' `TABLE
 not. The three length fences (`capture::TABLES`, `apply::META`, `SYNCED_TABLES.len()`) and the
 mirror's census in `every_table_in_the_schema_has_been_decided_about` are what go red first, and
 are counted inside the sites they fence rather than beside them.
+
+**A `WITHOUT ROWID` table owes one more, and `sync_gone` found it** (user schema v54, 2026-09-27,
+counted while landing it; a table of tombstones in the sense of a row saying a parent went, not the
+`del` ops this page also calls tombstones): `changes::MARKED_BY_COMMAND` or
+`changes::WRITTEN_BY_THE_APP`, because the update hook never fires for such a table and a window
+learns of its writes only by a hand-made mark or not at all.
+`every_without_rowid_user_table_has_been_decided_about` holds `main.sqlite_master` to the two
+lists, so a new one goes red there until somebody decides — the census counted inside that site,
+like the others. (`device_names`, synced and `WITHOUT ROWID`, has owed it since the lists existed,
+and is on the first.) `sync_gone` itself, unsynced, owed eight of these: the rung, its
+`USER_SCHEMA_SQL` lines, `UNDO_V54` **at the head of every rewind chain, ahead of `UNDO_V53`**, and not
+merely declared, `schema::TABLES`, the mirror's decided-about list (`surface_of` needs no arm — it
+falls through to `None`, as `sync_peers` does), `WRITTEN_BY_THE_APP` (a press reaches it only
+through its `AFTER DELETE` trigger, `apply` writes the rest, and no window draws a row of it),
+`src/lib/userTables.json`, and `TABLE_KEYS` as `sync_gone: []`. Two hand-spelled fences in
+`schema.rs` went red with it and are counted inside the sites they fence:
+`the_user_side_is_every_table_no_feed_can_rebuild` (`schema::TABLES`) and the figure in
+`the_user_schema_is_byte_identical_to_what_the_ladder_builds` (`USER_SCHEMA_SQL`) — re-counted
+there rather than incremented.
 
 Two further corrections, both found by reading `schema.rs` rather than the spec:
 
@@ -1352,8 +1349,8 @@ running last year's rules forever.
 gives the table and the rowid but **no values**. `preupdate_hook` does give values but fires
 *before commit*, so an in-memory buffer is the only record of an op between the commit and the
 drain, and a crash there loses an op: a device diverged for good, silently. A trigger runs
-inside the caller's transaction, rolls back with it, cannot be forgotten by a write site added
-next year, and is identical on native and on wasm.
+inside the caller's transaction, rolls back with it, and cannot be forgotten by a write site added
+next year.
 
 Three things about SQLite, all measured against **3.53.0 on 2026-08-28**, decide the rest — and
 the plan this was built from had the first two wrong:
@@ -1587,8 +1584,7 @@ and the sentence was there again.
 
 Without it, an edit made *after* seeing a peer's op can carry a stamp that sorts *before* it, and
 last-writer-wins is decided by whose clock ran faster. `apply` ends by pulling `sync_clock` past
-the batch's latest stamp — `hlc::Hlc::observe` spelled in SQL, because `SystemTime::now()`
-**panics on `wasm32-unknown-unknown`** and this module compiles for the web target.
+the batch's latest stamp — `hlc::Hlc::observe` spelled in SQL.
 
 ### A held op holds the watermark
 
@@ -1631,7 +1627,10 @@ can still resolve and for no others — the next section.
 
 Built 2026-09-27 ([the delivery holds design](../superpowers/specs/2026-09-27-sync-delivery-holds-design.md)),
 to ship in the release that carries user schema v52 and ahead of token stacks PR 3's v53, whose new
-`collection_folders.kind` word a v52 device must hold rather than drop. This section was titled
+`collection_folders.kind` word a v52 device must hold rather than drop. (PR 3 was dropped the same
+day. v53 went to a deck's per-list piles — *A pile's list is on the wire since user schema v53*,
+below — and `sync_gone`, written as v53 on its own branch, landed as v54: the moot row below, and
+*A delete that would clear rows out of a folder waits for the retry* after the table's notes.) This section was titled
 *Deferred ops are dropped, not held (open)* until then, and what it recorded is at its end.
 
 **The client used to supply half a hold.** `apply` held the sender's watermark at the first op it could
@@ -1656,12 +1655,16 @@ receiver ignores the key, because nothing on the wire is `deny_unknown_fields`
 
 **`apply` classifies every group it could not write**, from why — `UnknownTable`,
 `UnknownParent { table, uid }`, or `Unbuildable` carrying the constraint's own words, which were
-once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in this order):
+once discarded; a fourth, `DecidedOnRetry`, is what a pass answers for a decision it withholds — a
+gone-based one until a `Decide` pass, a clearing delete until a `Clear` one — and never reaches
+here (the table's notes) — and from
+who sealed it (`apply.rs`'s `classify`, asked in this order, of the
+last answer each group gave):
 
 | The group | Class | Holds its device? | Recorded? |
 | --- | --- | --- | --- |
-| Names a parent deleted here — a `del` for its uid in this device's own `sync_ops`, served by `idx_sync_ops_row` — or deleted in this page, and the parent's foreign key **cascades** | **moot** — and the row goes here too, where this device holds it, the group's placement under that parent stands, and no synced table files rows under it (never a folder) | no | no — the convergent outcome |
-| The same, but the key is **`SET NULL`** (`collection_entries.folder_id`, `wishlist_entries.folder_id`, `decks.folder_id`, `deck_cards.label_id`) | **not deferred** — written without that parent | no | no |
+| Names a parent deleted in this page, or anywhere a delete has ever reached this device — its own, a peer's applied here, a row a cascade took with either, or a row this device never held — which is what `sync_gone` records (user schema v54: a table of tombstones, not the `del` ops also called that) — and the parent's foreign key **cascades** | **moot**, decided only on a retry pass that follows one on which nothing else landed — and the row goes here too, where this device holds it and the group's placement under that parent stands, a folder included | no | no — the convergent outcome |
+| The same, but the key is **`SET NULL`** (`collection_entries.folder_id`, `wishlist_entries.folder_id`, `decks.folder_id`, `deck_cards.label_id`) | **not held** — written without that parent, only on a retry pass that follows one on which nothing else landed | no | no |
 | Any reason, and an op in it was sealed by a **newer** schema | **held · newer** | yes, with no bound | no — the Sync panel says it |
 | An unknown parent, from a same or older schema | **held · waiting** | yes, until the client's bound | only when released |
 | An unknown table, or a row this database cannot build, from a same or older schema | **dropped** — skipped | no | yes |
@@ -1690,29 +1693,71 @@ once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in thi
   order-free either — its applier takes a page parents first, so a delete and a later move of the
   same row in one page cascade the row before the move is attempted, and the move rebuilds it only
   where that device's history holds the row's insert.
-  **Never for a table another table's spec names as a parent** (`apply::is_a_parent`, read off
-  `capture::TABLES`) — the three folder tables, and a deck, a pile, a label and a note, which moot
-  never finds here anyway. The scoped re-review of this delete found why: it is uncaptured and no
-  delete in the page, so `gone` cannot see it. A peer that moves a folder under one deleted here and
-  then files a deck in it sends a deck naming a folder nothing here says is gone; the deck waits
-  out the bound and the release drops it, every card in it with it — where on the peer the delete
-  cascades the folder and `SET NULL` puts the deck at the root
+  **Until user schema v54 it never reached a table another table's spec names as a parent** — the
+  three folder tables, and a deck, a pile, a label and a note, which moot never finds here anyway
+  — and `gone` was the reason. The scoped re-review of this delete found it: the delete is
+  uncaptured and no delete in the page, so nothing recorded it. A peer that moved a folder under one
+  deleted here and then filed a deck in it sent a deck naming a folder nothing here said was gone;
+  the deck waited out the bound and the release dropped it, every card in it with it — where on the
+  peer the delete cascaded the folder and `SET NULL` put the deck at the root. So for those tables
+  the moot arm consumed the group and touched nothing, and the moved folder stayed here while the
+  peer's cascade took it — a folder one device held and the other did not. ⚠️ **That was a lasting
+  loss, not a placement difference** (the second scoped re-review of #574, read off the code and
+  unmeasured). The peer's cascade ran inside `apply`, under capture suppression, so it left no
+  `del` there either, and **anything this device filed into that folder afterwards** — a deck with
+  its piles and cards, a copy, a wish, a sub-folder — named a parent the peer's `gone` could not
+  see, waited out the bound there and was dropped, for as long as the folder stood here; a rename of
+  it was skipped there with an `error_log` row each time. Deleting the folder here instead (round 1)
+  converged but lost what the peer had filed into it before hearing about the delete. **Neither
+  answer was right without a trace, and v54 is the trace**
+  ([folder deletes across devices](../superpowers/specs/2026-09-27-folder-deletes-across-devices-design.md),
+  2026-09-27). `sync_gone (tbl, uid)` is a user table of **tombstones in a second sense** — a row
+  saying a parent went, where every other tombstone in this document is a `del` op in `sync_ops`
+  — `WITHOUT ROWID` and **not synced**, one row per deleted row of a table other rows are filed
+  under. An `AFTER DELETE` trigger writes it, `sync_gone_{table}`, which `capture::install` puts on
+  every table `capture::parent_tables()` reads off `capture::TABLES`' `parents`, and `apply` writes
+  it by hand for a row it never held (below); nothing else does. **The trigger is gated on
+  `OLD.sync_uid IS NOT NULL` and on nothing else**: not the apply guard, and not the device being
+  in a group, so a device that pairs later still knows what it deleted. SQLite fires `AFTER DELETE`
+  on the rows a foreign-key cascade takes as well — measured 2026-09-27 with `node:sqlite`, a
+  folder whose child folder cascades logged `before p, before x, after x, after p` — so this
+  device's own delete, a peer's applied here, a moot delete and every cascade any of them sets off
+  all land there, and no command has to remember to record anything. `gone` asks the page's delete
+  set and then that table, one primary-key read, in place of this device's own `sync_ops`; the
+  rung backfills it from those `del` ops for the seven parent tables of the day, spelled in the
+  rung because a rung is history, so nothing `gone` answered before it stops answering. **Nothing clears it** — leaving a group keeps
+  it, as it keeps `sync_ops` — and a stale row is never read, because a parent add-wins brought
+  back is found by `resolve_parent` before `gone` is asked. So the moot delete reaches folders
+  again, on the same placement check: in the moved-folder case this device now deletes the moved
+  folder as the peer's cascade did, a `sync_gone` row for it lands on both devices, and whatever
+  either files into it afterwards is written at the root (a deck, a copy, a wish: `SET NULL`) or
+  dropped with it (a sub-folder, a pile: `CASCADE`) on both
   (`a_deck_filed_into_a_folder_moved_under_one_this_device_deleted_survives_on_both`, and
   `a_copy_filed_into_a_binder_moved_under_one_this_device_deleted_survives_on_both` for the
-  collection's cabinet; both red with the folder tables back in). For those the moot arm is what it
-  was before the delete: consume the group and touch nothing, so the moved folder stays where it
-  was here while the peer's cascade takes it — a folder one device holds and the other does not.
-  ⚠️ **That is a lasting loss, not a placement difference** (the second scoped re-review of #574,
-  read off the code and unmeasured). What was filed in the folder before the exchange is kept on
-  both; but the peer's cascade ran inside `apply`, under capture suppression, so it left no `del`
-  there and none ever reaches a page. **Anything this device files into that folder afterwards** —
-  a deck with its piles and cards, a copy, a wish, a sub-folder — names a parent the peer's `gone`
-  cannot see, waits out the bound there and is dropped, for as long as the folder stays on this
-  device's screen; a rename of it is skipped there with an `error_log` row each time. Deleting the
-  folder here instead (round 1) converged but lost what the peer filed into it before hearing about
-  the delete. **Neither is right, and the fix is a design change**: make a cascaded or moot delete
-  leave a trace `gone` can read — a captured or tombstoned delete — so a later child lands without
-  the parent, as `SET NULL` does. It is owed with the folder-delete stall under *What is still owed*.
+  collection's cabinet, each extended to file from both devices and to find the moved folder gone
+  on both). A third device's delete is the same fix seen from the other side
+  (`a_copy_filed_into_a_binder_a_third_device_deleted_lands_at_the_root`, and *What a hold cannot
+  reach*, below). **A row the moot arm never held is recorded by hand** (`apply::tombstone`, where
+  rows are filed under its table), because a `DELETE` that finds nothing fires no trigger: a peer
+  that makes a folder under one deleted here and files a copy into it sends a folder this device
+  consumes as moot with no row to take, and the copy behind it named a folder nothing here said
+  was gone — it waited out the bound and was dropped, where the peer's cascade puts it at the root
+  (`a_copy_filed_into_a_binder_made_under_one_this_device_deleted_lands_at_the_root_on_both`).
+  **That row is written only on a deciding pass**, as the whole moot decision is (below). Written
+  on the first attempt, as it was for one fix round, it sent a child in the same page to the root
+  before a later group of that page brought the parent back through add-wins, and the retry then
+  built the folder under the resurrected parent — the child at the root here and in the folder on
+  the peer (`a_folder_made_under_a_parent_the_same_page_brings_back_keeps_its_copy`).
+  **A folder's or a deck's moot delete is a clearing delete, and waits as the delete arm's does**:
+  while rows are still filed in the folder it is decided only on a `Clear` pass, and the
+  re-homing after these notes takes whatever is left then. It had a wait of its own until the whole
+  decision moved to the retry, then none — a deciding pass was taken to be late enough — and has one
+  again since the final review's second wave, because a deciding pass's own decisions can land a
+  deck's group that a copy in the folder is moving into (*Why a `Clear` pass and not the deciding
+  one*, below). Two dragged-copy tests pin the older half of the wait
+  (`a_copy_dragged_onto_a_lower_root_twin_out_of_a_binder_moved_under_a_deleted_one_lands_once`
+  and its `…higher_root_twin…` sibling: deleted on the first attempt, the folder re-homed a copy
+  the page was itself folding, which counted it twice or deleted the survivor, by uid order).
   **A moot `deck_cards` row on the live list goes without `release_group_copies`**, so copies its
   deck's group held for it stay in the group, claimed by no row — which is what the peer's own
   cascade leaves too, since a foreign-key cascade releases nothing, so the two agree.
@@ -1729,6 +1774,65 @@ once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in thi
   deck. `apply::cascades` reads `on_delete` off `pragma_foreign_key_list` on the live schema, so the
   rule is never restated beside the key it describes
   (`a_child_of_a_folder_this_device_deleted_lands_at_the_root_on_both`).
+- **Every decision resting on `gone` is taken only on a retry pass that follows one on which
+  nothing else landed** — both arms, the moot one and the `SET NULL` one. The first attempt and
+  every `Retry` pass — the first retry pass, whatever the first attempt landed, and each one after
+  a pass on which something landed or was decided — answer `Why::DecidedOnRetry` and withhold
+  the decision (Task C's fix rounds, 2026-09-27: the branch decided both arms on the first attempt,
+  then on any retry pass, before this). `gone` answers for the page as it stands, and a group of
+  the same page can still bring the parent back: an edit made on the sender after this device's
+  delete resurrects it through add-wins, and that group can sort after the child — the page sorts
+  by table rank and then by each group's earliest op — **or land only on a retry pass itself**,
+  because it waits on a parent of its own. Decided before the parent came back, the moot arm
+  deleted a folder moved under it, which the folder's own sparse move could not rebuild when the
+  parent returned — dropped as `NOT NULL constraint failed: collection_folders.name` while the
+  sender kept it (`a_folder_moved_under_a_parent_the_same_page_brings_back_follows_it`) — and the
+  `SET NULL` arm filed at the root a copy the sender keeps in its binder
+  (`a_copy_filed_into_a_binder_the_same_page_brings_back_stays_in_it`). **One retry pass was not
+  late enough either**: `b` holds `X` and deletes `P`, and `a` moves `X` under `P`, renames `P`,
+  makes `Outer` and moves `P` into it, so `P` waits on `Outer` on the first attempt and is
+  resurrected on the first retry pass — after `X` was met on it; decided there, `X` was deleted as
+  moot and lost for good (`a_folder_moved_under_a_parent_resurrected_on_a_retry_pass_follows_it`,
+  and `a_copy_filed_into_a_binder_resurrected_on_a_later_retry_pass_stays_in_it` for the
+  `SET NULL` arm two passes in). A pass on which nothing landed is one after which no group of the
+  page can land without a withheld decision, so no resurrection is still to come; `resolve_parent`
+  is asked again first on every pass, finds a resurrected parent, and the group is written like any
+  other — only a parent still unknown and still gone reaches either arm. **The cost: every group
+  naming a gone parent takes at least two retry passes**, one that withholds and one that decides.
+  That is a put, or a put and its delete in one page, naming the parent: **a bare `del` carries no
+  parents**, resolves none and never reaches this arm, so a deck's cards deleted with it in the
+  same page, each a bare `del`, do not pay it. Each pass is one more `write_group` over a parent
+  already not found — cheap beside the pull.
+- **The retry passes run to a fixed point, bounded** (`apply::run_groups`). The groups the first
+  attempt did not write are retried in page order on **three kinds of pass**: a `Retry` pass
+  writes what it can and withholds every gone-based decision and every clearing delete; a `Decide`
+  pass, which runs only after a `Retry` pass on which nothing landed, takes the gone-based
+  decisions and still withholds the clearing deletes; and a `Clear` pass, which runs only after a
+  `Decide` pass on which nothing landed, takes those too (the clearing-delete notes below). A pass
+  that landed or decided something is followed by a `Retry`; one that did neither but withheld a
+  decision by a `Decide` after a `Retry` and by a `Clear` after a `Decide`; a `Clear` withholds
+  nothing, and a pass that neither progressed nor withheld ends the loop — and a decision is
+  progress in its own right, so the loop goes on with `Retry` passes after it. A group waiting on a
+  parent that is unknown and not gone goes round again, every other answer is final, and **only
+  each group's last answer is classified**, so a hold is decided by the page as it finally stood.
+  **The cap is three times the page's group count plus one** and is never reached: every pass
+  that lands or decides something takes a group out of the waiting set for good, and at most two
+  passes fall between two of those — a `Retry` and a `Decide` that landed nothing, before a `Clear`
+  that either decides something or ends the loop. It was twice the count plus one until the
+  `Clear` pass came in, at the final review. Why the loop at all: a child can be
+  met before the parent it waits on has been decided. `a` renames `X`, makes `Z` under a `P` this
+  device deleted and moves `X` into `Z`, and `X`'s group sorts ahead of `Z`'s (its earliest op, the
+  rename, is older than `Z`'s creation), so on a single retry `X` asked after `Z` before `Z` had
+  been decided — unknown and not yet gone — and was held, `Z` got its `sync_gone` row too late,
+  and when the release dropped `X`'s ops this device kept `X` where `a`'s cascade had taken it
+  (`a_folder_moved_into_one_made_under_a_parent_deleted_here_goes_on_both`). Now `Z` is decided
+  moot on a `Decide` pass and a later pass finds `X` under a parent that is gone, deleting it as
+  `a`'s cascade did. A child whose parent is genuinely missing ends the loop on the first pass after
+  the last thing moved, never at the cap (`the_retry_passes_stop_when_nothing_can_progress`, which
+  reads the pass count a test-only counter keeps). The cost is up to three passes for each link of
+  the longest chain of waiting groups, over only the groups still waiting; a page with nothing
+  withheld and nothing waiting pays the one retry it always paid. All the passes run inside one round of the apply, so a round that
+  is rolled back takes every pass with it.
 - **Held · newer is a hold on a possibility.** A newer sender's group this build cannot write may be
   one an upgrade can — a table it has not heard of, a `CHECK` word a rung will add — and nothing
   here can tell which, so every newer deferral holds
@@ -1748,6 +1852,166 @@ once discarded — and from who sealed it (`apply.rs`'s `classify`, asked in thi
   `Waiting::Release` is how a waiting hold ends — it becomes dropped and recorded, and its
   collateral applies exactly once, while a newer group stays held either way
   (`an_unknown_parent_waits_then_release_drops_it_and_applies_its_collateral_once`).
+
+**A delete that would clear rows out of a folder waits for the retry, then re-homes them** (user
+schema v54's branch, 2026-09-27, the folder-deletes design §3.3 as amended). It began as a stall,
+and the worst kind. `apply` takes a page parents first (`META[].order`), so a peer's
+`collection_folders` delete, rank 6, runs ahead of the rank-7 `collection_entries` ops that
+re-filed its copies on the sender — where `collection_folders::delete_folder` merges every copy
+onto the root one at a time before the folder goes, and so never meets a collision. Here the
+folder's `DELETE` ran with a copy still filed in it, `ON DELETE SET NULL` moved the copy onto the
+grain of a copy the root already held, and the delete arm answered `UNIQUE constraint failed:
+index 'idx_collection_grain'` through `?`: **the whole apply failed, and the same page failed it
+again on every pull**, so that device's sync stopped for good. A throwaway probe in the `apply`
+test harness reproduced it (debug build). Read off the code, a wishlist folder is the same shape,
+and so is a deck: its group folder goes with it (`collection_folders.deck_id` cascades) while
+`deck::delete_deck`'s re-filing into `Recently removed` is rank 7 behind the deck's rank 1 — and a
+copy filed into the folder here, concurrently, has no re-filing in the page at all. So every
+`DELETE` `apply` issues — the delete arm's, and the moot delete above — now finds first what it
+would clear (`sync_engine/apply/rehome.rs`'s `doomed`):
+
+1. **The doomed folders.** A `collection_folders` or `wishlist_folders` row and its sub-tree, or a
+   `decks` row's group folders and theirs: the three `ON DELETE CASCADE` keys into the two folder
+   tables, `collection_folders.parent_id`, `collection_folders.deck_id` and
+   `wishlist_folders.parent_id`. (`wishlist_folders.managed_deck_id` has no foreign key, so a deck's
+   delete never cascades into the wishlist.) `rehome::CASCADES_INTO_FOLDERS` names the three, and a
+   test reads every such key off the live schema and fails on one it does not cover. Any other
+   table dooms nothing and costs no query.
+2. **The doomed rows**: the copies and wishes filed directly in those folders — the rows the
+   delete's `SET NULL` would move onto the root's grain.
+
+- **A first attempt with anything doomed writes nothing** and answers `Why::DecidedOnRetry` — the
+  reason every decision resting on `gone` shares (the table's notes, above) — **and so does every
+  `Retry` and every `Decide` pass on which anything is still doomed**, the moot arm's delete of a
+  folder included. The group joins `run_groups`' failed list and is tried again on the retry
+  passes, after every other group in the page has had its first attempt, by which time the
+  sender's own writes to those rows — later in rank, sealed before its delete — have landed, or
+  land on a later pass. **A clearing delete is taken only on a `Clear` pass**, the one that follows
+  a `Decide` pass on which nothing landed: a pass that finds nothing doomed any more deletes at
+  once, and otherwise the delete answers `DecidedOnRetry` on every pass until then. The reason is
+  **never classified**, short of the loop's cap: a withheld group is
+  on every pass until it is decided, the loop ends only on a pass that withheld nothing, and only
+  each group's last answer is kept. A delete that dooms nothing — any other table, or an empty
+  folder — goes on the first attempt, in stamp order.
+- **The retry re-homes, then deletes.** Each doomed row still in a doomed folder, in `id`
+  order, is filed at the root through the crate's own merge — `collection_folders::refile_entry`
+  and `wishlist_folders::refile_wish` with no folder — which folds it onto a twin (counters summed,
+  provenance coalesced) or clears its folder. Where it folded, **the survivor takes the lower of
+  the two `sync_uid`s**, set after the source is gone so the uid index has nothing to refuse; a
+  nameless side takes the other's, and two nameless sides keep none. Then the `DELETE`, whose `SET
+  NULL` has nothing left to act on. By the retry the page's own re-filing has taken what it moves,
+  so what is re-homed is only what the page never mentioned.
+  `a_binder_deleted_with_a_copy_the_root_also_holds_lands_on_the_peer` went red against the old
+  arm with the stall's own words.
+- **Why every clearing delete waits, and not only one that would collide.** The design as approved
+  waited only on a collision — a doomed row whose grain, its folder cleared, matched a root row or
+  another doomed row — and Task B's review found two losses in that. Whether a delete collides
+  depends on what has landed yet, and a page taken parents first has not landed the sender's own
+  rows: a sender that makes a new root copy and then deletes a binder whose copy folds into it
+  sends a delete that collides with nothing on the peer, so the binder's copy was re-homed onto the
+  free grain, the new copy's insert grain-matched it and added its count on top, and the two
+  devices' counts parted
+  (`a_new_root_copy_and_a_binder_that_folds_into_it_land_at_the_senders_count`). That loss is why
+  the question is only whether anything is doomed, and the collision probe went. The other was a
+  folder deleted and re-made at the same grain in one page, which lost the re-made row wherever its
+  delete did wait — no corner, since `reset::clear_collection` re-makes `Recently removed` and every
+  deck group in one write — and waiting more makes it commoner, so the next two bullets are the
+  other half of the change.
+- **A grain match onto a row this page deletes adopts the incoming uid, not `min`** (`find_row`).
+  The sender retired that uid: it deleted the row and made the incoming one in its place on the
+  same grain. `reset::clear_collection` does exactly that to `Recently removed` and to every deck's
+  group, both grained — partially, on `kind = 'removed'` and on `deck_id` — so on a peer whose old
+  folders still hold copies the old rows' deletes wait for the retry while the re-made rows'
+  inserts land on the old rows. Kept by `min` wherever the old uid sorted lower, the retried
+  delete then took the very row the insert had just landed on, and the peer lost its holding area
+  or a deck's group with nothing recorded, about half the time by uid order. Under the incoming
+  uid the retried delete finds nothing to take
+  (`a_collection_cleared_on_one_device_keeps_the_re_made_folders_on_the_other`, which forces the
+  old uids low so the order is not a coin toss). `adopt_uid`'s taken-check still applies.
+- **A group whose own ops end in a delete finds its row by uid alone, never by grain**
+  (`find_row`, the other half of the same fact). The sender made that row and discarded it, so its
+  delete can only mean a row wearing its uid, and a grain match could only hand it one this device
+  keeps. It did, twice over, each time a row deleted with nothing recorded: a collection cleared
+  twice between two pulls — or a deck switched to Virtual and back twice — sends `del R`,
+  `put R'` + `del R'`, `put R''` on one partial grain, and on the retry the `R'` group grain-hit
+  `R''`, adopted it and deleted it
+  (`a_collection_cleared_twice_on_one_device_keeps_the_last_re_made_folders_on_the_other`); and a
+  copy the sender added and removed again grain-hit a copy of that printing the peer had made on
+  its own, and deleted that (`a_row_made_and_deleted_on_the_sender_never_deletes_a_local_twin`).
+  **Keyed on the group's own fold, and not on the page's delete set**: a row deleted and put back
+  in one page — a third device's edit beating the delete, add-wins — names its uid in a `del` op
+  and still folds to a row that exists, so it grain-matches like any put and a twin this device
+  made meets it as one row. Keyed on the page's deletes, it inserted beside the twin and was
+  dropped as a row this database cannot build
+  (`a_row_deleted_and_put_back_in_one_page_still_meets_its_twin`).
+- **A delete of a parent this device never held still leaves a `sync_gone` row.** A parent made
+  and deleted on a third device between two of this device's pulls arrives as a put and a `del`
+  op in one page, folds to deleted, finds no row and so fires no trigger; the delete arm writes the
+  row by hand (`apply::tombstone`, for the tables `capture::parent_tables()` names and no other),
+  so a child of that parent on a later page lands at once instead of waiting out the bound
+  (`a_child_of_a_parent_a_third_device_made_and_deleted_between_two_pulls_lands_at_once`).
+- **Why the lower uid.** A row re-homed here is one the page did not mention — filed here
+  concurrently, or by a third device — so its own put reaches the sender with its folder gone, a
+  `sync_gone` row there saying so since the sender's own delete. The sender writes it without the
+  folder, and `find_row`'s grain match lands it on the same twin, adopting `min`: one row, one
+  count and one uid on both devices.
+- **Why the retry and not at once.** On the first attempt the sender's re-filing has not landed, so
+  a merge would fold a copy the sender has itself already merged onto the root, and the sender's own
+  `+n` for the twin would then count it a second time. Measured by mutation on 2026-09-27, against
+  the design before the wait was widened: merging on the first attempt turned five of the branch's
+  new tests red, the binder's above among them.
+- **Why not the first retry pass.** A copy the sender dragged out of the binder
+  into a folder the page itself makes is moved only once that folder lands, and the folder can
+  land only on a retry pass: `a` makes `N`, then `Outer`, moves `N` into `Outer`, drags `c` from
+  `B` into `N` and deletes `B`, so the peer meets `N`, `Outer`, `B` and `c`'s move in that order,
+  and `N` and the move each fail the first attempt on a parent that lands later. Decided on the
+  first retry pass — as it was until the final review — `B` came round after `N` had landed and
+  before `c`'s move, and re-homed `c` onto its root twin `t`. Where `c`'s uid sorted lower the
+  survivor wore it and the move carried both copies into `N`, while the sender kept `c` in `N` and
+  `t` at the root; where `t`'s did, the move found no row and was dropped with an `error_log` row
+  (`a_copy_dragged_into_a_folder_the_page_makes_late_out_of_a_deleted_binder_lands_there`, both uid
+  orders forced, red first against the first-attempt-only wait). Waiting through every `Retry`
+  pass, the move lands on the first retry pass and `B` is deleted empty on the next.
+- **Why a `Clear` pass and not the deciding one.** The deciding pass's own decisions land groups,
+  and a group they unblock can re-file a row later in that same pass. `b` deletes a deck folder
+  `F`; `a` makes a deck `Q` in `F` — its group `G` with it — adds the card to `Q`'s list, moves `c`
+  out of binder `B` into `G` with `collection_to_deck` and deletes `B`, and a root twin `t` of
+  `c`'s printing is on both devices. On the peer nothing lands before the deciding pass: `Q` waits
+  for its `SET NULL` decision, `G` on `Q`, `B` on `c` and `c`'s move on `G`. The deciding pass
+  writes `Q` without `F`, then `G` lands — and `B`, decided on that pass as it was until the final
+  review's second wave, re-homed `c` onto `t` before `c`'s move came round: where `c`'s uid sorted
+  lower the move carried both copies into `G`, so the peer's deck owned 2 against the sender's 1,
+  and where `t`'s did the move found no row and was dropped with an `error_log` row. **The moot
+  arm's delete of a folder is the same delete and had the same flaw**: `b` deleted a binder `P` as
+  well, and `a` moved `B` under `P` in place of deleting it. Both forms, each in both uid orders,
+  are `a_copy_moved_into_a_decks_group_the_page_makes_late_lands_there`, red first against the
+  previous wave's guard; a mutation that drops either arm's wait turns exactly that arm's two red.
+  Withheld until a `Clear` pass, `B` is met again only after the move has landed on the deciding
+  pass, finds nothing doomed and goes empty, so no `Clear` pass is needed at all: three retry
+  passes for the delete arm and four for the moot one, read off the test-only counter.
+- **Not "apply deletes last"**, which would have fixed the ordering in one line and is wrong: a row
+  deleted and re-added at the same grain between two pulls — a card stepped to 0 and added again, a
+  pile deleted and re-made under its old name — would have its put land first, grain-match the row
+  the delete is about to take, and either sum the two or delete the survivor. So the page order
+  stays, and only what the page cannot settle in order waits for the retry — a delete that would
+  clear rows, and every decision resting on `gone`; a test pins a copy removed and re-added in one
+  page against that change.
+- **The backstop.** Every `DELETE` `apply` issues runs inside a savepoint, and a refusal is rolled
+  back and **never `?`**. The moot delete already fenced its refusal, leaving the row where it
+  stood; the delete arm gained the fence, and there a refusal — the read of the doomed rows and the
+  hand-written `sync_gone` row included — becomes `Why::Unbuildable` carrying the constraint's
+  words, dropped and recorded, or held where the sender is newer
+  (`a_folder_delete_this_database_refuses_is_dropped_and_the_page_applies`, a TEMP trigger standing
+  in for the refusal). A refused delete leaves a folder on one device, which is recorded and
+  visible; a stalled sync is neither.
+
+All of it runs inside `apply`'s `capture::suppressed`, so every device derives the same re-homing
+from the same delete, and `rehome.rs` borrows its two merges, `collection_folders::refile_entry`
+and `wishlist_folders::refile_wish`, rather than spelling a third. What it leaves is under *What is still owed*. **And for whatever files into a folder next**: a
+folder deleted on a peer re-homes its leftover copies to the **root**, as `SET NULL` does, and a
+sweep that files them somewhere else afterwards must be a derived write behind
+`capture::suppressed`, like `reconcile`, or both devices sweep the same copy and the destination
+counts it twice.
 
 **The client holds for the reason, and for no longer than the reason lasts.** After `apply` in
 `client::pull`, with the epoch rule (`behind`) unchanged and still first:
@@ -1769,9 +2033,10 @@ before it emits baselines, so a peer can pull a child a moment before the baseli
 parent, which arrives on that same trip of its sender's, seconds later. **Ten minutes** is time for
 it to have come. **Three pulls** is evidence that this device has looked since: elapsed time says
 nothing about a device that slept through it, and its next page may be the one with the parent.
-What the bound ends is a parent that will never come — deleted on a third device, which leaves no
-trace here (below). A parent that does arrive clears the hold on that pull, advancing, with nothing
-recorded (`client`'s `a_waiting_hold_clears_when_the_parent_arrives`).
+What the bound ends is a parent that will never come — deleted on a third device and applied here
+by a build before user schema v54, which left no trace here (below). A parent that does arrive
+clears the hold on that pull, advancing, with nothing recorded (`client`'s
+`a_waiting_hold_clears_when_the_parent_arrives`).
 
 **The bound belongs to the blocks it has watched, and a new block starts it over** (the final
 review's I1, 2026-09-27). The hold was counted by kind alone until then, so a second wait that
@@ -1799,9 +2064,8 @@ an unknown set**: its kind still reaches the panel, and the next pull starts ove
 (`a_hold_written_before_its_blocks_were_stored_reads_and_starts_over`). `noted` is the unreadable
 envelopes this hold's pulls have already written to `error_log`, by device and stamp, so a held page
 handed back on every trip records each once (below); it is left out while empty. `since` is SQL's
-`unixepoch()`, because `sync_engine` compiles for wasm and `SystemTime::now()` panics there. It is
-a `sync_state` key and no schema rung, it survives a restart, `identity::leave_group` deletes it
-with the group (`leaving_clears_a_held_pull` — a count left behind would carry into the next
+`unixepoch()`. It is a `sync_state` key and no schema rung, it survives a restart,
+`identity::leave_group` deletes it with the group (`leaving_clears_a_held_pull` — a count left behind would carry into the next
 group's first wait), and a newer hold is never released by pull count or time
 (`a_newer_hold_is_never_released_by_the_waiting_bound`). `sync_relay_status` reads its kind into
 `RelayStatus.pullHeld` — `"newer" | "waiting" | null`, and **`null` whenever the device is in no
@@ -1896,15 +2160,31 @@ The cursor-carrying loop the limit needs must walk to the head, and only then ma
   reset made there — turns every later edit to it into a sparse update that peer cannot place, with
   both devices at v52. It deferred and dropped the sender's page from there on; it is **skipped** now,
   one `error_log` row per table, and the sender's later ops apply.
-- **A parent deleted on a third device, and applied here on an earlier pull, leaves no trace.**
-  `apply` runs inside `capture::suppressed` and there is no tombstone table, so `gone` cannot find the
-  delete: the child waits out the bound and is skipped, recorded. Where the key cascades that is
-  convergent — the child's own device loses it when the delete arrives there — at the price of an
-  `error_log` row that describes no fault. ⚠️ **Where the key is `SET NULL` it is not**, read off the
-  code and unmeasured: the child's device keeps it at the root when the third device's delete
-  reaches it, and this device skipped it — the divergence the `SET NULL` row closes for a delete
-  made here or in the page, left open for one made elsewhere. *A third device's tombstone* under
-  *What is still owed* is the same missing table.
+- ~~**A parent deleted on a third device, and applied here on an earlier pull, leaves no
+  trace.**~~ **Closed by user schema v54** (2026-09-27,
+  [folder deletes across devices](../superpowers/specs/2026-09-27-folder-deletes-across-devices-design.md)).
+  It left none because `apply` runs inside `capture::suppressed`, which writes no `del` op, and
+  there was no table of tombstones in the other sense — rows saying a parent went — so `gone` could
+  not find the delete: the child waited out the bound and was skipped, recorded. Where the key
+  cascades that was convergent — the child's own device loses it when the delete arrives there —
+  at the price of an `error_log` row that described no fault; ⚠️ where the key is `SET NULL` it was
+  not, read off the code and unmeasured: the child's device kept it at the root when the third
+  device's delete reached it, and this device had skipped it. The delete now writes a `sync_gone`
+  row as it is applied here — the trigger that writes it ignores the apply guard, which is its
+  point — so the child lands on the pull that brings it, the way its parent's key answers a
+  delete: dropped with it where the key cascades, at the root where it is `SET NULL`, with no hold
+  and no `error_log` row (`a_copy_filed_into_a_binder_a_third_device_deleted_lands_at_the_root`).
+  **A delete applied here by a build before v54 left no row anywhere and is not recovered** — the
+  rung backfills only this device's own `del` ops — so its later children still wait out the
+  bound. ~~**Nor does a parent this device never held leave one**~~ — a parent created and deleted
+  on the third device between two of this device's pulls folds away here with no row to `DELETE`,
+  so no trigger fires. This bullet recorded that as open for part of 2026-09-27, read off the code;
+  **it is closed on the same branch**: the delete arm writes the `sync_gone` row by hand for a
+  parent-table row it did not find (`apply::tombstone`), so a child another device filed into that
+  parent lands on the later page at once
+  (`a_child_of_a_parent_a_third_device_made_and_deleted_between_two_pulls_lands_at_once`), and the
+  moot arm does the same, on a deciding pass, for a child it never held (the moot notes after the
+  table, above).
 - ⚠️ **A newer hold that spans a device removal loses everything it held** (the final review's I2,
   read off the code and unmeasured). A removal makes every remaining device forget the superseded
   keys (`identity::supersede` → `forget_superseded`, *One correction to the plan* below). The held
@@ -2055,12 +2335,12 @@ stands on, which is current only if that is the relay's — so no shipped client
 the next epoch, and anything further is a **422**. Beside that, `/claim` mints a fresh secret on
 every press and records the claiming device in `entitlements.refresh_device`, and an accepted
 rotation whose manifest omits that device sets both to NULL. **They close one hole between them,
-with a third change**: a lost phone that pressed Connect and was then removed keeps whatever its
+with a third change**: a lost laptop that pressed Connect and was then removed keeps whatever its
 `user.db` holds, and `/rotate` used to accept the refresh secret — so whoever held that file could
 publish `{epoch: 1e9, keys: {}}`, every remaining device would read a higher epoch with no blob for
 itself, and `check_keys` would take each of them out of the group. **`/rotate` now takes the
 group's current auth and nothing else**: no shipped client ever presented the secret there
-(`client::post_rotation` always sends the group auth), and a removed phone still logged into
+(`client::post_rotation` always sends the group auth), and a removed laptop still logged into
 Patreon could otherwise press Connect, be handed a fresh secret recorded against itself, and
 publish a manifest naming itself back in. The retirement still matters for `/token`'s refresh
 door, where a removed device's secret would otherwise go on minting tokens for the group. A secret
@@ -2228,7 +2508,7 @@ sync.
 
 **The two doors fail differently on the same status code, and that is the sharpest thing here.** A
 401 on the refresh door says the *secret* is dead, which is not the same as the membership: every
-`/claim` mints a fresh secret, so a Connect press on the phone leaves the desktop holding one the
+`/claim` mints a fresh secret, so a Connect press on one device leaves another holding one the
 relay will never accept again. So `entitlement::refused_secret` drops the secret and asks the
 group door — which mints for a superseded secret, and refuses a lapse too, because the relay's
 revocation marks the row `dead` and leaves its group auth in place. Only both refusals revoke the
@@ -2521,13 +2801,8 @@ frame is a hint and is never itself the cursor advancing.
 **The three original reasons, and what actually happened:**
 
 1. **"`reqwest` has no WebSocket client, and the obvious addition, `tokio-tungstenite`, does not
-   compile to `wasm32-unknown-unknown`."** True, and irrelevant once nothing on the wasm target
-   names the crate: `tokio-tungstenite` sits in `Cargo.toml`'s existing
-   `[target.'cfg(not(target_family = "wasm"))'.dependencies]` block, and every line of
-   `sync_engine::live` — the only module that touches it — carries the same `cfg`, not just the
-   dependency declaration. `sync_engine` as a whole still compiles for wasm, which `lib.rs`'s
-   module doc states as the point rather than a bonus, and `npm run verify` cannot see whether the
-   gate is right — only CI's `wasm` job builds that target.
+   compile to `wasm32-unknown-unknown`."** True, and irrelevant: the socket is opened by the
+   desktop's Rust process, and `sync_engine::live` is the only module that touches the crate.
 2. **"A WebSocket from the page would need the CSP widened."** It would not, and this is the half
    the record had backwards: `connect-src 'self' ipc: http://ipc.localhost` governs the
    **webview's** connections, and the socket that shipped is opened by `tokio-tungstenite` inside
@@ -2538,7 +2813,7 @@ frame is a hint and is never itself the cursor advancing.
    native HTTP or WebSocket client in the Rust process is **exempt** from it rather than permitted
    by it. Nothing in `connect-src` was ever consulted for either connection. The substantive claim
    is unchanged and is the stronger one: `tauri.conf.json` was not edited by this change and the
-   page was granted nothing. A fourth reason the record never named: a browser's own `WebSocket` constructor
+   page was granted nothing. A fourth reason the record never named: the page's own `WebSocket` constructor
    cannot set an `Authorization` header, so a socket opened from the page would have forced the
    relay's bearer gate onto a query parameter or a subprotocol — a relay change, and a worse one.
    Opening it from Rust keeps the existing gate unchanged.
@@ -2567,9 +2842,9 @@ as *"for compute requests billing-only"*, and whether it applies to the free pla
 counter is genuinely ambiguous. Every figure above assumes the pessimistic 1:1 — it barely bites,
 because protocol pings are free and the client sends almost nothing else inbound.
 
-What changed against the old manual baseline: a change made on a phone now reaches the desktop
-within a few seconds, rather than at the next press of **Sync now**. What did not change: the core
-still compiles to wasm, and the CSP still grants nothing.
+What changed against the old manual baseline: a change made on one device now reaches another
+within a few seconds, rather than at the next press of **Sync now**. What did not change: the CSP
+still grants nothing.
 
 **One correction to the plan, and it is the difference between a stall and a loss.** The plan says
 an envelope that will not open must not advance the cursor past it. That is right for exactly one
@@ -2637,6 +2912,7 @@ of the two ways it happens:
 | `sync_clock` | one row: the hybrid logical clock, **seeded** |
 | `sync_state` | key/value: `pull_cursor`, `last_sync_at`, the `applying` guard, the entitlement tokens the hosted relay design §10 adds, the superseded group keys (`group_key@<epoch>`) and the last manifest's ids that `identity::supersede` keeps, and `relay_url` — which is **a test/dev override with no UI**, not something a reader types |
 | `sync_peers` | per-device watermarks — what makes a counter idempotent |
+| `sync_gone` (v54) | tombstones as rows saying a parent went — not the `del` ops in `sync_ops` that are also called tombstones — `(tbl, uid)` and `WITHOUT ROWID`, **not synced**: one row per deleted row of a table other rows are filed under, written by the `sync_gone_{table}` trigger and, for a row `apply` never held, by `apply::tombstone`, and read by `apply`'s `gone` (*Held while it can resolve, skipped when it cannot*) |
 | `error_log` rebuilt | `source` gains `'relay'`, which is a table rebuild because the vocabulary is inside a `CHECK` |
 | `sync_devices.baselined_at INTEGER` (v30) | when this peer was last handed a baseline. NULL is "never", which is the trigger. **`sync_peers` is deliberately not consulted** — see the pairing-baseline design §10 |
 
@@ -2654,8 +2930,7 @@ table that will not exist until v30, on every database that climbs through v29 a
 **`sync_clock` is seeded in the rung *and* in `USER_SEED_SQL`.** Every capture trigger joins it,
 and a join against an empty table produces no row — so a file that never got the seed records no
 ops at all, silently, which is the worst way for a sync to not happen. The rung reaches upgraded
-files; the seed reaches converted and fresh ones, and the browser has only ever had the second
-kind.
+files; the seed reaches converted and fresh ones.
 
 The user side is **twenty-two tables and thirty-six indexes** now, up from eighteen and
 twenty-three.
@@ -2748,50 +3023,12 @@ difference, over 1 069 rows.
 
 ---
 
-## The engine compiles for wasm, and nobody had tried
-
-Spec §2's premise is one dataset across three platforms, so the conflict engine has to be one
-implementation — and `wire` seals every batch with `sync_pair::crypto`, which makes a browser
-that cannot open an envelope a browser that cannot sync. PR 4 gated `AppState.pairing` off wasm
-and said in its own comment that the gate was temporary. This is the half of it that could be
-lifted.
-
-`crypto`, `invite` and `identity` are in `lib.rs`'s every-target column now; `pairing` stays
-gated, because it is `#[tauri::command]`s over `AppState` and is the desktop's IPC surface rather
-than a piece of the protocol. So is `sync_engine::commands`, for the same reason. Everything else
-in `sync_engine` — `hlc`, `capture`, `merge`, `apply`, `wire`, `client` — compiles there.
-
-**Two dependency edits were what it took, and neither is a workaround; each removes something the
-tree did not need.**
-
-- **`chacha20poly1305` gets `default-features = false`.** Its default set enables
-  `aead/getrandom`, which pulls `rand_core 0.6` and with it **`getrandom 0.2`** — the one major
-  in this tree that refuses `wasm32-unknown-unknown` outright, with a `compile_error!` pointing
-  at a `js` feature. Nothing here uses what it buys: `AeadCore::generate_nonce` is unreachable,
-  because `crypto::seal` draws its own 24 bytes.
-- **`getrandom` moves 0.3 → 0.4**, which is the edit its own comment already told the next reader
-  to make: `x25519-dalek 3.0.0` resolves **0.4.3**, so declaring 0.3 stood two majors in the tree
-  and switched a browser backend on in only one of them — the build failed inside the *other*.
-  No code changed.
-
-Plus `getrandom`'s `wasm_js` feature in the web target block. **A `.cargo/config.toml` carrying
-`--cfg getrandom_backend="wasm_js"` was written first and then deleted**: 0.3 needs that flag and
-0.4 does not, established by removing the file and watching the wasm build stay green. Worth
-recording, because the file would have been a trap — `scripts/build-wasm.mjs` runs cargo from the
-repository root and CI's wasm job runs it from `src-tauri`, and cargo reads its config by walking
-up from the **current** directory, not the manifest's.
-
-Verified with `cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings`, exit 0, and
-`cargo tree --target wasm32-unknown-unknown -d` lists no duplicate `getrandom` at all. It needs
-clang on `PATH`; on this machine that is `C:\Program Files\LLVM\bin`.
-
----
-
 ## The first end-to-end pass, 2026-08-29
 
-**Two real devices over the deployed relay.** A Windows desktop and a OnePlus 12 (`CPH2581`),
-both debug builds off `main` at the pairing-baseline merge, both driven over CDP — 9222 for the
-desktop's WebView2, 9333 forwarded to `webview_devtools_remote_<pid>` on the phone.
+**Two real devices over the deployed relay.** A Windows desktop and, as the second device, a debug
+build of the Android app this repository had until 2026-09-27 — both off `main` at the
+pairing-baseline merge, both driven over CDP. What the pass proved is about the engine and the
+relay rather than about either platform, which is why it is kept.
 
 **The relay was deployed for this pass and each device was pointed at it by hand**, through
 `sync_state.relay_url` typed by the reader — which is what the app offered on 2026-08-29 and is
@@ -2807,9 +3044,9 @@ for the secrets that are not — **three of them**, per the correction in the re
 | | before | after |
 | --- | --- | --- |
 | Desktop collection | 275 entries | 275 |
-| **Phone collection** | **0 entries** | **275** |
-| Ops deferred on the phone | 1, permanently | **0** |
-| Ops applied on the phone | 0 | 1 069 |
+| **Second device's collection** | **0 entries** | **275** |
+| Ops deferred on the second device | 1, permanently | **0** |
+| Ops applied on the second device | 0 | 1 069 |
 
 The deferral was correct and permanent: the one captured op was a `put collection_entries` naming
 a folder by uid, and the folder's own op had never been written, so it waited for something that
@@ -2822,18 +3059,18 @@ did not exist.
 | Ops in one baseline | **1 069** — the figure §11 of the design predicted, unchanged |
 | `deck_audit` rows among them | 28 |
 | Desktop build + seal + push | **694 ms** |
-| Phone pull + apply of all 1 069 | **1 543 ms** |
 | Deferred | **0** |
 | `needs_review` raised on either device | **0** — no resurrection, no broken cycle |
 | One full 200-op stored relay row | **186 299 B**, against a 2 MB cap (`wire::tests`, debug) |
 
-Both directions fired: the phone emitted its own baseline back and the desktop applied 1 070. The
+Both directions fired: the second device emitted its own baseline back and the desktop applied
+1 070. The
 second sync on each device emitted **0** — the marker holds.
 
 ### Every field agrees
 
 ```
-field        desktop      phone
+field        desktop      second
 entries      275          275
 cards        330          330
 unique       272          272
@@ -2863,8 +3100,8 @@ Re-pairing was driven end to end over CDP. Both devices independently derived th
 digits — `144733` — before anything was confirmed, which is the property the ceremony exists for.
 
 **The first Sync of the session answered `baselineOps: 0`, and that was correct.** Both devices
-had revoked each other minutes earlier — the desktop marked the phone at one stamp, the phone
-marked the desktop 16 seconds later, both landing on epoch 1. The trigger skips a revoked peer,
+had revoked each other minutes earlier — each marked the other, 16 seconds apart, both landing on
+epoch 1. The trigger skips a revoked peer,
 so it did. It is worth recording that the *right* answer looked exactly like the feature not
 working, and that the roster was what said otherwise.
 
@@ -2886,13 +3123,6 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
 
 ### Traps this pass paid for
 
-- **The debug APK is `com.mtggrimoire.app.debug`**, not the identifier in `tauri.conf.json` —
-  `applicationIdSuffix = ".debug"`. `monkey` answers "No activities found to run" for the
-  unsuffixed name, which reads like a broken build.
-- **Two clangs, and each leg needs the other one.** `wasm32` needs `C:\Program Files\LLVM\bin`;
-  `aarch64-linux-android` needs the **NDK's** toolchain first on PATH, or `ring` fails with
-  `fatal error: 'assert.h' file not found` — an error that names a missing C header when the
-  cause is a clang with no Android sysroot. Neither is on PATH by default.
 - **A failed `sync_pairing_complete` clears the pending state**, so a mangled sealed key costs the
   whole handshake and the *second* attempt reports "There is no pairing in progress" — which
   names the wrong cause. Marshal the 224-char blob through `JSON.stringify`, never through shell
@@ -2918,7 +3148,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   response and `client.rs:917`'s `response.text()` has no cap, so a peer offline through a
   50 000-row import pulls 250 envelopes in one body — **~46.6 MB**, held as row strings plus the
   `JSON.stringify` copy at **~95 MB inside a 128 MB isolate shared with every other group's**
-  Durable Object, and over 150 MB peak on the phone. This is reachable today at
+  Durable Object, and over 150 MB peak on the pulling device. This is reachable today at
   `wire::BATCH = 200` and has nothing to do with automatic sync — what automatic sync changes is
   how often the path is taken: a `head` frame that wakes a peer holding a 250-row backlog *is*
   this path, where before it needed a reader to press **Sync now** by hand onto a device that had
@@ -2945,28 +3175,55 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   applied, and its child waits out the bound. The horizon exempts baseline ops from its own filter
   and not from the watermark. It needs a client test with an earlier emitter delta and the parent
   drawn from `baseline::build`, where the holds' tests seal the parent by hand.
-- ⚠️ **A folder delete from a peer fails the whole apply when one of its entries would land on a
-  grain the root already holds** (found 2026-09-27 while building the moot row's delete, older than
-  the holds; measured in the `apply` test harness, debug build). `collection_folders::delete_folder`
-  merges each entry into the root before the folder goes, so the deleting device never meets the
-  collision — but a peer applies a page parents first, `collection_folders` (rank 6) ahead of the
-  merge's `collection_entries` ops (rank 7), so the folder's `DELETE` runs while its entry is still
-  in it, `SET NULL` moves the entry onto the root row's grain, and `write_group`'s delete answers
-  `Err("UNIQUE constraint failed: index 'idx_collection_grain'")` through `?` — the whole apply
-  fails, and the same page fails it again on every pull, so that device's sync stops. A throwaway
-  probe — a binder holding one copy of a printing the root also holds, deleted through
-  `delete_folder` on one device and applied on the other — reproduced it. The moot row's delete
-  never reaches a folder table and fences any refusal (it keeps the row); the applier's ordinary
-  delete is not fenced.
-- ⚠️ **A folder moved under one deleted on another device diverges, and what is filed into it later
-  is lost on the device that deleted it** (the second scoped re-review of the holds' follow-up,
-  read off the code and unmeasured; the behaviour since #572, unchanged by it). The deleting
-  device's cascade takes the moved folder inside `apply`, under capture suppression, so no `del`
-  for it exists anywhere `gone` reads; the mover keeps it, and every later child of it — a deck, a
-  copy, a wish, a sub-folder — waits out the bound on the deleting device and is dropped. The fix is
-  one with the stall above: a cascaded or moot delete that leaves a readable trace (captured, or a
-  tombstone), so a later child lands without the parent the way `SET NULL` does. *Held while it can
-  resolve* has the two answers that were tried and what each lost.
+- ~~**A folder deleted and re-made at the same grain in one page, whose delete also had to wait,
+  loses the re-made row where its uid sorts higher.**~~ **Closed on the same branch, the same day**
+  (the folder-deletes design §3.3 as amended). It was recorded here read off the code: the re-made
+  row's put grain-matched the old row the waiting delete was about to take and kept the old uid by
+  `min`, and the retry then deleted it. The case named was a deck switched to Virtual and back
+  between two pulls, with a copy in its group the root also holds; Task B's review found the
+  ordinary one, `reset::clear_collection`, which re-makes `Recently removed` and every deck group
+  in one write. A grain match onto a row the page deletes now adopts the incoming uid, and a group
+  whose own ops end in a delete finds its row by uid alone (*A delete that would clear rows out of
+  a folder waits for the retry*, above). Kept as the record of why both rules exist.
+- ⚠️ **A row the peer filed concurrently into a folder the sender re-made follows the rename there
+  and lands at the root on the sender** (the folder-deletes design §3.5, read off the code at the
+  scoped re-review, unmeasured). On the peer the old folder takes the re-made one's uid, so the row
+  filed into it stays filed; on the sender that folder's old uid is a delete, its key is
+  `SET NULL`, and the row's put lands at the root. Counts and identity converge; placement does
+  not.
+- **A copy re-homed onto a twin the sender never had can leave one `error_log` row describing no
+  fault** (the same design §3.5, read off the code and unmeasured). The sender's own later move of
+  it names the uid that lost the fold, finds no row, and is skipped. Counts and identity still
+  converge: the sender adopts the twin's uid when the twin's put reaches it.
+- **Provenance can differ after a concurrent merge** (the same design §3.5, read off the code and
+  unmeasured). The re-homing coalesces the survivor's price, date, source and entry note over the
+  source's, where the sender's grain match takes each field by last-writer-wins. Counts and identity
+  converge; a field both rows carried may not.
+- **A sparse edit under the losing uid, on a later page, is still skipped** (the same design §3.5,
+  read off the code and unmeasured) — `find_row`'s existing behaviour after any grain merge, and
+  not new here.
+- ⚠️ **A copy the peer dragged into a binder the sender deletes, where the root holds its twin,
+  ends as one row on the peer and two on the sender** (the same design §3.5, parked at the final
+  review, 2026-09-27, read off the code and unmeasured). On the peer the sender's delete re-homes
+  the dragged copy and folds it onto the twin. On the sender the drag arrives as a sparse move
+  naming the binder, which is gone, so the `SET NULL` arm writes it without the folder — and
+  `update_row` fails `idx_collection_grain` against the twin at the root, so the move is
+  `Unbuildable`, dropped with an `error_log` row, and the copy stays where it was before the drag.
+  Totals converge; rows and uids do not. **Older than this work**: a move applied from a peer onto
+  an occupied grain has never folded, and this is only newly *reachable*, where the old delete arm
+  stalled on it. A copy the peer *added* to the binder is not this case — its put grain-matches
+  the twin (`a_copy_filed_into_a_binder_the_peer_deletes_meets_the_roots_copy_as_one_row`). The
+  fix is a fold, not a refusal: where the `SET NULL` arm's update would collide, fold
+  through `collection_folders::refile_entry` / `wishlist_folders::refile_wish`, the survivor
+  keeping the lower uid, as the delete arm's re-homing does. No test pins it either way.
+- ⚠️ **A page carrying a `del X`, a third device's resurrecting edit of X and a new put Y on X's
+  grain renames X to Y** (parked at Task B's scoped re-review, 2026-09-27, read off the code and
+  unmeasured). The incoming-uid rule above is keyed on the page's delete set: X's own group folds
+  to a row that exists — the third device's edit beat the delete, add-wins — but X's uid is still
+  in the page's deletes, so Y's put grain-matches X, takes Y's uid, and X's later sparse edits find
+  no row and are skipped. **Older than this work, not introduced by it**: before the rule, the same
+  page lost the other way — under `min` the resurrection's insert collided on the grain and was
+  dropped.
 - **An open Sync panel can show a stale `pullHeld`.** `RelayStatus` is under `SYNC_KEY`, which
   `useDeviceSyncInvalidation` refreshes on `sync:applied` — and `live::trip` and `sync_now` emit that
   only when a trip pulled or pushed something, while `pulled` counts newly applied ops only, on
@@ -2982,12 +3239,15 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   change — the holds deployed nothing. Lifting it means the Durable Object learning of a removal,
   and nothing tells it one: `/rotate` is answered out of D1 ahead of the bearer gate and never
   reaches the object — the gap the rewrap's fan-out bullet below records from the other side.
-- **A third device's tombstone against a third device's edit.** Add-wins reads this device's own
-  history and the incoming batch; two *other* devices' ops only meet if they arrive together. A
-  tombstone table would close it and is not built. **The delivery holds meet the same gap from the
-  other side**: a parent deleted on a third device and applied here earlier leaves no trace, so its
-  child waits out the bound and is skipped — convergent where the key cascades, and ⚠️ a copy this
-  device never holds where it is `SET NULL` (read off the code, unmeasured).
+- **A third device's tombstone against a third device's edit.** (The tombstone here is a `del` op.)
+  Add-wins reads this device's own history and the incoming batch; two *other* devices' ops only
+  meet if they arrive together. This said a tombstone table would close it; **user schema v54
+  built one, and it does not**: `sync_gone` holds tombstones in the other sense — a uid saying a
+  parent went, with no stamp, only for the tables other rows are filed under — and add-wins does
+  not read it; it answers `gone` alone. **The delivery holds met the same gap from the other side** —
+  a parent deleted on a third device and applied here earlier left no trace, so its child waited
+  out the bound and was skipped — and that half *is* closed by v54, for a delete applied from then
+  on (*What a hold cannot reach*, above).
 - ~~**A revoked device's rewrapped key over the relay.**~~ **Built and deployed 2026-08-30** —
   `/rotate` publishes it, `/keys` hands it over, and `client::check_keys` runs on every round trip
   before push and pull, so the pull cursor an envelope from a newer epoch was holding now advances
@@ -2996,8 +3256,8 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   host, and step 2 of the runbook records what the deploy itself found.
 - ~~**A `Leave group` press.**~~ **Built 2026-08-30** — `sync_group_leave`, and a press on the
   panel beside *Pair a device*, drawn on a paired device and on no other. See "The departure"
-  under §7.6. What it is still owed is the **live pass**: leaving on the phone and watching the
-  desktop's roster lose it, which is the check that found the group-key migration gap on its first
+  under §7.6. What it is still owed is the **live pass**: leaving on one device and watching
+  another's roster lose it, which is the check that found the group-key migration gap on its first
   press.
 - **The device cap is not deployed.** `group_devices`, the `device` field on both `/token` doors
   and on `/claim`, `/claim`'s rebind and `/rotate`'s `keepOnly` are all written and tested and
@@ -3036,7 +3296,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   corpus and is still unbounded. A pruner would have to keep whatever the two readers above can
   still need, which is a decision nobody has taken.
 - ~~**Nothing has been driven in the shipped window.**~~ **Done 2026-08-29** — the relay is
-  deployed and a desktop and a phone converged over it. See "The first end-to-end pass" below.
+  deployed and two devices converged over it. See "The first end-to-end pass" above.
 - **The bulk-import cost.** 4.22× is measured and unaddressed; see above.
 - **A persistent push failure still retries every ~3 s while the socket is up.** The outbox gate
   (`live::outbox_has_work`) improved this — before it, *every* commit rang the bell whether or
@@ -3047,13 +3307,10 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   **socket** — how long `connect_once` waits before dialing again after a disconnect — not the
   trip ladder, so a trip that keeps failing over a socket that stays up has no error backoff of
   its own.
-- **`Wake::Resume` is declared but never constructed.** Its mechanism is real but unwired —
-  `live::resume()` only sets the `FOREGROUND` atomic and never calls
-  `sched.wake(Wake::Resume, …)`. The catch-up still happens: the outer loop dials on resume
-  regardless, and `connect_once` fires `Wake::Reconnect` on every socket that comes up, so
-  `Resume` is redundant rather than missing. But `Wake::Exit` was deleted from this very enum
-  for being never-constructed, and this one now sits in the state that condemned it — either
-  arm it or delete it.
+- ~~**`Wake::Resume` is declared but never constructed.**~~ **Deleted 2026-09-27**, with the
+  foreground gate it belonged to (`live::resume`, `live::pause`, `Disconnect::Paused` and the
+  `sync_live_foreground` command), when the Android build was removed. `connect_once` fires
+  `Wake::Reconnect` on every socket that comes up, which was always the catch-up.
 - **`WAKE_LOCK_WAIT`'s one-second timeout can drop a single wake.** `outbox_has_work` tries the
   write connection for one second and answers `false` on a miss rather than waiting longer or
   asking again on its own. If another writer holds `state.db` for longer than that with no

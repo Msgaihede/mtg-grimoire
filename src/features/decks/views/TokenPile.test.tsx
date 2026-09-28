@@ -62,8 +62,6 @@ function token(over: Partial<DeckTokenView> = {}): DeckTokenView {
     state: "auto",
     overridden: false,
     subtitle: "Colorless · {T}, Sacrifice this token: Add one mana of any color.",
-    imageUrl: null,
-    imageUris: null,
     setCode: "tclb",
     collectorNumber: "5",
     setName: "Commander Legends",
@@ -231,7 +229,6 @@ describe("tokenFaceFacts", () => {
     expect(tokenFaceFacts(token({ quantity: 3, printingId: "p-gold" }))).toEqual({
       cardId: "p-gold",
       needsReview: null,
-      imageUris: null,
       // "Not said": `playedFinish` then falls to the printing's sole finish, as for a deck card.
       finish: null,
       finishes: '["nonfoil"]',

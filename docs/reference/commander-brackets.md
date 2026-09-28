@@ -318,8 +318,9 @@ and neither is `serde_json::Value`. `MAX_FEED_BYTES` (128 MiB) is checked agains
 
 **The framing is push-shaped, and that is a change from what first shipped.** The module drove
 `serde_json::Deserializer::from_reader` with a `DeserializeSeed` over the array, which is a
-*pull* parser: it calls `read()` when it wants more and blocks until it gets it. A browser stream
-is push and async with no thread to block, so the web target could not drive it at all.
+*pull* parser: it calls `read()` when it wants more and blocks until it gets it. The push shape
+was built for the browser build, removed on 2026-09-27; the desktop drives it too, with `ingest_gz`
+handing `read_stream` the temp file in 64 KB chunks.
 `read_file` and the seed are still there — they are the file-shaped entry point the tests use —
 but `ingest_gz` goes through `read_stream`.
 
@@ -1234,8 +1235,8 @@ full size, with nothing collapsed and nothing abbreviated. **Nothing about the b
 differently.
 
 **The panel is `w-[62rem] h-[54rem]`, and the width is arithmetic rather than taste.** `minWidth`
-is **1024** (`src-tauri/tauri.conf.json`) and `Dialog`'s scrim spends **24px a side** above the
-phone fold, so **976px** is every pixel the smallest window this app can be has to give. 62rem is
+is **1024** (`src-tauri/tauri.conf.json`) and `Dialog`'s scrim spends **24px a side** at `sm`
+(640px) and above, so **976px** is every pixel the smallest window this app can be has to give. 62rem is
 **992** — over that by 16, which the shell's own `max-w-full` absorbs — where 72rem would be 176px
 of panel a reader could never see. Everything else here is `w-[45rem]` or `w-[55rem]`; a split
 pane wants more than either, so this is the widest dialog the app ships. **The height is fixed,

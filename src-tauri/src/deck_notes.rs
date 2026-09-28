@@ -3,9 +3,7 @@
 //!
 //! Shaped like [`crate::deck_meta`] and [`crate::deck_tokens`]: pure functions over a
 //! `Connection`, testable without a Tauri app, wrapped in `async` commands that sit in one block
-//! at the bottom behind `#[cfg(not(target_family = "wasm"))]`. Nothing above that block names
-//! `tauri::` at all, which is what lets [`crate::web::route`] call the same functions the desktop
-//! wrappers call.
+//! at the bottom.
 //!
 //! # A card reference is a pointer the note holds, never a place the note lives
 //!
@@ -62,13 +60,11 @@
 //!   step carrying a `patch` carries that note's complete attachment set beside it.
 
 use crate::schema::DECK_NOTE_CARD_GRAIN;
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap, HashSet};
-#[cfg(not(target_family = "wasm"))]
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 /// What an adjustment to a note says when the id it names is not there — the asymmetry
@@ -144,10 +140,10 @@ pub struct DeckNoteRow {
 /// devices that synced on different days can honestly disagree about it, which is why nothing is
 /// ever matched on it.
 ///
-/// `card_id` and `image_uris` are the same kind of thing one step further: a **representative
-/// printing**, chosen at read time so a note card can draw a picture of what it names. A note
-/// attaches by oracle id and by nothing else — this printing is never written, never matched on
-/// and never synced, and the next reader of the same row may honestly get a different one.
+/// `card_id` is the same kind of thing one step further: a **representative printing**, chosen at
+/// read time so a note card can draw a picture of what it names. A note attaches by oracle id and
+/// by nothing else — this printing is never written, never matched on and never synced, and the
+/// next reader of the same row may honestly get a different one.
 ///
 /// **The deck's own printing is preferred**, falling back to any printing the corpus holds. A note
 /// about Lightning Bolt in a deck sleeving the M10 art must not draw the Alpha art: the picture is
@@ -160,7 +156,6 @@ pub struct DeckNoteCard {
     pub oracle_id: String,
     pub name: String,
     pub card_id: Option<String>,
-    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// One note naming one card, seen from the **card** rather than from a deck — [`notes_for_card`]'s
@@ -240,18 +235,15 @@ fn require_note(conn: &Connection, deck_id: i64, id: i64) -> Result<String, Stri
 /// Four things about the SQL:
 ///
 /// * **One printing is chosen as a *row*, by a correlated subquery, and every column is taken off
-///   that row.** This replaces the `GROUP BY` + `min()` the statement used to carry, and the
-///   reason is [`DeckNoteCard::image_uris`]: two independent aggregates over a joined `cards` can
-///   answer one printing's id and a different printing's picture, which is a wrong card's art with
-///   no way for any caller to notice. A subquery that answers one `id` makes that unrepresentable.
+///   that row.** This replaces the `GROUP BY` + `min()` the statement used to carry.
 /// * **`ORDER BY (dc.card_id IS NULL), c.id` inside it is the preference.** SQLite sorts `0`
 ///   before `1`, so a printing this deck holds comes first and `c.id` breaks the tie. **It
 ///   preserves nothing, because there was nothing to preserve**: the statement this replaced
 ///   selected `coalesce(min(c.name), nc.oracle_id)` under a `GROUP BY` and named no printing
-///   column at all — [`DeckNoteCard`] had no `card_id` and no `image_uris` to fill — so a
-///   `min(c.id)` never ran here. That expression existed only in a design draft this plan
-///   rejected, and a sentence citing it as this statement's own history is the kind of claim a
-///   later reader checks against `git log` and cannot find.
+///   column at all — [`DeckNoteCard`] had no `card_id` to fill — so a `min(c.id)` never ran here.
+///   That expression existed only in a design draft this plan rejected, and a sentence citing it
+///   as this statement's own history is the kind of claim a later reader checks against `git log`
+///   and cannot find.
 /// * **The `GROUP BY` is gone and no row count moved.** `deck_note_cards` carries
 ///   [`DECK_NOTE_CARD_GRAIN`](crate::schema::DECK_NOTE_CARD_GRAIN) on `(note_id, oracle_id)`, so
 ///   there is one row per attachment to begin with, and a `LEFT JOIN` on `p.id = (scalar)` matches
@@ -269,29 +261,11 @@ fn attachments_by_note(
     filter: &str,
     id: i64,
 ) -> Result<HashMap<i64, Vec<DeckNoteCard>>, String> {
-    /// Where this statement's image columns start — one past `p.id`, the last named column.
-    /// Named rather than inlined for `deck_row`'s reason, and `collection.rs`'s: a number left
-    /// behind when a fifth named column lands reads one variant's URL as another's, and nothing
-    /// errors — so the name is the fence a *new* column has to move, and a migration comment has
-    /// something to move with it.
-    ///
-    /// ⚠️ **What catches the offset going wrong is a fixture rather than a test, and that is
-    /// the thing to know before simplifying one.**
-    /// `tests::an_attachment_names_the_printing_this_deck_holds` is red against
-    /// `IMAGE_COL + i` → `3 + i` — mutated and confirmed — **only because it carries a different
-    /// URL in every one of the four image slots**. `front_face_selects` emits `(top-level, face)`
-    /// per variant and `for_face` prefers the face, so a read one column early slides each
-    /// top-level URL into the face slot and answers a real, versioned, on-host URL for every
-    /// variant, with nothing anywhere raising. A fixture with one column, or one variant, or the
-    /// same URL in two slots passes that shear in silence and takes the fence with it.
-    const IMAGE_COL: usize = 4;
-    let images = crate::image_uri::front_face_selects("p").join(", ");
     let sql = format!(
         "SELECT nc.note_id,
                 nc.oracle_id,
                 coalesce(p.name, nc.oracle_id),
-                p.id,
-                {images}
+                p.id
            FROM deck_note_cards nc
            JOIN deck_notes n ON n.id = nc.note_id
            LEFT JOIN cards p ON p.id = (
@@ -314,19 +288,6 @@ fn attachments_by_note(
                     oracle_id: r.get(1)?,
                     name: r.get(2)?,
                     card_id: r.get(3)?,
-                    // **From `IMAGE_COL`** — the `crate::image_uri::FRONT_FACE_COLUMNS`
-                    // expressions `front_face_selects` appended, in the (top-level, face) pairs
-                    // `front_face_map` folds back up, one pair per variant. The offset moves with
-                    // every column added to the named list above it.
-                    //
-                    // This read carries a failure the four above it do not, and it is the one
-                    // `card.rs`'s `fixture_with_both_image_columns` exists for: the pair is
-                    // (top-level, face) and `for_face` prefers the face, so a read one column
-                    // *early* puts the top-level URL into the face slot and answers a perfectly
-                    // real URL — the crop where the card belongs, on the real host, versioned.
-                    // A fixture carrying one column or one variant cannot tell that from a
-                    // correct read; only four different URLs in the four slots can.
-                    image_uris: crate::image_uri::front_face_map(|i| r.get(IMAGE_COL + i))?,
                 },
             ))
         })
@@ -903,7 +864,6 @@ pub fn notes_for_card(conn: &Connection, oracle_id: &str) -> Result<Vec<CardNote
 
 /// What a write here says when its worker thread died under it — never a user's problem, the
 /// write itself answers [`crate::db::BUSY`] when the database is busy.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck's notes could not be written: {e}")
 }
@@ -914,7 +874,6 @@ fn unfinished(e: tauri::Error) -> String {
 /// `deck_notes::deck_notes` registers as `deck_notes` — the module and the read wear the same
 /// name on purpose, exactly as `deck_tokens::deck_tokens` does, because the wire name is the one
 /// `src/lib/ipc.ts` invokes and `deck_notes_list` would be a second thing to remember.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_notes(
     state: tauri::State<'_, Arc<AppState>>,
@@ -928,7 +887,6 @@ pub async fn deck_notes(
     .map_err(|e| format!("the deck's notes could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_note_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -949,7 +907,6 @@ pub async fn deck_note_create(
 
 /// **Both fields are optional and an absent one means *leave it*.** Tauri fills a missing
 /// `Option` argument with `None`, so a page editing only the body sends only the body.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_note_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -968,7 +925,6 @@ pub async fn deck_note_update(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_note_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -983,7 +939,6 @@ pub async fn deck_note_delete(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_note_attach(
     state: tauri::State<'_, Arc<AppState>>,
@@ -999,7 +954,6 @@ pub async fn deck_note_attach(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_note_detach(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1015,7 +969,6 @@ pub async fn deck_note_detach(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_note_reorder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1032,7 +985,6 @@ pub async fn deck_note_reorder(
 
 /// **Read-only**, and the one command in this module with no deck id at all — see
 /// [`notes_for_card`].
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn card_notes(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1561,35 +1513,14 @@ mod tests {
     /// answer identically; with `aaa` filed in Storm it wins outright, because it sorts first and
     /// *some* deck holds it. Mutated and confirmed red: deleting that conjunct answers
     /// `Some("aaa")`.
-    ///
-    /// **Every one of the four image slots carries a different URL**, which is
-    /// `card::tests::fixture_with_both_image_columns`' rule and the only shape that can fail.
-    /// `front_face_selects` emits `(top-level, face)` per variant and `for_face` prefers the
-    /// face, so a read one column *early* slides each top-level URL into the face slot and
-    /// answers a real, versioned, on-host URL for every variant — the crop under `display`, and
-    /// nothing anywhere raising. A fixture with one column, or one variant, or the same URL in
-    /// two slots passes that shear. Mutated and confirmed red: `IMAGE_COL + i` → `3 + i` answers
-    /// the card-level URLs where the face's belong.
     #[test]
     fn an_attachment_names_the_printing_this_deck_holds() {
         let (conn, burn, storm) = deck_db();
         // Two printings of one oracle card: `aaa` sorts first by id, `zzz` is the one in Burn.
-        // Four distinct pictures on each, so a pairing read wrong is a URL that is wrong too.
         conn.execute(
-            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, oracle_id,
-                                 image_uris, face_image_uris, raw)
-             VALUES ('aaa','Bolt','lea','161','en','normal','o-bolt',
-                     json_object('display','https://cards.scryfall.io/display/CARD-A.webp?1',
-                                 'art','https://cards.scryfall.io/art/CARD-A.webp?1'),
-                     json_array(
-                       json_object('display','https://cards.scryfall.io/display/FACE-A.webp?1',
-                                   'art','https://cards.scryfall.io/art/FACE-A.webp?1')), '{}'),
-                    ('zzz','Bolt','m10','146','en','normal','o-bolt',
-                     json_object('display','https://cards.scryfall.io/display/CARD-Z.webp?1',
-                                 'art','https://cards.scryfall.io/art/CARD-Z.webp?1'),
-                     json_array(
-                       json_object('display','https://cards.scryfall.io/display/FACE-Z.webp?1',
-                                   'art','https://cards.scryfall.io/art/FACE-Z.webp?1')), '{}')",
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, oracle_id, raw)
+             VALUES ('aaa','Bolt','lea','161','en','normal','o-bolt','{}'),
+                    ('zzz','Bolt','m10','146','en','normal','o-bolt','{}')",
             [],
         )
         .unwrap();
@@ -1614,16 +1545,6 @@ mod tests {
         let card = &note.cards[0];
 
         assert_eq!(card.card_id.as_deref(), Some("zzz"));
-        let images = card.image_uris.as_ref().expect("the printing has pictures");
-        // The face wins over the card for both variants, and each variant reads its own pair.
-        assert_eq!(
-            images.get("display").map(String::as_str),
-            Some("https://cards.scryfall.io/display/FACE-Z.webp?1"),
-        );
-        assert_eq!(
-            images.get("art").map(String::as_str),
-            Some("https://cards.scryfall.io/art/FACE-Z.webp?1"),
-        );
     }
 
     /// A card the deck no longer holds still answers a printing — the note keeps the card it names
@@ -1642,8 +1563,6 @@ mod tests {
         let card = &note.cards[0];
 
         assert_eq!(card.card_id.as_deref(), Some("aaa"));
-        // No fetchable picture anywhere on the row is `None`, never an empty map.
-        assert!(card.image_uris.is_none());
     }
 
     /// An oracle id the corpus has never heard of keeps naming itself, and draws no frame.
@@ -1656,7 +1575,6 @@ mod tests {
 
         assert_eq!(card.name, "o-unknown");
         assert_eq!(card.card_id, None);
-        assert!(card.image_uris.is_none());
     }
 
     /// The printing multiplication the old `GROUP BY` collapsed is still collapsed — one row per

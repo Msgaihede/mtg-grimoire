@@ -59,7 +59,7 @@ function Popup({
  * One frame per story. **`transform: translateZ(0)`** makes `position: fixed` resolve against this
  * box rather than the viewport — every dialog story's trick — so the scrim fills the frame and
  * `Dialog`'s `max-w-full` clamps the panel to it, and the container queries inside measure the
- * width the panel really got. A 390px frame therefore draws the phone fold whatever the browser
+ * width the panel really got. A 764px frame therefore draws the 640 rung whatever the browser
  * window is doing.
  */
 function Frame({
@@ -145,14 +145,6 @@ export const Default: Story = {
  */
 export const Narrow: Story = {
   args: { width: 764 },
-};
-
-/**
- * The phone fold: **full-bleed, one column, one scroller** — the picture, then the range, the
- * figures and the line, stacked in a single thumb-driven scroll with every control at 44px.
- */
-export const Phone: Story = {
-  args: { width: 390, height: 844 },
 };
 
 /**

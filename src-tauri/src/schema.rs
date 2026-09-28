@@ -573,7 +573,18 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// and the comparison is the only thing that links them. The rung clones every pile of every
 /// deck with a plan into the theory list and moves the plan's cards across; the rung's own
 /// comment says why every pile rather than every used one, and why the clone's uid is derived.
-pub const USER_SCHEMA_VERSION: i64 = 53;
+///
+/// **54 (2026-09-27, the folder-deletes spec §3.1) is `sync_gone`, one row per deleted row of a
+/// table other rows are filed under.** Per-device and not synced, written by
+/// `sync_engine::capture`'s tombstone trigger — including behind the apply guard, which is the
+/// point: a delete a peer made, and every cascade it set off, left no trace here before it, so a
+/// later change naming that parent read as merely early and was dropped — and by
+/// `sync_engine::apply`'s `tombstone`, for a parent the applier deletes without ever having held
+/// it, which fires no trigger. The
+/// rung backfills it from this device's own `del` ops; a delete applied from a peer before the
+/// upgrade recorded nothing anywhere and is not recovered. **Written as 53 and renumbered at the
+/// merge**: the per-list piles above landed on `main` first, and a shipped number is spent.
+pub const USER_SCHEMA_VERSION: i64 = 54;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -638,11 +649,10 @@ pub const USER_SCHEMA_VERSION: i64 = 53;
 /// schema-qualified `ALTER TABLE {schema}.sets ADD COLUMN printed_size INTEGER`, **gated on
 /// `PRAGMA {schema}.table_info(sets)` and never on this number** for the reason the paragraph
 /// below spells out, no index and no backfill. **Its only writer is the `/sets` fetch**, which
-/// on desktop runs after an ingest and — since this rung — also whenever the table holds no
-/// printed size at all (`crate::sync`'s `sets_need_fetch`), so the gap between the rung and a
-/// filled column is one sync rather than one Scryfall bulk rotation. The browser build has never
-/// filled `sets`, so there it stays NULL, and `crate::set_completion` reads a NULL as *size
-/// unknown* rather than as zero on every target.
+/// runs after an ingest and — since this rung — also whenever the table holds no printed size
+/// at all (`crate::sync`'s `sets_need_fetch`), so the gap between the rung and a filled column
+/// is one sync rather than one Scryfall bulk rotation. `crate::set_completion` reads a NULL as
+/// *size unknown* rather than as zero.
 ///
 /// **3 (2026-09-10) is `cards.produced_mana`** — which colours of mana a printing can *make*,
 /// a field Scryfall has always published and this app parsed past. The deck editor's stats band
@@ -753,7 +763,7 @@ pub const TABLES: &[(&str, Side)] = &[
     ("deck_undo", Side::User),
     ("decks", Side::User),
     // A name is something a person typed, and nothing rebuilds it: no feed knows what the
-    // reader calls their phone. Synced (user schema v31) and the reader's are different
+    // reader calls their laptop. Synced (user schema v31) and the reader's are different
     // questions, and this list only answers the second — `SYNCED_TABLES` answers the first.
     ("device_names", Side::User),
     // Per-device and never synced, but nothing rebuilds it either — and it is the record of
@@ -793,6 +803,12 @@ pub const TABLES: &[(&str, Side)] = &[
     // this device already applied, and a counter that adds its delta twice is a collection
     // that grows by itself.
     ("sync_peers", Side::User),
+    // Every deleted row other rows are filed under (user schema v54), whoever deleted it —
+    // what lets an apply tell a change naming a gone parent from one that is merely early.
+    // Beside the watermarks rather than in name order, because it is their kind of table. Not
+    // rebuildable: a peer's delete applied here is recorded here and nowhere else on this
+    // device, and not synced — every device records the deletes it saw for itself.
+    ("sync_gone", Side::User),
     // The relay URL, the pull cursor and the apply guard (user schema v29). The URL is
     // something the reader typed, which settles this on its own.
     ("sync_state", Side::User),
@@ -4343,6 +4359,12 @@ CREATE TABLE {schema}.sync_peers (
                  last_ctr INTEGER NOT NULL
              ) WITHOUT ROWID;
 
+CREATE TABLE {schema}.sync_gone (
+                 tbl TEXT NOT NULL,
+                 uid TEXT NOT NULL,
+                 PRIMARY KEY (tbl, uid)
+             ) WITHOUT ROWID;
+
 CREATE TABLE {schema}.device_names (
                  -- The device this names. A group member's id, not a foreign key:
                  -- `sync_devices` does not sync, so a name can arrive before the roster row
@@ -5175,10 +5197,6 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
     // reach no other device — silently, for as long as it is used. There is no message this
     // could degrade into that a reader would act on.
     //
-    // Here rather than in `db::open_write` because this is the one door all three targets go
-    // through: the browser's pair is opened by `db::open_pooled_pair` and migrated by
-    // `web::glue`, which calls exactly this function.
-    //
     // **The stale apply guard first, and fatal for the same reason**: a kill inside a
     // `capture::suppressed` window leaves `sync_state.applying` on disk, and every trigger
     // installed below reads it and records nothing.
@@ -5322,64 +5340,54 @@ fn says_nothing_about_the_file(e: &rusqlite::Error) -> bool {
 /// one at head in its place — `DETACH`, delete, `ATTACH`, migrate, which is the reason the user
 /// file is `main` (see [`crate::db::open_write`]).
 ///
-/// **Answers `failed` unchanged when there is no file to delete**: an in-memory corpus (the
-/// test pairs) and the web target, whose OPFS pool is not a filesystem `std::fs` can reach. Both
-/// stop the launch exactly as before this existed.
+/// **Answers `failed` unchanged when there is no file to delete** — an in-memory corpus (the
+/// test pairs) — which stops the launch exactly as before this existed.
 ///
 /// A delete that fails puts the corpus back and answers `failed` too, so the launch stops over
 /// the original error rather than over a half-replaced file — and the next launch tries again,
 /// since nothing was stamped.
 fn replace_attached_corpus(conn: &Connection, failed: rusqlite::Error) -> rusqlite::Result<()> {
-    #[cfg(target_family = "wasm")]
-    {
-        let _ = conn;
-        Err(failed)
+    let file: String = conn.query_row(
+        &format!("SELECT file FROM pragma_database_list WHERE name = '{CORPUS}'"),
+        [],
+        |r| r.get(0),
+    )?;
+    if file.is_empty() {
+        return Err(failed);
     }
-    #[cfg(not(target_family = "wasm"))]
-    {
-        let file: String = conn.query_row(
-            &format!("SELECT file FROM pragma_database_list WHERE name = '{CORPUS}'"),
-            [],
-            |r| r.get(0),
+    let path = std::path::PathBuf::from(file);
+    // A cached statement naming the corpus would hold it open and fail the `DETACH` with
+    // `database corpus is locked`.
+    conn.flush_prepared_statement_cache();
+    conn.execute_batch(&format!("DETACH DATABASE {CORPUS}"))?;
+    let deleted = remove_database_files(&path);
+    let attach = |conn: &Connection| -> rusqlite::Result<()> {
+        conn.execute(
+            &format!("ATTACH DATABASE ?1 AS {CORPUS}"),
+            [path.to_string_lossy().as_ref()],
         )?;
-        if file.is_empty() {
-            return Err(failed);
-        }
-        let path = std::path::PathBuf::from(file);
-        // A cached statement naming the corpus would hold it open and fail the `DETACH` with
-        // `database corpus is locked`.
-        conn.flush_prepared_statement_cache();
-        conn.execute_batch(&format!("DETACH DATABASE {CORPUS}"))?;
-        let deleted = remove_database_files(&path);
-        let attach = |conn: &Connection| -> rusqlite::Result<()> {
-            conn.execute(
-                &format!("ATTACH DATABASE ?1 AS {CORPUS}"),
-                [path.to_string_lossy().as_ref()],
-            )?;
-            crate::db::apply_pragmas(conn, Some(CORPUS)).map(|_| ())
-        };
-        if let Err(why) = deleted {
-            eprintln!(
-                "the card database could not be migrated ({failed}) and could not be deleted to                  be rebuilt: {why}"
-            );
-            attach(conn)?;
-            return Err(failed);
-        }
-        attach(conn)?;
-        migrate_corpus(conn)?;
+        crate::db::apply_pragmas(conn, Some(CORPUS))
+    };
+    if let Err(why) = deleted {
         eprintln!(
-            "the card database could not be migrated ({failed}) and has been replaced; the next              sync will rebuild it. Nothing in your collection, decks or wishlist was touched."
+            "the card database could not be migrated ({failed}) and could not be deleted to \
+             be rebuilt: {why}"
         );
-        Ok(())
+        attach(conn)?;
+        return Err(failed);
     }
+    attach(conn)?;
+    migrate_corpus(conn)?;
+    eprintln!(
+        "the card database could not be migrated ({failed}) and has been replaced; the next \
+         sync will rebuild it. Nothing in your collection, decks or wishlist was touched."
+    );
+    Ok(())
 }
 
 /// Delete a database file and its two journals, answering the first failure that was not "it
 /// was not there". **`NotFound` is success**: the file this was asked to remove is gone, which
 /// is the whole of what a caller wants to know.
-///
-/// **Not gated to the desktop**, though only the desktop has files to delete: [`prepare_data_dir`]
-/// compiles on every target and calls it.
 fn remove_database_files(path: &std::path::Path) -> std::io::Result<()> {
     let mut first = Ok(());
     for suffix in ["", "-wal", "-shm"] {
@@ -5399,7 +5407,6 @@ pub const USER_BACKUPS_DIR: &str = "backups";
 /// How many pre-upgrade copies of `user.db` [`back_up_user_file`] keeps. Three upgrades back is
 /// long enough for a bug in a rung to be noticed, and at ~1.35 MB a copy it bounds the folder
 /// on a USB stick where one per update forever would not be.
-#[cfg(not(target_family = "wasm"))]
 const USER_BACKUPS_KEPT: usize = 3;
 
 /// Copy `user.db` to `backups/user.v{from}.db` before [`migrate_user`] climbs from `from`, and
@@ -5416,9 +5423,7 @@ const USER_BACKUPS_KEPT: usize = 3;
 /// first attempt took — the older state, which is the one worth having. The oldest copies past
 /// [`USER_BACKUPS_KEPT`] are removed after a new one is written.
 ///
-/// An in-memory `main` (the tests) has no path and is skipped, and so is the web target, whose
-/// OPFS pool is not a filesystem this can make a folder in.
-#[cfg(not(target_family = "wasm"))]
+/// An in-memory `main` (the tests) has no path and is skipped.
 pub(crate) fn back_up_user_file(
     conn: &Connection,
     from: i64,
@@ -5453,7 +5458,6 @@ pub(crate) fn back_up_user_file(
 
 /// Keep the newest [`USER_BACKUPS_KEPT`] `user.v{N}.db` copies by `N`, and leave every other
 /// file in the folder alone — a reader may keep their own copies there.
-#[cfg(not(target_family = "wasm"))]
 fn prune_user_backups(backups: &std::path::Path) {
     let Ok(entries) = std::fs::read_dir(backups) else {
         return;
@@ -5506,15 +5510,11 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         ));
     }
     // **A user file at 0 has no shape yet**, which is [`migrate_corpus`]'s `v < head` arm read
-    // for the other half — and it was found by running the web build rather than by reading.
-    // On desktop this never fires: `prepare_data_dir` runs `split::convert` before any
-    // connection the app keeps, and even a fresh install goes the long way round, building a
-    // whole legacy `mtg.db` at 26 and splitting it. **A browser has no `mtg.db` to take
-    // apart**, so before this the web target opened a pair whose corpus had a shape and whose
-    // user half had no tables at all. It failed where you would least look: the facet index
-    // reads `collection_entries` for its `owned` dimension, so the only symptom was
-    // `index build: no such table: collection_entries` in a Worker console, with the page
-    // otherwise working.
+    // for the other half. A launch does not reach it: `prepare_data_dir` runs `split::convert`
+    // before any connection the app keeps, and even a fresh install goes the long way round,
+    // building a whole legacy `mtg.db` at 26 and splitting it. A pair opened on an empty user
+    // file does, and without it would have no user tables at all — which fails where you would
+    // least look, since the facet index reads `collection_entries` for its `owned` dimension.
     //
     // `== 0` and not `< USER_SCHEMA_VERSION`, deliberately: this is the half whose rows exist
     // nowhere else, so "no shape yet" is the only state it may build from scratch. A rung
@@ -5547,7 +5547,6 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // head owes nothing and is not copied on every launch. Logged and never fatal — a full disk
     // that cannot take 1.35 MB of copy should not also cost the reader their launch, and every
     // rung below is still its own transaction with its stamp.
-    #[cfg(not(target_family = "wasm"))]
     if v < USER_SCHEMA_VERSION {
         if let Err(e) = back_up_user_file(conn, v) {
             eprintln!(
@@ -5932,7 +5931,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // trigger firing on `deck_labels` beside the `sync_ins_deck_labels` that
     // [`crate::sync_engine::capture::install`] then creates, and every insert would emit two ops.
     // Dropping them is free: `prepare_database` calls `install` immediately after this function,
-    // on every target, so the gap is closed before anything can write. The `deck_cards` three go
+    // so the gap is closed before anything can write. The `deck_cards` three go
     // for the narrower reason that `RENAME COLUMN` has to rewrite their `OF` lists and bodies,
     // and a rebuild that is happening anyway is cheaper to reason about than a rewrite that is.
     //
@@ -6133,7 +6132,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // **The capture triggers go down with the table and come straight back.** `DROP TABLE`
     // takes `sync_ins/upd/del_collection_entries` with it, and
     // [`crate::sync_engine::capture::install`] — which `prepare_database` calls on the very
-    // next line, on every target — puts the current set back before anything can write. That
+    // next line — puts the current set back before anything can write. That
     // ordering is also what makes the rebuild silent on the wire: the copy lands in a table
     // with no triggers on it, so a migration emits no ops, which is right, because moving a
     // reader's own rows between two shapes of one table is not an edit anybody made.
@@ -6603,7 +6602,8 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // **Appended at the end**, which is what keeps `deck.rs`'s positional reads honest: every
     // `r.get(n)` over `DECK_SELECT` is an index into this column order, and an `INTEGER`
     // inserted anywhere but last hands one column's value to another with nothing going red.
-    // `deck::IMAGE_COL` moves one further along with it.
+    // `deck::IMAGE_COL` moved one further along with it (the image tail it counted is gone since
+    // 2026-09-27).
     //
     // **`decks` is in [`SYNCED_TABLES`] and this column travels — but only because it was put
     // on the capture spec by hand**, v38's note verbatim: `sync_engine::capture`'s `Spec` for
@@ -6660,7 +6660,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // **Appended at the end**, which is what keeps `deck.rs`'s positional reads honest, and this
     // is the ninth time that sentence has been owed: every `r.get(n)` over `DECK_SELECT` is an
     // index into this column order, and an `INTEGER` inserted anywhere but last hands one
-    // column's value to another with nothing going red. `deck::IMAGE_COL` moves 25 → 26 with it.
+    // column's value to another with nothing going red. `deck::IMAGE_COL` moved 25 → 26 with it.
     // The trap here is v39's read one grain sharper still: the column it most reads like a
     // neighbour of is `theory_enabled`, which is the *other half of the same pair*, so an index
     // that landed there would swap a deck's kind for its own opposite and every field would
@@ -6834,7 +6834,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // triggers do both — but a rung that dropped only the triggers whose `OF` list named the
     // column would miss `sync_ins_decks`, which has no `OF` list at all.
     // Dropping them is free for v33's reason: `prepare_database` calls `install` immediately
-    // after this function, on every target, so the gap is closed before anything can write.
+    // after this function, so the gap is closed before anything can write.
     //
     // ⚠️ **`notes_open` is `DEFAULT 0` and not `1`, which is v37's answer rather than v42's.**
     // v42 gave `stats_open` a `1` because that band was already on screen for every deck on
@@ -7404,6 +7404,44 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v54 (2026-09-27, the folder-deletes spec §3.1): `sync_gone`, one row per deleted row of a
+    // table other rows are filed under — a folder, a deck, a category, a label, a note. Not
+    // synced and not captured; `capture::install` puts an `AFTER DELETE` trigger on each of
+    // those tables that writes it, gated on nothing but the row having a uid, so a delete this
+    // device made, one it applied from a peer behind the guard, and every cascade either set off
+    // all land here alike. `apply`'s `gone` reads it in place of `sync_ops`, which saw only the
+    // first of the three: a peer's delete left no trace, and a later change naming that parent
+    // read as merely early, waited out the bound and was dropped.
+    //
+    // **The backfill is this device's own history**, the one source `gone` could already see, so
+    // nothing it answered yesterday it stops answering today. A delete applied from a peer before
+    // the upgrade was written down nowhere and is not recovered — the spec's non-goal.
+    //
+    // It owes [`tests::UNDO_V54`] for [`tests::UNDO_V37`]'s loud reason — a bare `CREATE TABLE`,
+    // so a fixture that kept the table dies at `table sync_gone already exists` on the way up.
+    if v < 54 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE sync_gone (
+                 tbl TEXT NOT NULL,
+                 uid TEXT NOT NULL,
+                 PRIMARY KEY (tbl, uid)
+             ) WITHOUT ROWID;
+
+             -- Every delete `gone` could already see, it still sees: this device's own `del`
+             -- ops for the seven tables other rows are filed under. Spelled out because a rung
+             -- is history; live code reads `capture::parent_tables()`.
+             INSERT OR IGNORE INTO sync_gone (tbl, uid)
+                 SELECT DISTINCT tbl, uid FROM sync_ops
+                  WHERE kind = 'del'
+                    AND tbl IN ('deck_folders', 'decks', 'deck_categories', 'deck_labels',
+                                'deck_notes', 'collection_folders', 'wishlist_folders');",
+        )?;
+        // Literal `54`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA main.user_version = 54;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -7417,7 +7455,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     //
     // | how a user file comes to exist | seeded by |
     // | --- | --- |
-    // | fresh (`v == 0`, the browser's only path) | [`USER_SEED_SQL`] |
+    // | fresh (`v == 0`) | [`USER_SEED_SQL`] |
     // | already split, walked v27 → v29 | the rung above |
     // | **`split::convert` from a legacy `mtg.db`** | **neither** |
     //
@@ -7487,8 +7525,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// [`crate::index::fixtures::state_with_seeded_cards`] builds its database the way a fresh
 /// install is built — [`crate::split::convert`], which runs the frozen [`migrate_single_file`]
 /// ladder and stamps head — and then opened it without ever migrating. That is not a database
-/// any launch produces, because `prepare_database` is the door all three targets go through,
-/// and the gap was invisible until a corpus rung finally changed a table shape: the fixture
+/// any launch produces, because every launch goes through `prepare_database`, and the gap was invisible until a corpus rung finally changed a table shape: the fixture
 /// carried a v26-shaped `combos` under a header claiming head, which is precisely the state
 /// [`combos_are_at_head`] exists to repair.
 pub(crate) fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
@@ -7561,7 +7598,7 @@ pub(crate) fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
 /// user rungs already use — v24 and v29 both ask `pragma_table_info … WHERE name = ?` before
 /// they issue anything. The alternative was building the head table in a throwaway connection
 /// and diffing the two column lists, which cannot drift but adds a second SQLite handle to
-/// every launch on all three targets, one of which is a browser this branch cannot drive.
+/// every launch.
 ///
 /// **What a stale list costs is bounded, which is why the simpler thing is the right one.** The
 /// probe only has to be able to tell the two shapes apart, and any one of these four does that;
@@ -8001,9 +8038,8 @@ pub fn mark_corpus_damaged(data_dir: &std::path::Path, answer: &str) -> std::io:
 /// the DDL rather than from the ladder and would otherwise hand every test a database with
 /// no holding area — a state no converted database is ever in.
 ///
-/// **[`migrate_user`] is the second such caller**, and it is how the web target gets a
-/// user file at all: there is no `mtg.db` in a browser for [`crate::split::convert`] to
-/// take apart. A database without this row is one where no deck can ever release a card,
+/// **[`migrate_user`] is the second such caller**, for a user file at version 0 with no shape
+/// yet. A database without this row is one where no deck can ever release a card,
 /// permanently, because nothing at head ever runs a migration.
 /// **It mints its own `sync_uid`, because nothing else will.** The v29 rung backfills rows that
 /// were already there and the capture trigger mints for rows written later; this row is written
@@ -8825,12 +8861,10 @@ pub(crate) mod tests {
 
     /// **A pair whose user half is an empty file gets its shape from `prepare_database`.**
     ///
-    /// This is the web target's whole first run, and it has no desktop equivalent to lean on:
-    /// on Windows a fresh install builds a legacy `mtg.db` at 26 and `split::convert` takes it
-    /// apart, and in a browser there is no such file. Driving the real page on 2026-08-28 with
-    /// this arm missing produced a working-looking app whose Worker console said
-    /// `index build: no such table: collection_entries` - the facet index reads that table for
-    /// its `owned` dimension, and it was the only thing that noticed.
+    /// A launch never meets one — a fresh install builds a legacy `mtg.db` at 26 and
+    /// `split::convert` takes it apart — so this is the only thing that reaches the arm. Without
+    /// it the facet index is what would notice: it reads `collection_entries` for its `owned`
+    /// dimension.
     ///
     /// A bare `ATTACH ':memory:'` pair is the right fixture precisely because it is what an
     /// unshaped database looks like: two empty schemas at `user_version = 0`.
@@ -9154,8 +9188,8 @@ pub(crate) mod tests {
 
         assert_eq!(
             want.len(),
-            84,
-            "thirty-one tables, fifty indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason and `sticky_notes` brings none for the `INTEGER PRIMARY KEY` one, so thirty plus forty-seven plus three was eighty, and v48's `idx_wishlist_folders_managed` makes it forty-eight and eighty-one. v52's `deck_token_printings` is a table and two indexes, and no autoindex for the `INTEGER PRIMARY KEY` reason — thirty-one, fifty and eighty-four, counted off the literal rather than added. \n             Re-COUNT the two figures when a rung moves them; adding one to the number written here is how a wrong one survives"
+            85,
+            "thirty-two tables, fifty indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason and `sticky_notes` brings none for the `INTEGER PRIMARY KEY` one, so thirty plus forty-seven plus three was eighty, and v48's `idx_wishlist_folders_managed` makes it forty-eight and eighty-one. v52's `deck_token_printings` is a table and two indexes, and no autoindex for the `INTEGER PRIMARY KEY` reason — thirty-one, fifty and eighty-four. v53's `deck_categories.variant` moves neither figure: a column, and two indexes dropped and rebuilt wider under the names they had. v54's `sync_gone` is a table and nothing else: `WITHOUT ROWID`, so its composite primary key IS the table and brings neither an index nor an autoindex — thirty-two, fifty and eighty-five, counted off the literal rather than added. \n             Re-COUNT the two figures when a rung moves them; adding one to the number written here is how a wrong one survives"
         );
         for (w, g) in want.iter().zip(got.iter()) {
             assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
@@ -9266,6 +9300,7 @@ pub(crate) mod tests {
                 "sticky_notes",
                 "sync_clock",
                 "sync_devices",
+                "sync_gone",
                 "sync_group",
                 "sync_identity",
                 "sync_ops",
@@ -9384,7 +9419,32 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v53's per-list piles — the newest rewind on the user ladder, directly above [`UNDO_V52`].
+    /// v54's tombstones — the newest rewind on the user ladder, directly above [`UNDO_V53`].
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V37`]'s and [`UNDO_V31`]'s exactly: the rung
+    /// is a bare `CREATE TABLE`, so a fixture that kept `sync_gone` dies at `table sync_gone
+    /// already exists` on the way back up — a failure no real upgrade can produce, and one that
+    /// takes every unrelated test in the chain with it. **It runs first**, because a rewind walks
+    /// the ladder backwards. (Written as `UNDO_V53`, with its rung; renumbered to 54 at the merge
+    /// with `main`, whose per-list piles took 53 first.)
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule, and here there is none to name:
+    /// the table is `WITHOUT ROWID`, so its primary key *is* the table.
+    ///
+    /// ⚠️ **The `sync_gone_*` triggers are not the table's, so this leaves them standing** on a
+    /// fixture that ran `capture::install` before rewinding — each pointing at a table that is not
+    /// there until the climb puts it back. SQLite then refuses a `DROP COLUMN` or a `RENAME` on
+    /// any table carrying one (`error in trigger sync_gone_decks: no such table: main.sync_gone`,
+    /// measured against 3.53.0), as well as a delete from it — even one that matches no row. So
+    /// such a fixture may rewind v54 and nothing below it: [`UNDO_V53`]'s very first statement,
+    /// `DELETE FROM deck_categories WHERE variant = 'theory'`, is refused over
+    /// `sync_gone_deck_categories` with `no such table: main.sync_gone` (measured against 3.53.0
+    /// on 2026-09-27, over a table holding no theory pile). v54's own climb alters none of those
+    /// tables.
+    const UNDO_V54: &str = "DROP TABLE IF EXISTS sync_gone;";
+
+    /// v53's per-list piles — the rewind directly under [`UNDO_V54`] and directly above
+    /// [`UNDO_V52`].
     ///
     /// Owed for [`UNDO_V13`]'s **loud** reason: `ADD COLUMN variant` is not idempotent, so a
     /// fixture that kept the column dies at `duplicate column name` on the way back up. **The
@@ -9911,7 +9971,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -9943,7 +10003,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -9970,7 +10030,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -9997,7 +10057,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -10021,7 +10081,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
         ))
         .unwrap();
         conn
@@ -10042,7 +10102,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
         ))
         .unwrap();
         conn
@@ -10063,7 +10123,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
         ))
         .unwrap();
         conn
@@ -10084,7 +10144,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
         ))
         .unwrap();
         conn
@@ -10115,7 +10175,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
         ))
         .unwrap();
         conn
@@ -10136,7 +10196,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
         ))
         .unwrap();
         conn
@@ -10151,7 +10211,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
         ))
         .unwrap();
         conn
@@ -10163,7 +10223,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
         ))
         .unwrap();
         conn
@@ -10172,17 +10232,19 @@ pub(crate) mod tests {
     /// A user file at 49 — the shape every machine carries the day before a price snapshot
     /// recorded how many copies it was of, and the only population the v50 rung is *for*.
     ///
-    /// Head rewound past **all three** rungs above it, newest first — [`UNDO_V52`], [`UNDO_V51`]
-    /// and then [`UNDO_V50`]. It read "both" until v52 landed, which is the prediction every
-    /// fixture doc on this ladder makes coming true once more. Without [`UNDO_V51`] the file
-    /// would keep `decks.token_rail_index` and the v51 rung would die at `duplicate column name`
-    /// on the climb this fixture exists for; without [`UNDO_V52`], v52's at `table
-    /// deck_token_printings already exists`.
+    /// Head rewound past **all five** rungs above it, newest first — [`UNDO_V54`], [`UNDO_V53`],
+    /// [`UNDO_V52`], [`UNDO_V51`] and then [`UNDO_V50`]. It read "both" until v52 landed, "all
+    /// three" until v53 did and "all four" until v54 did, which is the prediction every fixture doc
+    /// on this ladder makes coming true once more. Without [`UNDO_V51`] the file would keep
+    /// `decks.token_rail_index` and the v51 rung would die at `duplicate column name` on the climb
+    /// this fixture exists for; without [`UNDO_V52`], v52's at `table deck_token_printings already
+    /// exists`; without [`UNDO_V53`], v53's at `duplicate column name` over
+    /// `deck_categories.variant`; without [`UNDO_V54`], v54's at `table sync_gone already exists`.
     fn user_file_at_49() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} PRAGMA main.user_version = 49;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} PRAGMA main.user_version = 49;"
         ))
         .unwrap();
         conn
@@ -10191,14 +10253,15 @@ pub(crate) mod tests {
     /// A user file at 50 — the shape every machine carries the day before the token pile could
     /// be moved in the rail, and the only population the v51 rung is *for*.
     ///
-    /// Head rewound past v52 and v51, newest first, so it carries v50's holdings table exactly as
-    /// a real v50 file does. (Written as `user_file_at_49`, before the rung was renumbered to v51;
-    /// renamed with it, which also keeps it clear of the v50 rung's own `user_file_at_49` above.)
+    /// Head rewound past v54, v53, v52 and v51, newest first, so it carries v50's holdings table
+    /// exactly as a real v50 file does. (Written as `user_file_at_49`, before the rung was
+    /// renumbered to v51; renamed with it, which also keeps it clear of the v50 rung's own
+    /// `user_file_at_49` above.)
     fn user_file_at_50() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} PRAGMA main.user_version = 50;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} PRAGMA main.user_version = 50;"
         ))
         .unwrap();
         conn
@@ -10207,15 +10270,16 @@ pub(crate) mod tests {
     /// A user file at 51 — the shape every machine carries the day before a token's printings
     /// became entries, and the only population the v52 rung is *for*.
     ///
-    /// Head rewound past v52 alone. What makes a test built on it a real upgrade rather than a
-    /// fresh install is what the test seeds afterwards: a `deck_tokens` row carrying a picked
-    /// `card_id`, which nothing at head writes any more, and a `decks.token_stack` that head
-    /// does not have.
+    /// Head rewound past v54, v53 and v52 — v52 alone until v53's piles and v54's table landed
+    /// above it, neither of which a file at 51 can hold. What makes a test built on it a real
+    /// upgrade rather than a fresh install is what the test seeds afterwards: a `deck_tokens` row
+    /// carrying a picked `card_id`, which nothing at head writes any more, and a
+    /// `decks.token_stack` that head does not have.
     fn user_file_at_51() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} PRAGMA main.user_version = 51;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} PRAGMA main.user_version = 51;"
         ))
         .unwrap();
         conn
@@ -10224,14 +10288,17 @@ pub(crate) mod tests {
     /// A user file at 52 — the shape every machine carries the day before each list of a deck
     /// got its own piles, and the only population the v53 rung is *for*.
     ///
-    /// Head rewound past v53 alone. What makes a test built on it a real upgrade rather than a
-    /// fresh install is what the test seeds afterwards: theory cards filed in a pile the live
-    /// list also uses, which no write at head can produce any more.
+    /// Head rewound past v54 and v53 — v53 alone until v54's `sync_gone` landed above it, which a
+    /// file at 52 cannot hold. What makes a test built on it a real upgrade rather than a fresh
+    /// install is what the test seeds afterwards: theory cards filed in a pile the live list also
+    /// uses, which no write at head can produce any more.
     fn user_file_at_52() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V53} PRAGMA main.user_version = 52;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V54} {UNDO_V53} PRAGMA main.user_version = 52;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -10279,7 +10346,7 @@ pub(crate) mod tests {
         // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
         // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -10436,7 +10503,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -10493,7 +10560,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -10871,7 +10938,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 53);
+        assert_eq!(USER_SCHEMA_VERSION, 54);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -11851,7 +11918,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -11938,7 +12005,7 @@ pub(crate) mod tests {
         // The literal, for the reason the two tests below spell out. It is **head**, not this
         // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
         // moves it.
-        assert_eq!(version, 53);
+        assert_eq!(version, 54);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
             2,
@@ -12249,7 +12316,7 @@ pub(crate) mod tests {
         // edited only the four this comment then named and left v43's red. **Do not trust this
         // list.** Bump what you can find, run `cargo test --lib schema::tests`, and every one
         // you missed names itself in a `left: <head>, right: <old>` panic.
-        assert_eq!(version, 53);
+        assert_eq!(version, 54);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
             1,
@@ -12271,7 +12338,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         // The literal, for the reason the test above spells out — head, which every rung moves.
-        assert_eq!(version, 53);
+        assert_eq!(version, 54);
     }
 
     /// The fixture is a real v35 file and not head wearing a v35 label.
@@ -12712,7 +12779,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v41 — `migrate_user` climbs the whole ladder. One of the five the v36
         // block's ⚠️ warns about; this one is why that warning exists.
-        assert_eq!(v, 53);
+        assert_eq!(v, 54);
         conn.execute(
             "INSERT INTO collection_shares
                  (id, folder_uid, title, owner_name, url, fields, state, updated_at)
@@ -12948,7 +13015,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v43 — `migrate_user` climbs the whole ladder. The fifth of the five the
         // v36 block's ⚠️ warns about, and the one v46 missed.
-        assert_eq!(v, 53);
+        assert_eq!(v, 54);
 
         assert_eq!(
             has_column(&conn, "decks", "notes"),
@@ -13409,7 +13476,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 53);
+        assert_eq!(version, 54);
         assert_eq!(has_column(&conn, "decks", "token_stack"), 0, "v52 took it");
         let (mode, stats): (String, i64) = conn
             .query_row(
@@ -13485,9 +13552,9 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        // Head, not v50 — `migrate_user` climbs the whole ladder, and v51 to v53 sit above this
+        // Head, not v50 — `migrate_user` climbs the whole ladder, and v51 to v54 sit above this
         // rung.
-        assert_eq!(version, 53);
+        assert_eq!(version, 54);
         assert_eq!(has_column(&conn, "price_snapshots", "copies"), 1);
         assert_eq!(price_is_required(&conn), 0, "an unpriced holding is a row");
         let (rows, null_copies, price_sum): (i64, i64, f64) = conn
@@ -13639,7 +13706,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 53);
+        assert_eq!(version, 54);
         assert_eq!(has_column(&conn, "decks", "token_rail_index"), 1);
         let (index, stats): (i64, i64) = conn
             .query_row(
@@ -13734,7 +13801,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 53);
+        assert_eq!(version, 54);
         assert_eq!(
             overrides(&conn),
             before,
@@ -14069,7 +14136,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 53);
+        assert_eq!(version, 54);
         assert_eq!(has_column(&conn, "deck_categories", "variant"), 1);
 
         // The live side, untouched: every pile it had, under the same id and uid and stamps.
@@ -14337,6 +14404,59 @@ pub(crate) mod tests {
         assert!(
             pile(Some("theory"), "Spare", "side").is_err(),
             "one Sideboard per list, whatever it is called"
+        );
+    }
+
+    /// **The v54 rung tombstones every delete `gone` could already see** — this device's own `del`
+    /// ops for a parent table — and nothing else: a copy's `del` is history `gone` is never asked.
+    #[test]
+    fn the_v54_rung_tombstones_this_devices_own_deletes_of_parent_rows() {
+        let conn = crate::schema::memory_pair();
+        crate::sync_engine::capture::install(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'dev', x'00', x'01', 'dev', 0);
+             INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+             VALUES (1, 'g', 0, x'02', 0);
+             INSERT INTO decks (name, format_key, created_at, updated_at)
+             VALUES ('D', 'commander', unixepoch(), unixepoch());
+             INSERT INTO collection_folders (name, kind, sort_order, created_at, updated_at)
+             VALUES ('Binder', 'user', 0, unixepoch(), unixepoch());
+             INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES ('c1','lea','1','en','nonfoil','NM',1,unixepoch(),unixepoch());",
+        )
+        .unwrap();
+        let uid = |sql: &str| -> String { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
+        let deck = uid("SELECT sync_uid FROM decks");
+        let binder = uid("SELECT sync_uid FROM collection_folders WHERE name = 'Binder'");
+        conn.execute_batch(
+            "DELETE FROM collection_entries;
+             DELETE FROM collection_folders WHERE name = 'Binder';
+             DELETE FROM decks;",
+        )
+        .unwrap();
+
+        // Back to a v53 file: no table, so the trigger's rows are gone and only `sync_ops` remains.
+        conn.execute_batch(&format!("{UNDO_V54} PRAGMA main.user_version = 53;"))
+            .unwrap();
+        migrate_user(&conn).unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT tbl, uid FROM sync_gone ORDER BY tbl")
+            .unwrap();
+        let got: Vec<(String, String)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                ("collection_folders".to_owned(), binder),
+                ("decks".to_owned(), deck)
+            ]
         );
     }
 
@@ -14668,7 +14788,7 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();

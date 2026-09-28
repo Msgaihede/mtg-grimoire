@@ -42,8 +42,9 @@ export function FigureRow({ children, actions }: { children: ReactNode; actions?
           (2026-09-08). The `<dl>` beside it is `flex-1` with a `0%` basis, so it *grows* into
           whatever is left and never shrinks — which means a `shrink-0` here made the actions'
           **max-content** a hard floor on the whole row. The collection's block grew from one
-          `ImportExportPair` (158.86px) to that plus a sharing group (421.67px), and at the phone's
-          390px frame — a 335px row — the row's `scrollWidth` went to 421 against a `clientWidth`
+          `ImportExportPair` (158.86px) to that plus a sharing group (421.67px), and at the phone
+          layout's 390px frame (since removed with that layout; the window's floor is 1024 now) —
+          a 335px row — the row's `scrollWidth` went to 421 against a `clientWidth`
           of 335 with `documentElement.scrollWidth` still 390: `Import` cut mid-word, `Export`
           entirely off screen and **not reachable by scrolling**, because the overflow was in a
           box the page does not scroll. Shrinkable, a block whose own content can wrap falls onto

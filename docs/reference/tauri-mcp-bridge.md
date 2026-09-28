@@ -17,7 +17,7 @@ Four pieces, and the bridge is dark if any one is missing:
 | Piece | Where | Why |
 | --- | --- | --- |
 | `tauri-plugin-mcp-bridge = "0.12"` | `src-tauri/Cargo.toml` | the server half |
-| `Builder::new().bind_address("127.0.0.1").build()` | `src-tauri/src/desktop.rs`, under `#[cfg(all(debug_assertions, desktop))]` — `tauri android dev` is a debug build too, and the `desktop` half keeps the port off the phone | opens the port |
+| `Builder::new().bind_address("127.0.0.1").build()` | `src-tauri/src/desktop.rs`, under `#[cfg(debug_assertions)]` | opens the port |
 | `"withGlobalTauri": true` | `src-tauri/tauri.conf.json` | `bridge.js` reaches IPC through `window.__TAURI__` |
 | three `mcp-bridge:` permissions | `src-tauri/capabilities/default.json` | the ACL gates the webview's half |
 

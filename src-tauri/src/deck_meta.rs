@@ -44,12 +44,10 @@
 //! change what a pile is called and nothing about what is in it — now covers every write in the
 //! module.
 
-#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::json;
-#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What an *adjustment* to a category says when the id it names is not there — the same
@@ -1191,10 +1189,11 @@ pub fn reorder_categories(
 ///
 /// **`moveToCategoryId: Some(id)` moves the cards first, in the same transaction**, folding on
 /// [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) — `deck_id, variant, category_id,
-/// card_id` — into a target that must be a pile of **the same deck and the same list**
-/// ([`CATEGORY_WRONG_DECK`], [`CATEGORY_WRONG_LIST`]): since user schema v53 a pile holds one
-/// list's cards, and moving them under the other list's pile would file a theory card in a
-/// column only the Actual tab draws. `None` leaves the
+/// card_id, coalesce(finish, '')`, so a foil and the regular copy of one printing each fold into
+/// their own row and never into each other — into a target that must be a pile of **the same
+/// deck and the same list** ([`CATEGORY_WRONG_DECK`], [`CATEGORY_WRONG_LIST`]): since user schema
+/// v53 a pile holds one list's cards, and moving them under the other list's pile would file a
+/// theory card in a column only the Actual tab draws. `None` leaves the
 /// `ON DELETE CASCADE` on `deck_cards.category_id` to take the cards with the category, which
 /// is the DDL's own comment on that column: "deleting a category deletes the cards filed under
 /// it, which is what the confirm dialog says it will do."
@@ -1314,12 +1313,20 @@ pub fn delete_category(
         // instead of zones. The `DO UPDATE` touches only `quantity`/`updated_at`: a row the
         // target already holds keeps its own `label_id` and `needs_review`, never the moved
         // row's — the same "the existing row wins a fold" rule `move_card`'s comment names.
+        //
+        // **Every column the row owns is carried except five**: `id`, which the INSERT mints;
+        // `category_id`, which is the move; the two timestamps, which are the move's, as in
+        // `move_card`; and `sync_uid`, which must not be — the source row still holds it when
+        // this INSERT runs, so a copy would collide on `idx_deck_cards_uid`, and the capture
+        // trigger mints the new row its own. `finish` is a `DECK_CARD_GRAIN` term, and until
+        // 2026-09-27 it was the one left out: the moved row took the column's NULL, so a foil
+        // became the regular copy and folded into the target's nonfoil row of that printing.
         let sql = format!(
             "INSERT INTO deck_cards
                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
-                 name, label_id, quantity, needs_review, created_at, updated_at)
+                 name, label_id, finish, quantity, needs_review, created_at, updated_at)
              SELECT deck_id, ?2, variant, card_id, set_code, collector_number, lang, name,
-                    label_id, quantity, needs_review, unixepoch(), unixepoch()
+                    label_id, finish, quantity, needs_review, unixepoch(), unixepoch()
                FROM deck_cards WHERE category_id = ?1
              ON CONFLICT({grain}) DO UPDATE SET
                 quantity = deck_cards.quantity + excluded.quantity,
@@ -2256,14 +2263,12 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
 
 /// What a write here says when its worker thread died under it — never a user's problem, the
 /// write itself answers [`crate::db::BUSY`] when the database is busy.
-#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck's categories, labels or folders could not be written: {e}")
 }
 
 /// The category panel. **Read-only connection** — see [`list_categories`]'s doc: it backfills
 /// nothing any more, so this never needs to contend for the write mutex.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2285,7 +2290,6 @@ pub async fn deck_category_list(
     .map_err(|e| format!("the deck's categories could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2301,7 +2305,6 @@ pub async fn deck_category_create(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_rename(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2316,7 +2319,6 @@ pub async fn deck_category_rename(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_set_active(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2331,7 +2333,6 @@ pub async fn deck_category_set_active(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_reorder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2346,7 +2347,6 @@ pub async fn deck_category_reorder(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2368,7 +2368,6 @@ pub async fn deck_category_delete(
 }
 
 /// **Read-only** connection, like every list in this module.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2390,7 +2389,6 @@ pub async fn deck_label_list(
 ///
 /// **Tauri fills a missing `Option` argument with `None`**, so the deck editor's existing calls,
 /// which send `deckId`, are unchanged.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2409,7 +2407,6 @@ pub async fn deck_label_create(
 /// `deck_id` is where the reader was standing, not what is being changed — see
 /// [`update_label`], which is app-wide. Optional, for [`deck_label_create`]'s reason: a rename
 /// made from Settings names no deck and records nothing.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2429,7 +2426,6 @@ pub async fn deck_label_update(
 /// Deletes the label **everywhere**, and answers nothing. `deck_id` is where the reader was, and
 /// is optional for [`deck_label_create`]'s reason — a deckless delete still un-labels every card,
 /// and writes no history and no undo step.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2446,7 +2442,6 @@ pub async fn deck_label_delete(
 
 /// Answers how many rows lost the label — see [`remove_label_from_deck`], which leaves the label
 /// itself alone.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_remove_from_deck(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2466,7 +2461,6 @@ pub async fn deck_label_remove_from_deck(
 
 /// **Read-only**, and the one command in this module with no deck id at all — see
 /// [`list_all_labels`]'s doc.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_label_all(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2479,7 +2473,6 @@ pub async fn deck_label_all(
     .map_err(|e| format!("the label list could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_card_set_label(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2509,7 +2502,6 @@ pub async fn deck_card_set_label(
 }
 
 /// **Read-only**, like every list in this module.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2520,7 +2512,6 @@ pub async fn deck_folder_list(
         .map_err(|e| format!("the deck folders could not be read: {e}"))?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2535,7 +2526,6 @@ pub async fn deck_folder_create(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_rename(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2550,7 +2540,6 @@ pub async fn deck_folder_rename(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_move(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2569,7 +2558,6 @@ pub async fn deck_folder_move(
 /// write. It answers the **whole** folder list rather than the rows it moved, like
 /// [`deck_category_reorder`]: every sibling's number changed, so a caller handed only the moved
 /// rows would have to guess at the rest.
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_reorder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2584,7 +2572,6 @@ pub async fn deck_folder_reorder(
     .map_err(unfinished)?
 }
 
-#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -3475,6 +3462,54 @@ mod tests {
             "the plan's own move folds into the plan's target"
         );
         assert_eq!(qty(to), 5, "and leaves the live pile alone in turn");
+    }
+
+    /// **`finish` is a grain term, so the move has to carry it or it moves a different card.**
+    /// The INSERT … SELECT used to name every column but this one, which wrote the moved row
+    /// with the column's NULL — the regular copy — and let `DECK_CARD_GRAIN` fold a foil into
+    /// the target's own nonfoil row of the same printing. The deck kept its count and lost its
+    /// foils, with nothing to say so.
+    #[test]
+    fn deck_category_delete_with_a_move_target_keeps_each_row_on_its_own_finish() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let from = category(&conn, deck_id, "main", "Creatures");
+        let to = category(&conn, deck_id, "main", "Main deck");
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        deck_card(&conn, deck_id, "bolt-lea", to, 2);
+        foil_deck_card(&conn, deck_id, "bolt-lea", from);
+        let etched = deck_card(&conn, deck_id, "bolt-lea", from, 4);
+        conn.execute(
+            "UPDATE deck_cards SET finish = 'etched', needs_review = 'printing' WHERE id = ?1",
+            params![etched],
+        )
+        .unwrap();
+
+        delete_category(&conn, from, Some(to)).unwrap();
+
+        let mut stmt = conn
+            .prepare(
+                "SELECT finish, quantity, needs_review FROM deck_cards
+                  WHERE deck_id = ?1 AND category_id = ?2 AND variant = 'live'
+                  ORDER BY coalesce(finish, '')",
+            )
+            .unwrap();
+        let rows: Vec<(Option<String>, i64, Option<String>)> = stmt
+            .query_map(params![deck_id, to], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (None, 2, None),
+                (Some("etched".to_owned()), 4, Some("printing".to_owned())),
+                (Some("foil".to_owned()), 1, None),
+            ],
+            "the regular row is untouched and each moved row keeps its finish"
+        );
     }
 
     #[test]

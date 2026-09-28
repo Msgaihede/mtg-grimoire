@@ -525,6 +525,11 @@ code — only the data changed.
 
 ## 5. PR 3 — Collection tokens
 
+**Dropped 2026-09-27, by the reader's decision, and its number went elsewhere**: `sync_gone`
+([folder deletes across devices](2026-09-27-folder-deletes-across-devices-design.md)) was
+written as v53 and landed as v54, because a deck's per-list piles (#561) took v53 on `main`
+first. This section is the design as it stood.
+
 User schema **v53**. Rust-heavy, and the one PR that moves the reader's cardboard.
 
 ### 5.1 The folders

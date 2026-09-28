@@ -23,13 +23,13 @@ import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { dragData } from "@/features/decks/dnd";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "@/features/decks/metaRows";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
+import { CardGrid, type GridCard, type GridSections } from "@/features/search/CardGrid";
 import {
-  CardGrid,
-  PHONE_TILE_WIDTH,
-  type GridCard,
-  type GridSections,
-} from "@/features/search/CardGrid";
-import { FilterBar, StatedFiltersLine, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
+  FilterBar,
+  StatedFiltersLine,
+  type FilterLabels,
+  type TrayCell,
+} from "@/features/search/FilterBar";
 import { ShelfLabel } from "@/features/shelves/ShelfLabel";
 import { FOLD_PAUSED_REASON, ShelfToolbar } from "@/features/shelves/ShelfToolbar";
 import { useFoldAnchor } from "@/features/shelves/useFoldAnchor";
@@ -73,10 +73,10 @@ import { tileKeyOf } from "@/lib/tileKey";
 import { useDeskWidth } from "@/lib/useDeskWidth";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useDockHeight } from "@/lib/useDockHeight";
-import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
+import { refreshCardSearches } from "@/lib/searchMarks";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
 import type { CollectionFolderTotals } from "./CollectionFolderCard";
 import { CollectionSearchPanel } from "./CollectionSearchPanel";
@@ -592,10 +592,11 @@ const COLLECTION_LABELS: FilterLabels = {
  *
  * The deck's floor is 192 because that is one stack column. This page's list was a *pair* of walls
  * stacked vertically until folder shelves (2026-09-26) — the cabinet's folder cards above, each
- * cell `minmax(180px, 1fr)`, and the card grid or table below — and both landed near the same
- * figure, since the wall draws `PHONE_TILE_WIDTH` tiles at the narrow rung. The shelved wall is one
- * wall now and its headings fill whatever width the wall has, so 192 still holds a column of tiles
- * with the page's own padding off it, which is why the deck's number is reused rather than a
+ * cell `minmax(180px, 1fr)`, and the card grid or table below — and 192 held a folder cell with the
+ * page's own padding off it. The shelved wall is one wall now and its headings fill whatever width
+ * the wall has, so what 192 has to hold is a column of tiles, and it does: a wall too narrow for a
+ * whole 170px tile draws it at the wall's own width instead (`CardGrid`'s `tileWidthFor`), so the
+ * column narrows rather than overflowing. That is why the deck's number is reused rather than a
  * second one invented.
  *
  * **Measured in the shipped window on 2026-09-07** (`npm run tauri dev`, a debug build, against a
@@ -673,9 +674,6 @@ export function CollectionPage() {
   const { query, figures, rows, total, marketplace, folderId, requestedFolderId } = collection;
   const view = useAppStore((s) => s.collectionView);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
-  // What the wall below is sized by — see its `baseTileWidth`. A consumer of the app's one
-  // viewport branch rather than a second one; the hook argues for itself at its own site.
-  const narrowWindow = useNarrowWindow();
   /**
    * The wall's own opener, and the finish it last opened the pane as.
    *
@@ -943,10 +941,10 @@ export function CollectionPage() {
     // wrong. The same pair `AddToCollection` invalidates, for the same reason — a write here
     // is the same write it makes.
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    // And the search results, which draw `ownedQuantity` on every row now. Refetched rather
-    // than merely marked — only *active* queries refetch, and while this view is on screen
-    // the search is unmounted, so from here the cost is a stale mark and nothing else.
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    // And the search results, which draw `ownedQuantity` on every row now. Brought up to date
+    // rather than merely marked — an active search is patched in place (`@/lib/searchMarks`),
+    // and one that is not on screen is only marked stale.
+    void refreshCardSearches(queryClient);
     // And every deck. Since schema v25 a deck owns what its own group physically holds, summed
     // per oracle id, so the row this stepper just changed *is* a deck's arithmetic if it is
     // filed in a deck group — and is spare for every theory list if it is not. Either way what
@@ -969,7 +967,7 @@ export function CollectionPage() {
   const settleFailure = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+    void refreshCardSearches(queryClient);
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
   }, [queryClient]);
 
@@ -1129,7 +1127,7 @@ export function CollectionPage() {
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
-      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      void refreshCardSearches(queryClient);
     },
   });
 
@@ -1201,11 +1199,6 @@ export function CollectionPage() {
         setCode: row.setCode,
         collectorNumber: row.collectorNumber,
         rarity: row.rarity,
-        // The picture a browser can reach, straight off the row. Ignored on the desktop, where
-        // `cardArtSrc` prefers the local cache — see `GridCard.imageUris`, which is where that
-        // branch is argued. Off the group's first row like `unitPrice` below, and for the same
-        // reason: every row behind this tile names the same printing.
-        imageUris: row.imageUris,
         copies: copies.get(key) ?? 0,
         // Narrowed against `FINISHES` rather than cast, for the reason the key above is *not*
         // narrowed: `finish` is TEXT with a CHECK rather than an enum this side knows, so a word
@@ -2275,9 +2268,9 @@ export function CollectionPage() {
    *
    * # Which row, and what the floor is
    *
-   * **The first row behind the art** — the same row {@link tiles} takes `id`, `name`, `unitPrice`
-   * and `imageUris` from, so the tile's identity and the tile's writes address one entry rather
-   * than two. "First" is the query's **current sort order** and is therefore not stable across a
+   * **The first row behind the art** — the same row {@link tiles} takes `id`, `name` and
+   * `unitPrice` from, so the tile's identity and the tile's writes address one entry rather than
+   * two. "First" is the query's **current sort order** and is therefore not stable across a
    * re-sort: the same picture can address a different entry after the reader presses a column
    * header. That is the accepted cost of the decision rather than an oversight — the alternative
    * is a dialog per press (which is what a *drag* gets, because a drag is already a question), and
@@ -3245,11 +3238,6 @@ export function CollectionPage() {
               onExport={() => setExporting(true)}
               importLabel="Import cards"
               exportLabel="Export collection"
-              // **Glyphs below the phone fold**, which is this pair's own rule applied by the
-              // caller: what it competes with for the line is the sharing group beside it, and
-              // worded the two came to 421.67px in the phone's 335px row. `ShareFolderMenu` reads
-              // the same fold for the same reason and carries the argument.
-              compact={narrowWindow}
             />
           </div>
         }
@@ -3571,12 +3559,6 @@ export function CollectionPage() {
                 // letterbox with a scrollbar of its own an inch from the page's — and nothing on
                 // screen said which one a wheel would turn.
                 grow
-                // **A phone gets a narrower card, so the binder is two columns rather than one.**
-                // The same width the search wall takes and for the same arithmetic: 324px of wall
-                // at 390, where 170 floors to one column. `PHONE_TILE_WIDTH` carries the
-                // derivation, the 160 that looks like a fix and is not, and the decision that the
-                // chin does not scale with it.
-                baseTileWidth={narrowWindow ? PHONE_TILE_WIDTH : undefined}
                 // This wall's own zoom, kept apart from the search's: the two views are the same
                 // component over different rows, and a reader who peers at one printing's art in
                 // search is not asking for a binder at 2× as well. `CardGrid`'s `zoomSection`

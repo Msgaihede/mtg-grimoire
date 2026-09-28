@@ -67,7 +67,7 @@ fn folder(
 
 /// The `display` URL the corpus stores for `id`, in Scryfall's own shape.
 ///
-/// **`display` and not `normal`**: [`crate::image_uri::LIST_VARIANT`] is the key
+/// **`display` and not `normal`**: [`crate::image_uri::FRONT_FACE_VARIANT`] is the key
 /// `front_face_selects` reads, so a fixture keyed on anything else makes every `img` in every
 /// snapshot silently absent — and the size measurement below a fiction.
 fn display_uri(id: &str) -> String {
@@ -454,7 +454,7 @@ fn an_unpriced_finish_carries_no_value_and_does_not_fail_the_publish() {
 }
 
 /// The image columns are read **positionally**, off the end of a select list this module builds
-/// by hand — `deck.rs`'s `IMAGE_COL` trap. Nothing else in this file would notice an offset
+/// by hand — `snapshot.rs`'s `IMAGE_COL`. Nothing else in this file would notice an offset
 /// that reads a folder uid as a URL, or reads nothing at all.
 #[test]
 fn the_front_face_picture_travels_with_the_card() {

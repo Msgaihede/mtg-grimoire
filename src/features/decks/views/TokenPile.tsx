@@ -143,14 +143,11 @@ export function tokenMadeBy(view: DeckTokenView): string {
  * exactly a deck card's arrangement. It was a flat `null` until token stacks PR 2, when a token
  * stated no finish at all; a regular entry still arrives as `null`, so `playedFinish` still falls
  * to the printing's sole finish and a foil-only printing still wears the sheen.
- * `imageUris` is the entry's printing's map, passed through: the face picks its own variant
- * (`DECK_CARD_VARIANT`) off it on the web and the phone, as it does for every deck card.
  */
 export function tokenFaceFacts(view: DeckTokenView): DeckCardFaceFacts {
   return {
     cardId: view.printingId,
     needsReview: null,
-    imageUris: view.imageUris,
     finish: tokenDeckFinish(view),
     finishes: view.finishes,
     name: view.name,

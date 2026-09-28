@@ -46,8 +46,6 @@ pub enum Wake {
     Launch,
     /// The socket came back after being away.
     Reconnect,
-    /// Android returned to the foreground.
-    Resume,
 }
 
 /// The single-flight, debounced schedule.
@@ -91,7 +89,7 @@ impl Scheduler {
             // asks `live::anything_pending` and calls `live::push_now` directly, inside its own
             // hard budget, because by then this loop may already be gone. A variant nothing
             // constructs is a mechanism a reader believes in.
-            Wake::Launch | Wake::Reconnect | Wake::Resume => now_ms,
+            Wake::Launch | Wake::Reconnect => now_ms,
         };
         // **Three cases, and only one of them moves a deadline later.**
         //
@@ -168,12 +166,11 @@ pub fn backoff_ms(attempt: u32, jitter: f64) -> u64 {
 
 /// Why a socket stopped — the only thing [`super::live`] decides for itself.
 ///
-/// **The classification is the socket's and every consequence is here.** Three reconnect rules
-/// were written inline in that loop where no test could reach them, and two of the three were
-/// wrong: a 4001 close that skipped the backoff and spun against the relay, and a foreground
-/// pause that spent an attempt. The third — how an attempt is forgiven — was wrong in a way
-/// only a trace could find. So the rules moved to the layer that has tests, and the socket now
-/// says only what happened to it.
+/// **The classification is the socket's and every consequence is here.** The reconnect rules
+/// were written inline in that loop where no test could reach them, and they were wrong: a 4001
+/// close skipped the backoff and spun against the relay, and how an attempt is forgiven was wrong
+/// in a way only a trace could find. So the rules moved to the layer that has tests, and the
+/// socket now says only what happened to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Disconnect {
     /// The relay closed with 4001: this group no longer exists.
@@ -184,8 +181,6 @@ pub enum Disconnect {
     Failed,
     /// The socket reached [`super::live`]'s age limit and was replaced on purpose.
     Aged,
-    /// The foreground gate closed under it.
-    Paused,
 }
 
 /// Whether the loop waits before reconnecting after `cause`.
@@ -198,9 +193,9 @@ pub enum Disconnect {
 pub fn deserves_backoff(cause: Disconnect) -> bool {
     match cause {
         Disconnect::Removed | Disconnect::Closed | Disconnect::Failed => true,
-        // Neither is a failure: the age limit is a socket replaced deliberately, and a pause is
-        // the app being put down. Making either wait punishes the healthy case.
-        Disconnect::Aged | Disconnect::Paused => false,
+        // Not a failure: the age limit is a socket replaced deliberately. Making it wait
+        // punishes the healthy case.
+        Disconnect::Aged => false,
     }
 }
 
@@ -225,9 +220,9 @@ const FORGIVEN_AFTER_MS: u64 = BACKOFF_MAX_MS;
 /// [`deserves_backoff`] exists to prevent.
 pub fn next_attempt(attempt: u32, cause: Disconnect, socket_lifetime_ms: u64) -> u32 {
     match cause {
-        // Evidence of nothing, so the count is left exactly as it was. A pause must not spend
-        // an attempt, and a socket retired at its age limit has not failed at all.
-        Disconnect::Aged | Disconnect::Paused => attempt,
+        // Evidence of nothing, so the count is left exactly as it was: a socket retired at its
+        // age limit has not failed at all.
+        Disconnect::Aged => attempt,
         // **Never forgiven by lifetime.** A group that is gone is gone however long this socket
         // had been up, and the reconnect that follows will be refused the same way.
         Disconnect::Removed => attempt.saturating_add(1),
@@ -287,7 +282,7 @@ mod tests {
 
     #[test]
     // Both sides are `const`, so clippy sees a compile-time-decidable comparison and would
-    // rather it were a `const` assertion — but this is a runtime test like its ten siblings,
+    // rather it were a `const` assertion — but this is a runtime test like its siblings,
     // asserting a relationship between the two debounces that a future edit could still get
     // backwards.
     #[allow(clippy::assertions_on_constants)]
@@ -298,8 +293,8 @@ mod tests {
     }
 
     #[test]
-    fn launch_reconnect_and_resume_are_immediate() {
-        for wake in [Wake::Launch, Wake::Reconnect, Wake::Resume] {
+    fn launch_and_reconnect_are_immediate() {
+        for wake in [Wake::Launch, Wake::Reconnect] {
             let mut s = Scheduler::new();
             s.wake(wake, 9_000, 0);
             assert_eq!(s.due_at(), Some(9_000), "no debounce on a catch-up");
@@ -362,13 +357,6 @@ mod tests {
         // However long the socket had been up. Forgiving a 4001 on lifetime would let a relay
         // that accepts the upgrade and immediately closes zero the counter every cycle.
         assert_eq!(next_attempt(2, Disconnect::Removed, 10 * BACKOFF_MAX_MS), 3);
-    }
-
-    #[test]
-    fn a_pause_neither_backs_off_nor_spends_an_attempt() {
-        assert!(!deserves_backoff(Disconnect::Paused));
-        assert_eq!(next_attempt(4, Disconnect::Paused, 0), 4);
-        assert_eq!(next_attempt(0, Disconnect::Paused, 10 * BACKOFF_MAX_MS), 0);
     }
 
     #[test]

@@ -21,11 +21,9 @@ import { allHandlers, makeDb } from "./db";
  * fails below — so it cannot quietly become a place commands go to be forgotten.
  */
 const ABSENT: Record<string, string> = {
-  // The live socket. Nothing in the fake answers either by default, so `useDeviceSyncLive`'s
-  // seed rejects exactly as it does on the web target (whose `web/route.rs` carries neither) and
-  // a story drives the state with `emitFake("sync:live", …)` — see `SyncPanel.stories.tsx`'s
-  // `SocketDropsAfterASync`. `AppShell`'s foreground call already swallows its rejection.
-  sync_live_foreground: "the live socket is driven by `sync:live` events in stories",
+  // The live socket. Nothing in the fake answers it by default, so `useDeviceSyncLive`'s seed
+  // rejects and a story drives the state with `emitFake("sync:live", …)` — see
+  // `SyncPanel.stories.tsx`'s `SocketDropsAfterASync`.
   sync_live_state: "the live socket is driven by `sync:live` events in stories",
   // Asked by `DesktopBoot` before `App` mounts. Storybook renders `App` and the boot screen
   // directly, so nothing in a story ever reaches this command.

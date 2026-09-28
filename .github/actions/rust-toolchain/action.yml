@@ -9,7 +9,7 @@ name: Pinned Rust toolchain
 description: Installs the toolchain rust-toolchain.toml names, with rustfmt, clippy and any extra targets.
 inputs:
   targets:
-    description: Comma-separated extra targets, e.g. wasm32-unknown-unknown.
+    description: Comma-separated extra targets, if a job needs any beyond the host.
     required: false
     default: ""
 runs:

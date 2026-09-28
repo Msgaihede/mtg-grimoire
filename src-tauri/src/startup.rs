@@ -21,9 +21,6 @@
 //! **The state moves once, and only out of `Loading`.** [`Startup::settle`] refuses every other
 //! transition, so a late failure cannot un-ready an app whose views are already mounted, and the
 //! event fires at most once.
-//!
-//! Desktop and Android. The browser has no `setup` and no second thread to wait on; its
-//! equivalent gate is `src/web/WebBoot.tsx`, which waits on the Worker opening the database.
 
 use serde::Serialize;
 use std::sync::Mutex;

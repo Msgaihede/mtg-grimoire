@@ -223,25 +223,13 @@ how a later edit puts the wrong one back:
 the first nine, so a merge cannot quietly restore the old numbering; the exclusions are still
 matched on **id** rather than counted. [home-page.md](home-page.md) is the rest of the record.
 
-## `newWindow`, and the first flag that says where a row is real
+## `newWindow`
 
 **`Ctrl+Shift+N` opens another window onto the same app** (2026-09-20). VS Code's chord, and
 **`Ctrl+N` is deliberately left unbound** — it is the obvious spelling of "a new *thing*", which a
 view may yet want for a deck or a folder, and spending it on a window would take that away for a
 gesture the reader already has: **relaunching the app does the same**, which is what Windows'
 middle-click on the taskbar icon is. [multi-window.md](multi-window.md) is the record.
-
-**The row carries `desktopOnly: true`, and that is the fence reaching one step further.** A chord
-for something the platform cannot do is a row promising a key nothing binds — exactly the drift the
-catalogue exists to end — and a second window is desktop-only twice over: the web build does not
-route `window_new`, and Android runs one task per application. So `shortcuts.ts` grew the flag and
-`shownOn(row, desktop)`; `KeyMap` filters with `shownOn(row, isDesktop())` and `AppShell` binds
-behind the **same** `isDesktop()` call, so listed and bound stay one answer rather than two.
-
-**Nothing reaches that filter off the desktop today**, and the flag is still where it belongs. The
-panel's one mount is `TitleBar`, which is itself desktop-only — so the filter is doing nothing this
-week. It sits in `KeyMap` rather than at that mount because `KeyMap` is the component that reads the
-catalogue, and the day this panel is drawn on a phone the rows are already honest.
 
 **It is matched ahead of the `[aria-modal="true"]` guard, with `F1` rather than with `Ctrl+1…9`,
 and the reason is its own.** That guard exists because switching view under an open dialog strands

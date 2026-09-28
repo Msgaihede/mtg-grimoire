@@ -38,17 +38,9 @@
  * must not write into. The collection's flagged entries through `collectionTotalKey`, which is
  * `SummaryWidget`'s own read and one fetch between the two. The flagged wishes as the `total` of a
  * one-row page, flattened so a wish filed in a drawer counts. `deck_review_count`, the one new
- * command — `sync_relay_status.reviewCount` sums six tables, is desktop-only and takes the write
- * lock. And `Recently removed` through `useCollectionFolders`: **found in the list, then looked up
- * in the summary**, because an empty folder answers no summary row and a missing row is zero.
- *
- * ## The browser build
- *
- * There is no scanner there (`ScannerPage.tsx:100`), so the tray is neither read nor drawn; and
- * `sync_review_list` is not routed on the web target, so the deck cards row is drawn **without a
- * press** and its hint says where the flags can be cleared. `web` is a prop defaulting to
- * `isWebTarget()` because that answer is a build-time define the workbench folds to the desktop
- * one — a story names it; the page never does.
+ * command — `sync_relay_status.reviewCount` sums six tables and takes the write lock. And
+ * `Recently removed` through `useCollectionFolders`: **found in the list, then looked up in the
+ * summary**, because an empty folder answers no summary row and a missing row is zero.
  *
  * **No `@container` here or on the page that draws this**, and no z-index that is not from
  * `LAYER` — `fit.ts`'s module doc has the argument.
@@ -64,7 +56,6 @@ import { count } from "@/lib/counts";
 import { ipc, ipcError, type ScannerTrayRow, type WishlistQuery } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
-import { isWebTarget } from "@/pwa/target";
 
 import {
   collectionTotalKey,
@@ -101,9 +92,6 @@ export interface ReviewRow {
   tileCaption: string;
   /** The figure at the right, or `null` where the caption already is the count. */
   value: string | null;
-  /** `false` only for the deck cards on the browser build, which have nowhere to open. */
-  pressable: boolean;
-  hint?: string;
   /** The removed folder's id, for the folder hand-off. */
   folderId?: number;
 }
@@ -114,8 +102,6 @@ const ROW_BARE = 36;
 
 const PENDING = "Looking for anything waiting on you…";
 export const EMPTY = "Nothing waiting for you.";
-export const WEB_DECK_HINT =
-  "The browser build has no Needs review list to open — clear these in the desktop app, under Settings → Sync.";
 const FLAGGED = "Flagged for review";
 
 /** The flagged wishes, as a one-row page: `total` is the count, and `flatten` reaches every
@@ -151,37 +137,25 @@ function copies(n: number): string {
   return `${count(n)} ${n === 1 ? "copy" : "copies"}`;
 }
 
-function flaggedRow(
-  kind: "binder" | "wishes" | "deckCards",
-  name: string,
-  n: number,
-  pressable: boolean,
-  hint?: string,
-): ReviewRow {
+function flaggedRow(kind: "binder" | "wishes" | "deckCards", name: string, n: number): ReviewRow {
   return {
     kind,
     name,
     caption: FLAGGED,
     tileCaption: `${count(n)} flagged`,
     value: count(n),
-    pressable,
-    hint,
   };
 }
 
 /**
  * Which rows are drawn, in which order, with which words — the whole of this card's judgement.
  *
- * A row is drawn only when its count is above zero. The browser build draws no scanner row and a
- * deck cards row with no press; the reader's `Recently removed` switch takes that row away, and a
- * database with no holding area never draws it.
+ * A row is drawn only when its count is above zero. The reader's `Recently removed` switch takes
+ * that row away, and a database with no holding area never draws it.
  */
-export function reviewRows(
-  counts: ReviewCounts,
-  opts: { web: boolean; removed: boolean },
-): ReviewRow[] {
+export function reviewRows(counts: ReviewCounts, opts: { removed: boolean }): ReviewRow[] {
   const rows: ReviewRow[] = [];
-  if (!opts.web && counts.scanned > 0) {
+  if (counts.scanned > 0) {
     // `TrayPanel`'s words for its two numbers: the figure is the copies its heading counts, and
     // the caption the `N cards to pick` beside it. The tile has no heading to lean on, so it names
     // the copies.
@@ -193,22 +167,11 @@ export function reviewRows(
       tileCaption:
         n > 0 ? `${copies(counts.scanned)} · ${count(n)} to pick` : `${copies(counts.scanned)} ready`,
       value: count(counts.scanned),
-      pressable: true,
     });
   }
-  if (counts.binder > 0) rows.push(flaggedRow("binder", "Binder entries", counts.binder, true));
-  if (counts.wishes > 0) rows.push(flaggedRow("wishes", "Wishes", counts.wishes, true));
-  if (counts.deckCards > 0) {
-    rows.push(
-      flaggedRow(
-        "deckCards",
-        "Deck cards",
-        counts.deckCards,
-        !opts.web,
-        opts.web ? WEB_DECK_HINT : undefined,
-      ),
-    );
-  }
+  if (counts.binder > 0) rows.push(flaggedRow("binder", "Binder entries", counts.binder));
+  if (counts.wishes > 0) rows.push(flaggedRow("wishes", "Wishes", counts.wishes));
+  if (counts.deckCards > 0) rows.push(flaggedRow("deckCards", "Deck cards", counts.deckCards));
   if (opts.removed && counts.removed > 0 && counts.removedFolderId !== null) {
     const held = copies(counts.removed);
     rows.push({
@@ -217,7 +180,6 @@ export function reviewRows(
       caption: held,
       tileCaption: held,
       value: null,
-      pressable: true,
       folderId: counts.removedFolderId,
     });
   }
@@ -238,12 +200,7 @@ function spoken(...parts: (string | undefined)[]): string {
   return parts.filter((part): part is string => part !== undefined && part !== "").join(" · ");
 }
 
-export function ToReviewWidget({
-  widget,
-  fit,
-  still,
-  web = isWebTarget(),
-}: WidgetBodyProps & { web?: boolean }): ReactElement {
+export function ToReviewWidget({ widget, fit, still }: WidgetBodyProps): ReactElement {
   const withRemoved = toggleOnOf(widget, "removed");
   const { marketplace } = useMarketplace();
   const setActiveView = useAppStore((s) => s.setActiveView);
@@ -254,8 +211,6 @@ export function ToReviewWidget({
   const tray = useQuery({
     queryKey: scannerTrayCountKey,
     queryFn: async () => trayCounts(await ipc.scannerTray()),
-    // No scanner on the browser build, and `scanner_tray` is not routed there.
-    enabled: !web,
     // With one window open nothing invalidates this key — the tray's writes feed
     // `["scanner", "tray"]` by `setQueryData`, and the Scanner and this card are never on screen
     // together — so it is read afresh on every mount rather than trusted for the app's 30 s. A
@@ -298,7 +253,7 @@ export function ToReviewWidget({
     collection.data === undefined ||
     wishes.data === undefined ||
     deckCards.data === undefined ||
-    (!web && tray.data === undefined) ||
+    tray.data === undefined ||
     (withRemoved && (folders.query.data === undefined || folders.summaryQuery.data === undefined))
   ) {
     return <WidgetMessage>{PENDING}</WidgetMessage>;
@@ -308,15 +263,15 @@ export function ToReviewWidget({
   const removedFolder = folders.folders.find((entry) => entry.kind === "removed") ?? null;
   const rows = reviewRows(
     {
-      scanned: tray.data?.scanned ?? 0,
-      unresolved: tray.data?.unresolved ?? 0,
+      scanned: tray.data.scanned,
+      unresolved: tray.data.unresolved,
       binder: collection.data.needsReview,
       wishes: wishes.data,
       deckCards: deckCards.data,
       removed: removedFolder === null ? 0 : (folders.summary.get(removedFolder.id)?.cards ?? 0),
       removedFolderId: removedFolder?.id ?? null,
     },
-    { web, removed: withRemoved },
+    { removed: withRemoved },
   );
   if (rows.length === 0) return <WidgetMessage>{EMPTY}</WidgetMessage>;
 
@@ -359,7 +314,7 @@ export function ToReviewWidget({
   return (
     <WidgetRowList fit={fit}>
       {shown.map((row) => {
-        const onPress = still || !row.pressable ? undefined : () => open(row);
+        const onPress = still ? undefined : () => open(row);
         // What this box draws under the name and at the right — and so what the press is named.
         const caption = tile ? row.tileCaption : captioned ? row.caption : undefined;
         const value = tile ? undefined : (row.value ?? (captioned ? undefined : row.caption));
@@ -371,7 +326,6 @@ export function ToReviewWidget({
             caption={caption}
             captionStrong
             icon={ICONS[row.kind]}
-            hint={row.hint}
             onPress={onPress}
             pressLabel={pressLabel}
           />
@@ -382,7 +336,6 @@ export function ToReviewWidget({
             caption={caption}
             value={value}
             icon={ICONS[row.kind]}
-            hint={row.hint}
             onPress={onPress}
             pressLabel={pressLabel}
           />

@@ -18,7 +18,6 @@ import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
 import { count, plural } from "@/lib/counts";
 import { openExternal } from "@/lib/externalLinks";
 import { FOCUS } from "@/lib/focus";
-import { WALL_CARD_VARIANT } from "@/lib/images";
 import {
   ipc,
   ipcError,
@@ -1159,17 +1158,11 @@ function Piece({ piece }: { piece: ComboPiece }) {
   return (
     <span className="flex w-44 flex-col gap-1.5">
       <CardArt
-        cardId={piece.cardId}
-        name={piece.name}
-        // **The protocol URL is computed here and passed in**, which is `lib/images.ts`'s rule and
-        // load-bearing rather than a style: `.storybook/main.ts` aliases `@/lib/images` to a fake
-        // whose whole job is to replace `cardImageUrl` with generated art, and a call made *inside*
-        // that module would reach the real function and paint every story a broken image.
-        //
         // `cardId === null` is a card this corpus has never synced — the feed names cards the
         // reader's database may simply not have — and `CardArt` draws its named, empty frame for
         // it, which is this app's existing "no art" state rather than an error.
-        imageUrl={piece.imageUris?.[WALL_CARD_VARIANT] ?? null}
+        cardId={piece.cardId}
+        name={piece.name}
       />
       <span className="text-[0.9375rem] leading-snug">{piece.name}</span>
       {/* A count laid **beside** a card keeps its `×` — `CountTag`'s bare number is for a count

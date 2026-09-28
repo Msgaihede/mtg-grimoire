@@ -8,8 +8,8 @@
 //! * `preupdate_hook` does give old and new values, but it fires *before commit*, so an
 //!   in-memory buffer is the only record of an op between the commit and the drain. **A crash
 //!   there loses an op silently, and a lost op is a device that has diverged for good.**
-//! * A trigger runs inside the caller's transaction, rolls back with it, cannot be forgotten by
-//!   a write site added next year, and is identical on native and on wasm. It is the rule
+//! * A trigger runs inside the caller's transaction, rolls back with it, and cannot be forgotten
+//!   by a write site added next year. It is the rule
 //!   [`crate::deck_audit`] already follows one table over: *written inside the caller's
 //!   transaction, where one is open.*
 //!
@@ -378,8 +378,8 @@ pub const TABLES: [Spec; 17] = [
             // reader-picked cover picture is gone: nothing in the crate writes this column any
             // more, the v32 rung flipped every `cover_kind` that said `'custom'` to
             // `'card_art'`, and every device already drew the card art anyway — the path was
-            // stored absolute, so a `D:\…\covers\7.webp` that reached a phone named nothing
-            // there.
+            // stored absolute, so a `D:\…\covers\7.webp` that reached another machine named
+            // nothing there.
             //
             // It stays here because what removing it buys today is one dead key out of a deck
             // op that is already sent. A later rung takes the column, this line and the `CHECK`
@@ -862,7 +862,7 @@ fn update_trigger(spec: &Spec) -> String {
     )
 }
 
-/// The delete trigger: a tombstone, and nothing else in it.
+/// The delete trigger: a `del` op, and nothing else in it.
 fn delete_trigger(spec: &Spec) -> String {
     let t = spec.table;
     let body = emit(
@@ -879,6 +879,42 @@ fn delete_trigger(spec: &Spec) -> String {
          WHEN {GUARD} AND OLD.sync_uid IS NOT NULL
          BEGIN
              {body}
+         END;"
+    )
+}
+
+/// Every table some spec names as a parent — the tables other rows are filed under, and so the
+/// only ones [`crate::sync_engine::apply`]'s `gone` is ever asked about. **Read off [`TABLES`]
+/// rather than listed**, so a deleted row of a synced table that grows a child leaves a
+/// `sync_gone` tombstone the day its spec says so.
+pub(crate) fn parent_tables() -> Vec<&'static str> {
+    let mut out: Vec<&'static str> = Vec::new();
+    for spec in &TABLES {
+        for p in spec.parents {
+            if !out.contains(&p.table) {
+                out.push(p.table);
+            }
+        }
+    }
+    out
+}
+
+/// The trigger that writes a `sync_gone` tombstone (not a `del` op): every delete of a parent row,
+/// whatever made it.
+///
+/// **Not gated on [`GUARD`], and that is the point of it.** A delete an apply makes runs behind
+/// the guard, and so does every cascade it sets off — which is why, before this, a delete a peer
+/// made left no trace here and a later child of it waited out the bound and was dropped
+/// (spec 2026-09-27 §1.2). A cascaded delete fires this like any other: measured with
+/// `recursive_triggers` off, a folder's delete logged its sub-folder's `AFTER DELETE` before its
+/// own. Not gated on a group either, so a device that pairs later still knows what it deleted.
+fn gone_trigger(table: &str) -> String {
+    format!(
+        "DROP TRIGGER IF EXISTS sync_gone_{table};
+         CREATE TRIGGER sync_gone_{table} AFTER DELETE ON {table}
+         WHEN OLD.sync_uid IS NOT NULL
+         BEGIN
+             INSERT OR IGNORE INTO sync_gone (tbl, uid) VALUES ('{table}', OLD.sync_uid);
          END;"
     )
 }
@@ -901,12 +937,17 @@ const CLOCK_TRIGGER: &str = "DROP TRIGGER IF EXISTS sync_ops_clock;
 /// that changed the generator and shipped `IF NOT EXISTS` would leave every existing database
 /// running last year's rules forever, silently, and a bug fixed here would reach nobody who
 /// already had the app. Dropping and creating every one at open — an insert trigger per
-/// [`TABLES`] entry, an update and a delete for every one but `deck_audit`, and the clock — is a
+/// [`TABLES`] entry, an update and a delete for every one but `deck_audit`, a trigger per
+/// [`parent_tables`] entry writing a `sync_gone` tombstone (not a `del` op), and the clock — is a
 /// fraction of a millisecond. (This carried a count, and said thirty-seven while the array made
 /// forty-seven; the array is the count.)
 ///
-/// Called from [`crate::schema::prepare_database`], so it reaches the desktop, Android and the
-/// browser through the one door. **Not** on a read-only connection: it never writes, and a
+/// **The tombstone triggers are the one kind here that is not capture**: they write
+/// `sync_gone` rather than `sync_ops`, on every device and behind the apply guard as well, so a
+/// delete this device did not make is still one it knows about — [`gone_trigger`] says why.
+///
+/// Called from [`crate::schema::prepare_database`], the one door every open goes through.
+/// **Not** on a read-only connection: it never writes, and a
 /// trigger there is an object nobody fires.
 pub fn install(conn: &Connection) -> rusqlite::Result<()> {
     for spec in &TABLES {
@@ -916,13 +957,16 @@ pub fn install(conn: &Connection) -> rusqlite::Result<()> {
             conn.execute_batch(&delete_trigger(spec))?;
         }
     }
+    for table in parent_tables() {
+        conn.execute_batch(&gone_trigger(table))?;
+    }
     conn.execute_batch(CLOCK_TRIGGER)
 }
 
 /// Read one `sync_ops` row as an [`Op`](super::merge::Op).
 ///
 /// **One reader, two callers**, and they must not drift: [`super::apply`] loads this device's
-/// own history for a row so that add-wins can compare a remote tombstone against a local edit,
+/// own history for a row so that add-wins can compare a remote `del` op against a local edit,
 /// and [`super::client`] drains the unpushed tail. The column order below is the order both
 /// their `SELECT`s use, and `OPS_SELECT` is what keeps that true.
 pub const OPS_SELECT: &str =
@@ -1029,8 +1073,7 @@ impl Drop for Suppressed<'_> {
 ///
 /// **Safe at open because the flag cannot be live then.** It belongs to the one write connection
 /// a process holds, and nothing writes before `prepare_database` returns: more windows share that
-/// process and its connection, a second launch opens a window in the running app, and the
-/// browser refuses a second tab.
+/// process and its connection, and a second launch opens a window in the running app.
 pub fn clear_stale_guard(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM sync_state WHERE key = ?1", [APPLYING])?;
     Ok(())
@@ -1946,9 +1989,9 @@ mod tests {
         );
     }
 
-    /// A delete writes a tombstone.
+    /// A delete writes one `del` op.
     #[test]
-    fn a_delete_writes_one_tombstone() {
+    fn a_delete_writes_one_del_op() {
         let conn = db();
         conn.execute(
             "INSERT INTO decks (name, format_key, created_at, updated_at)
@@ -1965,10 +2008,120 @@ mod tests {
         let o = ops(&conn);
         assert_eq!(o.len(), 1);
         assert_eq!(o[0].1, "del");
-        let tombstone: String = conn
+        let deleted: String = conn
             .query_row("SELECT uid FROM sync_ops", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(tombstone, uid);
+        assert_eq!(deleted, uid);
+    }
+
+    fn gone_rows(conn: &Connection) -> Vec<(String, String)> {
+        let mut stmt = conn
+            .prepare("SELECT tbl, uid FROM sync_gone ORDER BY tbl, uid")
+            .unwrap();
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        rows.map(Result::unwrap).collect()
+    }
+
+    /// **Every delete of a row other rows are filed under leaves a tombstone** — the reader's own,
+    /// and the one an apply makes behind the guard, and each row a cascade takes with it. That is
+    /// the whole of what `apply::gone` needs to answer for a delete it did not see in the page.
+    #[test]
+    fn every_delete_of_a_parent_row_leaves_a_tombstone_whatever_made_it() {
+        let conn = db();
+        conn.execute_batch(
+            "INSERT INTO collection_folders (name, kind, sort_order, created_at, updated_at)
+             VALUES ('Outer', 'user', 0, unixepoch(), unixepoch());
+             INSERT INTO collection_folders (parent_id, name, kind, sort_order, created_at, updated_at)
+             VALUES ((SELECT id FROM collection_folders WHERE name = 'Outer'), 'Inner', 'user', 0,
+                     unixepoch(), unixepoch());
+             INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+             VALUES ('Shelf', 0, unixepoch(), unixepoch());",
+        )
+        .unwrap();
+        let uid = |t: &str, name: &str| -> String {
+            conn.query_row(
+                &format!("SELECT sync_uid FROM {t} WHERE name = ?1"),
+                [name],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let (outer, inner, shelf) = (
+            uid("collection_folders", "Outer"),
+            uid("collection_folders", "Inner"),
+            uid("deck_folders", "Shelf"),
+        );
+
+        conn.execute("DELETE FROM deck_folders", []).unwrap();
+        // Behind the apply's guard, and `Inner` goes by the cascade alone.
+        suppressed(&conn, || {
+            conn.execute("DELETE FROM collection_folders WHERE name = 'Outer'", [])
+                .unwrap()
+        });
+
+        let mut want = vec![
+            ("collection_folders".to_owned(), inner),
+            ("collection_folders".to_owned(), outer),
+            ("deck_folders".to_owned(), shelf),
+        ];
+        want.sort();
+        assert_eq!(gone_rows(&conn), want);
+    }
+
+    /// **A row nothing is filed under leaves none** — a copy, a deck card, a wish. `gone` is only
+    /// ever asked about a parent, and every other row would be a table that grows with no reader.
+    #[test]
+    fn a_delete_of_a_row_nothing_is_filed_under_leaves_no_tombstone() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES ('c1','lea','1','en','nonfoil','NM',1,unixepoch(),unixepoch())",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM collection_entries", []).unwrap();
+        assert!(gone_rows(&conn).is_empty());
+    }
+
+    /// **A device in no group still records what it deleted**, so the day it pairs it can still
+    /// tell a peer's child of that row is moot rather than merely early.
+    #[test]
+    fn a_device_in_no_group_still_leaves_tombstones() {
+        let conn = crate::schema::memory_pair();
+        install(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO deck_folders (name, sort_order, created_at, updated_at, sync_uid)
+             VALUES ('Shelf', 0, unixepoch(), unixepoch(), 'u-shelf')",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM deck_folders", []).unwrap();
+        assert_eq!(
+            gone_rows(&conn),
+            vec![("deck_folders".to_owned(), "u-shelf".to_owned())]
+        );
+    }
+
+    /// **The parent tables are read off the specs**, so a synced table that grows a child is
+    /// tombstoned the day its spec says so.
+    #[test]
+    fn the_parent_tables_are_the_ones_the_specs_name() {
+        let mut got = parent_tables();
+        got.sort_unstable();
+        assert_eq!(
+            got,
+            vec![
+                "collection_folders",
+                "deck_categories",
+                "deck_folders",
+                "deck_labels",
+                "deck_notes",
+                "decks",
+                "wishlist_folders",
+            ]
+        );
     }
 
     /// **The reconciler's fold records nothing, and a counter is why.**

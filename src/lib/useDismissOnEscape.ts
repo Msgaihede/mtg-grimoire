@@ -138,7 +138,10 @@ function bubbleOwner(): symbol | undefined {
  * edit to revert (`DeckNameField`) and a filter box with text in it ({@link clearFieldOnEscape}).
  * They are React handlers on the input, which is target phase and therefore after capture and
  * before `window`'s bubble, and they `preventDefault()` only when they have something to spend
- * the press on. That is not a fourth rung so much as the reason the floor is safe to add: without
+ * the press on. **A field that could share a press with a capture rung must also ask whether the
+ * rung spent it first**, and ask `defaultPrevented` rather than its own "is my popup open" state,
+ * which the shipped window can re-render between the two listeners — {@link clearFieldOnEscape}
+ * does, and carries the measurement. That is not a fourth rung so much as the reason the floor is safe to add: without
  * it, Escape in a search box would clear the box **and** close the deck behind it.
  *
  * A layer that Escape dismissed hands focus back to whatever opened it — do that from
@@ -248,13 +251,28 @@ export function stopRowActivationKeys(e: ReactKeyboardEvent): void {
  * `DeckNameField`'s rule (`Escape` reverts a draft, and only while there *is* a draft) stated
  * once for the boxes that share it, rather than copied into each of them.
  *
+ * **A press something nearer has already spent is not the box's, and `defaultPrevented` is the only
+ * honest way to ask.** The field sits between the two halves of the handshake — after every
+ * capture listener, before any bubble one — so it keeps the rule both rungs keep: never act on a
+ * press something else has consumed. Asking the component's own state instead ("is my list up?")
+ * asks about a *render*, and in the shipped window the render a target-phase handler runs from is
+ * not always the one the press arrived in. Chromium runs a microtask checkpoint after **every
+ * listener** of a trusted event, React flushes a capture rung's close in that checkpoint, and the
+ * field's `onKeyDown` is then dispatched from the new render — where the list is already shut.
+ * `QuickAdd` guarded on exactly that flag, and one Escape put its list away **and** emptied it:
+ * measured 2026-09-28 (`tauri dev`, debug build) by a hand on the keyboard and over CDP alike, with
+ * `aria-expanded` already `false` at the `document` capture listener, one hop after the rung.
+ * **jsdom cannot see this unaided** — its dispatch is one JavaScript call with no checkpoint between
+ * listeners, which is also what an untrusted `dispatchEvent` in the live window does, and that kept
+ * the text. `QuickAdd.test.tsx` stands the checkpoint in by hand.
+ *
  * Not for a field inside a dialog or a popup: an `"inner"` layer listens in the **capture**
- * phase, so it has already consumed the press before the field's own handler runs, and a call
- * here would be a line that can never execute. `PrintingsFilterBar` and `DeckCoverPicker` are
- * both that case and both deliberately do without.
+ * phase and has already consumed the press before the field's own handler runs, so a call here
+ * does nothing. `PrintingsFilterBar` and `DeckCoverPicker` are both that case and both
+ * deliberately do without.
  */
 export function clearFieldOnEscape(e: ReactKeyboardEvent, value: string, clear: () => void): void {
-  if (e.key !== "Escape" || value === "") return;
+  if (e.key !== "Escape" || e.defaultPrevented || value === "") return;
   e.preventDefault();
   clear();
 }

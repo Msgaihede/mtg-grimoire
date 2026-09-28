@@ -336,6 +336,26 @@ describe("clearFieldOnEscape", () => {
     expect(navigation).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * A press a capture rung has already spent is not the box's — and the press is what says so.
+   *
+   * `Field` has text and no state that could gate it, which is the point: the only thing that can
+   * stop the clear is `defaultPrevented`. A caller's own "is my popup up?" flag is read off a
+   * render, and the shipped window can re-render between the rung and the field (see
+   * `QuickAdd.test.tsx`'s one-press test), so the helper cannot leave this to the caller.
+   */
+  it("leaves a press something nearer has already spent", () => {
+    const onClear = vi.fn();
+    const inner = vi.fn();
+    renderHook(() => useDismissOnEscape({ layer: "inner", onDismiss: inner }));
+    render(<Field onClear={onClear} />);
+
+    fireEvent.keyDown(screen.getByLabelText("Filter"), { key: "Escape" });
+
+    expect(inner).toHaveBeenCalledTimes(1);
+    expect(onClear).not.toHaveBeenCalled();
+  });
+
   it("ignores every other key", () => {
     const onClear = vi.fn();
     render(<Field onClear={onClear} />);

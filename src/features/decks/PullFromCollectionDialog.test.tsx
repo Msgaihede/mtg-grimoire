@@ -43,7 +43,6 @@ function row(over: Partial<DeckPullRow> = {}): DeckPullRow {
     finish: null,
     short: 3,
     categories: ["Removal"],
-    imageUris: null,
     candidates: [candidate()],
     ...over,
   };

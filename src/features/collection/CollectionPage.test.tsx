@@ -9,11 +9,6 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { isWebTarget } from "@/pwa/target";
-
-// The build flag `cardArtSrc` branches on. `false` is what `__CORE__` already answers under
-// vitest, so this changes nothing here until a case below asks for a browser.
-vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 // The shelf layout, **unchanged** — wrapped only so a case can count how often the wall is laid out
 // (`CardGrid` and this page both call it). Every other case reads it through the real function.
 vi.mock("@/lib/shelfLayout", async (importOriginal) => {
@@ -24,7 +19,7 @@ import { layoutShelves } from "@/lib/shelfLayout";
 import { dndManager } from "@/lib/dndManager";
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import {
@@ -53,9 +48,6 @@ import { pricesAsOf } from "@/lib/prices";
 import { MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { recordDrags, startPointerDrag } from "@/test-drag";
 import { pickOption } from "@/test-dropdown";
-import { stubNarrowWindow } from "@/test-viewport";
-import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
-import { PHONE_TILE_WIDTH } from "@/features/search/CardGrid";
 import { readCollectionTileDrag } from "./collectionDrag";
 
 const collectionList = vi.hoisted(() => vi.fn());
@@ -1251,10 +1243,14 @@ describe("CollectionPage", () => {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "summary"] }),
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
-    // And refetched, not merely marked: Task 12's badges put `ownedQuantity` on every result
-    // row, so a search left on screen behind this write is now visibly wrong rather than
-    // stale in a field nothing draws.
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    // And brought up to date, not merely marked: Task 12's badges put `ownedQuantity` on every
+    // result row, so a search left on screen behind this write is now visibly wrong rather than
+    // stale in a field nothing draws. `objectContaining` because the page's own docked search is
+    // mounted and patchable, so `refreshCardSearches` leaves it out of the prefix invalidation
+    // with a `predicate` and patches its badges instead (issue #552).
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ["cards", "search"] }),
+    );
     // And every deck: a deck owns what its own group holds, summed per oracle id, so a copy
     // stepped away from a deck's group has just changed what that deck reads as owning — and
     // the shortfall its "missing to wishlist" button would push. A copy stepped away from
@@ -1327,7 +1323,9 @@ describe("CollectionPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/not there any more/i);
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ["cards", "search"] }),
+    );
     // And the row is still there — the removal did not happen, so the list must not pretend
     // it did.
     expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
@@ -2813,7 +2811,9 @@ describe("the card menu", () => {
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ["cards", "search"] }),
+    );
 
     // And the wish's two, which are a strict subset — so the assertion that matters is the one
     // that must *not* fire: a wish is a copy nobody has, so it files nothing anywhere and no
@@ -2825,7 +2825,9 @@ describe("the card menu", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Wishlist" }));
 
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] }));
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ["cards", "search"] }),
+    );
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["decks"] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
   });
@@ -3241,7 +3243,9 @@ describe("clearing Recently removed", () => {
     );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+    expect(invalidate).toHaveBeenCalledWith(
+      expect.objectContaining({ queryKey: ["cards", "search"] }),
+    );
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
   });
 
@@ -6833,94 +6837,14 @@ describe("walking up to a level nothing has cached", () => {
   });
 });
 
-/**
- * **G1 — the tile a phone is handed, and the proof this wall is wired to ask for it.**
- *
- * A 390px window with the bottom tab bar instead of the rail leaves this wall **324px** once
- * `main`'s `p-5` and the scroller's own `border` + `p-3` are off it, and at the standard 170 that
- * is a single column with 90px of margin either side. `PHONE_TILE_WIDTH` and the arithmetic that
- * chose it live in `CardGrid.tsx`; what is asserted here is only that this call site asks the
- * question at all — a width that is right in a constant and never passed is the failure mode.
- *
- * **The prop, not a pixel.** jsdom lays nothing out, so the wall measures itself at 0 and
- * `tileWidthFor` answers a zero-width wall with the size it was asked for — which is what makes
- * the tile's own inline width a faithful reading of the prop and nothing else.
- */
-describe("the tile the collection's wall is given at the phone width", () => {
-  beforeEach(() =>
-    // `cardZoom` scales this width and lives in a module-level store that outlives a render, so
-    // a suite that left `collection` above 1× would be measured here.
-    useAppStore.setState({ collectionView: "grid", cardZoom: { ...DEFAULT_SECTION_ZOOMS } }),
-  );
-
-  afterEach(() => vi.unstubAllGlobals());
-
-  /** The tile's root — the box the width is set on, not the art button that takes the caret. */
-  const tileOf = (art: HTMLElement) => art.closest("[data-grid-index]");
-
-  it("hands the wall the phone's narrower tile below the phone width", async () => {
-    stubNarrowWindow(true);
-    wrap(<CollectionPage />);
-
-    const art = (await screen.findAllByAltText("Lightning Bolt"))[0];
-    expect(tileOf(art)).toHaveStyle({ width: `${PHONE_TILE_WIDTH}px` });
-  });
-
-  it("leaves the wall's own default standing at every other width", async () => {
-    stubNarrowWindow(false);
-    wrap(<CollectionPage />);
-
-    // 170 is `CardGrid`'s `TILE_BASE_WIDTH`, module-private and pinned by that component's own
-    // suite. Spelled here because what this case is about is that the prop is *absent* — a wall
-    // passing 144 unconditionally would pass the case above.
-    const art = (await screen.findAllByAltText("Lightning Bolt"))[0];
-    expect(tileOf(art)).toHaveStyle({ width: "170px" });
-  });
-});
-
-/**
- * **The collection wall in a browser**, which drew named, artless frames until 2026-08-31.
- *
- * `collection_list` is routed on web (`web/route.rs`'s `COMMANDS`), but its rows carried no
- * picture and `mtgimg://` is a Tauri custom protocol wasm cannot register with a browser — so
- * every tile fell through to `CardArt`'s no-art frame while the search wall beside it drew
- * pictures. The device pass of 2026-08-30 could not see it, because the collection was empty.
- *
- * The branch itself is `cardArtSrc`'s, in `@/lib/images`, and neither this page nor `CardGrid`
- * knows which build it is in. What these two cases say is that this wall is *wired* to it.
- */
 describe("the collection wall's art", () => {
-  /** One key, because `WALL_CARD_VARIANT` is the one size any wall draws. */
-  const SCRYFALL = { display: "https://cards.scryfall.io/display/front/c/1/c1.webp?1706230661" };
-
-  // Restored inside this block, so nothing else in the suite has to know the flag exists.
-  afterEach(() => {
-    vi.mocked(isWebTarget).mockReturnValue(false);
-  });
-
-  it("draws the row's own picture in a browser", async () => {
-    vi.mocked(isWebTarget).mockReturnValue(true);
+  it("draws the cached protocol picture", async () => {
     useAppStore.setState({ collectionView: "grid" });
-    collectionList.mockResolvedValue(page([{ ...BOLT, imageUris: SCRYFALL }]));
-    wrap(<CollectionPage />);
-
-    expect(await screen.findByAltText("Lightning Bolt")).toHaveAttribute("src", SCRYFALL.display);
-  });
-
-  /**
-   * The row carries the URL on **both** builds — one DTO, one shape — so the desktop claim is
-   * that the local cache still wins, not that nothing was passed. A wall that preferred the
-   * supplied URL would refetch a screenful of art the cache already holds, over the network and
-   * at Scryfall's expense, and it would still draw cards — so there would be nothing to see.
-   */
-  it("keeps drawing the cached protocol picture on desktop", async () => {
-    useAppStore.setState({ collectionView: "grid" });
-    collectionList.mockResolvedValue(page([{ ...BOLT, imageUris: SCRYFALL }]));
+    collectionList.mockResolvedValue(page([BOLT]));
     wrap(<CollectionPage />);
 
     const src = (await screen.findByAltText("Lightning Bolt")).getAttribute("src");
     expect(src).toContain("mtgimg");
-    expect(src).not.toContain("scryfall.io");
   });
 });
 

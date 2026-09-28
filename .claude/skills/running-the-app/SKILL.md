@@ -8,7 +8,7 @@ description: Use when launching MTG Grimoire, a live CDP pass, the Vite dev serv
 **Two things here are exclusive across every worktree, and both fail quietly.**
 
 - **The app.** `tauri-plugin-single-instance` is registered before every other plugin
-  (`src-tauri/src/desktop.rs`, the `#[cfg(desktop)] let builder` block) and keys on the
+  (`src-tauri/src/desktop.rs`, the `let builder` at the top of `run()`) and keys on the
   `com.mtggrimoire.app` identifier, which every worktree builds. A second instance gets
   **exit code 0, no window, no stderr** — it reads as a broken build. A debug build from
   `target/debug` counts.

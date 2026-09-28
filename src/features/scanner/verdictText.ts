@@ -1,18 +1,8 @@
-import { RAW_CALL_UNAVAILABLE } from "@/lib/core";
 import type { ScannerRule, ScannerStanding, ScannerStatus, ScannerTracked, ScannerVerdict } from "./types";
 
 export const CARD_ASPECT = 63 / 88;
 /** The distance gate, as a fraction of the descriptor's bits — `TrackerOptions::max_normalized`. */
 export const SURE_DISTANCE = 0.3;
-
-/**
- * What the page says where there is no detector to call.
- *
- * It is the browser core's own refusal rather than a second copy of the sentence: that module
- * rejects a `Uint8Array` call with this exact string, so a page that wrote its own would drift
- * from the message a reader gets if they press Scan anyway.
- */
-export const WEB_SENTENCE = RAW_CALL_UNAVAILABLE;
 
 /**
  * What a second window's Scanner view says while another window holds the scanner. The same string

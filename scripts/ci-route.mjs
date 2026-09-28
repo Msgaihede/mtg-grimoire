@@ -21,27 +21,27 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 /** Every job a `changes` output gates, in the order the outputs are printed. */
-export const JOBS = ["frontend", "rust", "powershell", "wasm", "android", "storybook"];
+export const JOBS = ["frontend", "rust", "powershell", "storybook"];
 
 /**
- * The four jobs a Rust source can break: the three that compile it, and `frontend`, whose tests
+ * The two jobs a Rust source can break: `rust`, which compiles it, and `frontend`, whose tests
  * read it as text. Not `storybook` — nothing it builds imports a file under `src-tauri/` or
  * `crates/`, and the fake's parity with `generate_handler!` is a vitest test that runs in
  * `frontend`.
  */
-const RUST_SIDE = ["frontend", "rust", "wasm", "android"];
+const RUST_SIDE = ["frontend", "rust"];
 
-/** The five jobs that build something. The fail-safe sets these and not `powershell`. */
+/** The three jobs that build something. The fail-safe sets these and not `powershell`. */
 const BUILD = [...RUST_SIDE, "storybook"];
 
 export const ARMS = [
   // The gate itself. A change to the gate re-runs the whole gate.
   { match: [".github/workflows/ci.yml", "scripts/ci-route.mjs"], jobs: JOBS },
 
-  // The pinned Rust toolchain and the one action that installs it. Every job that compiles Rust
-  // reads them, and `frontend` because `scripts/toolchain.test.mjs` does — it holds every
-  // workflow to installing Rust through that action and nothing else. **Above the `*` fail-safe
-  // only for `storybook`'s sake**, which installs no Rust.
+  // The pinned Rust toolchain and the one action that installs it. `rust` reads them, and
+  // `frontend` because `scripts/toolchain.test.mjs` does — it holds every workflow to installing
+  // Rust through that action and nothing else. **Above the `*` fail-safe only for `storybook`'s
+  // sake**, which installs no Rust.
   { match: ["rust-toolchain.toml", ".github/actions/rust-toolchain/*"], jobs: RUST_SIDE },
 
   // The two workflows outside this gate. No job in `ci.yml` runs them, but
@@ -53,23 +53,9 @@ export const ARMS = [
     jobs: ["frontend"],
   },
 
-  // The Node version every job that installs Node reads through `node-version-file`. `rust`,
-  // `android` and `powershell` install none.
-  { match: [".nvmrc"], jobs: ["frontend", "wasm", "storybook"] },
-
-  // The wasm build's own inputs, and nothing else's. **Above `scripts/*` and `src/*`**, both of
-  // which match more broadly and would route the wrong jobs first. `vite.web.config.ts` is not
-  // matched by the `vite.config.ts` literal below, but it is listed here so the pair reads as
-  // one decision.
-  { match: ["scripts/build-wasm.mjs", "vite.web.config.ts"], jobs: ["frontend", "wasm"] },
-
-  // The frontend half of the web target: what the web bundle adds on top of the desktop one,
-  // and `npm run web:build` type-checks and bundles all of it.
-  // `storybook` too, as for every arm under `src/`: whatever a story imports, Storybook compiles.
-  {
-    match: ["src/workers/*", "src/web/*", "src/lib/core/*"],
-    jobs: ["frontend", "wasm", "storybook"],
-  },
+  // The Node version every job that installs Node reads through `node-version-file`. `rust` and
+  // `powershell` install none.
+  { match: [".nvmrc"], jobs: ["frontend", "storybook"] },
 
   // Affects no job. Nothing here is compiled, linted or tested: `eslint .` never sees a `.md`,
   // no test on either side reads one (`ci-route.test.mjs` holds that to the census), and
@@ -98,28 +84,8 @@ export const ARMS = [
   // `lock.ps1` imports would otherwise run the build jobs and skip the only one that tests it.
   { match: ["*.ps1", "*.psm1", "*.psd1"], jobs: ["powershell"] },
 
-  // The two files under `gen/android/` that a Rust test `include_str!`s — one pins
-  // `minSdk`/`targetSdk`/the debug suffix, the other pins the permission list to `INTERNET`
-  // alone. Test inputs rather than build inputs, and no frontend test reads either. **Above the
-  // arm that silences the rest of that tree.**
-  {
-    match: [
-      "src-tauri/gen/android/app/build.gradle.kts",
-      "src-tauri/gen/android/app/src/main/AndroidManifest.xml",
-    ],
-    jobs: ["rust"],
-  },
-
-  // The rest of the Android Gradle project. Nothing reads it: `cargo` does not compile Kotlin,
-  // `eslint` does not lint a `.gradle.kts`, and the `android` job cross-compiles the library
-  // without Gradle. **Above `src-tauri/*`**, or a theme colour would run the whole matrix.
-  { match: ["src-tauri/gen/android/*"], jobs: [] },
-
   // Rust — and the frontend too. **Every build job but `storybook` reads this tree**:
   //   - `rust` compiles and tests it;
-  //   - `wasm` and `android` build the same crate for two more targets, and each has broken
-  //     with `verify` green (a `use tauri::` on the wasm side of `lib.rs`'s map; #270 for
-  //     Android, found by building an APK by hand);
   //   - `frontend` reads files here as text — `ipc.test.ts`'s mirror of every command module
   //     it wraps, `db.rs`, `image_uri.rs`, `share/publish.rs`, `tauri.conf.json` and the share
   //     golden `share/__golden__/snapshot.json`, and `desktop.rs`'s `generate_handler!` list,
@@ -133,8 +99,7 @@ export const ARMS = [
   // The TypeScript side's files that Rust tests read. `transfer::write` asserts the Rust export
   // writer reproduces every golden file byte for byte (with `card.rs` and `fields.rs` reading
   // `corpus.json` and `fields.json`), and `changes` asserts `userTables.json` is the user side
-  // of its table registry. Test inputs only — every read is in a `#[cfg(test)]` module — so
-  // neither `wasm` nor `android`, whose builds compile no tests. **Above `src/*`.**
+  // of its table registry. **Above `src/*`.**
   {
     match: ["src/features/transfer/__golden__/*", "src/lib/userTables.json"],
     jobs: ["frontend", "rust", "storybook"],
@@ -151,14 +116,12 @@ export const ARMS = [
   { match: [".storybook/*"], jobs: ["frontend", "storybook"] },
   {
     match: ["package.json", "package-lock.json", "components.json", ".prettierrc"],
-    jobs: ["frontend", "wasm", "storybook"],
+    jobs: ["frontend", "storybook"],
   },
-  // `npm run web:build` is `tsc && vite build --config vite.web.config.ts`, and that config
-  // merges `vite.config.ts` — so all four of these are wasm inputs too. Storybook's Vite builder
-  // loads `vite.config.ts` as well.
+  // Storybook's Vite builder loads `vite.config.ts` as well.
   {
     match: ["tsconfig.json", "tsconfig.node.json", "vite.config.ts", "eslint.config.js"],
-    jobs: ["frontend", "wasm", "storybook"],
+    jobs: ["frontend", "storybook"],
   },
   // `scripts/` because `eslint .` lints it — its ignore list does not name it — and because
   // `vitest` collects `scripts/**/*.test.mjs`.
@@ -166,10 +129,8 @@ export const ARMS = [
 
   // The `card-scanner` crate: a separate cargo package, deliberately not a workspace member,
   // that `src-tauri` takes as a path dependency. `rust` compiles it into the app and runs its
-  // own suite, `android` cross-compiles it, and `frontend` reads eight of its `.rs` files as
-  // text (`ipc.test.ts`'s mirror rows) and lints `crates/*/scripts/**/*.mjs`. `wasm` is kept
-  // although `src-tauri/Cargo.toml` has the dependency in its `cfg(not(target_family =
-  // "wasm"))` block — which block it sits in is that manifest's decision, not this router's.
+  // own suite, and `frontend` reads eight of its `.rs` files as text (`ipc.test.ts`'s mirror
+  // rows) and lints `crates/*/scripts/**/*.mjs`.
   { match: ["crates/*"], jobs: RUST_SIDE },
 
   // Anything unrecognised runs every build job. This is the fail-safe that makes the lists above

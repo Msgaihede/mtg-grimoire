@@ -31,7 +31,9 @@ export const queryClient = new QueryClient({
  *   shopping list's own rows move. A writer here that takes no wish pays one refetch of a page
  *   that cannot have changed, which is the price of the set being one set.
  * - `["cards", "search"]` — `CardSummary.ownedQuantity`, the Owned badge on the very tile the
- *   reader pressed.
+ *   reader pressed. **Fire this set through `@/lib/searchMarks`' `invalidateOwnedWrite`**, which
+ *   patches that badge into the loaded pages rather than refetching every one of them (issue
+ *   #552); a loop over the bare keys pays up to 100 page reads per press.
  * - `["decks"]` — every deck's detail, because copies filed in no group are what an open deck
  *   reads as spare, and a copy taken out of another deck's group is a card off *that* deck.
  */

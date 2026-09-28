@@ -8,7 +8,8 @@
  *
  * ## Over the corpus's own dates, counted in UTC
  *
- * `upcoming_sets` reads `cards` rather than `sets` — the browser build never fills `sets` — and
+ * `upcoming_sets` reads `cards` rather than `sets` — a corpus that has not fetched `/sets` still
+ * answers — and
  * "today" is SQLite's `date('now')`, which is UTC and **travels back beside the list**
  * (`UpcomingSets.today`). Days are counted from that date and never from this machine's clock
  * ({@link daysUntil}): a reader west of Greenwich in the evening would otherwise read a set as a

@@ -1115,9 +1115,9 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
       the panel to its overlay at 1024 on the card view, where a 360px list was measured drawing
       four tiles with no overflow at all — a working layout refused because a different view could
       not have used it. `useDeskWidth` takes `floor` as a parameter for exactly this.
-  - **The overlay ships too**, and it is the half a phone needs. Below the floor the shell already
-    knows how to draw itself *over* the list at the full row width, so the plumbing is one more
-    number from the page. Without it a narrow window would offer a sidebar that is only ever a
+  - **The overlay ships too**, and it is the half a narrow desk needs. Below the floor the shell
+    already knows how to draw itself *over* the list at the full row width, so the plumbing is one
+    more number from the page. Without it a narrow desk would offer a sidebar that is only ever a
     greyed chevron.
   - **The two lists open _railed_ where the deck opens open, and the overlay is why.** These pages
     have no docked card pane to suppress the overlay, so `roomy === false` always implies an
@@ -1130,11 +1130,12 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     false, wishlist: false }`. A rail is not an absence — 36px of chevron with `Search cards` turned
     on its side — and the press is remembered per section forever after.
   - **One overflow at 414px is _not_ this column's, and it was checked rather than assumed.** At a
-    414px window the nav rail is still 208px (`PHONE_PX` is 390, so `BottomTabBar` has not taken
-    over) and `main` overflows horizontally by **105px**. Collapsing the panel to its rail leaves
-    **90** of that, so 90px is the wishlist's own figure-row actions and 15px is the rail. The page
-    was already broken at that width; at a true phone width (374, tab bar engaged) `main` overflows
-    by **0**.
+    414px window the nav rail is still 208px and `main` overflows horizontally by **105px**.
+    Collapsing the panel to its rail leaves **90** of that, so 90px is the wishlist's own
+    figure-row actions and 15px is the rail. The page was already broken at that width; at 374,
+    where the phone's tab bar had replaced the rail, `main` overflowed by **0**. **Both widths are
+    below the desktop floor and were reached here by emulation** — and the tab bar went with the
+    phone layout on 2026-09-27, so the 374 row describes nothing the tree still draws.
 - **A scaled budget floors rather than scales only while the chrome inside it is unscaled — and
   since 2026-08-17 almost none of it is.** The rule was `max(base, scaled(base, zoom))` and three
   surfaces landed on it independently: `CardGrid`'s 28px caption was set by the 24px quick-add
@@ -1632,10 +1633,14 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   is the box it is a percentage *of*, and `max(1.5rem,5vh)` a side leaves it
   `min(100% − 3rem, 90vh)` of the window. **The `max()` floor is load-bearing rather than
   decoration**: below 480px tall, 5vh is the *smaller* inset, and a bare `5vh` would draw the panel
-  **351px at y 19.5** on a phone in landscape at 844×390 — 4.5px inside the 24px the scrim keeps
-  across, on the one class of window that still has an inset at all. Below `sm` there is no ceiling
-  at all, by the same `p-0` that takes the frame off: a phone's dialog fills the glass, and 5vh of
+  **351px at y 19.5** at 844×390 — 4.5px inside the 24px the scrim keeps across, on the one class
+  of window that still has an inset at all. Below `sm` there is no ceiling at all, by the same
+  `p-0` that takes the frame off: a window under 640px gets a dialog that fills it, and 5vh of
   scrim over a 358px-wide panel is the inset that fold exists to delete, spelled on the other axis.
+  **Both of those windows are below the desktop floor (1024×700), so the shipped app draws
+  neither**, and the two rungs are kept on purpose rather than left behind: they are correct at any
+  width and change nothing above the floor, which was the owner's call on 2026-09-27 when the phone
+  layout they were measured against was removed.
 
   **Doing it as a `max-h` on the panel instead would have silently outranked the card modal.**
   `CardDetailModal`'s `PANEL_SIZE` carries `min-[640px]:max-h-[min(825px,80vh)]`, and Tailwind
@@ -1658,7 +1663,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   | 1998×1088 — the reporter's own | 24, 1040 | **54.4, 979.2** |
   | 1280×800 | 24, 752 | **40, 720** |
   | 1024×700 — the window floor | 24, 652 | **35, 630** |
-  | 844×390 — a phone in landscape | 24, 342 | **24, 342** |
+  | 844×390 — short, and above `sm` | 24, 342 | **24, 342** |
   | 500×844 — below the 640 fold | 0, 844 | **0, 844** |
 
   The fifth row is the `max()` floor doing its work and the sixth is the fold: full bleed, and the
@@ -1667,7 +1672,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   `max-h-[min(100%,90vh)]` came off `AllPrintingsDialog` in the same commit, and removing it was
   not merely tidying: `cn`'s `tailwind-merge` deletes the shell's `max-h-full` the moment a host
   names a `max-h-…`, so left in place it would have capped that one dialog at **759.6px at y 42.2**
-  on the phone row while every other dialog filled the glass.
+  on the sixth row while every other dialog filled the window.
 
   **A dialog's tallest block opens shut when it is not what the reader came for** (2026-08-18),
   which is `DeckSearchPanel`'s collapsed default one rung down. `ExportDialog`'s decklist preview
@@ -3539,8 +3544,8 @@ trap it avoids, and the measured table are with the shell's own clamp — search
 `size` here is therefore a width and nothing else again. **Re-adding a height would be wrong
 rather than redundant**, and in one direction: `cn`'s `tailwind-merge` deletes the shell's
 `max-h-full` the moment a host names a `max-h-…`, so below `sm` — where the scrim is `p-0` and
-every other dialog fills the phone's glass — this one alone would keep a 90vh cap and float on a
-358px-wide screen. Measured at 500×844: 844px tall with the shell's rule, **759.6 at y 42.2** with
+every other dialog fills the window — this one alone would keep a 90vh cap and float in a
+358px-wide one. Measured at 500×844: 844px tall with the shell's rule, **759.6 at y 42.2** with
 the old host string forced back on. Above `sm` the two agree exactly, which is why nothing else
 about this modal moved.
 
@@ -4206,7 +4211,7 @@ vitest — so the classes are `twMerge`'s own answer (`shrink-0 size-4 rounded-[
 | --- | --- | --- | --- | --- | --- |
 | `h-9`, short label | `Removal` | 16×16 at x 35, `4px` radius, `rgb(211,32,42)` | 52.8px at x 59 | **14px** at x 239 | 240×36, no overflow |
 | `h-9`, 35-char label | `Removal — sweepers and edicts, long` | 16×16 | 182.8px, ellipsed | **11.3px** | 240×36, no overflow |
-| `h-11` (phone rung) | `Removal` | 16×16, centred | 52.8px | **14px** | 240×44 |
+| `h-11` (below `@min-[900px]/card`) | `Removal` | 16×16, centred | 52.8px | **14px** | 240×44 |
 | No label | — | none | — | 14px | 240×36 |
 
 **The chevron squashing is the arrow's own bug and it predates this.** A `size-3.5` is a *request*,
@@ -4938,11 +4943,11 @@ tree rather than in an array literal.
 
 > ⚠️ **"Zero `[aria-live]`" is a fact about the document that was measured, not about the app, and
 > the difference matters — corrected 2026-08-29.** It was a `querySelectorAll` on one page of a
-> running window, so it counted what was **mounted**. The source has **four** `aria-live="polite"`
+> running window, so it counted what was **mounted**. The source had **four** `aria-live="polite"`
 > elements — `DeckHistoryDialog.tsx:284`, `TheoryDiffDialog.tsx:620`,
-> `transfer/import/shared/CommitBar.tsx:88`, `web/BuildCorpus.tsx:62` — each inside a dialog or a
-> page that was not open, and **93** `role="status"`/`role="alert"` sites against the five that
-> were on screen.
+> `transfer/import/shared/CommitBar.tsx:88`, and `web/BuildCorpus.tsx:62`, which went with the
+> browser build on 2026-09-27 — each inside a dialog or a page that was not open, and **93**
+> `role="status"`/`role="alert"` sites against the five that were on screen.
 >
 > **None of the four is about a drag, so the finding this section rests on is unchanged.** What
 > changes is the cost of doing something about it: the app already has a live-region vocabulary to
@@ -5059,10 +5064,11 @@ place.** The plan that adopts it has to answer each of these at its own site:
    deliberate rather than incidental.
 
 **The audit this does not remove.** The plugin answers the *drag*. It does not answer the app's
-other pointer-only affordances, which the phone census enumerated: `menuClick` — a plain-click door
-to a context menu — exists at exactly **two** surfaces in the whole app (the collection's and the
-wishlist's folder cards), and the ctrl+wheel card zoom has exactly one caller and no other door.
-Those stay open and belong to the mobile work rather than to this decision.
+other pointer-only affordances, which the touch census (*What touch takes away*, below)
+enumerated: `menuClick` — a plain-click door to a context menu — existed at exactly **two**
+surfaces on the day of that census (`grep -rn "menuClick(" src/` for today's), and the ctrl+wheel
+card zoom has exactly one caller and no other door. Those stay open and belong to touch rather than
+to this decision.
 
 ### The shipped CSP blocks a plugin dnd-kit cannot be told not to load — and the rules moved into `index.css`
 
@@ -5198,50 +5204,47 @@ there rather than merely permissive.
 
 ---
 
-## Three floors, and only one of them is the app's
+## The desktop floor, and the one module that states it
 
 **`1024` is `src-tauri/tauri.conf.json`'s `minWidth`, so it is a promise the *desktop window*
-makes and nothing else in this repo makes** (2026-08-29, read out of the config in the
-`mobile-layout` worktree at `56e94c2`). Tauri hands it to the OS window manager, which refuses to
-drag the frame narrower; a browser tab honours nothing of the sort and neither does an Android
-webview, where the window is whatever the device is. Every measurement in this document that ends
-"which the 1024px floor forbids" is still true — a horizontal page scrollbar at 1024 is still the
-failure those passes were checking for — but it is true *about desktop*, and the phrasing that
-makes it sound universal is the thing being corrected here.
+makes** (2026-08-29, read out of the config in the `mobile-layout` worktree at `56e94c2`). Tauri
+hands it to the OS window manager, which refuses to drag the frame narrower. Every measurement in
+this document that ends "which the 1024px floor forbids" is still true — a horizontal page
+scrollbar at 1024 is still the failure those passes were checking for.
 
-**The three widths are now stated in one place, `src/lib/viewports.ts`**, and the reason it is a
-module rather than four numbers typed into four story files is that two options compared at two
-widths are not compared:
+**This section was *Three floors, and only one of them is the app's* until 2026-09-27.** It also
+stated a 390 × 844 phone frame and a 768px tablet one, chosen for the browser and Android builds,
+which honoured no such floor. Those builds were removed on 2026-09-27 and the phone layout the two
+frames were drawn for went after them — *The phone layout, removed on 2026-09-27* below has what
+went and what stayed — so the desktop window is the one target left and its floor is the one width
+the app states.
 
-| | | Why that number |
-| --- | --- | --- |
-| `DESKTOP_FLOOR_PX` / `DESKTOP_FLOOR_HEIGHT_PX` | 1024 × 700 | Quoted from `tauri.conf.json`'s `minWidth`/`minHeight`. Rust owns it; TypeScript only repeats it |
-| `PHONE_PX` / `PHONE_HEIGHT_PX` | 390 × 844 | A hard case rather than a device. `CardGrid.columnsFor(350, 170)` floors at **one** column at this width, which is the failure the wall's design round exists to answer |
-| `TABLET_PX` | 768 | Portrait tablet — the width at which the deck editor's two columns become possible again (`roomForPanel`'s threshold is 414) |
+**It is stated in one place, `src/lib/viewports.ts`**: `DESKTOP_FLOOR_PX` and
+`DESKTOP_FLOOR_HEIGHT_PX`, 1024 × 700, quoted from `tauri.conf.json`'s `minWidth`/`minHeight`.
+Rust owns the number; TypeScript only repeats it.
 
-**These are widths to look at, not breakpoints to branch on**, and the module's own doc comment
+**It is a width to look at, not a breakpoint to branch on**, and the module's own doc comment
 says so at the top rather than leaving it to be inferred. Where a control row folds is a question
 about *that row's own box* — `FilterBar` answers it with `@container/fb` and `DeckEditor` with a
 `ResizeObserver` over its desk — because the same component is drawn in a 1500px bar and in a
 206px docked panel, and a viewport query answers about the wrong box. Nothing here may grow a
-`sm:`/`md:`/`lg:` layout branch off these constants without saying, at its own site, why the
-*window* is the thing it is asking about.
+`sm:`/`md:`/`lg:` layout branch off the floor without saying, at its own site, why the *window* is
+the thing it is asking about. **There has been no viewport branch in the app since 2026-09-27**;
+the one there was, `useNarrowWindow`, went with the phone layout.
 
 **`src/lib/viewports.test.ts` is the fence, and it is the only thing in the build that compares
 the two files.** It reads `src-tauri/tauri.conf.json` through Vite's `?raw` — the same trick
 `tokens.test.ts` uses on `index.css`, because this project has no `@types/node` and cannot reach
 `node:fs` — parses it, and asserts the constants against `app.windows[0]`. Without it a floor
-raised in Rust and not in TypeScript would leave every story in the design round drawn at a width
-the app can no longer be, silently and forever. The second test only orders the three targets, and
-that is not decoration either: a phone width at or above the tablet width would make the design
-round's two frames one frame, and every option would be looked at once.
+raised in Rust and not in TypeScript would leave every story sized from it drawn at a width the
+app can no longer be, silently and forever.
 
-**Proved by mutation, 2026-08-29, three of them, each reverted:** `DESKTOP_FLOOR_PX` → 1025 went
-red with `expected 1025 to be 1024` — and the *expected* side is the number that came out of the
-config, which is what proves the `?raw` import reached the real file rather than an empty string;
+**Proved by mutation, 2026-08-29, each reverted:** `DESKTOP_FLOOR_PX` → 1025 went red with
+`expected 1025 to be 1024` — and the *expected* side is the number that came out of the config,
+which is what proves the `?raw` import reached the real file rather than an empty string; and
 `DESKTOP_FLOOR_HEIGHT_PX` → 701 went red the same way, because the first mutation alone leaves the
-height assertion unexercised; and `PHONE_PX` → 800 went red with `expected 800 to be less than
-768`. Two tests, 2 passed at rest.
+height assertion unexercised. A third mutation that day proved a second test, which ordered the
+three frames; it went with the two narrower ones.
 
 **No site was cross-linked to this section, and the grep is why.** `1024px floor|app's own
 floor|narrowest window this app` matches **43 lines across 22 files** — 38 lines across 20 once
@@ -5255,19 +5258,19 @@ reader finds by searching the same phrase is the cheaper fence. **A note for who
 grep:** it undercounts. `DeckSearchPanel.test.tsx:1413` wraps "the app's 1024px / floor" across a
 line break and the pattern misses it, so the real figure is a floor and not a count.
 
-**What web and Android have instead is nothing** — no enforced minimum at either target, which is
-precisely why the phone frame above had to be chosen rather than read off a config. `PHONE_PX` is
-a width the design round agrees to look through; it is not a width anything refuses to go below.
-
 ---
 
-## The shell is as tall as the *visible* viewport, and the safe area is opted into
+## The shell is as tall as the *visible* viewport
 
 Shipped 2026-08-29 (mobile-layout 9a, Task 2), measured against a production `npm run build` —
 `tsc && tsc -p .storybook && tsc -p tsconfig.sw.json && tsc -p tsconfig.relay.json && vite build`
-— in the `mobile-layout` worktree. Nothing here changes a layout. It changes what the shell's
-height *means* on a target this app does not yet ship to, and it makes four properties available
-for the one that will.
+— in the `mobile-layout` worktree. Nothing here changes a layout. It changed what the shell's
+height *means* in a mobile browser, and it opted the page into the safe area. **The safe-area half
+was removed on 2026-09-27 with the phone layout** — `viewport-fit=cover` in `index.html`, the four
+`--safe-*` insets in `src/index.css`, their uses in `AppShell` and `StartupScreen`, and the tests
+that pinned them; *The phone layout, removed on 2026-09-27* below has why. **`h-dvh` stayed**: in
+WebView2 it is the same number as `h-screen`, as the reading below shows, so there is nothing to
+gain by swapping it back.
 
 **`h-screen` is `100vh`, and `100vh` on a mobile browser is the *large* viewport** — the height
 the page would have if the URL bar were hidden. An `h-screen` shell therefore reaches past the
@@ -5290,66 +5293,44 @@ The shell's height is `documentElement.clientHeight` exactly, which is what it w
 first `type: page` target and DevTools, if open, is one, so a probe can silently answer about the
 wrong DOM.
 
-**The three inset paddings resolving to `0px` is the second half of that reading**, and it is the
-one that could not be got from a test: it shows `env(safe-area-inset-*)` parsing and falling back
-rather than invalidating the declaration, on a desktop window where all four are zero. The block
-costs the shipped app nothing, measured.
+**The three `pad` fields were the safe-area insets**, read in the same `eval`: `0px` on a desktop
+window, as they had to be, which showed `env(safe-area-inset-*)` parsing and falling back rather
+than invalidating the declaration. The insets are gone from the shell and the sheet since
+2026-09-27; the payload is kept as it was taken.
 
-**`viewport-fit=cover` and the four `--safe-*` properties are one change, because either half
-alone is worse than neither.** `env(safe-area-inset-*)` resolves to `0px` in every context until
-`index.html`'s viewport meta carries `viewport-fit=cover`; without the meta the properties are
-dead code — green in the suite, zero in the window, findable only on hardware with a notch. With
-the meta and without the padding, the page is moved *under* the notch and the gesture bar. So
-`index.html` gained the attribute and `src/index.css` gained the block in the same commit.
-
-The insets reach the shell as an **inline style**, not as arbitrary-value classes. Tailwind scans
-source text for whole class names, and a mistyped arbitrary value emits *nothing* — silently, with
-`tsc` and the whole suite green. An inline style is what a computed length is already spelled as
-here, exactly as a column template is.
-
-**`--safe-b` is published and deliberately unapplied.** Nothing in this build is anchored to the
-window's bottom edge, and padding the shell there would inset a scroller against an indicator that
-is not over it. It exists for whatever 9b puts down there — a bottom tab bar, a sheet — and the
-absence is the decision rather than an oversight.
-
-The four properties sit in a `:root` block **of their own**, immediately after `.dark`, rather
-than in the palette's. That block and `.dark` carry identical values on purpose and the insets
-have no `.dark` twin to carry: they are not a colour, and a second theme would not move them.
-
-### The build proved the classes emit, which is not a formality here
+### The build proved the class emits, which is not a formality here
 
 `h-dvh` is a core utility rather than an arbitrary value, so it *should* survive — but this repo
-has shipped a class that compiled to nothing, and the check is two greps against the built sheet
-(`dist/assets/index-*.css`, 159.09 kB / 28.95 kB gzipped):
+has shipped a class that compiled to nothing, and the check is a grep against the built sheet
+(`dist/assets/index-*.css`, 159.09 kB / 28.95 kB gzipped on the day):
 
 ```
 $ grep -o "\.h-dvh{[^}]*}" dist/assets/*.css
 .h-dvh{height:100dvh}
-
-$ grep -o -- "--safe-t:[^;]*" dist/assets/*.css
---safe-t:env(safe-area-inset-top,0px)
 ```
 
-All four insets are in the sheet — `--safe-t`, `--safe-r`, `--safe-b`, `--safe-l` — and
-`dist/index.html` carries
-`content="width=device-width, initial-scale=1.0, viewport-fit=cover"`.
+The same pass grepped the four `--safe-*` insets out of the sheet and `viewport-fit=cover` out of
+`dist/index.html`; neither is there to find since 2026-09-27.
 
-`.h-screen{height:100vh}` is **still emitted**, and that is correct rather than leftover: three
-`src/web/` boot screens use `min-h-screen` and `PlacementProbe.stories.tsx` uses `h-screen`
-deliberately. What is no longer true is the *shell* being one.
+`.h-screen{height:100vh}` was **still emitted**, and that was correct rather than leftover: three
+`src/web/` boot screens — gone with the browser build on 2026-09-27 — used `min-h-screen`, and
+`PlacementProbe.stories.tsx` uses `h-screen` deliberately. What is no longer true is the *shell*
+being one.
 
 ### The assertion that was green over its own regression
 
 Worth writing down, because it cost a mutation round and it is this repo's own trap read backwards.
+**The test is gone** — it pinned `viewport-fit=cover`, which went with the phone layout on
+2026-09-27 — **and the rule it earned is not.**
 
-`AppShell.test.tsx` asserts `viewport-fit=cover` against `index.html` read through `?raw`, which is
-the only observable — no render reaches that file. Written as the obvious whole-file
+`AppShell.test.tsx` asserted `viewport-fit=cover` against `index.html` read through `?raw`, which
+was the only observable — no render reaches that file. Written as the obvious whole-file
 `expect(html).toMatch(/viewport-fit=cover/)`, **it passed with the attribute deleted from the
-tag**: the HTML comment written directly above the meta explains why the attribute and the four
-properties ship together, and that explanation names the attribute. The regex matched the prose.
+tag**: the HTML comment written directly above the meta explained why the attribute and the four
+insets shipped together, and that explanation named the attribute. The regex matched the prose.
 
 This is `tokens.test.ts`'s rule — Tailwind reads prose as eagerly as code — arriving from the other
-side: here the *test* read prose as eagerly as markup. The fence is anchored on the tag now:
+side: here the *test* read prose as eagerly as markup. The fence was anchored on the tag:
 
 ```ts
 const VIEWPORT_META = /<meta\s+name="viewport"[^>]*\scontent="([^"]*)"/;
@@ -5377,78 +5358,21 @@ Both name the shell as `h-screen` and neither is in this task's file set:
 
 A prose-only edit routes to neither CI job, so nothing goes red for either.
 
-### The dialog against a real URL bar — deferred, with the recipe
-
-**This measurement was not taken, and the reading it needs cannot be emulated.** It is recorded
-here in full so the next person pays for it once.
-
-The question. `Dialog`'s scrim is `fixed inset-0 grid grid-rows-[minmax(0,1fr)]`
-(`src/components/Dialog.tsx:333`) and the panel's clamp is `max-h-full`
-(`src/components/Dialog.tsx:421`), a percentage of that grid area. If a `fixed` box's `bottom: 0`
-resolves against the **large** viewport on a mobile browser, the grid area is taller than the
-screen, `max-h-full` clamps to something bigger than the window, and the panel's footer buttons
-land under the URL bar — which is the 2963px failure this document already records, arriving by a
-different route and just as invisible to jsdom.
-
-This is genuinely two-way and must not be guessed. It needs a real device, because
-`scripts/cdp.mjs size` hardcodes `mobile: false` and emulates a narrow *desktop* — no URL bar, no
-`visualViewport` behaviour, no coarse pointer.
-
-**The recipe.**
-
-1. Take the Storybook lock (`.claude/skills/running-the-app/lock.ps1`), `npm run storybook`, then
-   `adb reverse tcp:6006 tcp:6006`. Storybook runs entirely on the fake, so this needs nothing
-   from the web or Android targets.
-2. On the phone, open the story **without the manager chrome**, which otherwise supplies its own
-   scroller and makes the reading about the wrong box:
-   `http://localhost:6006/iframe.html?id=decks-dialog-shell--long-body&viewMode=story`
-   (`Decks/Dialog shell → Long body`, whose 24-paragraph body is already the "more content than
-   fits" case). Repeat on
-   `http://localhost:6006/iframe.html?id=decks-categoriesdialog--default&viewMode=story` for a
-   panel that carries real footer controls — the `Dialog` shell itself renders header + body and
-   its hosts supply the footer, so the shell's own story has no footer to read.
-3. Evaluate, in one expression:
-
-```js
-(() => {
-  const panel = document.querySelector('[role="dialog"]');
-  const scrim = panel.parentElement;
-  const last = panel.lastElementChild;
-  return {
-    scrimHeight: scrim.getBoundingClientRect().height,
-    panelBottom: panel.getBoundingClientRect().bottom,
-    lastChildBottom: last.getBoundingClientRect().bottom,
-    visual: visualViewport.height,
-    inner: innerHeight,
-    client: document.documentElement.clientHeight,
-  };
-})();
-```
-
-`scrim` is `panel.parentElement` because that is exactly how `Dialog.test.tsx:226` reaches it;
-using the same expression keeps the live reading and the pinned assertion talking about one
-element.
-
-4. **If `panelBottom > visualViewport.height`** (equivalently, if `scrimHeight` exceeds it): add
-   `h-dvh` to the scrim's class string beside `inset-0` — a specified height wins over `bottom` on
-   a fixed box — and pin it in `Dialog.test.tsx` next to the existing
-   `expect(scrim).toHaveClass("grid-rows-[minmax(0,1fr)]")` at line 230, with a comment naming the
-   device, the browser and the three numbers, because jsdom can never see the failure.
-5. **If it does not:** change nothing, and **record the three numbers, the device and the browser
-   here.** "We looked and it was already right" is a result. Without it the next person pays for
-   the same measurement, and there is no cheaper way to take it.
-
-Until one branch or the other is written down, `Dialog.tsx` is unchanged and this question is
-open.
-
 ---
 
 ## One spelling of the coarse-pointer question, and a target-size floor
 
 Shipped 2026-08-29 (mobile-layout 9a, Task 3), against tailwindcss **4.3.3** and proved by a
 production `npm run build` in the `mobile-layout` worktree. Two lines of CSS and a sweep. **No
-control in the app uses either of them**, and that is the point of the task rather than an
-unfinished half of it.
+control in the app used either of them on the day**, and that was the point of the task rather
+than an unfinished half of it.
+
+**Both outlived the phone layout they were written for, by the owner's decision on 2026-09-27.**
+They ask about the *pointer* rather than the width, so the reason they exist — a finger needs a
+bigger target than a cursor — holds on a touchscreen Windows machine as well as it held on a
+phone. One caveat nobody has paid to settle: `pointer` asks about the **primary** pointer, so a
+touchscreen laptop whose trackpad is primary answers *fine* and draws none of this; which Windows
+machines answer *coarse* in WebView2 has not been measured in this repo.
 
 ### The variant
 
@@ -5514,27 +5438,33 @@ above.
 
 **WCAG 2.5.5 (AAA) asks 44×44 CSS px; 2.5.8 (AA) asks 24×24**, which this app already clears
 everywhere — its control ladder is `h-9`/`size-9` (36px) for a control and `h-8`/`h-7` (32/28px)
-for a small one. 44 is the number because the AA floor is a floor for a *pointer*, and the
-surfaces this token is for have no pointer at all.
+for a small one. 44 is the number because the AA floor is a floor for a *cursor*, and the input
+this token is for is a finger, which has no cursor to aim.
 
 **A plain custom property rather than a `@theme` entry.** It is a minimum, not a step on the
 spacing scale, and putting it in the spacing namespace would generate `p-target-min` and
-`gap-target-min` — two utilities that mean nothing and one that means this. It sits in the
-environment `:root` block beside the four `--safe-*` insets, which is the same argument: the
-palette's `:root` and `.dark` carry identical values on purpose, and this is not a colour.
+`gap-target-min` — two utilities that mean nothing and one that means this. It sits in an
+environment `:root` block rather than the palette's — beside four `--safe-*` insets until they
+went on 2026-09-27 — which is the same argument: the palette's `:root` and `.dark` carry identical
+values on purpose, and this is not a colour.
 
 Published in the sheet as `--target-min:44px`.
 
-### Nothing uses either one, and that is 9b's decision to take
+### Nothing used either one on the day, and that was 9b's decision to take
 
-**No `coarse:` variant and no `var(--target-min)` appears anywhere in `src/` outside the two
+**9b took it the same day** — the ⚠️ above records its Task 7 giving the variant its first
+utilities — and those consumers are what stayed when the phone layout went; `grep -rn "coarse:"
+src/` is the census rather than a count here. What follows is the state 9a left, kept as it was
+written.
+
+**No `coarse:` variant and no `var(--target-min)` appeared anywhere in `src/` outside the two
 places that declare and guard them** — `index.css`'s own comment and `touchTargets.test.ts`'s.
 Which control grows, and by how much, and on which surface, is a design decision: it is downstream
 of the four option rounds, and writing it now would be answering a question nobody has been asked.
 What is settled here is only that there is **one** way to ask the question, and a number to ask it
 with that comes from a standard rather than from taste.
 
-The consequence worth stating plainly: **the built sheet contains `--target-min` and no
+The consequence worth stating plainly: **the built sheet contained `--target-min` and no
 `(pointer: coarse)` rule at all.** A media query with no utility inside it is not emitted, so the
 variant costs the bundle nothing until something uses it.
 
@@ -5564,6 +5494,11 @@ declaration site.
 **Read out of the source on 2026-08-29**, in the `mobile-layout` worktree at `56e94c2` with Tasks
 1–3's then-uncommitted edits in the tree. Nothing below was driven on a device, and nothing below
 is a proposal — the last paragraph of this section is the point of it.
+
+**The census was taken for the phone layout, and it outlived it** (2026-09-27). What a reader with
+no hover and no wheel loses is the same question on a touchscreen Windows machine, which is why
+the `coarse` variant and the touch floors stayed when the phone layout went; where a row below
+said *phone* it now says *touch*, and nothing else in the rows was re-read.
 
 Line numbers are a fact about a tree, so every row names the symbol or the string beside the line
 and the line is the convenience rather than the identifier.
@@ -5644,7 +5579,7 @@ is prose about something else.
 
 | Site | What only a hover gives | Reached another way today |
 | --- | --- | --- |
-| `components/AppShell.tsx:614` — `{...tip(narrow && label, { side: "right", describes: false })}` | The nav entry's word while the rail is collapsed to `w-17`/68px. The label is `sr-only` there, so the button's accessible name is unchanged and a screen reader still has it; the eye has the icon and nothing else. | The expanded rail — `useNavCollapsed` persists the state in `app_meta`. At 390px the expanded rail is 208px of the window. |
+| `components/AppShell.tsx:614` — `{...tip(narrow && label, { side: "right", describes: false })}` | The nav entry's word while the rail is collapsed to `w-17`/68px. The label is `sr-only` there, so the button's accessible name is unchanged and a screen reader still has it; the eye has the icon and nothing else. | The expanded rail — `useNavCollapsed` persists the state in `app_meta`. |
 | `components/AppShell.tsx:822` — the same spread over a pinned deck or folder's name | Which deck or folder each pinned art crop is. | The same, and nothing else. |
 | `components/Ribbon.tsx:96` (`dataDir`) and `:97–98` (`imageStoreFailures`), bound at `:176` on the `role="status"` line | Which data folder is live, and how many card images could not be written to the cache. | **Nothing.** Each field reaches the UI at exactly one place, and it is this tooltip: `imageStoreFailures` is drawn in no other string and `dataDir` in no other expression. Settings names neither — `features/settings/SettingsPage.tsx:154` reads "Data folder and import. Coming in a later plan.", and `features/settings/DangerZonePanel.tsx:117` records that the folder is named nowhere on Settings. |
 | `features/collection/AddToCollection.tsx:41` — `REVEAL_ON_HOVER`. **No count is written here; `grep -rn REVEAL_ON_HOVER src` is the census** — this row said *11 sites* with line numbers and every one of them had moved by 2026-09-07. The files, which drift far more slowly: `collection/CollectionTable.tsx`, `collection/CollectionSearchPanel.tsx` **(new 2026-09-07)**, `decks/DeckTile.tsx`, `decks/FolderTree.tsx`, `search/CardGrid.tsx` (×2), `search/SearchPage.tsx` (×2), `tags/TagResults.tsx`, `wishlist/WishlistGrid.tsx`, `wishlist/WishlistSearchPanel.tsx` **(new 2026-09-07)**, `wishlist/WishlistTable.tsx` (×2). `card/CardDetailPane.tsx` was on this list until **that file was deleted 2026-09-03; the modal that replaced it draws no quick-add** | Where the quick-add `+` is, on every card surface in the app — **including the two docked search sidebars since 2026-09-07**, whose tiles are the newest place this `+` appears. | **The control is not gone; it is unaimable.** `opacity-0`, never `hidden` — deliberately, so it keeps its tab stop — and `CardGrid.tsx` states in as many words that an `opacity-0` element is still a hit target. A finger that lands on it presses it. Nothing on screen says it is there. |
@@ -5656,7 +5591,7 @@ is prose about something else.
 | `components/menu/ContextMenu.tsx:730` — `onPointerOver`, `SUBMENU_HOVER_MS` 120 (`:48`) | Opening a submenu by resting on its row. | **Yes, at the site**: the submenu row's own `onClick` toggles it (`components/menu/Submenu.tsx:163`). Opening the parent menu is the gestures table's problem, not this one's. |
 | The other **98** `{...tip(…)}` spreads, across 53 shipped files | Everything this app says only in a hint. Two kinds, unequally lost: **11** pass `whenClipped: true`, where the words are the anchor's own truncated text — complete in the DOM and therefore in the accessibility tree, so only the *paint* is cut off; the rest are descriptions, and the ~57 lines passing `describes: false` are the ones whose words are the element's own name or already-visible text, drawn `aria-hidden`. | Nothing generic. Each of the 98 is its own question, and the two kinds have to be told apart before any of them is counted as lost. |
 | The marks on a card face — `components/CardArt.tsx`, `components/FinishMark.tsx`, `components/GameChangerMark.tsx`, `components/CountTag.tsx`, `components/OwnedBadge.tsx`, `components/RarityGem.tsx` and every mark in `features/decks/CardMarks.tsx` (grep `useTooltip` there for the census — the line numbers this row carried moved twice on 2026-09-08 alone, and a stale line number reads as a claim about a site nobody can find) | What a glyph means. Each binds `describes: false` because the panel carries the mark's *name* and the mark itself is `aria-hidden`. | Nothing on the card. The same facts are set in type in the card pane and in the three tables — a different surface, not the same one reached twice. |
-| `components/AppShell.tsx:596` — the app's one native `title` | Nothing at all, and it is in this table so it is not mistaken for a lead. | **The phone answer is never "put the `title` back."** `src/CLAUDE.md` requires a hint to be `useTooltip()`'s spread, and the reason holds twice over here: a native tooltip does not appear on touch either, so restoring one would trade a hint nobody sees for a hint nobody sees. This site survives precisely *because* its sentence is never shown to anybody — Chromium freezes `:hover` at a drag's origin for the whole drag — and is read through the accname spec's description fallback instead. |
+| `components/AppShell.tsx:596` — the app's one native `title` | Nothing at all, and it is in this table so it is not mistaken for a lead. | **The touch answer is never "put the `title` back."** `src/CLAUDE.md` requires a hint to be `useTooltip()`'s spread, and the reason holds twice over here: a native tooltip does not appear on touch either, so restoring one would trade a hint nobody sees for a hint nobody sees. This site survives precisely *because* its sentence is never shown to anybody — Chromium freezes `:hover` at a drag's origin for the whole drag — and is read through the accname spec's description fallback instead. |
 
 ### Gestures with no touch equivalent
 
@@ -5685,13 +5620,14 @@ Ctrl. A touchscreen pinch produces **no wheel event at all**. It is a two-pointe
 nothing in this app listens for one: no `touchstart`, no `TouchEvent`, no `pointerType` branch, no
 gesture library, nowhere in `src/`.
 
-**So on a phone `cardZoom` is frozen at whatever the last session left.** `ZOOM_STEPS` is
+**So on a touchscreen with no wheel and no trackpad, `cardZoom` is frozen at whatever the last
+session left.** `ZOOM_STEPS` is
 **sixteen** stops from 0.5 to 2, ten points apart, written out as literals
 (`lib/cardZoom.ts:79–81`), walked independently per section (`ZOOM_SECTIONS`, `:129–140` — the
 constant is the census and no total is written here; it was **eight** when this paragraph was
 written and `collectionSearch` and `wishlistSearch` joined on 2026-09-07, which is the drift a
 written-down count buys).
-The value a phone opens on comes from `hydrateCardZoom` (`lib/store.ts:1029–1037`), called once
+The value such a reader opens on comes from `hydrateCardZoom` (`lib/store.ts:1029–1037`), called once
 from `lib/useCardZoomPersistence.ts:80` with whatever `ipc.cardZoom()` answered: it snaps each
 value to the ladder through `snapZoom`, **drops any key this build does not draw** (`isZoomSection`),
 bumps no pulse — a restored size is not a gesture — and returns unchanged if the reader zoomed
@@ -5717,8 +5653,9 @@ steps `cardZoom` but the wheel.**
 
 ### This is a census and not a proposal
 
-What replaces any of the rows above belongs to the four design rounds and to 9b, and is
-deliberately absent from here. A census that quietly proposes a fix is a design decision taken
+What replaces any of the rows above belonged to the four design rounds and to 9b when this was
+written, and since 2026-09-27 to whoever next designs for touch on the desktop window; either way
+it is deliberately absent from here. A census that quietly proposes a fix is a design decision taken
 without being asked for — it arrives dressed as a measurement, it is argued from nowhere, and by
 the time anybody notices it is a constraint rather than a finding. The rows are what a reader with
 no hover and no wheel loses, and the third column is what the tree offers **today**, not what it
@@ -5726,312 +5663,80 @@ ought to offer.
 
 ---
 
-## The phone frame, driven: the rail decides whether the wall can ever be two columns
-
-**Measured 2026-08-29 in the shipped WebView2** (`npm run tauri dev`, debug build, `mobile-layout`
-worktree), at `cdp.mjs size 390 844`. This is the reading the wall's design round argues from, and
-it found a coupling between two rounds that the 9a plan does not have.
-
-> ⚠️ **`cdp.mjs size` hardcodes `mobile: false`**, so this is a narrow *desktop* — no URL bar, no
-> `visualViewport` behaviour, no coarse pointer. It measures **width arithmetic**, which is
-> exactly what is wanted here, and it measures nothing about touch. WebView2 also **ignores
-> `clearDeviceMetricsOverride`**, so the window was put back with an explicit `size 1280 800`.
-
-### The three widths a 390px window actually leaves
-
-`main` is `p-5`, so it takes 40px off whatever the rail leaves. The rail's own width is
-`useNavCollapsed`'s persisted state, and **nothing collapses it automatically at any width** — a
-390px window opens with the full 208px rail unless the reader has collapsed it before.
-
-⚠️ **`main`'s content box is not the wall, and the 26px between them is worth a column.** The
-`ResizeObserver` is on `rowsRef` (`CardGrid.tsx:646–648`), which sits **inside** the scroller's
-`border` and `p-3` (`:1020`) — 1px + 12px each side. `rowsRef`'s own comment says it, having no
-padding of its own, "is the honest answer to how wide a row of tiles may be." So the wall is
-`main` content **− 26**, and any arithmetic done on `main`'s width overstates the columns.
-
-| Rail | `nav` | `main` content | **wall** (`rowsRef`) | `columnsFor` @170 | @160 | @144 |
-| --- | --- | --- | --- | --- | --- | --- |
-| Expanded — **today's default** | 208 | **142** | **116** | 1 | 1 | 1 |
-| Collapsed (`useNavCollapsed`) | 68 | **282** | **256** | 1 | 1 | **1** |
-| Gone entirely | — | 350 | **324** | 1 | **1** | **2** |
-
-The first two `nav`/`main` rows were driven in the window; the wall column is those figures less
-the 26px inset read from the class string, and the column counts are `columnsFor` — `max(1,
-floor((width + 12) / (tile + 12)))` (`CardGrid.tsx:180`) — over them. A desktop scrollbar takes
-another ~15px off the wall; a phone's overlay scrollbar takes none.
-
-**At 142px the tile is narrower than one whole tile**, so `tileWidthFor`'s cap — its only
-arithmetic, and it covers exactly this case — draws the card at 142 rather than 170, and
-`sideGutterFor` returns 0. That is the state a phone opens in today.
-
-### The coupling, which is the finding
-
-**Two columns need the rail gone *and* a tile well under 160.** Against the wall rather than
-against `main`: `columnsFor(324, 160)` is **1**, so 160 — the width the 9a plan suggests for a
-phone tile — draws a **single** column on a phone, which is the failure it was meant to fix. The
-largest round width that gives two columns at 324 is **144**; at 144 the leftover is 24 and the
-gutter is exactly `GAP`, so the margins and the inter-card gap become one measurement.
-
-And 144 only holds if the rail has gone. With the collapsed 68px rail the wall is 256, where
-`columnsFor(256, 144)` is **1** again and the tile would have to fall to about 122.
-
-So the wall's round and the chrome's round are **not independent**, and the option matrix is
-smaller than it looks: **a phone tile width delivers two columns only if the rail is gone** — a
-bottom bar or a drawer — **not if the collapsed rail is kept.** That is one finding across two
-rounds, and either round decided on its own gets it wrong.
-
-**What a narrower tile does *not* do is shrink the chin's type.** `--mark-scale` and
-`--control-scale` come from `cardScaleVars(zoom)` and know nothing about `baseTileWidth`, so the
-chin stays 28px with 10px type at any base — a narrower tile makes the chin proportionally
-**taller** (10.7 % of tile height at 170, 12.4 % at 144), which is a cost in the other direction
-from the one "a 6 % shrink on the type" suggests.
-
-### The vertical, on the same pass
-
-At 390×844 in WebView2: `TitleBar` **34**, ribbon + `ManaLine` **58** (56 + the 2px line, exactly
-as the plan states), `main` **752** of which **712** is content after `p-5`'s 20 top and bottom.
-
-**On web and Android the 34 comes back and roughly 144 goes away** — parity §5 says the browser and
-the OS own the frame, so `TitleBar` is absent, while a mobile browser's chrome takes the visible
-viewport to roughly 700. That leaves about **602px** of `main` content before the filter bar
-spends anything, and the bar's two or three lines at 36–40 take it to roughly **500** — one 170px
-tile plus its chin, and a sliver of the next row. The plan's vertical budget holds as written.
-
-### What this pass could not measure, and why
-
-**The wall was empty.** A worktree is a fresh install and its `corpus.db` has never synced, so
-`main li` returned zero tiles and no drawn tile width could be read. Every figure above is a
-measurement of *boxes* — `nav`, `main`, their padding — plus `columnsFor` evaluated against the
-measured content width in the same `eval`. That is the honest scope of it: the geometry is
-measured, the tile counts are arithmetic over a measured width, and **no card was on screen**. To
-read real tiles here, copy the main checkout's whole `data` folder into the worktree first.
-
----
-
-## The phone layout on an actual phone — and the vertical does not work
-
-**Driven 2026-08-29 on the OnePlus (`adb` device `21755151`), Android, Chrome 152.0.7977.64, dpr 3,
-portrait**, against the production web build of 9b (`npm run build:wasm && npm run web:build`,
-served by `vite preview` on 4173, reached from the device through `adb reverse tcp:4173 tcp:4173`
-and driven over `adb forward tcp:9333 localabstract:chrome_devtools_remote`). Corpus built on the
-device: **117 606 cards**.
-
-**This is the measurement 9a could not take and 9b's plan is answerable to**, and it falsifies the
-budget the plan was written against. Two independent things went wrong, and neither is visible
-from a desktop.
-
-### The device is 360 CSS px wide, not 390 — and that alone costs the second column
-
-`src/lib/viewports.ts`'s `PHONE_PX` is **390**, chosen in 9a as "a hard case… the iPhone 12/13/14,
-within a pixel or two of the common Android flagship in CSS pixels". **This flagship is 360.**
-
-| | 390 (the design frame) | **360 (this device)** |
-| --- | --- | --- |
-| `main` content | 350 | **320** |
-| wall (`rowsRef`, less the scroller's `border` + `p-3`) | 324 | **294** |
-| `columnsFor(wall, 144)` | **2** | **1** |
-| largest tile giving two columns | 156 | **141** |
-
-Measured on the device rather than computed: the wall's rows are **226 px tall × 294 px wide and
-carry exactly one tile each**. **G1's 144 misses two columns by three pixels here.**
-
-`matchMedia('(max-width: 390px)')` still answers **true** at 360, so `useNarrowWindow` and the tab
-bar are correct — it is only the *tile* that was sized against a frame this hardware is narrower
-than.
-
-### The shut filter bar is 381 px, not 273 — and 108 px of that is the touch floor
-
-| | px |
-| --- | --- |
-| Visible viewport with the URL bar (`innerHeight` = `visualViewport.height`) | **696** |
-| Ribbon block (`h-14` + the 2px `ManaLine`) | 58 |
-| Tab bar | **53** — exactly as designed |
-| `main`'s `p-5`, top and bottom | 40 |
-| `main` content | **545** |
-| **Shut filter bar** | **381** |
-| **What is left for the wall** | **99** |
-
-58 + 585 + 53 = 696 exactly, so nothing is unaccounted for. **A tile row is 226 px and the wall is
-99**, which is 44 % of one row — the plan's own failure condition was "one tile row", and this is
-less than half of it.
-
-**The cause was isolated on the device rather than guessed**, by setting `--target-min: 0px` on the
-root and re-reading, then restoring:
-
-| | shut bar | wall |
-| --- | --- | --- |
-| With the 44 px floor (shipped) | **381** | **99** |
-| `--target-min: 0px` | **273** | **207** |
-| Restored | 381 | 99 |
-
-**The floor costs exactly 108 px of vertical and the wall gains exactly the same 108 back.**
-Note what the middle row is: **273 is precisely the figure the 9a plan predicted for the shut
-bar** — that measurement was taken before `coarse:` had a consumer, so the plan was right for its
-time and Task 7 added 108 px to it.
-
-**So 9b's two decisions are in direct conflict, and now the size of it is known.** F1 buys a
-reachable control on the axis that had room; it spends 108 px on the axis that had none. This is
-not an argument against the floor — every chip measured **44 × 44** on hardware where they were 32,
-and `(pointer: coarse)` really is `true` — it is the measured price of it, and the thing to spend
-next.
-
-### What works, measured on the device
-
-- **`(pointer: coarse)` is `true`** and `--target-min` resolves to `44px`. Every control checked is
-  at or above the floor: the mana-value and colour chips **44 × 44** (they are 32 on a desktop),
-  `Show filters` and `Reset all` 44 tall, a tab **60 × 52**. Task 7 does what it claimed.
-- **The tab bar is 53 px**, the figure it was designed to.
-- **No horizontal overflow** — `documentElement.scrollWidth` equals `innerWidth`.
-- **`h-dvh` is right**: `100dvh` reads **696**, the visible viewport, against `100lvh`'s **752**.
-
-### The dialog against a real URL bar — owed since PR #274, and the answer is that it was already right
-
-`Dialog`'s scrim is `fixed inset-0`, and the open question was whether that resolves against the
-**large** viewport on a mobile browser — which would make the grid area taller than the screen,
-`max-h-full` clamp to more than the window, and the panel's footer land under the URL bar.
-
-Measured directly, with a probe rather than through one dialog's markup, so the answer is about
-the browser rather than about one component:
-
-| | px |
-| --- | --- |
-| `position: fixed; inset: 0` box | **696** |
-| `visualViewport.height` | **696** |
-| `100dvh` / `100svh` | **696** |
-| `100lvh` | **752** |
-
-**A `fixed inset-0` box resolves against the *visible* viewport, not the large one.** `Dialog`
-needs no change, and this is recorded so the next person does not pay for the same measurement.
-
-### `--safe-b` is `0px` on this device, and that is not a bug
-
-The gesture bar reserves no inset here, so the tab bar's `paddingBottom: var(--safe-b)` costs
-nothing on this hardware. It is still correct to carry: the value is a property of the device, the
-`env()` fallback is what makes the declaration parse, and a phone with a reserved gesture area
-would put the bar's targets under it without this.
-
-### What this does not settle
-
-- **The drag from the search overlay into a hidden pile** (9b Task 8's recorded limitation) was not
-  driven. With a 99 px wall there is no honest gesture to make, and the question should be re-asked
-  once the vertical is fixed — a reader who cannot see a tile cannot drag one.
-- **One device, one browser.** Every figure here is this OnePlus in Chrome 152. A 390 px phone
-  would get the second column; the point is that this one does not, and `PHONE_PX` is the app's
-  own stated frame.
-
----
-
-## 9c on the phone: the wall shows cards
-
-**Driven 2026-08-29 on the OnePlus, Chrome 152, portrait, `innerWidth` 360**, against the
-production web build of `main` at the merge of PR #300, with the 117 606-card corpus already in
-OPFS. Same instrument as 9b's pass — the recipe is in *"The phone layout on an actual phone"*
-above.
-
-**The prediction was 436px of wall and it came back at exactly 436.** The one figure that was off
-was the row height, and it was off in the app's favour.
-
-| | 9b (measured) | 9c predicted | **9c measured** |
-| --- | --- | --- | --- |
-| shut bar / strip | 381 | 44 | **44** |
-| wall | 99 | 436 | **436** |
-| tile row | 226 | 237 | **221** |
-| complete rows | **0** | 1.84 | **1.97** |
-| tiles per row | **1** | 2 | **2** |
-
-**0.44 of a row to 1.97.** A reader sees two whole cards and 97 % of the next two — **two whole
-rows are 442 and the wall is 436, short by six pixels.** Nothing else changed: the ribbon block is
-still 58, the tab bar still 53, `main`'s content still 545, and `documentElement.scrollWidth`
-still equals `innerWidth`.
-
-**The row is 221 rather than the projected 237** because the projection added `GAP` to the row
-box; the virtualiser's row *is* the tile and the gap sits between rows in the total. A 16px error
-that made the estimate pessimistic — worth naming so the next projection uses the measured shape.
-
-### Filtered, which is where the strip's second line appears
-
-| | px |
-| --- | --- |
-| strip, no filters | **44** |
-| strip, one filter on | **96** — 44 + 8 + 44 |
-| wall, filtered | **384** — 1.74 rows |
-
-The chip is on the strip and it is the real one: `Remove filter — Colour: Red`, with its own ✕.
-`Reset all` is beside it at **44px**, and `resetInScroller` reads **false** — it is outside the
-horizontal scroller, so it cannot scroll away from the chips it undoes. Both were designed that
-way and both are confirmed on hardware rather than in jsdom, which can see neither.
-
-**The second line is 44 and not 26**, because `ResetAll` sets it at the coarse floor. That is the
-figure this plan quoted as 34 when the decision was taken — see the plan's Task 3 for the
-correction and why the decision survives it.
-
-### What the whole screen is now
-
-One frame, top to bottom: the ribbon shed to a card count and Refresh; the strip's search box and
-`Filters · 1`; the stated `Colour: Red ×` beside `Reset all · 1`; four cards in two columns; the
-bottom tab bar with **Search** marked. Every decision from 9a's four rounds and 9c's two is
-visible at once, and the horizontal overflow is zero.
-
-### What is still owed, and it is the same question as before
-
-**9b's Step 3b — whether a drag from the deck editor's search overlay can land in a pile hidden
-behind it — was still not driven.** dnd-kit hit-tests by **rect**, so the piles stay droppable
-while invisible. The blocker is no longer a 99px wall: it is that the question needs a deck with
-categories on the device and a synthesised pointer drag, which is its own pass rather than a step
-in this one. **It is now answerable for the first time** — record that, because the reason it was
-deferred has changed.
-
-### One operational note for the next pass
-
-**The one-tab guard is a real obstacle to repeat measurement.** A tab left open from an earlier
-pass makes the next one render *"MTG Grimoire is already open"* and nothing else — correct
-behaviour, and indistinguishable from a broken build if you are not expecting it. Close the stale
-tab through `http://localhost:9333/json/close/<id>` before reloading, and take the ids from
-`/json/list` so the reader's own tabs are left alone.
-
-**And `vite preview` needs `--host`.** Without it the PC gets 200 and the phone gets `000` through
-`adb reverse` — the server binds too narrowly for the tunnel to reach, and the failure looks like
-a broken tunnel rather than a bound socket.
-
-### The tab bar reached `--target-min` on 2026-09-08, and four of nine labels truncate
-
-The rail grew two destinations in one afternoon — `Scanner` in the morning and the `Trade` and
-`Playtesting` placeholders after it — and `BottomTabBar` draws `NAV` rather than a list of its own,
-so all of them landed in the phone row. **Nine tabs is where the floor stops being a fence and
-starts being the width.**
-
-Measured headless over this branch's built stylesheet at 390 CSS px, the way the 2026-08-29 pass
-was, with the real Geist face loaded (checked the same way: `Search` inks **38.67**, the figure
-that pass recorded).
-
-| | 7 tabs | 9 tabs |
-| --- | --- | --- |
-| Wrapper width | 55.70 | **43.33** |
-| Button width | 55.70 | **44** — `--target-min`, not the division |
-| Neighbour overlap | 0 | **0.672** |
-| Row's right edge | 390 | **390.67** |
-| Row height | 53 | 53 |
-| Labels truncated | none | **`Collection`, `Playtesting`, `Scanner`, `Settings`** |
-
-The ink at `text-xs` against a 44px content box: `Playtesting` **61.97**, `Collection` **55.23**,
-`Scanner` **45.73**, `Settings` **45.42** — and `Wishlist` **43.30**, which clears it by seven
-tenths of a pixel. `Trade` is **30.39**, the shortest word in the rail.
-
-**Then the whole row was re-read in the shipped window**, `cdp.mjs size 390 900` against a debug
-`tauri dev` on the same day, and it agrees to the digit: nine tabs, **44** wide, **0.672** of
-overlap, right edge **390.67**, row **53**, and the same four labels truncated. Headless over
-`dist` and the real WebView2 answer the same thing here, which is worth knowing because the two
-have disagreed before.
-
-**The 0.67px past the right edge is clipped rather than scrolled.** `AppShell`'s root is
-`flex h-dvh flex-col overflow-hidden`, and the shipped window puts `documentElement.scrollWidth` at
-**390** against an `innerWidth` of 390 — so the app gains no sideways scroll from it, and what a
-reader sees is neighbours overlapping by two thirds of a pixel, which is nothing. **The truncation is the
-part that shows**, and it is recorded rather than fixed: what to do about it is a decision about
-what a phone's navigation *is* — a scroller, a `More` tab, a two-row bar, or a bar that draws fewer
-destinations than the rail — and none of those is a change the two placeholders that exposed it
-should be making. **The next destination makes it worse in a way arithmetic can predict**: a tenth
-tab divides to 39, under the floor by five, so the overlap goes from 0.67 to five pixels a tab.
+## The phone layout, removed on 2026-09-27 — and the machinery that stays
+
+**The phone layout was removed on 2026-09-27, after the web and Android builds it was drawn for,
+because the 1024px floor meant it could never engage on the one target left.** It switched in at
+`PHONE_PX` = 390, through `useNarrowWindow`'s `(max-width: 390px)`, and `tauri.conf.json`'s
+`minWidth` refuses any window narrower than 1024 — so in the shipped app the branch was a boolean
+that was always false, and everything behind it was code no reader could reach, tested at a width
+nobody could make. It was built across plans 9a, 9b and 9c between 2026-08-28 and 2026-09-08 and
+driven on a OnePlus in Chrome over the production web build; that build went first, and this
+followed it.
+
+**What went:**
+
+- **The viewport branch.** `useNarrowWindow` and its test, and `stubNarrowWindow`
+  (`src/test-viewport.ts`). Every reader collapsed to its desktop arm: `AppShell` always draws the
+  rail, `ShareFolderMenu` always draws its words, `ScannerPage` always stands the camera beside the
+  verdict, and `CollectionPage`, `FilterBar`, `SearchPage`, `TagResults` and `WishlistGrid` lost
+  their phone branches. **The app has no viewport branch now.**
+- **`BottomTabBar`** — the component, its test and stories, and its wiring in `AppShell`,
+  including the phone's drop-report strip. The rail's drag-inert entry is the app's one native
+  `title` again; it had a twin in the tab bar.
+- **`FilterBar`'s phone filter sheet**, and its `PhoneStrip`/`PhoneSheet` stories. The bar's root,
+  a fragment from 2026-08-29 so the sheet could be the `@container/fb` box's sibling rather than
+  its child, is one element again.
+- **The phone-only props and constants**: `Ribbon`'s `narrow`, `ImportExportPair`'s `compact`
+  (only the phone flag ever fed it), `CardGrid`'s `PHONE_TILE_WIDTH` (141), and the `Phone`
+  stories of `CardDetailModal` and `PriceHistoryDialog`.
+- **The safe area**: `viewport-fit=cover` in `index.html`, the four `--safe-*` insets in
+  `src/index.css`, their uses in `AppShell` and `StartupScreen`, and the tests that pinned them.
+  The shell's `h-dvh` stayed — *The shell is as tall as the visible viewport* above.
+- **`PHONE_PX`, `PHONE_HEIGHT_PX` and `TABLET_PX`** from `src/lib/viewports.ts`, with the test
+  that ordered them. `DESKTOP_FLOOR_PX` and `DESKTOP_FLOOR_HEIGHT_PX` stay.
+
+**What stays, by the owner's explicit decision — machinery, not the layout:**
+
+- **The `coarse` variant and the touch target floors** (`--target-min`, the 44px `h-11` rungs).
+  They ask about the pointer rather than the width, and they serve touchscreen Windows machines;
+  *One spelling of the coarse-pointer question* and *What touch takes away* above are theirs.
+- **Every box-width fold**: `FilterBar`'s `@container/fb`, `CardGrid`'s column arithmetic, the
+  deck editor's desk `ResizeObserver`, `SettingsNav`'s `@container/rail`. Each answers its own
+  box, and a 206px docked panel on a desktop window is as narrow as any phone was.
+- **The sub-640px CSS rungs**: `Dialog`'s `p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]` scrim inset, and
+  `CardDetailModal`'s and `PriceHistoryDialog`'s `min-[640px]:` and `@min-[640px]/card:` rungs.
+  They are width-based CSS the desktop window never reaches. They were left because they are
+  correct at any width and change nothing on desktop, and collapsing about a hundred classes
+  carries layout risk for no visible change. **A below-`sm` rung is kept on purpose; never read
+  one as a phone target.**
+- **The public share page** (`share/`) keeps its own narrow layout. It is a web page a viewer
+  opens on whatever they have, and nothing here touched it.
+
+**Three findings from the phone passes still describe code that stays**, so they are kept here
+rather than in history alone:
+
+- **`main`'s content box is not the card wall, and the 26px between them is worth a column.**
+  `CardGrid`'s `ResizeObserver` is on `rowsRef`, which sits inside the scroller's `border` and
+  `p-3` — 1px + 12px a side — so the wall is `main`'s content less 26, and arithmetic done on
+  `main`'s width overstates `columnsFor`. Measured at 390px on 2026-08-29; true at any width.
+- **The touch floor costs height as well as width.** On the phone, with `(pointer: coarse)` true
+  and `--target-min` resolving to 44px, the shut filter bar in a 320px `main` was **381px** — and
+  **273** with `--target-min: 0px` forced on the root, so the floor cost exactly **108px** of
+  vertical. The figure is a narrow bar's; the price is the floor's, on any coarse-pointer machine.
+- **A `fixed inset-0` box resolves against the *visible* viewport on a mobile browser**, not the
+  large one: 696px on that device, equal to `visualViewport.height` and `100dvh`, against
+  `100lvh`'s 752. So `Dialog`'s scrim needed no change. No target left has a URL bar; it is
+  recorded so the question is not paid for twice.
+
+**Where the history is.** The plans, in order:
+`docs/superpowers/plans/2026-08-28-mobile-layout-9a-foundation-and-options.md`,
+`docs/superpowers/plans/2026-08-29-mobile-layout-9b.md` and
+`docs/superpowers/plans/2026-08-29-mobile-layout-9c.md`; the spec they answer,
+`docs/superpowers/specs/2026-08-28-mobile-layout-options.md`; and git —
+`git log --grep '(mobile)'` finds the commits. The four sections this one replaced — the phone
+frame driven at 390, the OnePlus passes before and after 9c, and the tab bar at nine
+destinations — are in this file's history before 2026-09-27, with every figure they measured.
 
 ---
 
@@ -6067,7 +5772,7 @@ are decidable with no DOM in front of them.
 | Sync — badge: the `Needs review` queue | `sync`, `review` |
 | Tags | `hidden-tags` |
 | Appearance | `theory-marks`, `labels` |
-| Storage and data | `data-folder`, `backup`, `cache`, `web-storage` (web build only), `danger` |
+| Storage and data | `data-folder`, `backup`, `cache`, `danger` |
 | Errors — badge: the error count | `errors` |
 
 **Where two panels answer one question they share an entry**, and where a panel is the only answer
@@ -6099,8 +5804,7 @@ prose quotes markup freely, so a doc comment containing `<SettingsSection id="�
 read as a panel that nothing draws (proved by mutation — with the stripper
 disarmed, a tag quoted in one of `nav.ts`'s own comments turns the sweep red); and it **reports a tag carrying
 no literal `id` by name** rather than skipping it, so a dynamic id makes the sweep fail loudly
-instead of quietly under-reporting. `BackupPanel` draws `id="backup"` at two sites — the folder
-variant and the archive variant — and those are one panel, which is why the sweep collects a set.
+instead of quietly under-reporting.
 
 ### The row, and why 999 against 1
 
@@ -6147,8 +5851,10 @@ written out here rather than left as a magic number.
 `container-type: inline-size` — what every `@container` in this app compiles to — applies **layout
 containment**, and a layout-contained box is the containing block for every `position: fixed`
 descendant under it, exactly as a `transform` is. This document already records that trap from the
-other end: `FilterBar.tsx:1286` explains why that component's root is a **fragment**, so the
-phone's filter sheet is the container box's sibling rather than its child.
+other end: `FilterBar`'s root was a **fragment** from 2026-08-29 to 2026-09-27, so the phone's
+filter sheet could be the container box's sibling rather than its child. The sheet went with the
+phone layout and the root is one `@container/fb` element again, and the note over it still states
+the rule — nothing that must cover the window may mount inside it.
 
 Settings meets it from the inside. **Its panels mount their dialogs inline, and there is no
 `createPortal` anywhere in `src/`** — verified 2026-09-03: `grep -rn createPortal src/` matches
@@ -6173,17 +5879,18 @@ The container is **named** (`@container/rail`) for `FilterBar`'s reason: `@conta
 to the nearest ancestor container, so an unnamed one here would be what any future `@container`
 inside a panel resolved against.
 
-### Why not `useNarrowWindow()`
+### Why not a window-width branch
 
-`src/lib/viewports.ts` demands a reason at the site of any viewport branch, and `useNarrowWindow`'s
-own doc comment states the test to apply: **name the box the question is about, and if it is not
-the window, this is not the mechanism.** `AppShell` passes that test because the shell *is* the
-window. The rail does not — its question is whether the pane is beside it, which is a fact about
-the rail's own box and about the page's flex bases, and a window-width branch would be a different
-question that happens to agree today and stops agreeing the moment those bases move.
+`src/lib/viewports.ts` demands a reason at the site of any viewport branch, and the test to apply
+is the one `useNarrowWindow`'s doc comment stated while the app had that hook: **name the box the
+question is about, and if it is not the window, this is not the mechanism.** The rail's question
+is whether the pane is beside it, which is a fact about the rail's own box and about the page's
+flex bases, and a window-width branch would be a different question that happens to agree today
+and stops agreeing the moment those bases move.
 
-There is a second, blunter reason: `useNarrowWindow` is `(max-width: 390px)`, built from `PHONE_PX`.
-It is a phone question and could not have answered this one at any width.
+There was a second, blunter reason on the day: `useNarrowWindow` was `(max-width: 390px)`, a phone
+question that could not have answered this one at any width. It went with the phone layout on
+2026-09-27, and the app has no viewport branch at all now.
 
 ### `max-w-4xl`, and not the imported design's 64rem
 
@@ -6221,17 +5928,19 @@ covers the window exactly. Had the container gone on the settings root instead, 
 would have clamped that scrim to the 896px page box. This is the one claim in the section that
 could only ever have been settled live, and it is the reason the `<nav>` carries the query.
 
-**The strip costs 167px above the pane on a phone, which is more than the sketch promised.** At
-390×844 the rail is **127px** tall — a 34px search box, a 53px strip, and the `Import.` footnote —
+**The strip costs 167px above the pane at 390×844, which is more than the sketch promised.** At
+that size the rail is **127px** tall — a 34px search box, a 53px strip, and the `Import.` footnote —
 and `gap-8` adds 32 before the pane, so the first panel starts **167px** below the top of the page.
 The wrapped full-width column this replaced would have been roughly **280px**. The strip is the
 right call and it is not the ~90px a sketch suggested; the footnote and the gap are what the sketch
-left out.
+left out. **No shipped window reaches 390 since 2026-09-27**, and the strip stays anyway: it is
+`SettingsNav`'s own `@container/rail` fold, which is what the desktop window would draw the day the
+rail wraps at the floor — the 17px above is the margin against that.
 
 **Also driven, and correct — but this pass is 2026-09-03's, and the rail had six entries that
 day.** **Appearance and its two panels landed on 2026-09-07 and have not been driven in the window
 at all**, so nothing below was measured about them. What the pass confirmed: the six entries and
-their panel sets, `web-storage` absent on desktop, `aria-current` on exactly one entry at rest and on **none** while the box has words in it,
+their panel sets, `aria-current` on exactly one entry at rest and on **none** while the box has words in it,
 the query cleared and `main.scrollTop` back to 0 on a group press, `Escape` clearing the field, a
 cross-group search (`dropbox` typed while standing on Updates draws `backup-heading` and nothing
 else — a word that appears nowhere in that panel's own text, so it is the keyword registry
@@ -6240,7 +5949,7 @@ badges with the written accessible name (`Sync (1)`, `Errors (2)`, forced throug
 cache since this database has neither).
 
 **Still not driven:** the sticky rail's behaviour under a long pane's scroll was not stepped
-frame by frame, and nothing here was read on Android or in the browser build.
+frame by frame.
 
 ## The folder wall names its own folders (2026-09-03) — measured over the built CSS, not in the window
 
@@ -6445,8 +6154,9 @@ Read off the live boxes rather than computed:
 - **Both percentages are constants across the whole ladder, not readings at 1×.** At 0.5× / 1× / 2×
   the art box is 85×119 / 170×238 / 340×476 and the column 15.3×49.3 / 30.6×98.6 / 61.2×197.2 —
   18 % and 41.4 % at every stop, because the tile, the art and the column are each linear in the
-  same zoom. At `PHONE_TILE_WIDTH`'s 141 it is 22 % of the width, which is the first figure to check
-  if the column is ever made bigger.
+  same zoom. At the phone's 141px base (`PHONE_TILE_WIDTH`) it was 22 % of the width, and that was
+  the figure to check first if the column were ever made bigger; that base went with the phone
+  layout on 2026-09-27, so 170 is the only base these walls draw at and 18 % is the figure now.
 - **It clears the finish chip at every stop, and that is why the offset is on `--mark-scale` rather
   than flat.** The chip is 8 / 16 / 32px tall at those three stops and the column starts at
   12 / 24 / 48, so the gap is **1 / 3 / 7px** — narrowest at the bottom of the ladder and incapable

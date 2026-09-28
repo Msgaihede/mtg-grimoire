@@ -910,17 +910,11 @@ function RowFace({
         {/* **A whole printed card, never the `art` crop.** A crop has no printed frame, so wherever
             one is shown its illustrator must be named; a `thumb` carries the credit printed on the
             card itself, which is Scryfall's second arm met by construction in a 33px frame with no
-            room for a credit line. Decorative: the name is the line beside it.
-
-            **`imageUrl` is the web and Android builds' picture** and is ignored on the desktop,
-            where the local cache's `thumb` wins (`cardArtSrc`). It is the `display` URL because
-            that is what the wire carries — `image_uri::LIST_VARIANTS` is `display` and `art` —
-            and a 672px card drawn at 33 is still the card; an empty frame was not (issue #514). */}
+            room for a credit line. Decorative: the name is the line beside it. */}
         <CardArt
           cardId={printing.printingId}
           name=""
           variant="thumb"
-          imageUrl={printing.imageUris?.display}
           loading="lazy"
           className="rounded-[3px]"
         />
