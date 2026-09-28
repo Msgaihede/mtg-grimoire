@@ -171,9 +171,9 @@ rewrites the whole `cards` table — ~116,700 printings on the 2026-08-25 corpus
 refresh rewrites `marketplace_prices` wholesale; a Card Kingdom refresh driven live the same day
 wrote 149,321 rows. Mapping either to a surface would fire the hook that many times per refresh and
 turn every sync into a mirror rebuild triggered a hundred thousand times over. **What those two
-change instead enters through one full pass after the refresh *completes*** — `sync::run_sync` and
-`marketplace_feed::refresh` each call `Mask::mark_all` — which is a bounded event rather than a
-per-row storm.
+change instead enters through one full pass after the refresh *lands*** — `sync::do_sync` the
+moment its swap has committed, and `marketplace_feed::refresh` on success, each call
+`Mask::mark_all` — which is a bounded event rather than a per-row storm.
 
 **Writing it as a match on a fixed list, with `_ => None` as the default, is also how a table added
 by a future migration stays safe.** A prefix test would have got `deck_audit` wrong. What keeps
@@ -213,8 +213,10 @@ the rows that pass read.
 
 ### Everything that runs a full pass
 
-Startup; a completed sync (gated on `outcome.updated`, so a launch that found nothing new spends no
-render); a completed price-feed refresh; `Rebuild now`; the mirror being switched off and back on;
+Startup; a sync whose card swap has landed (marked at the swap itself, so a launch that found
+nothing new spends no render and a run that swaps and then fails at `/sets` still marks — until
+2026-09-28 this was gated on `outcome.updated`, which that run never reached); a completed price-feed
+refresh; `Rebuild now`; the mirror being switched off and back on;
 the root being changed; the marketplace being changed; a **failed** pass (`mark_all`, not a re-mark
 of the surfaces it was carrying, because the mask cannot describe what was missed while the root was
 gone); and **a pass that finds no `.mirror-manifest` under a root that exists** — see below.
@@ -382,6 +384,33 @@ like any rename, which `a_case_only_rename_leaves_the_deck_under_its_new_spellin
   first goes and the second inherits `azula`: its planned path is the deleted deck's old one by case
   alone. `two_decks_one_case_apart_hand_the_name_over_when_the_first_goes` pins that what is left is
   one `azula` holding the survivor's list.
+
+### One folder, one installation (2026-09-28)
+
+**Two installations pointed at one folder destroyed each other's backups**, and nothing in the
+folder said which installation had written it ([issue #551](https://github.com/Msgaihede/mtg-grimoire/issues/551)).
+A Dropbox folder chosen on two computers is the case: the second one's pass read the first one's
+manifest, `put` its own `Collection/*` and `Wishlist/*` over the first one's — every installation
+plans those under the same names — and `prune` deleted every file the manifest listed that its own
+plan did not, which was all of the first one's decks. Its manifest then replaced the first one's,
+and the first one's next pass did the same to the second's decks. What was lost was the backup of
+last resort rather than any row, and the reader's own files were never at risk (they are in no
+manifest).
+
+**The manifest's first line now names the installation that wrote it** — `installation: <32 hex
+digits>`, `app_meta.mirror_installation`, minted once at launch — and a pass over a folder whose
+manifest names another installation refuses before writing anything, with a sentence the panel
+shows; `set_root` refuses the same folder while it is being chosen. A per-installation manifest
+name was considered and rejected: it stops the pruning and the manifest overwrite but not the
+`Collection`/`Wishlist`/`README.txt` overwrites, and only a single writer per folder stops all
+three. An unstamped manifest is adopted and stamped, so the upgrade costs no folder anything, and
+deleting the manifest hands the folder to whichever installation writes next — `README.txt` says so.
+
+**What it still does not cover**: two installations writing their *first* manifest into an empty
+shared folder before either sync delivers the other's — Dropbox keeps one and renames the other a
+conflicted copy, the loser is refused from its next pass on, and the files it wrote first stay as
+orphans. And a copied `data/` folder carries the same name, which is right for a move and does not
+stop both copies writing one folder.
 
 ### What a reader loses if they delete `.mirror-manifest`
 
@@ -602,12 +631,18 @@ away and back orphaned 21 files. All three now have tests.
    or `note_failure`'s `Duration::ZERO` `try_lock` dropping rows under contention, and **the two were
    not separated**. What matters for the design — one row, never one per file — is settled; the
    cadence is not.
-6. **`run_sync`'s `note_mirror_after_sync` call site is unreachable from any automated test.**
-   `run_sync` takes a `tauri::AppHandle` and this crate has no mock-app harness, so nothing in the
-   suite can enter it. The *condition* is extracted and tested; the single line above it is not.
-   **The live pass verified it works** — the launch sync's completion produced a full pass that
+6. **`do_sync`'s `note_mirror_after_swap` call site is unreachable from any automated test.**
+   `do_sync` takes a `tauri::AppHandle` and this crate has no mock-app harness, so nothing in the
+   suite can enter it. What it marks is extracted and tested; the single line that calls it is not.
+   **The live pass verified the mark works** — the launch sync's completion produced a full pass that
    rewrote exactly the ten price-bearing CSVs — so this is a coverage gap rather than an unknown, and
    the same shape applies to `marketplace_feed::refresh`'s twin (also verified live, 149,321 rows).
+   **The call moved on 2026-09-28** ([issue #551](https://github.com/Msgaihede/mtg-grimoire/issues/551)):
+   it was `run_sync`'s `note_mirror_after_sync`, gated on `Ok` with `updated`, so a run that swapped
+   the cards and then failed at `/sets` never marked the mirror, and every later run took the 304 path
+   and marked nothing either — the mirrored prices stayed a corpus behind until Scryfall next rotated
+   the bulk file. It is now called where the swap lands, beside the facet index's `clear`. The live
+   pass above predates the move and has not been repeated.
 
 ### The regression a ruling caused
 

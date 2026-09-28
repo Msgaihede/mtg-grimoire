@@ -47,11 +47,44 @@ use crate::transfer::{Card, Surface};
 pub use super::readme::{README, README_NAME};
 
 /// The record of what the last pass intended to exist: one root-relative path per line, `/`
-/// separators, LF endings, sorted.
+/// separators, LF endings, sorted — after a first line naming the installation that wrote it
+/// ([`OWNER_PREFIX`]), when it has a name.
 ///
 /// **It is the pruner's only authority.** It lists every file of the current plan and
 /// [`README_NAME`]; it does not list itself, so nothing can ever plan it away.
 pub const MANIFEST_NAME: &str = ".mirror-manifest";
+
+/// The manifest's first line, before the installation's name —
+/// [`super::settings::K_INSTALLATION`].
+///
+/// **The `:` is what makes it safe to add to a file older builds read.** [`safe_entry`] refuses
+/// any line containing one, so a build from before the stamp never takes it for a path to
+/// delete; and `paths::sanitize` strips `:` from every planned name, so no file the mirror plans
+/// can ever be spelled like it.
+const OWNER_PREFIX: &str = "installation: ";
+
+/// The installation a manifest names, if it names one.
+fn owner_of(manifest: &[String]) -> Option<&str> {
+    manifest
+        .iter()
+        .find_map(|line| line.strip_prefix(OWNER_PREFIX))
+}
+
+/// The installation that owns the mirror folder at `root`, if its manifest names one.
+pub fn folder_owner(root: &Path) -> Option<String> {
+    read_manifest(root).and_then(|m| owner_of(&m).map(str::to_owned))
+}
+
+/// What a pass, and `settings::set_root`, say when `root` belongs to another installation.
+pub fn another_installation(root: &Path) -> String {
+    format!(
+        "{} is the backup folder of another MTG Grimoire installation, so this one wrote nothing \
+         there: its pass would overwrite that installation's files and delete its decks. Choose a \
+         folder of this computer's own (a subfolder per computer works), or delete \
+         {MANIFEST_NAME} in that folder to hand it to this installation.",
+        root.display()
+    )
+}
 
 /// What one pass did. Every field is a number the Settings panel and the tests both read.
 ///
@@ -201,6 +234,18 @@ pub fn run_pass(
     // being about three different moments.
     let previous = read_manifest(root);
 
+    // **Before anything is written: a folder another installation owns is not ours to write**
+    // (issue #551). Its manifest lists that installation's decks, so this pass's prune would
+    // delete every one of them, and its `put`s would overwrite the `Collection` and `Wishlist`
+    // files every installation plans under the same names. A manifest with no name — every
+    // build before the stamp — is adopted and stamped below. See `settings::K_INSTALLATION`.
+    let me = super::settings::installation(conn);
+    if let Some(owner) = previous.as_deref().and_then(owner_of) {
+        if me.as_deref() != Some(owner) {
+            return Err(another_installation(root));
+        }
+    }
+
     // **A missing manifest under a root that exists means the mirror was reset.**
     //
     // It is the one file every pass writes and no plan can ever leave out, so its absence is
@@ -266,7 +311,7 @@ pub fn run_pass(
     put(
         root,
         MANIFEST_NAME,
-        manifest_text(&plan, readme_is_ours).as_bytes(),
+        manifest_text(&plan, readme_is_ours, me.as_deref()).as_bytes(),
         cache,
         &mut report,
     );
@@ -438,7 +483,7 @@ fn holds_our_readme(abs: &Path) -> bool {
 /// refused to touch would make the next pass read it back as ours and overwrite the reader's
 /// file on the second pass rather than the first — the guard undone by the file that authorises
 /// it.
-fn manifest_text(plan: &Plan, readme_is_ours: bool) -> String {
+fn manifest_text(plan: &Plan, readme_is_ours: bool, owner: Option<&str>) -> String {
     let mut lines: Vec<&str> = plan
         .files
         .iter()
@@ -447,7 +492,12 @@ fn manifest_text(plan: &Plan, readme_is_ours: bool) -> String {
         .collect();
     lines.sort_unstable();
     lines.dedup();
-    let mut out = String::with_capacity(lines.len() * 32);
+    let mut out = String::with_capacity(lines.len() * 32 + 48);
+    if let Some(owner) = owner {
+        out.push_str(OWNER_PREFIX);
+        out.push_str(owner);
+        out.push('\n');
+    }
     for line in lines {
         out.push_str(line);
         out.push('\n');
@@ -922,6 +972,119 @@ mod tests {
             rusqlite::params![to, id],
         )
         .unwrap();
+    }
+
+    /// Name this database's installation `ch` repeated — a well-formed 32-hex-digit id.
+    fn own(conn: &Connection, ch: char) {
+        crate::app_meta::set_app_meta(
+            conn,
+            crate::mirror::settings::K_INSTALLATION,
+            &ch.to_string().repeat(32),
+        )
+        .unwrap();
+    }
+
+    /// A second installation: its own database, its own deck, and nothing of the first's.
+    fn another_installation_db() -> Connection {
+        let conn = seeded_db();
+        crate::deck::create_deck(
+            &conn,
+            &crate::deck::DeckInput {
+                name: "Burn".to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        conn
+    }
+
+    /// **A folder another installation owns is refused, and left exactly as it was** (issue
+    /// #551). The case is one Dropbox folder chosen on two computers: before the stamp, the
+    /// second one's pass pruned every deck the first had written — its manifest listed them and
+    /// its own plan did not — overwrote the first one's `Collection.csv`, and replaced its
+    /// manifest; the first one's next pass then did the same to the second's decks.
+    #[test]
+    fn a_folder_another_installation_owns_is_refused_and_left_as_it_was() {
+        let (a, dir, _) = seeded_db_and_temp_root();
+        own(&a, 'a');
+        pass(&a, dir.path(), Dirty::ALL);
+        let manifest = std::fs::read_to_string(dir.path().join(MANIFEST_NAME)).unwrap();
+        assert_eq!(
+            manifest.lines().next(),
+            Some(format!("{OWNER_PREFIX}{}", "a".repeat(32)).as_str()),
+            "the manifest names the installation that wrote it, first"
+        );
+        let collection = std::fs::read(dir.path().join("Collection/Collection.csv")).unwrap();
+
+        let b = another_installation_db();
+        own(&b, 'b');
+        let err = run_pass(&b, dir.path(), Dirty::ALL, &mut DigestCache::default()).unwrap_err();
+
+        assert!(err.contains("another MTG Grimoire installation"), "{err}");
+        assert!(
+            deck_file(&dir, "Azula").is_file(),
+            "its decks are not pruned"
+        );
+        assert!(dir.path().join("Decks/Azula/Theory/Azula.txt").is_file());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(MANIFEST_NAME)).unwrap(),
+            manifest,
+            "nor its manifest replaced"
+        );
+        assert_eq!(
+            std::fs::read(dir.path().join("Collection/Collection.csv")).unwrap(),
+            collection,
+            "nor its collection overwritten"
+        );
+        assert!(
+            !dir.path().join("Decks/Burn").exists(),
+            "and nothing is written"
+        );
+    }
+
+    /// Every manifest written before the stamp names nobody, and the installation that passes
+    /// over it next takes it as its own — the upgrade costs no folder anything.
+    #[test]
+    fn a_manifest_written_before_the_stamp_is_adopted_and_stamped() {
+        let (conn, dir, _) = seeded_db_and_temp_root();
+        pass(&conn, dir.path(), Dirty::ALL);
+        assert!(
+            folder_owner(dir.path()).is_none(),
+            "an unnamed installation stamps nothing"
+        );
+
+        own(&conn, 'c');
+        let report = pass(&conn, dir.path(), Dirty::ALL);
+
+        assert_eq!(report.pruned, 0, "adopting a folder deletes nothing in it");
+        assert_eq!(folder_owner(dir.path()), Some("c".repeat(32)));
+        assert!(deck_file(&dir, "Azula").is_file());
+    }
+
+    /// The escape hatch `README.txt` names: deleting the manifest hands the folder to whichever
+    /// installation writes next, and from then on the other one is refused.
+    #[test]
+    fn deleting_the_manifest_hands_the_folder_to_the_next_installation() {
+        let (a, dir, _) = seeded_db_and_temp_root();
+        own(&a, 'a');
+        pass(&a, dir.path(), Dirty::ALL);
+        let b = another_installation_db();
+        own(&b, 'b');
+        run_pass(&b, dir.path(), Dirty::ALL, &mut DigestCache::default()).unwrap_err();
+
+        std::fs::remove_file(dir.path().join(MANIFEST_NAME)).unwrap();
+        run_pass(&b, dir.path(), Dirty::ALL, &mut DigestCache::default()).unwrap();
+
+        assert_eq!(folder_owner(dir.path()), Some("b".repeat(32)));
+        assert!(deck_file(&dir, "Burn").is_file());
+        run_pass(&a, dir.path(), Dirty::ALL, &mut DigestCache::default()).unwrap_err();
+    }
+
+    /// A build from before the stamp reads the owner line as one more manifest entry, and must
+    /// never take it for a path to delete.
+    #[test]
+    fn the_owner_line_is_never_a_path_to_delete() {
+        assert!(!safe_entry(&format!("{OWNER_PREFIX}{}", "a".repeat(32))));
     }
 
     #[test]

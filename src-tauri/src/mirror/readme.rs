@@ -63,6 +63,11 @@ or delete a deck. It never names anything of yours. Deleting it is safe; the
 only cost is that the files the app was about to tidy up stay behind for good,
 because after that it no longer knows they were its.
 
+Its first line names the copy of the app this folder belongs to. A second
+computer pointed at the same folder is refused rather than allowed to overwrite
+this one's files and delete its decks; give each computer a folder of its own.
+Deleting .mirror-manifest hands the folder to whichever copy writes next.
+
 Deleting this whole folder is safe too. Nothing in the app depends on it, and
 the next pass builds it again from the database.
 ";

@@ -85,6 +85,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - NSIS handoff is `setup.exe /P /R /UPDATE`, **spawned before we exit**: the installer's
   `CheckIfAppIsRunning` kills the running process without prompting in passive mode, and
   leaving on our own terms is what lets `RunEvent::Exit` checkpoint the WAL.
+- **Every launch empties `data/updates/` of files, and until 2026-09-28 nothing did**
+  ([issue #551](https://github.com/Msgaihede/mtg-grimoire/issues/551)). The folder holds the NSIS
+  setup a download staged and the `.part` of one that failed; `update::clean_up` cleared only the
+  `.old` and `.new` beside the exe, so every NSIS update left its whole installer on disk for good.
+  Staging lives for one session by design, so anything in that folder at a launch is spent. A failed
+  portable extraction now deletes its `.part` and its half-written `.new` at once
+  (`update::stage_portable`).
+- **The staged `.new` and a downloaded setup are `sync_all`'d before they are used**, not only
+  flushed. `apply` renames the `.new` over the running exe, and a rename can reach the disk before
+  the data it names — a power cut between them would leave a zero-length `mtg-grimoire.exe`, the one
+  state a portable install cannot recover from by itself. Nobody has measured the cost; it is one
+  flush of a single-digit-megabyte file.
 - Schema **v6** adds `app_meta` for the check throttle and the cached release — not
   `sync_meta`, which belongs to the sync. The version history is a **third key in that same
   table** and needed no migration, `marketplace` and `printing_group_by`'s precedent.

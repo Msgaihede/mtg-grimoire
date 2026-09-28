@@ -854,6 +854,13 @@ fn start(app: &tauri::AppHandle) {
         // (`crate::changes`), riding the same hook for the fence's reason — SQLite
         // allows one update hook per connection.
         let conn = db::lock_blocking(&state.db);
+        // The name the mirror stamps into its manifest, minted here, on this connection and
+        // before the hook, so the mirror itself never writes to the database — see
+        // `mirror::settings::K_INSTALLATION`. A failure leaves manifests unstamped, which is what
+        // every build before the stamp wrote.
+        if let Err(e) = mirror::settings::ensure_installation(&conn) {
+            eprintln!("the backup mirror could not name this installation: {e}");
+        }
         mirror::watch::install_hook_with_changes(
             &conn,
             state.mirror.clone(),
@@ -879,14 +886,14 @@ fn start(app: &tauri::AppHandle) {
     }
 
     // Here rather than before the builder, and the difference is one rare bug: this
-    // deletes a staged build, and the second instance of a double-click would
-    // otherwise delete the *first* instance's staged update on its way to being
-    // refused. `setup` runs only for the instance that won the single-instance
+    // deletes a staged build (and, since issue #551, every file in `data/updates/`),
+    // and the second instance of a double-click would otherwise delete the *first*
+    // instance's staged update on its way to being refused. `setup` runs only for the instance that won the single-instance
     // guard, so what it clears is always its own. (The `.old` a swap leaves is
     // deleted earlier still, by `await_predecessor`; this is the path that finally
     // clears one whose successor never got that far.)
     let exe = std::env::current_exe().unwrap_or_default();
-    update::clean_up(&exe);
+    update::clean_up(&exe, &state.data_dir);
 
     // Decided once here — `Updater::new` probes whether it can write beside the exe
     // — so a status poll never re-answers a question that cannot change.
@@ -911,14 +918,57 @@ fn start(app: &tauri::AppHandle) {
     // Launch is never blocked on the network: the window comes up immediately
     // and this run reports itself through `sync:progress`. The throttle inside
     // makes it a no-op on all but the first launch of the day.
+    //
+    // **On a first run the optional feeds wait for it** (issue #551). A corpus with no card in
+    // it means the reader is looking at the modal first-run wait, and the tag files and the
+    // combos are ~46 MB against the card file's 77 MB on the same link — started beside it
+    // they made that wait about 1.6× longer on a slow line, for data no screen can use until
+    // the cards are there. So they start when the card sync ends, **whether it succeeded or
+    // not**: a failed card download must not also cost the reader the feeds, and each of them
+    // is independent of the corpus. On every later launch they start at once, beside the sync,
+    // exactly as before — the sync is a 304 then, and there is nothing to wait for.
+    let first_run = {
+        let conn = sync::lock_db_read(&state);
+        !sync::has_cards(&conn)
+    };
     let handle = app.clone();
     let sync_state = state.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = sync::run_sync(sync_state, handle, false).await {
+        if let Err(e) = sync::run_sync(sync_state.clone(), handle.clone(), false).await {
             eprintln!("initial sync failed: {e}");
+        }
+        if first_run {
+            spawn_optional_feeds(&handle, &sync_state);
+        }
+    });
+    if !first_run {
+        spawn_optional_feeds(app, &state);
+    }
+
+    // The daily update check, in its own task rather than chained onto the sync:
+    // the two answer to different services on different schedules, and a Scryfall
+    // failure must not be the reason the app stops noticing its own releases. Its
+    // result is written to `app_meta`, so the ribbon reads it without an event —
+    // which also means nothing is lost if this finishes before the webview is
+    // listening, the trap `sync:progress` has to work around.
+    let update_state = state.clone();
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = update::check(&update_state, &updater, false).await {
+            eprintln!("update check failed: {e}");
         }
     });
 
+    // The relay doorbell. Its own task for the same reason as the five above — five
+    // services, five schedules, and none of them may be the reason another stops
+    // running. It opens no socket at all until this installation is in a group, which
+    // is every installation that has connected nothing.
+    crate::sync_engine::live::spawn(app.clone(), state.clone(), writes.clone());
+}
+
+/// Start the launch's optional feeds, each on a task of its own: the selected marketplace's
+/// price feed, both Tagger files and the combos. [`start`] calls this beside the card sync, or
+/// behind it on a first run — see the comment there.
+fn spawn_optional_feeds(app: &tauri::AppHandle, state: &Arc<AppState>) {
     // The selected marketplace's price feed, if it is one this app downloads and it is
     // due. Its own task for the update check's reason — three services, three
     // schedules, and none of them may be the reason another stops running — and
@@ -937,7 +987,8 @@ fn start(app: &tauri::AppHandle) {
     // them may be the reason another stops running — and deliberately *after* the
     // card sync is spawned rather than chained onto it: the two write different
     // tables, both take the connection a batch at a time, and a tag file that never
-    // arrives must cost the corpus nothing. Silent and best-effort; a failure is
+    // arrives must cost the corpus nothing. (A first run is the one exception, and
+    // there it is the *card* download that must not be made to wait — see `start`.) Silent and best-effort; a failure is
     // already in `error_log` and the honest fallback is categorising by card type,
     // which is what the app did before this existed.
     let tags_state = state.clone();
@@ -952,8 +1003,9 @@ fn start(app: &tauri::AppHandle) {
     // awaiting one before the other would make the bigger download the reason the
     // smaller taxonomy is late — and on a first run, the reason a deck add is still
     // categorising by card type minutes after launch. They contend for the write
-    // connection a batch at a time, which is the engine's job and not the launch's.
-    // Silent and best-effort, like every one of its siblings.
+    // connection a batch at a time, which is the engine's job and not the launch's —
+    // and `db::lock_background` is what keeps that contention from starving a user
+    // write. Silent and best-effort, like every one of its siblings.
     let art_state = state.clone();
     let art_app = app.clone();
     tauri::async_runtime::spawn(async move {
@@ -988,25 +1040,6 @@ fn start(app: &tauri::AppHandle) {
     tauri::async_runtime::spawn(async move {
         combos::refresh_if_due(&combo_state, &combo_app).await;
     });
-
-    // The daily update check, in its own task rather than chained onto the sync:
-    // the two answer to different services on different schedules, and a Scryfall
-    // failure must not be the reason the app stops noticing its own releases. Its
-    // result is written to `app_meta`, so the ribbon reads it without an event —
-    // which also means nothing is lost if this finishes before the webview is
-    // listening, the trap `sync:progress` has to work around.
-    let update_state = state.clone();
-    tauri::async_runtime::spawn(async move {
-        if let Err(e) = update::check(&update_state, &updater, false).await {
-            eprintln!("update check failed: {e}");
-        }
-    });
-
-    // The relay doorbell. Its own task for the same reason as the five above — five
-    // services, five schedules, and none of them may be the reason another stops
-    // running. It opens no socket at all until this installation is in a group, which
-    // is every installation that has connected nothing.
-    crate::sync_engine::live::spawn(app.clone(), state.clone(), writes.clone());
 }
 
 /// Run [`schema::check_corpus`] and act on a damaged answer: leave the mark that makes the next
