@@ -119,7 +119,7 @@ const WINDOW_WORD: Record<ValueWindow, string> = {
 /** A split as a sentence says it. */
 const SPLIT_WORD: Record<Exclude<ValueSplit, "total">, string> = {
   type: "card type",
-  color: "colour",
+  color: "color",
   set: "set",
 };
 
@@ -269,12 +269,12 @@ export function ValueHistoryWidget({
   if (failure !== null) {
     return (
       <WidgetMessage tone="destructive">
-        Your price history could not be read. {ipcError(failure)}
+        Couldn't load price history. {ipcError(failure)}
       </WidgetMessage>
     );
   }
   if (summary.data === undefined || history.data === undefined || view === null) {
-    return <WidgetMessage>Reading your price history…</WidgetMessage>;
+    return <WidgetMessage>Loading price history…</WidgetMessage>;
   }
   // Rust answers no points at all for an empty collection, and the live point is always inside
   // the range, so `n === 0` and *nothing owned* are one state.
@@ -328,7 +328,7 @@ export function ValueHistoryWidget({
   // A history younger than the range says how long it is, rather than naming a range it has not
   // reached.
   const spanWord = view.historyShort
-    ? `the ${plural(spanDays, "day")} kept so far`
+    ? `the last ${plural(spanDays, "day")}`
     : WINDOW_WORD[range];
   const subject =
     split === "total" ? "Collection value" : `Collection value by ${SPLIT_WORD[split]}`;
@@ -441,7 +441,7 @@ export function ValueHistoryWidget({
           ) : (
             <p className="m-0 text-[0.8125rem] leading-[18px] text-dim">
               {firstDay
-                ? "Prices are kept once a day, so the line starts tomorrow."
+                ? "Prices are recorded daily. The chart starts tomorrow."
                 : "No prices recorded in this range. Select a longer range to view price history."}
             </p>
           )}
@@ -466,7 +466,7 @@ export function ValueHistoryWidget({
       {layout.rail === null && layout.list !== null && (
         <div
           role="group"
-          aria-label="Line to follow"
+          aria-label="Series"
           className="absolute grid content-start gap-x-2 gap-y-[3px] overflow-hidden"
           style={{
             ...place(layout.list),
@@ -738,7 +738,7 @@ function RailList({
     <>
       <div
         role="group"
-        aria-label={split === "total" ? "Figures" : "Line to follow"}
+        aria-label={split === "total" ? "Figures" : "Series"}
         className="absolute flex flex-col gap-[3px] overflow-hidden"
         style={{ left: rect.x, top: rect.y, width: rect.w, maxHeight: rect.h }}
       >
@@ -826,7 +826,7 @@ function Strip({
   return (
     <div
       role="group"
-      aria-label="Line to follow"
+      aria-label="Series"
       className="absolute flex items-center gap-0.5 overflow-hidden"
       style={{ left: rect.x - 6, top: rect.y, width: rect.w + 12, height: rect.h }}
     >

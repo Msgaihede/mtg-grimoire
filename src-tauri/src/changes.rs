@@ -294,6 +294,21 @@ mod tests {
         assert_eq!(json, ours);
     }
 
+    /// The second list both suites read, and the same arrangement: what a pull from another
+    /// device refreshes on screen is `crossWindow.ts`' table map read at these tables
+    /// (`DEVICE_SYNC_INVALIDATED`), so a table added to [`crate::schema::SYNCED_TABLES`] and not
+    /// to the file is red here, and one added to the file with no entry in that map is red in
+    /// `crossWindow.test.ts`. Without the first half, a pull of the new table's rows would refresh
+    /// nothing until the reader remounted whatever reads it.
+    #[test]
+    fn the_synced_json_both_suites_read_is_the_synced_tables_constant() {
+        let json: Vec<String> =
+            serde_json::from_str(include_str!("../../src/lib/syncedTables.json")).unwrap();
+        let mut ours = crate::schema::SYNCED_TABLES.to_vec();
+        ours.sort_unstable();
+        assert_eq!(json, ours);
+    }
+
     #[test]
     fn a_main_write_marks_its_table_once_and_a_corpus_write_marks_nothing() {
         let changes = Changes::new();

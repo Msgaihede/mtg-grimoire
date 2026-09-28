@@ -169,7 +169,7 @@ describe("CollectionValueWidget", () => {
         row({ key: "multi", cards: 90, value: 300 }),
         row({ key: "c", cards: 40, value: 100 }),
       ],
-      ["Blue", "Multicolour", "Colorless"],
+      ["Blue", "Multicolor", "Colorless"],
     ],
     [
       "set" as const,
@@ -440,7 +440,7 @@ describe("CollectionValueWidget", () => {
   it("says it is counting while the reads are in flight", () => {
     draw({ widget: widget({ dimension: "rarity" }) });
 
-    expect(screen.getByText("Counting your collection…")).toBeInTheDocument();
+    expect(screen.getByText("Loading collection value…")).toBeInTheDocument();
   });
 
   /** Nothing owned yet — a real answer, and a different sentence from the one above it. */
@@ -464,10 +464,10 @@ describe("CollectionValueWidget", () => {
 
     draw({ widget: widget({ dimension: "rarity" }) });
 
-    expect(screen.getByText(/Your collection could not be read/)).toHaveTextContent(
+    expect(screen.getByText(/Couldn't load your collection/)).toHaveTextContent(
       "BUSY: a sync holds the write connection",
     );
-    expect(screen.queryByText("Counting your collection…")).toBeNull();
+    expect(screen.queryByText("Loading collection value…")).toBeNull();
   });
 
   /** A catalogue preview is the same drawing, and nothing in it is a control to press. */

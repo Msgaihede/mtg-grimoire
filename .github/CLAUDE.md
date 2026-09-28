@@ -17,7 +17,8 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   included because frontend tests read its files as text (`ipc.test.ts`'s mirror rows, the
   share golden, `desktop.rs`'s `generate_handler!` for the fake's parity test) — and **not
   `storybook`**, which builds nothing from there; `src/features/transfer/__golden__/**` and
-  `src/lib/userTables.json` → `frontend`, `rust` and `storybook`, because Rust tests read them;
+  `src/lib/userTables.json` and `src/lib/syncedTables.json` → `frontend`, `rust` and `storybook`,
+  because Rust tests read them;
   **`crates/*` → the same two as `src-tauri/**`** (the `card-scanner` package is compiled by
   `rust`, and `frontend` reads eight of its `.rs` files as text for `ipc.test.ts` and lints its
   `scripts/*.mjs`); frontend sources, `.storybook/**`, lockfiles, configs and `.nvmrc` →

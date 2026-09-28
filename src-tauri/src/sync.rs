@@ -361,6 +361,15 @@ fn count_cards(conn: &Connection) -> i64 {
         .unwrap_or(0)
 }
 
+/// Does the corpus hold any card at all? The launch's question for whether this is a first run
+/// — `desktop::start` holds the optional feeds back until the card download is over when it is
+/// not. An `EXISTS` rather than [`count_cards`]'s `count(*)`, which walks 116 k rows to answer
+/// yes. A corpus that cannot answer reads as empty, which only defers the feeds.
+pub(crate) fn has_cards(conn: &Connection) -> bool {
+    conn.query_row("SELECT EXISTS (SELECT 1 FROM cards)", [], |r| r.get(0))
+        .unwrap_or(false)
+}
+
 /// Does `sets` owe a `/sets` fetch on a run that ingested nothing? A failed count reads as
 /// "no" — if the database cannot answer, a `/sets` fetch it cannot store either is not the fix.
 ///
@@ -471,7 +480,60 @@ pub(crate) fn with_write<T>(
     state: &AppState,
     f: impl FnOnce(&Connection) -> Result<T, String>,
 ) -> Result<T, String> {
-    let out = match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+    written(
+        state,
+        crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT),
+        f,
+    )
+}
+
+/// [`with_write`] that **waits for the write connection as long as it takes** instead of
+/// answering [`crate::db::BUSY`]. ⚠️ **The one sanctioned unbounded wait on `AppState.db`, and a
+/// departure is the only press that earns it.**
+///
+/// Every other press is optional: the reader can press again, and a five-second "busy" is kinder
+/// than a button that freezes for as long as whatever holds the connection. **Leaving a group is
+/// not optional in that sense** — `pairing::sync_group_leave` is the reader's instruction that
+/// this device be out of its group, the design promises that press always works (and
+/// `SyncPanel`'s `LEAVE_WARNING` names an unreachable relay as its only cost), and a sync trip
+/// (`sync_now`, `sync_engine::live`'s `trip`) holds this connection across its whole network round
+/// trip — so under [`with_write`] a Leave pressed during a slow trip failed with "the database is
+/// busy" (issue #546, item 7), which is a promise with a condition nobody wrote down.
+///
+/// **What makes the wait safe to have is that a trip always ends**: every relay request carries a
+/// 10 s connect and 30 s read timeout (`sync_engine::client`'s client, and `entitlement`'s at
+/// 10 s/10 s), so the holder gives the connection back in bounded time even with the network gone.
+/// **What makes it safe to *call*** is [`with_write`]'s reentrancy rule, which is sharper here:
+/// that one spends five seconds and answers BUSY against its own thread, where a same-thread call
+/// to this one **deadlocks** (std's `Mutex` may also panic on it). Nothing may call it holding a
+/// guard on `state.db`.
+///
+/// **Everything else is [`with_write`]'s, because it is [`with_write`]'s body** — the managed
+/// wishlists armed and settled, the token reconcile, and the cross-file fence — and the lock is
+/// [`crate::db::lock_blocking`], which recovers a poisoned mutex exactly as
+/// [`crate::db::lock_for`] does.
+///
+/// ⚠️ **`pairing::sync_device_revoke` deliberately stays on [`with_write`].** A removal must
+/// reach the relay to mean anything and is refused without it, and its first step is a round trip
+/// of its own — so waiting out one trip to start another buys a reader nothing a second press
+/// would not, and freezes the button for the length of both.
+pub(crate) fn with_write_waiting<T>(
+    state: &AppState,
+    f: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    written(state, Some(crate::db::lock_blocking(&state.db)), f)
+}
+
+/// [`with_write`] and [`with_write_waiting`]'s shared body: `guard` is the write connection, or
+/// `None` when the bounded wait gave up. **One body so the two cannot drift** — a waiting write
+/// that skipped the managed-wishlist settle or the fence would be a second definition of "a
+/// user-facing write", which is the thing [`with_write`] exists to have exactly one of.
+fn written<T>(
+    state: &AppState,
+    guard: Option<MutexGuard<'_, Connection>>,
+    f: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let out = match guard {
         Some(conn) => {
             // **The managed wishlists ride every write, before and after** (issue #512). Armed
             // first so the write's own changes to a deck are marked, and settled after — outside
@@ -629,7 +691,6 @@ pub async fn run_sync(
     // `Err` would drop exactly the lockouts nobody else records. An upsert of one integer is
     // not worth being clever about.
     persist_penalty(&state);
-    note_mirror_after_sync(&state, &result);
     if let Err(e) = &result {
         {
             let conn = lock_db(&state);
@@ -640,27 +701,26 @@ pub async fn run_sync(
     result
 }
 
-/// Tell the plain-text mirror that a sync finished, if it changed anything.
+/// Tell the plain-text mirror that the sync has swapped `cards`, so every mirrored CSV's
+/// `Price` column (and any corrected card name) is owed a pass.
 ///
 /// One of the four things that run a full mirror pass (spec §5). The update hook cannot carry
 /// this: `cards` maps to no surface on purpose, because a sync rewrites 116 700 rows and a
 /// per-row mark would be a hundred thousand hook fires and a rebuild every refresh.
 ///
-/// **Gated on `updated`, not on `Ok`.** A throttled run that downloaded nothing changed no card
-/// name and no printing, so marking there would spend a full render on every launch of the day
-/// over a corpus byte for byte the one the last pass already mirrored. Hash comparison means it
-/// would *write* nothing — the render is the cost, and it is avoidable.
+/// **Called from [`do_sync`] the moment the swap has landed, and it was once called from
+/// [`run_sync`] on `Ok` with `updated`** (issue #551). That gate was one step too late: a run
+/// that swapped the cards and then failed at `/sets` returned `Err`, so the mirror was never
+/// told — and every later run took the 304 path, which swaps nothing and marks nothing, so the
+/// mirrored prices stayed a corpus behind until Scryfall next rotated the bulk file. Marking
+/// where the swap lands covers that run and still spends nothing on a throttled or 304 run,
+/// which changed no card name and no price.
 ///
-/// A function rather than four lines inline in [`run_sync`] because [`run_sync`] takes a
-/// `tauri::AppHandle` and this crate has no mock-app harness, so nothing in the suite can enter
-/// it. This much is reachable, and the condition is the half worth testing; what stays untested
-/// is the single call above it.
-pub(crate) fn note_mirror_after_sync(state: &AppState, result: &Result<SyncOutcome, String>) {
-    if let Ok(outcome) = result {
-        if outcome.updated {
-            state.mirror.mark_all();
-        }
-    }
+/// A function rather than one line inline because [`do_sync`] takes a `tauri::AppHandle` and
+/// this crate has no mock-app harness, so the call site itself is unreachable from the suite —
+/// `mirror::watch`'s tests reach this instead, and the placement is what this doc records.
+pub(crate) fn note_mirror_after_swap(state: &AppState) {
+    state.mirror.mark_all();
 }
 
 /// Note a failed call to Scryfall in the error log.
@@ -727,7 +787,10 @@ pub(crate) fn note_database(state: &AppState, operation: &str, message: &str) {
 ///
 /// Best-effort throughout: this is bookkeeping about a refusal that has already happened,
 /// and failing a sync over it would be absurd.
-fn persist_penalty(state: &Arc<AppState>) {
+///
+/// **Every caller of the Scryfall API owes this, not only the sync** — `tags::refresh` runs it
+/// too, because its check shares the client's lockout (issue #551).
+pub(crate) fn persist_penalty(state: &AppState) {
     let until = state.client.penalty_until_unix();
     if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         let _ = crate::app_meta::set_app_meta(&conn, K_SCRYFALL_PENALTY_UNTIL, &until.to_string());
@@ -1077,7 +1140,7 @@ async fn do_sync(
         // server lying about sizes, a rotated file, a dead connection — must not leave
         // a partial behind that every future resume then argues with.
         if !matches!(e, scryfall::ScryfallError::SizeMismatch { .. }) {
-            let _ = std::fs::remove_file(&gz);
+            scryfall::discard_partial(&gz);
         }
         return Err(e.to_string());
     }
@@ -1103,14 +1166,14 @@ async fn do_sync(
         // no more use here than after any other ingest failure, and the module's rule is
         // that only a resumable partial survives a failed run.
         Err(e) => {
-            let _ = std::fs::remove_file(&gz);
+            scryfall::discard_partial(&gz);
             return Err(format!("ingest task failed: {e}"));
         }
         Ok(Err(e)) => {
             // The file is the right size but its contents are unusable (or the database
             // refused it). Either way this exact file will not ingest next time either,
             // and a resume would only re-verify a file that is already complete.
-            let _ = std::fs::remove_file(&gz);
+            scryfall::discard_partial(&gz);
             return Err(e.to_string());
         }
     };
@@ -1140,10 +1203,14 @@ async fn do_sync(
     // it: a clear on a failed ingest with nothing scheduled leaves the app cold for the rest
     // of the session. Named rather than fixed.
     crate::index::lifecycle::clear(state);
+    // And the mirror is owed a pass for the same reason, told here rather than at the end of
+    // the run so that a failure between here and there — `/sets` is the one that reaches the
+    // network again — cannot leave the mirrored prices a corpus behind for good.
+    note_mirror_after_swap(state);
 
     // Only now the unlink. 77 MB of blocking I/O, and until this line moved above it, it sat
     // inside the window the paragraph above is about.
-    let _ = std::fs::remove_file(&gz);
+    scryfall::discard_partial(&gz);
 
     reclaim_freed_pages(state, app).await;
 
@@ -1303,6 +1370,21 @@ mod tests {
 
     fn db() -> Connection {
         crate::schema::memory_pair()
+    }
+
+    /// **A corpus with no card in it is a first run**, which is what holds the optional feeds
+    /// back until the card download is over (issue #551); one card is not.
+    #[test]
+    fn a_corpus_with_no_cards_is_a_first_run() {
+        let conn = db();
+        assert!(!has_cards(&conn));
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
+             VALUES ('c1', 'Card', 'set', '1', 'en', 'normal', '{}')",
+            [],
+        )
+        .unwrap();
+        assert!(has_cards(&conn));
     }
 
     /// A real file with both connections on it — the shape `init_state` builds — because
@@ -1887,6 +1969,53 @@ mod tests {
                 .map_err(|e| e.to_string())
         });
         assert_eq!(answer.unwrap(), 1);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **The waiting write outlasts the bound [`with_write`] gives up at, and runs `f` once the
+    /// connection comes back** — issue #546, item 7: a Leave pressed during a sync trip that held
+    /// the connection for longer than five seconds answered BUSY, and "leaving is always possible"
+    /// had a condition.
+    ///
+    /// The holder is **another thread**, because that is the real shape (a trip on the blocking
+    /// pool) and because a same-thread call would never return — see the helper's doc. It holds
+    /// for the bound plus half a second, so an implementation that quietly kept the bound fails
+    /// with BUSY rather than passing on timing luck.
+    #[test]
+    fn with_write_waiting_outlasts_the_bound_and_runs_once_the_connection_is_free() {
+        let (state, dir) = file_state("with-write-waiting", false);
+        let hold = crate::db::WRITE_LOCK_WAIT + std::time::Duration::from_millis(500);
+        let (taken_tx, taken_rx) = std::sync::mpsc::channel();
+
+        let (answer, waited) = std::thread::scope(|scope| {
+            let holder = scope.spawn(|| {
+                let held = crate::db::lock_blocking(&state.db);
+                taken_tx.send(()).expect("signal");
+                std::thread::sleep(hold);
+                drop(held);
+            });
+            taken_rx.recv().expect("the holder took the connection");
+
+            let start = std::time::Instant::now();
+            let answer = with_write_waiting(&state, |c| {
+                c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))
+                    .map_err(|e| e.to_string())
+            });
+            let waited = start.elapsed();
+            holder.join().expect("the holder");
+            (answer, waited)
+        });
+
+        assert_eq!(
+            answer.expect("the waiting write gave up, which is the bug"),
+            1
+        );
+        assert!(
+            waited > crate::db::WRITE_LOCK_WAIT,
+            "it ran before the holder let go, so nothing was held: waited {waited:?}"
+        );
 
         drop(state);
         let _ = std::fs::remove_dir_all(dir);

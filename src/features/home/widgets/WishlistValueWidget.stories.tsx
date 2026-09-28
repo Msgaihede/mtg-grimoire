@@ -152,7 +152,7 @@ export const NothingWishedFor: Story = {
   play: async ({ canvasElement }) => {
     const card = await cardIn(canvasElement);
     await expect(
-      await card.findByText("Your wishlist is empty. Add cards to your wishlist to see costs here."),
+      await card.findByText("Your wishlist is empty. Add cards to see costs here."),
     ).toBeInTheDocument();
     await expect(card.queryByText(/of the total\./)).not.toBeInTheDocument();
   },

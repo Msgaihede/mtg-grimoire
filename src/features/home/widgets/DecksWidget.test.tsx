@@ -509,7 +509,7 @@ describe("DecksWidget", () => {
 
       draw({ scope: "pinned", deckIds: [99] });
 
-      expect(screen.getByText(/pinned decks are no longer in your collection/)).toBeInTheDocument();
+      expect(screen.getByText(/pinned decks no longer exist/)).toBeInTheDocument();
     });
 
     /** `Pinned` with nothing pinned points at the picker rather than drawing recent decks under a
@@ -537,7 +537,7 @@ describe("DecksWidget", () => {
       draw();
 
       expect(
-        await screen.findByText(/Could not read your decks — The database is busy\./),
+        await screen.findByText(/Couldn't load your decks — The database is busy\./),
       ).toBeInTheDocument();
     });
 
@@ -554,7 +554,7 @@ describe("DecksWidget", () => {
 
       expect(screen.getByRole("button", { name: /^Burn/ })).toHaveAccessibleName(/· —$/);
       expect(
-        await screen.findByText(/Could not read deck values — No price feed\./),
+        await screen.findByText(/Couldn't load deck values — No price feed\./),
       ).toBeInTheDocument();
     });
   });
@@ -574,7 +574,7 @@ describe("DecksWidget", () => {
 
       expect(screen.queryByRole("button", { name: "Decks to pin" })).toBeNull();
       expect(
-        screen.getByText("Choose Pinned under Which decks to pick the decks this card shows."),
+        screen.getByText("Choose Pinned under Which decks to pick the decks this widget shows."),
       ).toBeInTheDocument();
     });
 

@@ -72,11 +72,12 @@ not behind that gate and cannot be, because three of them exist precisely so a c
 token can get one, so each is guarded by something else instead (an authorization code Patreon
 carries, a single-use ten-minute claim code, the refresh secret or the group auth being presented,
 the webhook's HMAC). **Two `/g/…` routes stand outside it too** — `/rotate` and `/keys`, which
-carry the group's own key material and are D1 only: a device that has just been rotated away from
-cannot mint a token, so a `/keys` behind the gate would refuse exactly the caller it exists to
-serve. Either way nothing follows from knowing where the relay lives. **The hosted Worker is
-deployed at that address**, which reverses what this file said until 2026-08-30. Probed that day,
-after the group-key deploy: `/claim` and `/token` answer **405** to a GET (the route is there and
+carry the group's own key material and refuse out of D1 alone (an accepted rotation then posts its
+roster to the group's object, once): a device that has just been rotated away from cannot mint a
+token, so a `/keys` behind the gate would refuse exactly the caller it exists to serve. Either way
+nothing follows from knowing where the relay lives. **The hosted Worker is deployed at that
+address**, which reverses what this file said until 2026-08-30. Probed that day, after the
+group-key deploy: `/claim` and `/token` answer **405** to a GET (the route is there and
 wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate,
 `/g/{group}/rotate` **401** to a POST, `/g/{group}/keys` **401** to a GET with a well-formed
 bearer, and `/g/{group}/bogus` **404** — so the gate, the callback, the membership flow and the
@@ -234,7 +235,7 @@ number to compare against.
 | [data-and-sync.md](docs/reference/data-and-sync.md) | Data dir, sync timings, the schema ladder, every search-performance measurement |
 | [scryfall.md](docs/reference/scryfall.md) | Rate limits, the penalty, bulk data, `error_log`, pre-warm keys |
 | [the price-feed research](docs/superpowers/research/2026-08-12-card-kingdom-mana-pool-price-feeds.md) | Both feeds measured live — sizes, key collisions, the NM-vs-cheapest trap |
-| [image-cache.md](docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route |
+| [image-cache.md](docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route, and the budget — what eviction spares, why the used-stamp is a file's modified time, and the idle horizon that ages the old `grid` files out |
 | [search-faceting.md](docs/reference/search-faceting.md) | The in-memory index, and why faceting fails open |
 | [search-syntax.md](docs/reference/search-syntax.md) | Scryfall query syntax in every card search box — the fourteen keywords and why `:` does not mean one thing, the day `a:` and `o:` stopped being tags, FTS against LIKE measured at 82× and 277×, `kw:` and the corpus rung behind it, why tag resolution is exact, and the one arm that fails closed among all the ones that fail open |
 | [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written, and the minisign signature every update must carry — what the digest does not prove, the trusted comment that stops a replay, the compiled-in key and how to rotate it |

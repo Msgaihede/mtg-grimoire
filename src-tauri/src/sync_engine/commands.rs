@@ -404,7 +404,8 @@ pub async fn sync_patreon_claim(
 /// runtime; `spawn_blocking` moves the whole trip to a thread where a `block_on` is legal and
 /// the guard never has to be `Send`.
 ///
-/// **Emits `sync:applied`, on the same condition [`live::trip`] uses**, so a manual press
+/// **Emits `sync:applied`, on the same condition [`live::trip`] uses** (the trip pushed, or it
+/// `changed` the synced tables here, which is wider than applying something), so a manual press
 /// reports through the one event Task 10's listener invalidates on — the automatic path is not
 /// the only source of that event any more. `app` is taken by value into this function and used
 /// only after the blocking call has returned; it is never captured *into* the `spawn_blocking`
@@ -428,7 +429,7 @@ pub async fn sync_now(
     .map_err(|e| e.to_string())??;
 
     if let Some(o) = outcome {
-        if o.pulled > 0 || o.pushed > 0 {
+        if o.changed || o.pushed > 0 {
             let _ = app.emit("sync:applied", o);
         }
     }

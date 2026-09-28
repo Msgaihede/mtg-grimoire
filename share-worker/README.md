@@ -120,12 +120,13 @@ reconnects on another group leaves this one entitled by nothing. Fail closed, be
 reversible — a group that should not have gone dark lights again on the next pass, where a group
 that should have gone dark and did not, never does.
 
-Two things follow for a deploy. `30` and not `0` because `relay/wrangler.jsonc` already owns
-`0 3 * * *` and there is nothing to be gained by having both passes write the same D1 on the same
-minute; this is the account's **second** cron trigger of the free plan's five. And because the
-verdict is written into the column, **`GET /s/{id}` reads one row and branches on `state`** — no
-join to `entitlements`, no second query — so a link that goes viral costs a single-table read on
-the budget every paying reader's sync shares.
+Two things follow for a deploy. `30` and not `0` because `relay/wrangler.jsonc` owns minute `0` —
+`0 3 * * *` until 2026-09-28 and `0 * * * *`, hourly, since — and there is nothing to be gained by
+having both passes write the same D1 on the same minute; this is the account's **second** cron
+trigger of the free plan's five. And because the verdict is written into the column,
+**`GET /s/{id}` reads one row and branches on `state`** — no join to `entitlements`, no second
+query — so a link that goes viral costs a single-table read on the budget every paying reader's
+sync shares.
 
 A lapsed share **keeps its R2 object**. Reclaiming that storage is a sweep for later (spec §13),
 not a retention rule invented here: a revived membership wants the snapshot back.

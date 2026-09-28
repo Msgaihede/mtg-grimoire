@@ -196,7 +196,7 @@ describe("WishlistValueWidget", () => {
       "Common: 25 copies, $8.50, 7% of the total.",
       // Not "0% of the total", and not a price: a wish nobody will quote is a wish you cannot be
       // told the cost of, which is the wishlist's own version of this hole.
-      "Unknown rarity: 6 copies, no price to buy at TCGplayer.",
+      "Unknown rarity: 6 copies, no TCGplayer price.",
     ]);
   });
 
@@ -240,7 +240,7 @@ describe("WishlistValueWidget", () => {
 
   it.each([
     ["rarity", RARITY, ["Mythic", "Rare", "Common", "Unknown rarity"]],
-    ["color", COLOR, ["Multicolour", "Blue", "Colorless"]],
+    ["color", COLOR, ["Multicolor", "Blue", "Colorless"]],
     ["set", SET, ["Modern Horizons 3", "Unknown set"]],
     ["finish", FINISH, ["Any finish", "Foil"]],
   ] as const)("names every bucket of the %s dimension", (dimension, rows, labels) => {
@@ -350,7 +350,7 @@ describe("WishlistValueWidget", () => {
 
     // Synchronously, before the rejection below can land: a query's first render is always
     // pending, and nothing can run between `render` and this assertion.
-    expect(screen.getByText("Adding up what your wishlist would cost…")).toBeInTheDocument();
+    expect(screen.getByText("Loading wishlist prices…")).toBeInTheDocument();
   });
 
   it("says the wishlist is empty in the wishlist's own words", () => {
@@ -359,7 +359,7 @@ describe("WishlistValueWidget", () => {
     });
 
     expect(
-      screen.getByText("Your wishlist is empty. Add cards to your wishlist to see costs here."),
+      screen.getByText("Your wishlist is empty. Add cards to see costs here."),
     ).toBeInTheDocument();
     // Never a total over an empty list: `$0.00` is a price nobody quoted.
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
@@ -370,15 +370,15 @@ describe("WishlistValueWidget", () => {
       wrapper: world(SUMMARY, { rarity: [] }),
     });
 
-    expect(screen.getByText("Nothing in this slice has a price yet.")).toBeInTheDocument();
+    expect(screen.getByText("No prices for these cards yet.")).toBeInTheDocument();
   });
 
   it("says so when the read is refused", async () => {
     render(<WishlistValueWidget {...body(widgetOf(null))} />, { wrapper: LiveWorld });
 
     await waitFor(() =>
-      expect(screen.getByText(/Could not price your wishlist/)).toBeInTheDocument(),
+      expect(screen.getByText(/Couldn't load wishlist prices/)).toBeInTheDocument(),
     );
-    expect(screen.queryByText(/Adding up/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Loading wishlist prices/)).not.toBeInTheDocument();
   });
 });

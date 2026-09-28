@@ -563,9 +563,11 @@ async fn trip(app: &tauri::AppHandle, state: &Arc<AppState>, sched: &mut Schedul
     sched.finished();
 
     // **`sync:applied` is emitted only when something changed**, so a frontend listener that
-    // invalidates every user-data root does not do so on every heartbeat.
+    // invalidates every user-data root does not do so on every heartbeat. `changed` and not
+    // `pulled`: a pull can delete rows here through the moot arm, and the conversions behind it
+    // write rows, with nothing applied (`RelayOutcome::changed`).
     if let Ok(Ok(Some(o))) = outcome {
-        if o.pulled > 0 || o.pushed > 0 {
+        if o.changed || o.pushed > 0 {
             let _ = app.emit("sync:applied", o);
         }
     }
