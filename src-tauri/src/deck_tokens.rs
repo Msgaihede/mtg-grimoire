@@ -2830,9 +2830,12 @@ fn sql_words(words: &[&str]) -> String {
 /// that changes nothing (checked with a case-sensitive `GLOB`, `node:sqlite`, 2026-09-27); the
 /// helper arm is `instr`, case-sensitive like its Rust.
 ///
-/// **The set type is a subquery rather than a join**: `sets` is a thousand rows keyed by code, so
-/// the other games' codes are read once and every card row is a membership test — and a card whose
-/// set `sets` does not list is kept, as a helper in doubt is.
+/// **The set type is a correlated `NOT EXISTS` rather than a join**: `sets` is a thousand rows keyed
+/// by code, so each helper row is one primary-key lookup of its own set — and a card whose set
+/// `sets` does not list is kept, as a helper in doubt is. **Never a `NOT IN` over the other games'
+/// codes**: `sets.code` is a `TEXT PRIMARY KEY` without `NOT NULL`, and one row holding a NULL code
+/// makes `x NOT IN (…)` NULL for every `x`, which dropped every helper while [`is_listed_token`]
+/// kept them (`token_printings_keeps_the_helpers_when_a_set_has_no_code`).
 ///
 /// **The list, measured over a copy of the debug corpus on 2026-09-28**: 3 303 printings over 1 096
 /// oracle ids while the layout decided alone; 3 023 over 911 for one day, when only a `Token` or
@@ -2871,8 +2874,9 @@ pub fn list_token_printings(
           WHERE c.is_paper = 1
             AND ((c.layout IN ({tokens}, {two_sided}) AND ({lines}))
                  OR (c.layout IN ({helpers})
-                     AND c.set_code NOT IN
-                         (SELECT code FROM sets WHERE set_type IN ({other_games}))
+                     AND NOT EXISTS
+                         (SELECT 1 FROM sets s
+                           WHERE s.code = c.set_code AND s.set_type IN ({other_games}))
                      AND ((instr(' // ' || COALESCE(c.type_line, '') || ' // ',
                                  ' // {helper_face} // ') > 0
                            AND instr(COALESCE(c.oracle_text, ''), '{checklist}') = 0)
@@ -7633,6 +7637,73 @@ mod tests {
                     set_type_of(card.set_code),
                 ),
                 "`{}`: the SQL and the Rust must give one answer",
+                card.name
+            );
+        }
+    }
+
+    /// **A `sets` row with no code leaves out no helper.** `sets.code` is a `TEXT PRIMARY KEY`
+    /// with no `NOT NULL`, so SQLite lets a row hold a NULL one — and against a set holding a
+    /// NULL, `x NOT IN (…)` is never true, only NULL or false. Written as a `NOT IN` over the
+    /// other games' codes, one nameless `minigame` row dropped every helper from All tokens while
+    /// [`is_listed_token`] kept them all. The correlated `NOT EXISTS` asks each card's own set and
+    /// nothing else, so a card whose set `sets` does not list is kept, as it always was.
+    #[test]
+    fn token_printings_keeps_the_helpers_when_a_set_has_no_code() {
+        let conn = open();
+        conn.execute(
+            "INSERT INTO sets (code, name, set_type) VALUES ('tcmm', 'tcmm', 'token'),
+                                                           (NULL, 'Nameless', 'minigame')",
+            [],
+        )
+        .unwrap();
+        let nulls: i64 = conn
+            .query_row("SELECT count(*) FROM sets WHERE code IS NULL", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(nulls, 1, "the fixture really holds a set with no code");
+        let monarch = Card {
+            id: "c-monarch",
+            oracle_id: "o-monarch",
+            name: "The Monarch",
+            type_line: "Card",
+            layout: "token",
+            oracle_text: "At the beginning of your end step, draw a card.",
+            set_code: "tcmm",
+            ..Card::default()
+        };
+        // In a set `sets` does not list at all: a helper in doubt is kept.
+        let unlisted = Card {
+            id: "c-day-night",
+            oracle_id: "o-day-night",
+            name: "Day // Night",
+            type_line: "Card // Card",
+            layout: "double_faced_token",
+            set_code: "zzzz",
+            ..Card::default()
+        };
+        for card in [&monarch, &unlisted] {
+            card.insert(&conn);
+        }
+        treasure().insert(&conn);
+
+        let got = list_token_printings(&conn, Marketplace::Tcgplayer).unwrap();
+        assert_eq!(
+            got.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            vec!["Day // Night", "The Monarch", "Treasure"],
+            "both helpers listed beside the token"
+        );
+        for card in [&monarch, &unlisted] {
+            let set_type = (card.set_code == "tcmm").then_some("token");
+            assert!(
+                is_listed_token(
+                    card.layout,
+                    Some(card.type_line),
+                    Some(card.oracle_text),
+                    set_type
+                ),
+                "`{}`: the Rust keeps it, so the SQL must",
                 card.name
             );
         }
