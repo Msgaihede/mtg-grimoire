@@ -20,10 +20,14 @@ import { queryClient, SYNC_KEY } from "@/lib/query";
  * only fires for a trip *this window* started, and `sync:applied` is emitted for every trip —
  * including the automatic ones a background wake or another device's push can cause.
  *
- * **A trip that pulled nothing refreshes `SYNC_KEY` alone.** Rust emits the event when a trip
- * pushed *or* pulled, and `pulled` counts the ops this trip newly applied — so a push-only trip,
- * which every write of the reader's own ends in, changed no row a query reads: the window that
- * wrote has settled its own keys and every other window heard `db:changed`. Refreshing the whole
+ * **A trip that changed nothing here refreshes `SYNC_KEY` alone**, and `RelayOutcome.changed` is
+ * the whole of that test. Rust emits the event when a trip pushed or changed something, and
+ * `changed` is true when it applied or mooted an op, brought a row back, broke a folder cycle or
+ * ran a conversion behind its pull — so a push-only trip, which every write of the reader's own
+ * ends in, changed no row a query reads: the window that wrote has settled its own keys and every
+ * other window heard `db:changed`. **It gated on `pulled > 0` for one review round**, and that
+ * missed a trip whose pull only mooted — the moot arm deletes rows and counts them in `moot`,
+ * never in `applied` — or whose conversions wrote the only rows. Refreshing the whole
  * set there would re-read a deep search, an open card and the Tags page after every press — and a
  * read under one of those roots that ever wrote a synced table would push, firing the event that
  * re-ran it: `multi-window.md`'s refresh loop, with the relay inside it.
@@ -38,7 +42,7 @@ export function useDeviceSyncInvalidation(): void {
   useEffect(
     () =>
       ipc.onSyncApplied((outcome) => {
-        for (const queryKey of outcome.pulled > 0 ? DEVICE_SYNC_INVALIDATED : [SYNC_KEY]) {
+        for (const queryKey of outcome.changed ? DEVICE_SYNC_INVALIDATED : [SYNC_KEY]) {
           void queryClient.invalidateQueries({ queryKey });
         }
       }),

@@ -847,6 +847,26 @@ const SUPERSEDED: &str = "group_key@";
 /// reads it that way; only [`found_group`] seeds one without a rotation.
 const LAST_MANIFEST: &str = "last_manifest";
 
+/// The `sync_state` key holding the device ids **an epoch passed through on the way to the newest
+/// left off its manifest, and whose roster rows were kept anyway**, comma-joined — written by
+/// [`adopt_passing_epoch`], deleted by every adoption that prunes and by [`commit_rotation`], and
+/// absent whenever the roster is the last manifest's.
+///
+/// **The rows are kept because [`adopt_epoch`] never inserts one back** (issue #546's review,
+/// finding 3). A device removed at one epoch of `client::catch_up`'s walk and paired back by a
+/// later one is on the newest manifest; a walk that pruned at every step deleted its row, and with
+/// it the only public key this device holds for it, for good — so every rotation it later sealed
+/// failed [`NOT_ON_THE_ROSTER`] here, and this device's own next removal or departure published a
+/// manifest without it. Adopting the newest directly, as before the walk, kept it. So the roster is
+/// pruned against the newest manifest alone.
+///
+/// **And [`supersede`] leaves these out of its view**, which keeps every decision it takes the one
+/// a walk that pruned at each step took: after an epoch the walk passed through, the group as far
+/// as this device can see is that epoch's manifest, not a roster still holding a device the
+/// manifest dropped. Counted in, a join after a removal would read as dropping the removed device
+/// a second time and forget the key the join replaced.
+const PRUNE_DEFERRED: &str = "prune_deferred";
+
 /// The group as it stood at `epoch`, when this device still holds that epoch's key — what
 /// `client::pull` opens an envelope from before a rotation with.
 ///
@@ -881,16 +901,18 @@ pub fn group_at(conn: &Connection, current: &Group, epoch: i64) -> rusqlite::Res
 /// ⚠️ **The replaced key is kept only across a rotation that, as far as this device can see,
 /// dropped nobody** — the next epoch is exactly one ahead, this device **has** a view of the
 /// group (the last manifest it adopted or published, seeded `[itself]` by [`found_group`]), and
-/// every device in that view or on its live roster is on the new manifest. **No view is not an
-/// empty view**: an install upgraded from before this history, and every device that joined by
-/// pairing, has none, and `adopt_epoch` never inserts — so a device paired by somebody else is on
-/// neither side of the comparison and its removal would look like nothing. Anything else — a
-/// removal, a departure, a jump across an epoch whose manifest this device never saw, or no view
-/// — forgets **every** superseded key. The group key is symmetric, so holding epoch *N*'s key is
-/// being able to seal an envelope at *N* under any device id, and the relay does not refuse a
-/// push at a stale epoch: a device that went on opening *N* after a removal would be taking
-/// writes from the removed device after it was removed. A join drops nobody, which is the case
-/// the backlog is lost in otherwise — every pairing rotates.
+/// every device in that view or on its live roster is on the new manifest — **less the rows a
+/// catch-up walk kept past the manifest that dropped them** ([`PRUNE_DEFERRED`]), which that
+/// manifest has already decided about. **No view is not an empty view**: an install upgraded
+/// from before this history, and every device that joined by pairing, has none, and `adopt_epoch`
+/// never inserts — so a device paired by somebody else is on neither side of the comparison and
+/// its removal would look like nothing. Anything else — a removal, a departure, a jump across an
+/// epoch whose manifest this device never saw, or no view — forgets **every** superseded key. The
+/// group key is symmetric, so holding epoch *N*'s key is being able to seal an envelope at *N*
+/// under any device id, and the relay does not refuse a push at a stale epoch: a device that went
+/// on opening *N* after a removal would be taking writes from the removed device after it was
+/// removed. A join drops nobody, which is the case the backlog is lost in otherwise — every
+/// pairing rotates.
 ///
 /// **The epoch step is the authenticated join/removal marker, and this function is where it is
 /// read** (issue #546, item 9c). A join advances the epoch by [`JOIN_STEP`] and a removal or a
@@ -923,10 +945,25 @@ fn supersede(
         .map(String::as_str)
         .chain(std::iter::once(me))
         .collect();
+    let deferred: Option<String> = tx
+        .query_row(
+            "SELECT value FROM sync_state WHERE key = ?1",
+            [PRUNE_DEFERRED],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let deferred: std::collections::HashSet<&str> = deferred
+        .iter()
+        .flat_map(|ids| ids.split(','))
+        .filter(|id| !id.is_empty())
+        .collect();
     let mut known: Vec<String> = {
         let mut stmt = tx.prepare("SELECT device_id FROM sync_devices WHERE revoked_at IS NULL")?;
         let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-        rows.collect::<rusqlite::Result<_>>()?
+        rows.collect::<rusqlite::Result<Vec<String>>>()?
+            .into_iter()
+            .filter(|id| !deferred.contains(id.as_str()))
+            .collect()
     };
     let last: Option<String> = tx
         .query_row(
@@ -969,12 +1006,12 @@ fn supersede(
     Ok(())
 }
 
-/// Forget every superseded key and the last manifest: what leaving a group, and joining one
-/// afresh, owe the group this device is no longer in.
+/// Forget every superseded key, the last manifest and any prune a walk left owing: what leaving a
+/// group, and joining one afresh, owe the group this device is no longer in.
 fn forget_superseded(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
-        "DELETE FROM sync_state WHERE key GLOB ?1 || '*' OR key = ?2",
-        params![SUPERSEDED, LAST_MANIFEST],
+        "DELETE FROM sync_state WHERE key GLOB ?1 || '*' OR key = ?2 OR key = ?3",
+        params![SUPERSEDED, LAST_MANIFEST, PRUNE_DEFERRED],
     )?;
     Ok(())
 }
@@ -1046,6 +1083,15 @@ pub fn commit_rotation(
         [],
     )
     .map_err(|e| e.to_string())?;
+    // The manifest just published was planned from this roster, so no row on it is owed a prune
+    // any more ([`PRUNE_DEFERRED`]). Only a device at the relay's epoch can publish at all —
+    // `/rotate` takes the group's current auth — and a walk leaves a prune owing only on a device
+    // behind it, so this finds nothing in practice and is here so the two cannot disagree.
+    tx.execute(
+        "DELETE FROM sync_state WHERE key = ?1",
+        params![PRUNE_DEFERRED],
+    )
+    .map_err(|e| e.to_string())?;
     write_group(&tx, &rotation.group).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
@@ -1076,12 +1122,64 @@ pub fn commit_rotation(
 /// **The key it replaces is kept or forgotten by [`supersede`], before the sweep** — it reads the
 /// roster the sweep is about to prune. Kept, it is what opens the backlog a device offline across
 /// a join would otherwise step over for good.
+///
+/// **This is the adoption of the newest epoch.** One a catch-up walk passes through on its way
+/// there is [`adopt_passing_epoch`], which takes the key and sweeps nothing.
 pub fn adopt_epoch(
     conn: &Connection,
     from_device: &str,
     epoch: i64,
     blob: &[u8],
     manifest: &[String],
+) -> Result<(), String> {
+    adopt(conn, from_device, epoch, blob, manifest, Sweep::Prune)
+}
+
+/// [`adopt_epoch`] for an epoch `client::catch_up` passes through on its way to the newest: the
+/// key is taken and [`supersede`] decides against **this epoch's own manifest**, exactly as there —
+/// **and no roster row is deleted**. The rows the manifest omits are filed under
+/// [`PRUNE_DEFERRED`] instead, and the adoption of the newest decides them.
+///
+/// **Each half is the one that has to be per epoch, and the other is the one that must not be.**
+/// `supersede` has to read every step, because the step is the join/removal marker: a removal the
+/// walk passes through advances by [`REMOVAL_STEP`] and forgets whatever a later join would have
+/// kept, and a `+1` whose manifest drops somebody — an older build's removal — forgets on its own
+/// manifest, since its view is still the one before it. The roster has to wait for the newest,
+/// because the sweep deletes a public key nothing can put back: a device removed at one epoch and
+/// paired back by the next is on the newest manifest, and a walk that pruned as it went would have
+/// lost it from this roster for good, where adopting the newest directly kept it.
+///
+/// **A walk that stops after one of these leaves the roster behind the last manifest** — the
+/// newest failed to open, or the process ended between two steps — until the next adoption, which
+/// prunes against its own manifest and reads its view as this one would have. Nothing can be
+/// published from the rows in between: this device is behind the relay's epoch by then, and
+/// `/rotate` takes only the group's current auth.
+pub fn adopt_passing_epoch(
+    conn: &Connection,
+    from_device: &str,
+    epoch: i64,
+    blob: &[u8],
+    manifest: &[String],
+) -> Result<(), String> {
+    adopt(conn, from_device, epoch, blob, manifest, Sweep::Defer)
+}
+
+/// What an adoption does to the roster: [`adopt_epoch`]'s sweep, or [`adopt_passing_epoch`]'s
+/// deferral of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Sweep {
+    Prune,
+    Defer,
+}
+
+/// The body [`adopt_epoch`] and [`adopt_passing_epoch`] share; `sweep` is the only difference.
+fn adopt(
+    conn: &Connection,
+    from_device: &str,
+    epoch: i64,
+    blob: &[u8],
+    manifest: &[String],
+    sweep: Sweep,
 ) -> Result<(), String> {
     let Some(me) = read(conn).map_err(|e| e.to_string())? else {
         return Err(NOT_IN_A_GROUP.to_owned());
@@ -1135,14 +1233,54 @@ pub fn adopt_epoch(
     let mut stays: Vec<&str> = manifest.iter().map(String::as_str).collect();
     stays.push(&me.device_id);
     let holes: Vec<String> = (1..=stays.len()).map(|n| format!("?{n}")).collect();
-    tx.execute(
-        &format!(
-            "DELETE FROM sync_devices WHERE device_id NOT IN ({})",
-            holes.join(", ")
-        ),
-        rusqlite::params_from_iter(stays),
-    )
-    .map_err(|e| e.to_string())?;
+    match sweep {
+        Sweep::Prune => {
+            tx.execute(
+                &format!(
+                    "DELETE FROM sync_devices WHERE device_id NOT IN ({})",
+                    holes.join(", ")
+                ),
+                rusqlite::params_from_iter(stays),
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute(
+                "DELETE FROM sync_state WHERE key = ?1",
+                params![PRUNE_DEFERRED],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        Sweep::Defer => {
+            // **Recomputed from the roster and this manifest, never added to.** What the next
+            // step's view has to leave out is exactly what a prune here would have deleted, and a
+            // row an earlier step deferred that this manifest names again is in the group again.
+            let left: Vec<String> = {
+                let mut stmt = tx
+                    .prepare(&format!(
+                        "SELECT device_id FROM sync_devices WHERE device_id NOT IN ({})
+                          ORDER BY device_id",
+                        holes.join(", ")
+                    ))
+                    .map_err(|e| e.to_string())?;
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(stays), |r| r.get::<_, String>(0))
+                    .map_err(|e| e.to_string())?;
+                rows.collect::<rusqlite::Result<_>>()
+                    .map_err(|e| e.to_string())?
+            };
+            if left.is_empty() {
+                tx.execute(
+                    "DELETE FROM sync_state WHERE key = ?1",
+                    params![PRUNE_DEFERRED],
+                )
+            } else {
+                tx.execute(
+                    "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?1, ?2)",
+                    params![PRUNE_DEFERRED, left.join(",")],
+                )
+            }
+            .map_err(|e| e.to_string())?;
+        }
+    }
     if own {
         // **Its own rotation is the commit that was lost**, so it owes what [`commit_rotation`]
         // would have done after the sweep: re-arm every peer that stays for a baseline (§12.4).

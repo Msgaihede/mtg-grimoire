@@ -235,6 +235,8 @@ const OUTCOME: RelayOutcome = {
   // whole group, and no group so broken it has a moot child to consume.
   heldNewer: 0,
   dropped: 0,
+  moot: 0,
+  changed: true,
   // An ordinary trip, which is every trip but the first with a given device — so both baseline
   // counts are zero and the panel must say nothing at all about a first exchange.
   baselineOps: 0,

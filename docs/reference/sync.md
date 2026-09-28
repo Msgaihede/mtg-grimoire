@@ -2153,10 +2153,14 @@ holding its cursor on the first, would ask for that same page for ever and never
 resolves it — the baseline carrying a waiting child's parent, or merely the page after a held one.
 The cursor-carrying loop the limit needs must walk to the head, and only then may a hold be decided.
 
-**A third hold, `clock`, since issue #546 (2026-09-28).** A batch carrying any op stamped more
-than `hlc::MAX_AHEAD_MS` — one day — past this device's wall clock holds its sender from that
-batch's stamp on, by stamp and not page position, exactly as a newer build's batch does, and holds
-`PULL_CURSOR` under `"clock"`; the panel draws `PULL_HELD_CLOCK_NOTICE`, and `error_log` gets one
+**A third hold, `clock`, since issue #546 (2026-09-28).** A batch carrying any op above its
+sender's `sync_peers` watermark and stamped more than `hlc::MAX_AHEAD_MS` — one day — past this
+device's wall clock holds **every batch of that sender in the page**, and `PULL_CURSOR` with them,
+under `"clock"`. The whole sender and not "from that batch's stamp on", as a newer build's batch is
+held: a baseline's chunks are stamped from `updated_at` in table order, so a sibling chunk that
+applied could lift the watermark past ops in the held one, and the release would skip them as
+seen. The watermark test keeps a far-ahead batch this device already applied — re-delivered across
+an upgrade — from holding anything; the panel draws `PULL_HELD_CLOCK_NOTICE`, and `error_log` gets one
 row per hold naming the device and roughly how far ahead it is. **Held rather than applied, and
 the other two answers are both worse**: applied, a device with a future-dated clock wins every
 last-writer-wins edit and `apply`'s observe drags every peer's hybrid logical clock forward for
@@ -2169,8 +2173,17 @@ Precedence is behind > newer > clock > waiting. ⚠️ **A member chooses its ow
 sealed a year ahead holds this cursor for a year less a day — within what a member holding the key
 can already do to its own group. An updated relay refuses such a push (422 `clock_ahead`, measured
 against the relay's clock, the one every device shares), so what reaches this hold is a log stored
-before that, or a receiver whose own clock is behind; the pusher is told in `error_log` and its
-outbox waits until its stamps are within a day of the relay's time.
+before that, or a receiver whose own clock is behind. **The pusher defers rather than stalls** —
+its trip still pulls and acks — **and rebases once its clock is set right** (`client::rebase`):
+`sync_clock` only ratchets forward, so one write under a date a year ahead stamps every later op a
+year ahead too, and without the rebase that device could send nothing for a year. Pending ops
+stamped past `base` — the latest of the wall clock, every peer's watermark and this device's own
+pushed stamps — are re-stamped from it with successive ticks in one transaction and the push goes
+again. It converges because nobody has seen those ops, their order among themselves is kept, and
+they still sort after everything this device observed or sent, so every last-writer-wins decision
+already made here is the one every other device makes. **It refuses when `base` is itself a day
+ahead** — a future stamp already reached the group through an older relay — and then the device
+waits until real time reaches it, which is the one case `error_log` still tells it to wait out.
 
 **An envelope claiming an epoch above the relay's is not an epoch hold** (issue #546, item 3).
 `pull` used to hold for any `envelope.epoch > group.epoch`, and the relay stores `epoch` exactly as
@@ -2358,6 +2371,15 @@ stopped there, so everything queued behind it never reached the relay. Now it is
 stepped over, the one exception to "stamped only on a 200"; a baseline leaves such a row out the
 same way and still sets its marker. What it costs is that change on the other devices, which is
 the only honest answer to a paste in the megabytes.
+
+**A refusal that will not change on the next try defers the push; it no longer ends the trip.**
+`too_large`, `quota`, `clock_ahead` and `epoch_ahead` (`client::Deferral`, matched on the body's
+`code`) are recorded, nothing after the refused chunk is sent, the ops stay pending — and the trip
+goes on to pull and ack. Before, `round_trip`'s `push(..)?` ended every trip at such a refusal, so
+the device stopped reading as well as writing and, on `quota`, held the relay's compaction floor at
+its last ack: a full group could never drain. A baseline is skipped behind `quota` or
+`clock_ahead`, since a chunk refused part-way re-sends every chunk before it on the next trip.
+Network failures, a 5xx and an unreadable answer still fail the trip, as they always did.
 
 `base64` joined the tree for one job. Hex was the alternative and is twice the bytes over the
 wire and against that cap; base64 is four thirds and URL-safe.
@@ -3382,9 +3404,11 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   `src/lib/syncedTables.json`, reduced to outermost roots plus `SYNC_KEY` — `["collection"]`,
   `["wishlist"]`, `["decks"]`, `["cards"]`, `["card"]`, `["sync"]`, the four tag roots and
   `["stickyNotes"]`, never `["sets"]` — and `changes.rs`' test holds the JSON to `SYNCED_TABLES`.
-  `useDeviceSyncInvalidation` refreshes that whole set only when a trip **pulled** something
-  (`outcome.pulled > 0`); a push-only trip — the one every local write ends in — refreshes
-  `["sync"]` alone.
+  `useDeviceSyncInvalidation` refreshes that whole set only when a trip **changed** something
+  (`RelayOutcome.changed` — applied or mooted an op, brought a row back, broke a folder cycle, or
+  ran a conversion behind its pull); a push-only trip — the one every local write ends in —
+  refreshes `["sync"]` alone. It gated on `pulled > 0` for one review round and missed a pull that
+  only mooted: the moot arm deletes rows and counts them in `moot`, never in `applied`.
 - ~~**A removed device's ack pins the relay's compaction floor.**~~ **Fixed with issue #546, and
   not deployed.** `compact` took its floor as the lowest ack of every device the object had heard
   from, and nothing but a membership's end ever deleted an ack — so a removed device, a departed

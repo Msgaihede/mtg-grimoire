@@ -1466,7 +1466,8 @@ with the arithmetic behind the 105-character code and the crate pins, is
   dropped nobody** — `identity::supersede`, run by `adopt_epoch` and `commit_rotation` before
   either touches the roster. Exactly one epoch ahead, a view of the group **exists**, and every
   device in it (the live roster **and the last manifest's ids**, because `adopt_epoch` never
-  inserts) is still on the new manifest; anything else forgets them all. **An absent
+  inserts — less the rows in `sync_state.prune_deferred`, below) is still on the new manifest;
+  anything else forgets them all. **An absent
   `last_manifest` is no view, never an empty one**: only `identity::found_group` seeds it, with
   `[itself]`, because only a device minting its group knows all of it — a joiner's pairing blob
   names nobody but the initiator, and an upgraded install has never read a manifest. It is what
@@ -1528,7 +1529,13 @@ with the arithmetic behind the 105-character code and the crate pins, is
   `devices: Object.keys(manifest.keys)` — and there is no public key anywhere in one, so a device
   adopting somebody else's rotation *cannot* add a peer it has never met even in principle. It
   therefore learns **who left** and never **who joined**, and any device that has been told about a
-  join only by adopting an epoch is holding a partial roster. `client::publish_join` reads `/keys`
+  join only by adopting an epoch is holding a partial roster. **So `client::check_keys`' catch-up
+  walk (`/keys?epoch=`, issue #546) prunes only at the newest epoch**: every epoch it passes goes
+  through `identity::adopt_passing_epoch`, which lets `supersede` decide against that epoch's own
+  manifest but deletes no roster row — it parks the omitted ids in `sync_state.prune_deferred`,
+  which `supersede`'s view leaves out, and the newest adoption prunes and clears them. Pruning at
+  every step dropped a device removed at *N+2* and paired back at *N+3* for good, since the
+  *N+3* adoption could not re-insert it. `client::publish_join` reads `/keys`
   first and publishes **only when the manifest it would publish is a superset of the relay's
   current one**; otherwise it marks `roster_dirty`, publishes nothing and answers `Ok(())`. Without
   that check an ordinary pairing *evicts*: the manifest's key set is the roster on every device
@@ -1742,9 +1749,11 @@ record, with every measurement, is
   stamped by `wire::seal_batch` and never at capture — holds with no bound, until this device
   upgrades, and an envelope that opens under the key and does not parse counts as one **only when
   an op in it carries such a schema** (`WireError::Newer`; a `Malformed` one is stepped over like
-  an altered envelope, or it would pin the log for good); a **clock** hold (issue #546) holds a
-  sender from its first batch carrying an op stamped more than `hlc::MAX_AHEAD_MS` (a day) past
-  this device's wall clock, bounded by time itself — applying it would drag this device's clock
+  an altered envelope, or it would pin the log for good); a **clock** hold (issue #546) holds
+  **every** batch in the page from a sender with an op above its `sync_peers` watermark stamped
+  more than `hlc::MAX_AHEAD_MS` (a day) past this device's wall clock — the whole sender, because
+  a baseline's chunks are stamped from `updated_at` in table order and one that applied could lift
+  the watermark past ops in a held sibling — bounded by time itself — applying it would drag this device's clock
   forward for good, and clamping `observe` instead would stamp the reader's next edit *before* the
   op it followed, which diverges (`hlc::MAX_AHEAD_MS` has the argument); and an **unknown parent**
   from a same or older schema holds until the same blocks have been seen on 3 pulls spanning at
@@ -1922,8 +1931,19 @@ record, with every measurement, is
   `wire::MAX_SEALED_CHARS` on its own can never be sent, so it is recorded once, stamped and
   stepped over rather than stopping every op queued behind it. It stays in `sync_ops` as this
   device's history; "pending" would have been a promise that never resolves. Refusals from an
-  updated relay are matched on the body's `code` (`too_large`, `quota`, `clock_ahead`,
-  `epoch_ahead`, `stale_epoch` — the last retried once after a fresh `check_keys`). This line read "**every** relay failure", and `entitlement.rs` is the exception:
+  updated relay are matched on the body's `code`: `stale_epoch` is retried once after a fresh
+  `check_keys`, and **`too_large`, `quota`, `clock_ahead` and `epoch_ahead` defer the push rather
+  than fail the trip** (`client::Deferral`) — the ops stay pending and the trip still pulls and
+  acks, because a device whose every trip died at a refused push stopped reading too and, on
+  `quota`, pinned the relay's compaction floor at its old ack. A baseline is skipped behind
+  `quota` or `clock_ahead`, and never started while a row in it is stamped a day ahead.
+  **`clock_ahead` is first mended by `client::rebase`** when this device's clock has been set
+  right: `sync_clock` only ratchets forward, so one write made under a date a year ahead stamps
+  every later op a year ahead too. Pending ops stamped past `base` — the latest of the wall
+  clock, every peer's watermark and this device's own pushed stamps — are re-stamped from it in
+  one transaction, never when `base` is itself a day ahead (a future stamp already reached the
+  group, so re-stamping under it would reorder this device's history on the others). This line
+  read "**every** relay failure", and `entitlement.rs` is the exception:
   **nothing in that module writes to `error_log` on any path.** A 401 there means the membership
   ended, and routing it through `errors::record` like a network failure tells the reader their
   sync is broken when in fact their pledge lapsed — the wrong sentence, pointing at the wrong fix

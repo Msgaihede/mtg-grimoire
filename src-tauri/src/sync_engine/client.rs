@@ -150,8 +150,9 @@ pub(crate) struct Hold {
     /// Pulls that have found it, this one included.
     pulls: i64,
     /// **What the hold is a hold on**: each held device, at the stamp of its first held op
-    /// ([`apply::Held`]), of its first batch only a newer build can read, or of its first batch
-    /// stamped too far ahead, whichever is earliest.
+    /// ([`apply::Held`]), of its first batch only a newer build can read, or — when any of its
+    /// batches is stamped too far ahead, which holds all of them — of its earliest batch in the
+    /// page, whichever is earliest.
     ///
     /// **The waiting bound belongs to these, and a block not among them starts it over** (the
     /// final review of the delivery holds, I1). Counted by kind alone, a second wait that began
@@ -269,7 +270,8 @@ pub struct RelayOutcome {
     /// Ops this trip's pull **newly applied** — the same number as `applied`. Never the ops a
     /// held cursor was handed again: those are `skipped` or held, and counting them would fire
     /// `sync:applied` on every trip a hold lasts. (It read "envelopes taken", and counted every op
-    /// the page carried, until the cursor could be held.)
+    /// the page carried, until the cursor could be held.) **Not the gate for a screen refresh any
+    /// more** — `changed` is, and this is one of the things it counts.
     pub pulled: usize,
     /// Envelopes that could not be opened — a device that has not caught up with a key
     /// rotation, a blob from before one whose key this device does not hold, or one claiming an
@@ -288,6 +290,22 @@ pub struct RelayOutcome {
     /// Ops that can never apply, skipped: each group is an `error_log` row, so the panel can point
     /// there rather than promise them later.
     pub dropped: usize,
+    /// Ops consumed because they name a parent a delete has already taken
+    /// ([`ApplyReport::moot`]) — and **a row this device held under such an op's uid is deleted
+    /// with it**, so a trip can change what a screen shows while `applied` stays at nought.
+    pub moot: usize,
+    /// **Whether this trip wrote to the synced tables on this device** — the one field a screen
+    /// refresh may gate on. True when the pull applied ops (`pulled > 0`), mooted any (a cascade
+    /// can delete rows here), resurrected a row or broke a folder cycle, or when the conversions
+    /// that run behind a pull that read everything (`deck_tokens::convert_legacy_picks_after_pull`,
+    /// `deck_meta::refile_stray_theory_cards_after_pull`) wrote a row.
+    ///
+    /// **`pulled > 0` alone missed two of those** (issue #546's review, finding 4): the moot arm
+    /// deletes and counts in `moot`, never in `applied`, and the conversions write after `apply`
+    /// has returned and count nowhere in its report — so a trip that deleted a card here, or filed
+    /// a peer's token entries, refreshed nothing on screen. A trip that only pushed is `false`:
+    /// the window that wrote has already settled its own queries.
+    pub changed: bool,
     /// Ops sent as a first-contact baseline. Spec §13 — the panel names this separately,
     /// because a first exchange is larger than an ordinary sync and must not read as a hang.
     pub baseline_ops: usize,
@@ -306,6 +324,11 @@ impl RelayOutcome {
         self.deferred += report.deferred;
         self.held_newer += report.held_newer;
         self.dropped += report.dropped;
+        self.moot += report.moot;
+        self.changed |= report.applied > 0
+            || report.moot > 0
+            || report.resurrected > 0
+            || report.cycles_broken > 0;
     }
 }
 
@@ -356,6 +379,69 @@ const CLOCK_AHEAD: &str = "clock_ahead";
 const TOO_LARGE: &str = "too_large";
 /// A push that would take the group's stored log over its quota. **507**.
 const QUOTA: &str = "quota";
+
+/// A push the relay refused for a reason nothing else in this trip can clear, which **defers what
+/// is left of the push rather than failing the trip** ([`Pushed::deferred`]). Matched on the
+/// refusal's `code`, never its sentence.
+///
+/// ⚠️ **Failing the trip on one of these stopped the device pulling and acking for as long as the
+/// refusal lasted** (issue #546's review, finding 2), and every one of them lasts: the same ops
+/// meet the same answer on every attempt. For `quota` that is a deadlock — this device's ack is
+/// the relay's compaction floor, so the log it will not compact is the log that is full, until the
+/// relay's `ACK_TTL_MS` lets go of it ninety days on. So the ops stay pending, nothing after them
+/// is pushed this trip, and the trip goes on to pull and ack. A transient failure — the network, a 5xx, an answer that does
+/// not parse — still fails the trip, because the next attempt may simply work.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Deferral {
+    /// 413 `too_large`. Unreachable while [`wire::batches`] cuts under the cap and [`push`] sets
+    /// aside the one op no cut can save — the two sides disagreeing about a size.
+    TooLarge,
+    /// 507 `quota`: the group's stored log is full.
+    Quota,
+    /// 422 `clock_ahead`, once [`rebase`] could not mend it or its retry was refused too.
+    ClockAhead,
+    /// 422 `epoch_ahead`: sealed at an epoch the relay has not reached.
+    EpochAhead,
+}
+
+impl Deferral {
+    /// The deferral a refusal's `code` names, or `None` for every other code and for none.
+    /// `clock_ahead` is not read here: [`post_ops`] answers it as [`Refusal::ClockAhead`], because
+    /// [`push`] may still mend it.
+    fn of(code: Option<&str>) -> Option<Deferral> {
+        match code? {
+            TOO_LARGE => Some(Deferral::TooLarge),
+            QUOTA => Some(Deferral::Quota),
+            EPOCH_AHEAD => Some(Deferral::EpochAhead),
+            _ => None,
+        }
+    }
+
+    /// Whether a trip whose push was deferred for this should **emit no baseline** either.
+    ///
+    /// **The clock and the quota**, because a baseline can meet the same refusal part of the way
+    /// through, and there it costs more than a request: a baseline is cut into chunks and its
+    /// marker is stamped only once every chunk has landed, so one refused at chunk *k* pushes
+    /// chunks *0..k-1* again on every trip — into storage the quota is already out of, or past a
+    /// clock the relay goes on refusing. A baseline is sealed at the push's epoch, so `epoch_ahead`
+    /// refuses it too, but at its first chunk, where it costs one request; and `too_large` says
+    /// nothing about any other batch.
+    fn stops_baselines(self) -> bool {
+        matches!(self, Deferral::ClockAhead | Deferral::Quota)
+    }
+}
+
+/// What [`push`] did.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Pushed {
+    /// Ops the relay took, stamped `pushed_at`. The ops too large ever to send are stamped as well
+    /// and are not counted here.
+    pub sent: usize,
+    /// Why the push stopped short of the end of the outbox, or `None` when it reached it. What was
+    /// left is still pending and is offered again on the next trip, which this trip's pull and ack
+    /// do not wait for.
+    pub deferred: Option<Deferral>,
+}
 
 // ---------------------------------------------------------------------------------------
 // `sync_state`
@@ -508,7 +594,8 @@ pub enum KeyOutcome {
     Current,
     /// A higher epoch with a blob sealed to this device: the new key is written and the roster
     /// swept to the manifest — each epoch in between first, where the relay serves them
-    /// ([`check_keys`]). This device is still in the group and the trip carries on.
+    /// ([`check_keys`]), for its key and never its roster. This device is still in the group and
+    /// the trip carries on.
     Adopted,
     /// A higher epoch and **no blob for this device**, which is the removal notice — see
     /// [`check_keys`]. The group is left and the grant cleared.
@@ -788,7 +875,7 @@ pub async fn check_keys(conn: &Connection) -> Result<KeyCheck, String> {
         removed(conn)?;
         return Ok(answered(KeyOutcome::Removed));
     }
-    if let Err(message) = adopt_page(conn, &device, &page, blob) {
+    if let Err(message) = adopt_page(conn, &device, &page, blob, identity::adopt_epoch) {
         let url = keys_url(&base, &device, &group, None);
         note(conn, "keys", Kind::Parse, &message, Some(&url));
         return Err(message);
@@ -839,8 +926,15 @@ enum CatchUp {
 /// * **A manifest with no blob for this device** — the removal notice, exactly as the newest
 ///   answer's would be ([`removed`]). Compared only after the epoch has been seen to be `n`,
 ///   which is above this device's own — the guard [`check_keys`] keeps.
-/// * **A blob** — adopted as [`check_keys`] adopts one ([`adopt_page`]), and the walk goes on
-///   from `n + 1`.
+/// * **A blob** — adopted for its key, as [`check_keys`] adopts one ([`adopt_page`]) **except that
+///   no roster row is swept** (`identity::adopt_passing_epoch`), and the walk goes on from `n + 1`.
+///   `identity::supersede` still decides against `n`'s own manifest, which is what reads the
+///   join/removal marker step by step; the roster is swept against the newest manifest alone,
+///   when [`check_keys`] adopts it. **Swept at every step, it lost a device for good**: removed at
+///   one epoch and paired back by a later one, it is on the newest manifest, but `adopt_epoch`
+///   never inserts, so the row the walk deleted — and the only public key this device held for
+///   it — was gone. Every rotation it sealed after that failed to open here, and this device's own
+///   next removal or departure published a manifest without it (issue #546's review, finding 3).
 ///
 /// ⚠️ **An older relay ignores `?epoch=`** and answers the newest manifest, so an answer whose
 /// epoch is not `n` stops the walk: what it would have adopted is the newest, which the caller
@@ -873,16 +967,21 @@ async fn catch_up(
         let Some(blob) = &page.blob else {
             return Ok(CatchUp::Removed);
         };
-        if adopt_page(conn, device, &page, blob).is_err() {
+        if adopt_page(conn, device, &page, blob, identity::adopt_passing_epoch).is_err() {
             return Ok(CatchUp::Newest);
         }
     }
     Ok(CatchUp::Newest)
 }
 
-/// Open `page`'s blob with every sealer this device can name, and adopt the first that fits.
-/// Answers the refusal to record when none does; records nothing itself, because [`catch_up`]
-/// falls back rather than failing.
+/// `identity::adopt_epoch`'s shape, which `identity::adopt_passing_epoch` shares.
+type Adopt = fn(&Connection, &str, i64, &[u8], &[String]) -> Result<(), String>;
+
+/// Open `page`'s blob with every sealer this device can name, and adopt the first that fits —
+/// with `adopt`, which is `identity::adopt_epoch` for the newest epoch and
+/// `identity::adopt_passing_epoch` for one [`catch_up`] passes through. Answers the refusal to
+/// record when none does; records nothing itself, because [`catch_up`] falls back rather than
+/// failing.
 ///
 /// **The answer does not say who rotated, so every sealer this device can name is tried.**
 /// `/keys` carries the epoch, the blob and the manifest and nothing about the sealer —
@@ -905,7 +1004,13 @@ async fn catch_up(
 /// is off the roster already — deleted, or on an older build's database stamped `revoked_at`,
 /// which is skipped here and refused by `adopt_epoch` — and anybody able to publish to `/rotate`
 /// at all could always have named itself on its own manifest.
-fn adopt_page(conn: &Connection, device: &str, page: &KeyPage, blob: &str) -> Result<(), String> {
+fn adopt_page(
+    conn: &Connection,
+    device: &str,
+    page: &KeyPage,
+    blob: &str,
+    adopt: Adopt,
+) -> Result<(), String> {
     let sealed = URL_SAFE_NO_PAD
         .decode(blob.as_bytes())
         .map_err(|e| e.to_string())?;
@@ -920,7 +1025,7 @@ fn adopt_page(conn: &Connection, device: &str, page: &KeyPage, blob: &str) -> Re
     }
     let mut refusal = String::new();
     for sealer in &candidates {
-        match identity::adopt_epoch(conn, sealer, page.epoch, &sealed, &page.devices) {
+        match adopt(conn, sealer, page.epoch, &sealed, &page.devices) {
             Ok(()) => return Ok(()),
             Err(e) => refusal = e,
         }
@@ -1225,6 +1330,13 @@ enum Refusal {
     /// mend it — catch up and re-seal — and a row for a refusal the same trip then cleared would
     /// report a sync that worked.
     Stale,
+    /// **422 `clock_ahead`**: stamped more than a day past the relay's clock. **Not recorded
+    /// here either**, for `Stale`'s reason — [`push`] may mend it by [`rebase`] — and because a
+    /// baseline's refusal needs a sentence of its own ([`emit_baselines`]).
+    ClockAhead,
+    /// A refusal retrying will not clear inside this trip ([`Deferral`]), already recorded in
+    /// [`refused_push`]'s sentence.
+    Deferred(Deferral),
     /// Anything else, already recorded (or a lapse, which records nothing): the sentence to
     /// answer with.
     Failed(String),
@@ -1238,10 +1350,11 @@ enum Refusal {
 /// bytes *and* stamped a row could not have served it.
 ///
 /// Every failure is recorded under the operation `push`, because that is what it is from the
-/// relay's side and from the reader's — one endpoint, one `error_log` row to fold onto. The two
+/// relay's side and from the reader's — one endpoint, one `error_log` row to fold onto. The
 /// exceptions are a 401, which [`lapsed`] handles and does not record at all, and
-/// [`Refusal::Stale`], which is the caller's to mend or record. **A refusal an updated relay
-/// explains is recorded in its own sentence** ([`refused_push`]), matched on its `code`.
+/// [`Refusal::Stale`] and [`Refusal::ClockAhead`], which are the caller's to mend or record. **A
+/// refusal an updated relay explains is recorded in its own sentence** ([`refused_push`]),
+/// matched on its `code`.
 async fn post_ops(
     conn: &Connection,
     base: &str,
@@ -1279,12 +1392,17 @@ async fn post_ops(
     }
     if !(200..300).contains(&status) {
         let code = refusal_code(&response.text().await.unwrap_or_default());
-        if code.as_deref() == Some(STALE_EPOCH) {
-            return Err(Refusal::Stale);
+        match code.as_deref() {
+            Some(STALE_EPOCH) => return Err(Refusal::Stale),
+            Some(CLOCK_AHEAD) => return Err(Refusal::ClockAhead),
+            _ => {}
         }
         let message = refused_push(status, code.as_deref());
         note(conn, "push", Kind::Http, &message, Some(&url));
-        return Err(Refusal::Failed(message));
+        return Err(match Deferral::of(code.as_deref()) {
+            Some(deferral) => Refusal::Deferred(deferral),
+            None => Refusal::Failed(message),
+        });
     }
     match response.text().await {
         Ok(text) => {
@@ -1306,6 +1424,9 @@ async fn post_ops(
 /// Each says what happens to what this device wrote, because the answer to every one of them is
 /// the same and is the thing a reader looking at this row needs: **nothing was lost**. A refused
 /// batch leaves `pushed_at` NULL, so it is kept here and offered again on the next trip.
+/// `clock_ahead` is not here: whether it can be mended decides what is true to say about it, so
+/// [`push`] and [`emit_baselines`] each say it ([`CLOCK_STILL_AHEAD`], [`CLOCK_PINNED`],
+/// [`BASELINE_CLOCK_AHEAD`]).
 fn refused_push(status: u16, code: Option<&str>) -> String {
     match code {
         // Unreachable while `wire::batches` cuts under the cap and [`push`] sets aside the one op
@@ -1316,10 +1437,6 @@ fn refused_push(status: u16, code: Option<&str>) -> String {
         Some(QUOTA) => "this sync group's relay storage is full, so what this device wrote waits \
                         here until there is room again."
             .to_owned(),
-        Some(CLOCK_AHEAD) => "this device's clock is more than a day ahead of the relay's. Set \
-                              the date and time right - what it wrote while the clock was wrong \
-                              waits here until the relay's clock catches up with it."
-            .to_owned(),
         Some(EPOCH_AHEAD) => "the relay has not reached the group key change this device's \
                               changes were sealed under, so they wait here and are offered again \
                               on the next sync."
@@ -1327,6 +1444,23 @@ fn refused_push(status: u16, code: Option<&str>) -> String {
         _ => format!("the relay answered {status} to a push"),
     }
 }
+
+/// What a push refused as `clock_ahead` records when this device's own clock is the one still
+/// ahead — [`rebase`]'s [`Rebase::StillAhead`], or a push refused again after one. Nothing here
+/// can restamp a change earlier than a wall clock that is itself wrong, so the fix is the reader's,
+/// and once they have made it the next sync's [`rebase`] sends what waited.
+const CLOCK_STILL_AHEAD: &str = "this device's clock is set more than a day ahead of the relay's, \
+                                 so the changes it stamps cannot sync. Set the date and time \
+                                 right; this device's changes then go out on its next sync.";
+
+/// What a push refused as `clock_ahead` records when [`rebase`] may not move the stamps
+/// ([`Rebase::Pinned`]): something this device has already sent or received is stamped that far
+/// ahead, and what it wrote since has to stay after it. **Time is the only fix**, so the sentence
+/// sends the reader to no setting.
+const CLOCK_PINNED: &str = "this device's clock was once set more than a day ahead, and changes \
+                            stamped with that time have already been sent or received here. What \
+                            it has written since has to come after them, so it waits here until \
+                            the real date and time reach them.";
 
 /// What a push refused as `stale_epoch` answers when catching up did not mend it — a second
 /// refusal after [`check_keys`] adopted, which means the relay's epoch and the manifest's
@@ -1357,15 +1491,155 @@ fn stamp_pushed(conn: &Connection, seqs: &[i64]) -> Result<(), String> {
 
 /// What a change that can never be sent says: the table, the row, how large it is — and that it
 /// stays. `whom` is who goes without it.
+///
+/// **An op that will not serialize has no size to give**, and `wire::op_bytes` measures one as
+/// `usize::MAX` so that [`wire::oversized`] sets it aside rather than sealing it. Measured here it
+/// printed "0.0 MB, more than the relay takes", which is two false statements in one clause, so
+/// that case says only what is true of it.
 fn unsendable(op: &Op, whom: &str) -> String {
-    let bytes = serde_json::to_vec(op).map_or(0, |json| json.len());
-    format!(
-        "A change to {} (row {}) is {:.1} MB, more than the relay takes in one piece, so {whom} \
-         cannot be sent it. It is kept on this device.",
-        op.table,
-        op.uid,
-        bytes as f64 / 1_000_000.0
+    match serde_json::to_vec(op) {
+        Ok(json) => format!(
+            "A change to {} (row {}) is {:.1} MB, more than the relay takes in one piece, so \
+             {whom} cannot be sent it. It is kept on this device.",
+            op.table,
+            op.uid,
+            json.len() as f64 / 1_000_000.0
+        ),
+        Err(_) => format!(
+            "A change to {} (row {}) could not be written out to send, so {whom} cannot be sent \
+             it. It is kept on this device.",
+            op.table, op.uid
+        ),
+    }
+}
+
+/// What [`rebase`] found.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rebase {
+    /// The pending ops stamped after the base are stamped again from it and the clock is set back
+    /// with them: push again.
+    Done,
+    /// `sync_clock` is not more than a day past the wall clock, so the wall clock is what is
+    /// ahead — no stamp this device can make is any earlier than it. [`CLOCK_STILL_AHEAD`].
+    StillAhead,
+    /// The clock was set right, but something this device has already sent or received is stamped
+    /// too far ahead for what it wrote since to go under it. [`CLOCK_PINNED`].
+    Pinned,
+}
+
+/// **Stamp again what this device wrote while its clock was ahead, once the clock is right** — run
+/// when a push is refused `clock_ahead`, before the push is deferred (issue #546's review, finding
+/// 2b).
+///
+/// # Why setting the clock right was not enough
+///
+/// Capture stamps `max(sync_clock, wall)` and `sync_clock` only moves forward — a clock that
+/// retreated would stamp an edit before the ops it followed ([`hlc::Hlc::tick`]) — so one write
+/// made while the date was a year ahead stamped every write after it a year ahead too, long after
+/// the reader had set the date right. The relay refuses all of them, and the sentence that told the
+/// reader to fix the clock promised a recovery that never came.
+///
+/// # When it may
+///
+/// * **This device's clock has been set right**: `sync_clock` is more than [`hlc::MAX_AHEAD_MS`]
+///   past the wall clock. When it is not, the wall clock itself is what is ahead
+///   ([`Rebase::StillAhead`]), and there is nothing earlier to stamp with.
+/// * **Nothing this device has sent or received is that far ahead.** The base is the latest of the
+///   wall clock, the highest stamp it has observed from any device (its `sync_peers` watermarks)
+///   and the highest of its own ops with `pushed_at` set. When the base is itself too far ahead —
+///   a future-stamped op reached a relay that did not refuse it yet, or a peer's did and applied
+///   here, or an op too large to send was stamped over — it refuses ([`Rebase::Pinned`]): what it
+///   wrote has to stay after the base, so no stamp it could take would pass the relay's bound, and
+///   restamping it *below* an op the group already holds would put this device's own history in
+///   one order here and another on every other device. That is divergence, and waiting is not.
+///
+/// # What it does, in one transaction
+///
+/// Every pending op (`pushed_at IS NULL`) **stamped after the base** is stamped again, in `seq`
+/// order, with successive [`hlc::Hlc::tick`]s from the base under this device's id, and
+/// `sync_clock` is set to the last of them — to the base itself when none was after it. By hand,
+/// because the `sync_ops_clock` trigger follows an `INSERT` and this is an `UPDATE`.
+///
+/// # Why it converges
+///
+/// * **Nobody has seen the old stamps.** Only pending ops move, and a pending op has never left
+///   this device, so there is no copy anywhere for its new stamp to disagree with.
+/// * **This device's own order is kept.** Its stamps rise with `seq` — the clock follows every op
+///   it stamps — so the ops after the base are the outbox's tail. The ticks keep their order among
+///   themselves and put them after every other op this device wrote: the pending ones left where
+///   they are, at or below the base, and every pushed one, which the base is at or above.
+/// * **Every last-writer-wins decision this device has already made is the one the others will
+///   make.** A restamped op was stamped after everything this device had observed, so here it
+///   beat every remote op it met; it still sorts after all of them, because the base is at or
+///   above every watermark. An op from a device not yet heard from meets the new stamp here and
+///   everywhere else alike.
+/// * **Not every pending op, and that is what the previous point depends on.** A pending op at or
+///   below the base may sit below a remote op this device has already applied — a push deferred
+///   for the quota does not stop the pull — and on the same row that remote op won here. Lifted
+///   over it, the pending op would win on every other device: the same row, two answers. At or
+///   below the base it is inside the relay's bound already, so it has no reason to move.
+fn rebase(conn: &Connection, device: &str) -> Result<Rebase, String> {
+    let latest = |sql: &str| -> Result<Option<(i64, i64)>, String> {
+        conn.query_row(sql, [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()
+            .map_err(|e| e.to_string())
+    };
+    let wall = wall_ms(conn)?;
+    let clock = latest("SELECT ms, ctr FROM sync_clock WHERE id = 1")?;
+    if !clock.is_some_and(|(ms, _)| hlc::too_far_ahead(ms, wall)) {
+        return Ok(Rebase::StillAhead);
+    }
+    let observed = latest(
+        "SELECT last_ms, last_ctr FROM sync_peers ORDER BY last_ms DESC, last_ctr DESC LIMIT 1",
+    )?;
+    let sent = latest(
+        "SELECT hlc_ms, hlc_ctr FROM sync_ops WHERE pushed_at IS NOT NULL
+          ORDER BY hlc_ms DESC, hlc_ctr DESC LIMIT 1",
+    )?;
+    let base = [Some((wall, 0)), observed, sent]
+        .into_iter()
+        .flatten()
+        .max()
+        .unwrap_or((wall, 0));
+    if hlc::too_far_ahead(base.0, wall) {
+        return Ok(Rebase::Pinned);
+    }
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let after: Vec<i64> = {
+        let mut stmt = tx
+            .prepare(
+                "SELECT seq FROM sync_ops
+                  WHERE pushed_at IS NULL AND (hlc_ms, hlc_ctr) > (?1, ?2)
+                  ORDER BY seq",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(rusqlite::params![base.0, base.1], |r| r.get::<_, i64>(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(|e| e.to_string())?
+    };
+    let mut at = hlc::Hlc {
+        ms: base.0,
+        ctr: base.1,
+        device: device.to_owned(),
+    };
+    for seq in after {
+        at = hlc::Hlc::tick(&at, wall);
+        tx.execute(
+            "UPDATE sync_ops SET hlc_ms = ?1, hlc_ctr = ?2 WHERE seq = ?3",
+            rusqlite::params![at.ms, at.ctr, seq],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.execute(
+        "UPDATE sync_clock SET ms = ?1, ctr = ?2 WHERE id = 1",
+        rusqlite::params![at.ms, at.ctr],
     )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(Rebase::Done)
 }
 
 /// Hand every unpushed op to the relay.
@@ -1395,63 +1669,113 @@ fn unsendable(op: &Op, whom: &str) -> String {
 /// with nothing left to push to — and the chunk is re-sealed at the epoch it adopted. The ops are
 /// unpushed, so re-sealing them is all a retry needs. A second refusal is recorded and fails the
 /// push, and the next trip starts from its own `/keys` check.
-pub async fn push(conn: &Connection, base: &str, token: &str) -> Result<usize, String> {
+///
+/// **A 422 `clock_ahead` is mended once too, by [`rebase`]**, and the outbox is read again and
+/// pushed from where it stopped — the stamps it was read with have changed. When the rebase may not
+/// run, or its retry is refused as well, the refusal is recorded in the sentence that is true of
+/// it and the push is deferred.
+///
+/// ⚠️ **A refusal the relay will repeat defers the push and does not fail it** ([`Deferral`]):
+/// `too_large`, `quota`, `epoch_ahead`, and a `clock_ahead` nothing here could mend. It is
+/// recorded, **nothing after the refused chunk is sent this trip** — a later chunk landing ahead
+/// of an earlier one would carry its sender's watermark on every other device past the ops still
+/// waiting here, which would then be skipped as seen — and `Ok` answers with the deferral, so the
+/// trip goes on to pull and ack. Failing it held both back for as long as the refusal lasted.
+pub async fn push(conn: &Connection, base: &str, token: &str) -> Result<Pushed, String> {
     let Some((device, mut group)) = me(conn)? else {
-        return Ok(0);
+        return Ok(Pushed::default());
     };
-    let pending = unpushed(conn)?;
-    if pending.is_empty() {
-        return Ok(0);
-    }
     let url = format!("{base}/g/{}/push", group.group_id);
     let mut sent = 0usize;
-    let seqs: Vec<i64> = pending.iter().map(|(seq, _)| *seq).collect();
-    let ops: Vec<Op> = pending.into_iter().map(|(_, op)| op).collect();
     let mut caught_up = false;
-    let mut offset = 0usize;
+    let mut rebased = false;
 
-    for chunk in wire::batches(&ops) {
-        let taken = &seqs[offset..offset + chunk.len()];
-        offset += chunk.len();
-        if chunk.len() == 1 && wire::oversized(chunk) {
-            let op = &chunk[0];
-            note(
-                conn,
-                "push",
-                Kind::Other,
-                &unsendable(op, "your other devices"),
-                Some(&op.uid),
-            );
-            stamp_pushed(conn, taken)?;
-            continue;
-        }
-        match post_ops(conn, base, token, &group, &device, chunk).await {
-            Ok(()) => {}
-            Err(Refusal::Failed(message)) => return Err(message),
-            Err(Refusal::Stale) if caught_up => return Err(stale_twice(conn, &url)),
-            Err(Refusal::Stale) => {
+    // Round again only after a rebase, which is the one thing that changes what the outbox reads.
+    'outbox: loop {
+        let pending = unpushed(conn)?;
+        let seqs: Vec<i64> = pending.iter().map(|(seq, _)| *seq).collect();
+        let ops: Vec<Op> = pending.into_iter().map(|(_, op)| op).collect();
+        let mut offset = 0usize;
+
+        for chunk in wire::batches(&ops) {
+            let taken = &seqs[offset..offset + chunk.len()];
+            offset += chunk.len();
+            if chunk.len() == 1 && wire::oversized(chunk) {
+                let op = &chunk[0];
+                note(
+                    conn,
+                    "push",
+                    Kind::Other,
+                    &unsendable(op, "your other devices"),
+                    Some(&op.uid),
+                );
+                stamp_pushed(conn, taken)?;
+                continue;
+            }
+            let mut landed = post_ops(conn, base, token, &group, &device, chunk).await;
+            if matches!(landed, Err(Refusal::Stale)) {
+                if caught_up {
+                    return Err(stale_twice(conn, &url));
+                }
                 caught_up = true;
+                let gone = Pushed {
+                    sent,
+                    deferred: None,
+                };
                 if check_keys(conn).await?.outcome == KeyOutcome::Removed {
-                    return Ok(sent);
+                    return Ok(gone);
                 }
                 let Some((_, adopted)) = me(conn)? else {
-                    return Ok(sent);
+                    return Ok(gone);
                 };
                 group = adopted;
-                match post_ops(conn, base, token, &group, &device, chunk).await {
-                    Ok(()) => {}
-                    Err(Refusal::Stale) => return Err(stale_twice(conn, &url)),
-                    Err(Refusal::Failed(message)) => return Err(message),
+                landed = post_ops(conn, base, token, &group, &device, chunk).await;
+            }
+            match landed {
+                Ok(()) => {}
+                Err(Refusal::Stale) => return Err(stale_twice(conn, &url)),
+                Err(Refusal::Failed(message)) => return Err(message),
+                Err(Refusal::Deferred(deferral)) => {
+                    return Ok(Pushed {
+                        sent,
+                        deferred: Some(deferral),
+                    })
+                }
+                Err(Refusal::ClockAhead) => {
+                    // A second refusal after a rebase is the wall clock and the relay's disagreeing
+                    // by more than a day, whatever the rebase found.
+                    let found = if rebased {
+                        Rebase::StillAhead
+                    } else {
+                        rebase(conn, &device)?
+                    };
+                    if found == Rebase::Done {
+                        rebased = true;
+                        continue 'outbox;
+                    }
+                    let message = if found == Rebase::Pinned {
+                        CLOCK_PINNED
+                    } else {
+                        CLOCK_STILL_AHEAD
+                    };
+                    note(conn, "push", Kind::Http, message, Some(&url));
+                    return Ok(Pushed {
+                        sent,
+                        deferred: Some(Deferral::ClockAhead),
+                    });
                 }
             }
-        }
 
-        // Only now, and one chunk at a time: a run that dies between two chunks has handed the
-        // first over and is honest about it.
-        stamp_pushed(conn, taken)?;
-        sent += chunk.len();
+            // Only now, and one chunk at a time: a run that dies between two chunks has handed the
+            // first over and is honest about it.
+            stamp_pushed(conn, taken)?;
+            sent += chunk.len();
+        }
+        return Ok(Pushed {
+            sent,
+            deferred: None,
+        });
     }
-    Ok(sent)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1471,6 +1795,18 @@ const NO_SUCH_ROTATION: &str = "that batch claims a group key change the relay h
 /// An envelope's stamp — the last op's, and the relay's ordering key.
 fn at_of(envelope: &Envelope) -> (i64, i64) {
     (envelope.hlc_ms, envelope.hlc_ctr)
+}
+
+/// What [`pull`] took in.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Pulled {
+    /// Envelopes that could not be opened ([`RelayOutcome::unreadable`]).
+    pub unreadable: usize,
+    /// What `apply` made of the ones that could.
+    pub report: ApplyReport,
+    /// Whether the conversions that run behind a pull that read everything wrote a row — which no
+    /// count in `report` says. [`RelayOutcome::changed`].
+    pub converted: bool,
 }
 
 /// The sentence a clock hold records: which device, and roughly how far ahead of this one it is.
@@ -1553,12 +1889,23 @@ fn clock_sentence(conn: &Connection, device: &str, ahead_ms: i64) -> String {
 ///
 /// # A batch that opens and is stamped too far ahead holds too
 ///
-/// A batch any op of which is stamped more than [`hlc::MAX_AHEAD_MS`] past this device's wall
-/// clock ([`hlc::too_far_ahead`]) is not applied yet, **and nor are its sender's batches stamped
-/// at or after it** — the newer build's rule and for its reason, the sender's watermark. It holds
-/// the cursor as `"clock"`, which time alone resolves ([`PULL_HOLD`] says why hold and not clamp),
-/// and is recorded once per hold with a sentence naming the device. The sender's earlier batches
-/// and every other device's apply.
+/// A batch carrying an op stamped more than [`hlc::MAX_AHEAD_MS`] past this device's wall clock
+/// ([`hlc::too_far_ahead`]) is not applied yet, **and nor is any other batch its sender has in the
+/// page**. It holds the cursor as `"clock"`, which time alone resolves ([`PULL_HOLD`] says why hold
+/// and not clamp), and is recorded once per hold with a sentence naming the device. Every other
+/// device's batches apply.
+///
+/// * **Only an op `apply` would apply counts** — one above its sender's `sync_peers` watermark,
+///   and not this device's own. A far-future batch already applied (by a build before the hold,
+///   whose cursor an upgrade then found held) comes back with the page and would only be skipped;
+///   counted, it held the cursor until the clock reached it, for nothing.
+/// * **The whole sender, by device and not by stamp**, unlike the newer build's rule above. A
+///   baseline is stamped from each row's `updated_at` in table order, so one chunk of it can carry
+///   stamps above those in a sibling chunk whatever the two envelopes' own stamps say: a batch held
+///   by stamp let the other apply, its sender's watermark rose past ops still waiting, and the
+///   release skipped them as seen. A clock hold is an anomaly and holding the sender whole is the
+///   one shape the watermark cannot outrun. What it costs is the sender's ordinary batches waiting
+///   beside the fast one.
 ///
 /// **Every envelope recorded is recorded once per hold**, not once per pull: a held page comes back
 /// on every trip, and [`Hold::noted`] is what a later pull behind the same hold asks first.
@@ -1567,9 +1914,9 @@ pub async fn pull(
     base: &str,
     token: &str,
     relay_epoch: Option<i64>,
-) -> Result<(usize, ApplyReport), String> {
+) -> Result<Pulled, String> {
     let Some((device, group)) = me(conn)? else {
-        return Ok((0, ApplyReport::default()));
+        return Ok(Pulled::default());
     };
     let cursor: i64 = get_state(conn, PULL_CURSOR)
         .and_then(|v| v.parse().ok())
@@ -1686,13 +2033,21 @@ pub async fn pull(
     }
     let unread_newer = !unparsed.is_empty();
 
-    // Sender → the stamp of its earliest batch stamped too far ahead of this device's clock, and
-    // the furthest stamp among such batches, which is what the sentence says.
+    // Sender → the stamp of its earliest batch carrying an op stamped too far ahead of this
+    // device's clock that `apply` would not skip, and the furthest such stamp, which is what the
+    // sentence says.
     let wall = wall_ms(conn)?;
+    let applied = watermarks(conn)?;
     let mut ahead: std::collections::BTreeMap<&str, ((i64, i64), i64)> = Default::default();
     for (envelope, batch) in opened.iter().map(|(e, b)| (*e, b)) {
         let Some(furthest) = batch
             .iter()
+            .filter(|op| {
+                op.at.device != device
+                    && applied
+                        .get(&op.at.device)
+                        .is_none_or(|seen| (op.at.ms, op.at.ctr) > *seen)
+            })
             .map(|op| op.at.ms)
             .filter(|&ms| hlc::too_far_ahead(ms, wall))
             .max()
@@ -1722,10 +2077,21 @@ pub async fn pull(
         met.push(this);
     }
 
-    // **A sender's batches stamped at or after one only a newer build can read, or one stamped
-    // too far ahead, wait with the cursor**, or they would carry its watermark past the held ops,
-    // which the re-delivery would then skip as seen. By stamp, not page position; earlier ones
-    // are safe. A `Malformed` batch holds nothing and keeps nothing back: it is stepped over.
+    // Sender → the stamp of its earliest batch in the page: where a clock hold's block sits, since
+    // it holds every batch of its sender.
+    let mut earliest: std::collections::BTreeMap<&str, (i64, i64)> = Default::default();
+    for (envelope, _) in &opened {
+        earliest
+            .entry(envelope.device.as_str())
+            .and_modify(|first| *first = (*first).min(at_of(envelope)))
+            .or_insert(at_of(envelope));
+    }
+
+    // **A sender's batches stamped at or after one only a newer build can read wait with the
+    // cursor**, or they would carry its watermark past the held ops, which the re-delivery would
+    // then skip as seen — by stamp, not page position, so earlier ones are safe. **A sender held
+    // for its clock waits whole** (the doc above says why by device). A `Malformed` batch holds
+    // nothing and keeps nothing back: it is stepped over.
     let mut ops: Vec<Op> = Vec::new();
     let mut held_behind = 0usize;
     let mut held_clock = 0usize;
@@ -1734,7 +2100,7 @@ pub async fn pull(
         let sender = envelope.device.as_str();
         if unparsed.get(sender).is_some_and(|first| at >= *first) {
             held_behind += batch.len();
-        } else if ahead.get(sender).is_some_and(|(first, _)| at >= *first) {
+        } else if ahead.contains_key(sender) {
             held_clock += batch.len();
         } else {
             ops.append(&mut batch);
@@ -1743,14 +2109,16 @@ pub async fn pull(
 
     let (mut report, mut blocks) = apply::apply_held(conn, &ops, apply::Waiting::Hold)?;
     // Held behind a newer build's batch, which is what `held_newer` counts — and a block of the
-    // hold's, at the first such batch, unless `apply` holds its sender earlier still. A batch held
-    // for its clock is deferred and a block the same way, and counted in no class of `apply`'s.
+    // hold's, at the first such batch, unless `apply` holds its sender earlier still. A sender held
+    // for its clock is deferred and a block the same way, at its earliest batch, and counted in no
+    // class of `apply`'s.
     report.held_newer += held_behind;
     report.deferred += held_behind + held_clock;
-    let firsts = unparsed
-        .iter()
-        .map(|(device, at)| (*device, *at))
-        .chain(ahead.iter().map(|(device, (first, _))| (*device, *first)));
+    let firsts = unparsed.iter().map(|(device, at)| (*device, *at)).chain(
+        ahead
+            .keys()
+            .filter_map(|device| earliest.get(device).map(|at| (*device, *at))),
+    );
     for (device, at) in firsts {
         blocks
             .entry(device.to_owned())
@@ -1820,8 +2188,13 @@ pub async fn pull(
         clear_hold(conn)?;
         true
     };
+    let mut converted = false;
     if advance {
         set_state(conn, PULL_CURSOR, &page.cursor.to_string()).map_err(|e| e.to_string())?;
+        // **Both conversions below are captured, so whatever they write is a new `sync_ops`
+        // row** — which is how [`RelayOutcome::changed`] hears about it: neither counts in `apply`'s
+        // report, and only one answers a count at all.
+        let before = last_op(conn)?;
         // **User schema v52's art picks convert here on a paired device, and only behind a pull
         // that read everything.** A conversion before this device has heard its group can insert
         // an entry a peer already derived and has edited since, under a later stamp, and revert
@@ -1849,8 +2222,34 @@ pub async fn pull(
                  after a pull: {e}\nThey are tried again behind the next pull."
             );
         }
+        converted = last_op(conn)? != before;
     }
-    Ok((unreadable, report))
+    Ok(Pulled {
+        unreadable,
+        report,
+        converted,
+    })
+}
+
+/// The newest `sync_ops` row's `seq`, or 0 for none.
+fn last_op(conn: &Connection) -> Result<i64, String> {
+    conn.query_row("SELECT coalesce(max(seq), 0) FROM sync_ops", [], |r| {
+        r.get(0)
+    })
+    .map_err(|e| e.to_string())
+}
+
+/// Every device's `sync_peers` watermark as `(ms, ctr)`: how far `apply` has applied from it, at
+/// or below which it would only skip.
+fn watermarks(conn: &Connection) -> Result<std::collections::BTreeMap<String, (i64, i64)>, String> {
+    let mut stmt = conn
+        .prepare("SELECT device_id, last_ms, last_ctr FROM sync_peers")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get(1)?, r.get(2)?))))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<_>>()
+        .map_err(|e| e.to_string())
 }
 
 /// Tell the relay how far this device has consumed, which is what compaction reads.
@@ -1901,6 +2300,21 @@ pub async fn ack(conn: &Connection, base: &str, token: &str) -> Result<(), Strin
 // The baseline
 // ---------------------------------------------------------------------------------------
 
+/// What a baseline carrying a row stamped more than a day past this device's clock records, in
+/// place of beginning it. The row was last changed while the clock was ahead, and its
+/// `updated_at` — which the baseline is stamped from — says so until real time reaches it.
+const BASELINE_WAITS_FOR_THE_CLOCK: &str = "rows on this device were last changed while its clock \
+                                            was set more than a day ahead, so a device's first \
+                                            sync, which carries them, waits here until the real \
+                                            date and time reach them.";
+
+/// What a baseline the relay refused as `clock_ahead` records — its rows are stamped within a day
+/// of this device's clock (the check above) and still more than a day past the relay's, so it is
+/// this device's clock that is ahead.
+const BASELINE_CLOCK_AHEAD: &str = "the relay refused a device's first sync as stamped more than \
+                                    a day ahead of its clock. Set this device's date and time \
+                                    right; the first sync is offered again on the next sync.";
+
 /// Hand a full baseline to every peer that needs one. Spec §10.
 ///
 /// **Built, sealed and pushed without ever touching `sync_ops`** (§5.1). The outbox's contract
@@ -1917,6 +2331,19 @@ pub async fn ack(conn: &Connection, base: &str, token: &str) -> Result<(), Strin
 /// peer; the case that pays for this is two devices having joined between two syncs, and it
 /// pays in bandwidth rather than in correctness — claims resolve by `max`, the grain finds the
 /// same row and the horizon filters, so a second copy changes nothing anywhere (§10).
+///
+/// **A refusal the relay will repeat ends the emission and not the trip** ([`Deferral`], and a
+/// `clock_ahead`): it is recorded, that peer's marker stays NULL so the next trip starts its
+/// baseline over, no other peer's is begun, and `Ok` answers with what landed, so the ack still
+/// runs. Failed, it held the ack back for as long as the refusal lasted, exactly as [`push`] did.
+/// A transient failure still fails the trip.
+///
+/// **And a baseline carrying a row stamped too far ahead is not begun at all.** A baseline op is
+/// stamped from its row's `updated_at` (`baseline::build`), so a row last edited while this
+/// device's clock was a day or more ahead keeps that stamp after the clock is set right — [`rebase`]
+/// moves ops, not rows — and the relay would refuse the chunk carrying it after taking the ones
+/// before it, which the next trip then pushes again. Recorded once a trip
+/// ([`BASELINE_WAITS_FOR_THE_CLOCK`]), and it goes once real time reaches the row.
 async fn emit_baselines(
     conn: &Connection,
     base: &str,
@@ -1925,6 +2352,8 @@ async fn emit_baselines(
     let Some((device, group)) = me(conn)? else {
         return Ok((0, 0));
     };
+    let url = format!("{base}/g/{}/push", group.group_id);
+    let wall = wall_ms(conn)?;
     let mut emitted = 0usize;
     let mut history = 0usize;
     for peer in baseline::peers_needing(conn)? {
@@ -1936,6 +2365,18 @@ async fn emit_baselines(
         if ops.is_empty() {
             baseline::mark_sent(conn, &peer)?;
             continue;
+        }
+        // **Every peer's baseline is these same rows**, so one too far ahead for this peer is too
+        // far ahead for all of them: recorded once, and none is begun.
+        if ops.iter().any(|op| hlc::too_far_ahead(op.at.ms, wall)) {
+            note(
+                conn,
+                "push",
+                Kind::Other,
+                BASELINE_WAITS_FOR_THE_CLOCK,
+                None,
+            );
+            break;
         }
         let horizon = baseline::horizon(conn, &device)?;
         // **Cut where `wire::batches` would cut** — by count and by bytes — and walked as mutable
@@ -1984,16 +2425,17 @@ async fn emit_baselines(
                                    group key it has moved past; it is sent again on the next \
                                    sync, under the new key"
                         .to_owned();
-                    note(
-                        conn,
-                        "push",
-                        Kind::Http,
-                        &message,
-                        Some(&format!("{base}/g/{}/push", group.group_id)),
-                    );
+                    note(conn, "push", Kind::Http, &message, Some(&url));
                     return Err(message);
                 }
                 Err(Refusal::Failed(message)) => return Err(message),
+                // What landed of this peer's baseline is counted — the relay stored it — and the
+                // marker is left NULL, so the next trip sends the whole of it again.
+                Err(Refusal::ClockAhead) => {
+                    note(conn, "push", Kind::Http, BASELINE_CLOCK_AHEAD, Some(&url));
+                    return Ok((emitted + sent, history + sent_history));
+                }
+                Err(Refusal::Deferred(_)) => return Ok((emitted + sent, history + sent_history)),
             }
             sent += chunk.len();
             sent_history += baseline::history_count(chunk);
@@ -2099,8 +2541,13 @@ async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOu
         return Ok(None);
     }
     let base = entitlement::base(conn);
+    // **A push the relay keeps refusing is deferred and the trip goes on** ([`Deferral`]): the
+    // pull and the ack below do not depend on this device having been heard, and holding them
+    // back with it stopped the device reading its group — and, for a full log, stopped the relay
+    // compacting the very log that was full.
+    let pushed = push(conn, &base, &token).await?;
     let mut outcome = RelayOutcome {
-        pushed: push(conn, &base, &token).await?,
+        pushed: pushed.sent,
         ..RelayOutcome::default()
     };
     // A push refused as `stale_epoch` asks `/keys` again, and the answer can be the removal
@@ -2113,14 +2560,19 @@ async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOu
     // that never happened. A rotation published since — `publish_join` above, or one adopted by
     // the push — moved this device's own epoch with it, and an envelope at or below that is not
     // ahead at all; one above it makes the pull ask again.
-    let (unreadable, report) = pull(conn, &base, &token, keys.relay_epoch).await?;
-    outcome.unreadable = unreadable;
+    let pulled = pull(conn, &base, &token, keys.relay_epoch).await?;
+    outcome.unreadable = pulled.unreadable;
     // **What this trip applied, and nothing it was handed again.** A held cursor re-delivers the
-    // same page on every trip, and `pulled` is what fires `sync:applied` — counting the ops
-    // skipped or held again would refresh every screen on every trip for as long as a hold lasts.
-    outcome.pulled = report.applied;
-    outcome.absorb(report);
-    if baselines {
+    // same page on every trip, and what this trip applied is part of `changed`, which fires
+    // `sync:applied` — counting the ops skipped or held again would refresh every screen on every
+    // trip for as long as a hold lasts.
+    outcome.pulled = pulled.report.applied;
+    outcome.absorb(pulled.report);
+    outcome.changed |= pulled.converted;
+    // **No baseline behind a push deferred for the clock or the quota** — it would meet the same
+    // refusal part of the way through and push its first chunks again on every trip
+    // ([`Deferral::stops_baselines`]).
+    if baselines && !pushed.deferred.is_some_and(Deferral::stops_baselines) {
         let (ops, history) = emit_baselines(conn, &base, &token).await?;
         outcome.baseline_ops = ops;
         outcome.baseline_history = history;

@@ -23130,6 +23130,10 @@ export function writeHandlers(db: FakeDb) {
         // no second build or second device to produce.
         heldNewer: 0,
         dropped: 0,
+        moot: 0,
+        // What `pulled` says: this single in-memory world applies nothing from a peer, so a trip
+        // here changes no row a screen reads — the window that wrote has settled its own keys.
+        changed: false,
         baselineOps: first
           ? db.collectionEntries.length +
             db.collectionFolders.length +

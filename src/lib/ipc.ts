@@ -6692,6 +6692,19 @@ export interface RelayOutcome {
    */
   dropped: number;
   /**
+   * Ops consumed because they name a parent a delete has already taken — and a row this device
+   * held under such an op's uid is deleted with it, so a trip can change what a screen shows while
+   * {@link RelayOutcome.applied} stays at nought.
+   */
+  moot: number;
+  /**
+   * Whether this trip changed a row a screen reads: it applied or mooted an op, brought a row back,
+   * broke a folder cycle, or one of the conversions that run behind a pull wrote a row. `false` for
+   * a trip that only pushed, skipped, held or dropped. `useDeviceSyncInvalidation` gates its wide
+   * refresh on this and not on `pulled`, which missed the moot arm's deletes and the conversions.
+   */
+  changed: boolean;
+  /**
    * Rows handed to a device that had not heard from this one before.
    *
    * Larger than any other number here by orders of magnitude — 1 069 on the measured pair —

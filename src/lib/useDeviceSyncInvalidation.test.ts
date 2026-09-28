@@ -29,6 +29,8 @@ const outcome = (over: Partial<RelayOutcome> = {}): RelayOutcome => ({
   deferred: 0,
   heldNewer: 0,
   dropped: 0,
+  moot: 0,
+  changed: true,
   baselineOps: 0,
   baselineHistory: 0,
   ...over,
@@ -61,8 +63,19 @@ it("invalidates every root a synced table feeds, and the sync root, when a pull 
  */
 it("refreshes the sync root alone when a trip only pushed", () => {
   renderHook(() => useDeviceSyncInvalidation());
-  emit(outcome({ pushed: 4, pulled: 0, applied: 0 }));
+  emit(outcome({ pushed: 4, pulled: 0, applied: 0, changed: false }));
   expect(invalidatedKeys()).toEqual([["sync"]]);
+});
+
+/**
+ * **`changed` and not `pulled`.** The moot arm deletes a row this device held and counts it in
+ * `moot`, never in `applied`, so a trip that pushed and whose pull only mooted reports `pulled: 0`
+ * — and gated on `pulled`, the deleted card stayed on screen.
+ */
+it("refreshes the whole set when a pull changed rows without applying an op", () => {
+  renderHook(() => useDeviceSyncInvalidation());
+  emit(outcome({ pushed: 2, pulled: 0, applied: 0, moot: 1, changed: true }));
+  expect(invalidatedKeys()).toEqual([...DEVICE_SYNC_INVALIDATED]);
 });
 
 /**
