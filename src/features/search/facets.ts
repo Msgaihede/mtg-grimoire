@@ -94,7 +94,7 @@ export function colorDisabled(
  */
 export function facetTitle(label: string, count: number | undefined): string | undefined {
   if (count === undefined) return undefined;
-  if (count === 0) return `${label} — nothing in this search`;
+  if (count === 0) return `${label} (no results)`;
   // The unit is spelled here rather than through `plural`, which writes its number plainly:
   // a facet count is the one figure in this app that genuinely reaches five digits, so it
   // wants its separators. Only the numeral is shared.

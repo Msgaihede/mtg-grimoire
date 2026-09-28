@@ -17,7 +17,7 @@ import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
 /** Why the disclosure will not open, said where it is refused. */
-const NO_ROOM = "Not enough room — close the card details or widen the window";
+const NO_ROOM = "Not enough room. Close the card details or widen the window.";
 
 /**
  * Which of the three lists this column files into — the `data-search-over` value, and the word a

@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
  * pointing at a header, and a permanent caption for a modifier most readers never use would
  * cost 20px of every list to say it.
  */
-const SORT_HINT = (label: string) => `Sort by ${label} — Shift-click to add to the sort`;
+const SORT_HINT = (label: string) => `Sort by ${label} (Shift-click to add a secondary sort)`;
 
 /**
  * One column's header, when the column can be sorted on.

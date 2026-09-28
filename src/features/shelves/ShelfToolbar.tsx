@@ -10,7 +10,7 @@ import { SHELF_TEXT_BUTTON } from "./shelfButtons";
  * ways. Spec §3.4: a filtered wall shows every shelf with a match open, so a fold pressed then would
  * be written for a wall the reader is not looking at.
  */
-export const FOLD_PAUSED_REASON = "Folding is paused while filtering";
+export const FOLD_PAUSED_REASON = "Collapsing is paused while filtering";
 
 /**
  * What a paused fold control looks like: dimmed, a not-allowed cursor, no hover wash and no press

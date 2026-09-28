@@ -240,9 +240,8 @@ describe("EditCopy", () => {
     await user.clear(screen.getByRole("textbox", { name: PRICE_FIELD }));
 
     expect(
-      screen.getByText(/Emptying this box leaves \$450\.00 recorded\./),
+      screen.getByText("Purchase prices can be edited but not cleared."),
     ).toBeInTheDocument();
-    expect(screen.getByText(/A price can be corrected here, never removed\./)).toBeInTheDocument();
     // And with nothing else changed there is nothing to save at all.
     expect(save()).toHaveAttribute("aria-disabled", "true");
   });
@@ -297,7 +296,7 @@ describe("EditCopy", () => {
    *  warning about a state that cannot arise is noise. */
   it("draws no clearing note for a copy that has no price", () => {
     wrap(<Harness target={UNPRICED} />);
-    expect(screen.queryByText(/never removed/)).toBeNull();
+    expect(screen.queryByText(/can be edited but not cleared/)).toBeNull();
   });
 
   /**
@@ -313,7 +312,7 @@ describe("EditCopy", () => {
     await user.type(box, "about four fifty");
 
     expect(box).toHaveAttribute("aria-invalid", "true");
-    expect(screen.getByText("That is not a price — try 12.50.")).toBeInTheDocument();
+    expect(screen.getByText("Not a valid price. Try 12.50.")).toBeInTheDocument();
     expect(save()).toHaveAttribute("aria-disabled", "true");
 
     // Even with a grade change beside it, which is the case a patch-level guard alone would miss:
@@ -336,7 +335,7 @@ describe("EditCopy", () => {
     await user.type(box, "1.500");
 
     expect(box).toHaveAttribute("aria-invalid", "true");
-    expect(box).toHaveAccessibleDescription(`Write 1500 or 1.50 — "1.500" could mean either.`);
+    expect(box).toHaveAccessibleDescription(`“1.500” is ambiguous. Use 1500 or 1.50.`);
     expect(save()).toHaveAttribute("aria-disabled", "true");
   });
 
@@ -397,7 +396,7 @@ describe("EditCopy", () => {
     await user.click(save());
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not save this copy — That entry is gone.",
+      "Couldn't save this copy — That entry is gone.",
     );
     expect(screen.getByRole("button", { name: "Condition" })).toHaveTextContent("Near mint");
   });

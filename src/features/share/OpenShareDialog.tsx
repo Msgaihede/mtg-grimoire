@@ -121,7 +121,7 @@ export function OpenShareDialog({
       open={open}
       title="Open a shared collection"
       subtitle="Paste a shared collection link."
-      closeLabel="Close open a shared collection"
+      closeLabel="Close"
       size="w-[32rem]"
       onDismiss={onClose}
       onClose={onClose}
@@ -178,8 +178,7 @@ export function OpenShareDialog({
         )}
 
         <p className="text-sm text-dim">
-          View a read-only snapshot cross-referenced against your collection and wishlist. Neither
-          collection will be modified.
+          See which of these cards you already own or want. Nothing in either collection changes.
         </p>
 
         <div className="flex justify-end gap-2">

@@ -93,7 +93,7 @@ export function TagChips({
   onToggleMode,
   onFloorChange,
   ariaLabel = "Picked tags",
-  emptyMessage = "No tags picked yet. Pick one from the list to narrow the cards.",
+  emptyMessage = "No tags selected. Pick one from the list to filter cards.",
 }: TagChipsProps) {
   const row = useRef<HTMLDivElement>(null);
   /**
@@ -206,8 +206,8 @@ function PickedChip({
   const shown = excluded ? `not ${chip.label}` : chip.label;
   const namespaceWord = TAG_NAMESPACE_LABEL[chip.namespace].toLowerCase();
   const state = excluded
-    ? `${shown}, ${namespaceWord} tag, excluded. Press to include.`
-    : `${shown}, ${namespaceWord} tag, included. Press to exclude.`;
+    ? `${shown}, ${namespaceWord} tag, excluded. Click to include.`
+    : `${shown}, ${namespaceWord} tag, included. Click to exclude.`;
 
   return (
     <span

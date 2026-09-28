@@ -336,7 +336,7 @@ export const Empty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByText("Card database is empty — waiting for the first sync to finish."),
+      await canvas.findByText("Card database is empty. Waiting for the first sync."),
     ).toBeInTheDocument();
 
     const chips = canvas.getAllByRole("button").filter((b) => b.hasAttribute("aria-pressed"));

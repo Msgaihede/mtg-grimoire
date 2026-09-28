@@ -34,7 +34,7 @@ const FLASH_MS = 1200;
  * Why the filters cannot be used: the scanner narrows by set and date through its labels, and a
  * bundle with no `corpus.db` beside it has none.
  */
-const FILTERS_NEED_NAMES = "Filters need card names — the scanner has no corpus.db beside its bundle.";
+const FILTERS_NEED_NAMES = "Filters need the card database. corpus.db wasn't found next to the scanner bundle.";
 
 /** Is `id` a drawer the reader made? `null` — the root — always is. */
 function isUserFolder(folders: readonly CollectionFolder[], id: number | null): boolean {
@@ -104,7 +104,7 @@ function ElsewhereSentence() {
     <section className="flex h-full flex-col gap-3">
       <h2 className="sr-only">Scanner</h2>
       <p>{SCANNER_OPEN_ELSEWHERE}</p>
-      <p className="text-dim">It opens here once that window leaves the Scanner or closes.</p>
+      <p className="text-dim">It will open here once that window closes or leaves the scanner.</p>
     </section>
   );
 }

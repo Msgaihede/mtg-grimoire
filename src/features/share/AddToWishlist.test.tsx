@@ -147,18 +147,18 @@ describe("adding picked rows from somebody else's binder", () => {
     // The card that is already on the list says so on its own row…
     expect(
       within(screen.getByRole("listitem", { name: /^Lightning Bolt/ })).getByText(
-        "Already wanted: 2",
+        "Already on wishlist: 2",
       ),
     ).toBeInTheDocument();
     // …and the one that is not says nothing, rather than "Already wanted: 0".
     expect(
-      within(screen.getByRole("listitem", { name: /^Sol Ring/ })).queryByText(/Already wanted/),
+      within(screen.getByRole("listitem", { name: /^Sol Ring/ })).queryByText(/Already on wishlist/),
     ).toBeNull();
     // And the dialog says out loud what the press will do, naming the destination it will do it
     // to — the one number in this dialog that is entitled to the word *raises*.
     expect(
       screen.getByText(
-        "1 of these already has a line in your wishlist — adding raises it.",
+        "1 already in your wishlist. Its quantity will increase.",
       ),
     ).toBeInTheDocument();
   });
@@ -177,21 +177,21 @@ describe("adding picked rows from somebody else's binder", () => {
     mount({ cards: [card()], index: wanting("bolt", 2, { folderId: null }) });
 
     await screen.findByRole("option", { name: "Trade targets" });
-    expect(screen.getByText(/adding raises it\./)).toBeInTheDocument();
+    expect(screen.getByText(/Its quantity will increase\./)).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText("Add them to"), "1");
 
-    expect(screen.queryByText(/adding raises/)).toBeNull();
+    expect(screen.queryByText(/will increase/)).toBeNull();
     expect(
       screen.getByText(
-        "1 is on your wishlist under a different folder or finish, so it gets a line of its own.",
+        "1 already on your wishlist in a different folder or finish, so it'll be added as a new entry.",
       ),
     ).toBeInTheDocument();
     // The row's own figure does **not** move, and that is the other half of the distinction: it
     // says what the reader wants, which is true wherever they file this one.
     expect(
       within(screen.getByRole("listitem", { name: /^Lightning Bolt/ })).getByText(
-        "Already wanted: 2",
+        "Already on wishlist: 2",
       ),
     ).toBeInTheDocument();
   });
@@ -204,8 +204,8 @@ describe("adding picked rows from somebody else's binder", () => {
       index: wanting("bolt", 1, { finish: null, folderId: null }),
     });
 
-    expect(screen.queryByText(/adding raises/)).toBeNull();
-    expect(screen.getByText(/gets a line of its own/)).toBeInTheDocument();
+    expect(screen.queryByText(/will increase/)).toBeNull();
+    expect(screen.getByText(/added as a new entry/)).toBeInTheDocument();
   });
 
   it("draws no figure at all for a card the reader wants none of", async () => {
@@ -218,9 +218,9 @@ describe("adding picked rows from somebody else's binder", () => {
     mount({ cards: [card()], index: EMPTY_INDEX });
 
     await screen.findByRole("option", { name: "Trade targets" });
-    expect(screen.queryByText(/Already wanted/)).toBeNull();
-    expect(screen.queryByText(/adding raises/)).toBeNull();
-    expect(screen.queryByText(/on your wishlist under a different folder/)).toBeNull();
+    expect(screen.queryByText(/Already on wishlist/)).toBeNull();
+    expect(screen.queryByText(/will increase/)).toBeNull();
+    expect(screen.queryByText(/on your wishlist in a different folder/)).toBeNull();
   });
 
   it("files at the root when the reader picks no folder", async () => {

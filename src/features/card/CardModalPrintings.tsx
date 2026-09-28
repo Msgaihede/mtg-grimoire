@@ -335,7 +335,7 @@ export function CardModalPrintings({
       {loading && <p className="shrink-0 text-xs text-dim">Loading printings…</p>}
       {error !== null && (
         <p className="shrink-0 text-xs text-destructive">
-          Could not read the other printings — {error}. The card above is unaffected.
+          Couldn't load other printings — {error}
         </p>
       )}
 

@@ -309,7 +309,7 @@ export function CardModalArt({
       const half = card.faces[turned ? 0 : 1];
       return `Turn to ${half?.name || "the other half"}`;
     }
-    return turned ? "Turn back" : "Turn to read";
+    return turned ? "Turn back" : "Rotate to read";
   })();
 
   /**

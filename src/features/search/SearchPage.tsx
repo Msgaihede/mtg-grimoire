@@ -434,7 +434,7 @@ export function summaryOf(search: CardSearch, failure: string | null): string {
     // about the database, not about the query. Saying "no cards match" here would blame
     // the user for a sync that has not finished.
     return unfiltered
-      ? "Card database is empty — waiting for the first sync to finish."
+      ? "Card database is empty. Waiting for the first sync."
       : "No cards match these filters.";
   }
 
@@ -559,8 +559,8 @@ function Results({ search }: { search: CardSearch }) {
             >
               <span className="min-w-0">
                 {query.isFetchNextPageError
-                  ? "Could not load more cards"
-                  : "Could not refresh these results"}{" "}
+                  ? "Couldn't load more cards"
+                  : "Couldn't refresh these results"}{" "}
                 — {failure}
               </span>
               {query.isFetchNextPageError && (

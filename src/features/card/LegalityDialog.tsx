@@ -281,9 +281,9 @@ function LegalityBody({
   loading: boolean;
   error: string | null;
 }) {
-  if (loading) return <p className="text-sm text-dim">Reading the card…</p>;
+  if (loading) return <p className="text-sm text-dim">Loading card…</p>;
   if (error !== null) {
-    return <p className="text-sm text-destructive">Could not read the card — {error}.</p>;
+    return <p className="text-sm text-destructive">Couldn't read the card — {error}.</p>;
   }
   // `card_detail` answers `null` for an id `cards` has no row for, which is a real state rather
   // than a failure: a collection or a deck can hold a printing the corpus has since dropped.

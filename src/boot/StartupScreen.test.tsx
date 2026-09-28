@@ -54,7 +54,7 @@ describe("StartupScreen", () => {
     render(<StartupScreen status={{ state: "failed", message }} />);
 
     expect(
-      screen.getByRole("heading", { name: "The data folder would not open" }),
+      screen.getByRole("heading", { name: "Couldn't open the data folder" }),
     ).toBeInTheDocument();
     const said = screen.getByRole("alert");
     // `textContent` rather than `toHaveTextContent`, which normalises whitespace and would pass

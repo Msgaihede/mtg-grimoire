@@ -142,14 +142,14 @@ export const WantList: Story = {
     // because that is what `wishlist_add` folds on — the same two cards fold in one drawer and
     // make new lines in another.
     await expect(
-      canvas.getByText("1 of these already has a line in your wishlist — adding raises it."),
+      canvas.getByText("1 already in your wishlist. Its quantity will increase."),
     ).toBeInTheDocument();
 
     await userEvent.selectOptions(canvas.getByLabelText("Add them to"), "1");
     // …and it moves with the select. `starter` keeps a second Rhystic Study wish in `Ordered`,
     // so this destination folds too — but the sentence had to be recomputed to say so.
     await expect(
-      canvas.getByText("1 of these already has a line in Ordered — adding raises it."),
+      canvas.getByText("1 already in Ordered. Its quantity will increase."),
     ).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "Add 2 cards" }));
 
@@ -202,7 +202,7 @@ export const NothingOpened: Story = {
     const canvas = within(canvasElement);
 
     await expect(
-      canvas.getByRole("heading", { name: "Open a collection somebody shared with you" }),
+      canvas.getByRole("heading", { name: "Open a shared collection" }),
     ).toBeInTheDocument();
     await expect(
       canvas.getByRole("button", { name: "Open a shared collection" }),

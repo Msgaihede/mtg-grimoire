@@ -95,7 +95,7 @@ export const Shopping: Story = {
     await expect(canvas.getByText(/are excluded cuts/)).toBeVisible();
     await expect(canvas.getByText(/Cards can appear in both views/)).toBeVisible();
     await expect(
-      canvas.getByText("TCGplayer prices as of the last card-data sync."),
+      canvas.getByText("TCGplayer prices, last updated with card data."),
     ).toBeVisible();
   },
 };

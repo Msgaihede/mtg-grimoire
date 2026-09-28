@@ -83,7 +83,7 @@ export function batchWrite(
   const error =
     refusals.length === results.length
       ? said
-      : `${of} cards ${refusals.length === 1 ? "was" : "were"} not changed — ${said}`;
+      : `${of} cards ${refusals.length === 1 ? "wasn't" : "weren't"} changed — ${said}`;
   return { submittedAt: settledAt, isError: true, error, isSuccess: false };
 }
 

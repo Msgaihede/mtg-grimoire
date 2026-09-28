@@ -74,10 +74,10 @@ export const SNAPSHOT_TOO_NEW =
  * it is replaced rather than passed through — carried as `cause` for the console.
  */
 export const SNAPSHOT_UNREADABLE =
-  "This shared collection could not be read. It may have been published incompletely.";
+  "Couldn't read this shared collection. It may not have finished uploading.";
 
 /** The body parsed and is not a snapshot: not an object, or missing one of the two arrays. */
-export const SNAPSHOT_NOT_A_SNAPSHOT = "That link did not return a shared collection.";
+export const SNAPSHOT_NOT_A_SNAPSHOT = "That link isn't a shared collection.";
 
 /** One copy of one printing, as it travels. **Short keys** — this repeats once per card. */
 export interface ShareCard {

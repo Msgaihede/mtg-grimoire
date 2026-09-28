@@ -69,7 +69,7 @@ describe("Ribbon", () => {
     // keeps that break, and a normalized comparison would pass even if the join lost it.
     fireHover(line());
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "D:\\app\\data\n12 card images could not be saved to the cache — the data folder may be read-only or full.",
+      "D:\\app\\data\n12 card images couldn't be saved to the cache — the data folder may be read-only or full.",
       { normalizeWhitespace: false },
     );
     fireLeave(line());
@@ -83,7 +83,7 @@ describe("Ribbon", () => {
     );
     fireHover(line());
     expect(screen.getByRole("tooltip")).toHaveTextContent(
-      "D:\\app\\data\n1 card image could not be saved to the cache — the data folder may be read-only or full.",
+      "D:\\app\\data\n1 card image couldn't be saved to the cache — the data folder may be read-only or full.",
       { normalizeWhitespace: false },
     );
     fireLeave(line());
@@ -288,7 +288,7 @@ describe("Ribbon", () => {
     render(<Ribbon {...props({ deviceSync: "offline" })} />);
     const marker = screen.getByLabelText("Sync is offline");
     expect(marker).toHaveAttribute("aria-live", "polite");
-    const said = within(marker).getByText(/connection to your other devices dropped/i);
+    const said = within(marker).getByText(/Sync disconnected/i);
     expect(said).toHaveClass("sr-only");
   });
 

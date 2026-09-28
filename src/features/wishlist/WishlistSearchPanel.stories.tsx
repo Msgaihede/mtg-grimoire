@@ -281,7 +281,7 @@ export const Railed: Story = {
     await waitFor(
       async () =>
         expect(await canvas.findByRole("tooltip")).toHaveTextContent(
-          "Not enough room — close the card details or widen the window",
+          "Not enough room. Close the card details or widen the window.",
         ),
       { timeout: TOOLTIP_OPEN_MS + 1000 },
     );

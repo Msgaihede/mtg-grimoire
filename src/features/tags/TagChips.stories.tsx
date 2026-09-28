@@ -122,10 +122,10 @@ export const Default: Story = {
     // The state is in the accessible name as well as in the border, because the border is the
     // half a reader who cannot see it never gets.
     await expect(
-      canvas.getByRole("button", { name: "Forest, art tag, included. Press to exclude." }),
+      canvas.getByRole("button", { name: "Forest, art tag, included. Click to exclude." }),
     ).toBeInTheDocument();
     const exclusion = canvas.getByRole("button", {
-      name: "not Angel, art tag, excluded. Press to include.",
+      name: "not Angel, art tag, excluded. Click to include.",
     });
     // The visible word, read off the span that holds it rather than off the button — the button
     // also contains the taxonomy mark, so its whole text is `Artnot Angel`.
@@ -138,7 +138,7 @@ export const Default: Story = {
     const row = canvas.getByRole("group", { name: "Picked tags" });
     await waitFor(async () => {
       await expect(
-        within(row).getByRole("button", { name: "Angel, art tag, included. Press to exclude." }),
+        within(row).getByRole("button", { name: "Angel, art tag, included. Click to exclude." }),
       ).toBeInTheDocument();
     });
     // Order read off the removal buttons, whose names are the one clean statement of which chip
@@ -164,7 +164,7 @@ export const Empty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      canvas.getByText("No tags picked yet. Pick one from the list to narrow the cards."),
+      canvas.getByText("No tags selected. Pick one from the list to filter cards."),
     ).toBeInTheDocument();
     const floor = canvas.getByRole("button", { name: new RegExp(`^${HIDE_BACKGROUND_LABEL}`) });
     // `aria-disabled` and not `disabled`: the chip keeps its tab stop, so a reader sweeping the
@@ -189,10 +189,10 @@ export const BothTaxonomies: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      canvas.getByRole("button", { name: "Forest, art tag, included. Press to exclude." }),
+      canvas.getByRole("button", { name: "Forest, art tag, included. Click to exclude." }),
     ).toBeInTheDocument();
     await expect(
-      canvas.getByRole("button", { name: "Ramp, oracle tag, included. Press to exclude." }),
+      canvas.getByRole("button", { name: "Ramp, oracle tag, included. Click to exclude." }),
     ).toBeInTheDocument();
     // The removal buttons carry the taxonomy too: two chips sharing a slug would otherwise be
     // two buttons with one name.

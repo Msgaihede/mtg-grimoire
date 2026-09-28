@@ -917,7 +917,7 @@ describe("DeckSearchPanel", () => {
     const { container } = await openPanel();
     const crowned = await screen.findByRole("button", { name: "Rhystic Study" });
 
-    const marks = screen.getAllByLabelText("Game changer");
+    const marks = screen.getAllByLabelText("Game Changer");
     expect(marks).toHaveLength(1);
     const tiles = [...container.querySelectorAll(`[${DND_SOURCE_ATTR}]`)];
     expect(tiles).toHaveLength(2);

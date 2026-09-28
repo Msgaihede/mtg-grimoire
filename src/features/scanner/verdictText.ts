@@ -107,7 +107,7 @@ const RECOGNITION_FILE = "text-recognition.rten";
  * conclusion is that the path was wrong. `ScannerPage` says the same thing about why there is
  * no `Reload assets` button; this is the half a reader actually reads.
  */
-const RESTART = "Restart the app after placing or replacing a file — assets load once, at launch.";
+const RESTART = "Restart the app after adding or replacing a file.";
 
 /** A file that is *there* and did not parse. The path names it; the error says why. */
 function didNotLoad(file: string, path: string, error: string): string {
@@ -141,7 +141,7 @@ export function bundleSentence(status: ScannerStatus | null): string | null {
     return didNotLoad(BUNDLE_FILE, bundle.path, bundle.error ?? "no reason given");
   }
   if (bundle.error !== null) {
-    return `Bundle loaded, but its names did not: ${bundle.error}. Matches will show ids. ${RESTART}`;
+    return `Bundle loaded, but card names didn't: ${bundle.error}. Matches will show IDs. ${RESTART}`;
   }
   return null;
 }

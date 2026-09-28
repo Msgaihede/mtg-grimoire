@@ -371,7 +371,7 @@ export function ShelfHeading({
       {shelf.kind === "managed" && (
         <span
           className="flex-none rounded-full border border-border px-1.5 text-[0.6875rem] leading-4 text-dim"
-          {...tip("Follows its deck, and updates itself when the deck changes")}
+          {...tip("Updates automatically with its deck")}
         >
           Managed
         </span>

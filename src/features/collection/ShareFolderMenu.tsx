@@ -277,7 +277,7 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
     onSuccess: () => {
       setWithdrawing(false);
       back();
-      settle("Sharing stopped. The link no longer answers.");
+      settle("Sharing stopped. The link no longer works.");
     },
     onError: (e: unknown) => {
       setWithdrawing(false);
@@ -292,7 +292,7 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
     setNote(null);
     copyText(url).then(
       () => setNote("Link copied."),
-      (e: unknown) => setNote(`Could not copy that link — ${ipcError(e)}`),
+      (e: unknown) => setNote(`Couldn't copy that link — ${ipcError(e)}`),
     );
   }, []);
 
@@ -456,7 +456,7 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
           onPublished={() => {
             setPublishing(false);
             back();
-            settle("Shared. The link is on the Share menu.");
+            settle("Shared. Copy the link from the Share menu.");
           }}
           onClose={() => {
             setPublishing(false);
@@ -625,7 +625,7 @@ function PublishForm({
             setTyped(e.target.value);
             setRefusal(null);
           }}
-          placeholder="The name on the page"
+          placeholder="e.g. Markus"
           autoComplete="off"
           className={cn(
             "h-9 rounded-md border border-border bg-surface px-3 text-sm text-text",
@@ -636,7 +636,7 @@ function PublishForm({
         {/* Never anything Patreon supplied — spec §4.3. The relay holds a Patreon id in exactly
             one column of one table, and a display name pulled from the OAuth profile would put a
             reader's legal name on a public page because they once pressed Connect. */}
-        <p className="text-xs text-dim">Shown at the top of the page. Nothing else identifies you.</p>
+        <p className="text-xs text-dim">Shown at the top of the shared page.</p>
       </div>
 
       <fieldset className="flex flex-col gap-2">

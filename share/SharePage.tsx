@@ -33,7 +33,7 @@ export const READ_ONLY_NOTICE =
 export const SNAPSHOT_PENDING = "This shared collection is not ready yet.";
 
 /** The blob did not arrive at all — the network, or an R2 object the D1 row outlived. */
-export const SNAPSHOT_OFFLINE = "This shared collection could not be loaded.";
+export const SNAPSHOT_OFFLINE = "Couldn't load this shared collection.";
 
 /**
  * Where the snapshot is, read out of the shell rather than guessed.
@@ -332,7 +332,7 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
           <p className="mt-4 font-mono text-[0.8125rem] text-dim">
             {COUNT.format(copies)} {copies === 1 ? "card" : "cards"}
             {rail.length > 0 &&
-              ` in ${COUNT.format(rail.length)} ${rail.length === 1 ? "drawer" : "drawers"}`}
+              ` in ${COUNT.format(rail.length)} ${rail.length === 1 ? "folder" : "folders"}`}
             {stamp !== null && `, as of ${stamp}`}
           </p>
           <p className="mt-1 font-mono text-[0.8125rem] text-dim">
@@ -342,7 +342,7 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
                 ? // Three states, not two: prices were not shared, prices were shared and
                   // nothing is quoted, prices were shared and something is. The middle one is
                   // what the writer declines to put a number on, so neither does this.
-                  `No ${market.label} price is quoted for anything here`
+                  `No ${market.label} prices for these cards`
                 : `Worth ${formatPrice(worth, currency)} at ${market.label} prices` +
                   (unquoted > 0 ? `, with ${COUNT.format(unquoted)} unquoted` : "")}
           </p>
@@ -455,7 +455,7 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
 
             {shown.length === 0 ? (
               <p className="mt-8 text-sm text-dim">
-                Nothing here matches. Widen the search, or pick another drawer.
+                No cards match. Try a broader search or another folder.
               </p>
             ) : (
               <ul
@@ -481,8 +481,7 @@ export function SharePage({ snapshot }: { snapshot: ShareSnapshot }) {
             )}
 
             <p className="mt-12 max-w-[54ch] text-xs text-dim">
-              A snapshot does not change on its own. This page will show these cards until the
-              collection is published again.
+              This snapshot won't update until it's shared again.
             </p>
           </div>
         </div>
@@ -649,7 +648,7 @@ export function ShareNotice({ sentence, detail }: { sentence: string; detail?: s
 }
 
 /** What a reader is told when this page threw where nothing could catch it. */
-export const SNAPSHOT_UNDRAWABLE = "This shared collection could not be drawn.";
+export const SNAPSHOT_UNDRAWABLE = "Couldn't display this shared collection.";
 
 /**
  * **The floor under every field this page reads, and the reason it is a boundary rather than more
@@ -682,7 +681,7 @@ export class ShareBoundary extends Component<{ children: ReactNode }, { failed: 
     return (
       <ShareNotice
         sentence={SNAPSHOT_UNDRAWABLE}
-        detail="The link is good; this page could not read what it points at. Reload, or ask for the link again."
+        detail="Couldn't load this collection. Reload the page or ask for a new link."
       />
     );
   }

@@ -1151,7 +1151,7 @@ function Body({
         : ipc.collectionSetQuantity(id, quantity),
     onMutate: () => setRefusal(null),
     onSuccess: settle,
-    onError: (e) => setRefusal(`Could not change what you own — ${ipcError(e)}`),
+    onError: (e) => setRefusal(`Couldn't change what you own — ${ipcError(e)}`),
   });
   const setWished = useMutation({
     mutationFn: ({ id, quantity }: { id: number | null; quantity: number }) =>
@@ -1165,7 +1165,7 @@ function Body({
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       void refreshCardSearches(queryClient);
     },
-    onError: (e) => setRefusal(`Could not change your wishlist — ${ipcError(e)}`),
+    onError: (e) => setRefusal(`Couldn't change your wishlist — ${ipcError(e)}`),
   });
 
   /**
@@ -1188,14 +1188,14 @@ function Body({
       ipc.collectionUpdate(id, { finish }),
     onMutate: () => setRefusal(null),
     onSuccess: (change, { id, cardId, finish }) => followCopy(id, cardId, finish, change),
-    onError: (e) => setRefusal(`Could not change this copy's finish — ${ipcError(e)}`),
+    onError: (e) => setRefusal(`Couldn't change this copy's finish — ${ipcError(e)}`),
   });
   const moveCopy = useMutation({
     mutationFn: ({ id, cardId }: { id: number; cardId: string; finish: Finish | null }) =>
       ipc.collectionSetPrinting(id, cardId),
     onMutate: () => setRefusal(null),
     onSuccess: (change, { id, cardId, finish }) => followCopy(id, cardId, finish, change),
-    onError: (e) => setRefusal(`Could not change this copy's printing — ${ipcError(e)}`),
+    onError: (e) => setRefusal(`Couldn't change this copy's printing — ${ipcError(e)}`),
   });
 
   /**
@@ -1238,9 +1238,9 @@ function Body({
     const rows = scope.quantity === "owned" ? ownedRows : wishedRows;
     if (rows.length > 1) {
       setRefusal(
-        `You hold this printing in ${rows.length} rows — open the ${
+        `You have this printing in ${rows.length} rows. Open your ${
           scope.quantity === "owned" ? "collection" : "wishlist"
-        } to change one of them.`,
+        } to change one.`,
       );
       return;
     }
@@ -1368,7 +1368,7 @@ function Body({
       // modal's words appearing on surfaces that draw their own. TanStack drops a `mutate`
       // callback when its observer unmounts, which is exactly right here: the observer *is* the
       // panel the sentence would be drawn in.
-      { onError: (e) => setRefusal(`Could not file this card — ${ipcError(e)}`) },
+      { onError: (e) => setRefusal(`Couldn't file this card — ${ipcError(e)}`) },
     );
   };
   /**
@@ -1421,7 +1421,7 @@ function Body({
         // so the foil copy of the old printing becomes the foil copy of the new one.
         finish: slot.finish,
       },
-      { onError: (e) => setRefusal(`Could not use that printing — ${ipcError(e)}`) },
+      { onError: (e) => setRefusal(`Couldn't use that printing — ${ipcError(e)}`) },
     );
   };
   const pickLabel = (labelId: number | null) => {
@@ -1498,7 +1498,7 @@ function Body({
       // racing it — see {@link pickCategory}'s `toName`.
       .mutateAsync({ deckId: slot.deckId, variant: slot.variant, name })
       .then((category) => pickCategory(category.id, category.name))
-      .catch((e: unknown) => setRefusal(`Could not make that category — ${ipcError(e)}`));
+      .catch((e: unknown) => setRefusal(`Couldn't make that category — ${ipcError(e)}`));
   };
   const makeLabel = (name: string, color: LabelColor) => {
     const slot = scope.deck;
@@ -1507,7 +1507,7 @@ function Body({
     createLabel
       .mutateAsync({ deckId: slot.deckId, name, color })
       .then((label) => pickLabel(label.id))
-      .catch((e: unknown) => setRefusal(`Could not make that label — ${ipcError(e)}`));
+      .catch((e: unknown) => setRefusal(`Couldn't make that label — ${ipcError(e)}`));
   };
 
   const target = card === null ? null : cardTarget(card);
@@ -1662,13 +1662,12 @@ function Body({
 
         {error !== null && (
           <p role="alert" className="mx-5 mt-3 text-sm text-destructive">
-            Could not read this card — {error}
+            Couldn't read this card — {error}
           </p>
         )}
         {!pending && error === null && card === null && (
           <p className="mx-5 mt-3 text-sm text-dim">
-            This printing is not in the card database any more. It may have been removed by the
-            last sync.
+            This printing is no longer in the card database.
           </p>
         )}
 

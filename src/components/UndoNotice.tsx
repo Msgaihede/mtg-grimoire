@@ -57,7 +57,7 @@ function settleUndo(client: QueryClient, scope: UndoScope): void {
 
 /** The words the ✕ answers to. Named for what it takes down, so it is never read as a close
  *  button for the page around it. */
-export const DISMISS_UNDO = "Dismiss the undo offer";
+export const DISMISS_UNDO = "Dismiss";
 
 export function UndoNotice({
   scope,
@@ -89,7 +89,7 @@ export function UndoNotice({
     onMutate: () => setRefusal(null),
     onSuccess: (outcome) => settleUndo(queryClient, outcome.scope),
     onError: (error) => {
-      setRefusal(`Could not undo — ${ipcError(error)}`);
+      setRefusal(`Couldn't undo — ${ipcError(error)}`);
       settleUndo(queryClient, scope);
     },
     // **`drop` names the ticket that was pressed**, so an answer arriving after a newer write has

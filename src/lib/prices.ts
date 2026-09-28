@@ -112,8 +112,8 @@ export function unreadablePriceNote(draft: string): string | null {
   if (draft.trim() === "" || parsePurchasePrice(draft) !== undefined) return null;
   const read = readSeparators(draft);
   return read.kind === "ambiguous"
-    ? `Write ${read.thousands} or ${read.decimal} — "${draft.trim()}" could mean either.`
-    : "That is not a price — try 12.50.";
+    ? `“${draft.trim()}” is ambiguous. Use ${read.thousands} or ${read.decimal}.`
+    : "Not a valid price. Try 12.50.";
 }
 
 /**
@@ -229,6 +229,6 @@ function readSeparators(draft: string): Separated {
  */
 export function pricesAsOf(marketplace: Marketplace): string {
   return marketplace.feed
-    ? `${marketplace.label} prices as of the last price-feed refresh.`
-    : `${marketplace.label} prices as of the last card-data sync.`;
+    ? `${marketplace.label} prices, last updated with the price feed.`
+    : `${marketplace.label} prices, last updated with card data.`;
 }

@@ -290,13 +290,13 @@ describe("CardModalPrintings", () => {
     expect(await screen.findByText("This card has no paper printings.")).toBeInTheDocument();
   });
 
-  it("says a refused read beside the heading, and says the card is unaffected", async () => {
+  it("says a refused read beside the heading", async () => {
     // The printings are a second read behind the card's own: one that fails must not read as the
     // card having failed, because the card is right there above it.
     renderList({ items: [], total: 0, error: "The database is busy with a sync." });
 
-    expect(await screen.findByText(/Could not read the other printings/)).toHaveTextContent(
-      "The card above is unaffected.",
+    expect(await screen.findByText(/Couldn't load other printings/)).toHaveTextContent(
+      "The database is busy with a sync.",
     );
     // …and the empty state is not drawn under it: "no printings" and "we could not ask" are two
     // different facts and only one of them is true here.

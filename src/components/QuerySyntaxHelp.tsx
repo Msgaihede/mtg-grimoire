@@ -64,7 +64,7 @@ function groupOf(spec: KeywordSpec): number {
  * nothing at all rather than a heading over a gap — `KeyMap`'s rule for a scope with no
  * shortcuts, met here for the same reason.
  */
-const GROUPS = ["Text and names", "Numbers and colours", "Tags"]
+const GROUPS = ["Text and names", "Numbers and colors", "Tags"]
   .map((heading, at) => ({ heading, specs: QUERY_KEYWORDS.filter((spec) => groupOf(spec) === at) }))
   .filter((group) => group.specs.length > 0);
 
@@ -97,8 +97,8 @@ export function QuerySyntaxHelp() {
           whole shape refuses. The name exclusion is here rather than in the table because it
           has no keyword to be a row under: it is a `-` on plain words and nothing else. */}
       <p className="text-xs leading-5 text-dim">
-        Terms narrow together. A leading <code className={LITERAL}>-</code> excludes one:{" "}
-        <code className={LITERAL}>-t:land</code>, or a name:{" "}
+        All terms must match. Put <code className={LITERAL}>-</code> in front of a term to exclude
+        it: <code className={LITERAL}>-t:land</code>,{" "}
         <code className={LITERAL}>{'-"lightning bolt"'}</code>
       </p>
 

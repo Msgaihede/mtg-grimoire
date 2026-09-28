@@ -125,7 +125,7 @@ export const ABand: Story = {
   play: async ({ canvasElement }) => {
     const card = await cardIn(canvasElement);
     await expect(
-      await card.findByText("TCGplayer prices as of the last card-data sync · split by rarity"),
+      await card.findByText("TCGplayer prices, last updated with card data · split by rarity"),
     ).toBeInTheDocument();
   },
 };

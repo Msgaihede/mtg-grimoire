@@ -236,7 +236,7 @@ export const AllFiltersActive: Story = {
     // the vocabulary of the control that set it — which is the whole point of the row: with the
     // tray shut, four of these six filters have no control on screen at all.
     for (const label of [
-      "Colour: White, Blue, Black",
+      "Color: White, Blue, Black",
       "Mana value: 1",
       "Set: LEA",
       "Format: Modern",
@@ -352,7 +352,7 @@ export const SomeUnavailable: Story = {
     // not a prefix — is what proves the sentence rather than only that the row is greyed.
     for (const value of [5, 6, 7]) {
       const chip = canvas.getByRole("button", {
-        name: `Mana value ${value} — nothing in this search`,
+        name: `Mana value ${value} (no results)`,
       });
       await expect(chip).toHaveAttribute("aria-disabled", "true");
       // **`aria-disabled`, never the attribute.** A `disabled` button leaves the tab order,
@@ -558,7 +558,7 @@ export const SortedDescending: Story = {
     // untouched row above and every assertion below would read a state this story is not about.
     // The name is what changes when the sort arrives, so it is what this waits on.
     const direction = await canvas.findByRole("button", {
-      name: "Sort direction: descending — press for ascending",
+      name: "Sort descending (click for ascending)",
     });
     await expect(direction).not.toBeDisabled();
     // The same sentence rides as the hover tooltip: there is no visible text on the button, so
@@ -570,7 +570,7 @@ export const SortedDescending: Story = {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
     await expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
-      "Sort direction: descending — press for ascending",
+      "Sort descending (click for ascending)",
     );
     await userEvent.unhover(direction);
 
@@ -627,10 +627,10 @@ export const DockedPanel: Story = {
     // an inheritance.** `layoutToggle={false}` says "no second layout to switch to", which names
     // exactly the panel with no table and therefore no header to sort by — so fencing the picker
     // on this prop would take it away from the only place it is the only control. The button is
-    // matched on a prefix: its name grows a reason when there is no order to flip, which is the
+    // matched on a pattern: its name becomes a reason when there is no order to flip, which is the
     // state this untouched row is in.
     await expect(canvas.getByLabelText("Sort results")).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: /^Sort direction/ })).toBeDisabled();
+    await expect(canvas.getByRole("button", { name: /^(Sort (ascending|descending) \(|Best match has no sort direction)/ })).toBeDisabled();
     // On the count, because the button no longer appears with the preset — it is already there.
     await expect(
       await canvas.findByRole("button", { name: "Reset all — 6 filters active" }),
@@ -761,13 +761,13 @@ export const StrictColours: Story = {
     const toggle = await within(
       canvas.getByRole("group", { name: "Color identity" }),
     ).findByRole("button", {
-      name: "Exact — cards whose colour identity is exactly these colours",
+      name: "Exact — cards whose color identity is exactly these colors",
     });
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
 
     // One kind on, said twice and counted once — the whole of why this is not a chip of its own.
     await expect(
-      canvas.getByRole("button", { name: "Remove filter — Colour: exactly White, Blue" }),
+      canvas.getByRole("button", { name: "Remove filter — Color: exactly White, Blue" }),
     ).toBeInTheDocument();
     await expect(
       // Singular: `ResetAll` words its own count through `plural`, so a hard-coded "filters"
@@ -992,7 +992,7 @@ export const StatedFilters: Story = {
     // Five chips against a badge of six: the sixth kind is the text in the box, which is on
     // screen with the words still in it and is the one filter a chip would only repeat.
     await expect(labels()).toEqual([
-      "Colour: White, Blue, Black",
+      "Color: White, Blue, Black",
       "Mana value: 1",
       "Set: LEA",
       "Format: Modern",
@@ -1000,7 +1000,7 @@ export const StatedFilters: Story = {
     ]);
 
     await userEvent.click(
-      canvas.getByRole("button", { name: "Remove filter — Colour: White, Blue, Black" }),
+      canvas.getByRole("button", { name: "Remove filter — Color: White, Blue, Black" }),
     );
 
     // The whole kind went, not one colour of it — and the badge followed.

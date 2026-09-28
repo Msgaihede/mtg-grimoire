@@ -131,16 +131,15 @@ function alreadyLines(folds: number, already: number, destination: string): stri
   const lines: string[] = [];
   if (folds > 0) {
     lines.push(
-      `${folds} of these already ${folds === 1 ? "has" : "have"} a line in ${destination} — ` +
-        `adding raises ${folds === 1 ? "it" : "those"}.`,
+      `${folds} already in ${destination}. ` +
+        `${folds === 1 ? "Its quantity" : "Their quantities"} will increase.`,
     );
   }
   const elsewhere = already - folds;
   if (elsewhere > 0) {
     lines.push(
-      `${elsewhere} ${elsewhere === 1 ? "is" : "are"} on your wishlist under a different folder ` +
-        `or finish, so ${elsewhere === 1 ? "it gets a line" : "they get lines"} of ` +
-        `${elsewhere === 1 ? "its" : "their"} own.`,
+      `${elsewhere} already on your wishlist in a different folder or finish, so ` +
+        `${elsewhere === 1 ? "it'll be added as a new entry" : "they'll be added as new entries"}.`,
     );
   }
   return lines;
@@ -250,7 +249,7 @@ export function AddToWishlist({
       open={open}
       title="Add to your wishlist"
       subtitle="Adds one copy of each selected card to your wishlist."
-      closeLabel="Close add to your wishlist"
+      closeLabel="Close"
       size="w-[34rem]"
       onDismiss={onClose}
       onClose={onClose}
@@ -282,7 +281,7 @@ export function AddToWishlist({
                 cross-reference exists to keep off the screen. */}
             {want.already > 0 && (
               <span className="shrink-0 font-mono text-[0.6875rem] text-accent">
-                Already wanted: {want.already}
+                Already on wishlist: {want.already}
               </span>
             )}
           </li>
