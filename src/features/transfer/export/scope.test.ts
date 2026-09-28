@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { onlineManager, QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
 import type { WishlistQuery } from "@/lib/ipc";
 
@@ -97,5 +97,116 @@ describe("useExportScope — the wishlist's Everything arm", () => {
     await waitFor(() => expect(wishlistList).toHaveBeenCalled());
     expect(lastQuery().folderId).toBe(3);
     expect(lastQuery().flatten).toBe(false);
+  });
+});
+
+/**
+ * Issue #555: what the dialog's two buttons are told when the sweep has not answered, and when
+ * it could not. Both used to read as a finished sweep over an empty list — `loading` was
+ * `isFetching` and nothing reported a failure — so Copy and Save as… armed over a file of
+ * nothing.
+ */
+describe("useExportScope — a sweep that has not answered, or could not", () => {
+  const FILTERS: WishlistScopeFilters = { marketplace: "tcgplayer" };
+
+  beforeEach(() => {
+    wishlistList.mockReset();
+  });
+
+  /** `retry: false` so a failure is one call, which is what lets the counts below be exact. */
+  function wrapper({ children }: { children: ReactNode }) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    return createElement(QueryClientProvider, { client: qc }, children);
+  }
+
+  it("reports loading and no error until the sweep answers", async () => {
+    let answer: (page: { items: never[]; total: number }) => void = () => {};
+    wishlistList.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useExportScope("wishlist", FILTERS, true), { wrapper });
+
+    expect(result.current.loading).toBe(true);
+    expect(result.current.error).toBeNull();
+    expect(result.current.cards).toEqual([]);
+
+    act(() => answer({ items: [], total: 0 }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBeNull();
+  });
+
+  /**
+   * The gap `isFetching` left, and the one no fetch mock can show: a query the network manager
+   * has **paused** is waiting with nothing in flight, so `isFetching` is false while `cards` is
+   * still the empty placeholder. Offline is the ordinary way to get there.
+   */
+  it("reports loading while the query waits with no fetch in flight", () => {
+    onlineManager.setOnline(false);
+    try {
+      const { result } = renderHook(() => useExportScope("wishlist", FILTERS, true), { wrapper });
+
+      expect(wishlistList).not.toHaveBeenCalled();
+      expect(result.current.loading).toBe(true);
+      expect(result.current.error).toBeNull();
+    } finally {
+      onlineManager.setOnline(true);
+    }
+  });
+
+  it("is not loading on a page whose dialog is shut", () => {
+    const { result } = renderHook(() => useExportScope("wishlist", FILTERS, false), { wrapper });
+
+    expect(result.current.loading).toBe(false);
+    expect(wishlistList).not.toHaveBeenCalled();
+  });
+
+  it("reports a failure in ipcError's words, stops loading, and asks again on retry", async () => {
+    // A Tauri command rejects with a bare string, which `ipcError` passes through as it is.
+    wishlistList.mockRejectedValueOnce("database is locked");
+    const { result } = renderHook(() => useExportScope("wishlist", FILTERS, true), { wrapper });
+
+    await waitFor(() => expect(result.current.error).toBe("database is locked"));
+    expect(result.current.loading).toBe(false);
+    expect(result.current.cards).toEqual([]);
+    expect(wishlistList).toHaveBeenCalledTimes(1);
+
+    let answer: (page: { items: never[]; total: number }) => void = () => {};
+    wishlistList.mockReturnValueOnce(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    act(() => result.current.retry());
+
+    // The retry is a wait, not a second failure: the query keeps its error until an attempt
+    // succeeds, and an alert standing over the Retry it offered would say the retry had failed.
+    await waitFor(() => expect(result.current.loading).toBe(true));
+    expect(result.current.error).toBeNull();
+    expect(wishlistList).toHaveBeenCalledTimes(2);
+
+    act(() => answer({ items: [], total: 0 }));
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.error).toBeNull();
+  });
+
+  it("reports an Error's message rather than the object", async () => {
+    wishlistList.mockRejectedValueOnce(new Error("disk full"));
+    const { result } = renderHook(() => useExportScope("wishlist", FILTERS, true), { wrapper });
+
+    await waitFor(() => expect(result.current.error).toBe("disk full"));
+  });
+
+  it("hands back one retry across renders, so a caller can pass it straight to a button", async () => {
+    wishlistList.mockResolvedValue({ items: [], total: 0 });
+    const { result, rerender } = renderHook(() => useExportScope("wishlist", FILTERS, true), {
+      wrapper,
+    });
+    const first = result.current.retry;
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    rerender();
+
+    expect(result.current.retry).toBe(first);
   });
 });

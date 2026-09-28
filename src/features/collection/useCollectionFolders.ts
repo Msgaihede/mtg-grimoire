@@ -1,5 +1,7 @@
 import { useMemo } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
+import { offerUndo } from "@/lib/bulkUndo";
+import { plural } from "@/lib/counts";
 import { ipc, type CollectionFolder } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { refreshCardSearches } from "@/lib/searchMarks";
@@ -376,39 +378,105 @@ export function useSetCollectionFolder({ onMutate, onError }: SetCollectionFolde
     // **On success and on failure both**, and one handler because there is one behaviour: a
     // refusal leaves the list exactly as unknown as a success does, since a refused move is
     // almost always a row another surface has already moved or deleted.
-    onSettled: () => {
-      // **The whole `["collection"]` root, which is the list as well as everything counted from
-      // it** — the level being left, the level being joined, both folder subtotals and the
-      // header. `invalidateQueries` matches by key *prefix*, so this reaches
-      // `["collection", "list", …]` itself and refetches it because it is mounted; a settle that
-      // named only the summary and the folder keys is precisely the wishlist bug above. And
-      // marking it stale would not be enough on its own: `lib/query.ts` sets `staleTime: 30_000`,
-      // so a mounted observer that is merely stale never refetches.
-      void queryClient.invalidateQueries({ queryKey: ["collection"] });
-      // **And every deck, which is the half the drag's own mutation was missing.** A move changes
-      // no quantity, so no wish's `ownedQuantity` and no *unscoped* search row's owned badge can
-      // be different afterwards — but since schema v25 a deck owns exactly the copies filed in its
-      // own group, and this is the write that files copies.
-      //
-      // **Both ends are fenced now, which is newer than the sentence that stood here** (it read
-      // *"only the destination of this write is fenced … The source is not"*).
-      // `set_entry_folder` refuses a `deck` or `removed` **destination** (`FOLDER_NOT_YOURS`) and,
-      // since fan-in, a row whose **source** is a `deck` folder (`ENTRY_IN_A_DECK` — a sibling
-      // sentence rather than a reuse: that one is about the folder, this one about the row). So
-      // the case this key was added for — a copy dragged out of a group, leaving the deck listing
-      // a card whose copies have walked off — is a refusal rather than a silent loss of custody.
-      // **The key stays, and deliberately**: a refusal settles here too, and what the fences
-      // protect is an invariant rather than this callback, so the day one of them is relaxed the
-      // editor must not be the last thing to hear about it. `refile_entry` underneath carries no
-      // fence at all, which is exactly what lets `collection_alloc`'s two writes and
-      // `delete_deck` file into those folders.
-      void queryClient.invalidateQueries({ queryKey: ["decks"] });
-      // **And the card search, since 2026-09-03** (issue #349). The deck builder's card search
-      // counts *what a deck can use*, which is a fact about where each copy is filed — so this
-      // write, whose whole job is to change that, moves an `×N` even though it moves no quantity.
-      // A copy dragged into a locked drawer is the plainest case: nothing was gained or lost and
-      // every deck's badge for that card is one lower.
-      void refreshCardSearches(queryClient);
+    onSettled: () => settleFiling(queryClient),
+  });
+}
+
+/**
+ * What a filing owes the cache, success or refusal — {@link useSetCollectionFolder}'s settle set,
+ * written once so {@link useSetCollectionFolderMany} cannot drift from it. The two are one write
+ * at two grains, and the history above is of exactly that drift happening between two copies.
+ */
+function settleFiling(queryClient: QueryClient): void {
+  // **The whole `["collection"]` root, which is the list as well as everything counted from
+  // it** — the level being left, the level being joined, both folder subtotals and the
+  // header. `invalidateQueries` matches by key *prefix*, so this reaches
+  // `["collection", "list", …]` itself and refetches it because it is mounted; a settle that
+  // named only the summary and the folder keys is precisely the wishlist bug above. And
+  // marking it stale would not be enough on its own: `lib/query.ts` sets `staleTime: 30_000`,
+  // so a mounted observer that is merely stale never refetches.
+  void queryClient.invalidateQueries({ queryKey: ["collection"] });
+  // **And every deck, which is the half the drag's own mutation was missing.** A move changes
+  // no quantity, so no wish's `ownedQuantity` and no *unscoped* search row's owned badge can
+  // be different afterwards — but since schema v25 a deck owns exactly the copies filed in its
+  // own group, and this is the write that files copies.
+  //
+  // **Both ends are fenced now, which is newer than the sentence that stood here** (it read
+  // *"only the destination of this write is fenced … The source is not"*).
+  // `set_entry_folder` refuses a `deck` or `removed` **destination** (`FOLDER_NOT_YOURS`) and,
+  // since fan-in, a row whose **source** is a `deck` folder (`ENTRY_IN_A_DECK` — a sibling
+  // sentence rather than a reuse: that one is about the folder, this one about the row). So
+  // the case this key was added for — a copy dragged out of a group, leaving the deck listing
+  // a card whose copies have walked off — is a refusal rather than a silent loss of custody.
+  // **The key stays, and deliberately**: a refusal settles here too, and what the fences
+  // protect is an invariant rather than this callback, so the day one of them is relaxed the
+  // editor must not be the last thing to hear about it. `refile_entry` underneath carries no
+  // fence at all, which is exactly what lets `collection_alloc`'s two writes and
+  // `delete_deck` file into those folders.
+  void queryClient.invalidateQueries({ queryKey: ["decks"] });
+  // **And the card search, since 2026-09-03** (issue #349). The deck builder's card search
+  // counts *what a deck can use*, which is a fact about where each copy is filed — so this
+  // write, whose whole job is to change that, moves an `×N` even though it moves no quantity.
+  // A copy dragged into a locked drawer is the plainest case: nothing was gained or lost and
+  // every deck's badge for that card is one lower.
+  void refreshCardSearches(queryClient);
+}
+
+/** What {@link useSetCollectionFolderMany} files: the entries, the drawer, and the drawer's name
+ *  for the undo notice's sentence. */
+export interface FileManyInput {
+  entryIds: readonly number[];
+  /** `null` is the root of the collection — a destination, never an omission. */
+  folderId: number | null;
+  /**
+   * What the destination is called, for `Moved 5 cards to Trade binder.` — the caller's word,
+   * because both callers already hold the folder list and the root's name is a surface's to say
+   * (the page's `ROOT_LABEL`, the breadcrumb's first segment).
+   */
+  destination: string;
+}
+
+/** `Moved 5 cards to Trade binder.` — counted in **entries**, the unit the menu row counts in. */
+export function movedLabel(entries: number, destination: string): string {
+  return `Moved ${plural(entries, "card")} to ${destination}.`;
+}
+
+/**
+ * Filing several entries in **one** write — `collection_set_folder_many`, issue #555.
+ *
+ * {@link useSetCollectionFolder}'s merge rule per entry, in one transaction with one activity row,
+ * where a `Move to` over several used to be one `collection_set_folder` per id: N transactions, N
+ * feed lines, and a refusal part-way left the press half filed. **Any refusal rolls the whole press
+ * back**, so the settle set is the single write's, success or refusal, for its reasons.
+ *
+ * **The undo offer is made here rather than at each caller**, because both callers — the page's
+ * copy picker and the card menu's `moveCopies` — are this write, and an offer one of them forgot
+ * would be a bulk move that could not be taken back from exactly one door. `offerUndo` is a no-op
+ * for a `null` ticket, which is what a press that changed nothing answers.
+ *
+ * Not optimistic, for the single write's three reasons — a merge answers ids other than the ones
+ * sent, which is the whole of why `BulkMoveOutcome.changes` exists.
+ */
+export function useSetCollectionFolderMany({
+  onMutate,
+  onError,
+}: SetCollectionFolderHandlers = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ entryIds, folderId }: FileManyInput) =>
+      ipc.collectionSetFolderMany(entryIds, folderId),
+    onMutate: () => {
+      onMutate?.();
     },
+    onError: (error) => onError?.(error),
+    onSuccess: (outcome, { entryIds, destination }) => {
+      offerUndo(
+        "collection",
+        outcome.undoId,
+        movedLabel(outcome.changes.length || entryIds.length, destination),
+      );
+    },
+    onSettled: () => settleFiling(queryClient),
   });
 }

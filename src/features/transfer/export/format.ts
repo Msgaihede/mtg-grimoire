@@ -26,6 +26,7 @@ import type { CategoryKind } from "@/lib/ipc";
 import { csvRow } from "../csv";
 import { TRANSFER_FIELDS, TRANSFER_FIELD_IDS, type TransferFieldId } from "../fields";
 import type { ExportFormat } from "../formats";
+import { escapeFormula } from "../formula";
 import type { TransferCard } from "../TransferCard";
 import { foldForFields } from "./fold";
 
@@ -148,6 +149,48 @@ function finishMark(card: TransferCard): string {
   return "";
 }
 
+/**
+ * A pile's name as a bracket and a heading can carry it (issue #555): `,` becomes `;`, `{` and
+ * `[` become `<`, and `}` and `]` become `>`.
+ *
+ * **Each of the five is a character `parse.ts` reads as syntax, and every one cost the reader
+ * their pile on the way back in.** The first comma entry is the pile and the rest are the card's
+ * other categories, so `[Ramp, Fixing]` came back as `Ramp`. Anything in braces is a flag, so
+ * `{x}` vanished out of the middle of a name — and a lone `{` reached forward to the `{noDeck}`
+ * this writer appends and took the rest of the name with it. `]` closes the bracket, so a name
+ * holding one left no bracket at all and the whole tail landed in the *card's* name. And a heading
+ * holding a `[` is never a heading, so it was read as a card called after the pile.
+ *
+ * **Angle brackets rather than parentheses, because a parenthesis is syntax too.** `parse.ts`
+ * reads `(\w{0,10})` at the end of a line — optionally followed by one more token — as a printing
+ * hint (`HINT_TAIL`), and a heading carrying one is refused as a heading and read as a card line:
+ * `(x) (y)` would have turned `Ramp, Fixing {x} [y]` into a card called `Ramp; Fixing` from set
+ * `X`, and filed the pile's own cards under whatever heading came before it — the command zone,
+ * when that was `Commander`. Nothing in `parse.ts` reads `<`, `>` or `;` at all, so the rewritten
+ * name reads back byte for byte from the bracket **and** from the heading. That is what makes a
+ * second export of the re-imported deck the same file as the first.
+ *
+ * **The heading and the bracket say the same name, so the heading is rewritten too**, and the
+ * sections are grouped by what is *written* rather than by the stored name: two piles the file
+ * cannot tell apart share one heading rather than printing the same line twice. It changes
+ * nothing for a name holding none of the five, which is every pile a deck had before this.
+ *
+ * **What it leaves alone is a pile whose own name already trips the heading rule** — a native
+ * `Removal (cheap)` ends in a hint shape and `2 Drops` opens with a count — because rewriting a
+ * character the reader typed and Archidekt can carry would be this writer inventing a spelling.
+ * That is `parse.ts`'s heading rule to answer, and the bracket on every line under it still names
+ * the pile exactly.
+ *
+ * A **lossy** rewrite and deliberately so: Archidekt has no escape for any of the five, and a
+ * name that comes back one character different is a pile the reader can rename, where a name
+ * that comes back as `Ramp` has silently merged two of their piles.
+ * `src-tauri/src/transfer/write.rs`'s `written_category` is the same rule, held to this one by
+ * the golden fence.
+ */
+function writtenCategory(name: string): string {
+  return name.replace(/,/g, ";").replace(/[{[]/g, "<").replace(/[}\]]/g, ">");
+}
+
 /** How one format shapes the segments a field set turns on. */
 interface LineSpec {
   /** Archidekt's `1x`; everyone else's `1`. */
@@ -192,8 +235,10 @@ function writeLine(
   let line = parts.join(" ");
   if (fields.has("category") && card.categoryName !== null) {
     // `{noDeck}` is what makes an export and a re-import keep a maybeboard — the only format
-    // here that can say it.
-    line += ` [${card.categoryName}${card.categoryActive === false ? "{noDeck}" : ""}]`;
+    // here that can say it. It goes on *after* the name is sanitised, which is the whole reason
+    // the sanitiser takes braces out: the flag has to be the only thing in braces in the bracket.
+    const flag = card.categoryActive === false ? "{noDeck}" : "";
+    line += ` [${writtenCategory(card.categoryName)}${flag}]`;
   }
   if (fields.has("finish")) line += finishMark(card);
   // Archidekt's label. **Last on the line**, which is where Archidekt itself puts it and — not by
@@ -358,8 +403,13 @@ export function formatExport(
     case "archidekt":
       // Grouped by the pile's own name rather than a section word, and in the caller's order: a
       // deck's array order is its category order, and imposing one here would re-file somebody's
-      // deck on the way out.
-      text = sectioned(rows, (card) => card.categoryName, line);
+      // deck on the way out. The heading is the name as `writtenCategory` writes it, so it says
+      // exactly what every bracket under it says.
+      text = sectioned(
+        rows,
+        (card) => (card.categoryName === null ? null : writtenCategory(card.categoryName)),
+        line,
+      );
       break;
     case "tcgplayer":
       // Flat, and grouped by nothing: Mass Entry reads every line as one item, so a heading here
@@ -368,9 +418,16 @@ export function formatExport(
       break;
     case "csv": {
       const columns = TRANSFER_FIELD_IDS.filter((id) => set.has(id));
+      // Every cell a card fills goes through `escapeFormula` before `csvRow` quotes it (issue
+      // #555): a note reading `-2 lent` is a formula to a spreadsheet, and `'-2 lent` is the text.
+      // Every cell rather than the free-text columns, for `formula.ts`'s reason — and in this
+      // order, because the apostrophe is part of the value and the quoting is how a CSV carries
+      // one. The header row is this app's own words and never starts with a trigger.
       text = [
         csvRow(columns.map((id) => TRANSFER_FIELDS[id].csvHeader)),
-        ...rows.map((card) => csvRow(columns.map((id) => TRANSFER_FIELDS[id].read(card)))),
+        ...rows.map((card) =>
+          csvRow(columns.map((id) => escapeFormula(TRANSFER_FIELDS[id].read(card)))),
+        ),
       ].join("\n");
       break;
     }

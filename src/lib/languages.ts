@@ -111,3 +111,64 @@ export function languageName(code: string): string {
 export function languageHint(code: string): string {
   return `Printed in ${languageName(code)}`;
 }
+
+/**
+ * Every spelling of a language a **file** can use that is not the code itself or the name
+ * {@link LANGUAGE_NAME} gives it — issue #555, the fifth reader of this table and the first that
+ * reads a language *in* rather than drawing one out.
+ *
+ * The sources are the three a collection CSV arrives from: this app's own (the code), Deckbox and
+ * Moxfield (the English name — `Japanese`, and Chinese written three ways), and the printed codes
+ * a hand-typed sheet reaches for (`JP`, `CS`, `KR`). Keys are already {@link spelling}-normalised.
+ * **Import is permissive; export is canonical** — nothing here is ever written.
+ */
+const FILE_SPELLINGS = new Map<string, string>([
+  // Printed codes — what the card itself says in its corner, and what a sheet typed by hand uses.
+  ["jp", "ja"],
+  ["jpn", "ja"],
+  ["kr", "ko"],
+  ["kor", "ko"],
+  ["cs", "zhs"],
+  ["ct", "zht"],
+  ["sp", "es"],
+  // The Chinese names every exporter spells differently.
+  ["chinese", "zhs"],
+  ["chinese simplified", "zhs"],
+  ["zh", "zhs"],
+  ["zh cn", "zhs"],
+  ["zh hans", "zhs"],
+  ["chinese traditional", "zht"],
+  ["zh tw", "zht"],
+  ["zh hant", "zht"],
+  // Portuguese is printed as Brazilian Portuguese, and some exporters say so.
+  ["portuguese (brazil)", "pt"],
+  ["brazilian portuguese", "pt"],
+  ["pt br", "pt"],
+]);
+
+/** Lowercased, with any run of spaces, `-` and `_` read as one space. */
+function spelling(raw: string): string {
+  return raw.trim().toLowerCase().replace(/[\s_-]+/g, " ");
+}
+
+/** The code, its name and every {@link FILE_SPELLINGS} entry, all keyed by {@link spelling}. */
+const BY_SPELLING = new Map<string, string>([
+  ...LANGUAGE_CODES.map((code) => [code, code] as const),
+  ...Array.from(LANGUAGE_NAME, ([code, name]) => [spelling(name), code] as const),
+  ...FILE_SPELLINGS,
+]);
+
+/**
+ * A file's language cell as a Scryfall code, or `null` — for an empty cell (silence) **and** for
+ * one this table does not recognise (issue #555). The caller tells those two apart by whether the
+ * cell was empty, which is the division `normalizeCondition` draws for a grade.
+ *
+ * Stricter than {@link languageName} for {@link isKnownLanguage}'s reason: a code this app would
+ * *send* to the resolver as a preference has to be one the corpus can hold.
+ */
+export function languageCode(raw: string | null | undefined): string | null {
+  if (raw === null || raw === undefined) return null;
+  const key = spelling(raw);
+  if (key === "") return null;
+  return BY_SPELLING.get(key) ?? null;
+}

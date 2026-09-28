@@ -12,6 +12,7 @@ import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-
 import { ArrowDown, ArrowUp, FolderInput, Lock, LockOpen, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Dialog } from "@/components/Dialog";
+import { UndoNotice } from "@/components/UndoNotice";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -45,7 +46,9 @@ import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer
 import { collectionDestination } from "@/features/transfer/import/destinations/CollectionPreview";
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
+import { offerUndo } from "@/lib/bulkUndo";
 import { CONDITION_LABEL, CONDITIONS, MENU_CONDITION } from "@/lib/conditions";
+import { plural } from "@/lib/counts";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
 import { FINISHES, FINISH_LABEL, finishLabel, isFinish, type Finish } from "@/lib/finish";
@@ -110,7 +113,11 @@ import { PickCopies, type CopyChoice } from "./PickCopies";
 import { ShareFolderMenu, shareTargetFor } from "./ShareFolderMenu";
 import { pinnedFolders } from "./PinnedFolders";
 import { useCollection, type Collection } from "./useCollection";
-import { useCollectionFolders, useSetCollectionFolder } from "./useCollectionFolders";
+import {
+  useCollectionFolders,
+  useSetCollectionFolder,
+  useSetCollectionFolderMany,
+} from "./useCollectionFolders";
 
 /**
  * What the top of the cabinet is called, in the two places this page has to say it —
@@ -159,6 +166,12 @@ const ROOT_TARGET = 0;
  * #506): it is asked only while the reader is *standing in* `Recently removed`, there is exactly
  * one such folder, and the pinned census already names it — so an id here would be a second copy
  * of a fact the page holds, free to disagree with it.
+ *
+ * **`removeCopies` carries the entries, and is the second member that is not about the cabinet**
+ * (issue #555): `Remove N cards from collection…` over more than one entry asks before it writes,
+ * in the strip `clearRemoved` is asked in and on its terms — the same landing pad, the same
+ * Escape rung, the same blur. The ids are held rather than re-derived because the question is
+ * about the rows the menu reached, and nothing else on the page remembers which those were.
  */
 type Panel =
   | { kind: "newFolder"; parentId: number | null }
@@ -166,6 +179,7 @@ type Panel =
   | { kind: "moveFolder"; folderId: number }
   | { kind: "deleteFolder"; folderId: number }
   | { kind: "clearRemoved" }
+  | { kind: "removeCopies"; entryIds: readonly number[] }
   | { kind: "editCopy"; entryId: number }
   | null;
 
@@ -1015,36 +1029,46 @@ export function CollectionPage() {
   });
 
   /**
-   * The card menu's `Remove from collection` — issue #506, and {@link remove} said once per entry
-   * the press reaches.
+   * The card menu's `Remove from collection` — issue #506's press, and since issue #555 **one
+   * write**: `collection_remove_many`, every entry the press reaches in one transaction with one
+   * activity row.
    *
-   * **In sequence rather than all at once**, because each one is a transaction on one connection
-   * and a `Promise.all` would only queue them there anyway; in order, a refusal stops the rest and
-   * the page's banner says which sentence stopped it. What the ones before it did is real, and
-   * {@link settleFailure} re-reads the whole list so the wall shows exactly that rather than the
-   * rows the press was *going* to take.
+   * **It was a loop of {@link remove}'s command**, one transaction per entry, and that was the
+   * gap the issue named: N feed lines for one press, and a refusal part-way left it half applied —
+   * the rows before it gone, the rest still there, and one sentence in the banner about the one
+   * that stopped it. `cardMenu.test.tsx` asserted "one call" of the menu's dep and passed while
+   * this looped, because the loop was here. Now a refusal takes nothing, and
+   * {@link settleFailure} re-reads the list so the wall shows exactly that.
+   *
+   * **The answer is offered back** — the ticket goes to `@/lib/bulkUndo` with a sentence counted
+   * in entries, the menu row's unit, so the notice under the header says what the row said. One
+   * entry names the card instead, because `Removed 1 card` says less than the name the reader
+   * pointed at. `name` rides the variables because by `onSuccess` the row is already on its way
+   * out of the cache.
    *
    * Which targets may reach this at all is the menu deps' decision ({@link countEditable}, asked of
-   * every row behind the target), not this write's — `collection_remove` is the unconditional
-   * delete.
+   * every row behind the target), not this write's — `collection_remove_many` is the
+   * unconditional delete. Whether it asks first is {@link removeCopies}'.
    */
   const removeMany = useMutation({
-    mutationFn: async (ids: readonly number[]) => {
-      for (const id of ids) await ipc.collectionRemove(id);
-    },
+    mutationFn: ({ entryIds }: { entryIds: readonly number[]; name: string | null }) =>
+      ipc.collectionRemoveMany(entryIds),
     onError: settleFailure,
-    onSuccess: (_done, ids) => {
-      for (const id of ids) patchEntry(id, null);
+    onSuccess: (outcome, { entryIds, name }) => {
+      for (const id of entryIds) patchEntry(id, null);
       settle();
+      offerUndo(
+        "collection",
+        outcome.undoId,
+        outcome.removed === 1 && name !== null
+          ? `Removed ${name} from your collection.`
+          : `Removed ${plural(outcome.removed, "card")} from your collection.`,
+      );
     },
   });
-  // `mutate` is stable across renders and the result object around it is not, so the menu deps
-  // below are rebuilt only when something they carry actually changed.
-  const { mutate: removeManyMutate } = removeMany;
-  const removeCopies = useCallback(
-    (ids: readonly number[]) => removeManyMutate(ids),
-    [removeManyMutate],
-  );
+  // `mutate` and `reset` are stable across renders and the result object around them is not, so
+  // the menu deps below are rebuilt only when something they carry actually changed.
+  const { mutate: removeManyMutate, reset: removeManyReset } = removeMany;
 
   /**
    * `Clear…` inside `Recently removed` — every copy in the holding area, gone in one transaction
@@ -1079,6 +1103,14 @@ export function CollectionPage() {
    * one now.
    */
   const setFolder = useSetCollectionFolder();
+  /**
+   * The same filing over several entries in **one** write (issue #555) — what the copy picker's
+   * answer makes when the reader ticked more than one. It was `setFolder` once per tick: N
+   * transactions and N feed lines, and a refusal part-way filed half the copies. The hook makes
+   * the undo offer itself, so this page and the card menu cannot differ about it; the refusal
+   * shares this page's banner with every other write here.
+   */
+  const setFolderMany = useSetCollectionFolderMany();
 
   /**
    * **The other write a drop can make: an add, for a card the reader does not own yet.**
@@ -1703,6 +1735,12 @@ export function CollectionPage() {
    * under this heading applies to it: its trigger is a card's context-menu row, and it has no level
    * to compare against. It is also not the page's Escape rung's business — a `Dialog` registers its
    * own.
+   *
+   * **`removeCopies` is on this side of the line although it is not about a folder** (issue #555),
+   * because what puts a member here is where it is drawn rather than what it is about: it is a
+   * question in the strip above the wall, which needs this page's Escape rung and its `dismiss`,
+   * where `editCopy` is a `Dialog` that brings both of its own. No wall rule below closes it — the
+   * rows it is about are named by id, not by the level on screen.
    */
   const folderPanel = panel === null || panel.kind === "editCopy" ? null : panel;
   /** Standing in the holding area — the one level whose path row carries `Clear…`. */
@@ -2390,6 +2428,38 @@ export function CollectionPage() {
   );
 
   /**
+   * `Remove from collection`'s press — one entry removes at once, more than one asks first
+   * (issue #555).
+   *
+   * **One entry is the copy the reader pointed at**, and the press is the write, exactly as the
+   * table's stepper walked to zero is: no question with one answer in front of it. **Several** is a
+   * tile standing for more rows than the art shows, or a picked set, so the page asks in the strip
+   * above the wall — `clearRemoved`'s place and recipe — and the menu row wears the ellipsis that
+   * says a question comes first.
+   *
+   * **The opener is whatever holds the caret**, which by the time a row's handler runs is the tile
+   * or table row the menu was opened on: the menu hands the caret back to its opener before it
+   * runs a row. That is what `dismiss` gives it back to on Escape or Cancel.
+   *
+   * Declared down here rather than beside {@link removeMany} for {@link open}'s sake: a
+   * `useCallback`'s dependency array is read during render, so naming a `const` declared further
+   * down the component is a `ReferenceError` on the first paint.
+   */
+  const removeCopies = useCallback(
+    (entryIds: readonly number[]) => {
+      if (entryIds.length === 1) {
+        const name = rows.find((row) => row.id === entryIds[0])?.name ?? null;
+        removeManyMutate({ entryIds, name });
+        return;
+      }
+      // A refusal left standing from the last press must not read as this question's answer.
+      removeManyReset();
+      open({ kind: "removeCopies", entryIds }, focusedElement());
+    },
+    [rows, removeManyMutate, removeManyReset, open],
+  );
+
+  /**
    * The card menu's handlers, built here rather than beside {@link menuDeps} because two of the
    * four ask {@link countEditable}, which the folder census further up the page has to state
    * first — the same temporal dead zone {@link stepperByTile} records.
@@ -2710,6 +2780,7 @@ export function CollectionPage() {
     removeMany,
     clearRemoved,
     setFolder,
+    setFolderMany,
     // The sidebar's drop, which is a write this screen makes and shares the banner for the
     // reason the folder writes do: everything here is a change to the reader's collection. The
     // `+` beside it reports for itself, inside its own popup.
@@ -3428,7 +3499,8 @@ export function CollectionPage() {
               the cards inside. */}
           {(openPanel?.kind === "moveFolder" ||
             openPanel?.kind === "deleteFolder" ||
-            openPanel?.kind === "clearRemoved") && (
+            openPanel?.kind === "clearRemoved" ||
+            openPanel?.kind === "removeCopies") && (
             <div className="w-full max-w-sm shrink-0 rounded-lg border border-border bg-surface p-2 text-xs">
               {openPanel.kind === "moveFolder" && (
                 <MoveToFolder
@@ -3478,6 +3550,25 @@ export function CollectionPage() {
                   cards={removedCards}
                   pending={clearRemoved.isPending}
                   onConfirm={() => clearRemoved.mutate(undefined, { onSuccess: dismiss })}
+                  onCancel={dismiss}
+                  onClose={close}
+                />
+              )}
+
+              {/* `Remove N cards from collection…` (issue #555) — the card menu's press over more
+                  than one entry, asked here for `Clear…`'s reason: "remove these?" is a sentence
+                  about which cards go, and the menu that raised it has already closed. A refusal
+                  leaves the question open and the banner under the header says why. */}
+              {openPanel.kind === "removeCopies" && (
+                <RemoveCopiesConfirm
+                  {...removalFacts(rows, openPanel.entryIds)}
+                  pending={removeMany.isPending}
+                  onConfirm={() =>
+                    removeMany.mutate(
+                      { entryIds: openPanel.entryIds, name: null },
+                      { onSuccess: dismiss },
+                    )
+                  }
                   onCancel={dismiss}
                   onClose={close}
                 />
@@ -3535,6 +3626,13 @@ export function CollectionPage() {
               </motion.div>
             )}
           </AnimatePresence>
+
+          {/* The last bulk write, offered back (issue #555) — an import, a `Remove N cards…`, a
+              `Move N cards to`. Under the failure banner because the two are the page's two
+              sentences about something the reader just did, the refusal first; always mounted,
+              so the sentence arriving in it is announced. `empty:-mt-2` gives back this
+              column's gap while it says nothing, the *Needs review* region's arrangement. */}
+          <UndoNotice scope="collection" className="empty:-mt-2" />
 
           {/* A write the right-click menu started and the backend refused, beside the banner
               above rather than folded into it: that one is about this list's own controls — a
@@ -3854,13 +3952,22 @@ export function CollectionPage() {
             destination={folderNameOf(picking.folderId) ?? ROOT_LABEL}
             copies={pickChoices}
             onConfirm={(entryIds) => {
-              // One write per copy, the loop `cardMenu.tsx`'s multi-picked `Move to` already
-              // makes: `collection_set_folder` addresses one row, and it **merges** rather than
-              // failing when the destination already holds the same eleven-column grain — so two
-              // copies of one printing landing in one drawer become one row with the quantities
-              // summed, which is the same thing that happens when the reader does it by hand.
-              for (const entryId of entryIds) {
-                setFolder.mutate({ entryId, folderId: picking.folderId });
+              // **One write for the whole answer** (issue #555) — `collection_set_folder_many`,
+              // one transaction and one feed row, where it was one `collection_set_folder` per
+              // tick and a refusal part-way filed half of them. Each entry still **merges**
+              // rather than failing when the destination already holds the same eleven-column
+              // grain, so two copies of one printing landing in one drawer become one row with
+              // the quantities summed, which is what happens when the reader does it by hand.
+              // One tick is the single write it always was: there is nothing to batch, and no
+              // offer to take back one card's filing.
+              if (entryIds.length > 1) {
+                setFolderMany.mutate({
+                  entryIds,
+                  folderId: picking.folderId,
+                  destination: folderNameOf(picking.folderId) ?? ROOT_LABEL,
+                });
+              } else if (entryIds.length === 1) {
+                setFolder.mutate({ entryId: entryIds[0], folderId: picking.folderId });
               }
               setPicking(null);
             }}
@@ -3907,6 +4014,10 @@ export function CollectionPage() {
           loading: exportScope.loading,
           everything: exportScope.everything,
           onEverything: exportScope.setEverything,
+          // A sweep that failed says so in the dialog, with a way to ask again (issue #555) —
+          // before it, a refused page read as the collection being smaller than it is.
+          error: exportScope.error,
+          onRetry: exportScope.retry,
         }}
       />
 
@@ -4158,6 +4269,134 @@ function ClearRemovedConfirm({
           )}
         >
           Clear Recently removed
+        </button>
+        <button
+          type="button"
+          onClick={onCancel}
+          className={cn(
+            "rounded-md border border-border px-2 py-1 text-dim",
+            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * What {@link RemoveCopiesConfirm} says about the rows it is asking about, read off the list the
+ * menu was built from: how many entries, how many copies they hold, and the card's name when they
+ * are all one card.
+ *
+ * **`copies` is `null` when a row is not in the list**, rather than a sum short by that row — a
+ * refetch or another window can take a row out from under an open question, and a number that
+ * quietly undercounts is worse than a sentence that does not state one. The entry count is the
+ * ids', which is what the menu row said and what the write is sent.
+ */
+function removalFacts(
+  rows: readonly CollectionRow[],
+  entryIds: readonly number[],
+): { entries: number; copies: number | null; name: string | null } {
+  const byId = new Map(rows.map((row) => [row.id, row]));
+  const found = entryIds.flatMap((id) => {
+    const row = byId.get(id);
+    return row === undefined ? [] : [row];
+  });
+  const whole = found.length === entryIds.length;
+  const names = new Set(found.map((row) => row.name));
+  return {
+    entries: entryIds.length,
+    copies: whole ? found.reduce((sum, row) => sum + row.quantity, 0) : null,
+    name: whole && names.size === 1 ? (found[0]?.name ?? null) : null,
+  };
+}
+
+/**
+ * `Remove N cards from collection…`, asked — issue #555, and the one question on this page a
+ * **card menu** raises.
+ *
+ * **Asked only over more than one entry.** One entry is the copy the reader pointed at and the
+ * press is the write; several is a tile standing for more rows than its art shows, or a picked
+ * set, which is a press whose reach the reader cannot see from where they made it — the case a
+ * confirmation is worth its interruption for (`LockedMoveConfirm`'s test, *can this be hit by
+ * accident*, answered yes).
+ *
+ * **It states its numbers, {@link ClearRemovedConfirm}'s rule**: the entries in the sentence —
+ * the unit the menu row counted in, so the question agrees with the row that raised it — and the
+ * copies under it, which is what a reader thinks of as leaving the binder.
+ *
+ * **"You can undo this" is literally true and so it is said**, where the clear beside it says the
+ * opposite: `collection_remove_many` answers a ticket, and the notice under the header offers it
+ * back until a newer bulk write replaces it.
+ *
+ * **Weighted as a delete**: the plain affirmative is the destructive one and carries the count,
+ * the way out is quiet. `ClearRemovedConfirm`'s landing pad, blur rule and buttons verbatim, so
+ * every question this strip can ask behaves identically under the caret.
+ */
+function RemoveCopiesConfirm({
+  entries,
+  copies,
+  name,
+  pending,
+  onConfirm,
+  onCancel,
+  onClose,
+}: {
+  /** How many `collection_entries` rows the press reaches — the menu row's own count. */
+  entries: number;
+  /** The copies those rows hold, or `null` when the list no longer carries every one of them. */
+  copies: number | null;
+  /** The card, when every row is one card — a wall tile's grades and languages. */
+  name: string | null;
+  pending: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  onClose: () => void;
+}) {
+  const panelRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    panelRef.current?.focus();
+  }, []);
+
+  const cards = plural(entries, "card");
+  const held =
+    copies === null
+      ? null
+      : `${plural(copies, "copy", "copies")}${name === null ? " in all" : ` of ${name}`}.`;
+
+  return (
+    <div
+      ref={panelRef}
+      tabIndex={-1}
+      role="group"
+      aria-label={`Remove ${cards} from your collection`}
+      // No `FOCUS`, {@link DeleteFolderConfirm}'s reason: a landing pad, not a control.
+      className={cn("rounded-md")}
+      onBlur={(e) => {
+        if (pending) return;
+        if (!panelRef.current?.contains(e.relatedTarget)) onClose();
+      }}
+    >
+      <p>Remove {cards} from your collection?</p>
+      <p className="mt-1 leading-relaxed text-dim">
+        {held === null ? "" : `${held} `}You can undo this straight after.
+      </p>
+      <div className="mt-2 flex gap-2">
+        <button
+          type="button"
+          onClick={onConfirm}
+          disabled={pending}
+          className={cn(
+            "rounded-md border border-destructive px-2 py-1 text-destructive",
+            "transition-colors duration-150 hover:bg-destructive hover:text-bg",
+            "disabled:opacity-50 motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          Remove {cards}
         </button>
         <button
           type="button"

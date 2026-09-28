@@ -1195,6 +1195,98 @@ export const Wishlist: Story = {
 };
 
 /**
+ * A **collection** export still sweeping — `scope.loading`, which is what `export/scope.ts`
+ * reports until the paged sweep has answered, and (since issue #555) while the query is waiting
+ * with no fetch in flight at all.
+ *
+ * `cards` is what the sweep has landed so far — here, nothing — so Copy and Save as… are greyed:
+ * a file written now would look complete and be a fraction of the list. The count line is the
+ * sweep's own running total, which is the honest caption for a wait.
+ */
+export const StillSweeping: Story = {
+  args: {
+    subject: "your collection",
+    surface: "collection",
+    cards: [],
+    suggestedFileName: "collection",
+    scope: {
+      label: "1,500 cards matching your filters",
+      everythingLabel: "Export everything, ignoring the filters",
+      loading: true,
+      error: null,
+      onRetry: fn(),
+      everything: false,
+      onEverything: fn(),
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const dialog = await canvas.findByRole("dialog", { name: 'Export "your collection"' });
+    await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
+
+    await expect(canvas.getByText("1,500 cards matching your filters")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Copy" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    const save = canvas.getByRole("button", { name: /Save as/ });
+    await expect(save).toHaveAttribute("aria-disabled", "true");
+    await expect(save).toHaveAttribute("aria-busy", "true");
+  },
+};
+
+/**
+ * A **collection** export whose sweep could not be read — issue #555's own state.
+ *
+ * Before it had one, the query gave up after the app's single retry, `cards` stayed empty,
+ * `loading` went false, and Copy and Save as… armed over a file of nothing beside a count still
+ * quoting the total the first page had reported: `3,000 cards matching your filters` over
+ * `Show decklist (0 lines)`. Now the count is not drawn, the reason is an alert in the dialog's
+ * own words with Retry beside it, and both buttons are greyed and inert — the play presses each
+ * to prove it rather than trusting the attribute.
+ */
+export const SweepFailed: Story = {
+  args: {
+    subject: "your collection",
+    surface: "collection",
+    cards: [],
+    suggestedFileName: "collection",
+    scope: {
+      label: "3,000 cards matching your filters",
+      everythingLabel: "Export everything, ignoring the filters",
+      loading: false,
+      error: "database is locked",
+      onRetry: fn(),
+      everything: false,
+      onEverything: fn(),
+    },
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const dialog = await canvas.findByRole("dialog", { name: 'Export "your collection"' });
+    await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
+
+    await expect(canvas.getByRole("alert")).toHaveTextContent(
+      "Could not read the cards to export — database is locked",
+    );
+    await expect(canvas.queryByText("3,000 cards matching your filters")).toBeNull();
+
+    const copy = canvas.getByRole("button", { name: "Copy" });
+    const save = canvas.getByRole("button", { name: /Save as/ });
+    await expect(copy).toHaveAttribute("aria-disabled", "true");
+    await expect(save).toHaveAttribute("aria-disabled", "true");
+    await userEvent.click(copy);
+    await userEvent.click(save);
+    // Neither press wrote anything: no `Copied.` claim and no refusal line beside the alert.
+    await expect(canvas.queryByText("Copied.")).toBeNull();
+    await expect(canvas.getAllByRole("alert")).toHaveLength(1);
+
+    await userEvent.click(canvas.getByRole("button", { name: "Retry" }));
+    await expect(args.scope?.onRetry).toHaveBeenCalledTimes(1);
+  },
+};
+
+/**
  * **Every field the collection can carry, on, in CSV** — the tallest thing this dialog can draw.
  *
  * Not a hypothetical: this dialog already shipped one overflow bug where the panel grew past

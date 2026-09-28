@@ -61,7 +61,7 @@ import { deckDestination } from "./destinations/deckInto";
 import { NewDeckPreview } from "./destinations/NewDeckPreview";
 import { newDeckDestination } from "./destinations/newDeck";
 import { wishlistDestination } from "./destinations/WishlistPreview";
-import { ImportDialog } from "./ImportDialog";
+import { ImportDialog, LEGACY_ENCODING_NOTICE } from "./ImportDialog";
 
 /** One resolved printing, with everything this surface does not read filled in as nothing —
  *  `plan.test.ts`'s builder, for its reason: the workbench's fixtures are the workbench's. */
@@ -379,7 +379,7 @@ beforeEach(() => {
     ),
   );
   deckImportCommit.mockReset().mockResolvedValue(OUTCOME);
-  importReadFile.mockReset().mockResolvedValue("");
+  importReadFile.mockReset().mockResolvedValue({ text: "", encoding: "utf-8" });
   deckCreate.mockReset().mockResolvedValue(MADE);
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckGet.mockReset().mockResolvedValue(DETAIL);
@@ -1007,7 +1007,7 @@ describe("the import dialog", () => {
    */
   it("reads a file the reader picked", async () => {
     pickFile.mockResolvedValue("C:/lists/burn.txt");
-    importReadFile.mockResolvedValue("4 Lightning Bolt\n2 Sol Ring");
+    importReadFile.mockResolvedValue({ text: "4 Lightning Bolt\n2 Sol Ring", encoding: "utf-8" });
     wrap(<Harness />);
     await panel();
 
@@ -1017,6 +1017,8 @@ describe("the import dialog", () => {
     await waitFor(() =>
       expect(screen.getByLabelText("Decklist")).toHaveValue("4 Lightning Bolt\n2 Sol Ring"),
     );
+    // A UTF-8 file was read as what it said it was, so there is nothing to say about it.
+    expect(screen.queryByText(LEGACY_ENCODING_NOTICE)).not.toBeInTheDocument();
   });
 
   /** A cancelled picker is not a failure — it is the most ordinary way to use a file dialog
@@ -1045,6 +1047,122 @@ describe("the import dialog", () => {
       "Could not read that file — That file is larger than 1 MB.",
     );
     expect(screen.getByLabelText("Decklist")).toHaveValue("");
+  });
+
+  /**
+   * **The one reading the backend guessed is the one the reader is told about** (issue #555).
+   * A file that is not UTF-8 is read as Windows-1252 — Excel's "CSV" on a Western European
+   * Windows, which used to lose every accented letter to `U+FFFD` — and a file in any *other*
+   * legacy code page reads under it as the wrong letters, which only the reader can see. So the
+   * box says how its text was read, quietly: nothing failed, so nothing is an alert.
+   *
+   * And only while it is still the file's text. The first keystroke makes it the reader's, and a
+   * sentence about how a file was decoded would then describe something no longer on screen.
+   */
+  it("says a file was read as Windows-1252, until the reader changes the text", async () => {
+    pickFile.mockResolvedValue("C:/lists/excel.csv");
+    importReadFile.mockResolvedValue({ text: "1 Séance", encoding: "windows-1252" });
+    wrap(<Harness />);
+    await panel();
+
+    await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
+
+    const notice = await screen.findByText(
+      "This file was not saved as UTF-8, so it was read as Windows-1252 (Western European). " +
+        "If accented names look wrong, save it as UTF-8 and pick it again.",
+    );
+    expect(notice).not.toHaveAttribute("role");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    const box = screen.getByLabelText("Decklist");
+    expect(box).toHaveValue("1 Séance");
+    // It describes the box it is about, so a screen reader landing there hears it too.
+    expect(box).toHaveAccessibleDescription(LEGACY_ENCODING_NOTICE);
+
+    await userEvent.type(box, "x");
+
+    expect(screen.queryByText(LEGACY_ENCODING_NOTICE)).not.toBeInTheDocument();
+    expect(box).not.toHaveAccessibleDescription(LEGACY_ENCODING_NOTICE);
+  });
+
+  /**
+   * The notice follows **the text in the box**, not the last press of the button. A cancelled
+   * picker leaves the old file's text there, so its reading still stands; a second file that is
+   * read replaces both, and a UTF-8 one has nothing to say.
+   */
+  it("keeps the notice through a cancelled pick and drops it for a UTF-8 file", async () => {
+    pickFile.mockResolvedValue("C:/lists/excel.csv");
+    importReadFile.mockResolvedValue({ text: "1 Séance", encoding: "windows-1252" });
+    wrap(<Harness />);
+    await panel();
+    const choose = screen.getByRole("button", { name: "Choose file…" });
+
+    await userEvent.click(choose);
+    expect(await screen.findByText(LEGACY_ENCODING_NOTICE)).toBeInTheDocument();
+
+    pickFile.mockResolvedValue(null);
+    await waitFor(() => expect(choose).toBeEnabled());
+    await userEvent.click(choose);
+    await waitFor(() => expect(pickFile).toHaveBeenCalledTimes(2));
+    expect(screen.getByText(LEGACY_ENCODING_NOTICE)).toBeInTheDocument();
+
+    pickFile.mockResolvedValue("C:/lists/burn.txt");
+    importReadFile.mockResolvedValue({ text: "4 Lightning Bolt", encoding: "utf-8" });
+    await waitFor(() => expect(choose).toBeEnabled());
+    await userEvent.click(choose);
+
+    await waitFor(() => expect(screen.getByLabelText("Decklist")).toHaveValue("4 Lightning Bolt"));
+    expect(screen.queryByText(LEGACY_ENCODING_NOTICE)).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A CSV's `Language` column steers the printing** (issue #555) — as a Scryfall code, through
+   * `languageCode`, so Deckbox's `Japanese` arrives as `ja`. A preference the resolver ranks
+   * first, never a filter, so a cell nobody can read is sent as no preference rather than as a
+   * word the backend would have to refuse; and a blank cell is silence.
+   */
+  it("sends a CSV's Language column to the resolver as a preference", async () => {
+    wrap(<Harness />);
+    await preview(
+      "Quantity,Name,Language\n1,Sol Ring,Japanese\n2,Lightning Bolt,\n1,Duress,Klingon\n",
+    );
+
+    expect(importResolve).toHaveBeenCalledWith([
+      { name: "Sol Ring", setCode: null, collectorNumber: null, lang: "ja" },
+      { name: "Lightning Bolt", setCode: null, collectorNumber: null, lang: null },
+      { name: "Duress", setCode: null, collectorNumber: null, lang: null },
+    ] satisfies ImportResolveLine[]);
+  });
+
+  /** A decklist line has no language channel at all, so it asks for none. */
+  it("sends no language for a decklist line", async () => {
+    wrap(<Harness />);
+    await preview("4 Lightning Bolt (2X2) 117");
+
+    expect(importResolve).toHaveBeenCalledWith([
+      { name: "Lightning Bolt", setCode: "2X2", collectorNumber: "117", lang: null },
+    ] satisfies ImportResolveLine[]);
+  });
+
+  /**
+   * What reading a spreadsheet cost — the columns nothing read, a missing count column — is said
+   * on the preview step, **above** whichever destination is drawn, because it is a fact about the
+   * list and the list is the shell's. A decklist draws nothing there at all.
+   */
+  it("says what reading a spreadsheet cost above the destination's preview", async () => {
+    wrap(<Harness />);
+    const go = await preview("Name,Set code,Scryfall ID\nSol Ring,LTC,abc\n");
+
+    const notes = await screen.findByText("Read as a spreadsheet. Not read: Scryfall ID.");
+    expect(screen.getByText(/no quantity column/)).toBeInTheDocument();
+    expect(notes.compareDocumentPosition(go) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("draws no spreadsheet notes over a decklist's preview", async () => {
+    wrap(<Harness />);
+    await preview("1 Sol Ring");
+
+    expect(await screen.findByText("1 card")).toBeInTheDocument();
+    expect(screen.queryByText(/Read as a spreadsheet/)).not.toBeInTheDocument();
   });
 
   /**

@@ -392,3 +392,330 @@ describe("a purchase price round-trips through the collection's own CSV", () => 
     expect(plan.unreadablePrices).toEqual([{ lineNumber: 3, name: "Arcane Signet", said: "1.125" }]);
   });
 });
+
+/** A resolved row at a named language — `hit`'s own shape plus the `lang` the language check
+ *  reads. `hit` leaves `lang` out, which is safe only because a line with no `Language` cell is
+ *  never checked. */
+const hitIn = (index: number, cardId: string, lang: string): ImportResolveRow =>
+  ({ index, hintMissed: false,
+     matched: { cardId, oracleId: "o1", name: "Lightning Bolt", setCode: "2X2",
+       collectorNumber: "117", lang } } as unknown as ImportResolveRow);
+
+/**
+ * **Issue #555: the collection CSV is a restore, and two of its columns were never read back.**
+ * `Tags` and `Tradelist quantity` are written by this app's own export and were dropped on the way
+ * in; a backup that loses what the reader typed is a backup of everything else.
+ */
+describe("tags and the tradelist", () => {
+  const planOf = (extra: ParsedLine["extra"]) =>
+    planCollectionImport(listOf(line({ extra })), [hit(0, "c1")], OPTIONS);
+
+  it("reads this app's own JSON cell verbatim", () => {
+    expect(planOf({ tags: '["cube","trade"]' }).items[0].tags).toBe('["cube","trade"]');
+  });
+
+  /** Another app's words, both separators, with the whitespace and the repeat a hand-edited
+   *  spreadsheet carries. */
+  it("reads comma- and semicolon-separated words as one trimmed, distinct list", () => {
+    expect(planOf({ tags: " cube, trade;cube ,, binder " }).items[0].tags).toBe(
+      '["cube","trade","binder"]',
+    );
+  });
+
+  /** The JSON spelling is what lets a tag hold a comma, so it must not be split as words. */
+  it("keeps a comma inside a JSON tag", () => {
+    expect(planOf({ tags: '["red, aggro"]' }).items[0].tags).toBe('["red, aggro"]');
+  });
+
+  /**
+   * An explicit `[]` is this app's own export saying *no tags*, which a `set` restore should make
+   * true; silence — no column, or a cell of nothing but separators — must never touch a row's tags.
+   */
+  it("tells an explicit empty list from silence", () => {
+    expect(planOf({ tags: "[]" }).items[0].tags).toBe("[]");
+    expect(planOf({ tags: " , ; " }).items[0].tags).toBeUndefined();
+    expect(planOf({}).items[0].tags).toBeUndefined();
+  });
+
+  it("reads a whole tradelist quantity, zero included", () => {
+    expect(planOf({ tradelistQuantity: "2" }).items[0].tradelistQuantity).toBe(2);
+    expect(planOf({ tradelistQuantity: "0" }).items[0].tradelistQuantity).toBe(0);
+    expect(planOf({}).items[0].tradelistQuantity).toBeUndefined();
+  });
+
+  /** Refused rather than rounded — `2.5` copies offered for trade is not a number anybody meant —
+   *  and said, like an unreadable price, while the copy still lands. */
+  it("lists a tradelist that is not a whole number and still files the copy", () => {
+    const plan = planCollectionImport(
+      listOf(
+        line({ extra: { tradelistQuantity: "2.5" } }),
+        line({ lineNumber: 2, name: "Bolt", extra: { tradelistQuantity: "-1" } }),
+        line({ lineNumber: 3, name: "Shock", extra: { tradelistQuantity: "some" } }),
+      ),
+      [hit(0, "c1"), hit(1, "c2"), hit(2, "c3")],
+      OPTIONS,
+    );
+    expect(plan.items).toHaveLength(3);
+    expect(plan.items.map((i) => i.tradelistQuantity)).toEqual([undefined, undefined, undefined]);
+    expect(plan.unreadableTradelists).toEqual([
+      { lineNumber: 1, name: "Sol Ring", said: "2.5" },
+      { lineNumber: 2, name: "Bolt", said: "-1" },
+      { lineNumber: 3, name: "Shock", said: "some" },
+    ]);
+  });
+});
+
+/**
+ * Deckbox writes a flag column's own name as its only non-empty value — `signed` in `Signed` —
+ * and every such copy used to import as the plain one, which on the grain is a different row.
+ */
+describe("a flag column that says its own word", () => {
+  it("reads altered, alter, signed, proxy and misprint as yes in their own columns", () => {
+    const plan = planCollectionImport(
+      listOf(
+        line({
+          extra: { altered: "Altered", signed: "signed", proxy: "PROXY", misprint: "misprint" },
+        }),
+        line({ lineNumber: 2, extra: { altered: "alter" } }),
+      ),
+      [hit(0, "c1"), hit(1, "c2")],
+      OPTIONS,
+    );
+    expect(plan.items[0]).toMatchObject({
+      altered: true,
+      signed: true,
+      proxy: true,
+      misprint: true,
+    });
+    expect(plan.items[1].altered).toBe(true);
+  });
+
+  /** Only the column's *own* word: `signed` in the Altered column says nothing about an
+   *  alteration. */
+  it("does not read another column's word as a yes", () => {
+    const plan = planCollectionImport(
+      listOf(line({ extra: { altered: "signed", proxy: "misprint" } })),
+      [hit(0, "c1")],
+      OPTIONS,
+    );
+    expect(plan.items[0]).toMatchObject({ altered: false, proxy: false });
+  });
+});
+
+/**
+ * **Two lines at one grain are one copy described twice, and the fold used to keep the first
+ * line's words and drop the second's** — its notes, its price, where it came from. Every column is
+ * merged now, and the merge itself is listed.
+ */
+describe("the fold keeps what both lines said", () => {
+  it("combines distinct notes and acquisition sources, and names each line it merged", () => {
+    const plan = planCollectionImport(
+      listOf(
+        line({ extra: { notes: "from Bob", acquisitionSource: "LGS" } }),
+        line({ lineNumber: 2, extra: { notes: "trade bait", acquisitionSource: "LGS" } }),
+        line({ lineNumber: 3, extra: { notes: "from Bob" } }),
+      ),
+      [hit(0, "c1"), hit(1, "c1"), hit(2, "c1")],
+      OPTIONS,
+    );
+    expect(plan.items).toHaveLength(1);
+    expect(plan.items[0]).toMatchObject({
+      quantity: 3,
+      notes: "from Bob; trade bait",
+      acquisitionSource: "LGS",
+    });
+    expect(plan.folded).toEqual([
+      { lineNumber: 2, into: 1, name: "Sol Ring" },
+      { lineNumber: 3, into: 1, name: "Sol Ring" },
+    ]);
+  });
+
+  it("unions the tags and sums the tradelists, counting only the lines that said one", () => {
+    const plan = planCollectionImport(
+      listOf(
+        line({ extra: { tags: '["cube"]', tradelistQuantity: "1" } }),
+        line({ lineNumber: 2, extra: { tags: "trade, cube", tradelistQuantity: "2" } }),
+        line({ lineNumber: 3 }),
+      ),
+      [hit(0, "c1"), hit(1, "c1"), hit(2, "c1")],
+      OPTIONS,
+    );
+    expect(plan.items[0]).toMatchObject({ tags: '["cube","trade"]', tradelistQuantity: 3 });
+  });
+
+  /** 1 copy at 4 and 3 at 2 is 10 spent on 4 copies; the unpriced line's 2 copies say nothing
+   *  about what the others cost, so they are not in the divisor. */
+  it("prices the copy at the quantity-weighted mean of the lines that carried a price", () => {
+    const plan = planCollectionImport(
+      listOf(
+        line({ quantity: 1, extra: { purchasePrice: "4" } }),
+        line({ lineNumber: 2, quantity: 3, extra: { purchasePrice: "2" } }),
+        line({ lineNumber: 3, quantity: 2 }),
+      ),
+      [hit(0, "c1"), hit(1, "c1"), hit(2, "c1")],
+      OPTIONS,
+    );
+    expect(plan.items[0]).toMatchObject({ quantity: 6, purchasePrice: 2.5 });
+  });
+
+  /** A repeating mean is rounded to cents; a price written to four places keeps all four, which
+   *  is what this app's own CSV writes and what a restore must not round away. */
+  it("rounds the mean to the file's own precision, never below cents", () => {
+    const thirds = planCollectionImport(
+      listOf(
+        line({ quantity: 1, extra: { purchasePrice: "1" } }),
+        line({ lineNumber: 2, quantity: 2, extra: { purchasePrice: "2" } }),
+      ),
+      [hit(0, "c1"), hit(1, "c1")],
+      OPTIONS,
+    );
+    expect(thirds.items[0].purchasePrice).toBe(1.67);
+
+    const precise = planCollectionImport(
+      listOf(
+        line({ quantity: 1, extra: { purchasePrice: "1.2345" } }),
+        line({ lineNumber: 2, quantity: 2, extra: { purchasePrice: "1.2345" } }),
+      ),
+      [hit(0, "c1"), hit(1, "c1")],
+      OPTIONS,
+    );
+    expect(precise.items[0].purchasePrice).toBe(1.2345);
+  });
+
+  /** A mean across currencies is a number in no currency. The first price sets the copy's;
+   *  `usd` and `USD` are one currency; a price in another is listed and left out. */
+  it("keeps the first price's currency and lists a merged price in another", () => {
+    const plan = planCollectionImport(
+      listOf(
+        line({ extra: { purchasePrice: "4", purchaseCurrency: "USD" } }),
+        line({ lineNumber: 2, extra: { purchasePrice: "2", purchaseCurrency: "usd" } }),
+        line({ lineNumber: 3, extra: { purchasePrice: "3", purchaseCurrency: "EUR" } }),
+      ),
+      [hit(0, "c1"), hit(1, "c1"), hit(2, "c1")],
+      OPTIONS,
+    );
+    expect(plan.items[0]).toMatchObject({ purchasePrice: 3, purchaseCurrency: "USD" });
+    expect(plan.droppedPrices).toEqual([
+      { lineNumber: 3, into: 1, name: "Sol Ring", said: "3", currency: "EUR", kept: "USD" },
+    ]);
+  });
+
+  it("takes the price from a later line when the first carried none", () => {
+    const plan = planCollectionImport(
+      listOf(
+        line(),
+        line({ lineNumber: 2, extra: { purchasePrice: "5", purchaseCurrency: "EUR" } }),
+      ),
+      [hit(0, "c1"), hit(1, "c1")],
+      OPTIONS,
+    );
+    expect(plan.items[0]).toMatchObject({ purchasePrice: 5, purchaseCurrency: "EUR" });
+    expect(plan.droppedPrices).toEqual([]);
+  });
+
+  /** A copy acquired in two batches was first acquired at the first. Two dates nobody can order
+   *  keep the one the file wrote first rather than a guess. */
+  it("keeps the earliest acquisition date, and the first when either cannot be read", () => {
+    const iso = planCollectionImport(
+      listOf(
+        line({ extra: { acquiredAt: "2024-05-01" } }),
+        line({ lineNumber: 2, extra: { acquiredAt: "2023-11-20" } }),
+      ),
+      [hit(0, "c1"), hit(1, "c1")],
+      OPTIONS,
+    );
+    expect(iso.items[0].acquiredAt).toBe("2023-11-20");
+
+    const vague = planCollectionImport(
+      listOf(
+        line({ extra: { acquiredAt: "sometime" } }),
+        line({ lineNumber: 2, extra: { acquiredAt: "2023-01-01" } }),
+      ),
+      [hit(0, "c1"), hit(1, "c1")],
+      OPTIONS,
+    );
+    expect(vague.items[0].acquiredAt).toBe("sometime");
+  });
+
+  it("lists nothing when no two lines name one copy", () => {
+    const plan = planCollectionImport(
+      listOf(line(), line({ lineNumber: 2, finish: "foil" })),
+      [hit(0, "c1"), hit(1, "c1")],
+      OPTIONS,
+    );
+    expect(plan.folded).toEqual([]);
+  });
+});
+
+/**
+ * **A `Language` cell was a fact the export wrote and the import ignored.** The resolver is sent
+ * it as a preference now, so a printing in another language means the corpus held none in the
+ * file's — and the row takes its language from the printing, so the reader is told.
+ */
+describe("the file's language against the printing it got", () => {
+  it("lists a line whose printing is in another language than the file names", () => {
+    const plan = planCollectionImport(
+      listOf(line({ name: "Lightning Bolt", extra: { lang: "Japanese" } })),
+      [hitIn(0, "bolt", "en")],
+      OPTIONS,
+    );
+    expect(plan.items).toHaveLength(1);
+    expect(plan.languageMismatches).toEqual([
+      { lineNumber: 1, name: "Lightning Bolt", said: "ja", used: "en" },
+    ]);
+    expect(plan.unknownLanguages).toEqual([]);
+  });
+
+  it("lists a language it cannot read, and still files the copy", () => {
+    const plan = planCollectionImport(
+      listOf(line({ extra: { lang: "Klingon" } })),
+      [hitIn(0, "c1", "en")],
+      OPTIONS,
+    );
+    expect(plan.items).toHaveLength(1);
+    expect(plan.unknownLanguages).toEqual([{ lineNumber: 1, name: "Sol Ring", said: "Klingon" }]);
+    expect(plan.languageMismatches).toEqual([]);
+  });
+
+  /** Every spelling `languageCode` knows is the same answer as the code itself. */
+  it("says nothing when the printing is in the file's language, however it is spelt", () => {
+    const plan = planCollectionImport(
+      listOf(
+        line({ extra: { lang: "JP" } }),
+        line({ lineNumber: 2, extra: { lang: "English" } }),
+        line({ lineNumber: 3, extra: { lang: "en" } }),
+      ),
+      [hitIn(0, "c1", "ja"), hitIn(1, "c2", "en"), hitIn(2, "c3", "en")],
+      OPTIONS,
+    );
+    expect(plan.languageMismatches).toEqual([]);
+    expect(plan.unknownLanguages).toEqual([]);
+  });
+});
+
+/** Tags and the tradelist through the collection's own CSV and back — the restore the issue is
+ *  about, over the two columns it found missing. The tag with a comma in it is the one a
+ *  words-only reader would split. */
+describe("tags and the tradelist round-trip through the collection's own CSV", () => {
+  it("reads back exactly what it wrote", () => {
+    const row = {
+      name: "Sol Ring", quantity: 3, setCode: "LTC", collectorNumber: "285", finish: "nonfoil",
+      lang: "en", condition: "NM", tags: '["cube","red, aggro"]', tradelistQuantity: 2,
+    } as unknown as CollectionRow;
+    const text = formatExport([fromCollectionRow(row)], "csv", [
+      ...defaultFields("csv", "collection"),
+      "tags",
+      "tradelistQuantity",
+    ]);
+    const plan = planCollectionImport(parseDecklist(text), [hit(0, "c1")], {
+      condition: CONDITION_NOT_SET,
+      finish: null,
+    });
+    expect(plan.items[0]).toMatchObject({
+      quantity: 3,
+      tags: '["cube","red, aggro"]',
+      tradelistQuantity: 2,
+    });
+    expect(plan.unreadableTradelists).toEqual([]);
+  });
+});

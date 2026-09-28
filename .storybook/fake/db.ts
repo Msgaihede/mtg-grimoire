@@ -135,6 +135,9 @@ import type {
   ActivityEntry,
   BracketCardRow,
   BreakdownRow,
+  BulkMoveOutcome,
+  BulkRemoveOutcome,
+  BulkUndoOutcome,
   CardCombo,
   CardCombosPage,
   CardDetail,
@@ -203,6 +206,7 @@ import type {
   HomeLayout,
   HomeWidget,
   ImportCommitOutcome,
+  ImportFile,
   ImportItem,
   ImportMatch,
   ImportMode,
@@ -8946,9 +8950,18 @@ function foldRank(cardName: string, wanted: string): number | null {
  * The `id` tie-break is not decoration: it is what makes an import **deterministic**, so the
  * same list pasted twice puts the same printings in the deck. `releasedAt` needs no coalesce
  * here because {@link FakeCard.releasedAt} is not nullable where `cards.released_at` is.
+ *
+ * **`lang` goes in front of all three when a line names one** (issue #555) — a preference and
+ * never a filter, which is `ImportResolveLine.lang`'s own promise: a printing in that language
+ * outranks every other *where the fixture holds one*, and a line still resolves to its usual
+ * printing when it holds none. Over this corpus that is exactly one row, the Japanese `sta 105`
+ * Lightning Bolt, so a `Japanese` line for any other card lands where an unmarked one would.
+ * `null` is today's order, untouched.
  */
-function importOrder(db: FakeDb): Compare<FakeCard> {
+function importOrder(db: FakeDb, lang: string | null = null): Compare<FakeCard> {
+  const inLang = (c: FakeCard) => (lang !== null && c.lang === lang ? 0 : 1);
   return (a, b) =>
+    inLang(a) - inLang(b) ||
     ownedOfPrinting(db, b.id) - ownedOfPrinting(db, a.id) ||
     cmp(b.releasedAt, a.releasedAt) ||
     cmp(b.id, a.id);
@@ -9005,9 +9018,13 @@ function toImportMatch(db: FakeDb, c: FakeCard, printingCount: number): ImportMa
  * so it counts every row the `WHERE` matched. That is why `ImportMatch.printingCount` means
  * six different things and only means "printings of this card" on a line with no hint.
  */
-function bestOf(db: FakeDb, candidates: FakeCard[]): ImportMatch | null {
+function bestOf(
+  db: FakeDb,
+  candidates: FakeCard[],
+  lang: string | null = null,
+): ImportMatch | null {
   if (candidates.length === 0) return null;
-  const winner = [...candidates].sort(importOrder(db))[0];
+  const winner = [...candidates].sort(importOrder(db, lang))[0];
   return toImportMatch(db, winner, candidates.length);
 }
 
@@ -9020,7 +9037,7 @@ function bestOf(db: FakeDb, candidates: FakeCard[]): ImportMatch | null {
  * reader is choosing between printings of *their* card rather than between everything that
  * happened to mention it.
  */
-function foldMatch(db: FakeDb, name: string): ImportMatch | null {
+function foldMatch(db: FakeDb, name: string, lang: string | null = null): ImportMatch | null {
   const wanted = foldName(name);
   // A single-faced name has no front half, so an empty `wanted` would rank every card 1.
   if (wanted === "") return null;
@@ -9031,10 +9048,23 @@ function foldMatch(db: FakeDb, name: string): ImportMatch | null {
     if (rank !== null) kept.push({ rank, card });
   }
   if (kept.length === 0) return null;
-  const order = importOrder(db);
-  // The whole name ahead of a front face, then `MATCH_ORDER`'s three keys in its own order.
+  const order = importOrder(db, lang);
+  // The whole name ahead of a front face, then `MATCH_ORDER`'s keys in its own order — the
+  // language among them, so a preference never lifts a front face over a whole name.
   kept.sort((a, b) => a.rank - b.rank || order(a.card, b.card));
   return toImportMatch(db, kept[0].card, kept.length);
+}
+
+/**
+ * `import::preferred_lang` — the language a line asked for, as **two or three ASCII letters,
+ * lowercased, or nothing**: the shape of every Scryfall code (`en`, `ja`, `zhs`). Anything else —
+ * `Japanese`, `ja-JP`, a blank — is ignored rather than refused, because a preference nobody can
+ * read still leaves the line a name to resolve by. `@/lib/languages`' `languageCode` is what
+ * turns a file's cell into a code before it gets here.
+ */
+function preferredLang(raw: string | null | undefined): string | null {
+  const code = (raw ?? "").trim().replace(/[A-Z]/g, (c) => c.toLowerCase());
+  return /^[a-z]{2,3}$/.test(code) ? code : null;
 }
 
 /** `import::given` — a hint the caller actually gave: trimmed, and absent when blank.
@@ -11240,6 +11270,21 @@ export function readHandlers(db: FakeDb) {
      * corpus's 116 695 rows carry a set code in any other case, while a parser that
      * upper-cases `(MH2)` is the ordinary source of one. The collector number keeps its
      * case-insensitivity, which is the one place `COLLATE NOCASE` survives.
+     *
+     * Two things a line may say besides its name and printing, both since issue #555 and both
+     * preferences rather than filters:
+     *
+     * - **A language** ({@link preferredLang}), which {@link importOrder} puts ahead of every other
+     *   key *within each arm*, the owned printing included; a line whose language the fixture has
+     *   no printing in resolves exactly as an unmarked one does.
+     * - **A set hint that is a set's _name_** — Deckbox's `Edition` column, handed over as
+     *   `setCode` by a CSV with no code column. `import::SetHints`: a code always wins, so no file
+     *   that already worked resolves differently; only a hint no printing carries as a code is
+     *   folded ({@link foldName}) against the set names, and exactly one set answering turns it
+     *   into that set's code. None, or two sets sharing the name, and it goes on as the text it
+     *   arrived as — a missed hint, today's behaviour. The fixture has no `sets` table, so the
+     *   names are `cards.set_name`'s, which is the crate's own fallback for a database whose
+     *   `sets` is empty.
      */
     import_resolve: (args: { lines: ImportResolveLine[] }): ImportResolveRow[] => {
       // `is_paper = 1` is on every arm, so it is applied once here.
@@ -11247,6 +11292,26 @@ export function readHandlers(db: FakeDb) {
       // `c.name >= "{name} // " AND c.name < "{name} //!"`, which over a byte-wise comparison
       // is exactly "carries that prefix" — see `import::front_face_range` for the proof.
       const fronts = (name: string) => paper.filter((c) => c.name.startsWith(`${name} // `));
+      // `SetHints::code_for`, asked once per distinct hint rather than once per line. Any printing
+      // and not only a paper one counts as carrying a code, as `is_a_code` asks.
+      const codes = new Map<string, string>();
+      const setCodeFor = (hint: string): string => {
+        const lower = hint.toLowerCase();
+        const known = codes.get(lower);
+        if (known !== undefined) return known;
+        let code = lower;
+        if (!db.cards.some((c) => c.setCode === lower)) {
+          const wanted = foldName(hint);
+          const named = new Set(
+            db.cards
+              .filter((c) => wanted !== "" && foldName(c.setName) === wanted)
+              .map((c) => c.setCode),
+          );
+          if (named.size === 1) code = [...named][0];
+        }
+        codes.set(lower, code);
+        return code;
+      };
 
       return args.lines.map((line, index) => {
         // An empty name is no name at all: the front-face range of `""` is a real range over
@@ -11256,14 +11321,17 @@ export function readHandlers(db: FakeDb) {
         let matched: ImportMatch | null = null;
         let hintMissed = false;
 
-        const set = givenHint(line.setCode)?.toLowerCase() ?? null;
+        const hint = givenHint(line.setCode);
+        const set = hint === null ? null : setCodeFor(hint);
         const number = givenHint(line.collectorNumber);
+        const lang = preferredLang(line.lang);
         if (set !== null) {
           const inSet = paper.filter((c) => c.setCode === set);
           if (number !== null) {
             matched = bestOf(
               db,
               inSet.filter((c) => c.collectorNumber.toLowerCase() === number.toLowerCase()),
+              lang,
             );
           }
           // Set before the fallbacks below, so a number that named nothing stays reported even
@@ -11274,10 +11342,12 @@ export function readHandlers(db: FakeDb) {
               bestOf(
                 db,
                 inSet.filter((c) => c.name === name),
+                lang,
               ) ??
               bestOf(
                 db,
                 inSet.filter((c) => c.name.startsWith(`${name} // `)),
+                lang,
               );
             if (number === null) hintMissed = matched === null;
           }
@@ -11290,9 +11360,10 @@ export function readHandlers(db: FakeDb) {
             bestOf(
               db,
               paper.filter((c) => c.name === name),
+              lang,
             ) ??
-            bestOf(db, fronts(name)) ??
-            foldMatch(db, name);
+            bestOf(db, fronts(name), lang) ??
+            foldMatch(db, name, lang);
         }
         // The caller's index rides along rather than being inferred: the list that was sent is
         // the only thing that knows what line 34 said.
@@ -11309,9 +11380,47 @@ export function readHandlers(db: FakeDb) {
      * that cannot happen: the file arm's refusal would be the only branch anyone ever saw, and
      * it would be the wrong one. A story that wants a list pastes one, which is the same string
      * travelling the same path from one line later.
+     *
+     * **Typed `ImportFile` since issue #555** — the text and the encoding its bytes were read in
+     * — and still answering neither: the new field is about bytes on a disk, and there is no disk
+     * behind a story to have any.
      */
-    import_read_file: (): string => {
+    import_read_file: (): ImportFile => {
       throw refuse(NO_FILE_PICKER);
+    },
+
+    /**
+     * `collection_import_preview` — what {@link writeHandlers}' `collection_import_commit`
+     * **would** answer for the same three arguments, with nothing written (issue #555). The
+     * numbers the preview's sentence is built from, so a `set` file stops promising "N cards will
+     * be added" over a press that lowers some quantities and leaves others alone.
+     *
+     * **The commit's own body, run and then put back** — {@link importIntoCollection} on the live
+     * table, which is restored from a copy whatever happens — rather than a second function that
+     * reasons about what the first would do. Two of those would agree until the day one of them
+     * learned a rule, and the dialog would then promise one thing and press another. It refuses
+     * exactly what the commit refuses, in the commit's words, for the same reason. The crate's
+     * `preview_import` gets the same agreement another way — the one `walk_import` with its
+     * statements skipped — and both answer the same numbers because each line is decided against
+     * the grain the lines before it left.
+     *
+     * **A read, in this table and not the writes', because the crate's is one**: it runs on
+     * `db_read`, takes no write lock and so never answers BUSY behind a sync. A rolled-back write
+     * was refused there because the write connection's update hook would have re-rendered the
+     * plain-text backup and refetched every open window over a write that never happened — a cost
+     * this fake has no hook to pay, which is what lets it put a table back instead.
+     */
+    collection_import_preview: (args: {
+      items: CollectionImportItem[];
+      mode: TransferImportMode;
+      folderId?: number | null;
+    }): ImportCommitOutcome => {
+      const table = db.collectionEntries.map((e) => ({ ...e }));
+      try {
+        return { ...importIntoCollection(db, args), undoId: null };
+      } finally {
+        db.collectionEntries = table;
+      }
     },
 
     /**
@@ -14129,8 +14238,11 @@ function canonicalGrading(grading: string | undefined): string | null {
  * `coalesce(folder_id, 0)`, and it is safe only because `collection_folders.id` is a rowid
  * SQLite assigns and never hands out as 0 — a folder numbered 0 would be indistinguishable from
  * the root here, and every card in it would collide with the reader's unfiled copies.
+ *
+ * It takes the eleven terms rather than a whole row so the import can ask where a line *would*
+ * land before any row exists — `collection::ImportGrain`, which spells the same eleven.
  */
-function collectionGrain(e: FakeEntry): string {
+function collectionGrain(e: CollectionGrainTerms): string {
   return JSON.stringify([
     e.cardId,
     e.finish,
@@ -14145,6 +14257,22 @@ function collectionGrain(e: FakeEntry): string {
     e.folderId ?? 0,
   ]);
 }
+
+/** The eleven columns of {@link collectionGrain}, and nothing else of a row. */
+type CollectionGrainTerms = Pick<
+  FakeEntry,
+  | "cardId"
+  | "finish"
+  | "condition"
+  | "lang"
+  | "altered"
+  | "signed"
+  | "proxy"
+  | "misprint"
+  | "serialNumber"
+  | "grading"
+  | "folderId"
+>;
 
 /**
  * `schema::WISHLIST_GRAIN`: an oracle card, optionally pinned to one printing and one finish,
@@ -15919,6 +16047,11 @@ function addEntry(
  * `addEntry`'s first-writer-wins rule, and `tradelistQuantity` follows `collection_set_quantity`'s
  * own clamp (`min(existing, new quantity)`) rather than the additive cap, because a written
  * total is not a delta.
+ *
+ * **Unless the line names a tradelist of its own** (issue #555), which is then written the way
+ * the quantity is — a `set` file's `Tradelist quantity` column is as much the truth as its
+ * `Quantity` column — and still clamped to the pile it is drawn from. Absent keeps the row's own
+ * number, and that is the case the clamp above was written for.
  */
 function setEntry(
   db: FakeDb,
@@ -15970,7 +16103,10 @@ function setEntry(
   const existing = db.collectionEntries.find((e) => collectionGrain(e) === collectionGrain(row));
   if (existing) {
     existing.quantity = row.quantity;
-    existing.tradelistQuantity = Math.min(existing.tradelistQuantity, row.quantity);
+    existing.tradelistQuantity = Math.min(
+      input.tradelistQuantity == null ? existing.tradelistQuantity : tradelist,
+      row.quantity,
+    );
     existing.purchasePrice = existing.purchasePrice ?? row.purchasePrice;
     existing.purchaseCurrency = existing.purchaseCurrency ?? row.purchaseCurrency;
     existing.acquiredAt = existing.acquiredAt ?? row.acquiredAt;
@@ -16227,6 +16363,451 @@ function takeLoneWish(
   return take;
 }
 
+/* ------------------------------------------------------ the bulk writes and their undo ---- */
+
+/** `bulk_undo::UNDO_GONE`, verbatim — a ticket never issued, taken back already, retired by a
+ *  refusal, evicted by {@link BULK_UNDO_CAPACITY} newer ones, or lost to a restart. */
+const UNDO_TICKET_GONE = "That can no longer be undone.";
+
+/** `bulk_undo::UNDO_STALE`, verbatim — a row the write left has changed since. {@link putBack}
+ *  names the three ways it can have. */
+const UNDO_ROWS_CHANGED =
+  "Some of those cards have changed since, so this can no longer be undone.";
+
+/**
+ * `bulk_undo::CAPACITY` — how many tickets a session keeps, the oldest evicted first. **Ids only
+ * ever grow**, so an evicted id is never handed back to a different write and answers
+ * {@link UNDO_TICKET_GONE} for good.
+ */
+const BULK_UNDO_CAPACITY = 10;
+
+/**
+ * `bulk_undo::IGNORED`, less `sync_uid`, which no fake row carries — the columns the stale check
+ * does not compare and a restore does not write back. `updatedAt` moves on every write, the
+ * no-op re-save of a row nobody changed included; `needsReview` is the reconciler's note about a
+ * row, which an undo neither reverts nor may be refused over.
+ */
+const BULK_UNDO_IGNORED: ReadonlySet<string> = new Set(["updatedAt", "needsReview"]);
+
+/** One row a bulk write touched: what it was (`null` — the write made it) and what the write left
+ *  (`null` — the write deleted it). Both are copies, never the live row. */
+interface BulkUndoRow<T> {
+  id: number;
+  before: T | null;
+  after: T | null;
+}
+
+/** What one bulk write can put back, and which of the two lists it is about. */
+type BulkUndoTicket =
+  | { scope: "collection"; rows: BulkUndoRow<FakeEntry>[] }
+  | { scope: "wishlist"; rows: BulkUndoRow<FakeWish>[] };
+
+/**
+ * The tickets `bulk_undo` takes back, **keyed by the database and held nowhere else** — the
+ * fake's form of `bulk_undo`'s process-wide store, "held in memory, for the session".
+ *
+ * **Not a field on {@link FakeDb}, and that is the model rather than a shortcut**: every field
+ * there is a table or an `app_meta` row, something a restart would find again, and a ticket is
+ * precisely the thing a restart loses. A `WeakMap` keyed on the world is {@link stepOmissions}'
+ * shape for the same reason, and it keeps a docs page's two stories from sharing a ticket
+ * counter — a world belongs to a story, where the crate's store belongs to its one process.
+ *
+ * **It stores the rows twice rather than transcribing what each write did**, which is the crate's
+ * own design ("a ticket is the rows, not the gesture") and {@link journalled}'s one feature over:
+ * a ticket's whole job is "make these rows look like this again", and a second transcription of
+ * four writes' effects would be a second implementation to keep in step with them.
+ */
+const bulkUndoTickets = new WeakMap<
+  FakeDb,
+  { next: number; tickets: { id: number; ticket: BulkUndoTicket }[] }
+>();
+
+/** `bulk_undo::same` — two copies of one row agree on every column but
+ *  {@link BULK_UNDO_IGNORED}. Shallow on purpose: every column of {@link FakeEntry} and
+ *  {@link FakeWish} is a string, a number, a boolean or `null`. */
+function sameRow<T extends object>(a: T | null, b: T | null): boolean {
+  if (a === null || b === null) return a === b;
+  const x = a as Record<string, unknown>;
+  const y = b as Record<string, unknown>;
+  return [...new Set([...Object.keys(x), ...Object.keys(y)])].every(
+    (k) => BULK_UNDO_IGNORED.has(k) || Object.is(x[k], y[k]),
+  );
+}
+
+/**
+ * `bulk_undo::Capture::finish` — the rows a write changed, from a copy of the table taken before
+ * it and the live table after, matched **by id**. A row the write made is `before: null`, one it
+ * deleted is `after: null`, and a row it left as it was — **or only re-saved**, moving nothing
+ * but {@link BULK_UNDO_IGNORED} — is not here at all, so an undo never "restores" a row to what
+ * it already is. An id the write freed and then handed to a row it made (`nextId` reuses the
+ * largest, as SQLite's rowid does) reads as one row changed, which is what the crate's capture
+ * reads it as too.
+ */
+function touchedRows<T extends { id: number }>(
+  before: readonly T[],
+  after: readonly T[],
+): BulkUndoRow<T>[] {
+  const was = new Map(before.map((r) => [r.id, r]));
+  const now = new Map(after.map((r) => [r.id, r]));
+  const rows: BulkUndoRow<T>[] = [];
+  for (const id of [...new Set([...was.keys(), ...now.keys()])].sort((a, b) => a - b)) {
+    const from = was.get(id) ?? null;
+    const to = now.get(id) ?? null;
+    if (sameRow(from, to)) continue;
+    rows.push({ id, before: from && { ...from }, after: to && { ...to } });
+  }
+  return rows;
+}
+
+/**
+ * `bulk_undo::register` — file a ticket for what a bulk write changed, answering its id, or
+ * `null` when it changed nothing: a press that moved no row has nothing for Undo to take back,
+ * and an offer to would be a button that appears to do nothing. The oldest ticket past
+ * {@link BULK_UNDO_CAPACITY} is evicted.
+ */
+function fileBulkUndo(db: FakeDb, ticket: BulkUndoTicket): number | null {
+  if (ticket.rows.length === 0) return null;
+  const store = bulkUndoTickets.get(db) ?? { next: 1, tickets: [] };
+  bulkUndoTickets.set(db, store);
+  const id = store.next;
+  store.next += 1;
+  store.tickets.push({ id, ticket });
+  while (store.tickets.length > BULK_UNDO_CAPACITY) store.tickets.shift();
+  return id;
+}
+
+/** {@link fileBulkUndo} over the collection, from the copy of it taken before the write. */
+function collectionUndo(db: FakeDb, before: readonly FakeEntry[]): number | null {
+  return fileBulkUndo(db, {
+    scope: "collection",
+    rows: touchedRows(before, db.collectionEntries),
+  });
+}
+
+/** {@link fileBulkUndo} over the wishlist, from the copy of it taken before the write. */
+function wishlistUndo(db: FakeDb, before: readonly FakeWish[]): number | null {
+  return fileBulkUndo(db, { scope: "wishlist", rows: touchedRows(before, db.wishlistEntries) });
+}
+
+/**
+ * `bulk_undo::apply` — a ticket's rows written back over `table`, answering the table it leaves,
+ * or {@link UNDO_ROWS_CHANGED} with nothing written.
+ *
+ * **Three ways a ticket goes stale, every one checked before a row moves** — the crate checks the
+ * first up front and meets the other two as constraint failures inside one transaction, which is
+ * the same all-or-nothing answer:
+ *
+ * 1. a row the write **left** — changed or made — no longer reads exactly as it left it (outside
+ *    {@link BULK_UNDO_IGNORED}), or is gone. A row the write *deleted* is not checked here at all;
+ * 2. a row coming back lands on a **grain another row now holds** — the crate's unique grain
+ *    index — say a card removed and then added again at the same place;
+ * 3. a row goes back into a **folder that is gone** — the crate's foreign key.
+ *
+ * **The order is the crate's: what the write made goes, what it changed is put back, what it
+ * deleted comes back.** A changed row takes back every column but its id and the ignored ones,
+ * and is stamped now. A deleted row comes back under its **old id where nothing has taken it**
+ * and a fresh one where something has — which is why rule 1 does not look at deleted rows: an id
+ * reused since is not a change to anything this ticket describes.
+ */
+function putBack<T extends { id: number; folderId: number | null; updatedAt: number }>(
+  db: FakeDb,
+  table: readonly T[],
+  rows: readonly BulkUndoRow<T>[],
+  grain: (row: T) => string,
+  folderIsThere: (id: number) => boolean,
+): T[] {
+  const live = new Map(table.map((r) => [r.id, r]));
+  for (const row of rows) {
+    if (row.after !== null && !sameRow(live.get(row.id) ?? null, row.after)) {
+      throw refuse(UNDO_ROWS_CHANGED);
+    }
+  }
+  const now = stamp(db);
+  const made = new Set(rows.filter((r) => r.before === null).map((r) => r.id));
+  const next = table.filter((r) => !made.has(r.id)).map((r) => ({ ...r }));
+  for (const row of rows) {
+    if (row.before === null || row.after === null) continue;
+    const at = next.findIndex((r) => r.id === row.id);
+    const kept = next[at] as Record<string, unknown>;
+    const back: Record<string, unknown> = { ...row.before, id: row.id, updatedAt: now };
+    for (const k of BULK_UNDO_IGNORED) if (k !== "updatedAt") back[k] = kept[k];
+    next[at] = back as T;
+  }
+  for (const row of rows) {
+    if (row.after !== null || row.before === null) continue;
+    const id = next.some((r) => r.id === row.id) ? nextId(next) : row.id;
+    next.push({ ...row.before, id, updatedAt: now });
+  }
+  const grains = new Set<string>();
+  for (const row of next) {
+    const key = grain(row);
+    if (grains.has(key)) throw refuse(UNDO_ROWS_CHANGED);
+    grains.add(key);
+  }
+  if (rows.some((row) => row.before?.folderId != null && !folderIsThere(row.before.folderId))) {
+    throw refuse(UNDO_ROWS_CHANGED);
+  }
+  // Back in id order, which is the order every write here keeps the array in by pushing each new
+  // row at the end — a re-inserted row is an older id, and readers that take the first match on a
+  // key would otherwise meet it last.
+  return next.sort((a, b) => a.id - b.id);
+}
+
+/** Copies in a table, summed — what a wishlist import's `copies` is the difference of. */
+function totalCopies(rows: readonly { quantity: number }[]): number {
+  return rows.reduce((n, r) => n + r.quantity, 0);
+}
+
+/** `collection::distinct_ids` — the ids with every repeat after the first dropped, in the order
+ *  sent, so a selection naming one row twice is one removal or one move rather than a second pass
+ *  over a row the first already took away. */
+function distinctIds(ids: readonly number[]): number[] {
+  return [...new Set(ids)];
+}
+
+/**
+ * `collection::remove_entry`'s one statement, as a function — the row it deleted, or `null` for
+ * an id that named nothing, which both of its callers treat as a success.
+ * {@link writeHandlers}' `collection_remove` answers for one id and `collection_remove_many` for
+ * many, and this is the whole of the rule they share.
+ */
+function removeEntry(db: FakeDb, id: number): FakeEntry | null {
+  const row = db.collectionEntries.find((e) => e.id === id) ?? null;
+  if (row) db.collectionEntries = db.collectionEntries.filter((e) => e.id !== id);
+  return row;
+}
+
+/**
+ * `collection_folders::set_entry_folder`'s body, fences and all — what
+ * {@link writeHandlers}' `collection_set_folder` does for one id and `collection_set_folder_many`
+ * does for each. See the first for why each fence is there; this is where they live so the two
+ * commands cannot come to disagree about one.
+ */
+function setEntryFolder(db: FakeDb, id: number, folderId: number | null): EntryChange {
+  if (folderId !== null) userCollectionFolder(db, folderId);
+  // And the **source**, for `deck` alone ({@link ENTRY_IN_A_DECK}). Filing a copy out of a
+  // group by hand leaves the deck listing a card whose copies have walked off — the same
+  // invariant, reached from the other end. `removed` is deliberately not fenced: taking a
+  // card out of the holding area and filing it in a binder is what that folder is for.
+  const from = db.collectionEntries.find((e) => e.id === id);
+  if (from && from.folderId !== null) {
+    const kind = collectionFolderById(db, from.folderId)?.kind;
+    if (kind === COLLECTION_DECK_KIND) throw refuse(ENTRY_IN_A_DECK);
+  }
+  return refileEntry(db, id, folderId);
+}
+
+/**
+ * `collection::valid_tags` — an import line's `tags`, refused in words unless it is JSON. **JSON
+ * and no more**, the crate's own choice: the column has never said *array of strings*, so a
+ * validator stricter than the constraint it stands in for would refuse an edit to a row the
+ * database is happy with. Serde's parenthetical becomes `JSON.parse`'s, simplification 9's one
+ * exception applied again.
+ */
+function validTags(tags: string): unknown {
+  try {
+    return JSON.parse(tags);
+  } catch (e) {
+    throw refuse(
+      `\`${tags}\` is not a tag list (${(e as Error).message}). Tags are stored as JSON, like ` +
+        `["cube", "trade"].`,
+    );
+  }
+}
+
+/**
+ * `collection::tag_union` — the row's tags with the file's appended, the row's own order first and
+ * nothing twice, or `null` when the file adds nothing the row does not carry, so an unchanged row
+ * is not rewritten. Both sides are read as lists the crate's way: an array is its elements, a
+ * `null` is none, and any other JSON value is the one tag — which is what `valid_tags` letting a
+ * bare `"cube"` through makes possible.
+ */
+function tagUnion(row: string, file: string): string | null {
+  const list = (value: unknown): unknown[] =>
+    Array.isArray(value) ? value : value === null ? [] : [value];
+  const merged = list(validTags(row));
+  const had = merged.length;
+  const seen = new Set(merged.map((t) => JSON.stringify(t)));
+  for (const tag of list(validTags(file))) {
+    const key = JSON.stringify(tag);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(tag);
+  }
+  return merged.length === had ? null : JSON.stringify(merged);
+}
+
+/** Whether `folderId` names a deck's group — `collection::is_deck_group`, the one destination an
+ *  import may file into that its undo may not take back out of. */
+function isDeckGroup(db: FakeDb, folderId: number | null): boolean {
+  return folderId !== null && collectionFolderById(db, folderId)?.kind === COLLECTION_DECK_KIND;
+}
+
+/**
+ * `collection::walk_import` — both halves of an import, the commit that writes and the preview
+ * that does not, as **one pass**, so the numbers a preview promises are the numbers the press
+ * answers (issue #555). The preview here is this, run and put back
+ * ({@link readHandlers}' `collection_import_preview`); the crate's walk takes a `Pass` and skips
+ * its statements instead, which answers the same numbers because every line is decided against
+ * the grain the previous lines left, remembered per grain in `slots`.
+ *
+ * **Counts are per line, the crate's way since issue #555.** Each line is validated with its
+ * write's own refusals in its write's own order, placed on its grain, and classified: *added* (no
+ * row held the grain), *updated* (one did), *removed* (a `set` took it to zero), or **nothing at
+ * all** — a `set` of 0 for a grain holding no row writes nothing and counts nothing, where it used
+ * to insert and delete one and answer "1 added, 1 removed" over a line that changed nothing. So
+ * `added + updated + removed` can be less than the line count. `copies` is each line's net
+ * change, summed.
+ *
+ * **A `set` at the root reads the file's number as the total at that grain across every folder**,
+ * because an export writes copies wherever they are filed and a re-import says nothing about
+ * filing. The copies of the same ten grain terms filed in any folder count toward it and the root
+ * takes the difference, `max(0, file − elsewhere)`; when the folders alone hold more, the root
+ * goes to zero and the surplus is `leftInFolders` — **left where it is**, because moving or
+ * deleting a reader's filed copies is not something a file can ask for. Every folder is counted,
+ * the app's own included: `collection::filed_elsewhere` asks `folder_id IS NOT NULL` and nothing
+ * narrower. Before this, the number went into the root row beside them, so a reader's own export
+ * read back with "Set these quantities" doubled everything they had filed. **A `set` into a named
+ * folder is unchanged**: the file's number is that folder's row.
+ *
+ * **The two columns the export always wrote are read back.** A line's `tradelistQuantity` rides
+ * the upserts' own rules — added on an `add`, written on a `set`, clamped to the row's copies
+ * either way, and silence keeps the row's number. Its `tags` are a new row's as they stand; onto
+ * an existing row an `add` **unions** them ({@link tagUnion}) and a `set` **replaces** them, and
+ * a line carrying none leaves the row's alone. Neither upsert writes tags onto an existing row
+ * itself, and that stays so for every other caller: a quick add's empty list folded into a row
+ * would wipe the set the reader curated there.
+ */
+function importIntoCollection(
+  db: FakeDb,
+  args: { items: CollectionImportItem[]; mode: TransferImportMode; folderId?: number | null },
+): Omit<ImportCommitOutcome, "undoId"> {
+  if (args.mode !== "add" && args.mode !== "set") {
+    throw refuse(`\`${args.mode}\` is not an import mode. Use \`add\` or \`set\`.`);
+  }
+  // Checked once, before anything is written, exactly as the crate checks it a line after the
+  // mode: a stale folder id is a sentence rather than a rollback. `addEntry`/`setEntry` ask again
+  // per item — that is their own door and it stays theirs.
+  const folderId = collectionFolderNamed(db, args.folderId ?? null, COLLECTION_DECK_WRITE_FOLDERS);
+  const set = args.mode === "set";
+  const snapshot = db.collectionEntries.map((e) => ({ ...e }));
+  const out = { added: 0, updated: 0, removed: 0, copies: 0, leftInFolders: 0 };
+  // The row each grain the walk has touched now holds, or `null` for none — so a second line on
+  // one grain meets the row the first one left.
+  const slots = new Map<string, { id: number; quantity: number } | null>();
+  // Per grain rather than summed per line: if a hand-made file repeats one, the last line is the
+  // grain's `set`, so the last surplus is the one left.
+  const surplus = new Map<string, number>();
+  try {
+    for (const item of args.items) {
+      // The refusals of the write this line reaches, in the crate's order — so a preview of a
+      // file the commit would refuse refuses in the commit's words.
+      const finish = validFinish(item.finish);
+      const condition = validCondition(item.condition);
+      if (set) validQuantity(item.quantity, "collection quantity");
+      else if (item.quantity <= 0) throw refuse(ZERO_ADD);
+      validQuantity(item.tradelistQuantity ?? 0, "tradelist quantity");
+      const grading = canonicalGrading(item.grading);
+      if (item.tags != null) validTags(item.tags);
+      const card = requireCard(db, item.cardId);
+      // `ImportGrain`, spelled the way {@link addEntry} builds a row — the language off the card,
+      // the grade canonical, an unsaid flag the plain copy.
+      const probe = {
+        cardId: item.cardId,
+        finish,
+        condition,
+        lang: card.lang,
+        altered: item.altered ?? false,
+        signed: item.signed ?? false,
+        proxy: item.proxy ?? false,
+        misprint: item.misprint ?? false,
+        serialNumber: item.serialNumber ?? null,
+        grading,
+      };
+      const grain = collectionGrain({ ...probe, folderId });
+      const landed = slots.has(grain)
+        ? (slots.get(grain) ?? null)
+        : (db.collectionEntries.find((e) => collectionGrain(e) === grain) ?? null);
+      const held = landed?.quantity ?? 0;
+      let target: number;
+      if (!set) {
+        target = held + item.quantity;
+      } else if (folderId !== null) {
+        target = item.quantity;
+      } else {
+        // `collection::filed_elsewhere` — the ten other terms, in any folder at all.
+        const bare = collectionGrain({ ...probe, folderId: null });
+        const elsewhere = db.collectionEntries
+          .filter((e) => e.folderId !== null && collectionGrain({ ...e, folderId: null }) === bare)
+          .reduce((n, e) => n + e.quantity, 0);
+        surplus.set(grain, Math.max(0, elsewhere - item.quantity));
+        target = Math.max(0, item.quantity - elsewhere);
+      }
+
+      let now: { id: number; quantity: number } | null;
+      if (target === 0) {
+        // Only a `set` reaches zero, and with no row there is nothing to take away.
+        if (landed !== null) {
+          out.removed += 1;
+          db.collectionEntries = db.collectionEntries.filter((e) => e.id !== landed.id);
+        }
+        now = null;
+      } else {
+        if (landed !== null) out.updated += 1;
+        else out.added += 1;
+        const entry: EntryInput = {
+          cardId: item.cardId,
+          finish: item.finish,
+          quantity: set ? target : item.quantity,
+          condition: item.condition,
+          conditionOriginal: item.conditionOriginal,
+          purchasePrice: item.purchasePrice,
+          purchaseCurrency: item.purchaseCurrency,
+          acquiredAt: item.acquiredAt,
+          acquisitionSource: item.acquisitionSource,
+          serialNumber: item.serialNumber,
+          altered: item.altered,
+          signed: item.signed,
+          proxy: item.proxy,
+          misprint: item.misprint,
+          grading: item.grading,
+          notes: item.notes,
+          // The export's `Tradelist quantity` read back (issue #555). Absent is the file saying
+          // nothing, which `addEntry` adds as zero and `setEntry` reads as "keep the row's own".
+          tradelistQuantity: item.tradelistQuantity,
+          // A **new** row's tags, which both upserts write as they stand. Onto an existing row
+          // neither touches the column, and the two lines below are where the file's reach it.
+          tags: item.tags,
+          // The whole file into one folder, and `null` — the root — is what every caller that
+          // names none still gets. **A file says nothing about a reader's filing**, which is why
+          // this is the command's argument rather than a column on the item: the plain collection
+          // import sends nothing and lands at the top level exactly as it always has, and only the
+          // **deck** arm names a destination, because that press wrote the decklist in the same
+          // breath.
+          folderId,
+        };
+        const change = set
+          ? setEntry(db, entry, COLLECTION_DECK_WRITE_FOLDERS)
+          : addEntry(db, entry, COLLECTION_DECK_WRITE_FOLDERS);
+        const row = db.collectionEntries.find((e) => e.id === change.id);
+        if (row && landed !== null && item.tags != null) {
+          // `set` replaces with the file's spelling; `add` unions, and writes only what is new.
+          const tags = set ? item.tags : tagUnion(row.tags, item.tags);
+          if (tags !== null) row.tags = tags;
+        }
+        now = { id: change.id, quantity: target };
+      }
+      out.copies += (now?.quantity ?? 0) - held;
+      slots.set(grain, now);
+    }
+  } catch (e) {
+    db.collectionEntries = snapshot;
+    throw e;
+  }
+  out.leftInFolders = [...surplus.values()].reduce((n, s) => n + s, 0);
+  return out;
+}
+
 /** `shelffolds::UNKNOWN_PAGE` and `shelffolds::NOT_A_SHELF`, verbatim. */
 const SHELF_PAGE_UNKNOWN = "Shelves are folded on the collection or the wishlist, and nowhere else.";
 const NOT_A_SHELF = "A shelf is named by its folder id, or 0 for Not sorted.";
@@ -16471,8 +17052,38 @@ export function writeHandlers(db: FakeDb) {
      *  otherwise is an error dialog over a success. */
     collection_remove: (args: { id: number }): EntryChange => {
       refuseIfBusy(db);
-      db.collectionEntries = db.collectionEntries.filter((e) => e.id !== args.id);
+      removeEntry(db, args.id);
       return { id: args.id, quantity: 0, removed: true };
+    },
+
+    /**
+     * `collection::remove_entries` — `Remove from collection` over several rows, **one write**
+     * (issue #555). It was one {@link collection_remove} per id, from a loop in the page: N
+     * transactions, N rows in the home page's feed, and a refusal part-way left the press half
+     * applied with nothing to say so.
+     *
+     * {@link removeEntry} per id, so an id that names nothing is skipped exactly as the single
+     * command skips it — a stale selection is still a success — and `removed`/`copies` count only
+     * the rows that were really there, and an id sent twice is removed once ({@link distinctIds}).
+     * **No deck fence**, because the single command has none: removing is the unconditional
+     * delete, and a copy in a deck's group goes the way any other does. **No feed row either**:
+     * the crate's twin records one line for the press, and no write in this fake records any.
+     *
+     * The ticket it answers takes every deleted row back through {@link putBack}; a press that
+     * found nothing to delete answers `null`, and there is nothing to offer.
+     */
+    collection_remove_many: (args: { ids: readonly number[] }): BulkRemoveOutcome => {
+      refuseIfBusy(db);
+      const before = db.collectionEntries.map((e) => ({ ...e }));
+      let removed = 0;
+      let copies = 0;
+      for (const id of distinctIds(args.ids)) {
+        const row = removeEntry(db, id);
+        if (!row) continue;
+        removed += 1;
+        copies += row.quantity;
+      }
+      return { removed, copies, undoId: collectionUndo(db, before) };
     },
 
     /**
@@ -16756,17 +17367,46 @@ export function writeHandlers(db: FakeDb) {
      */
     collection_set_folder: (args: { id: number; folderId: number | null }): EntryChange => {
       refuseIfBusy(db);
-      if (args.folderId !== null) userCollectionFolder(db, args.folderId);
-      // And the **source**, for `deck` alone ({@link ENTRY_IN_A_DECK}). Filing a copy out of a
-      // group by hand leaves the deck listing a card whose copies have walked off — the same
-      // invariant, reached from the other end. `removed` is deliberately not fenced: taking a
-      // card out of the holding area and filing it in a binder is what that folder is for.
-      const from = db.collectionEntries.find((e) => e.id === args.id);
-      if (from && from.folderId !== null) {
-        const kind = collectionFolderById(db, from.folderId)?.kind;
-        if (kind === COLLECTION_DECK_KIND) throw refuse(ENTRY_IN_A_DECK);
+      return setEntryFolder(db, args.id, args.folderId);
+    },
+
+    /**
+     * `collection_set_folder_many` — `Move to …` over several rows, **one write**
+     * (issue #555), where the page used to loop {@link collection_set_folder}: N feed rows, N
+     * waves of invalidation, and a refusal part-way left some of the selection filed and the
+     * rest where it was.
+     *
+     * {@link setEntryFolder} per id, in the order they were sent, so every fence and the merge
+     * are that command's exactly — the destination fenced in words, a copy in a deck's group
+     * refused, a move onto a taken grain folded into the row already there. **Any refusal
+     * leaves nothing moved**, the snapshot-and-restore stand-in for the transaction
+     * {@link collection_import_commit} uses, and rejects with that refusal's own sentence.
+     *
+     * One {@link EntryChange} per id, in the order sent and each id once ({@link distinctIds}),
+     * because after a merge the row a caller sent is not the row the copies are in — two rows of
+     * one grain moved into one binder answer the same survivor twice. An id that names nothing is
+     * {@link ENTRY_GONE}, the single command's answer, and rolls the press back with it: unlike a
+     * remove, a move of a row that is not there has nothing it could have meant. **The crate's
+     * twin was not yet written when this was**, so its refusals and its dedupe follow the brief,
+     * `collection_set_folder` and `collection::distinct_ids`' own doc, which names a move beside
+     * a removal — check them against `collection_folders.rs` once it lands.
+     */
+    collection_set_folder_many: (args: {
+      ids: readonly number[];
+      folderId: number | null;
+    }): BulkMoveOutcome => {
+      refuseIfBusy(db);
+      const before = db.collectionEntries.map((e) => ({ ...e }));
+      const changes: EntryChange[] = [];
+      try {
+        for (const id of distinctIds(args.ids)) {
+          changes.push(setEntryFolder(db, id, args.folderId));
+        }
+      } catch (e) {
+        db.collectionEntries = before.map((row) => ({ ...row }));
+        throw e;
       }
-      return refileEntry(db, args.id, args.folderId);
+      return { changes, undoId: collectionUndo(db, before) };
     },
 
     /**
@@ -17465,16 +18105,17 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `collection::commit_import` — one transaction for a whole imported file, mirrored here as
-     * one loop over the same `addEntry`/`setEntry` operations `collection_add` performs one
-     * line at a time. A refused item must roll the whole file back, and there is no real
-     * transaction in an in-memory array to do that for us — so the array is snapshotted first
-     * and restored if anything throws, which is this fake's stand-in for it.
+     * `collection::commit_import` — one transaction for a whole imported file. The body is
+     * {@link importIntoCollection}, which {@link readHandlers}' `collection_import_preview` runs
+     * too; what this adds is the one thing a preview must never do, which is keep what it wrote
+     * — and the ticket {@link bulk_undo} takes it back with (issue #555), `null` for a file that
+     * changed nothing.
      *
-     * `added`/`updated` are counted by row-count before and after, exactly as the backend
-     * does: a hand-written lookup on the eleven-column grain here would be a second copy of
-     * {@link collectionGrain}'s own definition. `removed` is counted rather than derived,
-     * because a row deleted by a `set 0` has already left the count the other two are read from.
+     * **No ticket for an import into a deck's group**, `commit_import`'s one exception: that
+     * import is half of the deck arm's press, which wrote the decklist through a command this
+     * ticket knows nothing about, so taking the copies back out would leave the deck listing cards
+     * whose copies had walked off — {@link ENTRY_IN_A_DECK}'s invariant broken by an undo. Half an
+     * undo is worse than none.
      */
     collection_import_commit: (args: {
       items: CollectionImportItem[];
@@ -17482,82 +18123,10 @@ export function writeHandlers(db: FakeDb) {
       folderId?: number | null;
     }): ImportCommitOutcome => {
       refuseIfBusy(db);
-      if (args.mode !== "add" && args.mode !== "set") {
-        throw refuse(`\`${args.mode}\` is not an import mode. Use \`add\` or \`set\`.`);
-      }
-      // Checked once, before anything is written, exactly as the crate checks it a line after
-      // the mode: a stale folder id is a sentence rather than a rollback. `addEntry`/`setEntry`
-      // ask again per item — that is their own door and it stays theirs.
-      const folderId = collectionFolderNamed(
-        db,
-        args.folderId ?? null,
-        COLLECTION_DECK_WRITE_FOLDERS,
-      );
-      const before = db.collectionEntries.length;
-      const snapshot = db.collectionEntries.map((e) => ({ ...e }));
-      let removed = 0;
-      try {
-        for (const item of args.items) {
-          // **The full grain, carried rather than defaulted** — `collection::commit_import`'s own
-          // map since schema v24, where `CollectionImportItem` grew the six columns beyond the
-          // printing and its finish. Absent stays absent: `addEntry` reads an omitted flag as the
-          // plain unmarked copy, which is what a file with three columns in it means, and
-          // `destinations/collection.ts` folds its lines on the same eleven terms before any of
-          // them reach here. While these were dropped, a Storybook or vitest import of an altered
-          // or graded line landed on the plain grain in the fake and on its own grain in the app —
-          // and a re-import could never add to the reader's altered row, it wrote an anonymous
-          // twin beside it. See `docs/reference/import-export.md`.
-          const entry: EntryInput = {
-            cardId: item.cardId,
-            finish: item.finish,
-            quantity: item.quantity,
-            condition: item.condition,
-            conditionOriginal: item.conditionOriginal,
-            purchasePrice: item.purchasePrice,
-            purchaseCurrency: item.purchaseCurrency,
-            acquiredAt: item.acquiredAt,
-            acquisitionSource: item.acquisitionSource,
-            serialNumber: item.serialNumber,
-            altered: item.altered,
-            signed: item.signed,
-            proxy: item.proxy,
-            misprint: item.misprint,
-            grading: item.grading,
-            notes: item.notes,
-            // The whole file into one folder, and `null` — the root — is what every caller that
-            // names none still gets. **A file says nothing about a reader's filing**, which is
-            // why this is the command's argument rather than a column on the item: the plain
-            // collection import sends nothing and lands at the top level exactly as it always
-            // has, and only the **deck** arm names a destination, because that press wrote the
-            // decklist in the same breath. `tags` is deliberately not here — it is a set the
-            // reader curates on the row, and a file has nothing to say about it.
-            folderId,
-          };
-          if (args.mode === "add") {
-            addEntry(db, entry, COLLECTION_DECK_WRITE_FOLDERS);
-            continue;
-          }
-          // **A `set` of 0 deletes the row**, `collection_set_quantity`'s reversal reached from
-          // the file rather than from the stepper, and `wishlist_import_commit` has done the
-          // same one table over since schema v23. `setEntry` writes the total first, exactly as
-          // the crate's upsert does, so a `set 0` for a printing the reader does not own counts
-          // oddly and honestly: one added and one removed rather than nothing, because both
-          // statements really ran.
-          const change = setEntry(db, entry, COLLECTION_DECK_WRITE_FOLDERS);
-          if (change.quantity === 0) {
-            db.collectionEntries = db.collectionEntries.filter((e) => e.id !== change.id);
-            removed += 1;
-          }
-        }
-      } catch (e) {
-        db.collectionEntries = snapshot;
-        throw e;
-      }
-      const added = db.collectionEntries.length - before + removed;
-      // Clamped at zero, exactly as `collection::commit_import` clamps it: a `set 0` for a
-      // printing the reader does not own is counted as both an add and a removal — two statements
-      // that really ran — so that one item is subtracted twice and `updated` would read `-1`.
-      return { added, updated: Math.max(0, args.items.length - added - removed), removed };
+      const before = db.collectionEntries.map((e) => ({ ...e }));
+      const outcome = importIntoCollection(db, args);
+      const undoable = !isDeckGroup(db, args.folderId ?? null);
+      return { ...outcome, undoId: undoable ? collectionUndo(db, before) : null };
     },
 
     /** `wishlist::add_wish`. */
@@ -17647,7 +18216,69 @@ export function writeHandlers(db: FakeDb) {
         throw e;
       }
       const added = db.wishlistEntries.length - before + removed;
-      return { added, updated: args.items.length - added - removed, removed };
+      return {
+        added,
+        updated: args.items.length - added - removed,
+        removed,
+        copies: totalCopies(db.wishlistEntries) - totalCopies(snapshot),
+        // The collection's alone: a wishlist file lands at the root of the list and counts
+        // nothing filed elsewhere, so there is never a surplus to leave anywhere.
+        leftInFolders: 0,
+        // `snapshot` is still the untouched copy here — it only ever becomes the table on the
+        // way out of a refusal — so it is the before-image the ticket needs.
+        undoId: wishlistUndo(db, snapshot),
+      };
+    },
+
+    /**
+     * `bulk_undo::bulk_undo` — put back what one bulk write did (issue #555): a collection or
+     * wishlist import, a {@link collection_remove_many}, a {@link collection_set_folder_many}.
+     *
+     * **Refused rather than applied blindly**, in two sentences a reader can tell apart. A ticket
+     * this world does not hold — never issued, spent already, retired by a refusal or evicted past
+     * {@link BULK_UNDO_CAPACITY} — is {@link UNDO_TICKET_GONE}; a ticket whose rows have moved on
+     * since is {@link UNDO_ROWS_CHANGED}, and {@link putBack} lists the three ways they can have.
+     * **Either refusal retires the ticket**, and so does a success, so a second press answers the
+     * first sentence whatever the first press answered: a stale ticket can only grow staler.
+     *
+     * **The store is asked before the lock**, the crate's order: an id the store does not hold is
+     * {@link UNDO_TICKET_GONE} without touching the database at all, so it answers that even
+     * behind a sync, while a ticket it does hold waits for the write lock like every write — and
+     * answers BUSY **with the ticket kept**, because the lock refused before the undo took it.
+     * That order is why the busy sweep lists this among the writes it cannot walk.
+     *
+     * `restored` is every row the ticket touched — rows the write made deleted again, rows it
+     * changed put back, rows it deleted re-inserted — so it is a count of rows and not of copies.
+     * `scope` says which list, because the caller's ticket is only an id.
+     *
+     * **It files no {@link FakeDb.activity} row**, where the crate's records the press's own line
+     * again marked `undo` — {@link collection_removed_clear}'s note about this fake's feed — and
+     * it settles no managed wishlist: no bulk write reaches a deck's list, so no undo of one can.
+     */
+    bulk_undo: (args: { undoId: number }): BulkUndoOutcome => {
+      const store = bulkUndoTickets.get(db);
+      const at = store ? store.tickets.findIndex((t) => t.id === args.undoId) : -1;
+      if (!store || at < 0) throw refuse(UNDO_TICKET_GONE);
+      refuseIfBusy(db);
+      const [{ ticket }] = store.tickets.splice(at, 1);
+      if (ticket.scope === "collection") {
+        db.collectionEntries = putBack(
+          db,
+          db.collectionEntries,
+          ticket.rows,
+          collectionGrain,
+          (id) => collectionFolderById(db, id) !== undefined,
+        );
+      } else {
+        db.wishlistEntries = putBack(
+          db,
+          db.wishlistEntries,
+          ticket.rows,
+          wishGrain,
+          (id) => wishFolderById(db, id) !== undefined,
+        );
+      }
+      return { scope: ticket.scope, restored: ticket.rows.length };
     },
 
     /**
@@ -23324,6 +23955,11 @@ export function scannerHandlers(db: FakeDb) {
      * in one write. The crate refuses `remaining` on `store_tray`'s terms **before** the import, so
      * this does too; after that the import's own snapshot-and-restore is the rollback, and the tray
      * is written only once the import has returned.
+     *
+     * **It answers no undo ticket** (issue #555), `commit_import_with`'s rule: the lines the import
+     * filed leave the stored tray in the same write, so an undo that took the copies back would
+     * leave the scanned cards in neither place. Which is why this runs the import's body rather
+     * than the command, which would file one.
      */
     scanner_tray_commit: (args: {
       items: CollectionImportItem[];
@@ -23333,11 +23969,10 @@ export function scannerHandlers(db: FakeDb) {
       refuseIfBusy(db);
       if (args.remaining.length > MAX_TRAY_ROWS) throw refuse(TRAY_IS_FULL);
       if (args.remaining.some((row) => row.quantity < 1)) throw refuse(TRAY_ROW_NEEDS_A_COPY);
-      const outcome = writeHandlers(db).collection_import_commit({
-        items: args.items,
-        mode: "add",
-        folderId: args.folderId,
-      });
+      const outcome: ImportCommitOutcome = {
+        ...importIntoCollection(db, { items: args.items, mode: "add", folderId: args.folderId }),
+        undoId: null,
+      };
       db.scannerTray = throughJson(args.remaining);
       return outcome;
     },

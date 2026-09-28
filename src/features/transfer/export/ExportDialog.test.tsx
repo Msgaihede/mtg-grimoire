@@ -956,4 +956,85 @@ describe("the scope line", () => {
     await user.click(saveButton);
     expect(saveMock).not.toHaveBeenCalled();
   });
+
+  /**
+   * Issue #555: a sweep that failed left `cards` empty and `loading` false, so both buttons armed
+   * over a file of nothing — beside a count line still quoting the total the first page had
+   * reported. The failure is its own state now, and every half of it is asserted: the alert in
+   * the dialog's own words, the count gone, both buttons greyed **and inert**, and a Retry that
+   * reaches the caller.
+   */
+  it("greys Copy and Save as… and says why when the sweep could not be read", async () => {
+    const user = userEvent.setup();
+    const onRetry = vi.fn();
+    render(
+      <ExportDialog
+        {...props}
+        cards={[]}
+        surface="collection"
+        scope={scope({ label: "3,000 cards matching your filters", error: "database is locked", onRetry })}
+      />,
+    );
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Could not read the cards to export — database is locked",
+    );
+    // The count is a number the failed sweep never finished reading, so it is not drawn at all —
+    // "3,000 cards" beside "0 lines" was the reported contradiction.
+    expect(screen.queryByText("3,000 cards matching your filters")).not.toBeInTheDocument();
+
+    const copyButton = screen.getByRole("button", { name: "Copy" });
+    const saveButton = screen.getByRole("button", { name: /Save as/ });
+    expect(copyButton).toHaveAttribute("aria-disabled", "true");
+    expect(saveButton).toHaveAttribute("aria-disabled", "true");
+    // Nothing is on its way — the wait is over and it failed — so no busy signal either.
+    expect(saveButton).not.toHaveAttribute("aria-busy");
+    await user.click(copyButton);
+    expect(copyTextMock).not.toHaveBeenCalled();
+    await user.click(saveButton);
+    expect(saveMock).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledTimes(1);
+    // The escape hatch is still offered: widening the question is a way out of a failure too.
+    expect(
+      screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
+    ).toBeInTheDocument();
+  });
+
+  it("draws no Retry button for a caller that passed no way to retry", async () => {
+    render(<ExportDialog {...props} surface="collection" scope={scope({ error: "gone" })} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("gone");
+    expect(screen.queryByRole("button", { name: "Retry" })).not.toBeInTheDocument();
+  });
+
+  it("goes back to the count and arms both buttons once the error clears", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <ExportDialog {...props} surface="collection" scope={scope({ error: "database is locked" })} />,
+    );
+    expect(await screen.findByRole("alert")).toBeInTheDocument();
+
+    rerender(<ExportDialog {...props} surface="collection" scope={scope({ error: null })} />);
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByText("250 cards matching your filters")).toBeInTheDocument();
+    const copyButton = screen.getByRole("button", { name: "Copy" });
+    expect(copyButton).not.toHaveAttribute("aria-disabled");
+    await user.click(copyButton);
+    expect(copyTextMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("greys both buttons the way the house greys a refusing control", () => {
+    // `aria-disabled` alone is invisible: these two looked exactly as pressable mid-sweep as they
+    // do finished. The variant is what paints it, and it is a class assertion because jsdom loads
+    // no stylesheet — `classList.contains` rather than a substring, which a `hover:` variant of
+    // the same utility would satisfy on its own.
+    render(<ExportDialog {...props} surface="collection" scope={scope({ loading: true })} />);
+    for (const name of ["Copy", /Save as/]) {
+      const button = screen.getByRole("button", { name });
+      expect(button.classList.contains("aria-disabled:opacity-50")).toBe(true);
+      expect(button).not.toHaveAttribute("disabled");
+    }
+  });
 });

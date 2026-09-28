@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import FORMULA_CELLS_CSV from "../__golden__/formulaCells.csv.all.txt?raw";
 import { parseDecklist } from "./parse";
 import {
   ARCHIDEKT_FLAT,
@@ -617,5 +618,383 @@ describe("a CSV", () => {
     expect(list.lines).toEqual([]);
     expect(list.issues).toEqual([]);
     expect(list.totalCards).toBe(0);
+  });
+
+  /** The same guard with Excel's EU separator: the header line votes for `;`, the row under it
+   *  is one cell against two, and the shapes disagree exactly as they do for the comma. */
+  it("keeps the shape guard for a semicolon line over a decklist", () => {
+    const list = parseDecklist("Quantity; Name\n1 Sol Ring\n");
+    expect(list.lines.map((l) => [l.quantity, l.name])).toEqual([
+      [1, "Quantity; Name"],
+      [1, "Sol Ring"],
+    ]);
+    expect(list.csv).toBeUndefined();
+  });
+
+  /** A tab-separated decklist with no header is still a decklist — the tab is the `\s` the
+   *  line grammar already reads after a count. */
+  it("reads a headerless tab-separated list line by line, as it always did", () => {
+    const list = parseDecklist("4\tLightning Bolt\n2\tShock\n");
+    expect(list.lines.map((l) => [l.quantity, l.name])).toEqual([
+      [4, "Lightning Bolt"],
+      [2, "Shock"],
+    ]);
+    expect(list.csv).toBeUndefined();
+  });
+
+  it("says nothing about a CSV shape for a decklist, or for a file it would not read", () => {
+    expect(parseDecklist("4 Lightning Bolt").csv).toBeUndefined();
+    expect(parseDecklist("Quantity,Set\n1,LEA\n").csv).toBeUndefined();
+  });
+});
+
+/**
+ * Other apps' collection exports (issue #555). Each fixture is **cut from a real export** — the
+ * header row verbatim and the data rows real rows from it, a handful rather than all forty — taken
+ * from the sample exports `StepKie/MtgCsvHelper` keeps under `Resources/SampleCsvs` and checked
+ * against the research doc's verbatim header lists on 2026-09-28. A made-up header teaches the
+ * parser a spelling nobody writes.
+ */
+const DECKBOX_EXPORT = `Count,Tradelist Count,Name,Edition,Edition Code,Card Number,Condition,Language,Foil,Signed,Artist Proof,Altered Art,Misprint,Promo,Textless,Printing Id,Printing Note,Tags,My Price,Cost,Rarity,Price,TcgPlayer ID,Scryfall ID
+1,0,"Aragorn, the Uniter",The Lord of the Rings: Tales of Middle-earth,ltr,741,Near Mint,English,foil,,,,,,,85601,,"",$0.00,{R}{G}{W}{U},MythicRare,$85.08,517446,5f092adf-a06e-47c1-9400-2eebf9ef719d
+1,0,Brazen Borrower // Petty Theft,Throne of Eldraine,eld,39,Near Mint,English,,,,,,,,46095,,"",$0.00,{1}{U}{U} // {1}{U},MythicRare,$3.94,199387,c2089ec9-0665-448f-bfe9-d181de127814
+1,0,Lightning Bolt,Magic 2011,m11,149,Good (Lightly Played),English,,,,,,,,17427,,"",$0.00,{R},Common,$1.54,35427,e768c957-3a1f-42f5-853a-96942f645df5
+2,0,Lightning Bolt,Magic 2011,m11,149,Heavily Played,English,,,,,,,,17427,,"",$0.00,{R},Common,$1.54,35427,e768c957-3a1f-42f5-853a-96942f645df5
+`;
+
+const MOXFIELD_EXPORT = `"Count","Tradelist Count","Name","Edition","Condition","Language","Foil","Tags","Last Modified","Collector Number","Alter","Proxy","Purchase Price"
+"1","1","Aragorn, the Uniter","ltr","Near Mint","English","foil","","2026-05-15 13:52:30.943000","741z","False","False",""
+"1","1","Aragorn, the Uniter","ltr","Near Mint","English","","","2026-05-15 13:51:43.373000","192","False","False","12.00"
+"1","1","Demonic Tutor","cmm","Near Mint","English","etched","","2026-05-15 13:51:43.373000","509","False","False","40.00"
+"1","1","Lightning Bolt","m11","Played","English","","","2026-05-15 13:51:43.373000","149","False","False","0.20"
+`;
+
+/** CRLF on purpose: the research doc records that Dragon Shield's own import requires it. */
+const DRAGON_SHIELD_EXPORT = [
+  '"sep=,"',
+  "Folder Name,Quantity,Trade Quantity,Card Name,Set Code,Set Name,Card Number,Condition,Printing,Language,Price Bought,Date Bought,LOW,MID,MARKET",
+  'Test,1,1,"Aragorn, the Uniter",LTR,The Lord of the Rings: Tales of Middle-earth,741z,NearMint,Double Rainbow Foil,English,0.00,2026-05-15,,,',
+  "Test,1,1,Disciplined Duelist,SNC,Streets of New Capenna,369,NearMint,Gilded Foil,English,0.00,2026-05-15,0.09,0.40,0.32",
+  "Test,1,1,Lightning Bolt,M11,Magic 2011,149,Played,Normal,English,0.00,2026-05-15,0.97,1.55,1.50",
+  "",
+].join("\r\n");
+
+const MANABOX_EXPORT = `Name,Set code,Set name,Collector number,Foil,Rarity,Quantity,ManaBox ID,Scryfall ID,Purchase price,Misprint,Altered,Condition,Language,Purchase price currency
+"Aragorn, the Uniter",LTR,The Lord of the Rings: Tales of Middle-earth,741z,foil,mythic,1,89216,9d481911-48a9-4cd7-a3b4-14c058dcac19,4599.99,false,false,near_mint,en,USD
+Brazen Borrower // Petty Theft,ELD,Throne of Eldraine,39,normal,mythic,1,46299,c2089ec9-0665-448f-bfe9-d181de127814,1.5,false,false,near_mint,en,USD
+`;
+
+/** TCGplayer's `Name` is the product's title; 111 of the real export's 1,010 rows carry a
+ *  treatment in it, and `Simple Name` beside it is the card. */
+const TCGPLAYER_EXPORT = `Quantity,Name,Simple Name,Set,Card Number,Set Code,Printing,Condition,Language,Rarity,Product ID,SKU
+1,Abuelo's Awakening,Abuelo's Awakening,The Lost Caverns of Ixalan,1,LCI,Normal,Near Mint,English,Rare,526193,7543277
+1,Accursed Marauder (Retro Frame),Accursed Marauder,Modern Horizons 3,405,MH3,Normal,Near Mint,English,Common,553206,7958459
+1,Herd Migration (DMU Bundle),Herd Migration,Unique and Miscellaneous Promos,429,UMP,Foil,Near Mint,English,Rare,282802,5746441
+`;
+
+/** **One cell is not the export's**: the sample holds no premium card, so `Stone Rain`'s
+ *  `Premium` is flipped from `No` to `Yes` to give the column something to say. */
+const MTGO_EXPORT = `Card Name,Quantity,ID #,Rarity,Set,Collector #,Premium,Sideboarded,Annotation
+"Dark Ritual",1,6893,Common,MI,116/350,No,No,0
+"Stone Rain",4,7333,Common,MI,194/350,Yes,No,0
+`;
+
+describe("a CSV another app wrote", () => {
+  it("reads a Deckbox export by its own column names", () => {
+    const list = parseDecklist(DECKBOX_EXPORT);
+    expect(list.issues).toEqual([]);
+    expect(list.lines).toHaveLength(4);
+    expect(list.totalCards).toBe(5);
+    expect(list.lines[0]).toMatchObject({
+      lineNumber: 2,
+      quantity: 1,
+      name: "Aragorn, the Uniter",
+      // `Edition Code`, and never `Edition` — that column is the set's *name* in Deckbox's file.
+      setCode: "LTR",
+      collectorNumber: "741",
+      finish: "foil",
+      extra: { condition: "Near Mint", lang: "English", tradelistQuantity: "0" },
+    });
+    expect(list.lines[1]).toMatchObject({ name: "Brazen Borrower // Petty Theft", finish: null });
+    expect(list.lines[3]).toMatchObject({ quantity: 2, extra: { condition: "Heavily Played" } });
+    // Nothing in the row went to a price: `My Price` is a Deckbox seller's asking price.
+    expect(list.lines[0].extra.purchasePrice).toBeUndefined();
+  });
+
+  /** Every column nothing reads is named, in the file's own words and order: the unmapped ones,
+   *  the two this app never takes back (`Rarity`, `Price`), and `Edition`, which lost its field
+   *  to `Edition Code`. */
+  it("lists every Deckbox column it did not read", () => {
+    expect(parseDecklist(DECKBOX_EXPORT).csv).toEqual({
+      delimiter: ",",
+      hasQuantity: true,
+      ignoredColumns: [
+        "Edition",
+        "Artist Proof",
+        "Promo",
+        "Textless",
+        "Printing Id",
+        "Printing Note",
+        "My Price",
+        "Cost",
+        "Rarity",
+        "Price",
+        "TcgPlayer ID",
+        "Scryfall ID",
+      ],
+    });
+  });
+
+  it("reads a Moxfield export, every cell quoted, with its finish words", () => {
+    const list = parseDecklist(MOXFIELD_EXPORT);
+    expect(list.issues).toEqual([]);
+    expect(list.lines.map((l) => [l.name, l.setCode, l.collectorNumber, l.finish])).toEqual([
+      ["Aragorn, the Uniter", "LTR", "741z", "foil"],
+      ["Aragorn, the Uniter", "LTR", "192", null],
+      ["Demonic Tutor", "CMM", "509", "etched"],
+      ["Lightning Bolt", "M11", "149", null],
+    ]);
+    expect(list.lines[1].extra).toMatchObject({
+      purchasePrice: "12.00",
+      altered: "False",
+      proxy: "False",
+      tradelistQuantity: "1",
+      condition: "Near Mint",
+    });
+    expect(list.csv).toEqual({
+      delimiter: ",",
+      hasQuantity: true,
+      ignoredColumns: ["Last Modified"],
+    });
+  });
+
+  it("reads a Dragon Shield export past its sep= line, and counts its lines from the top", () => {
+    const list = parseDecklist(DRAGON_SHIELD_EXPORT);
+    expect(list.issues).toEqual([]);
+    expect(list.lines.map((l) => [l.lineNumber, l.name, l.setCode, l.finish])).toEqual([
+      [3, "Aragorn, the Uniter", "LTR", "foil"],
+      [4, "Disciplined Duelist", "SNC", "foil"],
+      [5, "Lightning Bolt", "M11", null],
+    ]);
+    expect(list.lines[0].extra).toMatchObject({
+      tradelistQuantity: "1",
+      purchasePrice: "0.00",
+      acquiredAt: "2026-05-15",
+      condition: "NearMint",
+    });
+    // A code column exists, so the set's name is read by nothing and says so.
+    expect(list.csv?.ignoredColumns).toEqual(["Folder Name", "Set Name", "LOW", "MID", "MARKET"]);
+  });
+
+  it("reads a ManaBox export, currency and all", () => {
+    const list = parseDecklist(MANABOX_EXPORT);
+    expect(list.lines[0]).toMatchObject({
+      setCode: "LTR",
+      collectorNumber: "741z",
+      finish: "foil",
+      extra: { purchasePrice: "4599.99", purchaseCurrency: "USD", condition: "near_mint" },
+    });
+    expect(list.lines[1].finish).toBeNull();
+    expect(list.csv?.ignoredColumns).toEqual(["Set name", "Rarity", "ManaBox ID", "Scryfall ID"]);
+  });
+
+  /** The two places `SPECIFIC` outranks this app's own spelling: TCGplayer's `Set` is a set's
+   *  name with the code beside it, and its `Name` is a product title with the card beside it. */
+  it("reads TCGplayer's card and code columns over its title and set name", () => {
+    const list = parseDecklist(TCGPLAYER_EXPORT);
+    expect(list.lines.map((l) => [l.name, l.setCode, l.collectorNumber, l.finish])).toEqual([
+      ["Abuelo's Awakening", "LCI", "1", null],
+      ["Accursed Marauder", "MH3", "405", null],
+      ["Herd Migration", "UMP", "429", "foil"],
+    ]);
+    expect(list.csv?.ignoredColumns).toEqual(["Name", "Set", "Rarity", "Product ID", "SKU"]);
+  });
+
+  it("reads MTGO's Premium column as the finish", () => {
+    const list = parseDecklist(MTGO_EXPORT);
+    expect(list.lines.map((l) => [l.name, l.quantity, l.collectorNumber, l.finish])).toEqual([
+      ["Dark Ritual", 1, "116/350", null],
+      ["Stone Rain", 4, "194/350", "foil"],
+    ]);
+  });
+
+  /** Only a file with **no** code column lends its set name to the hint, verbatim — a name is not
+   *  a code, and the resolver reads a hint that names no set code as a set's name. */
+  it("uses a set name as the hint only when the file has no code column", () => {
+    const named = parseDecklist("Quantity,Card Name,Set Name\n1,Sol Ring,Commander 2021\n");
+    expect(named.lines[0].setCode).toBe("Commander 2021");
+    expect(named.csv?.ignoredColumns).toEqual([]);
+
+    const coded = parseDecklist(
+      "Quantity,Card Name,Set Code,Set Name\n1,Sol Ring,,Commander 2021\n",
+    );
+    expect(coded.lines[0].setCode).toBeNull();
+    expect(coded.csv?.ignoredColumns).toEqual(["Set Name"]);
+  });
+
+  /** Moxfield's `Edition` is a code; with nothing better beside it, it is read as one. */
+  it("reads Edition as the set only when no code column outranks it", () => {
+    expect(parseDecklist("Count,Name,Edition\n1,Sol Ring,c21\n").lines[0].setCode).toBe("C21");
+  });
+
+  it("keeps this app's own header over an alias for the same field", () => {
+    const list = parseDecklist("Quantity,Count,Name\n2,5,Lightning Bolt\n");
+    expect(list.lines[0].quantity).toBe(2);
+    expect(list.csv?.ignoredColumns).toEqual(["Count"]);
+  });
+
+  /** The app's own export writes these for a reader's spreadsheet and never takes them back —
+   *  the card's rarity, type and price are the corpus's to answer. */
+  it("names this app's own write-only columns as not read", () => {
+    const list = parseDecklist(
+      "Quantity,Name,Set,Set name,Rarity,Type line,Price\n" +
+        "1,Sol Ring,LTC,Tales of Middle-earth Commander,Uncommon,Artifact,1.20\n",
+    );
+    expect(list.csv?.ignoredColumns).toEqual(["Set name", "Rarity", "Type line", "Price"]);
+  });
+
+  /** Cardmarket's export is semicolon-separated and names no card at all — the one sentence.
+   *  Cut to the real export's first nine columns; the five after them are more `is…` flags. */
+  it("refuses Cardmarket's nameless export in one sentence", () => {
+    const list = parseDecklist(
+      "idProduct;groupCount;price;idLanguage;condition;isFoil;isSigned;isAltered;isPlayset\n" +
+        "743311;1;;1;2;1;;;\n715954;1;12.00;1;2;;;;\n",
+    );
+    expect(list.lines).toEqual([]);
+    expect(list.issues).toHaveLength(1);
+    expect(list.issues[0]).toMatchObject({ lineNumber: 1, reason: expect.stringMatching(/name/) });
+  });
+});
+
+describe("a CSV's finish column", () => {
+  const finishOf = (cell: string) =>
+    parseDecklist(`Quantity,Name,Finish\n1,Sol Ring,${cell}\n`).lines[0].finish;
+
+  it("reads every word for foil as foil, and any treatment named a foil", () => {
+    const foil = ["foil", "Foil", "yes", "Y", "TRUE", "1", "x", "Surge Foil", "Gilded Foil"];
+    for (const cell of foil) expect(finishOf(cell), cell).toBe("foil");
+  });
+
+  /** Asked before foil, because `Foil Etched` and MTGGoldfish's `foil_etched` carry both. */
+  it("reads anything etched as etched, before it can read as foil", () => {
+    for (const cell of ["etched", "Etched", "Foil Etched", "foil_etched"]) {
+      expect(finishOf(cell), cell).toBe("etched");
+    }
+  });
+
+  /** `nonfoil` and `non-foil` both contain `foil`, which is why these are asked first. */
+  it("reads every word for the regular copy as the regular copy", () => {
+    const regular = ["", "normal", "Normal", "nonfoil", "non-foil", "regular", "no", "false", "0"];
+    for (const cell of regular) expect(finishOf(cell), JSON.stringify(cell)).toBeNull();
+  });
+
+  it("reads Foil, Printing and Premium columns by the same words", () => {
+    for (const header of ["Foil", "Printing", "Premium"]) {
+      const list = parseDecklist(`Quantity,Name,${header}\n1,Sol Ring,Yes\n1,Shock,Normal\n`);
+      expect(list.lines.map((l) => l.finish), header).toEqual(["foil", null]);
+    }
+  });
+});
+
+describe("a CSV's quantity column", () => {
+  /** `Number.parseInt` read a prefix, so each of these used to import — `1.5` as one copy and
+   *  `3 copies` as three — and none of them said anything. */
+  it("refuses anything but a whole number from 1 to 9999, with a sentence each", () => {
+    const list = parseDecklist(
+      "Quantity,Name\n1.5,Sol Ring\n3 copies,Shock\n0,Duress\n12345,Forest\n-1,Island\n+3,Swamp\n",
+    );
+    expect(list.lines).toEqual([]);
+    expect(list.issues.map((i) => [i.lineNumber, i.reason])).toEqual([
+      [2, "`1.5` is not a whole number of copies"],
+      [3, "`3 copies` is not a whole number of copies"],
+      [4, "A count of zero is not an import."],
+      [5, "`12345` is more than the 9999 copies one row can hold"],
+      [6, "`-1` is not a whole number of copies"],
+      [7, "`+3` is not a whole number of copies"],
+    ]);
+  });
+
+  it("takes the whole range, a leading zero, and a blank cell as one copy", () => {
+    const list = parseDecklist("Quantity,Name\n9999,Sol Ring\n03,Shock\n,Duress\n");
+    expect(list.issues).toEqual([]);
+    expect(list.lines.map((l) => l.quantity)).toEqual([9999, 3, 1]);
+  });
+
+  it("reads every row as one copy when no column counts them, and says so", () => {
+    const list = parseDecklist("Name,Set\nSol Ring,LTC\nShock,M19\n");
+    expect(list.lines.map((l) => l.quantity)).toEqual([1, 1]);
+    expect(list.csv).toMatchObject({ hasQuantity: false });
+  });
+});
+
+describe("a CSV, read as a file", () => {
+  /** A note written in three lines used to cost every later row two lines of its number, so a
+   *  preview quoting "line 3" sent the reader to the middle of somebody else's note. */
+  it("numbers every row by the line it starts on, past a cell that spans three", () => {
+    const list = parseDecklist(
+      'Quantity,Name,Notes\n1,Sol Ring,"first\nsecond\nthird"\n0,Shock,\n1,Lightning Bolt,\n',
+    );
+    expect(list.lines.map((l) => [l.lineNumber, l.name])).toEqual([
+      [2, "Sol Ring"],
+      [6, "Lightning Bolt"],
+    ]);
+    expect(list.lines[0].extra.notes).toBe("first\nsecond\nthird");
+    expect(list.issues).toEqual([
+      { lineNumber: 5, raw: "0,Shock,", reason: "A count of zero is not an import." },
+    ]);
+  });
+
+  /** Excel in a comma-decimal locale writes `;` between cells — and `4,50` inside one. */
+  it("reads a semicolon file, a comma inside a cell and all", () => {
+    const list = parseDecklist(
+      "Quantity;Name;Purchase price\n2;Aragorn, the Uniter;4,50\n1;Lightning Bolt;0,20\n",
+    );
+    expect(list.issues).toEqual([]);
+    expect(list.lines[0]).toMatchObject({
+      quantity: 2,
+      name: "Aragorn, the Uniter",
+      extra: { purchasePrice: "4,50" },
+    });
+    expect(list.csv?.delimiter).toBe(";");
+  });
+
+  it("reads a tab-separated file with a header", () => {
+    const list = parseDecklist("Quantity\tName\tSet\n2\tLightning Bolt\tM11\n");
+    expect(list.lines[0]).toMatchObject({ quantity: 2, name: "Lightning Bolt", setCode: "M11" });
+    expect(list.csv?.delimiter).toBe("\t");
+  });
+
+  it("strips a declared separator line and reads what it declares", () => {
+    const list = parseDecklist("sep=;\r\nQuantity;Name\r\n3;Forest\r\n");
+    expect(list.lines[0]).toMatchObject({ lineNumber: 3, quantity: 3, name: "Forest" });
+    expect(list.csv?.delimiter).toBe(";");
+  });
+
+  /** The writer escapes a cell a spreadsheet would evaluate; the reader takes it back off, so a
+   *  note that starts `-2 lent to Sam` round-trips as itself. */
+  it("undoes the formula escape on every cell it reads", () => {
+    const list = parseDecklist("Quantity,Name,Notes\n1,Sol Ring,'-2 lent to Sam\n1,Shock,'hi\n");
+    expect(list.lines.map((l) => l.extra.notes)).toEqual(["-2 lent to Sam", "'hi"]);
+  });
+
+  /**
+   * **The golden fence, read back.** Both writers — `format.ts` and the mirror's `csv.rs` — must
+   * produce this file byte for byte, apostrophes and all; this is the reader's half of the same
+   * promise: every escaped cell comes back as the corpus spelled it, including a note that
+   * already opened on an apostrophe and a quoted cell carrying a comma after its escape.
+   */
+  it("reads the golden formula-cells CSV back to the corpus's own words", () => {
+    const { lines, issues } = parseDecklist(FORMULA_CELLS_CSV);
+    expect(issues).toEqual([]);
+    expect(lines[0]).toMatchObject({
+      name: "+2 Mace",
+      extra: { acquisitionSource: "@shop", tags: "=binder, trade", notes: "-2 lent" },
+    });
+    expect(lines[1].extra.notes).toBe("'=already escaped");
+  });
+
+  it("quotes a refused row as the file wrote it, quotes and all", () => {
+    const list = parseDecklist('Quantity,Name\n1.5,"Aragorn, the Uniter"\n');
+    expect(list.issues[0].raw).toBe('1.5,"Aragorn, the Uniter"');
   });
 });

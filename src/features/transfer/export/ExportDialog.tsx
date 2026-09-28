@@ -127,6 +127,20 @@ import {
   type ExportFormat,
 } from "./format";
 
+/**
+ * Copy and Save as…, and what they look like while they refuse.
+ *
+ * **Greyed through `aria-disabled:`, never the `disabled` attribute** — `src/CLAUDE.md`'s rule,
+ * since a `disabled` button leaves the tab order and these two grey and un-grey as the sweep
+ * runs — with the house's pair (`aria-disabled:opacity-50` and a hover that no longer lights),
+ * so a refusing button does not answer the pointer as if it were about to act. Until issue #555
+ * they carried `aria-disabled` with nothing drawn from it, and a still-sweeping dialog's buttons
+ * looked exactly as pressable as a finished one's.
+ */
+const ACTION =
+  "h-9 rounded-md border border-border px-3 text-sm hover:bg-surface " +
+  "aria-disabled:opacity-50 aria-disabled:hover:bg-transparent";
+
 export interface ExportDialogProps {
   open: boolean;
   /** What is being exported — "Removal", "Atraxa". The dialog's title reads `Export "<title>"`. */
@@ -181,6 +195,18 @@ export interface ExportDialogProps {
      *  already uses — a reader must not save or copy a file the sweep has not finished
      *  filling in. */
     loading: boolean;
+    /**
+     * Why the sweep could not be read, or `null`/absent — `scope.ts`'s `error` (issue #555).
+     *
+     * While it is set the buttons are greyed exactly as they are for `loading`, and the count
+     * `label` is **not drawn**: it is a number from whatever the first page of a failed sweep
+     * reported, and beside an empty preview it read as a file of 3,000 cards that was really a
+     * file of none. An alert takes its place, with {@link onRetry} beside it.
+     */
+    error?: string | null;
+    /** Ask for the sweep again — `scope.ts`'s `retry`. The alert draws a Retry button only when
+     *  this is passed, because a button that can do nothing is furniture. */
+    onRetry?: () => void;
     everything: boolean;
     onEverything: (everything: boolean) => void;
   };
@@ -373,6 +399,17 @@ function Body({
   /** Names the preview for the toggle's `aria-controls` — see the button. */
   const previewId = useId();
 
+  /** Why a scope export's sweep could not be read, or `null` — on a deck export always `null`,
+   *  since there is no sweep. */
+  const scopeError = scope?.error ?? null;
+  /**
+   * The cards this dialog would write are not the cards the reader asked for — still sweeping, or
+   * the sweep failed (issue #555). Either way `cards` is empty or partial, and a file written from
+   * it looks complete and is not, so Copy and Save as… both refuse while it holds. `saving` is the
+   * third guard and is Save's alone: a copy made mid-write is still the right text.
+   */
+  const notReady = scope !== undefined && (scope.loading || scopeError !== null);
+
   const handleCopy = useCallback(() => {
     setError(null);
     setCopied(false);
@@ -409,7 +446,32 @@ function Body({
           to and nothing to say a count about that the dialog's title has not already said. */}
       {scope !== undefined && (
         <div className="flex flex-wrap items-center gap-3 text-sm">
-          <span className="text-dim">{scope.label}</span>
+          {/* A failed sweep draws its reason **instead of** the count, never beside it: the count
+              is whatever total the first page reported before the sweep fell over, and "3,000
+              cards matching your filters" over an empty preview is the file-of-nothing this
+              whole guard exists to stop (issue #555). A `role="alert"` rather than the dialog's
+              `text-dim` facts, because here something has failed and the reader can act on it. */}
+          {scopeError === null ? (
+            <span className="text-dim">{scope.label}</span>
+          ) : (
+            <>
+              <p role="alert" className="text-destructive">
+                Could not read the cards to export — {scopeError}
+              </p>
+              {scope.onRetry !== undefined && (
+                <button
+                  type="button"
+                  onClick={() => scope.onRetry?.()}
+                  className={cn(
+                    "h-8 rounded-md border border-border px-3 text-sm hover:bg-surface",
+                    FOCUS,
+                  )}
+                >
+                  Retry
+                </button>
+              )}
+            </>
+          )}
           <label className="flex items-center gap-2">
             <input
               type="checkbox"
@@ -598,27 +660,29 @@ function Body({
       )}
 
       <div className="flex flex-wrap items-center gap-3">
-        {/* `scope?.loading`, the same guard `saving` already is: a still-sweeping dialog has a
-            `text` built from whatever the sweep has landed *so far*, and a reader who copies or
-            saves it before it finishes gets a decklist that looks complete and is not. */}
+        {/* `notReady`, the same guard `saving` already is: a still-sweeping dialog has a `text`
+            built from whatever the sweep has landed *so far*, and a failed one has a `text` built
+            from nothing, and a reader who copies or saves either gets a decklist that looks
+            complete and is not. `aria-busy` is the wait's and not the failure's — nothing is
+            coming once the sweep has failed until the reader presses Retry. */}
         <button
           type="button"
-          aria-disabled={scope?.loading ? true : undefined}
+          aria-disabled={notReady ? true : undefined}
           onClick={() => {
-            if (!scope?.loading) handleCopy();
+            if (!notReady) handleCopy();
           }}
-          className={cn("h-9 rounded-md border border-border px-3 text-sm hover:bg-surface", FOCUS)}
+          className={cn(ACTION, FOCUS)}
         >
           Copy
         </button>
         <button
           type="button"
-          aria-disabled={saving || scope?.loading ? true : undefined}
+          aria-disabled={saving || notReady ? true : undefined}
           onClick={() => {
-            if (!saving && !scope?.loading) void handleSaveAs();
+            if (!saving && !notReady) void handleSaveAs();
           }}
           aria-busy={saving || scope?.loading || undefined}
-          className={cn("h-9 rounded-md border border-border px-3 text-sm hover:bg-surface", FOCUS)}
+          className={cn(ACTION, FOCUS)}
         >
           Save as…
         </button>

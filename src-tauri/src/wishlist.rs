@@ -692,6 +692,14 @@ pub struct WishlistImportItem {
 ///
 /// `removed` is counted in the loop rather than derived, because a delete and an insert in one
 /// file would cancel out in a before/after row count and report neither.
+///
+/// **It answers an undo ticket** ([`crate::bulk_undo`], issue #555), captured over the wishes a
+/// line can land on: every root wish naming one of the file's printings or oracle cards. That is
+/// the whole of [`WISHLIST_GRAIN`] an import can vary — the folder is always the root, and a
+/// line's `card_id` or `oracle_id` is the rest of any row it folds into or makes. `copies` is the
+/// feed row's `delta`, and `left_in_folders` is the collection's alone and always `0` here: a wish
+/// filed in a drawer is a second wish beside a root one ([`WishRow::elsewhere`]), not a copy the
+/// file's number could account for.
 pub(crate) fn commit_import(
     conn: &Connection,
     items: &[WishlistImportItem],
@@ -702,6 +710,14 @@ pub(crate) fn commit_import(
             "`{mode}` is not an import mode. Use `add` or `set`."
         ));
     }
+    let printings: Vec<&str> = items
+        .iter()
+        .filter_map(|i| crate::filters::nonblank(&i.card_id))
+        .collect();
+    let oracles: Vec<&str> = items
+        .iter()
+        .filter_map(|i| crate::filters::nonblank(&i.oracle_id))
+        .collect();
     // Both totals in one statement, `collection::commit_import`'s shape and for its reason: the
     // row count the outcome is built from, and the copies the feed's `delta` is. A `set` file can
     // lower a quantity without deleting a row, so neither number answers for the other.
@@ -715,6 +731,17 @@ pub(crate) fn commit_import(
     let mut removed = 0i64;
 
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let capture = crate::bulk_undo::Capture::begin(
+        &tx,
+        crate::bulk_undo::Table::Wishlist,
+        "folder_id IS NULL
+            AND (card_id IN (SELECT value FROM json_each(?1))
+                 OR oracle_id IN (SELECT value FROM json_each(?2)))",
+        vec![
+            crate::bulk_undo::json_list(&printings),
+            crate::bulk_undo::json_list(&oracles),
+        ],
+    )?;
     for item in items {
         let input = WishInput {
             oracle_id: item.oracle_id.clone(),
@@ -763,25 +790,29 @@ pub(crate) fn commit_import(
 
     // **One row for the whole file** — `cards` is what the file said, `rows` the wishlist lines
     // it landed on, and `delta` the net copies wished for, which a `set` file can make negative.
-    crate::activity::record(
-        &tx,
-        crate::activity::WISHLIST,
-        crate::activity::IMPORT,
-        None,
-        None,
-        &serde_json::json!({
+    let copies = copies_after - copies_before;
+    let feed = crate::bulk_undo::Feed {
+        kind: crate::activity::IMPORT,
+        card_id: None,
+        card_name: None,
+        payload: serde_json::json!({
             "cards": items.iter().map(|i| i.quantity).sum::<i64>(),
             "rows": added + updated + removed,
         }),
-        copies_after - copies_before,
-    )
-    .map_err(|e| e.to_string())?;
+        delta: copies,
+    };
+    feed.record(&tx, crate::bulk_undo::Table::Wishlist)?;
+    let changes = capture.finish(&tx)?;
     tx.commit().map_err(|e| e.to_string())?;
 
     Ok(crate::collection::ImportCommitOutcome {
         added,
         updated,
         removed,
+        copies,
+        left_in_folders: 0,
+        // After the commit, never before it — `bulk_undo::register`'s rule.
+        undo_id: crate::bulk_undo::register(changes, feed),
     })
 }
 
@@ -3613,6 +3644,58 @@ mod tests {
         assert_eq!(out.removed, 1, "the any-printing wish was zeroed away");
         assert_eq!(out.updated, 0);
         assert_eq!(wish_count(&conn), 1);
+    }
+
+    /// **A wishlist import answers its net copies and an undo ticket, and the undo puts back the
+    /// exact wishes it found** (issue #555) — the one it raised, the one it zeroed away and the one
+    /// it made, gone again — with one line saying so. `left_in_folders` is the collection's alone.
+    #[test]
+    fn a_wishlist_import_can_be_undone_to_the_wishes_it_found() {
+        let conn = seeded();
+        commit_import(
+            &conn,
+            &[wish("oracle-1", 2), pinned_wish("o1", "bolt-lea", 3)],
+            "add",
+        )
+        .unwrap();
+        let found = crate::bulk_undo::table_image(&conn, "wishlist_entries");
+
+        let out = commit_import(
+            &conn,
+            &[
+                pinned_wish("o1", "bolt-2ed", 1),
+                wish("oracle-1", 5),
+                pinned_wish("o1", "bolt-lea", 0),
+            ],
+            "set",
+        )
+        .unwrap();
+        assert_eq!((out.added, out.updated, out.removed), (1, 1, 1));
+        assert_eq!((out.copies, out.left_in_folders), (1, 0), "+1, +3 and -3");
+
+        let undone = crate::bulk_undo::undo(&conn, out.undo_id.unwrap()).unwrap();
+        assert_eq!((undone.scope, undone.restored), ("wishlist", 3));
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "wishlist_entries"),
+            found
+        );
+        let line = &feed(&conn)[0];
+        assert_eq!(line.scope, crate::activity::WISHLIST);
+        assert_eq!(
+            (line.kind.as_str(), line.delta),
+            (crate::activity::IMPORT, -1)
+        );
+        assert_eq!(payload(line)["undo"], true);
+    }
+
+    /// A refused line rolls the whole file back and leaves no ticket behind it.
+    #[test]
+    fn a_refused_wishlist_import_leaves_no_ticket() {
+        let conn = seeded();
+        let items = [wish("oracle-1", 1), bad_finish_wish("oracle-1", 1)];
+        assert!(commit_import(&conn, &items, "add").is_err());
+        assert_eq!(wish_count(&conn), 0);
+        assert_eq!(crate::bulk_undo::tickets_held(), 0);
     }
 
     /// **The fourth term of [`WISHLIST_GRAIN`], reached through the command rather than

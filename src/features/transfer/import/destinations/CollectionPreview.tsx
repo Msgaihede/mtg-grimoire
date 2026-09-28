@@ -15,19 +15,35 @@
  * graded on the way in answers `NM` once instead of correcting three hundred rows — but the
  * answer it opens on now records that the file said nothing, rather than putting the best grade
  * on the scale on every ungraded line.
+ *
+ * **Under `set` the headline is the backend's own count, not this page's arithmetic** (issue
+ * #555). It used to say "40 cards will be added" over a press that lowers some quantities,
+ * deletes others and — before the backend learnt to count filed copies toward the file's
+ * number — doubled every copy the reader had filed in a folder. What a `set` does depends on what
+ * the reader already holds, which only the database knows, so the sentence is drawn from
+ * `ipc.collectionImportPreview`: the same write, run without writing.
  */
 import { useMemo, useState, type JSX } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
+import { offerUndo } from "@/lib/bulkUndo";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
-import { plural } from "@/lib/counts";
-import { ipc, ipcError, type DeckFinish, type TransferImportMode } from "@/lib/ipc";
+import { count, plural, verb } from "@/lib/counts";
+import {
+  ipc,
+  ipcError,
+  type DeckFinish,
+  type ImportCommitOutcome,
+  type TransferImportMode,
+} from "@/lib/ipc";
+import { languageName } from "@/lib/languages";
 import { useAppStore } from "@/lib/store";
 import type { DestinationPreviewProps, ImportDestination, ImportModeOption } from "../destination";
 import { CommitBar, useImportCommit } from "../shared/CommitBar";
 import { ModeRadios } from "../shared/ModeRadios";
 import { ImportProblems } from "../shared/Problems";
-import { planCollectionImport } from "./collection";
+import { planCollectionImport, type CollectionPlan } from "./collection";
 import { ProblemList } from "./DeckPreview";
 
 /**
@@ -35,10 +51,20 @@ import { ProblemList } from "./DeckPreview";
  * collection would empty a 3,000-card record from a 40-line paste with the file that caused it
  * looking completely ordinary — see `TransferImportMode`'s own doc for why the backend never
  * offers the word at all.
+ *
+ * **`set`'s hint says "folders included" because that is the rule now and was not before.** A
+ * `set` used to write the file's number into a root row beside whatever the reader had filed,
+ * so 4 in the file over 3 in a binder became 7. The backend counts the filed copies toward the
+ * file's number and adjusts the root by the difference, and a reader choosing between the two
+ * radios needs to know the number means *all* of them before they press.
  */
 export const COLLECTION_MODES: readonly ImportModeOption[] = [
   { key: "add", label: "Add these copies", hint: "Quantities add to what you already own." },
-  { key: "set", label: "Set these quantities", hint: "The file's number replaces yours." },
+  {
+    key: "set",
+    label: "Set these quantities",
+    hint: "The file's number becomes how many you hold, copies filed in folders included.",
+  },
 ];
 
 export function CollectionPreview({
@@ -71,10 +97,34 @@ export function CollectionPreview({
     () => ipc.collectionImportCommit(plan.items, mode as TransferImportMode),
   );
 
+  // **The items are in the key as one string**, memoised with the plan: TanStack hashes a key on
+  // every render, and a 3,000-item array hashed field by field with its keys sorted is a cost
+  // this step would pay on every dropdown press. A string is the same identity for a fraction of
+  // it. Under `["collection"]` so every collection write — including this dialog's own, and a
+  // second window's — invalidates it: the dry run is a fact about the rows as they stand.
+  const itemsKey = useMemo(() => JSON.stringify(plan.items), [plan.items]);
+  const dryRun = useQuery({
+    queryKey: ["collection", "importPreview", mode, itemsKey],
+    queryFn: () => ipc.collectionImportPreview(plan.items, mode as TransferImportMode),
+    // `add` needs no count — its sentence is the file's own total — and neither does an empty
+    // plan. **Off while the write is in flight and after it lands**: the commit invalidates
+    // `["collection"]`, and a dry run refetched over the rows it has just written would redraw
+    // the sentence as "nothing changes" in the frame before the dialog closes.
+    enabled: mode === "set" && plan.items.length > 0 && !commit.isPending && !commit.isSuccess,
+    // A refused dry run is said once and the reader can still press Import; retrying it three
+    // times with backoff would hold "Counting…" on screen for seconds to say the same thing.
+    retry: false,
+  });
+
   const runImport = () => {
     if (plan.items.length === 0) return;
     commit.mutate(undefined, {
-      onSuccess: (outcome) => onDone(`${outcome.added} added, ${outcome.updated} updated.`),
+      onSuccess: (outcome) => {
+        // `?? null`: an outcome from a build (or a test double) that predates the ticket carries
+        // no `undoId` at all, and `offerUndo` offers anything that is not `null`.
+        offerUndo("collection", outcome.undoId ?? null, undoLabel(mode, plan));
+        onDone(doneMessage(outcome));
+      },
     });
   };
 
@@ -105,10 +155,15 @@ export function CollectionPreview({
       className="flex min-h-0 flex-1 flex-col"
     >
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
-        <p className="text-sm">
-          {plan.totalCards === 1 ? "1 card" : `${plan.totalCards} cards`} will be added to your
-          collection.
-        </p>
+        {mode === "set" ? (
+          <SetSummary
+            cardCount={plan.items.length}
+            outcome={dryRun.data}
+            error={dryRun.error}
+          />
+        ) : (
+          <p className="text-sm">{cards(plan.totalCards)} will be added to your collection.</p>
+        )}
 
         {/* The two facts a text list cannot carry, said before the reader commits rather than
             discovered afterwards in 300 rows they have to correct by hand. A CSV that carries
@@ -161,30 +216,7 @@ export function CollectionPreview({
           label="How to apply this file"
         />
 
-        {/* The collection's own third warning, beside the two `ImportProblems` already draws —
-            a grade the file named that this app cannot read fell back to the default above
-            rather than being filed as though the file had named none. Only the collection reads
-            conditions, so this has no wishlist equivalent. */}
-        {plan.unknownConditions.length > 0 && (
-          <ProblemList
-            caption={`${plural(plan.unknownConditions.length, "line")} named a condition this app does not recognise, and used the default instead`}
-            lines={plan.unknownConditions.map(
-              (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
-            )}
-          />
-        )}
-
-        {/* The same shape for a purchase price the file filled and this app could not read —
-            refused rather than guessed (`parsePurchasePrice`), so the copy lands with no price
-            and this is the only place the reader learns the cell was not empty. */}
-        {plan.unreadablePrices.length > 0 && (
-          <ProblemList
-            caption={`${plural(plan.unreadablePrices.length, "line")} had a purchase price this app could not read, and will be added without one`}
-            lines={plan.unreadablePrices.map(
-              (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
-            )}
-          />
-        )}
+        <CollectionProblems plan={plan} />
 
         <ImportProblems
           unmatched={plan.unmatched}
@@ -206,6 +238,211 @@ export function CollectionPreview({
       />
     </form>
   );
+}
+
+/**
+ * What a `set` would do, from the dry run — or a neutral sentence while it counts, or the reason
+ * it could not.
+ *
+ * **A refused count never blocks Import.** The dry run is a courtesy: the write is its own
+ * transaction with its own refusal, and a reader who can see their file was read correctly is
+ * entitled to press the button whether or not this page managed to predict the outcome.
+ *
+ * `cardCount` is the number of **items** — distinct copies at the collection's grain — and not
+ * the file's total, because `added`/`updated`/`removed` are counted in rows: "Sets how many you
+ * hold of 1 card: 1 changed" is a file reading `4 Lightning Bolt`.
+ */
+function SetSummary({
+  cardCount,
+  outcome,
+  error,
+}: {
+  cardCount: number;
+  outcome: ImportCommitOutcome | undefined;
+  error: unknown;
+}): JSX.Element {
+  if (cardCount === 0) return <p className="text-sm">Nothing in this file can be set.</p>;
+  if (error !== null) {
+    return (
+      <div className="space-y-1">
+        <p className="text-sm">Sets how many you hold of {cards(cardCount)}.</p>
+        <p className="text-xs text-dim">
+          What that would change could not be counted — {ipcError(error)}
+        </p>
+      </div>
+    );
+  }
+  if (outcome === undefined) {
+    return <p className="text-sm">Counting what setting {cards(cardCount)} would change…</p>;
+  }
+  return (
+    <div className="space-y-1">
+      <p className="text-sm">{setSentence(cardCount, outcome)}</p>
+      {outcome.leftInFolders > 0 && (
+        <p className="text-xs text-dim">{leftInFoldersSentence(outcome.leftInFolders)}</p>
+      )}
+    </div>
+  );
+}
+
+/**
+ * `Sets how many you hold of 40 cards: 5 new, 20 changed, 2 removed — 12 more copies than now.`
+ *
+ * **Only the parts that are not zero are named**, and a file that matches the collection
+ * exactly says so in words rather than as `0 new, 0 changed, 0 removed`. The copies clause is the
+ * one a reader restoring a backup is really asking — *will I have more cardboard or less* — so it
+ * turns on the sign rather than printing `-12 more`.
+ */
+function setSentence(cardCount: number, outcome: ImportCommitOutcome): string {
+  const head = `Sets how many you hold of ${cards(cardCount)}`;
+  const parts = [
+    outcome.added > 0 ? `${count(outcome.added)} new` : null,
+    outcome.updated > 0 ? `${count(outcome.updated)} changed` : null,
+    outcome.removed > 0 ? `${count(outcome.removed)} removed` : null,
+  ].filter((part) => part !== null);
+  if (parts.length === 0) return `${head}: every number already matches, so nothing changes.`;
+  return `${head}: ${parts.join(", ")} — ${copiesClause(outcome.copies)}.`;
+}
+
+function copiesClause(copies: number): string {
+  if (copies === 0) return "the same number of copies as now";
+  const n = Math.abs(copies);
+  return `${count(n)} ${copies > 0 ? "more" : "fewer"} ${n === 1 ? "copy" : "copies"} than now`;
+}
+
+/**
+ * The copies a `set` counted toward the file's number and could not take away, because they are
+ * filed — `ImportCommitOutcome.leftInFolders`. A file says nothing about a reader's filing, so the
+ * backend never reaches into a folder to lower a count, and this is where the reader learns their
+ * binder still holds more than the file does.
+ */
+function leftInFoldersSentence(n: number): string {
+  return (
+    `${count(n)} ${n === 1 ? "copy" : "copies"} filed in ${n === 1 ? "a folder" : "folders"} ` +
+    `${verb(n, "is", "are")} more than the file lists; ` +
+    `${verb(n, "it stays where it is", "they stay where they are")}.`
+  );
+}
+
+/**
+ * The sentence the collection page's undo notice draws — already pluralised, as
+ * `UndoOffer.label` asks. The two modes are two different acts and say so: an `add` imported
+ * cards, a `set` rewrote quantities, and a reader deciding whether to press Undo needs to know
+ * which one they would be taking back.
+ */
+function undoLabel(mode: string, plan: CollectionPlan): string {
+  return mode === "set"
+    ? `Set quantities from a file of ${cards(plan.items.length)}.`
+    : `Imported ${cards(plan.totalCards)} into your collection.`;
+}
+
+/** What `onDone` reports. `removed` only when a `set` removed something — an `add` never does,
+ *  and `0 removed` on every import would be a clause that is never news. */
+function doneMessage(outcome: ImportCommitOutcome): string {
+  const removed = outcome.removed > 0 ? `, ${outcome.removed} removed` : "";
+  return `${outcome.added} added, ${outcome.updated} updated${removed}.`;
+}
+
+/** `1 card`, `3,000 cards` — `plural` with the thousands separator a collection file reaches and
+ *  a deck never does (`counts.ts`' own note on `plural`). */
+function cards(n: number): string {
+  return `${count(n)} ${n === 1 ? "card" : "cards"}`;
+}
+
+/**
+ * The collection's own warnings, beside the three `ImportProblems` draws for every destination.
+ *
+ * **Each one is a place the file said something the import cannot carry as written**, and each
+ * is listed rather than absorbed: a grade or a tradelist this app could not read, a language it
+ * has no printing in, a price in another currency than the copy it was merged into. The fold is
+ * listed too, although nothing is lost by it, because a file of 300 lines that lands as 290 rows
+ * is a file the reader will otherwise count by hand.
+ */
+function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
+  return (
+    <>
+      {/* A grade the file named that this app cannot read fell back to the default above rather
+          than being filed as though the file had named none. Only the collection reads
+          conditions, so this has no wishlist equivalent. */}
+      {plan.unknownConditions.length > 0 && (
+        <ProblemList
+          caption={`${plural(plan.unknownConditions.length, "line")} named a condition this app does not recognise, and used the default instead`}
+          lines={plan.unknownConditions.map(
+            (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
+          )}
+        />
+      )}
+
+      {/* A language cell nothing here can read was sent to the resolver as no preference at all,
+          so the line matched whichever printing it would have without the column. */}
+      {plan.unknownLanguages.length > 0 && (
+        <ProblemList
+          caption={`${plural(plan.unknownLanguages.length, "line")} named a language this app does not recognise, and ${verb(plan.unknownLanguages.length, "was", "were")} matched without it`}
+          lines={plan.unknownLanguages.map(
+            (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
+          )}
+        />
+      )}
+
+      {/* The resolver preferred the file's language and the corpus had nothing in it — the row
+          takes its language from the printing it names, so this is the only notice the reader
+          gets that their Japanese copy is about to be recorded as English. */}
+      {plan.languageMismatches.length > 0 && (
+        <ProblemList
+          caption={`${plural(plan.languageMismatches.length, "line")} named a language this app's card data has no printing of, and will be added in the language it has`}
+          lines={plan.languageMismatches.map(
+            (m) =>
+              `line ${m.lineNumber} · ${m.name} — the file says ${languageName(m.said)}; added as ${languageName(m.used)}`,
+          )}
+        />
+      )}
+
+      {/* The same shape for a purchase price the file filled and this app could not read —
+          refused rather than guessed (`parsePurchasePrice`), so the copy lands with no price
+          and this is the only place the reader learns the cell was not empty. */}
+      {plan.unreadablePrices.length > 0 && (
+        <ProblemList
+          caption={`${plural(plan.unreadablePrices.length, "line")} had a purchase price this app could not read, and will be added without one`}
+          lines={plan.unreadablePrices.map(
+            (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
+          )}
+        />
+      )}
+
+      {plan.unreadableTradelists.length > 0 && (
+        <ProblemList
+          caption={`${plural(plan.unreadableTradelists.length, "line")} had a tradelist quantity that is not a whole number, and will be added without one`}
+          lines={plan.unreadableTradelists.map(
+            (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
+          )}
+        />
+      )}
+
+      {plan.folded.length > 0 && (
+        <ProblemList
+          caption={`${plural(plan.folded.length, "line")} named a copy an earlier line already named, and ${verb(plan.folded.length, "was", "were")} merged into it`}
+          lines={plan.folded.map((f) => `line ${f.lineNumber} → line ${f.into} · ${f.name}`)}
+        />
+      )}
+
+      {/* A mean across currencies is a number in no currency, so the first price a copy was
+          given sets its currency and a later one in another is left out — said here, because
+          the merged row's price is otherwise indistinguishable from one nobody disagreed with. */}
+      {plan.droppedPrices.length > 0 && (
+        <ProblemList
+          caption={`${plural(plan.droppedPrices.length, "merged line")} had a purchase price in a different currency from the copy it joined, and ${verb(plan.droppedPrices.length, "that price was", "those prices were")} left out`}
+          lines={plan.droppedPrices.map(
+            (d) =>
+              `line ${d.lineNumber} → line ${d.into} · ${d.name} — "${d.said}" ${inCurrency(d.currency)}, kept ${inCurrency(d.kept)}`,
+          )}
+        />
+      )}
+    </>
+  );
+}
+
+function inCurrency(currency: string | undefined): string {
+  return currency === undefined ? "with no currency" : `in ${currency}`;
 }
 
 export const collectionDestination: ImportDestination = {

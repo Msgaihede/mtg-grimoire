@@ -425,3 +425,90 @@ describe("a real decklist round-trips through every format this app can read", (
     expect(twice, format).toBe(once);
   });
 });
+
+/**
+ * Issue #555: the reader's own pile names, when a name holds a character Archidekt's syntax
+ * reads — a comma (the bracket's first entry is the pile), braces (a flag) or square brackets
+ * (the bracket itself). The 105-line corpus above holds none, so every fixed point there was
+ * silent about them, and `[Ramp, Fixing]` came back as a pile called `Ramp`.
+ *
+ * **The writer sanitises and the re-import carries the sanitised name**, which is a lossy step
+ * taken once: `,` is `;` and every brace or square bracket is an angle bracket from the first
+ * export on, and every export after it is the same file. A CSV needs none of that — a quoted cell
+ * carries all five characters — so it keeps the reader's spelling exactly.
+ *
+ * **Angle brackets rather than parentheses is what lets these names be the hostile ones**, trailing
+ * brackets included. A heading ending in `(x) (y)` is a printing hint to `parse.ts`'s heading
+ * rule, which then reads the line as a card and leaves the pile's own cards in whatever section
+ * came before — here, behind the Commander pile, the command zone. `<x> <y>` is nothing to it. A
+ * pile whose *own* name ends in parentheses (`Removal (cheap)`) or opens with a count (`2 Drops`)
+ * still trips that rule, and is the heading rule's to answer rather than this writer's, so none is
+ * in this fixture.
+ */
+describe("a pile name Archidekt's own syntax cannot carry", () => {
+  const RAMP = "Ramp, Fixing {x} [y]";
+  const filed = (
+    name: string,
+    quantity: number,
+    categoryName: string,
+    over: Partial<TransferCard> = {},
+  ): TransferCard =>
+    transferCard({
+      name,
+      quantity,
+      setCode: "C21",
+      collectorNumber: "1",
+      categoryName,
+      categoryKind: "main",
+      categoryActive: true,
+      ...over,
+    });
+  const cards = [
+    filed("Bruna, Light of Alabaster", 1, "Commander", { categoryKind: "commander" }),
+    filed("Sol Ring", 1, RAMP),
+    filed("Arcane Signet", 2, RAMP),
+    filed("Swords to Plowshares", 1, "Removal [cheap]"),
+    filed("Mana Crypt", 1, "Cuts [maybe], later", { categoryActive: false }),
+  ];
+
+  it("lands every card in its pile, named as the heading and the bracket wrote it", () => {
+    const text = formatExport(cards, "archidekt", DECK_FIELDS("archidekt"));
+    const parsed = parseDecklist(text);
+
+    expect(parsed.issues).toEqual([]);
+    // Every heading was consumed as a heading: the lines are the cards and nothing else — no
+    // card named after a pile — and not one of them was left behind in the command zone.
+    expect(parsed.lines.map((line) => [line.name, line.section])).toEqual([
+      ["Bruna, Light of Alabaster", "commander"],
+      ["Sol Ring", "deck"],
+      ["Arcane Signet", "deck"],
+      ["Swords to Plowshares", "deck"],
+      ["Mana Crypt", "deck"],
+    ]);
+    expect(pilesOf(text)).toEqual({
+      Commander: 1,
+      "Ramp; Fixing <x> <y>": 3,
+      "Removal <cheap>": 1,
+      "Cuts <maybe>; later": 1,
+    });
+    // The switched-off pile is still switched off — `{noDeck}` is the only brace left.
+    expect(tallyOf(itemsOf(text)).filter((pile) => pile.inactive)).toEqual([
+      { name: "Cuts <maybe>; later", cards: 1, inactive: true },
+    ]);
+  });
+
+  it("keeps the reader's own spelling through a CSV, which needs no sanitising", () => {
+    const text = formatExport(cards, "csv", DECK_FIELDS("csv"));
+
+    expect(Object.keys(pilesOf(text)).sort()).toEqual(
+      ["Commander", RAMP, "Removal [cheap]", "Cuts [maybe], later"].sort(),
+    );
+  });
+
+  it.each(["archidekt", "csv"] as const)("is a fixed point through %s", (format) => {
+    const once = formatExport(cards, format, DECK_FIELDS(format));
+    const twice = formatExport(exportCardsFor(once), format, DECK_FIELDS(format));
+
+    expect(twice, format).toBe(once);
+  });
+});

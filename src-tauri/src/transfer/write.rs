@@ -1,10 +1,10 @@
 //! A pile of cards as text — Rust's copy of `src/features/transfer/export/format.ts`.
 //!
 //! **A port, not a second design.** The TypeScript writer is the behaviour of record and the
-//! golden files under `src/features/transfer/__golden__/` are what says so: 70 files, five
-//! scenarios crossed with seven formats and two field sets, written from that writer and
-//! reproduced here byte for byte by [`tests::every_golden_file_is_reproduced_byte_for_byte`].
-//! When the two disagree, this file is wrong.
+//! golden files under `src/features/transfer/__golden__/` are what says so: every corpus scenario
+//! crossed with seven formats and two field sets, written from that writer and reproduced here
+//! byte for byte by [`tests::every_golden_file_is_reproduced_byte_for_byte`], which counts what it
+//! compared. When the two disagree, this file is wrong.
 //!
 //! LF and a trailing newline, always. The importer takes CRLF, a lone LF and a lone CR, so it
 //! would read any of them — but a file this app wrote should have one answer, and `\n` is the
@@ -16,7 +16,7 @@
 //! entirely maybeboard is an empty file in those two rather than a heading over nothing, and
 //! [`omitted_count`] is what says so out loud.
 
-use super::csv::csv_row;
+use super::csv::{csv_row, escape_formula};
 use super::fields::{csv_header, read, FieldId, FIELD_IDS};
 use super::fold::fold_for_fields;
 use super::{Card, Format};
@@ -112,6 +112,35 @@ fn finish_mark(card: &Card) -> &'static str {
     }
 }
 
+/// A pile's name as a bracket and a heading can carry it (issue #555): `,` becomes `;`, `{` and
+/// `[` become `<`, and `}` and `]` become `>`.
+///
+/// **`writtenCategory` in `format.ts`, character for character**, and the golden fence is what
+/// holds the two together. Each of the five is syntax to `parse.ts`: the first comma entry of a
+/// bracket is the pile, anything in braces is a flag, `]` closes the bracket, and a heading holding
+/// a `[` is read as a card. **Angle brackets rather than parentheses, because a parenthesis is
+/// syntax too**: a heading ending in `(\w{0,10})`, optionally followed by one more token, is read
+/// as a card line with a printing hint (`parse.ts`' `HINT_TAIL`), so `(x) (y)` would have turned a
+/// pile into a card of its own and filed the pile's cards under the heading before it. `<`, `>`
+/// and `;` are read as nothing at all, so the rewritten name comes back exactly from the bracket
+/// and from the heading. The sections are grouped by what is written, so two piles the file cannot
+/// tell apart share one heading. A name whose own parentheses already trip the heading rule —
+/// `Removal (cheap)` — is left as the reader wrote it; that is the parser's to answer.
+///
+/// **One `chars()` walk rather than a `str::replace` chain**, which would be the same answer four
+/// allocations later. Every character it touches and every one it writes is ASCII, so the walk
+/// and TypeScript's regex `replace` over UTF-16 cannot disagree about a single byte.
+fn written_category(name: &str) -> String {
+    name.chars()
+        .map(|ch| match ch {
+            ',' => ';',
+            '{' | '[' => '<',
+            '}' | ']' => '>',
+            other => other,
+        })
+        .collect()
+}
+
 /// Archidekt's `1x`; everyone else's `1`.
 #[derive(Clone, Copy)]
 enum SetCase {
@@ -192,12 +221,14 @@ fn write_line(card: &Card, fields: &[FieldId], spec: LineSpec) -> String {
     if fields.contains(&FieldId::Category) {
         if let Some(name) = card.category_name.as_deref() {
             // `{noDeck}` is what makes an export and a re-import keep a maybeboard — the only
-            // format here that can say it.
+            // format here that can say it. It goes on *after* the name is sanitised: the flag has
+            // to be the only thing in braces in the bracket.
             let flag = if card.category_active == Some(false) {
                 "{noDeck}"
             } else {
                 ""
             };
+            let name = written_category(name);
             line.push_str(&format!(" [{name}{flag}]"));
         }
     }
@@ -417,8 +448,14 @@ pub fn format_export(cards: &[Card], format: Format, fields: &[FieldId]) -> Stri
         ),
         // Grouped by the pile's own name rather than a section word, and in the caller's order:
         // a deck's array order is its category order, and imposing one here would re-file
-        // somebody's deck on the way out.
-        Format::Archidekt => sectioned(&rows, &|card| card.category_name.clone(), &line, None),
+        // somebody's deck on the way out. The heading is the name as `written_category` writes
+        // it, so it says exactly what every bracket under it says.
+        Format::Archidekt => sectioned(
+            &rows,
+            &|card| card.category_name.as_deref().map(written_category),
+            &line,
+            None,
+        ),
         // Flat, and grouped by nothing: Mass Entry reads every line as one item, so a heading
         // here would be read as a card. `written` has left the switched-off piles in — see the
         // writer.
@@ -436,9 +473,16 @@ pub fn format_export(cards: &[Card], format: Format, fields: &[FieldId]) -> Stri
                     .collect::<Vec<_>>(),
             );
             let mut lines = vec![header];
+            // Every cell a card fills goes through `escape_formula` before `csv_row` quotes it
+            // (issue #555) — `format.ts`'s order, for its reason: the apostrophe is part of the
+            // value, and quoting is how a CSV carries one. The header row is this app's own words
+            // and never starts with a trigger.
             for card in &rows {
                 lines.push(csv_row(
-                    &columns.iter().map(|id| read(*id, card)).collect::<Vec<_>>(),
+                    &columns
+                        .iter()
+                        .map(|id| escape_formula(&read(*id, card)))
+                        .collect::<Vec<_>>(),
                 ));
             }
             lines.join("\n")
@@ -561,10 +605,131 @@ mod tests {
                 }
             }
         }
+        // Seven scenarios × seven formats × two field sets. It was 70 over five scenarios until
+        // issue #555 added `awkwardPiles` and `formulaCells`, the two that exercise the category
+        // sanitiser and the CSV formula escape.
         assert_eq!(
-            checked, 70,
+            checked, 98,
             "the golden matrix changed size without this test noticing"
         );
+    }
+
+    /// A deck card filed under one pile — the smallest thing an Archidekt export writes a
+    /// heading over, and a bracket too wherever the test turns `Category` on.
+    fn filed(name: &str, pile: &str, active: bool) -> Card {
+        Card {
+            name: name.into(),
+            category_name: Some(pile.into()),
+            category_kind: Some("main".into()),
+            category_active: Some(active),
+            ..base()
+        }
+    }
+
+    /// Issue #555: `parse.ts` reads a comma, braces and square brackets as syntax, so each is
+    /// rewritten — in the heading and in the bracket alike, so the two name one pile — and into
+    /// angle brackets rather than parentheses, so the heading never ends in a printing hint.
+    #[test]
+    fn archidekt_sanitises_a_pile_name_in_the_heading_and_the_bracket_alike() {
+        let text = format_export(
+            &[filed("Sol Ring", "Ramp, Fixing {x} [y]", true)],
+            Format::Archidekt,
+            &[FieldId::Quantity, FieldId::Name, FieldId::Category],
+        );
+        assert_eq!(
+            text,
+            "Ramp; Fixing <x> <y>\n1x Sol Ring [Ramp; Fixing <x> <y>]\n"
+        );
+        assert!(
+            !text.contains(['(', ')']),
+            "a parenthesis at the end of a heading is a printing hint to the parser: {text:?}"
+        );
+    }
+
+    /// `{noDeck}` goes on after the name is sanitised, so it is the only thing in braces — and
+    /// the heading is sanitised whether or not `Category` writes a bracket under it.
+    #[test]
+    fn the_no_deck_flag_is_the_only_brace_left_in_a_sanitised_bracket() {
+        let fields = [FieldId::Quantity, FieldId::Name, FieldId::Category];
+        assert_eq!(
+            format_export(
+                &[filed("Mana Crypt", "Cuts {maybe}", false)],
+                Format::Archidekt,
+                &fields
+            ),
+            "Cuts <maybe>\n1x Mana Crypt [Cuts <maybe>{noDeck}]\n"
+        );
+        assert_eq!(
+            format_export(
+                &[filed("Mana Crypt", "Cuts {maybe}", false)],
+                Format::Archidekt,
+                &[FieldId::Quantity, FieldId::Name]
+            ),
+            "Cuts <maybe>\n1x Mana Crypt\n",
+            "the heading is sanitised whether or not the bracket is written"
+        );
+    }
+
+    /// Two piles the file cannot tell apart share one heading rather than printing it twice —
+    /// the sections are grouped by what is written, exactly as TypeScript groups them.
+    #[test]
+    fn two_piles_that_sanitise_alike_share_one_heading() {
+        let text = format_export(
+            &[
+                filed("Sol Ring", "Ramp, Fixing", true),
+                filed("Lightning Bolt", "Burn", true),
+                filed("Arcane Signet", "Ramp; Fixing", true),
+            ],
+            Format::Archidekt,
+            &[FieldId::Quantity, FieldId::Name],
+        );
+        assert_eq!(
+            text,
+            "Ramp; Fixing\n1x Sol Ring\n1x Arcane Signet\n\nBurn\n1x Lightning Bolt\n"
+        );
+    }
+
+    /// A name holding none of the five characters is written exactly as it was — which is every
+    /// pile the corpus held before the sanitiser, native parentheses included.
+    #[test]
+    fn a_pile_name_with_nothing_to_sanitise_is_untouched() {
+        assert_eq!(
+            written_category("(New) Maybeboard — Æther"),
+            "(New) Maybeboard — Æther"
+        );
+        assert_eq!(written_category("a,b{c}[d]"), "a;b<c><d>");
+    }
+
+    /// Issue #555: the CSV writer escapes every cell a card fills, and no other format escapes
+    /// anything — `+2 Mace` is a card, and a decklist line is not a spreadsheet cell.
+    #[test]
+    fn only_the_csv_escapes_a_formula_trigger() {
+        let mace = Card {
+            name: "+2 Mace".into(),
+            notes: Some("-2 lent".into()),
+            ..base()
+        };
+        let csv = format_export(
+            std::slice::from_ref(&mace),
+            Format::Csv,
+            &[FieldId::Quantity, FieldId::Name, FieldId::Notes],
+        );
+        assert_eq!(csv, "Quantity,Name,Notes\n1,'+2 Mace,'-2 lent\n");
+        for format in Format::ALL.into_iter().filter(|f| *f != Format::Csv) {
+            let text = format_export(
+                std::slice::from_ref(&mace),
+                format,
+                &[FieldId::Quantity, FieldId::Name],
+            );
+            assert!(
+                text.contains("1 +2 Mace") || text.contains("1x +2 Mace"),
+                "{format:?}: {text:?}"
+            );
+            assert!(
+                !text.contains('\''),
+                "{format:?} escaped a decklist line: {text:?}"
+            );
+        }
     }
 
     #[test]

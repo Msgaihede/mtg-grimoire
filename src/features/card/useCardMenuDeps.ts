@@ -20,6 +20,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useCollectionFolderList,
   useSetCollectionFolder,
+  useSetCollectionFolderMany,
 } from "@/features/collection/useCollectionFolders";
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
 import { MENU_CONDITION } from "@/lib/conditions";
@@ -35,6 +36,10 @@ import {
   type CardMenuDeps,
   type CardMenuTarget,
 } from "./cardMenu";
+
+/** What the collection's root is called in a sentence — the breadcrumb's first segment
+ *  (`CollectionBreadcrumb`'s `ROOT`) and the activity feed's `COLLECTION.root`. */
+const COLLECTION_ROOT = "Collection";
 
 export interface CardMenuWiring {
   /** One object for the whole page. Hand it to `buildCardMenu` with each row's own target. */
@@ -235,11 +240,22 @@ export function useCardMenuDeps(): CardMenuWiring {
     onError: (error) => setRefusal(`Could not move that card — ${ipcError(error)}`),
   });
 
-  // `mutate` is stable for the life of the observer, which is what lets the three callbacks below
-  // — and therefore `deps` — hold still across a render of a wall of forty tiles.
+  /**
+   * `Move N cards to` in **one** write (issue #555) — the same filing at a coarser grain, with the
+   * same refusal surface as {@link setFolder} beside it and the undo offer made inside the hook.
+   * A refusal rolls the whole press back, so the sentence says none of them moved.
+   */
+  const setFolderMany = useSetCollectionFolderMany({
+    onMutate: () => setRefusal(null),
+    onError: (error) => setRefusal(`Could not move those cards — ${ipcError(error)}`),
+  });
+
+  // `mutate` is stable for the life of the observer, which is what lets the callbacks below — and
+  // therefore `deps` — hold still across a render of a wall of forty tiles.
   const addCopy = collectionAdd.mutate;
   const addWish = wishlistAdd.mutate;
   const moveCopy = setFolder.mutate;
+  const moveMany = setFolderMany.mutate;
 
   const addToCollection = useCallback(
     (target: CardMenuTarget, finish: Finish, folderId: number | null) =>
@@ -255,6 +271,24 @@ export function useCardMenuDeps(): CardMenuWiring {
   const moveToFolder = useCallback(
     (entryId: number, folderId: number | null) => moveCopy({ entryId, folderId }),
     [moveCopy],
+  );
+  /**
+   * The several — one write, and the destination's name for the undo notice's sentence, read out
+   * of the cabinet this object already holds. `null` is the root, named by the breadcrumb's own
+   * first segment. A folder the list does not carry (a cabinet another window just changed) is
+   * still named, as the generic word, rather than as an empty `to`.
+   */
+  const moveCopies = useCallback(
+    (entryIds: readonly number[], folderId: number | null) =>
+      moveMany({
+        entryIds,
+        folderId,
+        destination:
+          folderId === null
+            ? COLLECTION_ROOT
+            : (collectionFolders.find((folder) => folder.id === folderId)?.name ?? "a folder"),
+      }),
+    [moveMany, collectionFolders],
   );
   /**
    * **`DEFAULT_VARIANT`, and the row does not ask.** "Add to → Deck" offers Theory then Live for a
@@ -292,6 +326,9 @@ export function useCardMenuDeps(): CardMenuWiring {
       // The write behind "Move to". Given on every surface, and the *item* is what is fenced —
       // a target with no `entryId` cannot name a row, so the row is never built.
       moveToFolder,
+      // Its plural, as one write — what "Move N cards to" makes on a surface that wires no
+      // `pickCopies` of its own (issue #555). The collection page spreads its dialog over this.
+      moveCopies,
       // **No `printingsDeck` and no `printingsOracleId`, and both absences are the point.** This
       // is the object every *plain* card surface takes — the search walls, the collection, the
       // wishlist, the card pane — and not one of them is a row of an open deck or a list of one
@@ -312,6 +349,7 @@ export function useCardMenuDeps(): CardMenuWiring {
       addToCollection,
       addToWishlist,
       moveToFolder,
+      moveCopies,
       wishlistFolders,
       collectionFolders,
       toDeck,

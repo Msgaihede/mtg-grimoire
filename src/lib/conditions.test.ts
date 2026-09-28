@@ -39,6 +39,63 @@ describe("normalizeCondition", () => {
   });
 
   /**
+   * Every grade a real third-party export writes, read off the export itself (issue #555):
+   * Deckbox's and Moxfield's scale, Archidekt's letters, Dragon Shield's run-together words and
+   * ManaBox's snake case. Nothing here may land on `matched: false`, or every row of a
+   * restored collection lights the preview's unknown-condition row.
+   */
+  it("reads every grade the vendors in scope write", () => {
+    const cases: [string, string][] = [
+      // Deckbox and Moxfield.
+      ["Mint", "NM"],
+      ["Near Mint", "NM"],
+      ["Good (Lightly Played)", "LP"],
+      ["Played", "MP"],
+      ["Heavily Played", "HP"],
+      ["Damaged", "DMG"],
+      ["Poor", "DMG"],
+      // Archidekt.
+      ["NM", "NM"],
+      ["MP", "MP"],
+      ["HP", "HP"],
+      ["D", "DMG"],
+      // Dragon Shield — Cardmarket's scale, written out and run together.
+      ["NearMint", "NM"],
+      ["Excellent", "LP"],
+      ["Good", "MP"],
+      ["LightPlayed", "MP"],
+      // ManaBox — the same scale in snake case.
+      ["near_mint", "NM"],
+      ["excellent", "LP"],
+      ["light_played", "MP"],
+      ["poor", "DMG"],
+      // TCGplayer.
+      ["Lightly Played", "LP"],
+      ["Moderately Played", "MP"],
+    ];
+    for (const [raw, expected] of cases) {
+      expect(normalizeCondition(raw), raw).toMatchObject({ condition: expected, matched: true });
+    }
+  });
+
+  /** The `-ly` is the whole difference: `Light Played` is Cardmarket's grade below `Good`, two
+   *  grades under the `Lightly Played` it looks like. */
+  it("reads Light Played two grades below Lightly Played", () => {
+    expect(normalizeCondition("Light Played").condition).toBe("MP");
+    expect(normalizeCondition("Lightly Played").condition).toBe("LP");
+  });
+
+  /** The underscore is read as a space for the lookup only — the reader's own spelling is what
+   *  the row keeps. */
+  it("keeps a snake-case grade's own spelling as the original", () => {
+    expect(normalizeCondition("near_mint")).toEqual({
+      condition: "NM",
+      original: "near_mint",
+      matched: true,
+    });
+  });
+
+  /**
    * The false friend, ruled on: a bare `LP` is the NA scale's Lightly Played, because the
    * NA scale is this app's own. Cardmarket's LP sits at NA Played, but *which scale a file
    * is on* is a property of the file — so that re-reading belongs to the importer, which

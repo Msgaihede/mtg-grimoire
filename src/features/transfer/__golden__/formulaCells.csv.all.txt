@@ -1,0 +1,3 @@
+Quantity,Name,Set,Collector number,Finish,Condition,Language,Tradelist quantity,Purchase price,Purchase currency,Acquired,Acquired from,Serial number,Grading,Altered,Signed,Proxy,Misprint,Tags,Notes,Set name,Rarity,Type line,Price
+1,'+2 Mace,AFR,1,,NM,en,0,0.25,USD,2025-05-01,'@shop,,,no,no,no,no,"'=binder, trade",'-2 lent,Adventures in the Forgotten Realms,common,Artifact — Equipment,0.1
+2,Lightning Bolt,2X2,117,foil,LP,en,1,3,USD,2024-12-24,Card Kingdom,,,no,no,no,no,burn,''=already escaped,Double Masters 2022,uncommon,Instant,2.5

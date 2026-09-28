@@ -1356,6 +1356,22 @@ export interface CollectionImportItem {
   acquiredAt?: string;
   acquisitionSource?: string;
   notes?: string;
+  /**
+   * How many of these copies the reader offers for trade — the export's `Tradelist quantity`
+   * column read back (issue #555). Absent is "the file said nothing", which an `add` leaves the
+   * row's own number alone for and a `set` leaves alone too; the backend clamps it to the row's
+   * quantity either way, because a tradelist bigger than the pile it is drawn from is not a
+   * promise anyone can keep.
+   */
+  tradelistQuantity?: number;
+  /**
+   * `collection_entries.tags` as the column holds it — a JSON array of strings, `["cube"]`
+   * (issue #555). The planner turns whatever the file said (this app's own JSON cell, or a
+   * comma-separated `cube, trade` from another app) into that one spelling. Absent is silence:
+   * an `add` onto an existing row **unions** the file's tags into the row's, a `set` **replaces**
+   * them, and neither touches a row's tags when the item carries none.
+   */
+  tags?: string;
 }
 
 /**
@@ -1384,6 +1400,64 @@ export interface ImportCommitOutcome {
   /** Rows deleted: every wish `set` to 0, and — since schema v24 — every collection row `set` to
    *  0 as well, with everything recorded on it. */
   removed: number;
+  /** The net change in copies the write made (or, from {@link ipc.collectionImportPreview},
+   *  would make) — negative when a `set` file lowers more than it raises. */
+  copies: number;
+  /**
+   * **Collection `set` at the root only**; `0` everywhere else. Copies of a line's exact grain
+   * that are filed in folders, beyond what the file's number accounts for — left where they are,
+   * because a file says nothing about a reader's filing (issue #555).
+   *
+   * `set` counts the copies filed elsewhere toward the file's number and adjusts the **root**
+   * row by the difference, rather than writing the number into a second root row beside them —
+   * which is what doubled a reader's filed copies before. When the folders alone already hold
+   * more than the file says, the root goes to zero and the surplus is this number.
+   */
+  leftInFolders: number;
+  /** The ticket {@link ipc.bulkUndo} takes back, or `null` when nothing changed (and always from
+   *  {@link ipc.collectionImportPreview}, which changes nothing). Held in the backend's memory
+   *  for the session, so it does not survive a restart. */
+  undoId: number | null;
+}
+
+/**
+ * The text of a picked decklist and how its bytes were read (issue #555).
+ *
+ * `windows-1252` is the fallback for a file that is not valid UTF-8 — Excel's "CSV" on a Western
+ * European Windows — and it is the one the import dialog says out loud, because a file in some
+ * *other* legacy code page reads as mojibake under it and the reader is the only one who can
+ * tell. The two UTF-16 spellings are what a byte-order mark named, and are lossless.
+ */
+export interface ImportFile {
+  text: string;
+  encoding: "utf-8" | "utf-16le" | "utf-16be" | "windows-1252";
+}
+
+/** What `Remove from collection` over several entries did — one transaction (issue #555). */
+export interface BulkRemoveOutcome {
+  /** Entries deleted. An id that named nothing is skipped, `collection_remove`'s own rule. */
+  removed: number;
+  /** Copies those entries held. */
+  copies: number;
+  /** See {@link ImportCommitOutcome.undoId}. */
+  undoId: number | null;
+}
+
+/** What `Move to` over several entries did — one transaction (issue #555). */
+export interface BulkMoveOutcome {
+  /** One per id, in the order they were sent — each {@link EntryChange} says where that entry's
+   *  copies ended up, which after a merge is a different row's id. */
+  changes: EntryChange[];
+  /** See {@link ImportCommitOutcome.undoId}. */
+  undoId: number | null;
+}
+
+/** What {@link ipc.bulkUndo} put back. */
+export interface BulkUndoOutcome {
+  /** Which list the ticket was about, so the caller knows which roots to refetch. */
+  scope: "collection" | "wishlist";
+  /** Rows written back — restored, re-inserted or deleted again. */
+  restored: number;
 }
 
 /** A collection list, as the UI asks for it. */
@@ -4898,6 +4972,15 @@ export interface ImportResolveLine {
   /** Only ever *narrows* a set — a collector number is not unique across sets — so one arriving
    *  with no `setCode` beside it is reported as a missed hint without being tried at all. */
   collectorNumber: string | null;
+  /**
+   * The language the line said its copy is in, as a Scryfall code (`ja`, `de`, `zhs`) — issue
+   * #555. **A preference and never a filter**: a printing in that language outranks every other
+   * where the corpus holds one, and a line still resolves when it holds none (which is most of
+   * the time — Scryfall's default bulk data carries a non-English printing only where there is
+   * no English one). Absent or `null` is today's order. `@/lib/languages`' `languageCode` is
+   * what turns a file's `Japanese` into `ja`.
+   */
+  lang?: string | null;
 }
 
 /**
@@ -7805,6 +7888,40 @@ export const ipc = {
     mode: TransferImportMode,
     folderId: number | null = null,
   ) => invoke<ImportCommitOutcome>("collection_import_commit", { items, mode, folderId }),
+  /**
+   * What {@link ipc.collectionImportCommit} **would** do with the same three arguments, without
+   * writing anything (issue #555) — the numbers the preview's sentence is built from, so a `set`
+   * file stops promising "N cards will be added" over a press that lowers some quantities and
+   * leaves others alone. Read-only; `undoId` is always `null`.
+   */
+  collectionImportPreview: (
+    items: CollectionImportItem[],
+    mode: TransferImportMode,
+    folderId: number | null = null,
+  ) => invoke<ImportCommitOutcome>("collection_import_preview", { items, mode, folderId }),
+  /**
+   * `Remove from collection` over several entries — **one transaction and one activity row**
+   * (issue #555), where it used to be one {@link ipc.collectionRemove} per id: N transactions, N
+   * feed rows, and a refusal part-way left the press half applied. An id that names nothing is
+   * skipped, as `collection_remove` skips it.
+   */
+  collectionRemoveMany: (ids: readonly number[]) =>
+    invoke<BulkRemoveOutcome>("collection_remove_many", { ids }),
+  /**
+   * `Move to` over several entries — {@link ipc.collectionSetFolder}'s merge rule per entry, in
+   * **one transaction with one activity row** (issue #555). Any refusal rolls the whole press
+   * back, so a move never lands half-filed.
+   */
+  collectionSetFolderMany: (ids: readonly number[], folderId: number | null) =>
+    invoke<BulkMoveOutcome>("collection_set_folder_many", { ids, folderId }),
+  /**
+   * Put back what one bulk write did — an import into the collection or the wishlist, a bulk
+   * remove, a bulk move (issue #555). The ticket is an outcome's `undoId`, held in the backend's
+   * memory for the session. **Refused rather than applied blindly** when a row the write touched
+   * has changed since, and refused when the ticket is unknown (a restart, or evicted); either
+   * refusal retires the ticket, so a second press answers the same way.
+   */
+  bulkUndo: (undoId: number) => invoke<BulkUndoOutcome>("bulk_undo", { undoId }),
   /** Every folder there is, flat — {@link ipc.wishlistFolderList}'s rule verbatim, ported: the
    *  tree is the reader's to build from `parentId`, and no card id scopes it because a folder
    *  belongs to no card. **Unfiltered by kind**: a deck's folder and the removed-cards folder
@@ -9324,12 +9441,13 @@ export const ipc = {
    * read the bytes itself would need a filesystem capability this app deliberately does not
    * have.
    *
-   * Capped at 1 MB, and read **lossily** on purpose: a Windows-1252 apostrophe in one card name
-   * costs that one line — it comes back carrying `U+FFFD`, resolves to nothing and is quoted in
-   * the preview — rather than failing the other hundred. What comes back is a string and nothing
-   * more; parsing it is this side's, exactly as it is for a paste.
+   * Capped at 1 MB. **Never refused for its bytes** (issue #555): valid UTF-8 is read as such, a
+   * UTF-16 byte-order mark is honoured, and anything else is decoded as Windows-1252 — Excel's
+   * CSV on a Western European Windows — rather than lossily, which used to turn every `é` in a
+   * cp1252 file into `U+FFFD`. {@link ImportFile.encoding} says which, so the dialog can say so.
+   * Parsing the text is this side's, exactly as it is for a paste.
    */
-  importReadFile: (path: string) => invoke<string>("import_read_file", { path }),
+  importReadFile: (path: string) => invoke<ImportFile>("import_read_file", { path }),
   /** The format rules as data, in picker order. Seeded by the migration, so this changes at
    *  most once per app version — cached for the session by `useFormatSpecs`. */
   formatSpecs: () => invoke<FormatSpec[]>("format_specs_list"),

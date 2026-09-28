@@ -61,6 +61,7 @@ use crate::sorting::Marketplace;
 use crate::sync::{lock_db_read, with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// What every write here says about a folder that is the **app's** rather than the reader's —
@@ -935,28 +936,61 @@ pub fn set_entry_folder(
     folder_id: Option<i64>,
 ) -> Result<EntryChange, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    // The card and the drawer it is leaving, read before the move — the row may be folded into
-    // another and stop existing, and its folder is the very thing about to change.
-    let facts = crate::collection::entry_facts(&tx, id)?;
-    // `None` is the **root** and not an absence — `activityText.ts` reads a present-but-null
-    // `to` as the cabinet's own name and a missing key as "we do not know", so both ends of a
-    // move are always written.
-    let mut destination: Option<String> = None;
-    if let Some(folder) = folder_id {
-        // **A locked folder gains nothing here, on either side, and that is the requirement
-        // rather than an omission.** Issue #365 asks that copies can always be moved into and
-        // out of a folder that is set aside: a lock is about what the app *offers* — a search
-        // result, an availability figure — and never about what the reader can reach. The
-        // refusal that looks missing would make a locked drawer a place cards cannot leave,
-        // which is a lock on the reader rather than on the app. The warning is the page's, and
-        // it is a confirmation on a *drag* (a rectangle a pointer lands on by accident) rather
-        // than on a menu pick the reader just named. Nothing about the destination's lock is
-        // asked below, and nothing about the source's is either.
-        //
-        // The name comes off the row this fence already read — the destination end of the feed
-        // line, which cannot be looked up afterwards on the folding path.
-        destination = Some(user_folder(&tx, folder)?.name);
+    let destination = destination_name(&tx, folder_id)?;
+    let (change, facts) = file_by_hand(&tx, id, folder_id)?;
+    // **`delta` is 0**: a move changes no count, and a day roll-up that added a move would
+    // double every card that only ever changed drawer.
+    if let Some(facts) = facts {
+        crate::activity::record(
+            &tx,
+            crate::activity::COLLECTION,
+            crate::activity::MOVE,
+            facts.card_id.as_deref(),
+            facts.card_name.as_deref(),
+            &serde_json::json!({ "from": facts.folder, "to": destination }),
+            0,
+        )
+        .map_err(|e| e.to_string())?;
     }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(change)
+}
+
+/// The destination of a filing by hand, fenced — `None` for the root, the folder's **name**
+/// otherwise, because that is the `to` end of the feed line and cannot be looked up afterwards on
+/// the folding path. [`user_folder`] is the fence: [`FOLDER_GONE`] or [`FOLDER_NOT_YOURS`].
+///
+/// `None` is the **root** and not an absence — `activityText.ts` reads a present-but-null `to` as
+/// the cabinet's own name and a missing key as "we do not know", so both ends of a move are always
+/// written.
+fn destination_name(tx: &Connection, folder_id: Option<i64>) -> Result<Option<String>, String> {
+    // **A locked folder gains nothing here, on either side, and that is the requirement rather
+    // than an omission.** Issue #365 asks that copies can always be moved into and out of a folder
+    // that is set aside: a lock is about what the app *offers* — a search result, an availability
+    // figure — and never about what the reader can reach. The refusal that looks missing would
+    // make a locked drawer a place cards cannot leave, which is a lock on the reader rather than
+    // on the app. The warning is the page's, and it is a confirmation on a *drag* (a rectangle a
+    // pointer lands on by accident) rather than on a menu pick the reader just named. Nothing
+    // about the destination's lock is asked below, and nothing about the source's is either.
+    folder_id
+        .map(|folder| user_folder(tx, folder).map(|f| f.name))
+        .transpose()
+}
+
+/// One entry filed by the reader's own hand, inside the caller's transaction and **recording
+/// nothing** — [`set_entry_folder`]'s body, split out so [`set_entries_folder`] runs the same
+/// rules per entry and writes one feed row for the press. The destination is the caller's to
+/// fence, once ([`destination_name`]); this owns the **source** fence and the refile.
+///
+/// Answers the change and the entry's facts, read before the move — the row may be folded into
+/// another and stop existing, and its folder is the very thing about to change. `None` facts are
+/// an entry that is not there, and [`refile_entry`]'s [`GONE`] has already refused it.
+fn file_by_hand(
+    tx: &Connection,
+    id: i64,
+    folder_id: Option<i64>,
+) -> Result<(EntryChange, Option<crate::collection::EntryFacts>), String> {
+    let facts = crate::collection::entry_facts(tx, id)?;
     // `optional()`, and a `None` falls through on purpose: it is the root, an entry that is not
     // there, or a folder that has gone between two reads. The first is the ordinary case and the
     // other two are [`refile_entry`]'s [`GONE`] to answer — a second sentence for a missing row
@@ -974,23 +1008,126 @@ pub fn set_entry_folder(
     if source_kind.as_deref() == Some(DECK_KIND) {
         return Err(ENTRY_IN_A_DECK.to_owned());
     }
-    refile_entry(&tx, id, folder_id).and_then(|change| {
-        // **`delta` is 0**: a move changes no count, and a day roll-up that added a move would
-        // double every card that only ever changed drawer.
-        if let Some(facts) = facts {
-            crate::activity::record(
-                &tx,
-                crate::activity::COLLECTION,
-                crate::activity::MOVE,
-                facts.card_id.as_deref(),
-                facts.card_name.as_deref(),
-                &serde_json::json!({ "from": facts.folder, "to": destination }),
-                0,
-            )
-            .map_err(|e| e.to_string())?;
+    let change = refile_entry(tx, id, folder_id)?;
+    Ok((change, facts))
+}
+
+/// What `Move to` over several entries did (issue #555).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkMoveOutcome {
+    /// One per id, **in the order they were sent** — each says where that entry's copies ended
+    /// up, which after a merge is a different row's id, with that row's quantity once the whole
+    /// press has landed.
+    pub changes: Vec<EntryChange>,
+    /// See [`crate::collection::ImportCommitOutcome::undo_id`].
+    pub undo_id: Option<u64>,
+}
+
+/// File several entries into one folder — or the root — in **one transaction with one feed row**
+/// (issue #555), where the page used to call [`set_entry_folder`] once per selected row.
+///
+/// **[`set_entry_folder`]'s rules per entry, and all-or-nothing across them**: the destination
+/// fence once, then each entry through [`file_by_hand`] — the source fence ([`ENTRY_IN_A_DECK`]),
+/// [`GONE`] for an id that is not there, and the merge onto a row that already holds the grain in
+/// the destination. **Any refusal rolls the whole press back and answers that refusal's
+/// sentence**, so a move never lands half-filed: a selection holding one copy in a deck's group
+/// moves nothing, and says why.
+///
+/// **One entry records exactly [`set_entry_folder`]'s line** — the card, `{from, to}` — because a
+/// one-row selection is the same event as a drag. Several are one line about no one card:
+/// `{"entries": n, "to": <destination name or null for the root>}`, `to` being the key the
+/// single line already carries, so `activityText.ts` words both ends from one field. `delta` is 0
+/// either way — a move changes no count.
+///
+/// It answers an undo ticket captured over the ids **and every other row of their cards**, read
+/// before the first move: a merge target is a row of the same card the selection did not name,
+/// and the undo has to put its quantity back too.
+pub fn set_entries_folder(
+    conn: &Connection,
+    ids: &[i64],
+    folder_id: Option<i64>,
+) -> Result<BulkMoveOutcome, String> {
+    let distinct = crate::collection::distinct_ids(ids);
+    if distinct.is_empty() {
+        return Ok(BulkMoveOutcome {
+            changes: Vec::new(),
+            undo_id: None,
+        });
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let destination = destination_name(&tx, folder_id)?;
+    let listed = crate::bulk_undo::json_list(&distinct);
+    // The cards as a literal list read now, not as a subquery the capture re-runs: once an id has
+    // folded away, a subquery over the ids would no longer find its card, and the row it folded
+    // into would drop out of the after-image.
+    let cards: Vec<String> = tx
+        .prepare(
+            "SELECT DISTINCT card_id FROM collection_entries
+              WHERE id IN (SELECT value FROM json_each(?1))",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map(params![listed], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()
+        })
+        .map_err(|e| e.to_string())?;
+    let capture = crate::bulk_undo::Capture::begin(
+        &tx,
+        crate::bulk_undo::Table::Collection,
+        "id IN (SELECT value FROM json_each(?1)) OR card_id IN (SELECT value FROM json_each(?2))",
+        vec![listed.clone(), crate::bulk_undo::json_list(&cards)],
+    )?;
+
+    let mut landed: HashMap<i64, EntryChange> = HashMap::new();
+    let mut first = None;
+    for &id in &distinct {
+        let (change, facts) = file_by_hand(&tx, id, folder_id)?;
+        if first.is_none() {
+            first = facts;
         }
-        tx.commit().map_err(|e| e.to_string())?;
-        Ok(change)
+        landed.insert(id, change);
+    }
+    // A later entry can fold into the row an earlier one landed on, so each change is read back
+    // once the whole press is in rather than trusted from the moment it was made.
+    for change in landed.values_mut() {
+        if let Some(now) = tx
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE id = ?1",
+                params![change.id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+        {
+            change.quantity = now;
+        }
+    }
+
+    let feed = match (distinct.len(), first) {
+        (1, Some(facts)) => crate::bulk_undo::Feed {
+            kind: crate::activity::MOVE,
+            card_id: facts.card_id,
+            card_name: facts.card_name,
+            payload: serde_json::json!({ "from": facts.folder, "to": destination }),
+            delta: 0,
+        },
+        (entries, _) => crate::bulk_undo::Feed {
+            kind: crate::activity::MOVE,
+            card_id: None,
+            card_name: None,
+            payload: serde_json::json!({ "entries": entries, "to": destination }),
+            delta: 0,
+        },
+    };
+    feed.record(&tx, crate::bulk_undo::Table::Collection)?;
+    let changes = capture.finish(&tx)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(BulkMoveOutcome {
+        changes: ids
+            .iter()
+            .filter_map(|id| landed.get(id).cloned())
+            .collect(),
+        undo_id: crate::bulk_undo::register(changes, feed),
     })
 }
 
@@ -1479,6 +1616,24 @@ pub async fn collection_set_folder(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         crate::collection_source::with_write_owned(&state, |c| set_entry_folder(c, id, folder_id))
+    })
+    .await
+    .map_err(|e| format!("the collection could not be written: {e}"))?
+}
+
+/// `Move to` over several entries — see [`set_entries_folder`]. `with_write_owned` for
+/// [`collection_set_folder`]'s reason: a merge deletes a row, and the facet index counts them.
+#[tauri::command]
+pub async fn collection_set_folder_many(
+    state: tauri::State<'_, Arc<AppState>>,
+    ids: Vec<i64>,
+    folder_id: Option<i64>,
+) -> Result<BulkMoveOutcome, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::collection_source::with_write_owned(&state, |c| {
+            set_entries_folder(c, &ids, folder_id)
+        })
     })
     .await
     .map_err(|e| format!("the collection could not be written: {e}"))?
@@ -3170,5 +3325,153 @@ mod tests {
         assert!(rename_folder(&conn, shelf.id, "Trade box").is_err());
         assert_eq!(user_folder_names(&conn), ["Shelf"]);
         assert_eq!(feed(&conn).len(), 1, "the create's line, and no rename's");
+    }
+
+    // -----------------------------------------------------------------------------------
+    // `set_entries_folder` — `Move to` over several entries (issue #555)
+    // -----------------------------------------------------------------------------------
+
+    fn exists(conn: &Connection, id: i64) -> bool {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM collection_entries WHERE id = ?1)",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// **Several entries move in one press with one feed line**, each by `set_entry_folder`'s
+    /// rule: `a` meets a row of its grain in the binder and folds into it, `b` simply moves. The
+    /// changes come back one per id, in order, each naming where its copies ended up.
+    #[test]
+    fn moving_several_entries_merges_onto_the_destination_and_records_one_row() {
+        let conn = open();
+        priced_card(&conn, "bolt", "1.00");
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let held = insert_entry(&conn, "bolt", Some(binder.id), 2);
+        let a = insert_entry(&conn, "bolt", None, 1);
+        let b = insert_entry(&conn, "other", None, 4);
+        let history = feed(&conn).len();
+
+        let out = set_entries_folder(&conn, &[a, b, a], Some(binder.id)).unwrap();
+
+        let landed: Vec<(i64, i64)> = out.changes.iter().map(|c| (c.id, c.quantity)).collect();
+        assert_eq!(
+            landed,
+            vec![(held, 3), (b, 4), (held, 3)],
+            "one change per id sent, a repeat answered like the first"
+        );
+        assert!(!exists(&conn, a), "a folded into the binder's row");
+        assert_eq!(folder_of(&conn, b), Some(binder.id));
+        assert!(out.undo_id.is_some());
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), history + 1, "one line for the press");
+        assert_eq!(rows[0].kind, crate::activity::MOVE);
+        assert_eq!((rows[0].card_id.as_deref(), rows[0].delta), (None, 0));
+        assert_eq!(
+            payload(&rows[0]),
+            serde_json::json!({ "entries": 2, "to": "Binder" })
+        );
+
+        // …and back to the root, whose name on the line is a present null.
+        set_entries_folder(&conn, &[held, b], None).unwrap();
+        assert_eq!(
+            payload(&feed(&conn)[0]),
+            serde_json::json!({ "entries": 2, "to": null })
+        );
+    }
+
+    /// A one-row selection is the same event as a drag, and reads as one.
+    #[test]
+    fn moving_one_entry_through_the_bulk_door_records_the_single_move_line() {
+        let conn = open();
+        priced_card(&conn, "bolt", "1.00");
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        let entry = insert_entry(&conn, "bolt", None, 2);
+
+        set_entries_folder(&conn, &[entry], Some(shelf.id)).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::MOVE);
+        assert_eq!(rows[0].card_name.as_deref(), Some("Lightning Bolt"));
+        assert_eq!(
+            payload(&rows[0]),
+            serde_json::json!({ "from": null, "to": "Shelf" })
+        );
+    }
+
+    /// **One refusal takes the whole press back and answers its own sentence** — a copy in a
+    /// deck's group, a destination the app owns, an entry that is gone, a feed row that fails —
+    /// and a rolled-back move leaves no ticket.
+    #[test]
+    fn one_refused_entry_or_destination_rolls_the_whole_move_back() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let group = insert_system_folder(&conn, "deck", "Mono red");
+        let loose = insert_entry(&conn, "bolt", None, 1);
+        let in_deck = insert_entry(&conn, "other", Some(group), 1);
+        let before = crate::bulk_undo::table_image(&conn, "collection_entries");
+        let history = feed(&conn).len();
+
+        assert_eq!(
+            set_entries_folder(&conn, &[loose, in_deck], Some(binder.id)).unwrap_err(),
+            ENTRY_IN_A_DECK
+        );
+        assert_eq!(
+            set_entries_folder(&conn, &[loose], Some(group)).unwrap_err(),
+            FOLDER_NOT_YOURS
+        );
+        assert_eq!(
+            set_entries_folder(&conn, &[loose, 404], Some(binder.id)).unwrap_err(),
+            GONE
+        );
+        refuse_activity(&conn);
+        assert!(set_entries_folder(&conn, &[loose], Some(binder.id)).is_err());
+        allow_activity(&conn);
+
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "collection_entries"),
+            before,
+            "the loose copy never left the root"
+        );
+        assert_eq!(feed(&conn).len(), history);
+        assert_eq!(crate::bulk_undo::tickets_held(), 0);
+    }
+
+    /// **A bulk move's undo puts back the exact rows, the merge included** — the survivor's
+    /// quantity and the note it took from the source, and the source itself under its own id.
+    #[test]
+    fn a_bulk_move_can_be_undone_merge_and_all() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        insert_entry(&conn, "bolt", Some(binder.id), 2);
+        let a = insert_entry(&conn, "bolt", None, 1);
+        let b = insert_entry(&conn, "other", None, 4);
+        conn.execute(
+            "UPDATE collection_entries SET notes = 'loose' WHERE id = ?1",
+            params![a],
+        )
+        .unwrap();
+        let found = crate::bulk_undo::table_image(&conn, "collection_entries");
+
+        let out = set_entries_folder(&conn, &[a, b], Some(binder.id)).unwrap();
+        let undone = crate::bulk_undo::undo(&conn, out.undo_id.unwrap()).unwrap();
+
+        assert_eq!(
+            (undone.scope, undone.restored),
+            ("collection", 3),
+            "the survivor restored, the source re-inserted, the other moved back"
+        );
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "collection_entries"),
+            found
+        );
+        let line = &feed(&conn)[0];
+        assert_eq!((line.kind.as_str(), line.delta), (crate::activity::MOVE, 0));
+        assert_eq!(
+            payload(line),
+            serde_json::json!({ "entries": 2, "to": "Binder", "undo": true })
+        );
     }
 }

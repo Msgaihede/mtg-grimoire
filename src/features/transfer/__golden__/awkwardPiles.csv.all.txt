@@ -1,0 +1,4 @@
+Quantity,Name,Set,Collector number,Category,Finish,Label,Label colour,Language,Set name,Rarity,Type line,Price
+1,"Bruna, Light of Alabaster",AVR,5,Commander,,,,en,Avacyn Restored,mythic,Legendary Creature — Angel,4.31
+1,Sol Ring,C21,263,"Ramp, Fixing {x} [y]",foil,Keeper,#4aab08,en,Commander 2021,uncommon,Artifact,1.2
+2,Arcane Signet,C21,236,"Cuts, maybe",,,,en,Commander 2021,common,Artifact,0.45

@@ -339,6 +339,113 @@ function copies(entry: ActivityEntry): number {
   return Math.abs(entry.delta);
 }
 
+/**
+ * The entries a **bulk** remove or move wrote, or `0` for a row about one card (issue #555).
+ *
+ * {@link wishlistLine}'s bulk-add fence, one field over: `Remove from collection` and `Move to`
+ * over several entries write **one** row naming no card and carrying `entries`, where the same
+ * press over one entry keeps the one-card row it always wrote. So both halves have to hold — no
+ * card, and a count above zero. A one-card row whose printing has left `cards` names no card
+ * either, and carries no `entries` key, so it falls through to its own sentence rather than being
+ * worded as a bulk press of nothing; and every row an older build wrote is one of those two.
+ */
+function bulkEntries(entry: ActivityEntry, p: Record<string, unknown>): number {
+  return entry.cardName === null ? numberField(p.entries) : 0;
+}
+
+/**
+ * `7 copies`, the quiet half of a bulk remove — or nothing where the row moved none.
+ *
+ * The sentence counts **entries** (`Removed 3 cards`), which is the unit the menu row and the
+ * undo notice both count in; the copies those entries held are a different number and the one a
+ * reader thinks of as what left the binder. `delta` is that number (`copies()`'s rule), so a row
+ * whose delta is zero — an older or a truncated one — says nothing rather than `0 copies`.
+ */
+function copiesClause(entry: ActivityEntry): string | null {
+  const n = copies(entry);
+  return n > 0 ? counted(n, "copy", "copies") : null;
+}
+
+/** Where a bulk move landed: the folder's name, the cabinet's root for `null`, and nothing at all
+ *  where the row carries no `to` key — {@link moveEnd}'s two absences, for the one end a bulk
+ *  row records. */
+function bulkDestination(p: Record<string, unknown>, cabinet: Cabinet): string | null {
+  return moveEnd(p, "to", cabinet);
+}
+
+/**
+ * An undo, worded around the write it took back (issue #555).
+ *
+ * `bulk_undo` writes **the original row's kind and payload with `"undo": true` beside them**, and
+ * the reverse delta — so a feed reads `Undid removing 12 cards` over `+7` copies, and nothing
+ * about the kind vocabulary grew. That is `auditText.ts`'s `field: "undo"` decision reached from a
+ * different table: a new kind would be a word an older build's feed answers with *Changed your
+ * collection*, where an extra key is one it simply does not read.
+ *
+ * **`in` / `from` are said only for the wishlist**, which is the rule the two cabinets' own lines
+ * already keep: a collection line about a card names no place, a wishlist line always does. An
+ * import names its place on both, as {@link importLine} does.
+ *
+ * A kind this function has no words for is still an undo, and says so without claiming which act
+ * it reversed.
+ */
+function undoLine(
+  entry: ActivityEntry,
+  p: Record<string, unknown>,
+  cabinet: Cabinet,
+): ActivityLine {
+  const name = cardName(entry);
+  const onWishlist = cabinet === WISHLIST;
+  const entries = bulkEntries(entry, p);
+
+  switch (entry.kind) {
+    case "import": {
+      const cards = numberField(p.cards);
+      const rows = numberField(p.rows);
+      return {
+        text:
+          cards > 0
+            ? `Undid an import of ${counted(cards, "card")} into ${cabinet.place}`
+            : `Undid an import into ${cabinet.place}`,
+        detail: rows > 0 ? `across ${counted(rows, "row")}` : null,
+      };
+    }
+    case "remove": {
+      const what = entries > 0 ? counted(entries, "card") : name;
+      // The folder clause keeps each cabinet's own preposition — `from Binder A` under a
+      // collection line, `in Staples` under a wishlist one, whose sentence has spent `from`.
+      const where = folderClause(onWishlist ? "in" : "from", p.folder);
+      return {
+        text: `Undid removing ${what}${onWishlist ? ` from ${cabinet.place}` : ""}`,
+        detail: entries > 0 ? copiesClause(entry) : where,
+      };
+    }
+    case "move": {
+      if (entries > 0) {
+        const to = bulkDestination(p, cabinet);
+        return {
+          text: `Undid moving ${counted(entries, "card")}${to === null ? "" : ` to ${to}`}`,
+          detail: null,
+        };
+      }
+      return {
+        text: onWishlist ? `Undid moving ${name} on ${cabinet.place}` : `Undid moving ${name}`,
+        detail: moveClause(p, cabinet),
+      };
+    }
+    case "add": {
+      const cards = numberField(p.cards);
+      const what = entry.cardName === null && cards > 0 ? counted(cards, "card") : name;
+      return {
+        text: `Undid adding ${what}${onWishlist ? ` to ${cabinet.place}` : ""}`,
+        detail: null,
+      };
+    }
+    default:
+      return { text: `Undid a change to ${cabinet.place}`, detail: null };
+  }
+}
+
 /* -------------------------------------------------------------------------------------------- *
  * The two scopes' sentences.
  * -------------------------------------------------------------------------------------------- */
@@ -347,6 +454,9 @@ function copies(entry: ActivityEntry): number {
 function collectionLine(entry: ActivityEntry): ActivityLine {
   const p = facts(entry.payload);
   const name = cardName(entry);
+  // `true` and nothing looser: a payload is a string some build wrote, and `"undo": "yes"` is a
+  // row this one does not understand rather than an undo it should word as one.
+  if (p.undo === true) return undoLine(entry, p, COLLECTION);
 
   switch (entry.kind) {
     case "add": {
@@ -366,6 +476,13 @@ function collectionLine(entry: ActivityEntry): ActivityLine {
       };
     }
     case "remove": {
+      // `Remove from collection` over several entries — one row, the entries in the sentence and
+      // the copies they held in the detail. See {@link bulkEntries} for why a one-card row can
+      // never read as this.
+      const entries = bulkEntries(entry, p);
+      if (entries > 0) {
+        return { text: `Removed ${counted(entries, "card")}`, detail: copiesClause(entry) };
+      }
       const n = copies(entry);
       return {
         text: n > 1 ? `Removed ${count(n)} × ${name}` : `Removed ${name}`,
@@ -374,8 +491,20 @@ function collectionLine(entry: ActivityEntry): ActivityLine {
     }
     case "edit":
       return { text: `Edited ${name}`, detail: fieldsClause(p.fields) };
-    case "move":
+    case "move": {
+      // `Move to` over several entries: one destination for the whole press, named in the
+      // sentence because it is the whole of what the press did — there is no single `from` to
+      // put an arrow after, since the entries may have come out of several drawers.
+      const entries = bulkEntries(entry, p);
+      if (entries > 0) {
+        const to = bulkDestination(p, COLLECTION);
+        return {
+          text: `Moved ${counted(entries, "card")}${to === null ? "" : ` to ${to}`}`,
+          detail: null,
+        };
+      }
       return { text: `Moved ${name}`, detail: moveClause(p, COLLECTION) };
+    }
     case "folder":
       return folderLine(p, COLLECTION);
     case "import":
@@ -409,6 +538,8 @@ function wishlistLine(entry: ActivityEntry): ActivityLine {
   const p = facts(entry.payload);
   const name = cardName(entry);
   const place = WISHLIST.place;
+  // A wishlist import taken back — {@link undoLine}, and `true` for the collection's reason.
+  if (p.undo === true) return undoLine(entry, p, WISHLIST);
 
   switch (entry.kind) {
     case "add": {

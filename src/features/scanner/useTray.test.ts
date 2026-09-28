@@ -59,7 +59,14 @@ async function advance(ms: number) {
   });
 }
 
-const OUTCOME: ImportCommitOutcome = { added: 1, updated: 0, removed: 0 };
+const OUTCOME: ImportCommitOutcome = {
+  added: 1,
+  updated: 0,
+  removed: 0,
+  copies: 1,
+  leftInFolders: 0,
+  undoId: null,
+};
 
 /**
  * A backend that applies each write **when it answers** — the stored tray is whatever landed last —

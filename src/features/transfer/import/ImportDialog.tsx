@@ -2,7 +2,8 @@ import { useEffect, useId, useMemo, useRef, useState, type JSX, type ReactNode }
 import { AnimatePresence, motion } from "motion/react";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
-import { ipcError, type ImportResolveLine } from "@/lib/ipc";
+import { ipcError, type ImportFile, type ImportResolveLine } from "@/lib/ipc";
+import { languageCode } from "@/lib/languages";
 import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
@@ -10,7 +11,22 @@ import { pickDecklist } from "../files";
 import type { ImportDestination } from "./destination";
 import { parseDecklist } from "./parse";
 import { PRIMARY } from "./shared/CommitBar";
+import { CsvNotes } from "./shared/CsvNotes";
 import { useImport } from "./useImport";
+
+/**
+ * What the source step says under a file `import.rs` read as Windows-1252 (issue #555).
+ *
+ * **The one reading the backend guessed**, and so the one the reader is told about: a file in
+ * that code page — Excel's "CSV" on a Western European Windows — now reads correctly where it
+ * used to lose every accented letter, but a file in some *other* legacy code page reads without
+ * complaint into the wrong letters, and only somebody looking at the names can tell. The sentence
+ * says what happened and what to do, and nothing about UTF-16 or a byte-order mark, because those
+ * readings were told rather than guessed and are right by construction.
+ */
+export const LEGACY_ENCODING_NOTICE =
+  "This file was not saved as UTF-8, so it was read as Windows-1252 (Western European). If " +
+  "accented names look wrong, save it as UTF-8 and pick it again.";
 
 export interface ImportDialogProps {
   /**
@@ -177,6 +193,14 @@ function ImportBody({
    *  backend could not read — and it belongs beside the button rather than in the footer. */
   const [pickerFailure, setPickerFailure] = useState<string | null>(null);
   const [picking, setPicking] = useState(false);
+  /**
+   * How the text in the box was read, while it is still the text a file read put there — `null`
+   * from the first keystroke or paste on, because from then on it is the reader's text and a
+   * sentence about how a file was decoded would be about something no longer on screen. Picking
+   * another file replaces it **only when that read succeeds**: a cancelled picker or a refused
+   * read leaves the old file's text in the box, so its reading still describes what is there.
+   */
+  const [readAs, setReadAs] = useState<ImportFile["encoding"] | null>(null);
 
   const { resolve, readFile } = useImport();
 
@@ -202,6 +226,11 @@ function ImportBody({
       name: line.name,
       setCode: line.setCode,
       collectorNumber: line.collectorNumber,
+      // A CSV's `Language` cell, as a Scryfall code — a **preference** the resolver ranks ahead
+      // of every other key, never a filter (issue #555). `null` for a decklist line, which has no
+      // such column, and for a cell `languageCode` does not recognise: an unreadable language is
+      // no preference rather than a reason to lose the card.
+      lang: languageCode(line.extra.lang),
     }));
     resolve.mutate(lines, { onSuccess: () => setStep("preview") });
   };
@@ -217,7 +246,12 @@ function ImportBody({
       // A cancelled picker is not a failure — it is the most ordinary way to use a file dialog
       // after changing your mind.
       if (path !== null) {
-        readFile.mutate(path, { onSuccess: (contents) => setText(contents) });
+        readFile.mutate(path, {
+          onSuccess: (file) => {
+            setText(file.text);
+            setReadAs(file.encoding);
+          },
+        });
       }
     } catch (e) {
       setPickerFailure(ipcError(e));
@@ -237,13 +271,36 @@ function ImportBody({
 
   if (step === "preview" && resolved !== null && destination !== undefined) {
     return (
-      <destination.Preview
-        list={parsed}
-        resolved={resolved.rows}
-        tags={resolved.tags}
-        onDone={onDone}
-        onBack={toSource}
-      />
+      <>
+        {/* What reading a spreadsheet cost — the columns nothing read, a missing count column —
+            above whichever destination is drawn below it, because it is a fact about the *list*
+            and the list is the shell's (issue #555). A strip of its own rather than a line inside
+            the destination's body: the four `Preview`s each own their scroller, and a note here
+            is said once rather than four times.
+
+            **Its own ceiling and its own scroller**, because the panel is clamped to the window
+            and the destination's body is what gives way (`min-h-0 flex-1`). A strip that could
+            grow would take the destination's footer — the Import button — off the bottom of a
+            short window; `max-h-24` caps it at a few lines and a long "Not read" list scrolls in
+            place. `shrink-0` so the destination gives way first, `relative` for the scroller
+            rule (`src/CLAUDE.md`), and `empty:hidden` because `CsvNotes` draws nothing for a
+            decklist and a padded, bordered box around nothing is a rule across the dialog. */}
+        <div
+          className={cn(
+            "relative max-h-24 shrink-0 overflow-y-auto",
+            "border-b border-border px-5 py-2.5 empty:hidden",
+          )}
+        >
+          <CsvNotes list={parsed} />
+        </div>
+        <destination.Preview
+          list={parsed}
+          resolved={resolved.rows}
+          tags={resolved.tags}
+          onDone={onDone}
+          onBack={toSource}
+        />
+      </>
     );
   }
 
@@ -284,15 +341,28 @@ function ImportBody({
             id={`${id}-list`}
             ref={listRef}
             value={text}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              setReadAs(null);
+            }}
             rows={14}
             spellCheck={false}
+            aria-describedby={readAs === "windows-1252" ? `${id}-encoding` : undefined}
             className={cn(
               "w-full resize-y rounded-md border border-border bg-surface px-2 py-1.5",
               "font-mono text-xs leading-relaxed",
               "focus:border-accent focus:outline-none",
             )}
           />
+          {/* Under the box whose text it is about, in the hint's own quiet voice rather than as
+              an alert: nothing failed, the file was read — the sentence is here so a reader whose
+              Polish list shows `³` where `ł` belongs knows why and what to do. Named as the box's
+              description, so a screen reader that lands in the box hears it too. */}
+          {readAs === "windows-1252" && (
+            <p id={`${id}-encoding`} className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
+              {LEGACY_ENCODING_NOTICE}
+            </p>
+          )}
           <p className="mt-1 text-[0.6875rem] text-dim">
             One card per line, quantity first (e.g. <span className="font-mono">4 Lightning Bolt</span>).
             Supports Arena, Moxfield, and MTGO exports.

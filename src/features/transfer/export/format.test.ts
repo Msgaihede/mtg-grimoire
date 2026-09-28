@@ -291,6 +291,217 @@ describe("formatExport", () => {
 });
 
 /**
+ * Issue #555's two writer rules: a pile name Archidekt's syntax cannot carry, and a CSV cell a
+ * spreadsheet would evaluate.
+ *
+ * Both are rewrites on the way out, both change nothing for a value that did not need one, and
+ * both have a Rust twin the golden fence holds to these bytes (`awkwardPiles` and
+ * `formulaCells` in `__golden__/corpus.json`). What each is *for* is the round trip, so the
+ * reading half is asserted here too wherever it does not depend on another file's rules.
+ */
+describe("what a reader could not get back before issue #555", () => {
+  const ARCHIDEKT = defaultFields("archidekt", "deck");
+
+  it("sanitises a pile name in the Archidekt heading and bracket alike", () => {
+    const text = formatExport(
+      [card({ name: "Sol Ring", categoryName: "Ramp, Fixing {x} [y]" })],
+      "archidekt",
+      ARCHIDEKT,
+    );
+    expect(text).toBe("Ramp; Fixing <x> <y>\n1x Sol Ring (ltc) 285 [Ramp; Fixing <x> <y>]\n");
+    // Angle brackets and never parentheses: `(x) (y)` at the end of a heading is a printing hint
+    // to `parse.ts`, which reads the whole line as a card. The tests below read it back. (The
+    // card line's own `(ltc)` is the printing hint it is meant to be.)
+    const [heading, cardLine] = text.split("\n");
+    expect(heading).not.toMatch(/[()]/);
+    expect(cardLine.slice(cardLine.indexOf("["))).not.toMatch(/[()]/);
+  });
+
+  it("appends {noDeck} after the name is sanitised, so it is the only thing in braces", () => {
+    const text = formatExport(
+      [card({ name: "Mox Amber", categoryName: "Cuts {maybe}", categoryActive: false })],
+      "archidekt",
+      ARCHIDEKT,
+    );
+    expect(text).toBe("Cuts <maybe>\n1x Mox Amber (ltc) 285 [Cuts <maybe>{noDeck}]\n");
+    // And the flag still reads as the flag — a lone `{` in the name used to reach forward to it —
+    // under a heading the parser consumes as a heading, so the card is the only line it reads.
+    const back = parseDecklist(text);
+    expect(back.issues).toEqual([]);
+    expect(back.lines.map((l) => [l.name, l.categoryName, l.excluded])).toEqual([
+      ["Mox Amber", "Cuts <maybe>", true],
+    ]);
+  });
+
+  it("sanitises the heading even when Category is off and no bracket is written", () => {
+    expect(
+      formatExport(
+        [card({ name: "Sol Ring", categoryName: "Ramp, Fixing" })],
+        "archidekt",
+        ARCHIDEKT.filter((id) => id !== "category"),
+      ),
+    ).toBe("Ramp; Fixing\n1x Sol Ring (ltc) 285\n");
+  });
+
+  it("gives two piles that sanitise alike one heading, in first-appearance order", () => {
+    const text = formatExport(
+      [
+        card({ name: "Sol Ring", categoryName: "Ramp, Fixing" }),
+        card({ name: "Lightning Bolt", categoryName: "Burn" }),
+        card({ name: "Arcane Signet", categoryName: "Ramp; Fixing" }),
+      ],
+      "archidekt",
+      ["quantity", "name"],
+    );
+    expect(text).toBe("Ramp; Fixing\n1x Sol Ring\n1x Arcane Signet\n\nBurn\n1x Lightning Bolt\n");
+  });
+
+  /**
+   * Every hostile name, alone or in combination, and what the writer turns it into. The last row
+   * is the one that argued for angle brackets: `Removal [cheap]` written as `Removal (cheap)` would
+   * have ended its heading in a printing hint.
+   */
+  const HOSTILE_PILES: [pile: string, written: string][] = [
+    ["Ramp, Fixing {x} [y]", "Ramp; Fixing <x> <y>"],
+    ["a,b,c", "a;b;c"],
+    ["Stax]", "Stax>"],
+    ["[Tricks", "<Tricks"],
+    ["Ramp {x", "Ramp <x"],
+    ["x} y", "x> y"],
+    ["{noDeck}", "<noDeck>"],
+    ["Removal [cheap]", "Removal <cheap>"],
+  ];
+
+  /** The pile under test, after a commander — whose heading is the section the pile's cards
+   *  would be left in if the parser did not take the pile's own heading as one. */
+  const afterCommander = (pile: string) => [
+    card({ name: "Bruna, Light of Alabaster", categoryName: "Commander", categoryKind: "commander" }),
+    card({ name: "Sol Ring", categoryName: pile }),
+  ];
+
+  /**
+   * The bracket's half of the round trip, read off the whole file: every hostile name comes back
+   * from `[…]` exactly as the writer wrote it, and the heading above it is consumed as a heading
+   * rather than read as a card — no stray line, no issue, and the pile's card in the deck rather
+   * than in whatever section came before it.
+   */
+  it.each(HOSTILE_PILES)("reads %j back as %j, heading and bracket alike", (pile, written) => {
+    const alone = formatExport([card({ name: "Sol Ring", categoryName: pile })], "archidekt", ARCHIDEKT);
+    expect(alone).toBe(`${written}\n1x Sol Ring (ltc) 285 [${written}]\n`);
+    const first = parseDecklist(alone);
+    expect(first.issues).toEqual([]);
+    expect(first.lines.map((l) => [l.name, l.section, l.categoryName, l.excluded])).toEqual([
+      ["Sol Ring", "deck", written, false],
+    ]);
+
+    // Behind a `Commander` heading, which is where a heading the parser refused used to leave the
+    // pile's cards — in the command zone, with a card named after the pile beside them.
+    const behind = parseDecklist(formatExport(afterCommander(pile), "archidekt", ARCHIDEKT));
+    expect(behind.issues).toEqual([]);
+    expect(behind.lines.map((l) => [l.name, l.section, l.categoryName])).toEqual([
+      ["Bruna, Light of Alabaster", "commander", null],
+      ["Sol Ring", "deck", written],
+    ]);
+  });
+
+  /**
+   * And the heading's half on its own: with `Category` off there is no bracket to override it, so
+   * the pile the card lands in is whatever the parser made of the heading line. It is the stricter
+   * of the two tests — a bracket would have hidden a heading read wrong.
+   */
+  it.each(HOSTILE_PILES)("files a card under the heading %j wrote as %j", (pile, written) => {
+    const noBracket = ARCHIDEKT.filter((id) => id !== "category");
+    const text = formatExport(afterCommander(pile), "archidekt", noBracket);
+    expect(text).toContain(`\n\n${written}\n1x Sol Ring (ltc) 285\n`);
+
+    const back = parseDecklist(text);
+    expect(back.issues).toEqual([]);
+    expect(back.lines.map((l) => [l.name, l.section, l.categoryName])).toEqual([
+      ["Bruna, Light of Alabaster", "commander", null],
+      ["Sol Ring", "deck", written],
+    ]);
+  });
+
+  it("leaves a pile name holding none of the five characters exactly as it was", () => {
+    const pile = "(New) Maybeboard — Æther; 2nd pass";
+    expect(
+      formatExport([card({ name: "Sol Ring", categoryName: pile })], "archidekt", ARCHIDEKT),
+    ).toBe(`${pile}\n1x Sol Ring (ltc) 285 [${pile}]\n`);
+  });
+
+  it("leaves the CSV's Category cell as the reader named it", () => {
+    // A quoted cell carries a comma and a bracket without help, and `parseCsvGrid` reads the
+    // column verbatim — so the pile's own name is what a CSV round-trips, and sanitising it here
+    // would lose characters the format never needed to give up.
+    expect(
+      formatExport(
+        [card({ name: "Sol Ring", categoryName: "Ramp, Fixing {x} [y]" })],
+        "csv",
+        defaultFields("csv", "deck"),
+      ),
+    ).toBe(
+      'Quantity,Name,Set,Collector number,Category,Finish\n1,Sol Ring,LTC,285,"Ramp, Fixing {x} [y]",\n',
+    );
+  });
+
+  /** A collection row with every free-text cell holding something a spreadsheet would run. */
+  const HOSTILE = transferCard({
+    name: "+2 Mace",
+    setCode: "AFR",
+    collectorNumber: "1",
+    condition: "NM",
+    acquisitionSource: "@shop",
+    tags: "=binder, trade",
+    notes: "-2 lent",
+  });
+  const CSV_FIELDS = ["quantity", "name", "acquisitionSource", "tags", "notes"] as const;
+
+  it("puts one apostrophe in front of a formula trigger at the head of every CSV cell", () => {
+    expect(formatExport([HOSTILE], "csv", [...CSV_FIELDS])).toBe(
+      "Quantity,Name,Acquired from,Tags,Notes\n" +
+        // Escaped first and quoted second: the apostrophe is part of the value the quotes carry.
+        `1,'+2 Mace,'@shop,"'=binder, trade",'-2 lent\n`,
+    );
+  });
+
+  it.each([
+    ["-2 lent", "'-2 lent"],
+    ["=SUM(A1)", "'=SUM(A1)"],
+    ["@shop", "'@shop"],
+    ["+1", "'+1"],
+    ["\tindented", "'\tindented"],
+    // The round-trip edge: already an apostrophe and then a trigger, so one more goes on and the
+    // reader's one-apostrophe strip hands back the note as it was written.
+    ["'=already escaped", "''=already escaped"],
+    // An apostrophe before anything else, and a trigger anywhere but the head, are not touched.
+    ["'quoted", "'quoted"],
+    ["a-b", "a-b"],
+    [" -2", " -2"],
+  ])("writes a %j note as %j", (notes, cell) => {
+    const text = formatExport([transferCard({ name: "Bolt", notes })], "csv", ["name", "notes"]);
+    expect(text).toBe(`Name,Notes\nBolt,${cell}\n`);
+  });
+
+  it("quotes a carriage-return trigger after escaping it, like any cell holding one", () => {
+    const text = formatExport([transferCard({ name: "Bolt", notes: "\rx" })], "csv", [
+      "name",
+      "notes",
+    ]);
+    expect(text).toBe(`Name,Notes\nBolt,"'\rx"\n`);
+  });
+
+  it("escapes nothing in a format that is not a spreadsheet", () => {
+    // `+2 Mace` is a card, and a decklist line is read by a deck builder rather than evaluated,
+    // so an apostrophe here would be a character in the card's name.
+    for (const format of EXPORT_FORMATS.filter((f) => f !== "csv")) {
+      const text = formatExport([HOSTILE], format, defaultFields(format, "collection"));
+      expect(text, format).toMatch(/^1x? \+2 Mace/);
+      expect(text, format).not.toContain("'");
+    }
+  });
+});
+
+/**
  * The switched-off pile, asked about from **outside** the writer — issue #390's half of this
  * file.
  *

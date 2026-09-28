@@ -13,9 +13,9 @@
  * total, and believing it would either drop the tail or loop forever — the same reasoning
  * `useCollection`'s own `getNextPageParam` documents.
  */
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { ipc, type CollectionQuery, type WishlistQuery } from "@/lib/ipc";
+import { ipc, ipcError, type CollectionQuery, type WishlistQuery } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 import { fromCollectionRow, fromWishRow, type TransferCard } from "../TransferCard";
 
@@ -53,10 +53,35 @@ export interface ExportScope {
    *  finishes. Never the *filter bar*'s own total: with `everything` on, the two answer a
    *  different question, and this is the one the sweep is actually reading. */
   total: number;
-  /** Still sweeping — `ExportDialog`'s `scope.loading` disables Copy and Save as… on it, the same
-   *  guard `saving` already uses, so a reader cannot save a file the sweep has not finished
-   *  filling in. */
+  /**
+   * No answer yet — `ExportDialog`'s `scope.loading` disables Copy and Save as… on it, the same
+   * guard `saving` already uses, so a reader cannot save a file the sweep has not finished
+   * filling in.
+   *
+   * **Not `isFetching` alone, and the difference is a file of nothing** (issue #555). `cards` is
+   * empty until the whole sweep lands, and a query can be waiting with no fetch in flight — paused
+   * by the network manager while the machine is offline, for one. `isFetching` is `false` there,
+   * so the buttons used to arm over an empty list. This is "a fetch is running, or the sweep is
+   * switched on and has never answered", and it is `false` once it has failed, because a failure
+   * is {@link error}'s to report rather than a wait.
+   */
   loading: boolean;
+  /**
+   * Why the sweep could not be read, in `ipcError`'s words, or `null` (issue #555).
+   *
+   * **A failed sweep used to be indistinguishable from an empty one.** `useQuery` gives up after
+   * the app-wide `retry: 1`, `cards` stays empty and `loading` goes `false` — so Copy and Save as…
+   * armed over a file of nothing, beside a count line still quoting the total the first page had
+   * reported. `ExportDialog` greys both buttons on this, draws the sentence as an alert with
+   * {@link retry} beside it, and stops drawing the count.
+   *
+   * **`null` while a fetch is running**, including the one {@link retry} starts: the query keeps
+   * its error until an attempt succeeds, and an alert standing over the retry it offered would
+   * read as that retry having failed already.
+   */
+  error: string | null;
+  /** Ask again — the query's `refetch`. Stable, so a caller can hand it straight to a button. */
+  retry: () => void;
   everything: boolean;
   setEverything: (everything: boolean) => void;
 }
@@ -178,12 +203,22 @@ export function useExportScope(
   });
 
   const cards = query.data ?? NO_CARDS;
+  const { refetch } = query;
+  const retry = useCallback(() => {
+    // The promise is the query's: whatever it settles to lands in `error` or `cards` above, so
+    // there is nothing for the press itself to wait on.
+    void refetch();
+  }, [refetch]);
   return {
     cards,
     // The finished count once it is known; the sweep's own running total until then, which is
     // the honest number to caption a still-loading dialog with.
     total: query.data ? cards.length : progress.total,
-    loading: query.isFetching,
+    // `isPending` is "no data and no error": gated on `enabled` so a page that has never opened
+    // the dialog is not reported as sweeping, and false after a failure, which `error` reports.
+    loading: query.isFetching || (enabled && query.isPending),
+    error: query.isError && !query.isFetching ? ipcError(query.error) : null,
+    retry,
     everything,
     setEverything,
   };

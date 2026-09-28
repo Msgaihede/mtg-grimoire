@@ -32,10 +32,24 @@ vi.mock("@/lib/ipc", async (orig) => {
       scannerSetFilters: vi.fn(async () => {}),
       scannerTray: vi.fn(async () => []),
       setScannerTray: vi.fn(async () => {}),
-      scannerTrayCommit: vi.fn(async () => ({ added: 1, updated: 0, removed: 0 })),
+      scannerTrayCommit: vi.fn(async () => ({
+        added: 1,
+        updated: 0,
+        removed: 0,
+        copies: 1,
+        leftInFolders: 0,
+        undoId: null,
+      })),
       // Mocked so a regression back to it answers rather than reaching the real core — and so the
       // commit tests can say it is never called.
-      collectionImportCommit: vi.fn(async () => ({ added: 1, updated: 0, removed: 0 })),
+      collectionImportCommit: vi.fn(async () => ({
+        added: 1,
+        updated: 0,
+        removed: 0,
+        copies: 1,
+        leftInFolders: 0,
+        undoId: null,
+      })),
       collectionFolderList: vi.fn(async () => []),
     },
   };
@@ -464,7 +478,18 @@ describe("ScannerPage", () => {
       .mockImplementation(() => new Promise(() => {}));
     let answer!: () => void;
     vi.mocked(ipc.scannerTrayCommit).mockImplementationOnce(
-      () => new Promise((resolve) => (answer = () => resolve({ added: 3, updated: 0, removed: 0 }))),
+      () =>
+        new Promise((resolve) => {
+          answer = () =>
+            resolve({
+              added: 3,
+              updated: 0,
+              removed: 0,
+              copies: 3,
+              leftInFolders: 0,
+              undoId: null,
+            });
+        }),
     );
     const user = userEvent.setup();
     try {
@@ -524,7 +549,18 @@ describe("ScannerPage", () => {
       .mockImplementation(() => new Promise(() => {}));
     let answer!: () => void;
     vi.mocked(ipc.scannerTrayCommit).mockImplementationOnce(
-      () => new Promise((resolve) => (answer = () => resolve({ added: 1, updated: 0, removed: 0 }))),
+      () =>
+        new Promise((resolve) => {
+          answer = () =>
+            resolve({
+              added: 1,
+              updated: 0,
+              removed: 0,
+              copies: 1,
+              leftInFolders: 0,
+              undoId: null,
+            });
+        }),
     );
     const user = userEvent.setup();
     try {

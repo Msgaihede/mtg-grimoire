@@ -99,7 +99,14 @@ const COPIES: CollectionImportItem[] = [
   { cardId: "p1", quantity: 1, finish: "nonfoil", condition: "NM" },
 ];
 
-const OWNED: ImportCommitOutcome = { added: 1, updated: 0, removed: 0 };
+const OWNED: ImportCommitOutcome = {
+  added: 1,
+  updated: 0,
+  removed: 0,
+  copies: 1,
+  leftInFolders: 0,
+  undoId: null,
+};
 
 /** A resolved row, thin: this hook reads exactly one field off a match — the printing id it
  *  asks the taxonomy about — so the rest is not invented here. */

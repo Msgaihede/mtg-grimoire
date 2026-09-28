@@ -217,10 +217,22 @@ export interface CardMenuDeps {
    * card would file copies they never meant to touch, and the collection is the one record they
    * cannot check against anything. Two entries is a *question*, and this dep is where it gets
    * asked. It is optional rather than required so that the fallback below stays reachable: a
-   * surface that has not wired the dialog loops {@link moveToFolder}, which is what a multi-picked
-   * set has always done and is not a regression to introduce here.
+   * surface that has not wired the dialog files the set in one write through
+   * {@link moveCopies}, and only a surface that wired neither loops {@link moveToFolder}.
    */
   pickCopies?: (entryIds: readonly number[], folderId: number | null) => void;
+  /**
+   * File several entries in **one** write — `collection_set_folder_many` (issue #555), which is
+   * `moveToFolder`'s merge rule per entry in one transaction with one activity row, and which
+   * rolls the whole press back on any refusal.
+   *
+   * **What `Move N cards to` does where no {@link pickCopies} is wired.** It used to loop
+   * {@link moveToFolder} — N transactions and N feed lines for one press, and a refusal part-way
+   * left the press half filed. The loop survives only for a surface that wired neither dep, so a
+   * working row is never taken off a surface that had one; `useCardMenuDeps` wires this on every
+   * surface it serves.
+   */
+  moveCopies?: (entryIds: readonly number[], folderId: number | null) => void;
   /**
    * Open the editor for one copy the reader owns — its grade and what they paid for it.
    *
@@ -253,9 +265,11 @@ export interface CardMenuDeps {
    * from the other direction. The menu asks two things only — is it wired, and are there entry
    * ids — and builds no row when either answer is no.
    *
-   * **Plural always, and without a question**, which is where it parts from {@link moveToFolder}
-   * and {@link pickCopies}: a move has to ask *where* each of several copies goes, and a removal
-   * has only one destination, so a tile's ids go whole.
+   * **Plural always, and never a *which* question**, which is where it parts from
+   * {@link moveToFolder} and {@link pickCopies}: a move has to ask *where* each of several copies
+   * goes, and a removal has only one destination, so a tile's ids go whole. Whether the surface
+   * asks *whether* first is its own business — the collection page confirms a press reaching more
+   * than one entry (issue #555), which is why that row's label ends in an ellipsis.
    */
   removeCopies?: (entryIds: readonly number[]) => void;
   /**
@@ -345,8 +359,11 @@ export interface CardMenuDeps {
    * ## Which rows read it
    *
    * The **writes** do: `Add to → Collection`, `Add to → Wishlist`, `Add to → Deck`, and the
-   * collection's `Move to` and `Remove from collection`. Each is a per-card write over an address the target already carries,
-   * so plural is a loop and the label is the only thing that has to change.
+   * collection's `Move to` and `Remove from collection`. Each is a per-card write over an address
+   * the target already carries, so the label is the one thing plural always changes. The three
+   * adds loop; the collection's two are **one** write over every id since issue #555
+   * (`moveCopies`, `removeCopies`), because a press that is N transactions is a press a refusal
+   * can leave half made.
    *
    * **`Copy card name`, `Copy card image`, `Open on` and `View all printings` stay about the one
    * card, and that is a statement rather than an omission.** A clipboard holds one image; a
@@ -736,6 +753,7 @@ function collectionRow(onSelect: () => void): MenuAction {
 function moveItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuItem | null {
   const move = deps.moveToFolder;
   const pick = deps.pickCopies;
+  const moveMany = deps.moveCopies;
   const folders = userFolders(deps.collectionFolders);
   const entryIds = movableEntryIds(rows);
   if (entryIds.length === 0 || move === undefined || folders.length === 0) return null;
@@ -763,9 +781,10 @@ function moveItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuItem
        * printing **and finish** — so the finish is the one thing the ids behind a tile can no
        * longer disagree about. The rule is unchanged; the example was simply the wrong one.)
        *
-       * **With no dialog wired it loops**, which is what a multi-picked set has done since #214.
-       * Falling through to nothing would take a working row off a surface that never had the
-       * question to ask.
+       * **With no dialog wired it is one write** — {@link CardMenuDeps.moveCopies}, issue #555 —
+       * where it used to loop, which is what a multi-picked set had done since #214. **The loop
+       * survives only for a surface that wired neither**: falling through to nothing would take a
+       * working row off a surface that never had the question to ask.
        */
       if (entryIds.length === 1) {
         move(entryIds[0], folderId);
@@ -773,6 +792,10 @@ function moveItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuItem
       }
       if (pick !== undefined) {
         pick(entryIds, folderId);
+        return;
+      }
+      if (moveMany !== undefined) {
+        moveMany(entryIds, folderId);
         return;
       }
       for (const entryId of entryIds) move(entryId, folderId);
@@ -883,8 +906,14 @@ function editItem(target: CardMenuTarget, deps: CardMenuDeps): MenuItem | null {
  * **which targets may lose copies is the surface's decision**, made when it chooses to pass
  * {@link CardMenuDeps.removeCopies} at all (see there).
  *
- * **No confirmation, and no ellipsis**: the press is the write. The stepper walked to zero is the
- * same write with no dialog in front of it, and the activity feed records both.
+ * **One entry is the write; several ask first, and the label says which** (issue #555). A single
+ * entry is the copy the reader pointed at, gone at the press — the stepper walked to zero is the
+ * same write with no question in front of it. Several is a tile standing for more rows than the
+ * one on screen, or a picked set, and the collection page confirms that before it writes — so
+ * that row wears the ellipsis the app puts on a row that opens a question (`Edit copy…`,
+ * `Rename…`, `Delete…`), and the single row keeps none, because its press is still the write.
+ * The confirmation is the page's rather than this row's: the menu is closed by the time a
+ * handler runs, and only the page holds the rows a sentence about them would be written from.
  */
 function removeItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuItem | null {
   const remove = deps.removeCopies;
@@ -896,7 +925,7 @@ function removeItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuIt
     // Counted in entries, `Move to`'s unit and for its reason.
     label:
       entryIds.length > 1
-        ? `Remove ${manyCards(entryIds.length)} from collection`
+        ? `Remove ${manyCards(entryIds.length)} from collection…`
         : "Remove from collection",
     Icon: Trash2,
     onSelect: () => remove(entryIds),
