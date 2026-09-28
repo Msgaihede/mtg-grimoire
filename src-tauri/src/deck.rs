@@ -4928,9 +4928,15 @@ pub struct SwapResult {
 /// NULLABLE and no live row is null, 0 of 116 590 including all 81 reversible printings,
 /// because `card_row` falls back to `card_faces[0]`.
 ///
+/// **The row is rewritten in place, so everything attached to it stays** — its label, its age,
+/// its sync identity (issue #643). The reader is choosing which printing a card plays, not
+/// making a new card, so nothing but the printing columns may change. A **fold** keeps the
+/// surviving row's own label and takes the moved row's only where the survivor has none: a
+/// label falls off when the reader removes it or the card, never because the art changed.
+///
 /// `needs_review` is deliberately **not** carried across. The flag says the row's printing
 /// left the card database, and a swap onto a printing that is in it is exactly the cure —
-/// the new row is written clean. A fold leaves the target row's flag alone, [`add_card`]'s
+/// the rewritten row is clean. A fold leaves the target row's flag alone, [`add_card`]'s
 /// rule and the reconciler's.
 ///
 /// One transaction, for the reason [`update_deck`]'s is one: mid-swap the copies are in
@@ -4982,13 +4988,20 @@ pub fn swap_printing(
     // code comes across for the history: "swapped `lea` for `m10`" is the whole of what a
     // reader wants from this line, and the row about to be deleted is the only place the
     // *old* one is still written down.
-    let (quantity, from_name, from_set): (i64, String, String) = tx
+    // The label comes across for a fold: the row the copies land in may be unlabelled.
+    let (from_id, quantity, from_name, from_set, from_label): (
+        i64,
+        i64,
+        String,
+        String,
+        Option<i64>,
+    ) = tx
         .query_row(
-            "SELECT quantity, name, set_code FROM deck_cards
+            "SELECT id, quantity, name, set_code, label_id FROM deck_cards
               WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
                 AND coalesce(finish, '') = coalesce(?5, '')",
             params![deck_id, from_card_id, category_id, variant, finish],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?
@@ -5028,50 +5041,52 @@ pub fn swap_printing(
     ];
     let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
 
-    // [`add_card`]'s insert, grain and all — the same statement, because "put these copies
-    // in that category" is the same write whether they came from a search or from another row.
-    let sql = format!(
-        "INSERT INTO deck_cards
-            (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
-             finish, quantity, created_at, updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10, unixepoch(), unixepoch())
-         ON CONFLICT({grain}) DO UPDATE SET
-            quantity = deck_cards.quantity + excluded.quantity,
-            updated_at = unixepoch()
-         RETURNING quantity",
-        grain = crate::schema::DECK_CARD_GRAIN
-    );
-    let landed: i64 = tx
+    // The row the category already holds of the printing swapped to, if any — the fold's
+    // target, on the grain every card write answers to.
+    let landed: Option<(i64, i64)> = tx
         .query_row(
-            &sql,
-            params![
-                deck_id,
-                category_id,
-                variant,
-                to_card_id,
-                set_code,
-                collector_number,
-                lang,
-                name,
-                finish,
-                quantity
-            ],
-            |r| r.get(0),
+            "SELECT id, quantity FROM deck_cards
+              WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
+                AND coalesce(finish, '') = coalesce(?5, '')",
+            params![deck_id, to_card_id, category_id, variant, finish],
+            |r| Ok((r.get(0)?, r.get(1)?)),
         )
+        .optional()
         .map_err(|e| e.to_string())?;
 
-    tx.execute(
-        "DELETE FROM deck_cards
-          WHERE deck_id = ?1 AND card_id = ?2 AND category_id = ?3 AND variant = ?4
-            AND coalesce(finish, '') = coalesce(?5, '')",
-        params![deck_id, from_card_id, category_id, variant, finish],
-    )
-    .map_err(|e| e.to_string())?;
-
-    // `deck_cards.quantity` carries `CHECK (quantity > 0)`, so a row that was already there
-    // contributed at least one copy: the landed total is strictly greater than what was moved
-    // exactly when the insert folded. No second read needed to know it.
-    let folded = landed > quantity;
+    let (landed, folded) = match landed {
+        // Two rows become one, [`set_card_finish`]'s fold: the row that was there keeps its id,
+        // its sentence and its own label, and takes the moved row's label only where it has
+        // none — a label falls off when the reader removes it, never because the art changed.
+        Some((target_id, there)) => {
+            tx.execute(
+                "UPDATE deck_cards
+                    SET quantity = ?2, label_id = coalesce(label_id, ?3), updated_at = unixepoch()
+                  WHERE id = ?1",
+                params![target_id, there + quantity, from_label],
+            )
+            .map_err(|e| e.to_string())?;
+            tx.execute("DELETE FROM deck_cards WHERE id = ?1", params![from_id])
+                .map_err(|e| e.to_string())?;
+            (there + quantity, true)
+        }
+        // Nothing to fold into: the row plays the new printing **in place**, so everything the
+        // reader attached to it — the label, the row's age, its sync identity, and any column
+        // added after this comment — stays. It used to be an insert of a fresh row and a delete
+        // of this one, and the insert named no `label_id`, which is how a swap took the label
+        // off (issue #643). `needs_review` is cleared, per the doc above.
+        None => {
+            tx.execute(
+                "UPDATE deck_cards
+                    SET card_id = ?2, set_code = ?3, collector_number = ?4, lang = ?5, name = ?6,
+                        needs_review = NULL, updated_at = unixepoch()
+                  WHERE id = ?1",
+                params![from_id, to_card_id, set_code, collector_number, lang, name],
+            )
+            .map_err(|e| e.to_string())?;
+            (quantity, false)
+        }
+    };
     // The line's identity changed and the group did not follow it, which is the hole the exact
     // grain opens: `deck_cards` is rewritten here and no collection table is touched, so the old
     // printing's copies would sit in this deck's group claimed by nothing — and
@@ -5117,7 +5132,9 @@ pub fn swap_printing(
 /// **The fold is the half worth reading.** Setting the foil row of a pile that already holds a
 /// regular row is two rows becoming one: the quantities add and the row that moved is deleted.
 /// `label_id` and `needs_review` are the **surviving** row's — [`add_card`]'s rule, because the
-/// row that was already there is the one the reader labelled.
+/// row that was already there is the one the reader labelled — except that a survivor with **no**
+/// label takes the moved row's, [`swap_printing`]'s fold exactly: a label falls off when the
+/// reader removes it, never because the finish changed (issue #643).
 ///
 /// Three refusals, each its own sentence: [`SAME_FINISH`] for a press that changes nothing,
 /// [`FINISH_NOT_SOLD`] for a finish the printing does not come in, and [`GONE`] for a row that
@@ -5183,19 +5200,19 @@ pub fn set_card_finish(
     let cells = vec![crate::deck_undo::Cell::card(variant, category_id, card_id)];
     let before = crate::deck_undo::read_cells(&tx, deck_id, &cells)?;
 
-    let row: Option<(i64, i64, String)> = tx
+    let row: Option<(i64, i64, String, Option<i64>)> = tx
         .query_row(
-            "SELECT id, quantity, name FROM deck_cards
+            "SELECT id, quantity, name, label_id FROM deck_cards
               WHERE deck_id = ?1 AND variant = ?2 AND category_id = ?3 AND card_id = ?4
                 AND coalesce(finish, '') = coalesce(?5, '')",
             params![deck_id, variant, category_id, card_id, from],
-            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
     // `set_card_quantity`'s asymmetry: an adjustment to a row that is not there could not do
     // what it was asked.
-    let (from_id, moved, name) = row.ok_or_else(|| card_gone(&category))?;
+    let (from_id, moved, name, from_label) = row.ok_or_else(|| card_gone(&category))?;
 
     let landed: Option<(i64, i64)> = tx
         .query_row(
@@ -5209,11 +5226,14 @@ pub fn set_card_finish(
         .map_err(|e| e.to_string())?;
 
     let (quantity, folded) = match landed {
-        // Two rows become one. The target keeps its own id, its label and its sentence.
+        // Two rows become one. The target keeps its own id, its label and its sentence, and
+        // takes the moved row's label only where it has none of its own.
         Some((target_id, there)) => {
             tx.execute(
-                "UPDATE deck_cards SET quantity = ?2, updated_at = unixepoch() WHERE id = ?1",
-                params![target_id, there + moved],
+                "UPDATE deck_cards
+                    SET quantity = ?2, label_id = coalesce(label_id, ?3), updated_at = unixepoch()
+                  WHERE id = ?1",
+                params![target_id, there + moved, from_label],
             )
             .map_err(|e| e.to_string())?;
             tx.execute("DELETE FROM deck_cards WHERE id = ?1", params![from_id])
@@ -9098,6 +9118,128 @@ mod tests {
         assert_eq!(folder_copies(&conn, removed_group(&conn), "bolt-lea"), 4);
     }
 
+    /// **Issue #643: a swap changes which printing the row plays and nothing else about it.**
+    /// It was an insert of a fresh row followed by a delete of the old one, and the insert named
+    /// no `label_id` — so choosing another art took the reader's label off the card. The row is
+    /// rewritten in place now, so the label, the row's age and its id all survive, and so will
+    /// any column added after this one. `needs_review` is the one deliberate exception: the swap
+    /// is the cure for a printing that left the card database, so the sentence goes.
+    #[test]
+    fn a_swap_keeps_the_rows_label_and_everything_else_about_it() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let label = crate::deck_meta::create_label(&conn, Some(deck.id), "Flex", "amber").unwrap();
+        add(&conn, deck.id, "bolt-lea", main, 3);
+        crate::deck_meta::set_card_label(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            LIVE,
+            None,
+            Some(label.id),
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE deck_cards SET created_at = 42, needs_review = 'gone from Scryfall'
+              WHERE card_id = 'bolt-lea'",
+            [],
+        )
+        .unwrap();
+        let before: i64 = conn
+            .query_row("SELECT id FROM deck_cards", [], |r| r.get(0))
+            .unwrap();
+
+        swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap();
+
+        let (id, card, labelled, created, review): (i64, String, Option<i64>, i64, Option<String>) =
+            conn.query_row(
+                "SELECT id, card_id, label_id, created_at, needs_review FROM deck_cards",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+            )
+            .unwrap();
+        assert_eq!(card, "bolt-m10");
+        assert_eq!(
+            labelled,
+            Some(label.id),
+            "the label came with the new printing"
+        );
+        assert_eq!(
+            created, 42,
+            "the row is as old as it was — it is the same row"
+        );
+        assert_eq!(
+            id, before,
+            "rewritten in place, never deleted and re-inserted"
+        );
+        assert_eq!(
+            review, None,
+            "the swap is the cure, so the review sentence goes"
+        );
+    }
+
+    /// The fold keeps a label too. A row that was already there and already labelled keeps its
+    /// own — [`add_card`]'s rule, because that is the label the reader put on it — but a row that
+    /// was already there **unlabelled** takes the label of the copies swapped onto it, since a
+    /// label falls off only when the reader removes it or the card (issue #643).
+    #[test]
+    fn a_folded_swap_keeps_the_label_unless_the_surviving_row_has_its_own() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = kind_of(&conn, deck.id, "side");
+        let flex = crate::deck_meta::create_label(&conn, Some(deck.id), "Flex", "amber").unwrap();
+        let keep = crate::deck_meta::create_label(&conn, Some(deck.id), "Keep", "slate").unwrap();
+        let label_of = |category: i64| -> Option<i64> {
+            conn.query_row(
+                "SELECT label_id FROM deck_cards WHERE category_id = ?1 AND card_id = 'bolt-m10'",
+                params![category],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+
+        // Main deck: labelled copies folded onto an unlabelled row.
+        add(&conn, deck.id, "bolt-lea", main, 3);
+        add(&conn, deck.id, "bolt-m10", main, 1);
+        crate::deck_meta::set_card_label(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            LIVE,
+            None,
+            Some(flex.id),
+        )
+        .unwrap();
+        let folded =
+            swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", main, LIVE, None).unwrap();
+        assert_eq!((folded.folded, folded.quantity), (true, 4));
+        assert_eq!(
+            label_of(main),
+            Some(flex.id),
+            "the unlabelled survivor took it"
+        );
+
+        // Sideboard: both rows labelled, and the one that was already there wins.
+        add(&conn, deck.id, "bolt-lea", side, 1);
+        add(&conn, deck.id, "bolt-m10", side, 1);
+        for (card, label) in [("bolt-lea", flex.id), ("bolt-m10", keep.id)] {
+            crate::deck_meta::set_card_label(&conn, deck.id, card, side, LIVE, None, Some(label))
+                .unwrap();
+        }
+        swap_printing(&conn, deck.id, "bolt-lea", "bolt-m10", side, LIVE, None).unwrap();
+        assert_eq!(
+            label_of(side),
+            Some(keep.id),
+            "the surviving row's own label stands"
+        );
+    }
+
     /// Swapping a printing to itself is not an edit: the pane hides the action on the row the
     /// deck already uses, so reaching here is a double-click or a stale list.
     #[test]
@@ -9251,9 +9393,9 @@ mod tests {
         assert_eq!(err, GONE, "the same sentence every other card write gives");
     }
 
-    /// The insert, the delete and the history are one write. Failure injected at the last of
-    /// the three — the state in between is a deck holding the copies in *neither* row, and it
-    /// is not a state anyone can read.
+    /// The rewrite of the row and the history are one write. Failure injected at the last of
+    /// them — the state in between is a deck listing a printing its history never swapped to,
+    /// and it is not a state anyone can read.
     ///
     /// **The trigger fires on `deck_audit`**, which is the last table the swap writes now that
     /// the allocator is gone; it used to fire on `deck_allocations` for exactly the same
@@ -14203,6 +14345,38 @@ mod tests {
             vec![(None, 4)],
             "one row of four, and no foil row left behind"
         );
+    }
+
+    /// A finish fold keeps the moved row's label when the row it folds into has none — the same
+    /// rule as a folded swap, one axis over (issue #643).
+    #[test]
+    fn a_finish_fold_keeps_the_moved_rows_label_when_the_survivor_has_none() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let label = crate::deck_meta::create_label(&conn, Some(deck.id), "Flex", "amber").unwrap();
+        add(&conn, deck.id, "bolt-m10", main, 3);
+        add_foil(&conn, deck.id, "bolt-m10", main, 1);
+        crate::deck_meta::set_card_label(
+            &conn,
+            deck.id,
+            "bolt-m10",
+            main,
+            LIVE,
+            Some("foil"),
+            Some(label.id),
+        )
+        .unwrap();
+
+        let result =
+            set_card_finish(&conn, deck.id, "bolt-m10", main, LIVE, Some("foil"), None).unwrap();
+
+        assert!(result.folded);
+        let labelled: Option<i64> = conn
+            .query_row("SELECT label_id FROM deck_cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(labelled, Some(label.id));
     }
 
     /// With nothing to fold into, the row changes finish **in place** and keeps its quantity.

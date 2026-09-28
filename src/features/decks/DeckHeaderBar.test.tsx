@@ -3,6 +3,7 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { Wrench } from "lucide-react";
 
 // The bar draws the toolbar's own `QuickAdd`, whose one command is `search_cards`. Nothing here
 // types a card name, so it only has to answer — an empty page, never the real `invoke`.
@@ -16,7 +17,12 @@ import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import type { MenuItem } from "@/components/menu/types";
 import { installKeyboardModality, KEYBOARD_MODALITY_ATTR } from "@/lib/keyboardModality";
 import { boxed, startPointerDrag } from "@/test-drag";
-import { DeckHeaderBar, type DeckHeaderBarProps } from "./DeckHeaderBar";
+import {
+  DECK_BAR_CLEARANCE_PX,
+  DeckHeaderBar,
+  type BarAction,
+  type DeckHeaderBarProps,
+} from "./DeckHeaderBar";
 import { cardDraggable, type DragPayload } from "./dnd";
 
 /**
@@ -24,9 +30,10 @@ import { cardDraggable, type DragPayload } from "./dnd";
  * that decide whether it is drawn at all: the header having scrolled away, a caret or a menu still
  * inside it, and a card in the air.
  *
- * **What none of this can see is the box**: jsdom lays nothing out, so `sticky`, the 50px panel,
- * the zero-height wrapper that costs the deck no layout and the clearance a neighbour is offset
- * by are all the live pass's to prove. What is asserted here is structure and behaviour.
+ * **What none of this can see is the box**: jsdom lays nothing out, so `sticky`, the docked
+ * panel meeting the scroller's edges, the zero-height wrapper that costs the deck no layout and the
+ * clearance a neighbour is offset by are all the live pass's to prove. What is asserted here is
+ * structure and behaviour.
  */
 
 const DISPLAY = "Display: Stacks, grouped by Category, sorted by Name";
@@ -43,11 +50,26 @@ const bar = () => screen.queryByRole("group", { name: "Deck toolbar" });
 /** The bar in the DOM at all, fading or not — for the assertions that it has really left. */
 const barInDom = () => document.querySelector('[role="group"][aria-label="Deck toolbar"]');
 
+/** One of the header's verbs, as `DeckEditor` hands it over — its word is its label unless said. */
+const verb = (label: string, word = label): BarAction => ({
+  label,
+  word,
+  Icon: Wrench,
+  expanded: false,
+  open: vi.fn(),
+});
+
+/** The header's six verbs, in its own order: the joined pair, then the four worded actions. */
+const verbs = () => ({
+  pair: [verb("Import cards", "Import"), verb("Export deck", "Export")],
+  rest: [verb("Categories"), verb("Labels"), verb("History"), verb("Deck settings")],
+});
+
 /** Every prop, at a deck with a plan, on its Actual list, with one change to take back. */
 function props(over: Partial<DeckHeaderBarProps> = {}): DeckHeaderBarProps {
   return {
     undocked: true,
-    tight: false,
+    width: "normal",
     onTop: vi.fn(),
     quickAddTarget: null,
     onQuickAdd: vi.fn(),
@@ -60,9 +82,7 @@ function props(over: Partial<DeckHeaderBarProps> = {}): DeckHeaderBarProps {
     ]),
     filter: "",
     onFilter: vi.fn(),
-    actionsMenu: vi.fn((): MenuItem[] => [
-      { kind: "action", id: "settings", label: "Deck settings", onSelect: vi.fn() },
-    ]),
+    actions: verbs(),
     ...over,
   };
 }
@@ -344,8 +364,8 @@ describe("DeckHeaderBar", () => {
     expect(p.displayMenu).toHaveBeenCalledTimes(1);
   });
 
-  /** The `⋯` hands its builder the button, so a dialog raised from a row can give the caret back. */
-  it("opens the deck's actions and hands their builder the button that asked", async () => {
+  /** The `⋯` hands each row the button, so a dialog raised from one can give the caret back. */
+  it("opens the deck's actions, and a row opens its layer back onto the button that asked", async () => {
     const user = userEvent.setup();
     const { props: p } = mount();
     const actions = within(bar()!).getByRole("button", { name: "Deck actions" });
@@ -354,8 +374,18 @@ describe("DeckHeaderBar", () => {
     expect(actions).not.toHaveAttribute("aria-expanded");
     await user.click(actions);
 
-    expect(await screen.findByRole("menuitem", { name: "Deck settings" })).toBeInTheDocument();
-    expect(p.actionsMenu).toHaveBeenCalledWith(actions);
+    // All six, in the header's order.
+    const rows = await screen.findAllByRole("menuitem");
+    expect(rows.map((row) => row.textContent)).toEqual([
+      "Import cards",
+      "Export deck",
+      "Categories",
+      "Labels",
+      "History",
+      "Deck settings",
+    ]);
+    await user.click(screen.getByRole("menuitem", { name: "Deck settings" }));
+    expect(p.actions.rest[3].open).toHaveBeenCalledWith(actions);
   });
 
   /** The positive control for the two below: with nothing holding it, docking takes it away. */
@@ -511,7 +541,7 @@ describe("DeckHeaderBar", () => {
    * same utility would satisfy before anything happened.
    */
   it("narrows both fields when the column is tight", () => {
-    mount({ tight: true });
+    mount({ width: "tight" });
     const toolbar = within(bar()!);
 
     const quickAdd = toolbar.getByRole("combobox");
@@ -530,6 +560,94 @@ describe("DeckHeaderBar", () => {
 
     expect(toolbar.getByRole("combobox").classList.contains("w-60")).toBe(true);
     expect(toolbar.getByRole("searchbox").parentElement!.classList.contains("w-60")).toBe(true);
+  });
+
+  /**
+   * **Glyphs alone below `wide`, their words beside them from it** (issue #646) — and the names
+   * do not move, so the order test above holds on every rung. Each word is contained in its name,
+   * which is what WCAG 2.5.3 asks of a visible label.
+   */
+  it("prints each press's word beside its glyph from the wide rung, under the same names", () => {
+    mount({ width: "wide" });
+    const toolbar = within(bar()!);
+
+    const words: [string, string][] = [
+      ["Back to the top", "Top"],
+      ["Compare", "Compare"],
+      [UNDO, "Undo"],
+      ["Redo", "Redo"],
+      [DISPLAY, "Display"],
+      ["Deck actions", "Actions"],
+    ];
+    for (const [name, word] of words) {
+      expect(toolbar.getByRole("button", { name }).textContent, name).toBe(word);
+      expect(name.toLowerCase()).toContain(word.toLowerCase());
+    }
+    expect(toolbar.getByRole("combobox").classList.contains("w-80")).toBe(true);
+    expect(toolbar.getByRole("searchbox").parentElement!.classList.contains("w-80")).toBe(true);
+  });
+
+  it("draws its presses as bare glyphs below the wide rung", () => {
+    mount();
+    const toolbar = within(bar()!);
+
+    for (const name of ["Back to the top", "Compare", UNDO, DISPLAY, "Deck actions"]) {
+      expect(toolbar.getByRole("button", { name }).textContent, name).toBe("");
+    }
+  });
+
+  /**
+   * At the widest rung the `⋯` opens out into the header's six verbs, each a button that opens
+   * its own layer back onto itself, and says whether that layer is up.
+   */
+  it("opens the header's verbs out into buttons at the widest rung", async () => {
+    const user = userEvent.setup();
+    const actions = verbs();
+    actions.rest[2] = { ...actions.rest[2], expanded: true };
+    const { props: p } = mount({ width: "widest", actions });
+    const toolbar = within(bar()!);
+
+    expect(toolbar.queryByRole("button", { name: "Deck actions" })).toBeNull();
+    const pair = toolbar.getByRole("group", { name: "Import and export" });
+    expect(within(pair).getByRole("button", { name: "Import cards" })).toHaveTextContent("Import");
+    expect(within(pair).getByRole("button", { name: "Export deck" })).toHaveTextContent("Export");
+    for (const name of ["Categories", "Labels", "History", "Deck settings"]) {
+      const button = toolbar.getByRole("button", { name });
+      expect(button).toHaveTextContent(name);
+      expect(button).toHaveAttribute("aria-haspopup", "dialog");
+    }
+    expect(toolbar.getByRole("button", { name: "History" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+    expect(toolbar.getByRole("button", { name: "Labels" })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+
+    const exportDeck = within(pair).getByRole("button", { name: "Export deck" });
+    await user.click(exportDeck);
+    expect(p.actions.pair[1].open).toHaveBeenCalledWith(exportDeck);
+    expect(toolbar.getByRole("combobox").classList.contains("w-96")).toBe(true);
+  });
+
+  /**
+   * **Docked, not floating** (issue #646): the panel reaches back across the scroller's 20px of
+   * padding to meet its top and both sides, and the clearance neighbours are offset by is its foot
+   * below the content edge plus the gap. The pixels are the live pass's; what a tidy could undo
+   * silently is the arithmetic, so that is what is pinned.
+   */
+  it("docks its panel across the scroller's padding, and clears its foot by the gap", () => {
+    mount();
+    const panel = bar()!.parentElement!;
+
+    expect(panel.style.top).toBe("-20px");
+    expect(panel.style.left).toBe("-20px");
+    expect(panel.style.right).toBe("-20px");
+    expect(panel.style.height).toBe("53px");
+    expect(panel.classList.contains("rounded-lg")).toBe(false);
+    // 53 of bar, 20 of it above the content edge, 8 of gap under it.
+    expect(DECK_BAR_CLEARANCE_PX).toBe(41);
   });
 
   /**

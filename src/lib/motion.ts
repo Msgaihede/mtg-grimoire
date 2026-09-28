@@ -212,6 +212,26 @@ export const popup: EnterExit = {
 };
 
 /**
+ * A bar docked flush to the top edge of the page scroller: the deck editor's undocked toolbar
+ * (issue #646).
+ *
+ * **It drops from behind the edge it is docked to rather than scaling**, and that is why it is
+ * not {@link popup}. A scale pivots on the box's own origin, and on a box as wide as the page a
+ * 0.96 start is thirty-odd pixels drawn in from each side, which reads as a zoom rather than as
+ * a toolbar arriving. The scroller clips everything above its top edge, so the travel happens
+ * behind the ribbon and the bar looks as though it slid out from under it. Leaves on `fast` for
+ * `popup`'s reason: the reader has already scrolled on.
+ *
+ * `y` is a transform, so `MotionConfig reducedMotion="user"` takes the travel away and leaves
+ * the fade.
+ */
+export const dockBar: EnterExit = {
+  initial: { opacity: 0, y: "-100%" },
+  animate: { opacity: 1, y: 0, transition: arriving(DURATION.base) },
+  exit: { opacity: 0, y: "-100%", transition: leaving(DURATION.fast) },
+};
+
+/**
  * An inline `role="status"` / `role="alert"` line that **grows into place** instead of shoving
  * everything below it down by its full height the instant it appears.
  *
