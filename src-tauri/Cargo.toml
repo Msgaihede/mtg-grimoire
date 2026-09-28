@@ -45,10 +45,20 @@ thiserror = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
 
-# HKDF-SHA256's hash, and the updater's integrity check: every GitHub release asset carries a
-# `digest` (`sha256:…`, measured live 2026-08-09 on all five), which is what stands in for the
-# minisign signature a hand-written updater gives up.
+# HKDF-SHA256's hash, and the updater's transport check: every GitHub release asset carries a
+# `digest` (`sha256:…`, measured live 2026-08-09 on all five), which says a download arrived as
+# it was uploaded. **It says nothing about who uploaded it** — anyone who can put a file on a
+# release gets a valid digest computed for them — and this comment used to call it the stand-in
+# for a minisign signature. The signature is `minisign-verify`, below.
 sha2 = "0.10"
+# Who published an update: the updater verifies a minisign signature over the portable zip and
+# the NSIS setup before it unpacks or stages either (`update::verify_signature`), against a
+# public key compiled into the binary. The release workflow's `sign` job makes the signatures
+# with `scripts/update-signing.mjs`. **Zero dependencies** and verify-only — nothing here signs.
+# `0.3` rather than the `0.2` line: `lib.rs` is byte-identical between 0.2.5 and 0.3.0, and the
+# one file that changed swapped raw-pointer copies for safe slice copies, so 0.3.0 carries no
+# `unsafe` at all.
+minisign-verify = "0.3"
 # Pairing (spec §7.5) and the sync envelope (§7.7). Five crates, and the version choices are
 # one decision rather than five. `sync_engine::wire` seals every batch with `sync_pair::crypto`.
 #
