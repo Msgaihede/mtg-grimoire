@@ -332,15 +332,15 @@ describe("the four sentences", () => {
     activityRecent.mockReturnValue(new Promise(() => {}));
     draw();
 
-    expect(screen.getByText("Reading recent activity…")).toBeInTheDocument();
-    expect(screen.queryByText("Nothing has happened yet.")).toBeNull();
+    expect(screen.getByText("Loading activity…")).toBeInTheDocument();
+    expect(screen.queryByText("No activity yet.")).toBeNull();
   });
 
   /** A new database is a complete answer rather than a failure, and it is worth an invitation. */
   it("says nothing has happened yet, for a database with no rows", async () => {
     draw();
 
-    expect(await screen.findByText("Nothing has happened yet.")).toBeInTheDocument();
+    expect(await screen.findByText("No activity yet.")).toBeInTheDocument();
   });
 
   /**
@@ -351,7 +351,7 @@ describe("the four sentences", () => {
    */
   it("keeps the empty state honest about being this device's feed", async () => {
     draw();
-    await screen.findByText("Nothing has happened yet.");
+    await screen.findByText("No activity yet.");
 
     expect(screen.getByText(/this device/i)).toBeInTheDocument();
   });
@@ -366,9 +366,9 @@ describe("the four sentences", () => {
     activityRecent.mockRejectedValue(new Error("BUSY: the database is being written to"));
     draw();
 
-    expect(await screen.findByText("Recent activity could not be read.")).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load recent activity.")).toBeInTheDocument();
     expect(screen.getByText(/BUSY: the database is being written to/)).toBeInTheDocument();
-    expect(screen.queryByText("Nothing has happened yet.")).toBeNull();
+    expect(screen.queryByText("No activity yet.")).toBeNull();
   });
 });
 

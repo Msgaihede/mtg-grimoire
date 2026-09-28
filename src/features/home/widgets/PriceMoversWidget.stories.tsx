@@ -93,7 +93,7 @@ export const Band: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "Price movers" }));
     await expect(
-      await card.findByText("Against the last seven days of TCGplayer prices."),
+      await card.findByText("TCGplayer prices over the last seven days."),
     ).toBeInTheDocument();
   },
 };
@@ -107,7 +107,7 @@ export const GainersSinceTheOldestPrice: Story = {
     const moves = within(list).getAllByText(SIGNED).map((el) => el.textContent ?? "");
     await expect(moves.every((text) => text.startsWith("+"))).toBe(true);
     await expect(
-      canvas.getByText("Against the oldest price kept of TCGplayer prices."),
+      canvas.getByText("TCGplayer prices since the oldest price kept."),
     ).toBeInTheDocument();
   },
 };

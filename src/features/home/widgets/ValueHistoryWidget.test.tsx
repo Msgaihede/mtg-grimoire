@@ -240,7 +240,7 @@ describe("ValueHistoryWidget", () => {
 
   it("says it is reading before either read answers", () => {
     draw();
-    expect(screen.getByText("Reading your price history…")).toBeInTheDocument();
+    expect(screen.getByText("Loading price history…")).toBeInTheDocument();
   });
 
   it("says the history could not be read, with the reason", () => {
@@ -248,7 +248,7 @@ describe("ValueHistoryWidget", () => {
     seedRefusal(valueHistoryKey("type", MARKETPLACE), "database is locked");
     draw();
     expect(
-      screen.getByText("Your price history could not be read. database is locked"),
+      screen.getByText("Couldn't load price history. database is locked"),
     ).toBeInTheDocument();
   });
 
@@ -264,7 +264,7 @@ describe("ValueHistoryWidget", () => {
     draw();
     expect(screen.getByText("$150.00")).toBeInTheDocument();
     expect(
-      screen.getByText("Prices are kept once a day, so the line starts tomorrow."),
+      screen.getByText("Prices are recorded daily. The chart starts tomorrow."),
     ).toBeInTheDocument();
     // No line, so nothing to walk — and no change figure measured against itself.
     expect(screen.queryByRole("slider")).toBeNull();
@@ -292,7 +292,7 @@ describe("ValueHistoryWidget", () => {
     seed();
     const user = userEvent.setup();
     const { container } = draw();
-    const lines = within(screen.getByRole("group", { name: "Line to follow" }));
+    const lines = within(screen.getByRole("group", { name: "Series" }));
     const creature = lines.getByRole("button", { name: /^Creature/ });
     const land = lines.getByRole("button", { name: /^Land/ });
     expect(creature).toHaveAttribute("aria-pressed", "true");
@@ -436,7 +436,7 @@ describe("ValueHistoryWidget", () => {
     client.setQueryData(valueHistoryKey("color", MARKETPLACE), THREE_DAYS_COLOR);
     const user = userEvent.setup();
     const { container, redraw } = draw({ widget: widget({ split: "type" }) });
-    const lines = () => within(screen.getByRole("group", { name: "Line to follow" }));
+    const lines = () => within(screen.getByRole("group", { name: "Series" }));
 
     await user.click(lines().getByRole("button", { name: /^Land/ }));
     pointer(slider(), "pointermove", 500);
@@ -480,7 +480,7 @@ describe("ValueHistoryWidget", () => {
     expect(figures.getByText("Collection changes").parentElement).toHaveTextContent("+$54.60");
     expect(figures.getByText("Price moves").parentElement).toHaveTextContent("−$4.60");
     expect(figures.getByText("High").parentElement).toHaveTextContent("$180.00");
-    expect(screen.queryByRole("group", { name: "Line to follow" })).toBeNull();
+    expect(screen.queryByRole("group", { name: "Series" })).toBeNull();
   });
 
   it("takes no pointer, key or press in a still body, and writes nothing", async () => {

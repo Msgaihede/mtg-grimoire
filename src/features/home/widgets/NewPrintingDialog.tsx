@@ -184,7 +184,7 @@ export function NewPrintingDialog({
         />
       }
       subtitle={releasedLine(printing)}
-      closeLabel="Close new printing"
+      closeLabel="Close"
       onDismiss={onDismiss}
       onClose={onClose}
     >
@@ -248,7 +248,7 @@ function Body({
         <div className="min-w-0">
           {error !== null ? (
             <p role="alert" className="m-0 text-sm text-destructive">
-              Could not read this card — {error}
+              Couldn't load this card — {error}
             </p>
           ) : card === undefined || pending ? (
             // The frame the picture will fill, so the decks beside it do not jump when the read
@@ -292,7 +292,7 @@ function Body({
               decks this card watches and not every deck the reader has — a virtual deck, or one
               outside a `Chosen…` scope, can hold the card and not be here. */}
           <h3 id={decksId} className="m-0 text-xs uppercase tracking-wide text-accent">
-            In {plural(printing.decks.length, "watched deck")}
+            In {plural(printing.decks.length, "tracked deck")}
           </h3>
           <PrintingDecks printing={printing} onOpenDeck={onOpenDeck} />
         </section>

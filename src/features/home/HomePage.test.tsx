@@ -562,7 +562,7 @@ describe("HomePage", () => {
     expect(() => mount(layoutOf(widget({ id: "x", kind: "timeMachine" })))).not.toThrow();
 
     const card = screen.getByRole("region", { name: titleOf("timeMachine") });
-    expect(within(card).getByText(/came from a newer version of MTG Grimoire/)).toBeInTheDocument();
+    expect(within(card).getByText(/needs a newer version of MTG Grimoire/)).toBeInTheDocument();
 
     // And it keeps its tray, because a widget this build cannot draw is the one a reader is most
     // likely to want off the page.

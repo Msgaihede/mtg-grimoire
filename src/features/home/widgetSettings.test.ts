@@ -195,7 +195,7 @@ describe("titles", () => {
 describe("chipLabel", () => {
   it("answers the words of the chip pick's current value", () => {
     expect(chipLabel(widget("collectionValue"))).toBe("Rarity");
-    expect(chipLabel(widget("collectionValue", { dimension: "color" }))).toBe("Colour");
+    expect(chipLabel(widget("collectionValue", { dimension: "color" }))).toBe("Color");
     expect(chipLabel(widget("decks", { scope: "pinned" }))).toBe("Pinned");
     expect(chipLabel(widget("priceMovers", { window: "all", direction: "up" }))).toBe("All time");
     expect(chipLabel(widget("setCompletion"))).toBe("Nearest complete");

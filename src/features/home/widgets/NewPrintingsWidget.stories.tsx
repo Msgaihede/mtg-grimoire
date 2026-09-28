@@ -132,7 +132,7 @@ export const Default: Story = {
       }),
     ).toBeInTheDocument();
     await expect(
-      card.getByText("4 decks watched · 90 days · English · basics hidden"),
+      card.getByText("4 decks tracked · 90 days · English · basics hidden"),
     ).toBeInTheDocument();
   },
 };
@@ -159,7 +159,7 @@ export const Band: Story = {
     ).toBeInTheDocument();
     await expect(card.getByText("Secret Lair Drop")).toBeInTheDocument();
     await expect(
-      card.getByText("4 decks watched · 365 days · English · basics hidden"),
+      card.getByText("4 decks tracked · 365 days · English · basics hidden"),
     ).toBeInTheDocument();
   },
 };
@@ -184,9 +184,9 @@ export const Tall: Story = {
     const card = within(await canvas.findByRole("region", { name: "New printings" }));
 
     await expect(await card.findByText("December 2025")).toBeInTheDocument();
-    await expect(card.getByText("Seen already")).toBeInTheDocument();
+    await expect(card.getByText("Already seen")).toBeInTheDocument();
     await expect(
-      card.getByText(/^Nothing older than 1 December in this window\.$/),
+      card.getByText(/^Nothing before 1 December in this period\.$/),
     ).toBeInTheDocument();
   },
 };
@@ -206,7 +206,7 @@ export const NoDecks: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "New printings" }));
 
-    await expect(await card.findByText(/^No decks are being watched/)).toBeInTheDocument();
+    await expect(await card.findByText(/^No decks selected/)).toBeInTheDocument();
     await expect(card.queryByText(/has been reprinted in the last/)).not.toBeInTheDocument();
   },
 };
@@ -231,7 +231,7 @@ export const NothingReprinted: Story = {
         "Nothing in the 4 decks you watch has been reprinted in the last 30 days. New printings arrive with each card data sync.",
       ),
     ).toBeInTheDocument();
-    await expect(card.queryByText(/^No decks are being watched/)).not.toBeInTheDocument();
+    await expect(card.queryByText(/^No decks selected/)).not.toBeInTheDocument();
   },
 };
 
@@ -262,7 +262,7 @@ export const Chosen: Story = {
 
     await userEvent.click(card.getByRole("button", { name: "Settings for New printings" }));
     const decks = await waitFor(
-      () => card.getByRole("button", { name: "Decks to watch" }),
+      () => card.getByRole("button", { name: "Decks to track" }),
       POPOVER_TIMEOUT,
     );
     await expect(decks).toHaveTextContent("2 decks");
@@ -294,7 +294,7 @@ export const PrintingOpen: Story = {
     await expect(
       await dialog.findByRole("img", { name: "Swords to Plowshares" }, POPOVER_TIMEOUT),
     ).toBeInTheDocument();
-    await expect(dialog.getByRole("region", { name: "In 1 watched deck" })).toBeInTheDocument();
+    await expect(dialog.getByRole("region", { name: "In 1 tracked deck" })).toBeInTheDocument();
     await expect(dialog.getByRole("button", { name: "Open card details" })).toBeInTheDocument();
   },
 };

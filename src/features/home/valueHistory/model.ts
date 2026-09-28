@@ -149,7 +149,7 @@ const COLOUR_LABEL: Record<string, string> = {
   R: MANA_LABEL.R,
   G: MANA_LABEL.G,
   c: MANA_LABEL.C,
-  multi: "Multicolour",
+  multi: "Multicolor",
 };
 
 function typeLabel(key: string): string {
