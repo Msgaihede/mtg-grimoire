@@ -738,6 +738,13 @@ Every one of these has its measurement and its story in
   Until issue #558 each radio was its own stop and the arrows did nothing, argued as consistency;
   one group already walked on its arrows, so it was not even that. A three-way toggle that is not
   a choice of one value (`DeckKindGroup`) stays a `role="group"` of `aria-pressed` buttons.
+- **A list of results is one Tab stop, and the arrows walk it** (issue #558). `VirtualTable`'s
+  rows rove whenever `onActivate` (or `rove`, for a caller that activates per row) is passed, and
+  `CardGrid`'s tiles rove on an `arrowNav` wall — the tile's own controls leave the tab order with
+  it and come back when the arrows make it the stop. A row renderer spreads the `tabIndex` it is
+  handed and never writes `tabIndex={0}` of its own, or every row is a stop again. Both keep the
+  stop on a drawn, on-screen row when the remembered one scrolls out and unmounts. A wall
+  without `arrowNav` keeps every tile a stop, because nothing else reaches them there.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one** — the virtualiser
   has already made the request count small, so the browser's gate only delays the pictures about
   to be looked at.

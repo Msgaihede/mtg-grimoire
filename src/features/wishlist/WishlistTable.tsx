@@ -697,10 +697,16 @@ export function WishlistTable({
       // nothing there, and here it is per row. The row's own props are overridden below
       // instead.
       //
+      // **`rove` is that split's half of the roving tab stop** (issue #558): the rows take the
+      // table's one-stop `tabIndex` from `props` and its arrow walk, where each card row used to
+      // write `tabIndex={0}` and make every wish a Tab stop. A wish with no printing is on the
+      // walk too — a row the arrows skipped would be a gap in the list the keyboard cannot see.
+      //
       // **The drag is no longer part of that split.** Both branches are a `DraggableRow` since
       // spec §9: every wish can be filed into a folder, and only the *card* half of what a row
       // carries is conditional — see {@link DraggableRow}. What still branches is opening the
       // pane, the caret and the menu, all three of which genuinely need a printing.
+      rove
       renderRow={(props, row) =>
         // A band never reaches `renderRow` (rule 1); the first arm is for the type.
         isBand(row) ? null : row.cardId ? (
@@ -712,7 +718,6 @@ export function WishlistTable({
             name={row.name}
             typeLine={row.typeLine}
             fixed={readOnly(row)}
-            tabIndex={0}
             // The menu goes on exactly the rows that open the card, and for the same reason:
             // both need a printing. A right-click is not an activation — `onClick` below is a
             // left click and `onKeyDown` is the two keys — so asking about the row does not

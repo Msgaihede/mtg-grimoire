@@ -438,8 +438,9 @@ export const CardMode: Story = {
  * the one they worked in.
  *
  * It costs the wall no height — the strip is `absolute inset-x-0 bottom-0`, so `tileHeight` is
- * unchanged — and it is revealed on hover **and on focus-within**, never removed from the tab
- * order, because "visible on hover" is not a state a keyboard has.
+ * unchanged — and it is revealed on hover **and on focus-within**, and is in the tab order on the
+ * wall's one roving stop tile (issue #558), because "visible on hover" is not a state a keyboard
+ * has. The arrows make any tile that stop.
  *
  * **The number it shows is the tile's sum, which is the same figure `OwnedBadge` draws in the
  * corner** — two numbers six pixels apart disagreeing about one piece of art is not a state this
