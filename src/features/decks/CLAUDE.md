@@ -4168,6 +4168,23 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   focuses this very field and asserts the press reaches `window`. Escape here
   closes the list and hands focus to nobody: the field is not unmounting and is what the caret was
   in the whole time, so the hook's focus-hand-back clause has nothing to do.
+- **The field's own clear asks the press whether it was spent, never `listOpen`.** Three presses
+  from a field with text and rows under it are three rungs: the capture rung above puts the list
+  away, `clearFieldOnEscape` empties the field, and the empty field lets the third fall through to
+  the floor. What separates the first two is `defaultPrevented`, read inside the helper. It was
+  `if (!listOpen)` at the call site from 2026-08-24 to 2026-09-28, and in the shipped window that
+  flag answers about the wrong render: Chromium runs a microtask checkpoint after **every listener**
+  of a trusted keypress, React flushes the rung's `setOpen(false)` in it, and the field's
+  `onKeyDown` then runs with the list already shut — so **one Escape closed the list and emptied
+  the field**. Measured 2026-09-28 (`tauri dev`, debug build, a real deck, `sol r` with five rows)
+  by a hand on the keyboard and by `cdp.mjs key` alike, both trusted and identical: `aria-expanded`
+  already `false` at a `document` capture listener one hop after the rung, `"sol r"` at the input,
+  `""` by `window`'s bubble, deck still open. An untrusted `dispatchEvent` on the input — one
+  JavaScript call, no checkpoint — read `true` throughout and kept the text, which is the whole of
+  the difference. After the fix the same presses gave list, then text, then deck, one each. jsdom
+  never checkpoints between listeners, so `QuickAdd.test.tsx`'s one-press test stands the flush in
+  with a `document` capture `flushSync` and asserts it landed; the older three-press test there
+  passed over the bug the whole time.
 - **The list is one more `"inner"` peer on this screen and deliberately outside the `Layer` union
   above**, kept apart by focus and click mechanics rather than by structure — the same arrangement
   as the docked panel's set filter. **Most of the editor's full-window surfaces are opened by

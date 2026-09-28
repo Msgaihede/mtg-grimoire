@@ -24,7 +24,12 @@ import { dragData } from "@/features/decks/dnd";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "@/features/decks/metaRows";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { CardGrid, type GridCard, type GridSections } from "@/features/search/CardGrid";
-import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
+import {
+  FilterBar,
+  StatedFiltersLine,
+  type FilterLabels,
+  type TrayCell,
+} from "@/features/search/FilterBar";
 import { ShelfLabel } from "@/features/shelves/ShelfLabel";
 import { FOLD_PAUSED_REASON, ShelfToolbar } from "@/features/shelves/ShelfToolbar";
 import { useFoldAnchor } from "@/features/shelves/useFoldAnchor";
@@ -3193,7 +3198,7 @@ export function CollectionPage() {
   return (
     <section
       className={cn(
-        "flex flex-col gap-4",
+        "flex flex-col gap-3",
         // **`h-full` is the table's, not the page's** — `SearchPage`'s branch, and the wishlist
         // carries the twin of this comment. `VirtualTable` is `min-h-0 flex-1 overflow-auto`, so it
         // has a height only while every box above it has one, and this section pinned to `main`'s
@@ -3241,9 +3246,9 @@ export function CollectionPage() {
       {/* The region is mounted for the life of the view and the banner is swapped into it: a
           live region that appears together with its own text announces nothing, because there
           was no change for a screen reader to notice — the same rule as the status line below
-          and as the quick-add's report. `empty:-mt-4` gives back the flex gap it would
+          and as the quick-add's report. `empty:-mt-3` gives back the flex gap it would
           otherwise hold open under the header while it is saying nothing at all. */}
-      <div role="status" aria-label="Needs review" className="empty:-mt-4">
+      <div role="status" aria-label="Needs review" className="empty:-mt-3">
         {/* Only while there are flagged rows *and* the reader is not already looking at them —
             with the filter on, the list is the answer and the banner would be a second copy of
             the question.
@@ -3285,6 +3290,8 @@ export function CollectionPage() {
         sortRows={collection.sortRows}
         tray={COLLECTION_TRAY}
         layoutFor="collection"
+        // The chips are stated in the path row instead — see `StatedFiltersLine` there.
+        statesFilters={false}
       />
 
       {/* **The row the list and the search column share** (design §4), and the one thing on this
@@ -3344,6 +3351,41 @@ export function CollectionPage() {
                 />
               </div>
             )}
+            {/* **The page's one live region, and it lives in this row rather than on a line of its
+                own under it** (2026-09-27, the header redesign). A region that appears together
+                with its text announces nothing, so it is mounted for the life of the view.
+
+                It had a `min-h-4` line of its own until then, reserved whether or not it said
+                anything, for the final re-check's new 2: `Updating…` came and went for 40–80 ms
+                after every write, and a line that is nothing tall while it is empty pushed the
+                wall down 16px for exactly the frames a reveal or a drop anchor was measured
+                across. That guarantee is kept and the 24px it cost (the line and its gap) are
+                not: this row is the toolbar's 28px whatever the region says, `truncate` keeps a
+                long sentence on its one line, and `flex-1` with a zero basis never asks the row to
+                wrap. So the wall's offset still never depends on what it says.
+
+                **The empty wall's sentence is this same element**, never a second copy: it takes
+                `order-last basis-full`, which wraps it onto a whole line of its own under the
+                toolbar, and draws it large and centred where the wall would be. One element, so
+                the region is never remounted with its text and the sentence is never in the page
+                twice. */}
+            {/* The filters that are on, as chips, on this row's empty left side rather than on a
+                line of their own under the bar — so filtering costs the wall no height and the
+                first filter no longer moves it (2026-09-27). `basis-0` so the line never makes
+                the row wrap; it scrolls sideways instead. `grow-[3]` against the status line's 1,
+                so the chips get most of the room and the status sits by the toolbar. */}
+            <StatedFiltersLine search={collection} className="grow-[3] basis-0" />
+            <p
+              role="status"
+              className={cn(
+                empty && status
+                  ? "order-last basis-full py-16 text-center text-sm"
+                  : "min-w-0 flex-1 basis-0 truncate text-right text-xs",
+                empty && failure ? "text-destructive" : "text-dim",
+              )}
+            >
+              {status}
+            </p>
             <div ref={pathRowRef} className="ml-auto flex shrink-0 items-center gap-2">
               {canClearRemoved && (
                 <button
@@ -3473,26 +3515,6 @@ export function CollectionPage() {
               </motion.div>
             )}
           </AnimatePresence>
-
-          {/* One live region, mounted for the life of the view: a region that appears together
-              with its text announces nothing, because there was no change for a screen reader
-              to notice.
-
-              **Its line is reserved whether or not it says anything** (the final re-check's new 2):
-              `Updating…` came and went for 40–80 ms after every write, and a line that is nothing
-              tall while it is empty pushed the wall down 16px for exactly the frames a reveal or a
-              drop anchor was being measured across, then gave the 16px back as a scroll. So the
-              line is `min-h-4` — one line of `text-xs` — empty or not, and the wall's offset
-              never depends on what it says. The empty wall's own sentence is its own shape. */}
-          <p
-            role="status"
-            className={cn(
-              empty && status ? "py-16 text-center text-sm" : "min-h-4 text-xs",
-              empty && failure ? "text-destructive" : "text-dim",
-            )}
-          >
-            {status}
-          </p>
 
           {/* A write that was refused, said where the writing happened. Not folded into the
               line above: that one describes the list, and this one describes something the

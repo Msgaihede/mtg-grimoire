@@ -361,7 +361,14 @@ Every one of these has its measurement and its story in
   once for the boxes that share it. **jsdom does not implement the native clear**, so the suite
   can never see the half this exists to prevent; the shipped window is the only witness. Not for
   a field inside a dialog or a popup — an `"inner"` layer consumes the press in the capture phase
-  before the field's own handler runs, so a call there is a line that cannot execute.
+  before the field's own handler runs, so a call there does nothing.
+  **A press a capture rung already spent is never the box's, and the helper asks
+  `defaultPrevented` rather than trusting its caller's state** (2026-09-28). A trusted keypress
+  gets a microtask checkpoint after every listener, React flushes a capture rung's close in it, so
+  a field's `onKeyDown` can run from a render where its own popup is already shut: `QuickAdd`
+  guarded on its `listOpen` and one Escape closed the list **and** emptied the field. jsdom and an
+  untrusted `dispatchEvent` never checkpoint between listeners, so neither can see it unaided —
+  `features/decks/CLAUDE.md`'s quick add has the measurement.
 - **A surface opened from a view is a centred modal over a scrim, not a docked column — unless
   the reader works _out of_ it while editing beside it.** Width is the scarce thing in this app:
   the deck editor's desk row measures **602px** at the app's own 1280×800 with the card pane
@@ -554,7 +561,11 @@ Every one of these has its measurement and its story in
   controls never fold away — the search box, the colours, the mana values and the sort — and
   everything else (set, format, owned, rarity, type, border, price, printings, finish,
   condition, needs review) is behind one `Filters`
-  disclosure, with the filters that are **on** stated as 26px chips under a rule. Thresholds are
+  disclosure, with the filters that are **on** stated as 26px chips on a line under the bar that is
+  drawn only while something is on — `Reset all` sits at the bar's own far end, greyed at zero, since
+  2026-09-27. The collection and the wishlist pass `statesFilters={false}` and draw the same chips
+  with `StatedFiltersLine` in their path row, beside the shelf toolbar, so filtering there costs the
+  wall no height. Thresholds are
   640 / 900 / 1500 and each is where a *line's own contents* stop fitting, not a device.
   **The right-hand end of that row's first line belongs to the grid-or-table pair**, on every
   surface that has two layouts — which is where a reader now looks for it on all four card views,

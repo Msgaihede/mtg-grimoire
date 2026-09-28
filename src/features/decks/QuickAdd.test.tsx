@@ -2,6 +2,7 @@ import type { ComponentProps } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { flushSync } from "react-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CardSummary, SearchResponse } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -430,6 +431,46 @@ describe("QuickAdd", () => {
     }
 
     expect(heard).toEqual([true, true, false]);
+  });
+
+  /**
+   * **One press, and the list is all it spends — in the order the shipped window runs it.**
+   *
+   * `spends one Escape on the list…` above cannot fail for the bug this is here for, and that is
+   * the reason this exists. Chromium runs a microtask checkpoint after **every listener** of a
+   * trusted keypress, and React flushes the capture rung's `setOpen(false)` in it — so the field's
+   * own `onKeyDown` is dispatched from the *next* render, with the list already shut. jsdom runs
+   * every listener inside one JavaScript call and never checkpoints between them, so there the
+   * handler still sees the list up. A field that guarded its clear on `listOpen` passed the test
+   * above and, in the window, closed the list **and** emptied the field on one press (2026-09-28,
+   * debug build, by hand and over CDP alike).
+   *
+   * `checkpoint` stands in for that microtask: a `document` capture listener runs after every
+   * `window` capture one and before React's root, which is where the browser flushed. `atTarget`
+   * is the half that keeps this honest — it reads `aria-expanded` off the input itself, before
+   * React dispatches, and proves the render really did land in between. Without it, a React that
+   * stopped flushing here would quietly turn this back into the test above, green over the bug.
+   */
+  it("keeps the text when one press closes the list, with a render between listeners", async () => {
+    searchCards.mockResolvedValue(page("Goblin Guide", "Goblin Bushwhacker"));
+    const { field } = mount();
+    await suggest(field, "goblin");
+
+    const checkpoint = () => flushSync(() => {});
+    const atTargetSaw: (string | null)[] = [];
+    const atTarget = () => atTargetSaw.push(field.getAttribute("aria-expanded"));
+    document.addEventListener("keydown", checkpoint, true);
+    field.addEventListener("keydown", atTarget);
+    try {
+      await userEvent.keyboard("{Escape}");
+    } finally {
+      document.removeEventListener("keydown", checkpoint, true);
+      field.removeEventListener("keydown", atTarget);
+    }
+
+    expect(atTargetSaw).toEqual(["false"]);
+    expect(field).toHaveAttribute("aria-expanded", "false");
+    expect(field).toHaveValue("goblin");
   });
 
   /**
