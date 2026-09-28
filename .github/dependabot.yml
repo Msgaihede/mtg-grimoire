@@ -1,0 +1,27 @@
+# Keeps the SHA-pinned actions current. Every third-party `uses:` in this repository is a full
+# commit SHA with the tag it was on in a trailing comment (`@<sha> # v7.0.1`), because a tag is
+# whatever its owner last pushed; Dependabot moves the SHA and the comment together, in a pull
+# request that runs CI like any other. `scripts/actions-pinned.test.mjs` holds the pins, and
+# holds this file to covering both places they live.
+#
+# GitHub Actions only. npm and cargo are not here: their versions move through lockfiles that a
+# person updates on purpose, and nothing about this file's reason applies to them.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    # `/` is the workflows. The composite action is a directory of its own and Dependabot reads
+    # only the directories it is given, so without the second entry the one action every build
+    # job runs — `dtolnay/rust-toolchain` — would stay pinned for ever.
+    directories:
+      - "/"
+      - "/.github/actions/*"
+    schedule:
+      interval: weekly
+    # One pull request a week rather than one per action: `main` is protected with `strict`, so
+    # every merge sends every open PR back to the queue.
+    groups:
+      actions:
+        patterns: ["*"]
+    # `ci:` is a conventional-commit type release-please reads as no release at all.
+    commit-message:
+      prefix: ci
