@@ -12,7 +12,7 @@ describe("EmptyShelf", () => {
   it("says what to do with an empty folder", () => {
     render(<EmptyShelf />);
     expect(EMPTY_SHELF_COPY).toBe(
-      "Empty — drag cards here, or pick cards and choose Move to folder…",
+      "Empty. Drag cards here or use Move to folder…",
     );
     expect(screen.getByText(EMPTY_SHELF_COPY)).toBeInTheDocument();
   });

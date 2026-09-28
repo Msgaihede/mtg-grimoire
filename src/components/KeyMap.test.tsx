@@ -68,7 +68,7 @@ describe("KeyMap", () => {
 
     const headings = screen.getAllByRole("heading").map((h) => h.textContent);
     expect(headings).toEqual(["Everywhere", "Deck editor"]);
-    expect(screen.getByText("Undo the last change")).toBeInTheDocument();
+    expect(screen.getByText("Undo")).toBeInTheDocument();
   });
 
   /**
@@ -95,9 +95,9 @@ describe("KeyMap", () => {
     useAppStore.setState({ activeView: "decks", openDeckId: 7, keyMapOpen: true });
     render(<Harness />);
 
-    expect(capsFor("Undo the last change")).toEqual(["Ctrl", "Z"]);
-    expect(capsFor("Redo the change you undid")).toEqual(["Ctrl", "Y", "Ctrl", "Shift", "Z"]);
-    expect(screen.getByText("Redo the change you undid").nextElementSibling?.textContent).toContain(
+    expect(capsFor("Undo")).toEqual(["Ctrl", "Z"]);
+    expect(capsFor("Redo")).toEqual(["Ctrl", "Y", "Ctrl", "Shift", "Z"]);
+    expect(screen.getByText("Redo").nextElementSibling?.textContent).toContain(
       "or",
     );
   });
@@ -154,7 +154,7 @@ describe("KeyMap", () => {
     render(<Harness />);
 
     expect(capsFor("Resize the cards")).toEqual(["Ctrl", "Scroll"]);
-    expect(capsFor("Pick more than one card")).toEqual(["Ctrl", "Click", "Shift", "Click"]);
+    expect(capsFor("Select multiple cards")).toEqual(["Ctrl", "Click", "Shift", "Click"]);
   });
 
   it("lists Ctrl+Shift+N for a new window", () => {
@@ -178,8 +178,8 @@ describe("KeyMap", () => {
     render(<Harness />);
 
     expect(readingOf("Jump to a section")).toBe("Ctrl 1 to Ctrl 9");
-    expect(readingOf("Redo the change you undid")).toBe("Ctrl Y or Ctrl Shift Z");
-    expect(readingOf("Undo the last change")).toBe("Ctrl Z");
+    expect(readingOf("Redo")).toBe("Ctrl Y or Ctrl Shift Z");
+    expect(readingOf("Undo")).toBe("Ctrl Z");
   });
 
   /**

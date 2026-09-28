@@ -122,12 +122,12 @@ function markColorsQuery() {
 function sentence(error: unknown): string {
   if (typeof error === "string") return error;
   if (error instanceof Error) return error.message;
-  return "The colour could not be saved.";
+  return "Couldn't save the color.";
 }
 
 /** A colour the field could not make sense of — refused here rather than at the far end, because
  *  `markcolors.rs` would answer the same and a round trip buys nothing. */
-const UNREADABLE = "That is not a colour — six hex digits, like #56bd78.";
+const UNREADABLE = "Not a valid color. Use a hex code like #56bd78.";
 
 /**
  * The colour of each mark, and the two writes that change one.

@@ -42,7 +42,7 @@ export const PENDING_DETAIL = "The collection is still uploading. Reload this pa
 
 /** Under whatever went wrong. The one thing a stranger can actually do about any of it. */
 export const FAILED_DETAIL =
-  "If the link came from a chat, ask for it again — a collection can be republished.";
+  "Ask the owner for a new link.";
 
 /** A thrown sentence, or the generic one. `parseSnapshot` throws four a page can print. */
 function sentence(error: unknown): string {

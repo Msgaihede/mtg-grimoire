@@ -158,7 +158,7 @@ function FirstRun({
     ? activity.label
     : failure
       ? ""
-      : "No download is running, and there is no card data yet.";
+      : "No card data yet.";
 
   return (
     <motion.div

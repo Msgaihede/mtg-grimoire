@@ -384,7 +384,7 @@ const RARITIES = ["common", "uncommon", "rare", "mythic"] as const;
  * be the button contradicting the select beside it.
  */
 function sortDirectionName(dir: SortDir | undefined): string {
-  if (!dir) return "Sort direction — Best match has no direction";
+  if (!dir) return "Sort direction: none for Best match";
   return dir === "asc"
     ? "Sort direction: ascending — press for descending"
     : "Sort direction: descending — press for ascending";
@@ -456,7 +456,7 @@ function activeChips<SortKey extends string>(
       // holding. Unpressing the last colour chip is a press about one colour, so it leaves the
       // reading alone; pressing this × is a press on a sentence with `exactly` in it. One is an
       // incidental emptying of the row, the other is the reader clearing what they can read.
-      label: `Colour: ${search.colorsStrict ? "exactly " : ""}${MANA_KEYS.filter((k) =>
+      label: `Color: ${search.colorsStrict ? "exactly " : ""}${MANA_KEYS.filter((k) =>
         search.colors.includes(k),
       )
         .map((k) => MANA_LABEL[k])
@@ -1463,7 +1463,7 @@ function FilterTray<SortKey extends string>({
       <TrayField key="decks" label="Decks">
         <ToggleChip
           label="Not in a deck"
-          hint="only the copies no deck is holding"
+          hint="Only copies not used in a deck"
           pressed={search.allocation === "unallocated"}
           onClick={() =>
             search.setAllocation?.(search.allocation === "unallocated" ? "all" : "unallocated")

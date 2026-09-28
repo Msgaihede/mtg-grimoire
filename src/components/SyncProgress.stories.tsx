@@ -286,7 +286,7 @@ export const Throttled: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      canvas.getByText("No download is running, and there is no card data yet."),
+      canvas.getByText("No card data yet."),
     ).toBeInTheDocument();
     await expect(canvas.queryByRole("progressbar")).toBeNull();
     await expect(canvas.getByRole("button", { name: "Retry download" })).toBeEnabled();

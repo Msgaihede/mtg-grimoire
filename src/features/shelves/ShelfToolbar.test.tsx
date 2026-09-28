@@ -39,7 +39,7 @@ describe("ShelfToolbar", () => {
 
   /** The words both pages pass, fenced as a literal so a rewording is a diff about them. */
   it("says why folding is paused in one sentence", () => {
-    expect(FOLD_PAUSED_REASON).toBe("Folding is paused while filtering");
+    expect(FOLD_PAUSED_REASON).toBe("Collapsing is paused while filtering");
   });
 
   /**

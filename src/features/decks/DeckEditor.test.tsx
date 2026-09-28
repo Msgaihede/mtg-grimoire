@@ -2045,7 +2045,7 @@ describe("DeckEditor", () => {
     await open();
 
     const stats = screen.getByRole("region", { name: "Deck stats" });
-    const asOf = screen.getByText(/prices as of the last/i);
+    const asOf = screen.getByText(/prices, last updated with/i);
     // `DOCUMENT_POSITION_FOLLOWING` — the band comes after the as-of line in document order,
     // which in this one flex column is after it on screen.
     expect(asOf.compareDocumentPosition(stats) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
@@ -2069,7 +2069,7 @@ describe("DeckEditor", () => {
   it("draws the token wall under the price strip and over the stats band", async () => {
     await open();
 
-    const asOf = screen.getByText(/prices as of the last/i);
+    const asOf = screen.getByText(/prices, last updated with/i);
     const tokens = screen.getByRole("region", { name: "Tokens & Emblems" });
     const stats = screen.getByRole("region", { name: "Deck stats" });
 
@@ -2094,7 +2094,7 @@ describe("DeckEditor", () => {
   it("draws the notes band under the price strip and under the stats band", async () => {
     await open();
 
-    const asOf = screen.getByText(/prices as of the last/i);
+    const asOf = screen.getByText(/prices, last updated with/i);
     const stats = screen.getByRole("region", { name: "Deck stats" });
     const notes = screen.getByRole("region", { name: "Notes" });
 
@@ -5122,7 +5122,7 @@ describe("DeckEditor", () => {
   it("says how old its prices are, and whose", async () => {
     await open();
 
-    expect(screen.getByText("TCGplayer prices as of the last card-data sync.")).toBeInTheDocument();
+    expect(screen.getByText("TCGplayer prices, last updated with card data.")).toBeInTheDocument();
   });
 
   /**
@@ -5162,7 +5162,7 @@ describe("DeckEditor", () => {
     await waitFor(() => expect(screen.queryByText(CUT_CARDS_NOTE)).toBeNull());
     // The price line is the strip's permanent half and is drawn on both tabs — so the absence
     // above is this sentence being withheld rather than the strip having gone.
-    expect(screen.getByText("TCGplayer prices as of the last card-data sync.")).toBeInTheDocument();
+    expect(screen.getByText("TCGplayer prices, last updated with card data.")).toBeInTheDocument();
   });
 
   /** A deck deleted from another view is a deck the editor is holding a ghost of. It says so
@@ -6482,7 +6482,7 @@ describe("DeckEditor — a card's menu", () => {
       await within(addTo as HTMLElement).findByRole("menuitem", { name: "Collection" }),
     );
 
-    expect(await screen.findByText(/Could not add to your collection/)).toBeInTheDocument();
+    expect(await screen.findByText(/Couldn't add to your collection/)).toBeInTheDocument();
   });
 
   /**
@@ -8321,7 +8321,7 @@ describe("DeckEditor multi-select", () => {
     await userEvent.keyboard("{Delete}");
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "1 of 2 cards was not changed — The database is busy with a sync.",
+      "1 of 2 cards wasn't changed — The database is busy with a sync.",
     );
   });
 
@@ -8336,7 +8336,7 @@ describe("DeckEditor multi-select", () => {
     await pointerDrag(row("Lightning Bolt"), boxed(group("Sideboard"), 300, 80));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "1 of 2 cards was not changed — That card is not in the pile any more.",
+      "1 of 2 cards wasn't changed — That card is not in the pile any more.",
     );
   });
 

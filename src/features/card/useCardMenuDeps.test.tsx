@@ -98,7 +98,7 @@ describe("useCardMenuDeps — moveCopies", () => {
     act(() => result.current.deps.moveCopies?.([7, 8], 3));
 
     await waitFor(() =>
-      expect(result.current.error).toBe("Could not move those cards — That entry is in a deck."),
+      expect(result.current.error).toBe("Couldn't move those cards — That entry is in a deck."),
     );
     expect(useBulkUndo.getState().offers.collection).toBeNull();
   });

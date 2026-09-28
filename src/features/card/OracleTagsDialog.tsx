@@ -42,11 +42,11 @@ const ORACLE_TAG_STATUS_KEY = ["tags", "oracle", "status"];
  * app, so the honest instruction is that nothing needs a press.
  */
 const NEVER_FETCHED =
-  "No oracle tags yet. Scryfall tagger data has not been downloaded yet; it will sync automatically in the background.";
+  "Tag data is still downloading. Check back shortly.";
 
 /** An empty answer from a taxonomy that *is* here: Tagger's editors have not tagged this card.
  *  The other half of {@link NEVER_FETCHED}'s split, and the claim that needs the status row. */
-const UNTAGGED = "No oracle tags. Scryfall's tagger has nothing on record for this card.";
+const UNTAGGED = "No oracle tags for this card.";
 
 /**
  * A printing with no oracle card behind it.
@@ -56,7 +56,7 @@ const UNTAGGED = "No oracle tags. Scryfall's tagger has nothing on record for th
  * question to put: the read is keyed on an oracle id, so a null id has nothing to look up and a
  * call would only be this component asking the backend to confirm that `[]` is `[]`.
  */
-const NO_ORACLE_CARD = "No oracle tags. This printing is not linked to an Oracle card.";
+const NO_ORACLE_CARD = "Oracle tags aren't available for this printing.";
 
 /**
  * Where the tags came from and how old they are — the app's rule that data with an age says its
@@ -70,7 +70,7 @@ const NO_ORACLE_CARD = "No oracle tags. This printing is not linked to an Oracle
  * `CLAUDE.md` asks in bold not to do, and a caption that names the wrong clock is worse than one
  * that names none.
  */
-const AS_OF = "Oracle tags come from Scryfall's tagger, as of the last tag refresh.";
+const AS_OF = "Tags from Scryfall Tagger.";
 
 /**
  * The card's Oracle tags, over the card detail modal.
@@ -185,7 +185,7 @@ function Body({
     <>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {card === null ? (
-          <Note>Reading the card…</Note>
+          <Note>Loading card…</Note>
         ) : oracleId === null ? (
           <Note>{NO_ORACLE_CARD}</Note>
         ) : tags.isPending || status.isPending ? (
@@ -193,7 +193,7 @@ function Body({
           // the status row, so drawing before it lands would flash whichever of the two claims
           // the default happened to be — and one of them is about the reader's database rather
           // than about their card.
-          <Note>Reading the tags…</Note>
+          <Note>Loading tags…</Note>
         ) : slugs.length > 0 ? (
           <section aria-labelledby={headingId} className="space-y-2">
             <h3 id={headingId} className="text-xs uppercase tracking-wide text-dim">

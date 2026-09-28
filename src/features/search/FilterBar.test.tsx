@@ -205,7 +205,7 @@ describe("FilterBar, its sort direction tooltip binding", () => {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
     expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
-      "Sort direction — Best match has no direction",
+      "Sort direction: none for Best match",
     );
   });
 
@@ -609,7 +609,7 @@ describe("FilterBar, greyed by its facets", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Cards with X in their mana cost — nothing in this search",
+        name: "Cards with X in their mana cost (no results)",
       }),
     ).toHaveTextContent("X");
   });
@@ -727,7 +727,7 @@ describe("FilterBar, greyed by its facets", () => {
     const white = screen.getByRole("button", { name: "White — 12,481 printings" });
     expect(white.textContent).toBe("");
 
-    const seven = screen.getByRole("button", { name: "Mana value 7 — nothing in this search" });
+    const seven = screen.getByRole("button", { name: "Mana value 7 (no results)" });
     // The numeral on the chip is the chip's own label, not a count.
     expect(seven).toHaveTextContent("7");
   });
@@ -741,7 +741,7 @@ describe("FilterBar, greyed by its facets", () => {
 
     await openTray();
 
-    const chip = screen.getByRole("button", { name: "Owned — nothing in this search" });
+    const chip = screen.getByRole("button", { name: "Owned (no results)" });
     expect(chip).not.toHaveAttribute("aria-disabled");
 
     // Mid-cycle, the word on the chip changes and the count follows it.
@@ -1277,7 +1277,7 @@ describe("FilterBar, its sort picker", () => {
 
     const button = dirButton();
     expect(button).toBeDisabled();
-    expect(button).toHaveAccessibleName("Sort direction — Best match has no direction");
+    expect(button).toHaveAccessibleName("Sort direction: none for Best match");
   });
 
   /** The name says the state **and** what pressing does, because an arrow is the whole of what
@@ -1655,7 +1655,7 @@ describe("FilterBar, its rarity chips", () => {
     );
     await openTray();
 
-    const mythic = screen.getByRole("button", { name: "Mythic — nothing in this search" });
+    const mythic = screen.getByRole("button", { name: "Mythic (no results)" });
     expect(mythic).toHaveAttribute("aria-disabled", "true");
     expect(mythic).not.toBeDisabled();
 
@@ -1694,7 +1694,7 @@ describe("FilterBar, its rarity chips", () => {
 describe("FilterBar, its Exact chip", () => {
   /** Matched on a **prefix**: the chip's accessible name is its own sentence, which names the
    *  state as well as the word, and the sentence changes with the press. */
-  const exact = () => screen.queryByRole("button", { name: /^Exact\b/ });
+  const exact = () => screen.queryByRole("button", { name: /^(Exact|Within)\b/ });
 
   /** **In the colour group, with the tray shut** — the whole of the move. A query over the whole
    *  document would also pass with it in the tray once opened; this one cannot. */
@@ -1704,7 +1704,7 @@ describe("FilterBar, its Exact chip", () => {
     const group = screen.getByRole("group", { name: "Color identity" });
     const buttons = within(group).getAllByRole("button");
     expect(buttons).toHaveLength(7);
-    expect(buttons[buttons.length - 1]).toHaveAccessibleName(/^Exact\b/);
+    expect(buttons[buttons.length - 1]).toHaveAccessibleName(/^(Exact|Within)\b/);
     expect(screen.getByRole("button", { name: /^Show filters/ })).toBeInTheDocument();
   });
 
@@ -1714,7 +1714,7 @@ describe("FilterBar, its Exact chip", () => {
     render(<FilterBar search={search()} />);
     await openTray();
 
-    expect(screen.getAllByRole("button", { name: /^Exact\b/ })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: /^(Exact|Within)\b/ })).toHaveLength(1);
     expect(screen.queryByText("Colour")).toBeNull();
   });
 
@@ -1774,7 +1774,7 @@ describe("FilterBar, its Exact chip", () => {
   it("says which reading is on, in words, at both ends of the press", () => {
     const { unmount } = render(<FilterBar search={search({ colors: ["W", "U"] })} />);
     expect(exact()).toHaveAccessibleName(
-      "Exact — cards whose colour identity fits within these colours",
+      "Within — cards whose color identity fits within these colors",
     );
     unmount();
 
@@ -1782,7 +1782,7 @@ describe("FilterBar, its Exact chip", () => {
     const on = exact()!;
     expect(on).toHaveAttribute("aria-pressed", "true");
     expect(on).toHaveAccessibleName(
-      "Exact — cards whose colour identity is exactly these colours",
+      "Exact — cards whose color identity is exactly these colors",
     );
   });
 
@@ -1799,13 +1799,13 @@ describe("FilterBar, its Exact chip", () => {
       <FilterBar search={search({ colors: ["W", "U"], colorsStrict: true, activeCount: 1 })} />,
     );
 
-    expect(chipLabels()).toEqual(["Colour: exactly White, Blue"]);
+    expect(chipLabels()).toEqual(["Color: exactly White, Blue"]);
   });
 
   it("leaves the word out when the colours are read loosely", () => {
     render(<FilterBar search={search({ colors: ["W", "U"], activeCount: 1 })} />);
 
-    expect(chipLabels()).toEqual(["Colour: White, Blue"]);
+    expect(chipLabels()).toEqual(["Color: White, Blue"]);
   });
 
   /**
@@ -1834,7 +1834,7 @@ describe("FilterBar, its Exact chip", () => {
     );
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Remove filter — Colour: exactly White, Blue" }),
+      screen.getByRole("button", { name: "Remove filter — Color: exactly White, Blue" }),
     );
 
     expect(toggleColor.mock.calls.map(([c]) => c)).toEqual(["W", "U"]);
@@ -1847,7 +1847,7 @@ describe("FilterBar, its Exact chip", () => {
     const toggleColorsStrict = vi.fn();
     render(<FilterBar search={search({ colors: ["W"], toggleColorsStrict, activeCount: 1 })} />);
 
-    await userEvent.click(screen.getByRole("button", { name: "Remove filter — Colour: White" }));
+    await userEvent.click(screen.getByRole("button", { name: "Remove filter — Color: White" }));
 
     expect(toggleColorsStrict).not.toHaveBeenCalled();
   });
@@ -1960,7 +1960,7 @@ describe("FilterBar, its type chips", () => {
     );
     await openTray();
 
-    const battle = screen.getByRole("button", { name: "Battle — nothing in this search" });
+    const battle = screen.getByRole("button", { name: "Battle (no results)" });
     expect(battle).toHaveAttribute("aria-disabled", "true");
     expect(battle).not.toBeDisabled();
 
@@ -2098,7 +2098,7 @@ describe("FilterBar, its border chips", () => {
     await openTray();
 
     const borderless = within(group()).getByRole("button", { name: /^Borderless\b/ });
-    expect(borderless).toHaveAccessibleName("Borderless — nothing in this search");
+    expect(borderless).toHaveAccessibleName("Borderless (no results)");
     expect(borderless).toHaveAttribute("aria-disabled", "true");
     expect(borderless).not.toBeDisabled();
     const regular = within(group()).getByRole("button", { name: /^Regular\b/ });
@@ -2201,7 +2201,7 @@ describe("FilterBar, its finish chips", () => {
     await openTray();
 
     const etched = within(group()).getByRole("button", { name: /^Etched\b/ });
-    expect(etched).toHaveAccessibleName("Etched — nothing in this search");
+    expect(etched).toHaveAccessibleName("Etched (no results)");
     expect(etched).toHaveAttribute("aria-disabled", "true");
     const foil = within(group()).getByRole("button", { name: /^Foil\b/ });
     expect(foil).toHaveAccessibleName("Foil — 5 printings");
@@ -2320,7 +2320,7 @@ describe("FilterBar, the filters it states", () => {
     expect(chipLabels()).toEqual([
       // WUBRG order and the colours' own names — `Colour: U, R` is the payload, and the payload
       // is not what the reader pressed.
-      "Colour: Blue, Red",
+      "Color: Blue, Red",
       // One chip for the whole OR group, X included: it is one entry in the count for the same
       // reason it is one question on the row.
       "Mana value: 2, 8+, X",
@@ -2391,7 +2391,7 @@ describe("FilterBar, the filters it states", () => {
     );
 
     await userEvent.click(
-      screen.getByRole("button", { name: "Remove filter — Colour: Blue, Red" }),
+      screen.getByRole("button", { name: "Remove filter — Color: Blue, Red" }),
     );
     expect(toggleColor.mock.calls.map(([c]) => c)).toEqual(["U", "R"]);
 
@@ -2417,7 +2417,7 @@ describe("FilterBar, the filters it states", () => {
     render(<FilterBar search={search({ colors: ["U", "R"], activeCount: 1 })} />);
 
     const block = screen.getByRole("button", {
-      name: "Remove filter — Colour: Blue, Red",
+      name: "Remove filter — Color: Blue, Red",
     }).parentElement!;
     expect(block.classList.contains("flex-wrap")).toBe(true);
 
@@ -2471,7 +2471,7 @@ describe("FilterBar, its owned pair", () => {
     );
     await openTray();
 
-    const owned = screen.getByRole("button", { name: "Owned — nothing in this search" });
+    const owned = screen.getByRole("button", { name: "Owned (no results)" });
     const missing = screen.getByRole("button", { name: "Missing — 40 printings" });
     expect(owned).not.toHaveAttribute("aria-disabled");
     expect(missing).not.toHaveAttribute("aria-disabled");
@@ -2588,7 +2588,7 @@ describe("StatedFiltersLine", () => {
     );
 
     expect(screen.getByText("Filtering by")).toBeInTheDocument();
-    const chip = screen.getByRole("button", { name: "Remove filter — Colour: Blue" });
+    const chip = screen.getByRole("button", { name: "Remove filter — Color: Blue" });
     expect(screen.getByRole("button", { name: /^Remove filter — Rarity/ })).toBeInTheDocument();
     const { classList } = chip.parentElement!;
     expect(classList.contains("overflow-x-auto")).toBe(true);

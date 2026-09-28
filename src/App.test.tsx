@@ -752,7 +752,7 @@ it("opens the tag browser on the tags entry", async () => {
     await screen.findByRole("heading", { name: "Browse cards by tag", level: 2 }),
   ).toBeInTheDocument();
   // And the honest empty state, since this file's database has never ingested either taxonomy.
-  expect(await screen.findByText(/art tags have not been downloaded/i)).toBeInTheDocument();
+  expect(await screen.findByText(/art tags are still downloading/i)).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Card search" })).not.toBeInTheDocument();
 });
 
@@ -797,7 +797,7 @@ it("draws the shared view's empty state, with no share and no rail row", async (
   render(<App />);
 
   expect(
-    await screen.findByRole("heading", { name: "Open a collection somebody shared with you" }),
+    await screen.findByRole("heading", { name: "Open a shared collection" }),
   ).toBeInTheDocument();
   expect(screen.getByRole("heading", { level: 1 })).toHaveTextContent("Shared");
   // Nothing was fetched: an empty state asks the network for nothing.
@@ -1266,7 +1266,7 @@ it("says a refused swap in the printings modal, and the deck behind it goes with
   await userEvent.click(await within(printings).findByRole("button", { name: /M10/ }));
 
   expect(await within(printings).findByRole("alert")).toHaveTextContent(
-    "Could not use that printing — That deck is not there any more.",
+    "Couldn't use that printing — That deck is not there any more.",
   );
   // Still open. The refusal is drawn *in* the modal rather than closing it, which is the one
   // thing the docked pane could not do with this sentence.
@@ -1358,7 +1358,7 @@ it("announces a fold in the printings modal, and stays open so it can be read", 
 
   await waitFor(() =>
     expect(within(printings).getByRole("status")).toHaveTextContent(
-      "Folded into one row of 3 in Main deck.",
+      "Merged into one row of 3 in Main deck.",
     ),
   );
   // Still on screen — the sentence has somewhere to be read, and the wall behind it is the same

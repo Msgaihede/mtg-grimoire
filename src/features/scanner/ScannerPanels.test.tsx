@@ -120,7 +120,7 @@ describe("the match panel", () => {
   it("says the names failed without taking the verdict's place", () => {
     render(<ScannerPanels {...props({ status: STATUS.unlabelled })} />);
     const match = screen.getByRole("region", { name: "Match" });
-    expect(within(match).getByText(/Bundle loaded, but its names did not/)).toBeInTheDocument();
+    expect(within(match).getByText(/Bundle loaded, but card names didn't/)).toBeInTheDocument();
     expect(within(match).getByText("Plains — 2XM 373")).toBeInTheDocument();
     expect(within(match).getByText("voting")).toBeInTheDocument();
   });

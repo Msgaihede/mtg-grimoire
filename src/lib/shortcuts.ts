@@ -37,7 +37,7 @@ export type Chord =
 export interface Shortcut {
   /** Stable across labels and chords — it is what a call site names, so a rename is free. */
   id: string;
-  /** The imperative — "Undo the last change", not "Undo". */
+  /** What the chord does, in the imperative — "Remove selected cards". */
   label: string;
   /** More than one when a chord has two spellings a reader's hands might know. */
   chords: readonly Chord[];
@@ -152,10 +152,10 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
        */
       chords: [{ key: "n", ctrl: true, shift: true }],
     },
-    { id: "dismiss", label: "Close what is open", chords: [{ key: "Escape" }] },
+    { id: "dismiss", label: "Close dialog or panel", chords: [{ key: "Escape" }] },
     {
       id: "contextMenu",
-      label: "Open the menu for what is focused",
+      label: "Open context menu",
       /**
        * Both presses `menuKey` accepts, in the order a reader can rely on them: `Shift+F10` is on
        * every keyboard, and the dedicated key is not on a laptop's.
@@ -174,7 +174,7 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
     { id: "zoom", label: "Resize the cards", chords: [{ pointer: "wheel", ctrl: true }] },
     {
       id: "select",
-      label: "Pick more than one card",
+      label: "Select multiple cards",
       chords: [
         { pointer: "click", ctrl: true },
         { pointer: "click", shift: true },
@@ -196,10 +196,10 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
   playtesting: [],
   settings: [],
   deckEditor: [
-    { id: "undo", label: "Undo the last change", chords: [{ key: "z", ctrl: true }] },
+    { id: "undo", label: "Undo", chords: [{ key: "z", ctrl: true }] },
     {
       id: "redo",
-      label: "Redo the change you undid",
+      label: "Redo",
       /**
        * Both spellings, because both are muscle memory somewhere: `Ctrl+Y` is Windows' and
        * `Ctrl+Shift+Z` is what an editor-shaped app teaches — and this app ships on Windows to
@@ -218,7 +218,7 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
         { key: "z", ctrl: true, shift: true },
       ],
     },
-    { id: "remove", label: "Remove the picked cards", chords: [{ key: "Delete" }] },
+    { id: "remove", label: "Remove selected cards", chords: [{ key: "Delete" }] },
   ],
 };
 

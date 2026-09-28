@@ -112,7 +112,7 @@ const meta = {
           "solid is a button.\n\n" +
           "Its footprint is a folder card's by construction rather than by a copied number: a " +
           "`text-sm` line holding a `size-3.5` glyph and a name, `mt-1`, then a `text-xs` second " +
-          "line. Where a folder card's second line is `6 wishes · $312.00`, this one says " +
+          "line. Where a folder card's second line is `6 cards · $312.00`, this one says " +
           "“Up one level” — so the **name** is the destination, which is what a reader needs to " +
           "read before letting go.\n\n" +
           "It renders an `<li>`, so a caller drops it straight into the wall's existing " +
@@ -143,8 +143,8 @@ export const FirstInTheWall: Story = {
     <Wall>
       <Tile {...args} />
       <NewFolderTile />
-      <FolderTile name="Ordered" face="6 wishes · $312.00" />
-      <FolderTile name="Someday" face="2 wishes" />
+      <FolderTile name="Ordered" face="6 cards · $312.00" />
+      <FolderTile name="Someday" face="2 cards" />
     </Wall>
   ),
   play: async ({ canvas, args }) => {
@@ -183,7 +183,7 @@ export const InsideASubFolder: Story = {
     <Wall>
       <Tile {...args} />
       <NewFolderTile />
-      <FolderTile name="Backordered" face="2 wishes · $20.00" />
+      <FolderTile name="Backordered" face="2 cards · $20.00" />
     </Wall>
   ),
   play: async ({ canvas }) => {
@@ -213,7 +213,7 @@ export const HoldingSomethingOverIt: Story = {
     <Wall>
       <Tile {...args} />
       <NewFolderTile />
-      <FolderTile name="Someday" face="2 wishes" />
+      <FolderTile name="Someday" face="2 cards" />
     </Wall>
   ),
   play: async ({ canvas }) => {
@@ -244,7 +244,7 @@ export const ALongName: Story = {
   render: (args) => (
     <Wall>
       <Tile {...args} />
-      <FolderTile name="Someday" face="2 wishes" />
+      <FolderTile name="Someday" face="2 cards" />
     </Wall>
   ),
   play: async ({ canvas }) => {

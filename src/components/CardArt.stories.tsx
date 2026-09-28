@@ -174,7 +174,7 @@ export const GameChanger: Story = {
     await userEvent.hover(chip!);
     await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 50));
     const panel = canvasElement.ownerDocument.getElementById(TOOLTIP_PANEL_ID);
-    await expect(panel).toHaveTextContent("Game changer");
+    await expect(panel).toHaveTextContent("Game Changer");
     // No sheen: this printing is sold in both finishes, so there is nothing to photograph.
     await expect(canvasElement.querySelector("[data-foil-sheen]")).toBeNull();
   },
@@ -206,7 +206,7 @@ export const GameChangerFoil: Story = {
     await userEvent.hover(chips[0]);
     await new Promise((resolve) => setTimeout(resolve, TOOLTIP_OPEN_MS + 50));
     const panel = canvasElement.ownerDocument.getElementById(TOOLTIP_PANEL_ID);
-    await expect(panel).toHaveTextContent("Game changer · Foil");
+    await expect(panel).toHaveTextContent("Game Changer · Foil");
     await expect(canvasElement.querySelector("[data-foil-sheen]")).not.toBeNull();
     // Two marks, and the art is still the only thing in the accessibility tree: `getByRole`
     // skips a hidden subtree, so the one `img` it can see is the card.

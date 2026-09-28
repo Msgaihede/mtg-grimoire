@@ -20,7 +20,7 @@ import {
  * one — it would agree with whatever the module says, including the empty string. This is the
  * wording, spelled twice on purpose, and the two agree by hand.
  */
-const RESTART = "Restart the app after placing or replacing a file — assets load once, at launch.";
+const RESTART = "Restart the app after adding or replacing a file.";
 
 describe("the headline", () => {
   it("is the decided card's name, and otherwise says what the frame is", () => {
@@ -110,7 +110,7 @@ describe("the sentences", () => {
    */
   it("says the names failed where the bundle itself did not", () => {
     expect(bundleSentence(STATUS.unlabelled)).toBe(
-      `Bundle loaded, but its names did not: ${STATUS.unlabelled.bundle.error}. Matches will show ids. ${RESTART}`,
+      `Bundle loaded, but card names didn't: ${STATUS.unlabelled.bundle.error}. Matches will show IDs. ${RESTART}`,
     );
   });
 
@@ -152,7 +152,7 @@ describe("the sentences", () => {
       labels: 0,
     };
     expect(bundleSentence(embeddedUnlabelled)).toBe(
-      `Bundle loaded, but its names did not: ${STATUS.unlabelled.bundle.error}. Matches will show ids. ${RESTART}`,
+      `Bundle loaded, but card names didn't: ${STATUS.unlabelled.bundle.error}. Matches will show IDs. ${RESTART}`,
     );
   });
 

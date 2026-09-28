@@ -165,8 +165,8 @@ function TypedChip({
   const excluded = chip.mode === "exclude";
   const shown = excluded ? `not ${chip.label}` : chip.label;
   const state = excluded
-    ? `${shown}, search term, excluded. Press to include.`
-    : `${shown}, search term, included. Press to exclude.`;
+    ? `${shown}, excluded. Click to include.`
+    : `${shown}, included. Click to exclude.`;
   return (
     <span
       className={cn(

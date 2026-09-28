@@ -85,7 +85,7 @@ export function StartupScreen({ status }: StartupScreenProps) {
             <div className="w-full max-w-lg space-y-3">
               {/* Not "MTG Grimoire could not start": every message Rust writes here already opens
                   with "MTG Grimoire could not …", so the heading names the thing instead. */}
-              <h1 className="font-heading text-2xl text-text">The data folder would not open</h1>
+              <h1 className="font-heading text-2xl text-text">Couldn't open the data folder</h1>
               {/* Verbatim. The native side wrote this for a reader — it names the folder and what
                 to do about it — and it is multi-line, so `whitespace-pre-line` keeps its breaks.
                 Left-aligned because a paragraph ragged on both edges is hard to follow, and

@@ -127,7 +127,7 @@ describe("facetTitle", () => {
   /** A greyed control's tooltip has to explain *why* it is greyed. "0 printings" is a
    *  number where a reason belongs. */
   it("gives a reason rather than a zero", () => {
-    expect(facetTitle("Mana value 7", 0)).toBe("Mana value 7 — nothing in this search");
+    expect(facetTitle("Mana value 7", 0)).toBe("Mana value 7 (no results)");
   });
 
   /** No count, no sentence — the control keeps the plain label it has always had, which is

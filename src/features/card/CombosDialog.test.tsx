@@ -452,7 +452,7 @@ it("does not ask for combos for a printing with no oracle card", async () => {
   // read, so a bare synchronous check would pass before the card had even resolved and would go on
   // passing with the guard deleted. Waiting for the sentence this state draws is what puts the
   // component past the point where it would have asked.
-  expect(await screen.findByText(/not linked to an oracle card/i)).toBeInTheDocument();
+  expect(await screen.findByText(/aren't available for this printing/i)).toBeInTheDocument();
   expect(combosForCard).not.toHaveBeenCalled();
 });
 
@@ -466,9 +466,9 @@ it("says the combo list has never been downloaded rather than claiming the card 
   combosStatus.mockResolvedValue(NEVER_INGESTED);
   renderWithCard();
 
-  expect(await screen.findByText(/has not been downloaded/i)).toBeInTheDocument();
+  expect(await screen.findByText(/still downloading/i)).toBeInTheDocument();
   // Never this, on a database that has looked at nothing.
-  expect(screen.queryByText(/none on record naming this card/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/no known combos for this card/i)).not.toBeInTheDocument();
 });
 
 it("says Spellbook has nothing on record when the list is here and answers none", async () => {
@@ -481,8 +481,8 @@ it("says Spellbook has nothing on record when the list is here and answers none"
   combosStatus.mockResolvedValue(INGESTED);
   renderWithCard();
 
-  expect(await screen.findByText(/none on record naming this card/i)).toBeInTheDocument();
-  expect(screen.queryByText(/has not been downloaded/i)).not.toBeInTheDocument();
+  expect(await screen.findByText(/no known combos for this card/i)).toBeInTheDocument();
+  expect(screen.queryByText(/still downloading/i)).not.toBeInTheDocument();
 });
 
 /* ------------------------------------------------------------- the rail and the pane ---------
@@ -769,7 +769,7 @@ it("says a combo also needs something no card list can name", async () => {
   renderWithCard();
   await combosList();
 
-  expect(screen.getByText(/no card list can name/i)).toBeInTheDocument();
+  expect(screen.getByText(/can't be matched to a specific card/i)).toBeInTheDocument();
 });
 
 it("marks a piece the reader does not own, in words, in the pane and in the rail", async () => {
@@ -964,7 +964,7 @@ it("says where the combos came from, and does not blame the card sync for their 
   renderWithCard();
   await combosList();
 
-  expect(screen.getByText(/as of the last combo refresh/i)).toBeInTheDocument();
+  expect(screen.getByText(/data from commander spellbook/i)).toBeInTheDocument();
   expect(screen.queryByText(/card-data sync/i)).not.toBeInTheDocument();
 });
 
@@ -980,7 +980,7 @@ it("names the panel after the card it is about", async () => {
   combosForCard.mockResolvedValue(EMPTY);
   renderWithCard();
 
-  await screen.findByText(/none on record naming this card/i);
+  await screen.findByText(/no known combos for this card/i);
   expect(screen.getByText("Boros Reckoner")).toBeInTheDocument();
 });
 
@@ -1057,8 +1057,8 @@ it("says the filter left nothing rather than claiming the card is in no combos",
   renderWithCard();
 
   expect(await screen.findByText(/no combo matches that filter/i)).toBeInTheDocument();
-  expect(screen.queryByText(/none on record naming this card/i)).not.toBeInTheDocument();
-  expect(screen.queryByText(/has not been downloaded/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/no known combos for this card/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/still downloading/i)).not.toBeInTheDocument();
 });
 
 it("draws the filter's empty rather than a pane with nothing in it", async () => {
@@ -1248,8 +1248,8 @@ it("says the filter left nothing when a term matches no combo", async () => {
   await user.type(searchBox(), "krark-clan");
 
   expect(await screen.findByText(/no combo matches that filter/i)).toBeInTheDocument();
-  expect(screen.queryByText(/none on record naming this card/i)).not.toBeInTheDocument();
-  expect(screen.queryByText(/has not been downloaded/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/no known combos for this card/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/still downloading/i)).not.toBeInTheDocument();
   // And the box that emptied the list is still on screen holding the term that did it, which is
   // the whole of the way back.
   expect(searchBox()).toHaveValue("krark-clan");

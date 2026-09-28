@@ -413,7 +413,7 @@ export const Combos: Story = {
     // caveat all belong to a row nobody has pressed.
     await expect(canvas.queryByText("Spitemare")).toBeNull();
     await expect(canvas.queryByRole("list", { name: "Steps" })).toBeNull();
-    await expect(canvas.queryByText(/no card list can name/i)).toBeNull();
+    await expect(canvas.queryByText(/can't be matched to a specific card/i)).toBeNull();
   },
 };
 
@@ -462,7 +462,7 @@ export const WalkTheRail: Story = {
     await expect(canvas.getByRole("list", { name: "Notable prerequisites" })).toBeInTheDocument();
     await expect(canvas.getByRole("list", { name: "Steps" })).toBeInTheDocument();
     await expect(canvas.getByText("Mana needed")).toBeInTheDocument();
-    await expect(canvas.getByText(/no card list can name/i)).toBeVisible();
+    await expect(canvas.getByText(/can't be matched to a specific card/i)).toBeVisible();
 
     // **The unsynced piece names its card twice, on purpose.** `CardArt` prints the name inside
     // the empty frame it draws for a null `cardId`, and the pane prints it again as the caption.
@@ -619,8 +619,8 @@ export const SearchedToNothing: Story = {
     await userEvent.type(canvas.getByLabelText("Search these combos"), "krark-clan");
 
     await expect(await canvas.findByText(/no combo matches that filter/i)).toBeInTheDocument();
-    await expect(canvas.queryByText(/none on record naming this card/i)).toBeNull();
-    await expect(canvas.queryByText(/has not been downloaded/i)).toBeNull();
+    await expect(canvas.queryByText(/no known combos for this card/i)).toBeNull();
+    await expect(canvas.queryByText(/still downloading/i)).toBeNull();
     // The way back is still on screen; the rail and the pane are not.
     await expect(canvas.getByRole("button", { name: "All" })).toBeInTheDocument();
     await expect(canvas.queryByRole("list", { name: "Combos" })).toBeNull();
@@ -704,9 +704,9 @@ export const NeverDownloaded: Story = {
   args: { stage: "never" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/has not been downloaded/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/still downloading/i)).toBeInTheDocument();
     // Never the other sentence, on a database that has looked at nothing.
-    await expect(canvas.queryByText(/none on record naming this card/i)).toBeNull();
+    await expect(canvas.queryByText(/no known combos for this card/i)).toBeNull();
     // And no filter band over it: `total` is 0, so there is nothing for a chip to be a facet of.
     await expect(canvas.queryByRole("button", { name: "All" })).toBeNull();
   },
@@ -722,8 +722,8 @@ export const NoCombos: Story = {
   args: { stage: "none" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/none on record naming this card/i)).toBeInTheDocument();
-    await expect(canvas.queryByText(/has not been downloaded/i)).toBeNull();
+    await expect(await canvas.findByText(/no known combos for this card/i)).toBeInTheDocument();
+    await expect(canvas.queryByText(/still downloading/i)).toBeNull();
   },
 };
 

@@ -165,9 +165,9 @@ it("says the card has no notes rather than drawing an empty box", async () => {
   cardNotes.mockResolvedValue([]);
   renderWithCard({ oracleId: "o1" });
 
-  expect(await screen.findByText(/no notes\./i)).toBeInTheDocument();
+  expect(await screen.findByText(/no notes yet/i)).toBeInTheDocument();
   // And it says where one is written, because nothing on this surface writes one.
-  expect(screen.getByText(/open a deck that holds it/i)).toBeInTheDocument();
+  expect(screen.getByText(/add one from a deck that uses this card/i)).toBeInTheDocument();
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
 });
 
@@ -179,10 +179,10 @@ it("says the read failed rather than showing the same emptiness", async () => {
   renderWithCard({ oracleId: "o1" });
 
   const alert = await screen.findByRole("alert");
-  expect(alert).toHaveTextContent("Could not read the notes — database is busy.");
+  expect(alert).toHaveTextContent("Couldn't read the notes — database is busy.");
   // The half that would still pass with the failure drawn as an empty list: the empty state's
   // own sentence must be nowhere on screen.
-  expect(screen.queryByText(/open a deck that holds it/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/add one from a deck that uses this card/i)).not.toBeInTheDocument();
 });
 
 it("draws a body through the dialect reader rather than printing its markup", async () => {
@@ -223,7 +223,7 @@ it("does not ask for notes for a card with no oracle id", async () => {
   // read, so a bare synchronous check would pass before the card had even resolved and would go
   // on passing with the guard deleted. Waiting for the sentence this state draws is what puts the
   // component past the point where it would have asked.
-  expect(await screen.findByText(/not linked to an oracle card/i)).toBeInTheDocument();
+  expect(await screen.findByText(/aren't available for this printing/i)).toBeInTheDocument();
   expect(cardNotes).not.toHaveBeenCalled();
 });
 

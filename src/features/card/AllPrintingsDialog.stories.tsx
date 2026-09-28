@@ -811,7 +811,7 @@ export const RefusedSwap: Story = {
     await userEvent.click(await modal.findByRole("button", { name: "Sol Ring (SLD 913)" }));
 
     await expect(await modal.findByRole("alert")).toHaveTextContent(
-      "Could not use that printing — The card database is busy finishing a sync. " +
+      "Couldn't use that printing — The card database is busy finishing a sync. " +
         "Try that again in a moment.",
     );
     // Still open, still showing the whole list, and the deck still plays what it played.

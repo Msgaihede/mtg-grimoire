@@ -42,11 +42,11 @@ const NO_FILTERS: ScanFilters = { sets: [], released_from: null, released_to: nu
  * row, and a reader choosing between two scans needs only to know which one pins the printing.
  */
 const MODES: readonly { id: ScanMode; label: string; hint: string }[] = [
-  { id: "fast", label: "Fast", hint: "Names a card from its picture — quickest for a pile of different cards" },
+  { id: "fast", label: "Fast", hint: "Recognizes cards by their picture. Fastest for mixed piles." },
   {
     id: "exact",
     label: "Exact",
-    hint: "Also reads the name and collector number, to tell one printing from another",
+    hint: "Also reads the name and collector number to identify the exact printing.",
   },
 ];
 

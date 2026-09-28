@@ -201,8 +201,8 @@ export function TagResults({ search }: { search: CardSearch }) {
             >
               <span className="min-w-0">
                 {query.isFetchNextPageError
-                  ? "Could not load more cards"
-                  : "Could not refresh these results"}{" "}
+                  ? "Couldn't load more cards"
+                  : "Couldn't refresh these results"}{" "}
                 — {failure}
               </span>
               {query.isFetchNextPageError && (

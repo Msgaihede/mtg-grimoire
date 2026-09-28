@@ -729,7 +729,7 @@ describe("AllPrintingsDialog", () => {
     // surface makes, and both are in the sentence.
     await waitFor(() =>
       expect(within(dialog).getByRole("status")).toHaveTextContent(
-        "Folded into one row of 3 in Ramp.",
+        "Merged into one row of 3 in Ramp.",
       ),
     );
     expect(screen.getByRole("dialog", { name: /Sol Ring/ })).toBeInTheDocument();

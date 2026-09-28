@@ -626,7 +626,7 @@ describe("opening somebody else's share", () => {
     await user.click(opener);
     await screen.findByLabelText("Link to a shared collection");
 
-    await user.click(screen.getByRole("button", { name: "Close open a shared collection" }));
+    await user.click(screen.getByRole("button", { name: "Close" }));
 
     await waitFor(() => expect(document.activeElement).toBe(opener));
   });

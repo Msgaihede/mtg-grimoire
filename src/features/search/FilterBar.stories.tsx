@@ -236,7 +236,7 @@ export const AllFiltersActive: Story = {
     // the vocabulary of the control that set it — which is the whole point of the row: with the
     // tray shut, four of these six filters have no control on screen at all.
     for (const label of [
-      "Colour: White, Blue, Black",
+      "Color: White, Blue, Black",
       "Mana value: 1",
       "Set: LEA",
       "Format: Modern",
@@ -352,7 +352,7 @@ export const SomeUnavailable: Story = {
     // not a prefix — is what proves the sentence rather than only that the row is greyed.
     for (const value of [5, 6, 7]) {
       const chip = canvas.getByRole("button", {
-        name: `Mana value ${value} — nothing in this search`,
+        name: `Mana value ${value} (no results)`,
       });
       await expect(chip).toHaveAttribute("aria-disabled", "true");
       // **`aria-disabled`, never the attribute.** A `disabled` button leaves the tab order,
@@ -761,13 +761,13 @@ export const StrictColours: Story = {
     const toggle = await within(
       canvas.getByRole("group", { name: "Color identity" }),
     ).findByRole("button", {
-      name: "Exact — cards whose colour identity is exactly these colours",
+      name: "Exact — cards whose color identity is exactly these colors",
     });
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
 
     // One kind on, said twice and counted once — the whole of why this is not a chip of its own.
     await expect(
-      canvas.getByRole("button", { name: "Remove filter — Colour: exactly White, Blue" }),
+      canvas.getByRole("button", { name: "Remove filter — Color: exactly White, Blue" }),
     ).toBeInTheDocument();
     await expect(
       // Singular: `ResetAll` words its own count through `plural`, so a hard-coded "filters"
@@ -992,7 +992,7 @@ export const StatedFilters: Story = {
     // Five chips against a badge of six: the sixth kind is the text in the box, which is on
     // screen with the words still in it and is the one filter a chip would only repeat.
     await expect(labels()).toEqual([
-      "Colour: White, Blue, Black",
+      "Color: White, Blue, Black",
       "Mana value: 1",
       "Set: LEA",
       "Format: Modern",
@@ -1000,7 +1000,7 @@ export const StatedFilters: Story = {
     ]);
 
     await userEvent.click(
-      canvas.getByRole("button", { name: "Remove filter — Colour: White, Blue, Black" }),
+      canvas.getByRole("button", { name: "Remove filter — Color: White, Blue, Black" }),
     );
 
     // The whole kind went, not one colour of it — and the badge followed.

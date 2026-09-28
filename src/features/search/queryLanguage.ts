@@ -244,7 +244,7 @@ export const QUERY_KEYWORDS: readonly KeywordSpec[] = [
     defaultOp: "gte",
     ops: COMPARISONS,
     example: "c>=rg",
-    blurb: "Card colours",
+    blurb: "Card colors",
   },
   {
     target: "colorIdentity",
@@ -252,7 +252,7 @@ export const QUERY_KEYWORDS: readonly KeywordSpec[] = [
     defaultOp: "lte",
     ops: COMPARISONS,
     example: "id<=wu",
-    blurb: "Colour identity",
+    blurb: "Color identity",
   },
   {
     target: "cmc",

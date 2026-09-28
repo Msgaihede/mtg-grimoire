@@ -353,7 +353,7 @@ describe("DecksWidget", () => {
 
       draw(null, { fit: fitFor(3, 3) });
 
-      expect(screen.queryByText(/prices as of/)).toBeNull();
+      expect(screen.queryByText(/prices, last updated with/)).toBeNull();
     });
   });
 

@@ -115,7 +115,7 @@ export const Default: Story = {
     // Nothing picked is an invitation rather than a blank, and the weight control beside it is
     // greyed rather than absent — an option that vanishes reads as a control that broke.
     await expect(
-      canvas.getByText("No tags picked yet. Pick one from the list to narrow the cards."),
+      canvas.getByText("No tags selected. Pick one from the list to filter cards."),
     ).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: FLOOR })).toHaveAttribute(
       "aria-disabled",
@@ -123,7 +123,7 @@ export const Default: Story = {
     );
 
     // Both taxonomies are ingested in this world, so the never-downloaded notice is absent.
-    await expect(canvas.queryByText(/tags have not been downloaded yet\./)).toBeNull();
+    await expect(canvas.queryByText(/tags are still downloading\./)).toBeNull();
   },
 };
 
@@ -152,7 +152,7 @@ export const AMotifAndItsFloor: Story = {
     // picked — two drawings of one fact, which is what lets a reader look away and come back.
     await expect(
       await canvas.findByRole("button", {
-        name: "Landscape, art tag, included. Press to exclude.",
+        name: "Landscape, art tag, included. Click to exclude.",
       }),
     ).toBeInTheDocument();
     await waitFor(
@@ -240,15 +240,10 @@ export const ArtTagsMissing: Story = {
     const canvas = within(canvasElement);
 
     await expect(
-      await canvas.findByText("Art tags have not been downloaded yet."),
+      await canvas.findByText("Art tags are still downloading."),
     ).toBeInTheDocument();
     // One line per taxonomy, and the oracle file is fine in this world.
-    await expect(canvas.queryByText("Oracle tags have not been downloaded yet.")).toBeNull();
-    // Direction rather than mood, and it is the whole of what a reader can do: there is no
-    // button for this anywhere in the app.
-    await expect(
-      canvas.getByText("The app fetches them in the background automatically."),
-    ).toBeInTheDocument();
+    await expect(canvas.queryByText("Oracle tags are still downloading.")).toBeNull();
 
     // The rail keeps the taxonomy that *did* arrive rather than going empty…
     await expect(
@@ -303,7 +298,7 @@ export const ArtTagsFetchError: Story = {
       },
       { timeout: 5000 },
     );
-    await expect(canvas.queryByText(/tags have not been downloaded yet\./)).toBeNull();
+    await expect(canvas.queryByText(/tags are still downloading\./)).toBeNull();
     await expect(canvas.getByText("46 cards", CAPTION)).toBeInTheDocument();
   },
 };

@@ -302,7 +302,7 @@ describe("CardModalArt", () => {
     );
 
     expect(document.querySelector("[data-card-turn]")).toHaveAttribute("data-card-turn", "0");
-    const turn = screen.getByRole("button", { name: "Turn to read" });
+    const turn = screen.getByRole("button", { name: "Rotate to read" });
     expect(turn).toHaveAttribute("aria-pressed", "false");
 
     await userEvent.click(turn);
@@ -331,7 +331,7 @@ describe("CardModalArt", () => {
     const { unmount } = render(
       <CardModalArt card={card({ layout: "split", faces: aftermath })} {...rest} />,
     );
-    await userEvent.click(screen.getByRole("button", { name: "Turn to read" }));
+    await userEvent.click(screen.getByRole("button", { name: "Rotate to read" }));
     expect(document.querySelector("[data-card-turn]")).toHaveAttribute("data-card-turn", "-90");
     unmount();
 

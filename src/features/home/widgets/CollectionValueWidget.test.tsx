@@ -419,7 +419,7 @@ describe("CollectionValueWidget", () => {
     draw({ widget: widget({ dimension: "finish" }, 4, 6) });
 
     expect(
-      screen.getByText("TCGplayer prices as of the last card-data sync · split by finish"),
+      screen.getByText("TCGplayer prices, last updated with card data · split by finish"),
     ).toBeInTheDocument();
   });
 

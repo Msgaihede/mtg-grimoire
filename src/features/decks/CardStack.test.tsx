@@ -1429,7 +1429,7 @@ describe("CardStack tooltips", () => {
     // assertion built from the constant would agree with the constant being rewritten.
     const tag = screen.getByText("2");
     expect(tag.querySelector(".lucide-crown")).not.toBeNull();
-    expect(await openTooltip(tag)).toHaveTextContent("Fast mana · 2 in this pile · Game changer");
+    expect(await openTooltip(tag)).toHaveTextContent("Fast mana · 2 in this pile · Game Changer");
     await closeTooltip(tag);
 
     const ruleBreak = screen.getByText("RULE BREAK");

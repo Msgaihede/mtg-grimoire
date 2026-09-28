@@ -186,7 +186,7 @@ describe("CardArt", () => {
     const chip = () => container.querySelector<HTMLElement>("[data-card-marks]");
     fireEvent.pointerEnter(chip()!);
     advance(TOOLTIP_OPEN_MS);
-    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent("Game changer · Foil");
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent("Game Changer · Foil");
     expect(chip()).not.toHaveAttribute("aria-describedby");
     fireEvent.pointerLeave(chip()!);
 
@@ -199,9 +199,9 @@ describe("CardArt", () => {
     advance(TOOLTIP_OPEN_MS);
     // Exact, not a substring: this card carries no `finish`, so the panel must read "Game
     // changer" alone — `toHaveTextContent`'s string form is `.includes()`, and "Game changer" is
-    // a prefix of the foil card's "Game changer · Foil" above, so a stale or wrongly-suffixed
+    // a prefix of the foil card's "Game Changer · Foil" above, so a stale or wrongly-suffixed
     // panel here would pass a substring check just as readily as the correct one.
-    expect(document.getElementById(TOOLTIP_PANEL_ID)?.textContent).toBe("Game changer");
+    expect(document.getElementById(TOOLTIP_PANEL_ID)?.textContent).toBe("Game Changer");
     vi.useRealTimers();
   });
 

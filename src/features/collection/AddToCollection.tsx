@@ -700,7 +700,7 @@ function AddForm({
           // Stays open behind this, with every answer still in it: recording the same card
           // twice is one interaction, and so is trying again.
           <p role="alert" className="text-xs text-destructive">
-            Could not add to your {mode} — {ipcError(add.error)}
+            Couldn't add to your {mode} — {ipcError(add.error)}
           </p>
         )}
       </div>

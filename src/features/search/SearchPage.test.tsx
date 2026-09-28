@@ -628,7 +628,7 @@ describe("SearchPage", () => {
     await userEvent.hover(button);
     const panel = await screen.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
     expect(panel).toHaveTextContent(
-      `${pricesAsOf(MARKETPLACES.tcgplayer)}\nSort by Price — Shift-click to add to the sort`,
+      `${pricesAsOf(MARKETPLACES.tcgplayer)}\nSort by Price (Shift-click to add a secondary sort)`,
       { normalizeWhitespace: false },
     );
     // And bound to the button rather than to the header cell — `aria-describedby` is what
@@ -1047,7 +1047,7 @@ describe("SearchPage", () => {
       .mockResolvedValueOnce(page(cards(50, 50), 120));
     wrap(<SearchPage />);
 
-    expect(await screen.findByText(/could not load more cards/i)).toBeInTheDocument();
+    expect(await screen.findByText(/couldn't load more cards/i)).toBeInTheDocument();
     // query-core keeps `data` on error: the 50 rows already read must survive page 2's
     // rejection, not be replaced by a full-page error.
     expect(screen.getByText("Card 0")).toBeInTheDocument();
@@ -1060,7 +1060,7 @@ describe("SearchPage", () => {
     await userEvent.click(screen.getByRole("button", { name: /try again/i }));
 
     await waitFor(() => expect(screen.getByText("Card 50")).toBeInTheDocument());
-    expect(screen.queryByText(/could not load more cards/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/couldn't load more cards/i)).not.toBeInTheDocument();
   });
 });
 

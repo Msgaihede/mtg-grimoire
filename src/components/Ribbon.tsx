@@ -71,9 +71,7 @@ export interface RibbonProps {
 const DEVICE_SYNC_TOOLTIP: Record<Exclude<LiveState, "off">, string> = {
   connecting: "Reconnecting to your other devices…",
   live: "Synced with your other devices.",
-  offline:
-    "The connection to your other devices dropped. Changes made here are not reaching them " +
-    "until it reconnects.",
+  offline: "Sync disconnected. Changes will sync when the connection is back.",
 };
 
 /**
@@ -147,7 +145,7 @@ export function Ribbon({
     [
       dataDir,
       imageStoreFailures > 0 &&
-        `${imageStoreFailures} card image${imageStoreFailures === 1 ? "" : "s"} could not be saved to the cache — the data folder may be read-only or full.`,
+        `${imageStoreFailures} card image${imageStoreFailures === 1 ? "" : "s"} couldn't be saved to the cache — the data folder may be read-only or full.`,
     ]
       .filter((s): s is string => typeof s === "string" && s.length > 0)
       .join("\n") || undefined;

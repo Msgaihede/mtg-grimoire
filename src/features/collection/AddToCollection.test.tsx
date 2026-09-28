@@ -290,11 +290,11 @@ describe("AddToCollectionButton", () => {
 
     await userEvent.type(price(), "1.500");
     expect(price()).toHaveAttribute("aria-invalid", "true");
-    expect(price()).toHaveAccessibleDescription(`Write 1500 or 1.50 — "1.500" could mean either.`);
+    expect(price()).toHaveAccessibleDescription(`“1.500” is ambiguous. Use 1500 or 1.50.`);
 
     await userEvent.clear(price());
     await userEvent.type(price(), "later");
-    expect(price()).toHaveAccessibleDescription("That is not a price — try 12.50.");
+    expect(price()).toHaveAccessibleDescription("Not a valid price. Try 12.50.");
 
     await userEvent.clear(price());
     await userEvent.type(price(), "12.50");

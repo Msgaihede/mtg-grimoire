@@ -28,7 +28,7 @@ const forest: LastAdded = { name: "Forest", setCode: "hob", collectorNumber: "19
 describe("statusLine", () => {
   it("says the scanner cannot name anything while no hashes are loaded, whatever is in frame", () => {
     expect(statusLine(settled, "exact", forest, false, resolution("resolved"))).toBe(
-      "The scanner has no card hashes loaded, so it can find a card but not name it.",
+      "Card hashes aren't loaded, so cards can be detected but not identified.",
     );
   });
 
@@ -41,7 +41,7 @@ describe("statusLine", () => {
 
   it("says a resolve found nothing, even before the tracker settles", () => {
     expect(statusLine(weighing, "exact", null, true, resolution("not_found"))).toBe(
-      "No match — try better light, or clear the filters",
+      "No match. Try better lighting or clear the filters.",
     );
   });
 
@@ -53,7 +53,7 @@ describe("statusLine", () => {
 
   it("does not ask for a pick on a card the tracker has not settled on", () => {
     expect(statusLine(weighing, "exact", null, true, resolution("ambiguous"))).toBe(
-      "Hold steady — reading the card…",
+      "Hold steady — reading…",
     );
   });
 
@@ -85,7 +85,7 @@ describe("statusLine", () => {
   });
 
   it("says the card is being read while Exact holds a lock it has not settled", () => {
-    expect(statusLine(weighing, "exact", null, true, null)).toBe("Hold steady — reading the card…");
+    expect(statusLine(weighing, "exact", null, true, null)).toBe("Hold steady — reading…");
   });
 
   it("says hold steady otherwise", () => {

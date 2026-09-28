@@ -212,7 +212,7 @@ describe("matchesChord — a pointer chord never matches", () => {
 describe("matchesShortcut", () => {
   const twoSpellings: Shortcut = {
     id: "redoLike",
-    label: "Redo the change you undid",
+    label: "Redo",
     chords: [
       { key: "y", ctrl: true },
       { key: "z", ctrl: true, shift: true },
@@ -234,7 +234,7 @@ describe("matchesShortcut", () => {
   it("answers false for a shortcut whose chords are all pointer gestures", () => {
     const pointerOnly: Shortcut = {
       id: "selectLike",
-      label: "Pick more than one card",
+      label: "Select multiple cards",
       chords: [
         { pointer: "click", ctrl: true },
         { pointer: "click", shift: true },
@@ -446,15 +446,15 @@ describe("the catalogue's shape", () => {
       switchView: "Jump to a section",
       keyMap: "Show this list",
       newWindow: "Open a new window",
-      dismiss: "Close what is open",
-      contextMenu: "Open the menu for what is focused",
+      dismiss: "Close dialog or panel",
+      contextMenu: "Open context menu",
       zoom: "Resize the cards",
-      select: "Pick more than one card",
+      select: "Select multiple cards",
     });
     expect(Object.fromEntries(SHORTCUTS.deckEditor.map((s) => [s.id, s.label] as const))).toEqual({
-      undo: "Undo the last change",
-      redo: "Redo the change you undid",
-      remove: "Remove the picked cards",
+      undo: "Undo",
+      redo: "Redo",
+      remove: "Remove selected cards",
     });
   });
 

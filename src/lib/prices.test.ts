@@ -49,10 +49,10 @@ describe("pricesAsOf", () => {
    */
   it("names the marketplace the prices came from", () => {
     expect(pricesAsOf(MARKETPLACES.tcgplayer)).toBe(
-      "TCGplayer prices as of the last card-data sync.",
+      "TCGplayer prices, last updated with card data.",
     );
     expect(pricesAsOf(MARKETPLACES.cardmarket)).toBe(
-      "Cardmarket prices as of the last card-data sync.",
+      "Cardmarket prices, last updated with card data.",
     );
   });
 });
@@ -203,9 +203,9 @@ describe("unreadablePriceNote", () => {
    *  thought and **without rounding** — `12.125` is offered back as `12.1250`, never `12.13`,
    *  so the reader retypes the one they meant rather than a nearby one. */
   it("names both readings of a lone dot before three digits, losslessly", () => {
-    expect(unreadablePriceNote("1.500")).toBe(`Write 1500 or 1.50 — "1.500" could mean either.`);
+    expect(unreadablePriceNote("1.500")).toBe(`“1.500” is ambiguous. Use 1500 or 1.50.`);
     expect(unreadablePriceNote("€12.125")).toBe(
-      `Write 12125 or 12.1250 — "€12.125" could mean either.`,
+      `“€12.125” is ambiguous. Use 12125 or 12.1250.`,
     );
     expect(parsePurchasePrice("12.1250")).toBe(12.125);
   });
@@ -214,7 +214,7 @@ describe("unreadablePriceNote", () => {
    *  than a suggestion nobody could have meant; so does everything else that will not read. */
   it("says the ordinary sentence for everything else it refuses", () => {
     for (const text of ["0.125", "1000.125", "about four fifty", "1,2,3", "-4", "1e3"]) {
-      expect(unreadablePriceNote(text)).toBe("That is not a price — try 12.50.");
+      expect(unreadablePriceNote(text)).toBe("Not a valid price. Try 12.50.");
     }
   });
 });

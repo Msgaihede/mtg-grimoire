@@ -299,9 +299,9 @@ export function SetCombobox({
    */
   const emptyLine =
     options !== undefined || sets.isSuccess
-      ? "No sets match that."
+      ? "No matching sets."
       : sets.isError
-        ? "Could not read the set list — try Refresh data."
+        ? "Couldn't load sets. Try Refresh data."
         : "Loading sets…";
 
   /**
@@ -327,7 +327,7 @@ export function SetCombobox({
     <>
       {full && (
         <p className="pt-2 text-center text-[0.7rem] text-dim">
-          {MAX_SETS} sets is the most one search can name — remove one to add another.
+          You can search up to {MAX_SETS} sets. Remove one to add another.
         </p>
       )}
       {moreCount > 0 && (
@@ -336,7 +336,7 @@ export function SetCombobox({
               reachable but it is not the intended path, and the button below is the
               escape for the search that cannot be narrowed rather than the fast way. */}
           <p>
-            Showing {page.length} of {matches.length} — keep typing to narrow it down.
+            Showing {page.length} of {matches.length}. Keep typing to narrow it down.
           </p>
           <button
             type="button"
