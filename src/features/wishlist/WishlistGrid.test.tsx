@@ -828,6 +828,22 @@ describe("the printing line", () => {
     expect(screen.getByText("LEA · 161 · Nonfoil")).toBeInTheDocument();
   });
 
+  /**
+   * **Issue #616: a nonfoil wish wears no sheen.** The managed wishlist's Tokens folder files
+   * every token with `preferred_finish = 'nonfoil'` — the reconcile always states a finish — and
+   * the wall handed that word to `CardArt`, which drew a holo sheen over every one of them. One
+   * foil wish among plain ones draws exactly one sheen.
+   */
+  it("draws the foil sheen on a foil wish and on no nonfoil one", () => {
+    const { container } = wall([
+      BOLT,
+      { ...BOLT, id: 11, name: "Treasure", artCardId: "c-treasure", preferredFinish: "nonfoil" },
+      { ...BOLT, id: 12, name: "Clue", artCardId: "c-clue", preferredFinish: "nonfoil" },
+    ]);
+
+    expect(container.querySelectorAll("[data-foil-sheen]")).toHaveLength(1);
+  });
+
   /** No preference is not nonfoil, and says neither. */
   it("says nothing about the finish on a wish that names none", () => {
     wall([{ ...BOLT, preferredFinish: null }]);
