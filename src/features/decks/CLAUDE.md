@@ -4301,13 +4301,23 @@ taken there.
 
 - **Docked is the header exactly as it was; undocked is one bar in its place.** While any of the
   header's third line (the toolbar) is on the page, nothing changes. Once that line has scrolled up
-  out of `AppShell`'s `main`, `DeckHeaderBar` comes down: a 50px floating bar, and it goes again as
-  the line comes back. **It stands 28px below `main`'s top edge and not the 8 the canvas drew**,
-  because a sticky inset is measured from the scroller's *content* edge and `main` is `p-5` — the
-  same 20px every other sticky thing on this page already stands in (the docked panel, the quick
-  zones), so the bar agrees with its neighbours rather than with the mock. **The whole header does not follow** — it measured
+  out of `AppShell`'s `main`, `DeckHeaderBar` comes down: a 53px bar docked across the top of
+  `main`, flush with the ribbon's mana line above and both edges of the scroller, and it goes again
+  as the line comes back. **The whole header does not follow** — it measured
   ~170px of a 708px page at 1280×800 on the canvas, a quarter of the deck — and the bar **does not
   hide on scroll-down**: a switch the reader reaches for has to be where their hand expects it.
+- **It floated until issue [#646](https://github.com/Msgaihede/mtg-grimoire/issues/646)
+  (2026-09-28), and the padding it floated in is what docking reaches back across.** It was a
+  rounded 50px panel `top-2` inside the editor column: 28px below `main`'s top, because a sticky
+  inset is measured from the scroller's *content* edge and `main` is `p-5`, and 20px in from each
+  side for the same padding — so cards scrolled past visibly above it and down both sides, and its
+  shadow barely read on the felt. The panel now sits at `-20px` top, left and right of its
+  zero-height sticky wrapper (`SHELL_PAD_PX`, inline styles from the constant — **it has to move
+  with `AppShell`'s `p-5` or not at all**), its inline padding puts the controls back over the
+  column's own edges, and it is square, opaque `bg-surface` with a `border-b`. The shadow is cast
+  down only: the panel spans `main`'s padding box, where `overflow` clips, so its sides and top are
+  cut off at the window's edges. It drops from behind the ribbon on `motion.ts`' `dockBar` preset
+  rather than `PopupPanel`'s `popup`, whose scale on a page-wide box reads as a zoom.
 - **What is in it, left to right: ↥, Quick add, Theory | Actual and Compare, then undo/redo,
   Display, the filter field and `⋯`.** No deck name and no back button (the reader asked for Quick
   add in the name's place; the header keeps both, and Escape still closes the deck), and **no
@@ -4315,7 +4325,17 @@ taken there.
   submenus of radio rows, and `⋯` is the header's Import/Export pair and its four worded actions;
   both open the app's one context menu (`menuClick`), so neither brought a popover or a z-index of
   its own. Built from `VIEW_PICKER`/the group-by lists/`SORT_BY_PICKER` and from `TRANSFER` +
-  `ACTIONS`, never listed again. `Split X` stays the toolbar's alone.
+  `ACTIONS`, never listed again — the verbs reach the bar as data (`BarAction`, a label, a word, a
+  glyph, `expanded` and `open`), and the bar builds the menu from them. `Split X` stays the
+  toolbar's alone.
+- **Four rungs off `deskWidth`, and the names never move between them** (issue #646, `BarWidth`).
+  `tight` (`TIGHT_HEADER_PX`) and `normal` draw every press as its glyph, as the bar always did.
+  `wide` (`WIDE_HEADER_PX`, a 1920px window) prints each press's word beside its glyph — `Top`,
+  `Compare`, `Undo`, `Redo`, `Display`, `Actions`, each contained in its name for WCAG 2.5.3 — and
+  widens both fields to 320px. `widest` (`BAR_WIDEST_PX`, 1980, a 2560px window) opens the `⋯` out
+  into the header's six verbs as buttons — the joined Import/Export pair, then the four — and
+  widens the fields to 384px. A tooltip is bound where the word is absent **or** says less than the
+  name (the undo sentence, Display's three answers); `Compare` worded has none.
 - **Every control is a second entrance to one of the header's**, on the same state and the same
   writes — the variant, `useDeckUndo`, the pickers (`parkScroll` included), the filter text, the
   layers. Only Quick add keeps a draft of its own: it is a second `QuickAdd`, with a wider field
@@ -4328,17 +4348,29 @@ taken there.
   the caret in its Quick add must not drop the caret on `<body>`; once focus leaves, it goes. It
   hides for the length of a drag on its own `useDndDragging` monitor — the quick zones take the top
   then — so a `dragstart` re-renders the bar and not this editor.
-- **Two other sticky things start under it** while it is down, by `DECK_BAR_CLEARANCE_PX` (66 —
-  8 + 50 + 8): the docked search panel's dock (an inline `top`, and `useDockHeight`'s third argument
+- **Two other sticky things start under it** while it is down, by `DECK_BAR_CLEARANCE_PX` (41 —
+  the bar's 53, less the 20 of it above the content edge, plus 8; it was 66, 8 + 50 + 8, while the
+  bar floated): the docked search panel's dock (an inline `top`, and `useDockHeight`'s third argument
   so the height agrees) and the Table view's column header (`--sticky-top`, a `px` string, on the
   view box — `VirtualTable`'s header reads `top-[var(--sticky-top,0px)]` **under `grow` only**, so a
   table that is its own scroller, the panel's or a dialog's, pins at its own top whatever it
   inherits). The page's `scroll-padding-top` is set while the bar is down, so a card the arrow keys
-  walk to is never parked under it (WCAG 2.4.11) — to `main`'s own padding **plus** 66, because
+  walk to is never parked under it (WCAG 2.4.11) — to `main`'s own padding **plus** 41, because
   scroll padding is measured from the top edge where a sticky inset is measured from the content
   edge. `useDockHeight` counts that padding too since this change; before it, a pinned dock's
   bottom 20px hung past the window on every page that docks a column in `main`.
-- **Driven in the shipped window 2026-09-27** (`npm run tauri dev`, a **debug** build, a copy of
+- **Driven in the shipped window 2026-09-28, docked** (`npm run tauri dev`, a **debug** build, a
+  copy of the real db, Azula — Theory + Actual, 100 cards, `scrollTop` 1600, the three larger sizes
+  emulated over CDP). At every size the panel's box was `main`'s own top-left and client width —
+  (208, 92), 1697×53 at 1920×1080 — with a 0 radius, the shadow applied, `scroll-padding-top`
+  61px and no horizontal overflow on the page, `main` or the bar's group. The slack between the
+  bar's halves: **354** at 2560×1440 (`widest`, all six verbs out, controls 1 943px), **343** at
+  1920×1080 (`wide`), **120** at 1280×800 (`normal`), **20** at 1024×700 (`tight` — the 8px floor
+  below was the floating panel's own padding and border eating the column). The search column's
+  top sat just under the bar's foot in a screenshot, and the card tops beneath the bar darkened
+  where the shadow falls; no bar at `scrollTop` 0.
+- **Driven in the shipped window 2026-09-27, floating** — the arrangement #646 replaced, kept for
+  the behaviour it proved (`npm run tauri dev`, a **debug** build, a copy of
   the real db, Azula — Theory + Actual, 127 cards). At 1280×800: no bar at `scrollTop` 0 or 150;
   at 1600 the bar 1017×50 at y 120, its eleven children in the canvas's order, `scrollWidth` equal
   to `clientWidth` (1015); the dock at y 178 (8px under the bar) with its bottom at 800; the
