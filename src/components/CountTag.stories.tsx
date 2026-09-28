@@ -47,7 +47,7 @@ export const Neutral: Story = {
     await expect(tag).not.toHaveTextContent("×");
     // The declaration rather than the computed value: this play also runs under jsdom
     // (`src/stories.test.tsx`), which has no stylesheet to resolve a custom property against.
-    await expect(tag?.style.backgroundColor).toBe("var(--color-pie-c)");
+    await expect(tag?.style.backgroundColor).toBe("var(--color-mana-c)");
     // `describes: false`: the tag is `aria-hidden`, so there is nothing here for
     // `aria-describedby` to point at — the tooltip is the words for a pointer alone.
     await userEvent.hover(tag!);
@@ -67,7 +67,9 @@ export const Painted: Story = {
   args: {
     count: 3,
     title: "Ramp · 3 in this pile",
-    paint: { css: "var(--color-pie-g)", fg: "var(--color-text)" },
+    // A pale mana fill takes the near-black `labelFgCss` answers for it — light text on one of
+    // these is the contrast failure the retired deeps never had to think about.
+    paint: { css: "var(--color-mana-g)", fg: "var(--color-accent-fg)" },
   },
 };
 

@@ -22,8 +22,8 @@ import type { DeckStatsSummary } from "../DeckStats";
 import { BarChart, type ChartBar, StatsCard } from "./StatsCard";
 
 /** How tall one of the six tracks is. Short enough that six panels fit two columns without the
- *  card becoming the tallest thing in the band; tall enough for `BarChart`'s `sm` headroom rule
- *  to print a count above a small bar rather than inside it. */
+ *  card becoming the tallest thing in the band. `variant="mana"` adds `BarChart`'s `sm` headroom
+ *  strip above it, so every count — the tallest bar's included — is printed over its fill. */
 const PANEL_HEIGHT = 88;
 
 export function CurveByColor({ stats }: { stats: DeckStatsSummary }): JSX.Element {
@@ -109,6 +109,10 @@ function ColorCurve({
         height={PANEL_HEIGHT}
         fill={MANA_FILL[colour]}
         size="sm"
+        // The Mana curve's picture at the grid's size: circled numerals, counts above. One
+        // vocabulary for the two charts that share an axis, so a reader who learnt the curve
+        // reads its six colours without a second lesson.
+        variant="mana"
       />
     </li>
   );

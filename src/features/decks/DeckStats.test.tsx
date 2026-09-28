@@ -1,7 +1,7 @@
 import type { ComponentProps } from "react";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
@@ -12,9 +12,12 @@ import {
   DeckStats,
   deckStats,
   STATS_HEADING,
+  statsColumns,
+  THREE_COLUMN_MIN_PX,
   type DeckStatsSummary,
   type MissingWrite,
 } from "./DeckStats";
+import { CREATURE_SPLIT_LABEL } from "./stats/ManaCurveChart";
 import { HIDE_COLORLESS_LABEL } from "./stats/ManaPips";
 
 /**
@@ -287,6 +290,91 @@ describe("deckStats", () => {
 
     expect(stats.curve[0]).toBe(1);
     expect(stats.variableCost).toBe(0);
+  });
+
+  /**
+   * **`curveCreatures` is a subset of `curve`, bucket for bucket** — counted in the same pass,
+   * under the same rules, so the Mana curve's creature split can never draw a creature part
+   * taller than its bar. The fixture puts creatures and noncreatures in one bucket, a creature
+   * alone in another, and a noncreature alone in a third, so every relation the property allows
+   * is exercised rather than only equality.
+   */
+  it("counts the creatures in each curve bucket, as a subset of the curve", () => {
+    const stats = deckStats([
+      spell("Goblin Guide", 1, { typeLine: "Creature — Goblin Scout", quantity: 4 }),
+      spell("Shock", 1, { quantity: 2 }),
+      spell("Walking Ballista", 0, { typeLine: "Artifact Creature — Construct", quantity: 1 }),
+      spell("Fireball", 5, { typeLine: "Sorcery", quantity: 3 }),
+      spell("Craterhoof Behemoth", 8, { typeLine: "Creature — Beast", quantity: 1 }),
+    ]);
+
+    expect(stats.curve).toEqual([1, 6, 0, 0, 0, 3, 0, 0, 1]);
+    expect(stats.curveCreatures).toEqual([1, 4, 0, 0, 0, 0, 0, 0, 1]);
+    for (const [bucket, creatures] of stats.curveCreatures.entries()) {
+      expect(creatures).toBeLessThanOrEqual(stats.curve[bucket]);
+    }
+    // No X bar, so no creature count for one — `null`, never `0`.
+    expect(stats.variableCostCreatures).toBeNull();
+  });
+
+  /**
+   * **The X bar splits too, and its creatures leave the numeric bucket with it.** A creature
+   * printing `{X}` is in `variableCost` and `variableCostCreatures`, and in neither half of its
+   * numeric bucket — one home, never two, is the curve's rule and so it is the split's.
+   */
+  it("moves a creature with X in its cost into the X bar's creature count", () => {
+    const deck = [
+      xSpell("Hydroid Krasis", { typeLine: "Creature — Jellyfish Hydra Beast", quantity: 2 }),
+      xSpell("Agadeem's Awakening", { quantity: 1 }),
+      spell("Tarmogoyf", 3, { typeLine: "Creature — Lhurgoyf", quantity: 1 }),
+    ];
+
+    const off = deckStats(deck);
+    expect(off.curve[3]).toBe(4);
+    expect(off.curveCreatures[3]).toBe(3);
+    expect(off.variableCostCreatures).toBeNull();
+
+    const on = deckStats(deck, true);
+    expect(on.variableCost).toBe(3);
+    expect(on.variableCostCreatures).toBe(2);
+    expect(on.curve[3]).toBe(1);
+    expect(on.curveCreatures[3]).toBe(1);
+  });
+
+  /**
+   * **The front face decides, and a land is never in the split.** A modal DFC with a creature on
+   * its back is a spell to the curve and a noncreature to the split, because a deck is cast from
+   * the front; Dryad Arbor is a creature by its type line and a land to `isLand`, so it is in
+   * neither the curve nor the split. Both are the curve's own rules reaching the split rather than
+   * clauses of the split's.
+   */
+  it("reads a creature off the front face and leaves lands out", () => {
+    const stats = deckStats([
+      spell("Emeria's Call", 7, {
+        typeLine: "Sorcery // Land",
+        layout: "modal_dfc",
+        quantity: 1,
+      }),
+      spell("Bala Ged Recovery", 3, {
+        typeLine: "Sorcery // Land",
+        layout: "modal_dfc",
+        quantity: 1,
+      }),
+      spell("Delver of Secrets", 1, {
+        typeLine: "Creature — Human Wizard // Creature — Human Insect",
+        layout: "transform",
+        quantity: 4,
+      }),
+      spell("Tergrid's Shadow", 5, {
+        typeLine: "Instant // Creature — God",
+        quantity: 1,
+      }),
+      card({ name: "Dryad Arbor", typeLine: "Land Creature — Forest Dryad", cmc: 0, quantity: 1 }),
+    ]);
+
+    expect(stats.curveCreatures).toEqual([0, 4, 0, 0, 0, 0, 0, 0, 0]);
+    expect(stats.curve[0]).toBe(0);
+    expect(stats.curve[5]).toBe(1);
   });
 
   /**
@@ -958,6 +1046,8 @@ describe("DeckStats", () => {
     theory: null,
     open: true,
     onToggle: vi.fn(),
+    creatureSplit: false,
+    onCreatureSplitChange: vi.fn(),
     ...over,
   });
 
@@ -1128,6 +1218,142 @@ describe("DeckStats", () => {
     const body = document.getElementById(id ?? "");
     expect(body).not.toBeNull();
     expect(body).toBeEmptyDOMElement();
+  });
+
+  /**
+   * **Two columns or three, by the band body's own width** (issue #620) — and what is worth pinning
+   * is the two ends a layout engine never reaches in this suite: `0` is two, because `0` is what
+   * jsdom and the first paint answer, and the threshold is inclusive.
+   */
+  it("picks three columns at the threshold and two below it, and two when unmeasured", () => {
+    expect(statsColumns(0)).toBe(2);
+    expect(statsColumns(1184)).toBe(2);
+    expect(statsColumns(THREE_COLUMN_MIN_PX - 1)).toBe(2);
+    expect(statsColumns(THREE_COLUMN_MIN_PX)).toBe(3);
+    expect(statsColumns(1657)).toBe(3);
+  });
+
+  describe("the arrangement", () => {
+    /**
+     * The observers the band constructs, driven by hand. `test-setup.ts` installs a no-op class,
+     * which is exactly the unmeasured state every other case in this file is written against — so
+     * this block alone swaps in one whose callback a test can fire with a width.
+     */
+    let observers: ResizeObserverCallback[] = [];
+    beforeEach(() => {
+      observers = [];
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(callback: ResizeObserverCallback) {
+            observers.push(callback);
+          }
+          observe() {}
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    /** Report a band body `width` px wide to every observer alive. */
+    const measure = (width: number) =>
+      act(() => {
+        for (const callback of observers) {
+          callback(
+            [{ contentRect: { width } } as ResizeObserverEntry],
+            {} as ResizeObserver,
+          );
+        }
+      });
+
+    /** The column box a readout is drawn in — the flex column its region is a child of. */
+    const columnOf = (title: string) => statsCard(title).parentElement;
+
+    /** The two arrangements, read as which readouts share a column. */
+    it("lays the readouts out in two columns, and in three on a wide band", () => {
+      render(
+        <TooltipProvider>
+          <DeckStats {...props({ cards: short() })} />
+        </TooltipProvider>,
+      );
+
+      // Unmeasured, and measured narrow: today's two columns.
+      expect(columnOf("Mana pips")).toBe(columnOf("Card distribution"));
+      expect(columnOf("Mana curve")).toBe(columnOf("Figures"));
+      measure(1184);
+      expect(columnOf("Mana pips")).toBe(columnOf("Card distribution"));
+      expect(columnOf("Mana curve")).toBe(columnOf(COLLECTION_HEADING));
+
+      measure(THREE_COLUMN_MIN_PX);
+      expect(columnOf("Mana curve")).toBe(columnOf("Curve by color"));
+      expect(columnOf("Mana pips")).toBe(columnOf("Figures"));
+      expect(columnOf("Card distribution")).toBe(columnOf(COLLECTION_HEADING));
+      expect(columnOf("Mana pips")).not.toBe(columnOf("Card distribution"));
+      expect(columnOf("Mana curve")).not.toBe(columnOf("Mana pips"));
+    });
+
+    /**
+     * **A readout that changes column is remounted**, so its state has to live above it — this is
+     * the case that fails if hide-colorless or the distribution's cut is put back into its card.
+     * Both are changed at two columns and read back at three, and again on the way back down.
+     */
+    it("keeps each readout's own state across a change of arrangement", async () => {
+      const user = userEvent.setup();
+      render(
+        <TooltipProvider>
+          <DeckStats {...props({ cards: boros() })} />
+        </TooltipProvider>,
+      );
+      const hide = () =>
+        within(statsCard("Mana pips")).getByRole("button", { name: HIDE_COLORLESS_LABEL });
+
+      await user.click(hide());
+      await pickOption(user, "Card distribution by", "Mana value");
+      expect(hide()).toHaveAttribute("aria-pressed", "true");
+
+      measure(THREE_COLUMN_MIN_PX + 200);
+      expect(columnOf("Mana pips")).toBe(columnOf("Figures"));
+      expect(hide()).toHaveAttribute("aria-pressed", "true");
+      expect(
+        within(statsCard("Card distribution")).getByText("8 cards at mana value 1"),
+      ).toBeInTheDocument();
+
+      measure(1000);
+      expect(columnOf("Mana pips")).toBe(columnOf("Card distribution"));
+      expect(hide()).toHaveAttribute("aria-pressed", "true");
+      expect(
+        within(statsCard("Card distribution")).getByText("8 cards at mana value 1"),
+      ).toBeInTheDocument();
+    });
+
+    /** The split is the deck's, so the band holds none of it: it passes the prop down and hands
+     *  the press straight back to the host. */
+    it("hands the curve's creature split to the host rather than holding it", async () => {
+      const onCreatureSplitChange = vi.fn();
+      const view = render(
+        <TooltipProvider>
+          <DeckStats {...props({ cards: boros(), onCreatureSplitChange })} />
+        </TooltipProvider>,
+      );
+      const toggle = () =>
+        within(statsCard("Mana curve")).getByRole("button", { name: CREATURE_SPLIT_LABEL });
+
+      expect(toggle()).toHaveAttribute("aria-pressed", "false");
+      await userEvent.click(toggle());
+      expect(onCreatureSplitChange).toHaveBeenLastCalledWith(true);
+      // Nothing moved until the host answered.
+      expect(toggle()).toHaveAttribute("aria-pressed", "false");
+
+      view.rerender(
+        <TooltipProvider>
+          <DeckStats
+            {...props({ cards: boros(), creatureSplit: true, onCreatureSplitChange })}
+          />
+        </TooltipProvider>,
+      );
+      expect(toggle()).toHaveAttribute("aria-pressed", "true");
+    });
   });
 
   /**

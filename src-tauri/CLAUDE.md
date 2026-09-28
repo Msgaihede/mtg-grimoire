@@ -215,15 +215,27 @@ picks it up from any directory under the root.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v55**
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v56**
+  (2026-09-28, [the deck-stats band plan](../docs/superpowers/plans/2026-09-28-deck-stats-band-redesign.md)
+  §3) is `decks.curve_creatures INTEGER NOT NULL DEFAULT 0`, whether the Deck stats band's Mana
+  curve splits each bar into creatures and noncreatures — v42's `stats_open` one control further
+  in, with every rule of that rung but its default: per-deck view state riding `DeckPatch`, on the
+  `decks` capture spec, on no history row and no `deck_undo::DECK_FIELDS`, not carried by
+  `duplicate_deck`. **`DEFAULT 0` is v43's answer and not v42's**, because the split is new and
+  off is exactly the chart every deck already drew. `deck_row` reads it at 30 and `update_deck`
+  binds it at `?24`, both at the end of their lists. It owes `UNDO_V56`, now the head of every
+  chain, and that rewind **drops the three `decks` capture triggers before the column** — v43's
+  move in the rewind direction, because `sync_ins_decks` and `sync_upd_decks` read
+  `NEW.curve_creatures` and SQLite refuses the `DROP COLUMN` on a fixture that ran
+  `capture::install` (the v54 rung's test is one). That is one above **v55**
   (2026-09-27, [the token-improvements spec](../docs/superpowers/specs/2026-09-27-token-improvements-design.md)
-  §3.8) is `wishlist_folders.managed_tokens INTEGER NOT NULL DEFAULT 0`, the managed wishlist's
+  §3.8), which is `wishlist_folders.managed_tokens INTEGER NOT NULL DEFAULT 0`, the managed wishlist's
   **Tokens** subfolder — `1` on the child a theory deck's managed folder holds its token wishes in,
   `0` everywhere else — with `idx_wishlist_folders_managed` **dropped and recreated** on
   `(managed_deck_id, managed_tokens)`, the changed-index rule above, so a deck can own that child
-  beside its own folder. Not synced, v48's column's reason, and owed its `UNDO_V55`, which runs
-  first in every chain. The same build makes an untouched token read zero and retires every
-  pre-v55 dismissal at launch (`deck_tokens::retire_hidden`), **neither of which is a rung**: the
+  beside its own folder. Not synced, v48's column's reason, and owed its `UNDO_V55`, which ran
+  first in every chain until `UNDO_V56` landed above it. The same build makes an untouched token
+  read zero and retires every pre-v55 dismissal at launch (`deck_tokens::retire_hidden`), **neither of which is a rung**: the
   first writes nothing and the second reads the corpus. It was written as v54 and renumbered at the
   merge with the folder-deletes branch, which carried `main`'s v53 and its own v54 — the ladder's
   rule once more. That is one above **v54**

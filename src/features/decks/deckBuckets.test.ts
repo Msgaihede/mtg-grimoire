@@ -10,6 +10,7 @@ import {
   distribution,
   foldBuckets,
   front,
+  isCreature,
   isLand,
   isMdfcLand,
   MODAL_DFC,
@@ -96,6 +97,37 @@ describe("isLand against typeBucket", () => {
     expect(typeBucket(null)).toBe(OTHER);
     expect(typeBucket("Token Creature")).toBe("Creature");
     expect(typeBucket("Scheme")).toBe(OTHER);
+  });
+});
+
+/**
+ * **`isCreature` is `typeBucket`'s answer, read as a yes or no** — the creature split on the Mana
+ * curve and the `Creature` bar under `by Types` must be one count, so every case here is a case the
+ * bar already answers. The front face decides, for the curve's reason: a deck is cast from it.
+ */
+describe("isCreature", () => {
+  it("answers for the front face's first printed type, as the Creature bar does", () => {
+    expect(isCreature("Creature — Goblin")).toBe(true);
+    expect(isCreature("Artifact Creature — Golem")).toBe(true);
+    expect(isCreature("Legendary Enchantment Creature — God")).toBe(true);
+    expect(isCreature("Instant")).toBe(false);
+    expect(isCreature("Legendary Planeswalker — Ajani")).toBe(false);
+    expect(isCreature(null)).toBe(false);
+  });
+
+  /** A modal DFC with a creature on its back is a spell to the curve, and its creature half is
+   *  never cast from the front — so it is a noncreature here, and a creature front is a creature
+   *  whatever its back is. */
+  it("reads the front face of a double-faced card and never the back", () => {
+    expect(isCreature("Sorcery // Creature — Elemental")).toBe(false);
+    expect(isCreature("Creature — Human Wizard // Creature — Human Insect")).toBe(true);
+  });
+
+  /** Dryad Arbor is a creature to this predicate and a land to `isLand`, and the split never meets
+   *  it because the curve is over nonlands — `deckStats`' `curveCreatures` test pins that half. */
+  it("agrees with typeBucket about a Land Creature", () => {
+    expect(isCreature(DRYAD_ARBOR)).toBe(typeBucket(DRYAD_ARBOR) === "Creature");
+    expect(isLand(DRYAD_ARBOR)).toBe(true);
   });
 });
 

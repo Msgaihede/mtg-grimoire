@@ -1377,7 +1377,7 @@ export const SwapFolds: Story = {
  * row of the reader's own. It is one control again since 2026-09-10, back where the count has been
  * since 2026-08-24 — between the format check and the bracket, wearing a crown whether or not it
  * is pressed, because the glyph is the chip's identity and `aria-pressed` is what says whether the
- * filter is on. On, it takes `pie-gold` for its edge and its words: the gold the crowns on the
+ * filter is on. On, it takes the accent for its edge and its words: the gold the crowns on the
  * cards themselves are drawn in.
  *
  * **Deck 2's one game changer is Ancient Tomb**, which is the fixture's own argument for the mark

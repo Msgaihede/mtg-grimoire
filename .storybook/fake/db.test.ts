@@ -8768,6 +8768,22 @@ describe("the deck row itself", () => {
   });
 
   /**
+   * `decks.curve_creatures` (user schema v56): unsplit by default — a seed that never says and a
+   * deck made here alike — and the Mana curve's toggle rides `deck_update` with
+   * `coalesce(?n, column)`, so a patch that says nothing leaves it where the reader put it.
+   */
+  it("draws a deck's Mana curve unsplit until the reader splits it", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    expect(readHandlers(db).deck_list()[0]).toMatchObject({ curveCreatures: false });
+    const born = writeHandlers(db).deck_create({ deck: { name: "Burn", formatKey: "modern" } });
+    expect(born).toMatchObject({ curveCreatures: false });
+    const split = writeHandlers(db).deck_update({ id: 1, patch: { curveCreatures: true } });
+    expect(split).toMatchObject({ curveCreatures: true, statsOpen: true });
+    const left = writeHandlers(db).deck_update({ id: 1, patch: { notesOpen: true } });
+    expect(left).toMatchObject({ curveCreatures: true });
+  });
+
+  /**
    * `decks.token_mode` (user schema v52), which replaced v47's `token_stack` switch: **`managed`
    * by default** — a seed that never says and a deck made here alike, because every deck starts
    * there, the ones whose stack was off included — moved by the ordinary patch, **audited** under

@@ -176,6 +176,25 @@ export function typeBucket(typeLine: string | null): string {
 }
 
 /**
+ * Whether this row is a **creature** to the stats band's creature split — the Mana curve's
+ * two-part bars and Card distribution's `Creatures vs noncreatures` band.
+ *
+ * **{@link typeBucket}'s own answer and never a second test of the type line.** `Creature` leads
+ * {@link TYPE_BUCKETS}, so "the front face names Creature" and "this card heads the Creature bar"
+ * are one question — and asking it here, rather than spelling `includes("Creature")` again, is
+ * what keeps the split's creature count and the `by Types` bar's the same number. An Artifact
+ * Creature is a creature; a modal DFC with a creature on its back is not, because a deck is cast
+ * from the front.
+ *
+ * Dryad Arbor answers `true` here and is still no part of the split, because the split is drawn
+ * over the curve and the curve is over nonlands ({@link isLand}). That is the curve's rule reaching
+ * this one, not a clause of it.
+ */
+export function isCreature(typeLine: string | null): boolean {
+  return typeBucket(typeLine) === "Creature";
+}
+
+/**
  * Copies in every **active** pile — the rows every chart in the stats band is drawn over.
  *
  * One flag rather than a kind test, and it is the same line `validateDeck` opens with: a pile

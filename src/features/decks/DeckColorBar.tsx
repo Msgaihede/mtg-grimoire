@@ -56,24 +56,22 @@ export const DECK_COLOR_SEGMENT_ATTR = "data-deck-color";
  * The fill one colour's field is painted with — `--color-mana-*`, the values a real printed
  * symbol's disc is filled with, keyed over all six of {@link MANA_KEYS}.
  *
- * **This is the switch away from the pie deeps, and the band is what forced it.** The 5px rule
- * this replaced was filled from `--color-pie-*`, the colour-identity deeps, and that was right for
- * what it was: `index.css` calls them "saturated enough to carry meaning at 1px", which is exactly
- * the demand a hairline makes. A 20px band with a black glyph printed on it makes the opposite
- * demand. `ms-b` in near-black on `--color-pie-b` (#3b3a3e) is a black symbol on a near-black
- * field — invisible, on the one colour a reader is most likely to be checking for — and the fills
- * are the family the palette *already* says a glyph sits on: "Glyphs sit on these in near-black,
- * exactly like a real symbol", at the token itself. `FilterChips`' `ManaChip` is the shipped
+ * **This was the switch away from the pie deeps, and the band is what forced it.** The 5px rule
+ * this replaced was filled from the saturated colour-identity deeps, and that was right for what
+ * it was: `index.css` called them "saturated enough to carry meaning at 1px", which is exactly the
+ * demand a hairline makes. A 20px band with a black glyph printed on it makes the opposite demand.
+ * `ms-b` in near-black on the black deep (#3b3a3e) is a black symbol on a near-black field —
+ * invisible, on the one colour a reader is most likely to be checking for — and the fills are the
+ * family the palette *already* says a glyph sits on, near-black, exactly like a real symbol. (The
+ * deeps were deleted outright on 2026-09-28, so the fills are the only Magic-colour family left.) `FilterChips`' `ManaChip` is the shipped
  * precedent for the pair, character for character — `text-black` over an inline
  * `backgroundColor: var(--color-mana-…)`.
  *
  * **The tokens are the shared fact, and they are the whole of what must not drift.** A colour in
  * this app is a `--color-*` custom property and nothing else invents one (`src/CLAUDE.md`), so
- * this table is a second *keying* of six properties rather than a second palette. What it is no
- * longer keyed alongside is `DeckStats`' `PIP_COLOR`: the tile and the editor's identity pie now
- * answer with two different families, and that is the honest reading rather than a drift — a pie
- * slice is a colour with nothing printed on it and a segment here is a field with a symbol on it,
- * so they are two demands on the palette and the palette has two answers.
+ * this table is a second *keying* of six properties rather than a second palette. It was once not
+ * keyed alongside `DeckStats`' `PIP_COLOR`, which filled from the deeps; that table is gone, the
+ * deeps with it, and every Magic-colour fill in the app keys these six properties now.
  *
  * A record with the `var()` spelled out, never a class built from the key: Tailwind scans source
  * text for whole class names, so an interpolated `bg-mana-${key}` emits no rule at all and the bar

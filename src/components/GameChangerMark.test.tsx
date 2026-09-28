@@ -56,7 +56,7 @@ describe("GameChangerMark", () => {
     expect(mark).toHaveClass(
       "absolute",
       "top-1",
-      "text-pie-gold",
+      "text-accent",
       "size-[calc(0.75rem*var(--mark-scale,1))]",
     );
   });

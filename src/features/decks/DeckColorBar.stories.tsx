@@ -90,8 +90,8 @@ const meta = {
           "grey band saying so is worse than silence and indistinguishable from a rendering " +
           "fault, and the crop simply keeps all four of its own corners.\n\n" +
           "The fills are the `--color-mana-*` values a real printed symbol's disc carries, not " +
-          "the `--color-pie-*` identity deeps the 5px rule this replaced used: a black `ms-b` " +
-          "on `--color-pie-b` (#3b3a3e) is invisible. The accessible name is nothing at all — " +
+          "the retired identity deeps the 5px rule this replaced used: a black `ms-b` on the " +
+          "black deep (#3b3a3e) is invisible. The accessible name is nothing at all — " +
           "the colours are said in `DeckTile`'s `sr-only` span after the deck's name, and the " +
           "counts are in the tooltip, where a reader who wants the arithmetic can ask for it.",
       },

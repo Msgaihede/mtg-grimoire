@@ -16,7 +16,9 @@
  *
  * {@link LEGACY_TOKENS} came with the functions because {@link normalizeLabelColor} is *total*
  * over it and the two cannot be separated. It is deck-label history, kept verbatim; that it is
- * now filed under a general name changes nothing about what it is for.
+ * now filed under a general name changes nothing about what it is for. **It is deliberately not
+ * the picker's six any more**: those moved to the mana colours on 2026-09-28, and a stored token
+ * word still draws the deep it always drew, exactly as a stored hex does.
  */
 
 /**
@@ -49,7 +51,7 @@ export const HEX = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i;
  * The alternative — importing the picker's array back into this file — is the import direction
  * this module exists to remove.
  */
-export const FALLBACK_HEX = "#d9b95c";
+export const FALLBACK_HEX = "#d1a84b";
 
 /**
  * A stored colour as `#rrggbb` lowercase, or `null` for one this build cannot read.

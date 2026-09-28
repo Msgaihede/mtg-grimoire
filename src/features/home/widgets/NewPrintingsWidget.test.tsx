@@ -171,6 +171,7 @@ function deckRow(over: Partial<DeckRow> & { id: number; name: string }): DeckRow
     tokenMode: "managed",
     tokenRailIndex: -1,
     statsOpen: true,
+    curveCreatures: false,
     ...over,
   };
 }

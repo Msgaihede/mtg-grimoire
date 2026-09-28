@@ -11,10 +11,11 @@
  *
  * * **Money is the accent, counts are body ink.** A value figure is gold wherever it appears; a row
  *   of four golds would emphasise nothing.
- * * **A gain or a loss is spent as a *fill*, never as ink.** `--color-pie-g` at a figure's size on
- *   this background reads 3.3:1, under the floor — so a delta is body ink on a tinted chip, with a
- *   green or red glyph beside it. (There is no `text-pie-g` utility either: the name compiles and
- *   paints in the body colour.)
+ * * **A gain or a loss is spent as a *fill*, never as ink.** A delta is body ink on a tinted chip,
+ *   with a green or red glyph beside it. The rule was measured against the saturated green deep
+ *   that was the gain colour until 2026-09-28, which read 3.3:1 on this background; the gain is
+ *   `--color-mana-g` now (11.4:1 as a glyph), but the chip stays the figure's colour so that a
+ *   gain and a loss are one weight of type and differ only in their tint.
  */
 import type { CSSProperties, ReactElement, ReactNode } from "react";
 
@@ -26,8 +27,10 @@ import { cn } from "@/lib/utils";
 
 import type { WidgetFit } from "./fit";
 
-/** A gain's fill — the green of a forest pip. */
-export const UP_FILL = "var(--color-pie-g)";
+/** A gain's fill — the green of a forest pip, `--color-mana-g`. It is pale, so it is spent as a
+ *  20–24% tint under body ink or as a glyph on the dark ground, and never as a solid fill with
+ *  light text on it (1.4:1). */
+export const UP_FILL = "var(--color-mana-g)";
 /** A loss's fill — the destructive red. */
 export const DOWN_FILL = "var(--color-destructive)";
 

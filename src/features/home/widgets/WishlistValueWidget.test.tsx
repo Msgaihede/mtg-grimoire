@@ -235,7 +235,7 @@ describe("WishlistValueWidget", () => {
     const fills = Array.from(container.querySelectorAll<HTMLElement>("li span.h-full")).map(
       (fill) => fill.style.background,
     );
-    expect(fills).toEqual(["var(--color-pie-gold)", "var(--color-mana-u)", "var(--color-mana-c)"]);
+    expect(fills).toEqual(["var(--color-accent)", "var(--color-mana-u)", "var(--color-mana-c)"]);
   });
 
   it.each([

@@ -3,7 +3,9 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cn } from "@/lib/utils";
 
 /**
- * What a count tag is filled with when nothing colours it: the colourless deep, `--color-pie-c`.
+ * What a count tag is filled with when nothing colours it: colourless, `--color-mana-c`.
+ * (It was the colourless *deep* until 2026-09-28, when that family was retired; the two were the
+ * same `#c8c4bf`, so nothing on screen moved and the dark foreground below still reads on it.)
  *
  * A filled mark has to be *some* colour, and grey is the one that says nothing — which is what a
  * count on an unlabelled deck card has to say. If the neutral fill were gold, gold would stop
@@ -15,7 +17,7 @@ import { cn } from "@/lib/utils";
  * about label colours is the wrong place for the absence of one.
  */
 export const NEUTRAL_COUNT_PAINT = {
-  css: "var(--color-pie-c)",
+  css: "var(--color-mana-c)",
   fg: "var(--color-accent-fg)",
 } as const;
 
@@ -313,7 +315,7 @@ export function CountTag({
    * `currentColor`, so it is {@link paint}'s `fg` exactly as the crown is — and the two are
    * therefore always the same colour, which is what says they are two facts of one kind rather
    * than a hierarchy. There was no colour available to give it even had one been wanted: the
-   * `--color-pie-*` deeps are what a **label** means, gold is what a picked card wears, and the
+   * label colours are what a **label** means, gold is what a picked card wears, and the
    * destructive red is a rule break. A sixth vocabulary word bought nothing here.
    *
    * ## The 14px it costs is the crown's 14px again

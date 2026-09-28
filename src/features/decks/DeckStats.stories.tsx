@@ -99,13 +99,23 @@ const meta = {
     // overrides this one: a cast would type it as a plain function and take `toHaveBeenCalled`
     // away from {@link Collapsed}'s play, which is the whole of what that story checks.
     onToggle: fn(),
+    // `decks.curve_creatures` — the Mana curve's creature split, the deck's own and therefore a
+    // prop rather than the band's state. Off is the column's default. {@link ThreeColumns} draws
+    // the other arm.
+    creatureSplit: false,
+    onCreatureSplitChange: fn(),
   },
   // The strip wraps rather than truncates — at 1024px with the card pane docked beside the editor
   // this row is a few hundred pixels wide — so a story is rendered at the editor's own width
   // rather than the canvas's, which would let the four charts sit on one line at any window size.
+  //
+  // **`parameters.wideBand` is the one story that asks for more**, and it has to be asked of this
+  // decorator rather than added beside it: a story's own decorator is drawn *inside* the meta's,
+  // so it could never be wider than 52rem. Both classes are written out whole, because Tailwind
+  // emits nothing for a class built by interpolation.
   decorators: [
-    (Story) => (
-      <div className="w-[52rem] max-w-full p-2">
+    (Story, { parameters }) => (
+      <div className={parameters.wideBand ? "w-[92rem] p-2" : "w-[52rem] max-w-full p-2"}>
         <Story />
       </div>
     ),
@@ -131,11 +141,11 @@ const meta = {
           "**Seven bordered readouts in two wrapping columns, behind a disclosure** since the " +
           "redesign of 2026-09-10 — Mana pips, Card distribution with the opening-hand odds " +
           "under it, Mana curve, Curve by color, Figures, and a Collection card drawn only " +
-          "where there is a shortfall to act on. **The two pies are gone**: `Colors` and " +
-          "`Lands` answered *what is this deck made of* with two circles whose legends were " +
-          "the only readable part, and the six colour curves answer the same question with the " +
-          "mana **value** attached while the distribution's `by Types` bars carry the land " +
-          "count in a bar a reader can compare against the others.\n\n" +
+          "where there is a shortfall to act on. **Three columns on a band 1400px wide or " +
+          "more** since 2026-09-28 — see `ThreeColumns` — and two below it. **The colour pie " +
+          "is gone and a land pie is back**: the six colour curves answer *what colours is this " +
+          "deck* with the mana **value** attached, while Card distribution's land pie " +
+          "partitions the lands by their basic land types, which no bar says.\n\n" +
           "Nothing animates, nothing is a chart library, and every chart carries its numbers " +
           "as text — the drawing is `aria-hidden` and the words beside it are the whole " +
           "accessible story. The arithmetic itself is `deckStats`, exported and covered by " +
@@ -1072,4 +1082,26 @@ export const OnTheoryProgress: Story = {
     // questions about one deck, which is why they are two entries rather than one.
     await expect(within(figures).getByText("Owned").closest("div")).toHaveTextContent("3 missing");
   },
+};
+
+/**
+ * **Three columns, which is what a band 1400px wide or more draws** (issue #620) —
+ * `[Mana curve, Curve by color] [Mana pips, Figures] [Card distribution, Collection]`, balanced
+ * by height. The frame is 92rem so the band body measures ~1456px; every other story on this page
+ * is 52rem and draws the two columns it always has.
+ *
+ * **The width is observed from script, never a container query**, because the Collection card
+ * opens anchored layers and `container-type` would make the band their containing block. The
+ * curve's creature split is on here too, since the two landed together and a wide band is where
+ * the split's legend has the most room.
+ *
+ * **No `play`, deliberately.** `stories.test.tsx` plays every story under jsdom, whose
+ * `ResizeObserver` never reports, so a play asserting three columns would fail there for a reason
+ * that is not this band's. The wiring — which readouts share a column at which width, and that a
+ * readout's state survives the remount a change of column costs it — is `DeckStats.test.tsx`'s
+ * `the arrangement` block, with an observer it drives by hand; this story is the picture.
+ */
+export const ThreeColumns: Story = {
+  args: { ...ManaCurve.args, creatureSplit: true },
+  parameters: { wideBand: true },
 };
