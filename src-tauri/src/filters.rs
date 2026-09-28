@@ -844,9 +844,9 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     // `{alias}` shadows the outer table — which the exclude arm is still correlated by, and
     // `a.illustration_id = a.illustration_id` is no longer a correlation at all: the
     // `NOT EXISTS` degenerates to "does no row with this slug exist anywhere", which is false for
-    // every card at once and empties the result silently. All three production callers pass
-    // `"c"` (`search.rs`, `collection.rs`, `wishlist.rs`), so a fourth one is the only way in and
-    // nothing else in the suite would go red for it.
+    // every card at once and empties the result silently. All four production callers pass
+    // `"c"` (`search.rs`, `collection.rs`, `wishlist.rs`, `deck_query.rs`), so a fifth one is
+    // the only way in and nothing else in the suite would go red for it.
     debug_assert!(
         alias != "ati" && alias != "otc",
         "a caller alias equal to a subquery alias uncorrelates the NOT EXISTS and answers about the whole closure instead of about this card"

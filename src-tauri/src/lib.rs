@@ -42,6 +42,9 @@ pub mod deck_missing;
 /// or a network.
 pub mod deck_notes;
 pub mod deck_pull;
+/// **Which of a deck's cards answer the search terms typed into the editor's filter box** —
+/// issue #621. One read over `deck_cards`, through the search's own `filters` SQL.
+pub mod deck_query;
 pub mod deck_quick_add;
 pub mod deck_theory;
 /// **The tokens and emblems a deck needs, derived — and which printings of them the reader keeps,

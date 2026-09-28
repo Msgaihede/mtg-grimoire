@@ -979,7 +979,11 @@ Every one of these has its measurement and its story in
   tags with whatever chips its caller passed. Five surfaces share that hook — the search page, the
   deck editor's *All cards* tab, the collection's and the wishlist's docked columns, and the Tags
   page — and `useCollection`, `useCollectionSearch` and `useWishlist` parse the same string into
-  the same two fields. Four rules that are not obvious, each with its failure written at its own
+  the same two fields. **The deck editor's `Filter this deck` box joined on 2026-09-28** (issue
+  #621) through `features/decks/useDeckCardQuery.ts`: its free text stays the substring test it
+  always was, in the webview, and its typed terms and resolved tags go to `deck_query_cards` —
+  the same `filters` SQL over the deck's own rows — rather than to a client-side evaluator that
+  could not answer `kw:`, `a:` or a tag at all. Four rules that are not obvious, each with its failure written at its own
   site and all of it in [search-syntax.md](../docs/reference/search-syntax.md): **`a:` is the
   artist and `o:` is the rules text**, Scryfall's meanings, since 2026-09-22 — they were the two
   taxonomies until then and `atag:`/`otag:` are what a tag is spelt with now; **`:` does not mean

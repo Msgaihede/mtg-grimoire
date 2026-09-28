@@ -1602,6 +1602,19 @@ layer.
     closes it by accident in one surface: the counting argument above is an argument about a
     number, and the chart is a number, so whether the curve should drop the commander too is a
     question somebody has to ask the reader rather than infer from this rule.
+- **`Filter this deck` reads search syntax since 2026-09-28** ([issue
+  #621](https://github.com/Msgaihede/mtg-grimoire/issues/621)), and `useDeckCardQuery.ts` is the
+  whole of it. Two filters ANDed: **the free text** is `needleMatches`, the substring of the name
+  or type line the box always was, answered in the webview per keystroke; **every typed term and
+  resolved tag** (`t:`, `cmc>=`, `kw:`, `a:`, `f:`, `otag:`, `-bolt`…) is answered by
+  `deck_query_cards` as the set of this deck's printings that match, through the search's own
+  `filters` SQL. Never a client-side evaluator over `DeckCard`: it carries no keywords, no artist
+  and no tags, and the other ten fields would be a second dialect of `c:`/`id:`, rarity order and
+  star powers. The terms wait out the search's 300 ms debounce and narrow by nothing until their
+  first answer; clearing them stops narrowing at once; an unknown tag empties the deck (fail
+  closed, `useCardSearch`'s rule). The answer is keyed on the printing, so a foil and a regular
+  copy, or one card in two piles, stand or fall together. Both filter boxes — the toolbar's and
+  the undocked bar's — write the one `filter` state, so the hook is called once.
 - **At `TIGHT_HEADER_PX` the toolbar reads as two sentences rather than one long run**
   (2026-08-24): the three pickers that decide how the deck is *drawn*, then the tools that
   *change* it — quick add, undo/redo and the filter. `order` does the regrouping and a

@@ -137,6 +137,8 @@ const deckTheoryMissingToWishlist = vi.hoisted(() => vi.fn());
 // Two columns of one indexed scan, and the only read the editor makes of the list the
 // reader is *not* looking at.
 const deckTheorySlots = vi.hoisted(() => vi.fn());
+// The filter box's typed terms (issue #621) — answered by Rust as the printings that match.
+const deckQueryCards = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
 // The import dialog's three commands, and the sync it reads to tell "your list is wrong" from
 // "the card database is not filled in yet".
@@ -269,6 +271,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTheoryDiff,
     deckTheoryMissingToWishlist,
     deckTheorySlots,
+    deckQueryCards,
     deckFolderList,
     importResolve,
     deckImportCommit,
@@ -1007,6 +1010,7 @@ beforeEach(() => {
   // A plan that asks for nothing: the tick is drawn by the tests that are about it and by
   // no other, so a card name assertion elsewhere never has to know this mark exists.
   deckTheorySlots.mockReset().mockResolvedValue([]);
+  deckQueryCards.mockReset().mockResolvedValue([]);
   deckFolderList.mockReset().mockResolvedValue([]);
   // One printing, so a one-line paste has something to resolve to and the Import button is
   // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
@@ -1853,6 +1857,32 @@ describe("DeckEditor", () => {
     expect(within(main).getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
     expect(within(main).queryByRole("button", { name: /^Bear/ })).not.toBeInTheDocument();
     expect(within(main).getByText("4 cards")).toBeInTheDocument();
+  });
+
+  /**
+   * The box reads search syntax (issue #621): a typed term is asked of Rust and the deck narrows
+   * to the printings it answers, while the free text beside it is still the substring test —
+   * both must hold, and the heading still counts what is left.
+   */
+  it("filters the deck by a typed search term, ANDed with the free text", async () => {
+    deckQueryCards.mockResolvedValue(["c-Lightning Bolt"]);
+    await open();
+
+    await userEvent.type(screen.getByLabelText("Filter this deck"), "t:instant");
+
+    const main = group("Main deck");
+    await waitFor(() =>
+      expect(within(main).queryByRole("button", { name: /^Bear/ })).not.toBeInTheDocument(),
+    );
+    expect(within(main).getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
+    expect(within(main).getByText("4 cards")).toBeInTheDocument();
+    expect(deckQueryCards).toHaveBeenLastCalledWith(4, {
+      predicates: [{ field: "typeLine", op: "colon", value: "instant", negated: false }],
+    });
+
+    // Free text beside the term narrows further, in the webview and at once.
+    await userEvent.type(screen.getByLabelText("Filter this deck"), " zzz");
+    expect(within(main).queryByRole("button", { name: /^Lightning Bolt/ })).not.toBeInTheDocument();
   });
 
   /** The deck's own labels, as filters. **Nothing at all for a deck with none** — an empty group
