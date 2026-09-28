@@ -2445,7 +2445,9 @@ async fn a_device_that_changes_group_pulls_the_new_log_from_the_start() {
     });
 
     let b = moved_groups("500", "500", &key);
-    pull(&b, &server.base_url(), "access-1").await.unwrap();
+    pull(&b, &server.base_url(), "access-1", Some(0))
+        .await
+        .unwrap();
     ack(&b, &server.base_url(), "access-1").await.unwrap();
 
     from_start.assert_calls(1);
@@ -2484,7 +2486,9 @@ async fn a_device_that_changes_group_acks_the_new_log_at_the_old_logs_number() {
     });
 
     let b = moved_groups("7", "7", &[9u8; 32]);
-    pull(&b, &server.base_url(), "access-1").await.unwrap();
+    pull(&b, &server.base_url(), "access-1", Some(0))
+        .await
+        .unwrap();
     ack(&b, &server.base_url(), "access-1").await.unwrap();
 
     acked.assert_calls(1);
