@@ -59,7 +59,11 @@ export function shareLinkFrom(text: string): string | null {
     return null;
   }
   // `javascript:` and `file:` parse perfectly well; the scheme is what tells them from a link.
-  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  // **`https:` alone since 2026-09-28** (issue #545): the crate refuses plain `http:` with the
+  // same sentence and no request, because a link over plain HTTP is one anybody on the path can
+  // rewrite into somebody else's document — so accepting it here would only move the refusal
+  // one round trip later.
+  if (url.protocol !== "https:") return null;
   const segments = url.pathname.split("/").filter((s) => s !== "");
   // `/s/{id}` — the id last, `s` immediately before it, and whatever path the base carries in
   // front of both.

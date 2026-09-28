@@ -1365,6 +1365,19 @@ variant)`; `deck_missing_to_wishlist(deckId, folderId?)`, which reads `live` and
     precisely what the id arm's caller-side guard exists to prevent. Nothing can have been created
     on that path: `category_for_name` answers a **new** id when it makes a pile, and a new id is
     never a pile the card is already in.
+  - **A move onto a pile that already holds the printing folds, and the fold keeps a label**
+    ([issue #643](https://github.com/Msgaihede/mtg-grimoire/issues/643), 2026-09-28). The
+    quantities add and `needs_review` stays the surviving row's; the label is
+    `label_id = coalesce(deck_cards.label_id, excluded.label_id)` — the surviving row's own label
+    stands, and an unlabelled survivor takes the moved row's. The `DO UPDATE` used to set
+    `quantity` alone, so re-filing a labelled card onto an unlabelled row of the same printing
+    took the reader's label off it, where the issue's rule is that a label falls off only when
+    the reader removes it or the card. **Three other folds of a `deck_cards` row onto another
+    follow the same rule**, each fixed in the same change: `deck_category_delete`'s move arm
+    (`move_card`'s statement over a whole pile), `deck_meta::refile_stray_theory_cards` (v53's
+    net for a theory card left in a live pile) and `reconcile::fold_deck_card_into_existing` (a
+    Scryfall merge landing on a row the pile already holds). The import's `ON CONFLICT` already
+    coalesced.
 - **`deck_add_card_to_other_list` → `deck::add_card_to_other_list` copies a card into the deck's
   other list** (2026-09-28, issue [#592](https://github.com/Msgaihede/mtg-grimoire/issues/592),
   behind the card menu's `Add to actual` / `Add to theory`). `variant` is the list the card goes
@@ -1609,11 +1622,17 @@ labels_it_made` is the proof that the reader's own labels are not swept with the
   (`Dakkon, Shadow Slayer` is the mechanism — `mh2` and `amh2` share a release date and the art
   series wins the `id` tie-break). Asked in sequence the exact name always answers first. A
   `MULTI-INDEX OR` **is** indexed, measured — and still wrong.
-- **`import_read_file` takes a path, not bytes**, which is the whole reason `dialog:allow-open`
-  is sufficient and **no `fs:` permission is granted anywhere**: a webview that can only _name_ a
-  file needs none. The contract was shared with `export_write_file` and `deck_set_cover_image`;
-  since custom deck covers went on 2026-08-31 it is shared with `export_write_file` alone, and
-  `dialog:allow-open` is granted for this command rather than for two. The
+- **`import_pick_file` opens the file dialog itself and answers text — no path crosses IPC in
+  either direction** (issue #545, 2026-09-28), and Rust reading the file is why **no `fs:`
+  permission is granted anywhere**. It was `import_read_file(path)` until then, taking the path the
+  page's `open()` answered on the argument that a webview that can only _name_ a file needs no
+  filesystem permission — true, and beside the point: the command took *any* path a script in the
+  page named, which made it a read of any text file up to 1 MB. `export_write_file` shared that
+  shape and was fixed the same way (`export_save_file`); `deck_set_cover_image` shared it until
+  custom deck covers went on 2026-08-31. The page is granted no `dialog:` permission now.
+  *(The next two sentences are the 2026-08-12 design, and issue #555 replaced both: the cap is a
+  bounded read rather than a metadata check, and the decode is never lossy for a Western European
+  file. `import.rs`'s `read_bounded` and `decode` are the current rules.)* The
   1 MB cap (`MAX_IMPORT_BYTES`, shared with the paste path so the two cannot disagree) is read off
   the **metadata**, so a 200 MB file pointed at by mistake is refused without ever being pulled
   into memory. Decoding is `from_utf8_lossy` **deliberately**: a Windows-1252 apostrophe in one
@@ -1686,14 +1705,20 @@ labels_it_made` is the proof that the reader's own labels are not swept with the
   **`csv` carried the same write-only label through Tasks 1–9 and stopped being true in Task
   10** — `parse.ts` reads a CSV by its header row now, so `decklists.test.ts` drives it over the
   same three decklists as every other readable format. Rust's only part in any of it is
-  `export_write_file` taking the path `save()` answered, for `import_read_file`'s reason one
-  shelf up: **no `fs:` permission is granted anywhere**.
+  `export_save_file` opening the save dialog and writing where it answered — `export_write_file`
+  taking the path `save()` answered until issue #545 — for `import_pick_file`'s reason one shelf
+  up: **no `fs:` permission is granted anywhere, and no path crosses IPC**.
 - **Unverified, and not by choice: the file picker's own half.** `dialog:allow-open` opens a
   native window CDP cannot reach, so `import_read_file` was exercised by invoking the command
   with a path — exactly as `deck_set_cover_image` was, when there was one. The path → text →
   preview half is measured; the **click → path half is not**, and with the cover command deleted
   on 2026-08-31 the import is the only `dialog:allow-open` caller left for that gap to be closed
   against (`export_write_file` goes through `allow-save`, and has the same gap of its own).
+  *(2026-09-28, issue #545: Rust opens both dialogs now — `import_pick_file` and
+  `export_save_file` take no path, and the page is granted no `dialog:` permission — so neither
+  command can be driven with a path any more. The gap is unchanged in kind: the click → chosen
+  file half is the native window's, and the read and the write after it are unit-tested over real
+  files.)*
 - **Driven in the shipped window 2026-08-12**, `npm run tauri dev` — so a **debug** build with
   Vite serving the frontend (`/src/main.tsx` in the page's script list, which is the cheap proof
   that no stale embedded `dist/` is being measured), the live 116 695-card corpus, 1280×800.

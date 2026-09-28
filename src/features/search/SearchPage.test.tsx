@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
+import { BUTTON_OVER_ART } from "@/components/QuantityStepper";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
 import { MENU_CONDITION } from "@/lib/conditions";
@@ -1115,6 +1116,26 @@ describe("the result layout toggle", () => {
       "button",
     );
     expect(chips.map((c) => c.textContent)).toEqual(["Foil"]);
+  });
+
+  /**
+   * Issue #645's bare outline, one wall over: the tile's `+` stands over the art, so it carries the
+   * backing the deck's own card steppers do — and the table row's, which sits on a panel, does not.
+   * jsdom draws nothing, so the classes are what is pinned, and both halves are, because the
+   * backing is the caller's word rather than `AnchoredPopup`'s default.
+   */
+  it("backs a tile's quick-add over the art and leaves the table row's on its panel", async () => {
+    wrap(<SearchPage />);
+
+    expect(
+      await screen.findByRole("button", { name: /^Add Lightning Bolt \(LEA 161\)/ }),
+    ).toHaveClass(...BUTTON_OVER_ART.split(" "));
+
+    await userEvent.click(screen.getByRole("button", { name: "Table view" }));
+
+    expect(
+      await screen.findByRole("button", { name: /^Add Lightning Bolt \(LEA 161\)/ }),
+    ).not.toHaveClass("bg-bg/88");
   });
 
   /**

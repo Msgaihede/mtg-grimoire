@@ -145,14 +145,16 @@ const meta = {
      * last 20px. **The inner one is `relative flex flex-col gap-3` because that is the column**:
      * the bar is a zero-height `sticky` child with `-mb-3` cancelling the column's own gap. The
      * width is the column's at the rung the story draws ({@link COLUMN}), and the height leaves
-     * room under the bar for Quick add's five suggestions and its status chip.
+     * room under the bar for Quick add's ten suggestions, the count under them and its status
+     * chip — `h-[28rem]`, which was `h-80` and clipped the list once it went from five rows to ten
+     * (issue #648).
      *
      * The piles are stand-ins drawn in the app's own tokens, there so the panel's shadow has
      * something to fall on: the bar is always drawn *over* the deck, never over glass.
      */
     (Story, { args }) => (
       <div className="overflow-hidden bg-bg p-5" style={{ width: COLUMN[args.width] + 40 }}>
-        <div className="relative flex h-80 flex-col gap-3">
+        <div className="relative flex h-[28rem] flex-col gap-3">
           <Story />
           <div aria-hidden="true" className="flex gap-2 px-2">
             {[0, 1, 2, 3, 4, 5, 6, 7].map((pile) => (

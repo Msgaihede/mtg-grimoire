@@ -81,9 +81,11 @@ wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from t
 `/g/{group}/rotate` **401** to a POST, `/g/{group}/keys` **401** to a GET with a well-formed
 bearer, and `/g/{group}/bogus` **404** — so the gate, the callback, the membership flow and the
 key distribution are all live. This sentence briefly said `/rotate` and `/keys` were the two
-routes still missing; that was true for part of one day. **What is not deployed is the device
-roll**, and it changes no route — the tell is that the live `/token` still accepts a body with no
-`device` field. The next deploy is an **update** with a D1 that holds real entitlements, not a
+routes still missing; that was true for part of one day. **The device roll and the pairing
+rendezvous are deployed too**, which this file denied until 2026-09-28 on a probe that could not
+fail — [the runbook](docs/reference/hosted-relay-deploy.md)'s step 0 has one that can. **The last
+deploy was 2026-09-28, from `main` at `1512ea68`**, and carried the refresh-secret change (#541).
+The next deploy is an **update** with a D1 that holds real entitlements, not a
 first landing. **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
 real id now**, public on the same terms and verified live against Patreon's authorize endpoint.
 
@@ -235,7 +237,7 @@ number to compare against.
 | [image-cache.md](docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route |
 | [search-faceting.md](docs/reference/search-faceting.md) | The in-memory index, and why faceting fails open |
 | [search-syntax.md](docs/reference/search-syntax.md) | Scryfall query syntax in every card search box — the fourteen keywords and why `:` does not mean one thing, the day `a:` and `o:` stopped being tags, FTS against LIKE measured at 82× and 277×, `kw:` and the corpus rung behind it, why tag resolution is exact, and the one arm that fails closed among all the ones that fail open |
-| [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written |
+| [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written, and the minisign signature every update must carry — what the digest does not prove, the trusted comment that stops a replay, the compiled-in key and how to rotate it |
 | [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, the token resolver and its union keep rule |
 | [commander-brackets.md](docs/reference/commander-brackets.md) | The bracket table as it stands, why the estimate is a floor and never 5, what the four signals can and cannot see, Commander Spellbook's combo feed measured, corpus schema 2 and its two traps, and the card side's three statements, its four empty states and the `CROSS JOIN` worth 65 ms |
 | [external-links.md](docs/reference/external-links.md) | The `Open on …` ladder — the TCGplayer product ids Scryfall has always stored measured across the corpus, the two-word printing vocabulary verified in a browser, the decision table's six rows and why a link always names a printing, the finish floor that reads the printing's own column rather than defaulting flat, and why tcgcsv.com was measured and refused |
@@ -253,7 +255,7 @@ number to compare against.
 | [motion.md](docs/reference/motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** |
 | [storybook.md](docs/reference/storybook.md) | The workbench and its fake, in full |
 | [live-ui-verification.md](docs/reference/live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps |
-| [tauri-mcp-bridge.md](docs/reference/tauri-mcp-bridge.md) | The other way to drive the window — its four pieces, three permissions, and the one tool that cannot reach an app command |
+| [tauri-mcp-bridge.md](docs/reference/tauri-mcp-bridge.md) | The other way to drive the window — its five pieces, the environment variable that opens it, three permissions, and the one tool that cannot reach an app command |
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
 | [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
 | [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what is not deployed** |

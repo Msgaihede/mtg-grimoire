@@ -23,8 +23,9 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   `scripts/*.mjs`); frontend sources, `.storybook/**`, lockfiles, configs and `.nvmrc` →
   `frontend` and `storybook`; **`scripts/` because `eslint .` lints it** → `frontend` alone;
   `rust-toolchain.toml` and `.github/actions/rust-toolchain/` → the two Rust-side jobs;
-  `release.yml` and `scanner-bundle.yml` → `frontend`, because `scripts/toolchain.test.mjs`
-  reads every workflow; `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` and the router
+  `release.yml`, `scanner-bundle.yml` and `dependabot.yml` → `frontend`, because
+  `scripts/toolchain.test.mjs` and `scripts/actions-pinned.test.mjs` read them;
+  `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` and the router
   itself → every job, `powershell` included; prose and editor bookkeeping → neither; and **anything
   unrecognised → every build job**, `storybook` included. That last arm is the fail-safe that
   makes the lists safe to be wrong in the cheap direction — and it is load-bearing for
@@ -56,14 +57,26 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   `.ts`/`.tsx` and ESLint ignores the file — and the only compile of `preview.css`.
 - **Rust is pinned by `rust-toolchain.toml`, and no workflow installs its own** (2026-09-27).
   Every job, `release.yml` and `scanner-bundle.yml` use **`./.github/actions/rust-toolchain`**,
-  which reads the channel with `sed` and hands it to `dtolnay/rust-toolchain@master` — that
-  action does not read the file, and `@stable` beside it would install one toolchain and have
-  rustup fetch the pinned one, without the job's components, on the first `cargo`. **Moving the
-  pin is a deliberate commit**: a new stable's lints can no longer turn every PR red by
-  themselves.
+  which reads the channel with `sed` and hands it to `dtolnay/rust-toolchain` (SHA-pinned since
+  2026-09-28, below) — that action does not read the file, and `@stable` beside it would install
+  one toolchain and have rustup fetch the pinned one, without the job's components, on the first
+  `cargo`. **Moving the pin is a deliberate commit**: a new stable's lints can no longer turn
+  every PR red by themselves.
   **Node is pinned the same way** — every `setup-node` reads `node-version-file: .nvmrc`.
   **`scripts/toolchain.test.mjs` fences both**: it globs every workflow and fails on a direct
   `dtolnay/rust-toolchain`, a `rustup` install, or a `node-version:`.
+- **Every third-party `uses:` is a full commit SHA with its tag in a trailing comment —
+  `@<40 hex> # v7.0.1` — in all three workflows and the composite action, and never a tag or a
+  branch** (2026-09-28, issue #545). A tag is whatever its owner last pushed, and `release.yml`
+  ran `@v1`-style references beside a write token and a release in progress. The SHA is the one
+  the tag named that day (the peeled commit for an annotated tag), so behaviour did not move.
+  **`.github/dependabot.yml`** moves SHA and comment together, weekly, one grouped `ci:` PR, over
+  `/` **and `/.github/actions/*`** — Dependabot reads only the directories it is given. **Every
+  `actions/checkout` sets `persist-credentials: false`** (nothing after one runs `git` against
+  the remote; uploads are `gh`/tauri-action with the token handed in), and **no workflow grants a
+  write permission above `jobs:`** — `release.yml` and `scanner-bundle.yml` are `permissions: {}`
+  with a grant per job. **`scripts/actions-pinned.test.mjs` fences all of it**, plus the signing
+  secret's isolation below; a new workflow or composite action is globbed in the day it lands.
 - **The `powershell` job runs the repo's `.ps1` tests on `windows-latest`** — `lock.test.ps1`
   for the worktree locks and `pr-auto.test.ps1` for the auto-PR guard — and its arm in
   `ci-route.mjs` must stay **above** `src-tauri/*` and `scripts/*` — first-match-wins, and
@@ -110,7 +123,23 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
 
 - **It is one workflow on purpose.** A release created with `GITHUB_TOKEN` does not trigger
   `on: release` in another workflow — GitHub's recursion guard — so release-please, the build
-  matrix and the publish step are three jobs in one file, chained on `release_created`.
+  matrix, the signing step and the publish step are jobs in one file, chained on
+  `release_created`.
+- **The `sign` job minisign-signs the portable zip and the NSIS setup — the two files the in-app
+  updater installs, and refuses unsigned — and it must never move into the build job**
+  (2026-09-28). A build leg runs tauri-action, rust-cache and every npm and cargo build script in
+  the tree; any of them can read a secret in the same job, and a leaked signing key signs updates
+  for every install, from anywhere, for good. So `sign` is a pinned checkout, a pinned
+  setup-node and `scripts/update-signing.mjs` (`node:crypto`/`node:fs` only) — **no `npm ci`, no
+  third-party action, `UPDATE_SIGNING_KEY` on one step**. It downloads both files from the draft
+  under their uploaded, dotted names so `<asset>.minisig` is the name the updater asks for, and
+  signs each with the trusted comment `mtg-grimoire <version> <kind>`, which the updater requires
+  to match the release and install kind it is installing (the replay fence). **`publish` needs
+  it, so an unset secret leaves the release a draft** — fail-safe, never unsigned.
+  **One-time setup: the `UPDATE_SIGNING_KEY` repository secret**, and the matching public key in
+  `update::SIGNING_PUBLIC_KEY`; the order, and the rotation that takes effect a release late, are
+  [in-app-updates.md](../docs/reference/in-app-updates.md). Written 2026-09-28 and **not yet run
+  on GitHub** — `gh release download` of a draft by tag is the step nobody has measured.
 - **Versions are never typed by hand.** release-please reads the `feat:`/`fix:`/`!` prefixes and
   keeps a release PR open that bumps all five version files. `bump-minor-pre-major` is on, so
   while on `0.x` a `feat!:` bumps the **minor**; reaching 1.0 is a deliberate `Release-As: 1.0.0`
@@ -144,7 +173,9 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   asset on the dotted form, never on the local bundle name.
 - **Linux artifacts are built but unverified** — nobody has run a Linux build.
 - Not done, deliberately: no code signing (SmartScreen warns on the installers), and **not**
-  GitHub Packages — none of its registry types hosts a desktop installer.
+  GitHub Packages — none of its registry types hosts a desktop installer. **That is Authenticode,
+  and it is still not done**: the `sign` job's minisign signatures are read by the app's own
+  updater and by nothing in Windows, so they change nothing SmartScreen sees.
 
 ## `scanner-bundle.yml`
 

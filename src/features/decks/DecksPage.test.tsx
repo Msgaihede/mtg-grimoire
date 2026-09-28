@@ -60,7 +60,7 @@ const deckLastFormat = vi.hoisted(() => vi.fn());
 // missing answer.
 const importResolve = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
-const importReadFile = vi.hoisted(() => vi.fn());
+const importPickFile = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
 // The gallery warms the `art` crops its tiles draw. Fire-and-forget, so the stub only has to
 // resolve; what it is called with is asserted in its own test below.
@@ -92,7 +92,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     setDeckFolderPane,
     importResolve,
     deckImportCommit,
-    importReadFile,
+    importPickFile,
     syncStatus,
   },
 }));
@@ -402,7 +402,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 1 });
-  importReadFile.mockReset().mockResolvedValue("");
+  importPickFile.mockReset().mockResolvedValue(null);
   syncStatus.mockReset().mockResolvedValue(SYNCED);
   prefetchImages.mockClear();
   // A **copy** of `DEFAULT_SECTION_ZOOMS`, never the constant itself — a case that wrote through

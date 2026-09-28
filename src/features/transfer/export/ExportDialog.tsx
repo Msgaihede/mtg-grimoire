@@ -20,16 +20,16 @@
  * closed dialog — `open={false}` — mounts nothing: no format state, no memoized preview text.
  *
  * **Where the text ends up is `../files`'s question and no longer this file's.** `saveExport`
- * opens the OS save dialog and hands the path to `export_write_file`. This file passes one file
- * name and catches one refusal.
+ * is one command, `export_save_file`: Rust opens the OS save dialog and writes at the path it
+ * answered, so the path never reaches the page (issue #545). This file passes one suggested file
+ * name and the text, and catches one refusal.
  *
- * **The _native_ picker's own half is unverifiable**, for the reason the cover picker's was
+ * **The _native_ dialog's own half is unverifiable**, for the reason the cover picker's was
  * before it was removed (`src/features/transfer/CLAUDE.md`'s Import section says the same of the
- * open dialog):
- * `dialog:allow-save` opens a native window CDP cannot reach, and nothing in a test or a browser
- * can drive it either. So this file's tests cover **path → write**, not **click → path** — `save`
- * from `@tauri-apps/plugin-dialog` is mocked to answer a path directly, the same way
- * `DeckCoverPicker`'s and `ImportDialog`'s tests stub `open`.
+ * open dialog): the save dialog is a native window CDP cannot reach, and nothing in a test or a
+ * browser can drive it either. So this file's tests cover **press → the text and the name the
+ * backend is handed → what it answered**, not the dialog — `ipc.exportSaveFile` is mocked to
+ * answer directly, the same way `ImportDialog`'s tests stub `ipc.importPickFile`.
  *
  * **The preview is a disclosure and opens shut** (2026-08-18). A decklist is the tallest thing
  * this dialog draws and the least of what a reader came for — the two presses that do the work
@@ -41,15 +41,13 @@
  * the window and took the buttons off screen with it, which is `Dialog`'s scrim and is fixed
  * there for every dialog on the shell.
  *
- * **A cancelled save answers `null`, and that is the one bug worth naming in prose.** `save()`
- * resolves `null` on Cancel, and writing *that* string to disk — `ipc.exportWriteFile(path,
- * text)` called with `path` still `null` — is exactly the trap the deck cover's own callers
- * avoided before that command was removed. The guard is `saveExport`'s now rather than this
- * file's, which is the right
- * place for it: it sits beside the `save()` whose answer it is about, so no second caller of that
- * dialog can forget it. And a refused write is still reported rather than closing the dialog on
- * it: the reader's text is still on screen and still copyable, so the failure costs them nothing
- * they cannot immediately retry.
+ * **A cancelled save is not a failure, and the trap it used to set is gone with the path.** When
+ * the page opened the dialog, `save()` resolved `null` on Cancel and writing *that* string to disk
+ * was the bug a guard in `saveExport` existed to prevent. The dialog's answer never leaves Rust
+ * now, so Cancel is `export_save_file` answering `false` and there is nothing on this side to
+ * mis-handle. A refused write is still reported rather than closing the dialog on it: the
+ * reader's text is still on screen and still copyable, so the failure costs them nothing they
+ * cannot immediately retry.
  *
  * **What a format leaves out is said on screen before Copy is pressed, and it is deliberately not
  * a `role="alert"`.** Arena and MTGO have no maybeboard, so `formatExport` writes only the piles
@@ -427,9 +425,9 @@ function Body({
     setError(null);
     setSaving(true);
     try {
-      // `../files` is the seam: `dialog:allow-save` answers a *path* and `export_write_file`
-      // writes at it in Rust — and it is where the `null` a cancelled save dialog answers is
-      // caught before anything is written.
+      // `../files` is the seam: one command, and Rust opens the save dialog *and* writes at the
+      // path it answered, so no path reaches the page (issue #545). A cancel resolves `false`,
+      // and there is nothing to say about it — the text is still here.
       await saveExport(`${suggestedFileName}.${EXPORT_FORMAT_EXTENSION[format]}`, text);
     } catch (e) {
       // Reported, not fatal to the dialog: the reader's text is still on screen and still

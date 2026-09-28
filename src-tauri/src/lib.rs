@@ -9,6 +9,9 @@ pub mod activity;
 /// **The `app_meta` key–value store, carved out of [`update`].** Eleven modules keep view state
 /// in that one table and only `update` swaps an `.exe`.
 pub mod app_meta;
+/// **Which pages are this app's own, and the navigation guard that keeps every window on them.**
+/// One origin set, read by the guard and by [`camera`], so the two cannot disagree.
+pub mod app_origin;
 /// **Taking back one bulk collection or wishlist write** (issue #555) — the before/after images of
 /// exactly the rows it changed, held in memory for the session and put back only while nothing
 /// has touched them since.
@@ -75,6 +78,10 @@ pub mod decksort;
 pub mod errors;
 pub mod export;
 pub mod feed;
+/// **Every file dialog the app shows, opened from Rust** (issue #545) — so the path the reader
+/// chose goes to the read or the write without crossing IPC, and no command takes a path from
+/// the page. The rule for the next file command is in the module doc.
+pub mod file_dialog;
 pub mod filters;
 /// **[`markcolors`]'s shape with a document instead of a map.** One `app_meta` row, an
 /// infallible read that answers the default layout for anything it cannot parse, and a write
