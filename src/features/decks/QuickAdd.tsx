@@ -4,6 +4,7 @@ import { AnimatePresence } from "motion/react";
 import { ManaText } from "@/components/ManaText";
 import { PopupPanel } from "@/components/PopupListbox";
 import { DEBOUNCE_MS, searchTerms } from "@/features/search/useCardSearch";
+import { count } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -13,15 +14,44 @@ import { cn } from "@/lib/utils";
 /**
  * The most suggestions the dropdown offers at once.
  *
- * Five, and the ceiling is the *reader's* rather than the backend's: this is a field in a
+ * Ten, and the ceiling is the *reader's* rather than the backend's: this is a field in a
  * toolbar and the list is glanced at rather than read, so a list long enough to need a
  * scrollbar has already stopped being a shortcut. Browsing is what the docked search panel is
- * for, and this stays a shortcut over that wall rather than a second one.
+ * for, and this stays a shortcut over that wall rather than a second one. It was five until
+ * 2026-09-28, when the owner asked for ten in the same change that added the count of what the
+ * rows leave out (issue #648).
  *
  * It is also why there is no `scrollIntoView` effect here and there is one in `SetCombobox`:
- * five rows are all visible at once, so the highlight can never move out of the box.
+ * ten rows are all visible at once, so the highlight can never move out of the box. That is
+ * arithmetic rather than a measurement — a row is ~32px, so ten and the count line are ~350px,
+ * which fits below the field at the app's 1024×700 floor — and it is the number to re-check if
+ * this ever grows again.
+ *
+ * **What the ten leave out is said, and never offered** (issue #648): {@link moreMatches}
+ * words it under the rows. There is no press that loads an eleventh, because the answer to "not
+ * in these ten" is a longer name or the docked panel, and a list that grew on demand would be
+ * the wall this field is a shortcut over.
  */
-export const MAX_SUGGESTIONS = 5;
+export const MAX_SUGGESTIONS = 10;
+
+/**
+ * The line under the suggestions — `+23 more` — or `null` when the rows are every match.
+ *
+ * **It costs no request.** `search_cards` counts its matches on every call, the ten-row page
+ * included, so the number is read off the answer the rows came from; asking again for a count
+ * would be a second round trip per keystroke to learn a fact the first one already carried.
+ * Collapsed, `total` counts cards rather than printings, so it is the same unit as the rows.
+ *
+ * **A capped count keeps its `+`.** The backend stops counting at 5 000 and says so, so the
+ * remainder is a floor rather than a figure — `+4,990+ more`, the way `SearchPage` and the cover
+ * picker print `5,000+`. Dropping the second `+` would state a number the backend never
+ * counted, and it is the ordinary case rather than an edge: a first letter matches thousands.
+ */
+export function moreMatches(total: number, capped: boolean, shown: number): string | null {
+  const rest = total - shown;
+  if (rest <= 0) return null;
+  return `+${count(rest)}${capped ? "+" : ""} more`;
+}
 
 /**
  * Module scope, so that the id an option carries and the id `aria-activedescendant` points at
@@ -142,7 +172,7 @@ export function QuickAdd({
   // **No `marketplace`, in the request or in the key**, and that is a deliberate exception to
   // the app's rule that every price-bearing query carries it. These rows draw no price — a
   // name, a cost and a set code — so a currency switch has nothing to change about them, and
-  // putting the marketplace in the key would refetch five names for nothing every time one
+  // putting the marketplace in the key would refetch ten names for nothing every time one
   // happened. The request below is the *same* search the fallback makes, differing only in
   // `limit`, which is what keeps the top suggestion and the fallback's one hit the same card.
 
@@ -161,7 +191,7 @@ export function QuickAdd({
    *
    * `keepPreviousData` is what makes that second clause necessary: clearing the field changes
    * the query key to `""`, which is a key this query is `enabled: false` for — so it never
-   * fetches, never replaces the placeholder, and the last search's five rows would hang under
+   * fetches, never replaces the placeholder, and the last search's ten rows would hang under
    * an empty box for the rest of the session. Read off `text` rather than off `debouncedText`
    * so they go the moment the field does, instead of 300ms later.
    */
@@ -174,6 +204,15 @@ export function QuickAdd({
   const activeIndex = Math.min(active, Math.max(0, options.length - 1));
   /** What `aria-expanded` says, and the only state in which this layer owns the Escape key. */
   const listOpen = open && options.length > 0;
+  /**
+   * The matches the rows leave out, in words, off the **same** answer the rows are — so under
+   * `keepPreviousData` a stale page and its count stay one page rather than two.
+   */
+  const more =
+    options.length > 0 && suggestions.data
+      ? moreMatches(suggestions.data.total, suggestions.data.totalIsCapped, options.length)
+      : null;
+  const moreId = `${id}-more`;
 
   /**
    * The field as it stands **now**, for the one reader that is not a render: the lookup's
@@ -379,6 +418,11 @@ export function QuickAdd({
         // have to Tab into the answers to take one. Absent when there is nothing to point at —
         // a descendant id that resolves to no element announces nothing.
         aria-activedescendant={options.length > 0 ? optionId(id, activeIndex) : undefined}
+        // The count under the rows is a fact about the list, and the caret never enters the list
+        // — so it is described *here*, where a screen reader is, rather than left as text beside
+        // options it only ever hears one at a time. Gated like `aria-activedescendant`: an id
+        // naming no element describes nothing.
+        aria-describedby={listOpen && more !== null ? moreId : undefined}
         // The rows are the search's answer rather than a completion of what is being typed:
         // `list`, not `both`. Nothing is ever written into the field on the reader's behalf.
         aria-autocomplete="list"
@@ -423,7 +467,7 @@ export function QuickAdd({
               "origin-top-left",
             )}
           >
-            {/* No `max-height` and no scroller: {@link MAX_SUGGESTIONS} is five, which is
+            {/* No `max-height` and no scroller: {@link MAX_SUGGESTIONS} is ten, which is
                 shorter than any ceiling worth writing. */}
             <ul id={listboxId} role="listbox">
               {options.map((card, i) => (
@@ -467,6 +511,15 @@ export function QuickAdd({
                 </li>
               ))}
             </ul>
+            {/* Outside the listbox, which may own only options — and plain text rather than a
+                button, because nothing loads an eleventh row (see `MAX_SUGGESTIONS`). Indented to
+                the rows' own `px-2` so it reads under the names, and at the status line's size
+                so it reads as a caption on the list rather than as one more card. */}
+            {more !== null && (
+              <p id={moreId} className="px-2 pt-1 pb-0.5 text-[0.6875rem] text-dim tabular-nums">
+                {more}
+              </p>
+            )}
           </PopupPanel>
         )}
       </AnimatePresence>

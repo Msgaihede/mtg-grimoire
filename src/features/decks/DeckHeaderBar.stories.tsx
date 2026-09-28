@@ -109,14 +109,15 @@ const meta = {
      * the page, and without the gap the negative margin would pull the deck up by 12px. The width
      * is the editor column's at the two sizes the bar is drawn for — 1020 roomy, 760 tight, the
      * latter being the app's 1024px window floor — and the height leaves room under the bar for
-     * Quick add's five suggestions and its status chip.
+     * Quick add's ten suggestions, the count under them and its status chip — `h-[28rem]`, which
+     * was `h-80` and clipped the list once it went from five rows to ten (issue #648).
      *
      * The piles are stand-ins drawn in the app's own tokens, there so the panel's blur and shadow
      * have something to read against: the bar is always drawn *over* the deck, never over glass.
      */
     (Story, { args }) => (
       <div
-        className="relative flex h-80 flex-col gap-3 overflow-hidden bg-bg"
+        className="relative flex h-[28rem] flex-col gap-3 overflow-hidden bg-bg"
         style={{ width: args.tight ? 760 : 1020 }}
       >
         <Story />
