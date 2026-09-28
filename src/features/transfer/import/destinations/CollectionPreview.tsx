@@ -63,7 +63,7 @@ export const COLLECTION_MODES: readonly ImportModeOption[] = [
   {
     key: "set",
     label: "Set these quantities",
-    hint: "The file's number becomes how many you hold, copies filed in folders included.",
+    hint: "Replaces your quantities with the file's, including copies in folders.",
   },
 ];
 
@@ -178,7 +178,7 @@ export function CollectionPreview({
                 `htmlFor` alongside it keeps a click on the words opening the dropdown, the way it
                 used to focus the select. */}
             <label id="collection-import-condition-label" htmlFor="collection-import-condition">
-              Condition when the file doesn&apos;t say
+              Default condition
             </label>
             <Dropdown
               id="collection-import-condition"
@@ -193,7 +193,7 @@ export function CollectionPreview({
           <div className="flex items-center gap-2">
             {/* Same treatment as Condition above, and the same reason. */}
             <label id="collection-import-finish-label" htmlFor="collection-import-finish">
-              Finish when the file doesn&apos;t say
+              Default finish
             </label>
             <Dropdown
               id="collection-import-finish"
@@ -231,7 +231,7 @@ export function CollectionPreview({
         pending={commit.isPending}
         disabled={plan.items.length === 0}
         message={
-          commit.error === null ? "" : `Could not import the list — ${ipcError(commit.error)}`
+          commit.error === null ? "" : `Couldn't import the list — ${ipcError(commit.error)}`
         }
         failed={commit.error !== null}
         onBack={onBack}
@@ -261,19 +261,19 @@ function SetSummary({
   outcome: ImportCommitOutcome | undefined;
   error: unknown;
 }): JSX.Element {
-  if (cardCount === 0) return <p className="text-sm">Nothing in this file can be set.</p>;
+  if (cardCount === 0) return <p className="text-sm">Nothing in this file can be imported.</p>;
   if (error !== null) {
     return (
       <div className="space-y-1">
-        <p className="text-sm">Sets how many you hold of {cards(cardCount)}.</p>
+        <p className="text-sm">Updates quantities for {cards(cardCount)}.</p>
         <p className="text-xs text-dim">
-          What that would change could not be counted — {ipcError(error)}
+          Couldn&apos;t preview changes — {ipcError(error)}
         </p>
       </div>
     );
   }
   if (outcome === undefined) {
-    return <p className="text-sm">Counting what setting {cards(cardCount)} would change…</p>;
+    return <p className="text-sm">Previewing changes…</p>;
   }
   return (
     <div className="space-y-1">
@@ -294,13 +294,13 @@ function SetSummary({
  * turns on the sign rather than printing `-12 more`.
  */
 function setSentence(cardCount: number, outcome: ImportCommitOutcome): string {
-  const head = `Sets how many you hold of ${cards(cardCount)}`;
+  const head = `Updates quantities for ${cards(cardCount)}`;
   const parts = [
     outcome.added > 0 ? `${count(outcome.added)} new` : null,
     outcome.updated > 0 ? `${count(outcome.updated)} changed` : null,
     outcome.removed > 0 ? `${count(outcome.removed)} removed` : null,
   ].filter((part) => part !== null);
-  if (parts.length === 0) return `${head}: every number already matches, so nothing changes.`;
+  if (parts.length === 0) return `${head}: all quantities already match. Nothing to change.`;
   return `${head}: ${parts.join(", ")} — ${copiesClause(outcome.copies)}.`;
 }
 
@@ -318,9 +318,8 @@ function copiesClause(copies: number): string {
  */
 function leftInFoldersSentence(n: number): string {
   return (
-    `${count(n)} ${n === 1 ? "copy" : "copies"} filed in ${n === 1 ? "a folder" : "folders"} ` +
-    `${verb(n, "is", "are")} more than the file lists; ` +
-    `${verb(n, "it stays where it is", "they stay where they are")}.`
+    `${count(n)} ${n === 1 ? "copy" : "copies"} in ${n === 1 ? "a folder" : "folders"} ` +
+    `${verb(n, "exceeds", "exceed")} the file's count and will stay.`
   );
 }
 
@@ -366,7 +365,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
           conditions, so this has no wishlist equivalent. */}
       {plan.unknownConditions.length > 0 && (
         <ProblemList
-          caption={`${plural(plan.unknownConditions.length, "line")} named a condition this app does not recognise, and used the default instead`}
+          caption={`${plural(plan.unknownConditions.length, "line")} had an unknown condition, so the default was used`}
           lines={plan.unknownConditions.map(
             (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
           )}
@@ -377,7 +376,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
           so the line matched whichever printing it would have without the column. */}
       {plan.unknownLanguages.length > 0 && (
         <ProblemList
-          caption={`${plural(plan.unknownLanguages.length, "line")} named a language this app does not recognise, and ${verb(plan.unknownLanguages.length, "was", "were")} matched without it`}
+          caption={`${plural(plan.unknownLanguages.length, "line")} had an unknown language and ${verb(plan.unknownLanguages.length, "was", "were")} matched without it`}
           lines={plan.unknownLanguages.map(
             (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
           )}
@@ -389,7 +388,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
           gets that their Japanese copy is about to be recorded as English. */}
       {plan.languageMismatches.length > 0 && (
         <ProblemList
-          caption={`${plural(plan.languageMismatches.length, "line")} named a language this app's card data has no printing of, and will be added in the language it has`}
+          caption={`${plural(plan.languageMismatches.length, "line")} asked for a language with no printing, and will be added in an available language`}
           lines={plan.languageMismatches.map(
             (m) =>
               `line ${m.lineNumber} · ${m.name} — the file says ${languageName(m.said)}; added as ${languageName(m.used)}`,
@@ -402,7 +401,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
           and this is the only place the reader learns the cell was not empty. */}
       {plan.unreadablePrices.length > 0 && (
         <ProblemList
-          caption={`${plural(plan.unreadablePrices.length, "line")} had a purchase price this app could not read, and will be added without one`}
+          caption={`${plural(plan.unreadablePrices.length, "line")} had an unreadable purchase price, and will be added without one`}
           lines={plan.unreadablePrices.map(
             (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
           )}
@@ -411,7 +410,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
 
       {plan.unreadableTradelists.length > 0 && (
         <ProblemList
-          caption={`${plural(plan.unreadableTradelists.length, "line")} had a tradelist quantity that is not a whole number, and will be added without one`}
+          caption={`${plural(plan.unreadableTradelists.length, "line")} had an invalid tradelist quantity, and will be added without one`}
           lines={plan.unreadableTradelists.map(
             (u) => `line ${u.lineNumber} · ${u.name} — "${u.said}"`,
           )}
@@ -420,7 +419,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
 
       {plan.folded.length > 0 && (
         <ProblemList
-          caption={`${plural(plan.folded.length, "line")} named a copy an earlier line already named, and ${verb(plan.folded.length, "was", "were")} merged into it`}
+          caption={`${plural(plan.folded.length, "line")} duplicated an earlier line and ${verb(plan.folded.length, "was", "were")} merged into it`}
           lines={plan.folded.map((f) => `line ${f.lineNumber} → line ${f.into} · ${f.name}`)}
         />
       )}
@@ -430,7 +429,7 @@ function CollectionProblems({ plan }: { plan: CollectionPlan }): JSX.Element {
           the merged row's price is otherwise indistinguishable from one nobody disagreed with. */}
       {plan.droppedPrices.length > 0 && (
         <ProblemList
-          caption={`${plural(plan.droppedPrices.length, "merged line")} had a purchase price in a different currency from the copy it joined, and ${verb(plan.droppedPrices.length, "that price was", "those prices were")} left out`}
+          caption={`${plural(plan.droppedPrices.length, "merged line")} had a price in a different currency, and ${verb(plan.droppedPrices.length, "that price was", "those prices were")} dropped`}
           lines={plan.droppedPrices.map(
             (d) =>
               `line ${d.lineNumber} → line ${d.into} · ${d.name} — "${d.said}" ${inCurrency(d.currency)}, kept ${inCurrency(d.kept)}`,

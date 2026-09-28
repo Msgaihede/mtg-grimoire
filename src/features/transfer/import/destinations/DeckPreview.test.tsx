@@ -345,7 +345,7 @@ describe("Add cards to collection", () => {
    *  the box is in **copies**, so two Sol Rings are two of the three. */
   it("counts the copies, not the lines", () => {
     deckPreview();
-    expect(screen.getByText(/3 copies are added to what you have/)).toBeInTheDocument();
+    expect(screen.getByText(/3 copies will be added to your collection/)).toBeInTheDocument();
   });
 
   /** Nothing resolved is nothing to own, so the question is not asked — the way the tally and
@@ -396,7 +396,7 @@ describe("Add cards to collection", () => {
 
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     expect(onDone.mock.calls[0][0]).toBe(
-      "3 cards imported. The copies could not be added to your collection — " +
+      "3 cards imported. The copies couldn't be added to your collection — " +
         "The card database is busy finishing a sync.",
     );
   });
@@ -608,7 +608,7 @@ describe("where a live replace puts the copies", () => {
     preview("live");
 
     await userEvent.click(
-      await screen.findByLabelText("Replace — removes the 42 cards in Actual first"),
+      await screen.findByLabelText("Replace — remove the 42 cards in Actual first"),
     );
     expect(screen.getByText(PROMISE)).toBeInTheDocument();
   });
@@ -633,7 +633,7 @@ describe("where a live replace puts the copies", () => {
     preview("theory");
 
     await userEvent.click(
-      await screen.findByLabelText("Replace — removes the 42 cards in Theory first"),
+      await screen.findByLabelText("Replace — remove the 42 cards in Theory first"),
     );
     expect(screen.queryByText(PROMISE)).toBeNull();
   });
@@ -645,7 +645,7 @@ describe("where a live replace puts the copies", () => {
     preview("live");
 
     await userEvent.click(
-      await screen.findByLabelText("Replace — there is nothing in Actual to remove"),
+      await screen.findByLabelText("Replace — Actual is empty"),
     );
     expect(screen.queryByText(PROMISE)).toBeNull();
   });

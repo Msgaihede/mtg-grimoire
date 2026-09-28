@@ -101,7 +101,7 @@ export const TRANSFER_FIELDS: Record<TransferFieldId, TransferField> = {
    * CSV round trip lossless into a fresh install.
    */
   labelColor: {
-    label: "Label colour",
+    label: "Label color",
     csvHeader: "Label colour",
     read: (c) => c.labelColor ?? "",
   },

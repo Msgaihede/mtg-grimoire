@@ -1543,7 +1543,7 @@ describe("WishlistPage", () => {
     await user.click(await screen.findByRole("button", { name: "Export wishlist" }));
     const dialog = await screen.findByRole("dialog");
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Could not read the cards to export — The database is busy.",
+      "Couldn't load the cards to export — The database is busy.",
     );
 
     refuse = false;
@@ -4259,7 +4259,7 @@ describe("the folders", () => {
     expect(
       await screen.findByRole("checkbox", { name: "Export everything, ignoring the filters" }),
     ).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Close export" }));
+    await user.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Close" }));
 
     await user.click(openOf(ORDERED.id, "Ordered"));
     await screen.findByText("Rhystic Study");

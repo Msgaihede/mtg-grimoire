@@ -2528,7 +2528,7 @@ describe("CollectionPage", () => {
     // no equivalent of, and an `add`/`set` mode radio rather than `merge`/`replace`.
     expect(await screen.findByText(/will be added to your collection/)).toBeInTheDocument();
     expect(
-      within(dialog).getByRole("button", { name: "Condition when the file doesn't say" }),
+      within(dialog).getByRole("button", { name: "Default condition" }),
     ).toHaveTextContent("Not set");
 
     // Scoped to the dialog: the page's own trigger is still on screen behind it and shares the
@@ -2674,7 +2674,7 @@ describe("CollectionPage", () => {
     await user.click(await screen.findByRole("button", { name: "Export collection" }));
     const dialog = await screen.findByRole("dialog");
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Could not read the cards to export — The database is busy.",
+      "Couldn't load the cards to export — The database is busy.",
     );
 
     refuse = false;

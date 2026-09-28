@@ -251,7 +251,7 @@ export const IntoExistingDeck: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
 
     await expect(await canvas.findByLabelText(/^Merge/)).toBeChecked();
-    const replace = canvas.getByLabelText(/^Replace — removes the \d+ cards in Actual first/);
+    const replace = canvas.getByLabelText(/^Replace — remove the \d+ cards in Actual first/);
     await expect(replace).toBeInTheDocument();
 
     // Merge is the mode that clears nothing, so it promises nothing.
@@ -306,7 +306,7 @@ export const WithArchidektLabels: Story = {
     // Unticking is what the boxes are for, and the sentence above them counts what is left.
     await userEvent.click(keeper);
     await expect(keeper).not.toBeChecked();
-    await expect(canvas.getByText(/1 of them will be brought across\./)).toBeInTheDocument();
+    await expect(canvas.getByText(/1 will be imported\./)).toBeInTheDocument();
   },
 };
 
@@ -330,7 +330,7 @@ export const Refused: Story = {
 
     await waitFor(async () => {
       await expect(await canvas.findByRole("status")).toHaveTextContent(
-        "Could not import the list",
+        "Couldn't import the list",
       );
     });
     await expect(args.onImported).not.toHaveBeenCalled();
@@ -401,14 +401,14 @@ export const IntoCollection: Story = {
     // The trigger's accessible name is supplied by `labelledBy`, not a wrapping `<label>` — see
     // `CollectionPreview.tsx`'s own comment — so it is found by role rather than `getByLabelText`.
     await expect(
-      canvas.getByRole("button", { name: /Condition when the file doesn.t say/ }),
+      canvas.getByRole("button", { name: "Default condition" }),
     ).toBeInTheDocument();
     await expect(
-      canvas.getByRole("button", { name: /Finish when the file doesn.t say/ }),
+      canvas.getByRole("button", { name: "Default finish" }),
     ).toBeInTheDocument();
     // `add`/`set`, and `add` first — never `replace`, which belongs to the deck's own preview.
     await expect(canvas.getByRole("radio", { name: "Add these copies" })).toBeChecked();
-    await expect(canvas.queryByText(/^Replace/)).toBeNull();
+    await expect(canvas.queryByRole("radio", { name: /^Replace/ })).toBeNull();
     await expect(canvas.getByRole("button", { name: "Import" })).toBeEnabled();
   },
 };
@@ -433,10 +433,10 @@ export const IntoWishlist: Story = {
     // `labelledBy`, not a wrapping `<label>` — `WishlistPreview.tsx`'s own comment says why —
     // so the name is found by role rather than `getByLabelText`.
     await expect(
-      canvas.getByRole("button", { name: /Finish when the file doesn.t say/ }),
+      canvas.getByRole("button", { name: "Default finish" }),
     ).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: /Condition/ })).toBeNull();
-    await expect(canvas.getByRole("radio", { name: "Add these wishes" })).toBeChecked();
+    await expect(canvas.getByRole("radio", { name: "Add to wishlist quantities" })).toBeChecked();
     await expect(canvas.getByRole("button", { name: "Import" })).toBeEnabled();
   },
 };

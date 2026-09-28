@@ -28,8 +28,8 @@ and `ExportDialog` call it and know nothing about how a file is picked or writte
   on each — a picker that would not open, and a file that would not read. They used to be kept
   apart by making picking and reading two calls; they are one command now, so **the backend's
   rejection says which** ("The file picker could not be opened — …" against `import.rs`'s "That
-  file could not be opened — …" or its 1 MB refusal), and `ImportDialog` frames either as "Could
-  not read a decklist from a file — …", which is true of both. A frame naming one stage would put
+  file could not be opened — …" or its 1 MB refusal), and `ImportDialog` frames either as "Couldn't
+  read a decklist from a file — …", which is true of both. A frame naming one stage would put
   "that file is over 1 MB" behind a broken picker, or the reverse.
 - **The 1 MB cap is `import.rs`'s `MAX_IMPORT_BYTES`**, the same constant the paste path uses, so
   the two cannot disagree about how long a decklist may be.
@@ -293,10 +293,10 @@ Pathway` is one card and there are seven such names in the reference list alone,
   since #336 this press *is* that act. **It is under the radios rather than in the Replace
   label**, and the two reasons agree: a radio's accessible name is what the control *does*, so a
   second sentence on it makes the control announce a paragraph and turns every query for it into a
-  prefix match (the tests match `Replace — removes the N cards in <list> first` as a literal); and
+  prefix match (the tests match `Replace — remove the N cards in <list> first` as a literal); and
   where the copies go is a consequence of the mode being *chosen* rather than a description of the
   option, so it belongs after the choice. It stays inside the `fieldset`, because it is still part
-  of what `What this does to <list>` answers.
+  of what `How to import into <list>` answers.
 - **That note is drawn behind four conditions and none of them can be dropped** — `replace`,
   `live`, **not a virtual deck**, and a list that holds something. A merge removes nothing, so
   nothing is released; a theory list is a plan and has never held a copy; a **virtual** deck has
@@ -446,11 +446,10 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   surface answers rather than defaulting to `undefined` and drawing the box over a list with no
   piles in it.
 - **Two omission lines, two sentences, and they can never be on screen together.** The reader's
-  reads `6 cards in inactive categories are not written.` / `1 card in an inactive category is not
-  written.` — `inactive categories` because that is the box they just pressed. The format's still
-  reads `6 cards in switched-off piles are not written in this format.`, because under Arena and
-  MTGO there is no box, the pile is the only thing to name, and `in this format` is the true
-  ending there and not here. Both count **copies** rather than rows — six basic lands on one cut
+  reads `6 cards in inactive categories are left out.` / `1 card in an inactive category is left
+  out.` — `inactive categories` because that is the box they just pressed. The format's reads
+  `This format can't include inactive categories, so 6 cards are left out.`, because under Arena
+  and MTGO there is no box and the format is what to blame, which is true there and not here. Both count **copies** rather than rows — six basic lands on one cut
   row are six cards missing from the file — and both are ordinary `text-dim` lines rather than
   alerts, because nothing has failed. They are fenced on complementary halves of `dropsInactive`,
   so each is non-zero exactly where the other cannot be.

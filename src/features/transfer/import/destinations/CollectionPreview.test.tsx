@@ -78,7 +78,7 @@ function mount(csv: string) {
 const setRadio = () => screen.getByRole("radio", { name: "Set these quantities" });
 
 const CAPTION =
-  "1 line had a purchase price this app could not read, and will be added without one";
+  "1 line had an unreadable purchase price, and will be added without one";
 
 beforeEach(() => {
   collectionImportPreview.mockReset().mockResolvedValue(outcome());
@@ -131,7 +131,7 @@ describe("CollectionPreview under set", () => {
 
     expect(
       await screen.findByText(
-        "Sets how many you hold of 2 cards: 5 new, 20 changed, 2 removed — 12 more copies than now.",
+        "Updates quantities for 2 cards: 5 new, 20 changed, 2 removed — 12 more copies than now.",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/will be added/)).toBeNull();
@@ -155,11 +155,11 @@ describe("CollectionPreview under set", () => {
     await user.click(setRadio());
 
     expect(
-      await screen.findByText("Sets how many you hold of 1 card: 1 changed — 3 fewer copies than now."),
+      await screen.findByText("Updates quantities for 1 card: 1 changed — 3 fewer copies than now."),
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "7 copies filed in folders are more than the file lists; they stay where they are.",
+        "7 copies in folders exceed the file's count and will stay.",
       ),
     ).toBeInTheDocument();
   });
@@ -172,11 +172,11 @@ describe("CollectionPreview under set", () => {
 
     expect(
       await screen.findByText(
-        "Sets how many you hold of 1 card: every number already matches, so nothing changes.",
+        "Updates quantities for 1 card: all quantities already match. Nothing to change.",
       ),
     ).toBeInTheDocument();
     // Nothing is filed beyond the file's number, so there is nothing to say about folders.
-    expect(screen.queryByText(/more than the file lists/)).toBeNull();
+    expect(screen.queryByText(/exceeds? the file's count/)).toBeNull();
   });
 
   it("draws a neutral sentence while the dry run is counting", async () => {
@@ -186,7 +186,7 @@ describe("CollectionPreview under set", () => {
 
     await user.click(setRadio());
 
-    expect(screen.getByText("Counting what setting 1 card would change…")).toBeInTheDocument();
+    expect(screen.getByText("Previewing changes…")).toBeInTheDocument();
   });
 
   /** A refused count is a courtesy failing, not the import failing: the reader still presses
@@ -200,10 +200,10 @@ describe("CollectionPreview under set", () => {
 
     expect(
       await screen.findByText(
-        "What that would change could not be counted — The card database is busy finishing a sync.",
+        "Couldn't preview changes — The card database is busy finishing a sync.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText("Sets how many you hold of 1 card.")).toBeInTheDocument();
+    expect(screen.getByText("Updates quantities for 1 card.")).toBeInTheDocument();
 
     const importButton = screen.getByRole("button", { name: "Import" });
     expect(importButton).toBeEnabled();
@@ -217,7 +217,7 @@ describe("CollectionPreview under set", () => {
     mount("1 Sol Ring\n");
 
     expect(setRadio()).toHaveAccessibleDescription(
-      "The file's number becomes how many you hold, copies filed in folders included.",
+      "Replaces your quantities with the file's, including copies in folders.",
     );
   });
 });
@@ -228,7 +228,7 @@ describe("CollectionPreview's own warnings", () => {
 
     expect(
       screen.getByText(
-        "1 line named a language this app's card data has no printing of, and will be added in the language it has",
+        "1 line asked for a language with no printing, and will be added in an available language",
       ),
     ).toBeInTheDocument();
     expect(
@@ -236,7 +236,7 @@ describe("CollectionPreview's own warnings", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "1 line named a language this app does not recognise, and was matched without it",
+        "1 line had an unknown language and was matched without it",
       ),
     ).toBeInTheDocument();
     expect(screen.getByText(`line 3 · Sol Ring — "Klingon"`)).toBeInTheDocument();
@@ -247,7 +247,7 @@ describe("CollectionPreview's own warnings", () => {
 
     expect(
       screen.getByText(
-        "1 line named a copy an earlier line already named, and was merged into it",
+        "1 line duplicated an earlier line and was merged into it",
       ),
     ).toBeInTheDocument();
     expect(screen.getByText("line 4 → line 2 · Lightning Bolt")).toBeInTheDocument();
@@ -263,7 +263,7 @@ describe("CollectionPreview's own warnings", () => {
 
     expect(
       screen.getByText(
-        "1 merged line had a purchase price in a different currency from the copy it joined, and that price was left out",
+        "1 merged line had a price in a different currency, and that price was dropped",
       ),
     ).toBeInTheDocument();
     expect(
@@ -271,7 +271,7 @@ describe("CollectionPreview's own warnings", () => {
     ).toBeInTheDocument();
     expect(
       screen.getByText(
-        "1 line had a tradelist quantity that is not a whole number, and will be added without one",
+        "1 line had an invalid tradelist quantity, and will be added without one",
       ),
     ).toBeInTheDocument();
     expect(screen.getByText(`line 4 · Sol Ring — "2.5"`)).toBeInTheDocument();

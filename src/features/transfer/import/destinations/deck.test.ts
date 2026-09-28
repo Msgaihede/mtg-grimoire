@@ -310,7 +310,7 @@ Maybeboard
 
     expect(plan.parseIssues).toEqual(parsed.issues);
     expect(plan.parseIssues).toEqual([
-      { lineNumber: 2, raw: "0 Shock", reason: "A count of zero is not an import." },
+      { lineNumber: 2, raw: "0 Shock", reason: "Quantity can't be zero." },
     ]);
   });
 
