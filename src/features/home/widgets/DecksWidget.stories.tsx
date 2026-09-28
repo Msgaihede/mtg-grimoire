@@ -158,7 +158,7 @@ export const PinnedDecksGone: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "Decks" }));
     await expect(
-      await card.findByText("The decks pinned here are not in this collection any more."),
+      await card.findByText("The pinned decks are no longer in your collection."),
     ).toBeInTheDocument();
   },
 };
@@ -169,7 +169,7 @@ export const NothingPinned: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "Decks" }));
-    await expect(await card.findByText(/^No decks pinned yet/)).toBeInTheDocument();
+    await expect(await card.findByText(/^No pinned decks/)).toBeInTheDocument();
   },
 };
 
@@ -180,7 +180,7 @@ export const NoDecksYet: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "Decks" }));
     await expect(
-      await card.findByText("No decks yet — make one on the Decks page and it will show up here."),
+      await card.findByText("No decks found. Build a deck on the Decks page to see it here."),
     ).toBeInTheDocument();
   },
 };

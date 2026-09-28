@@ -371,7 +371,7 @@ export const NothingToPull: Story = {
     });
 
     await expect(canvas.getByText(/exact printing and finish/)).toHaveTextContent(
-      "never a copy another deck is already holding",
+      "Cards in other decks or not yet owned cannot be pulled.",
     );
     await expect(canvas.queryByRole("alert")).toBeNull();
   },

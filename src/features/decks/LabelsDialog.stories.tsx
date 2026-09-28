@@ -71,7 +71,7 @@ export const FirstOpen: Story = {
     // The panel's arrival, waited out once — everything under it is visible in the same tick,
     // which is why the rows below need no wait of their own. See {@link FRAME_WAIT}.
     await waitFor(
-      async () => await expect(await canvas.findByText(/Nothing in this list is labelled yet/)).toBeVisible(),
+      async () => await expect(await canvas.findByText(/No cards in this list are labelled yet/)).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
     await expect(await canvas.findByText("Cut candidate")).toBeVisible();
@@ -165,7 +165,7 @@ export const RemovingALabelFromTheDeck: Story = {
 
     // Nothing in this list wears it any more...
     await waitFor(async () => {
-      await expect(await canvas.findByText(/Nothing in this list is labelled yet/)).toBeVisible();
+      await expect(await canvas.findByText(/No cards in this list are labelled yet/)).toBeVisible();
     });
     // ...and the label is still the reader's, one section down, offering the app-wide delete.
     const moved = (await canvas.findByText("Cut candidate")).closest("li") as HTMLElement;

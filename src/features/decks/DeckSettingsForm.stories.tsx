@@ -10,6 +10,7 @@ import type { DeckCoverPickerProps } from "./DeckCoverPicker";
 import { DECK_KIND_HINT, deckKindPatch, type DeckKind } from "./deckKind";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
 import { DEFAULT_FORMAT } from "./FormatSelect";
+import { TOKEN_MODE_HINT } from "./TokenModeControl";
 import { useDeck } from "./useDeck";
 import { useDeckFolders } from "./useDeckFolders";
 import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
@@ -506,11 +507,7 @@ export const TokensAndEmblems: Story = {
       "true",
     );
     // The selected mode's sentence follows the press, under the control.
-    await expect(
-      canvas.getByText(
-        "No token pile in the deck's views. The Tokens & Emblems band under the deck still keeps every token.",
-      ),
-    ).toBeVisible();
+    await expect(canvas.getByText(TOKEN_MODE_HINT.hidden)).toBeVisible();
     // A press settles in one act, so nothing commits beside it.
     await expect(args.onCommit).not.toHaveBeenCalled();
   },
