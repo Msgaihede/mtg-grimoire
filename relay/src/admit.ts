@@ -141,7 +141,9 @@ export function admit(
  * `storedChars` is the object's running total rather than a `sum()` over the log, and `group.ts`
  * says why at the table. A group that meets this has a log the thirty-day tail or a slow device is
  * holding, and the refusal clears on its own as the tail passes and compaction deletes what every
- * device has acked — it is *not now* rather than *never*.
+ * device has acked — it is *not now* rather than *never* **because `group.ts`'s `push` compacts
+ * before it refuses**: a full group refuses every push, so no head moves and no ack would ever run
+ * a compaction otherwise.
  */
 export function admitToLog(storedChars: number, sealedChars: number): Refusal | null {
   if (storedChars + sealedChars <= MAX_GROUP_LOG_CHARS) return null;

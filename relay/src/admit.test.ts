@@ -158,7 +158,7 @@ describe("admitToLog", () => {
  * is a recorder: a refusal must leave it empty, and an admission must hand it the push's own text.
  *
  * The bearer gate is real, and so is the epoch's D1 read: `fakeD1` evaluates the `SELECT`, so a
- * group whose `group_epoch` is set is refused against it and one whose column is NULL is not.
+ * group with a key row is refused against its newest epoch and one with none is not.
  */
 const KEY = "test-signing-key";
 
@@ -200,6 +200,17 @@ async function push(env: Env, body: string): Promise<Response> {
   );
 }
 
+/** A `group_keys` row for `g1` at `epoch` — what `/rotate` and a claim's seed write. */
+function keyRow(tables: Tables, epoch: number): void {
+  tables.group_keys.push({
+    group_id: "g1",
+    epoch,
+    auth: "a".repeat(64),
+    keys: "{}",
+    created_at: 0,
+  });
+}
+
 /** A push stamped by the real clock, since the router reads `Date.now()` itself. */
 function live(over: Partial<Record<string, unknown>> = {}): string {
   return JSON.stringify(envelope({ hlcMs: Date.now(), ...over }));
@@ -221,7 +232,7 @@ describe("POST /push, at the Worker", () => {
 
   it("refuses an epoch behind or ahead of the group's without reaching the object", async () => {
     const { env, tables, reached } = relay();
-    tables.entitlements[0].group_epoch = 3;
+    keyRow(tables, 3);
 
     const behind = await push(env, live({ epoch: 2 }));
     const ahead = await push(env, live({ epoch: 4 }));
@@ -236,7 +247,20 @@ describe("POST /push, at the Worker", () => {
     expect(reached).toHaveLength(1);
   });
 
-  it("forwards any epoch for a group whose entitlement has none recorded", async () => {
+  it("reads the group's key rows, not the entitlement's mirror of them", async () => {
+    // The mirror follows `recordRotation`'s insert in a second statement. One that failed to
+    // follow must not refuse every push at the epoch the group has really moved to.
+    const { env, tables, reached } = relay();
+    keyRow(tables, 2);
+    keyRow(tables, 3);
+    tables.entitlements[0].group_epoch = 2;
+
+    expect((await push(env, live({ epoch: 3 }))).status).toBe(200);
+    expect((await push(env, live({ epoch: 2 }))).status).toBe(409);
+    expect(reached).toHaveLength(1);
+  });
+
+  it("forwards any epoch for a group with no key rows at all", async () => {
     const { env, reached } = relay();
 
     expect((await push(env, live({ epoch: 1e12 }))).status).toBe(200);

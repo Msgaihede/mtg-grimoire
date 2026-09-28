@@ -2409,14 +2409,17 @@ object's side in full, and *What is still owed* the three gaps it leaves.
 reason — none of these needs the object's state to refuse, so none should cost an object request.
 In order: a body past 1 504 096 characters, declared or read, is **413 `too_large`**; one that is
 not JSON or not an envelope is the object's old **400**, without a code; `sealed` past 1 500 000 is
-**413 `too_large`**; an epoch below the group's `group_epoch` — one D1 point read — is **409
+**413 `too_large`**; an epoch below the group's — its newest `group_keys` row, one D1 read, and
+not `entitlements.group_epoch`, whose mirror follows the rotation's insert in a second statement
+that could fail and would then refuse every push at the epoch the group has really reached — is **409
 `stale_epoch`**, and above it **422 `epoch_ahead`**; an `hlcMs` more than a day past the relay's
 clock is **422 `clock_ahead`**. The object keeps one check of its own: a log that this push would
-take past 128 MiB of `sealed` is **507 `quota`**. `stale_epoch` is what stops a removed device
+take past 128 MiB of `sealed` is **507 `quota`**, and it compacts before refusing — a full group
+moves no head and acks nothing, so no other path would ever compact it again. `stale_epoch` is what stops a removed device
 writing under the key it was removed from for the day its token outlives the rotation;
 `epoch_ahead` is what stops one envelope at `{ epoch: 1e12 }` freezing every peer's cursor on keys
-to an epoch that will never exist. A `group_epoch` of NULL — claimed before the column and never
-seeded or rotated since — skips both. Clients match on `code`, never on the sentence.
+to an epoch that will never exist. A group with no key rows — claimed before `group_keys` and
+never seeded or rotated since — skips both. Clients match on `code`, never on the sentence.
 
 **`/rotate` takes one epoch or two, and the refresh secret dies with its device's place in the
 group.** A join plans its own epoch plus one and a removal or a departure plus two, and a device

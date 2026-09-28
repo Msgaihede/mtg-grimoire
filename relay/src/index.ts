@@ -8,6 +8,7 @@ import {
   handleWebhook,
   reconcile,
 } from "./claim";
+import { groupEpoch } from "./groupauth";
 import { handlePair } from "./pair";
 import { required } from "./patreon";
 import { handleRendezvousGet, handleRendezvousPut, sweepRendezvous } from "./rendezvous";
@@ -151,20 +152,20 @@ function refuse(refusal: Refusal): Response {
 }
 
 /**
- * The epoch the group stands on, for `admit`: `entitlements.group_epoch`, one point read on the
- * `entitlements_group` unique index. It is the mirror `/token`'s group door already reads, moved
- * by `/rotate` and a claim's seed to the group's newest key row — and moved **before** `/rotate`
- * answers, so the rotating device cannot push at its new epoch ahead of this read seeing it.
+ * The epoch the group stands on, for `admit`: the newest `group_keys` row (`groupEpoch`, one read
+ * on `group_keys_by_group`). `/rotate` writes that row **before** it answers, so the rotating
+ * device cannot push at its new epoch ahead of this read seeing it.
  *
- * `null` for no row — a token outlives the binding it was minted for by up to a day — and for a
- * NULL column, a row claimed before the column existed that has never been seeded since. `admit`
- * skips the epoch check for both: there is nothing to compare against.
+ * **The key row and not `entitlements.group_epoch`**, although the mirror is one point read too.
+ * `recordRotation`'s insert *is* the rotation's acceptance, and the mirror follows in a second
+ * statement; a mirror that failed to follow would otherwise refuse every push at the epoch the
+ * group has really moved to (`epoch_ahead`), with nothing left that could move it.
+ *
+ * `null` for a group with no key rows — one claimed before `group_keys` existed and never seeded
+ * since. `admit` skips the epoch check then: there is nothing to compare against.
  */
 async function currentEpoch(env: Env, group: string): Promise<number | null> {
-  const row = await env.DB.prepare(`SELECT group_epoch FROM entitlements WHERE group_id = ?`)
-    .bind(group)
-    .first<{ group_epoch: number | null }>();
-  return row?.group_epoch ?? null;
+  return groupEpoch(env, group);
 }
 
 /**

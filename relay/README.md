@@ -345,14 +345,17 @@ object's state to be refused. In the order a push meets them, every refusal but 
 | 2 | the body's text is longer than that | `413 too_large` |
 | 3 | the body is not JSON, or not an envelope | `400 unreadable body` / `400 malformed envelope`, no code — the object's words, unchanged |
 | 4 | `sealed` is over `MAX_SEALED_CHARS` (1 500 000, `log.ts`) | `413 too_large` |
-| 5 | the envelope's epoch is below the group's `group_epoch` — one D1 point read on `entitlements_group` | `409 stale_epoch` |
+| 5 | the envelope's epoch is below the group's — its newest `group_keys` row, one read on `group_keys_by_group` | `409 stale_epoch` |
 | 6 | … or above it | `422 epoch_ahead` |
 | 7 | `hlcMs` is more than `MAX_CLOCK_AHEAD_MS` (a day) past the relay's clock; exactly a day is admitted | `422 clock_ahead` |
 
 Then the object: an envelope naming another group is the `409 group mismatch` below, and a log that
 this push would take past `MAX_GROUP_LOG_CHARS` (128 MiB of `sealed`) is **`507 quota`** — exactly
 at the cap is stored. The quota is the one refusal on the far side of the hop, because the log's
-size is the object's to know.
+size is the object's to know. **The object compacts before it refuses**: a full group refuses every
+push, so no device's head moves and no ack would ever run a compaction again — without that pass,
+rows aged past the thirty-day tail behind every ack would never be deleted and the group would stay
+full for good. The full scan is paid only by a push about to be refused.
 
 - **The sealed cap is the Durable Object's 2 MB row**, less headroom for the other six columns;
   `sealed` is base64url, one byte a character. It refuses no batch the app builds: a 512 KiB
@@ -363,8 +366,11 @@ size is the object's to know.
   its token outlives the rotation, and tells a device merely behind one to catch up. **`epoch_ahead`
   is the one that froze whole groups**: anyone holding a token could push `{epoch: 1e12}`, and
   every peer that pulled it held its cursor waiting for keys to an epoch that would never exist. A
-  `group_epoch` of NULL — a row claimed before the column, never seeded or rotated since — skips
-  both rather than refusing every push to the group.
+  group with no key rows — claimed before `group_keys`, never seeded or rotated since — skips both
+  rather than refusing every push to the group. **The epoch is read off `group_keys` and not off
+  `entitlements.group_epoch`**: `recordRotation`'s insert is the rotation's acceptance and the
+  mirror follows in a second statement, so a mirror that failed to follow would otherwise refuse
+  every push at the epoch the group has really reached.
 - **A day of clock is what an honest machine can be wrong by**: one that dual-boots Windows, which
   keeps the hardware clock in local time, and Linux, which keeps it in UTC, is off by its time
   zone's offset — up to fourteen hours. A clock a day fast wins every last-writer-wins comparison

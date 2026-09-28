@@ -241,10 +241,18 @@ export class Group implements DurableObject {
     // Durable Object request (`admit.ts`). The quota is the one check that needs this object's
     // own state. Nothing awaits between the read and the two writes, so no other request can
     // land in between and both be admitted against the same total.
-    const size = this.sql
-      .exec<{ chars: number }>(`SELECT chars FROM log_size WHERE id = 1`)
-      .one().chars;
-    const full = admitToLog(size, envelope.sealed.length);
+    const size = () =>
+      this.sql.exec<{ chars: number }>(`SELECT chars FROM log_size WHERE id = 1`).one().chars;
+    let full = admitToLog(size(), envelope.sealed.length);
+    // **Compact before refusing, and this is what makes the quota "not now" rather than "never".**
+    // Compaction otherwise runs only when an ack moves a cursor or a roster arrives — and a group
+    // at its cap refuses every push, so no device's head moves, no ack advances, and rows that
+    // aged past the thirty-day tail behind every device's ack would never be deleted: the group
+    // would stay full for good. A full scan, paid only by a push that is about to be refused.
+    if (full) {
+      this.compactNow();
+      full = admitToLog(size(), envelope.sealed.length);
+    }
     if (full) return json({ error: full.error, code: full.code }, full.status);
 
     const stored = this.sql
