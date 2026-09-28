@@ -2692,7 +2692,6 @@ describe("ipc argument names match the Rust command signatures", () => {
               quantity: 1,
               mustBeCommander: false,
               cardId: "printing-thassa",
-              imageUris: { display: "https://cards.scryfall.io/large/front/a/b/ab.jpg?1" },
               owned: 2,
             },
             {
@@ -2703,7 +2702,6 @@ describe("ipc argument names match the Rust command signatures", () => {
               // A piece the corpus has never synced: no printing to address, no picture, and
               // the feed's own spelling is the whole of what the row can draw.
               cardId: null,
-              imageUris: null,
               owned: 0,
             },
           ],
@@ -2773,7 +2771,6 @@ describe("ipc argument names match the Rust command signatures", () => {
     // The unsynced piece keeps its name and loses everything a printing would have given it.
     expect(consultation.cardId).toBeNull();
     expect(consultation.name).toBe("Demonic Consultation");
-    expect(consultation.imageUris).toBeNull();
 
     // A narrowed read: the size comes from a bucket and the owned box is on. Still no term, so
     // `search` has to travel as `null` here too rather than being dropped once something else is
@@ -4560,14 +4557,6 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   });
 
   /**
-   * The field this whole pin was added for, named on its own as well as counted above.
-   */
-  it("names the front face's image URLs on both sides", () => {
-    expect(rustFields(searchRs, "CardSummary")).toContain("image_uris");
-    expect(tsFields(ipcSource, "CardSummary")).toContain("imageUris");
-  });
-
-  /**
    * The request's side of the same rot, for the one field on it that changes what a *number*
    * means rather than which rows come back.
    *
@@ -4693,17 +4682,12 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   });
 
   /**
-   * **The other three card walls, pinned the same way.** `CardSummary` was the only DTO
-   * carrying `image_uris` until 2026-08-31, when `collection_list`, `wishlist_list` and
-   * `deck_get` grew it too.
+   * **The other three card walls, pinned the same way**, and the two other wide rows beside
+   * them — the deck gallery's `DeckRow` and the token pile's `DeckTokenRow`.
    *
-   * Nothing in jsdom can notice a missing picture, and nothing in the build type-checks this
-   * mirror against the crate, so the field name on both sides is the whole of the fence.
-   *
-   * **It is not only the walls, which is why the list below is longer than that paragraph.**
-   * Two more DTOs carry the field — for the deck gallery's cover, a folder card's strip of
-   * member art, the cover picker's preview and its choice tiles, and the theory diff's row
-   * thumbnails — and both are pinned here rather than trusted; see the rows themselves.
+   * Nothing in the build type-checks this mirror against the crate, so a field renamed or
+   * dropped on one side is `undefined` at the call site with no type error anywhere, and parity
+   * on both sides is the whole of the fence.
    */
   // Annotated rather than inferred: without the tuple type TypeScript widens each row to
   // `string[]` and the three arguments below lose their names.
@@ -4713,22 +4697,15 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // The one pair whose two names differ: the crate calls a deck's line `DeckCardRow` and
     // this file calls it `DeckCard`, so the mapping is spelled out rather than assumed.
     ["DeckCard", deckRs, "DeckCardRow"],
-    // **The two rows that are not card walls, added 2026-08-31 with the surfaces that needed
-    // them.** `DeckRow.image_uris` is the **cover printing's** picture,
-    // off the same `LEFT JOIN cards c ON c.id = d.cover_card_id` its `cover_artist` comes from,
-    // not the deck's own; `TheoryDiffRow.image_uris` is the row's printing.
     ["DeckRow", deckRs, "DeckRow"],
-    ["TheoryDiffRow", deckTheoryRs, "TheoryDiffRow"],
-    // **The first row here that is not about a picture**, and it earns its place on the same
-    // mechanism rather than the same symptom. Four of `DeckTokenRow`'s fields exist solely to
-    // tell two tokens apart — `power`, `toughness`, `colors`, `oracleText` — because a token's
-    // name does not identify it: 104 token/emblem names are shared by more than one `oracle_id`
-    // (debug corpus, 2026-09-07), and `Wurmcoil Engine` alone puts two tokens both called
-    // `Wurm 3/3` in one deck. A field dropped on either side of this mirror would not blank a
-    // tile the way a missing `image_uris` does; it would draw two tiles that look and announce
-    // the same, which is the collection wall's shipped bug again and which neither suite can
-    // see. `colors` typed as an array rather than the concatenated letters `cards.colors`
-    // actually stores would be caught here too, by name parity alone.
+    // Four of `DeckTokenRow`'s fields exist solely to tell two tokens apart — `power`,
+    // `toughness`, `colors`, `oracleText` — because a token's name does not identify it: 104
+    // token/emblem names are shared by more than one `oracle_id` (debug corpus, 2026-09-07), and
+    // `Wurmcoil Engine` alone puts two tokens both called `Wurm 3/3` in one deck. A field
+    // dropped on either side of this mirror would draw two tiles that look and announce the
+    // same, which is the collection wall's shipped bug again and which neither suite can see.
+    // `colors` typed as an array rather than the concatenated letters `cards.colors` actually
+    // stores would be caught here too, by name parity alone.
     ["DeckTokenRow", deckTokensRs, "DeckTokenRow"],
   ];
 
@@ -4737,14 +4714,6 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     (tsName, rustSource, rustName) => {
     const rust = rustFields(rustSource, rustName).map(camel);
     const ts = tsFields(ipcSource, tsName);
-
-    // **First, because it is the assertion this whole block exists for** — and because the
-    // sanity floor below reads as nonsense when it is the one that trips ("expected 10 to be
-    // greater than 10" is a missing field, not a parser fault). Named on its own as well as
-    // counted, since its absence is silent on both sides: `undefined` at the call site, a
-    // blank frame on screen, and no type error anywhere.
-    expect(rust, `\`${rustName}\` (Rust) has no \`image_uris\``).toContain("imageUris");
-    expect(ts, `\`${tsName}\` (ipc.ts) has no \`imageUris\``).toContain("imageUris");
 
     // Not `toEqual` on the raw arrays: the parsers are the thing under suspicion, so a pass
     // has to mean "both found fields", never "both found nothing".
@@ -4757,10 +4726,9 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
   /**
    * The same fence, for structs that are **not** card rows.
    *
-   * `mirrors` above asserts two things beyond field parity — that `image_uris` is present, and
-   * that more than ten fields parsed — and both are properties of a card-bearing row rather
-   * than of a mirror. `DecksCleared` is two fields and has no picture, so it needs the parity
-   * rule and neither of the others.
+   * `mirrors` above asserts one thing beyond field parity — that more than ten fields parsed —
+   * and that is a property of a wide row rather than of a mirror. `DecksCleared` is two fields,
+   * so it needs the parity rule and not the floor.
    *
    * **These three are here because one of them drifted unnoticed on 2026-08-31.** Rust dropped
    * `DecksCleared::covers` along with the custom deck cover; this file's mirror kept it, and
@@ -4779,41 +4747,32 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["DecksCleared", resetRs, "DecksCleared"],
     ["CacheCleared", resetRs, "CacheCleared"],
     // **Added with `locked` (2026-09-03), which is the field that showed why it was missing.**
-    // A folder row is small, unpictured and had been on neither list since folders shipped — so
-    // a boolean added to the Rust struct and forgotten here would be `undefined` on every
-    // folder, and `if (folder.locked)` takes the other branch for ever: no badge, no greyed
-    // Delete, and nothing red anywhere. That is `DecksCleared::covers`' failure exactly, in a
-    // field the reader presses a menu row to set.
+    // A folder row is small and had been on neither list since folders shipped — so a boolean
+    // added to the Rust struct and forgotten here would be `undefined` on every folder, and
+    // `if (folder.locked)` takes the other branch for ever: no badge, no greyed Delete, and
+    // nothing red anywhere. That is `DecksCleared::covers`' failure exactly, in a field the
+    // reader presses a menu row to set.
     ["CollectionFolder", collectionFoldersRs, "CollectionFolder"],
     // **The pull's four, added with the feature** (2026-09-03, issue #351). Three of them are
     // read-only shapes and the fourth is the only DTO in this file the app *sends*, which is
     // the one where a drift is loudest: `deck_pull_from_collection` is all-or-nothing, so a
     // renamed `Pick` field deserialises to a serde default and the batch is refused whole
     // rather than half-applied — a press that always fails, with nothing red anywhere.
-    //
-    // `PullRow` is on this list rather than on `mirrors` above even though it carries a
-    // picture, because that table's floor of ten fields is a property of a card *wall*'s row
-    // and this one has nine. The picture is asserted on its own instead, below.
     ["DeckPullRow", deckPullRs, "PullRow"],
     ["DeckPullCandidate", deckPullRs, "PullCandidate"],
     ["DeckPullPick", deckPullRs, "Pick"],
     ["DeckPullOutcome", deckPullRs, "PullOutcome"],
     // **The quick add's two, added with the feature** (2026-09-03, issue #350). Both are
-    // read-only shapes with no picture, and both are exactly the kind of small unpictured row
-    // `CollectionFolder` above is on this list for: `QuickAddOutcome`'s three numbers are all
-    // counts a sentence quotes, so a renamed one arrives as `undefined`, prints as `0` through
-    // the audit's own defensive readers, and reads as a press that recorded nothing — with
-    // nothing red anywhere, because a press that *did* record nothing is a legitimate answer.
+    // read-only shapes, and both are exactly the kind of small row `CollectionFolder` above is
+    // on this list for: `QuickAddOutcome`'s three numbers are all counts a sentence quotes, so a
+    // renamed one arrives as `undefined`, prints as `0` through the audit's own defensive
+    // readers, and reads as a press that recorded nothing — with nothing red anywhere, because a
+    // press that *did* record nothing is a legitimate answer.
     ["DeckQuickAddWish", deckQuickAddRs, "QuickAddWish"],
     ["DeckQuickAddOutcome", deckQuickAddRs, "QuickAddOutcome"],
     // **The deck-wide add's three, added with the feature** (2026-09-08) — one row per struct,
     // which is two commands' worth: `deck_missing_plan` answers `MissingRow[]` and
     // `deck_missing_to_collection` takes `MissingPick[]` and answers a `MissingOutcome`.
-    //
-    // `MissingRow` is on this list and not on `mirrors` above for `PullRow`'s reason exactly: it
-    // carries a picture, but it is nine fields against that table's floor of ten, and the floor
-    // is a property of a card *wall*'s row rather than of a mirror. The picture is asserted on
-    // its own below, beside the pull row's.
     //
     // `MissingPick` is the one the app **sends**, where a drift is loudest —
     // `WishOptimizeApplyItem`'s lesson below and `deck_pull_from_collection`'s above: the write
@@ -4832,8 +4791,8 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["DeckMissingOutcome", deckMissingRs, "MissingOutcome"],
     // **The cheapest-printing sweep's six, added with the feature** (2026-09-03, issue #352).
     // They are here rather than on `mirrors` above for `DecksCleared`'s reason and not for a new
-    // one: none is a card wall's row, none carries a picture, and the smallest of them is two
-    // fields — so the parity rule is the only one of that table's three they can pass.
+    // one: none is a card wall's row, and the smallest of them is two fields — so the parity
+    // rule is the only one of that table's two they can pass.
     //
     // The list is longer than the feature looks because a plan is **nested**: `OptimizePrinting`
     // is not sent or received on its own, it is the `from` and the `to` of every move, and a
@@ -4864,12 +4823,9 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     //
     // **`BracketCardRow` is on this list and not on `mirrors` above, and it is the closest call
     // either table has had.** It is card-shaped — a name, oracle text, the faces blob — so the
-    // obvious reading is that the card table is where it goes. It is not: that table's two extra
-    // rules are properties of a card *wall's* row rather than of a card, and this row satisfies
-    // neither. It carries no `image_uris`, because the bracket estimate draws no picture and a
-    // gallery-wide read that shipped one would be carrying an art URL per card of every deck for
-    // a number in a caption; and it is five fields against a floor of ten, which is the same
-    // fact said twice — it is `estimateBracket`'s input and nothing else.
+    // obvious reading is that the card table is where it goes. It is not: that table's floor is a
+    // property of a card *wall's* row rather than of a card, and this row is five fields against
+    // it — it is `estimateBracket`'s input and nothing else.
     //
     // What a drift here costs is worth stating because none of it is loud. A renamed
     // `game_changer` reads `undefined`, `=== true` takes the other branch, and every deck in the
@@ -4888,11 +4844,6 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // holds `ComboPiece`s, and the page also holds a list of `ComboCountBucket`s. A field
     // renamed at any level below the top leaves the outer struct agreeing field for field while
     // everything inside it arrives `undefined`, so each level is named.
-    //
-    // `ComboPiece` is on this list and not on `mirrors` above for `PullRow`'s and `MissingRow`'s
-    // reason exactly: it carries a picture, but it is seven fields against that table's floor of
-    // ten, and the floor is a property of a card *wall's* row rather than of a mirror. The
-    // picture is asserted on its own below, beside theirs.
     //
     // What a drift costs here is quiet in the way this table exists for. A renamed `owned` reads
     // `undefined` and prints as though the reader owns none of a card they have four of. A
@@ -4919,9 +4870,8 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // silently stopped working.
     ["DeckFolderPane", deckpaneRs, "DeckFolderPane"],
     // **The share list's two, added with the feature** (2026-09-08). `ShareRow` is here rather
-    // than on `mirrors` above for `PullRow`'s reason: it draws no picture and is nine fields
-    // against that table's floor of ten, and both of those rules are properties of a card
-    // *wall's* row rather than of a mirror.
+    // than on `mirrors` above because it is nine fields against that table's floor of ten, and
+    // the floor is a property of a card *wall's* row rather than of a mirror.
     //
     // What a drift costs is the quiet kind this table exists for, and every one of the four is a
     // page that still draws. A renamed `state` reads `undefined`, the *Lapsed* row never draws,
@@ -4968,20 +4918,19 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // `serde_json::to_value` and so reads the real wire names. Worth knowing before trusting this
     // table with a struct whose rename is the only thing standing between two spellings.
     //
-    // On this table rather than on `mirrors` above for `ShareRow`'s reason, twice over: it draws
-    // no picture, and it is **two** fields against that table's floor of ten. Both of those are
-    // properties of a card wall's row rather than of a mirror. Two fields are also the whole of
-    // what needs comparing — both are `Option<i64>` → `number | null`, so there is no nested
-    // struct to walk and no enum to keep in step — and the `camel` step this table applies is
-    // load-bearing, because the struct does carry `rename_all = "camelCase"`.
+    // On this table rather than on `mirrors` above for `ShareRow`'s reason: it is **two** fields
+    // against that table's floor of ten. Two fields are also the whole of what needs comparing —
+    // both are `Option<i64>` → `number | null`, so there is no nested struct to walk and no enum
+    // to keep in step — and the `camel` step this table applies is load-bearing, because the
+    // struct does carry `rename_all = "camelCase"`.
     //
     // The command **name** and its `id` argument are pinned separately, in *"asks for a
     // printing's TCGplayer product ids under `id`"* above: this row compares struct fields and
     // would say nothing about either.
     ["TcgplayerIds", cardRs, "TcgplayerIds"],
-    // **The home page's six, added with the feature** (2026-09-10). None is a card wall's row and
-    // none carries a picture, so they are here rather than on `mirrors` above for `DecksCleared`'s
-    // reason — and the smallest of them, `HomeLayout`, is two fields.
+    // **The home page's six, added with the feature** (2026-09-10). None is a card wall's row, so
+    // they are here rather than on `mirrors` above for `DecksCleared`'s reason — and the smallest
+    // of them, `HomeLayout`, is two fields.
     //
     // Every one of them is a **figure** rather than a control, which is the flavour of drift this
     // table is worst at being noticed without. A renamed `unpriced` on either summary reads
@@ -5074,8 +5023,8 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // **Round two's three** (2026-09-26): `DeckCompletion` from `deck_completion.rs`, and
     // `UpcomingSet` nested inside `UpcomingSets` from `upcoming_sets.rs` — two rows for that one
     // command for `PriceMovers`' reason, since a field renamed inside a set leaves the outer struct
-    // agreeing while every row reads `undefined`. Here and not on `mirrors`: no picture, and none
-    // reaches ten fields.
+    // agreeing while every row reads `undefined`. Here and not on `mirrors`: none reaches ten
+    // fields.
     //
     // Every drift is the quiet kind. A renamed `missingCost` is `undefined`, which is not `null`,
     // so a deck's cost draws `NaN` where an em dash belongs; a renamed `wanted` makes every ratio
@@ -5106,17 +5055,10 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // chip and the deck's per-card marks, so a field renamed one level down leaves `DeckNoteRow`
     // agreeing field for field while every card the note names arrives `undefined`.
     //
-    // **On this table and not on `mirrors` above, and since 2026-09-20 the _field floor_ is the
-    // whole of why.** `mirrors` asserts two things beyond field parity — `imageUris` present on
-    // both sides, and more than ten fields parsed — and this comment used to rest on the first:
-    // *neither draws a picture, and a row carrying an art URL per attachment would be paying for
-    // a wall nobody renders*. **That stopped being true when `DeckNoteCard` grew `cardId` and
-    // `imageUris`**, which is exactly that art URL per attachment: a note card draws a
-    // representative printing now, so the picture assertion is one these rows would **pass**.
-    // What still keeps all three here is the count — `DeckNoteRow` 8, `CardNoteRow` 5,
-    // `DeckNoteCard` 4 — against a floor of ten that is a property of a card *wall's* row rather
-    // than of a mirror. So: **a later rung that takes one of these past ten fields is a row that
-    // should move up to `mirrors`**, and for `DeckNoteCard` nothing else is in the way.
+    // **On this table and not on `mirrors` above because of the field floor**: `DeckNoteRow` 8,
+    // `CardNoteRow` 5, `DeckNoteCard` 3, against a floor of ten that is a property of a card
+    // *wall's* row rather than of a mirror. So **a later rung that takes one of these past ten
+    // fields is a row that should move up to `mirrors`**.
     //
     // **`DeckNote`/`DeckNoteRow` and `CardNote`/`CardNoteRow` are the two spellings that differ**,
     // `DeckCard`/`DeckCardRow`'s precedent, so both pairs are written out rather than assumed.
@@ -5146,7 +5088,7 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // **The scanner's three stored rows** (2026-09-15) — the only camelCase structs in
     // `scanner.rs`, because they are this app's `app_meta` rows rather than the detector's JSON,
     // so they are here and not on `snakeMirrors` below. Here rather than on `mirrors` for
-    // `HomeLayout`'s reason: no picture, and none reaches ten fields.
+    // `HomeLayout`'s reason: none reaches ten fields.
     //
     // The app **sends** all three as well as reading them, which is where a drift is quietest: all
     // three structs are `#[serde(default)]`, so a renamed `folderId` is not a refusal, it is
@@ -5165,9 +5107,9 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // every filter in the app, and until this row they drifted in silence like everything else
     // off these lists.
     //
-    // Here rather than on `mirrors` above for `DecksCleared`'s reason: none is a card row and
-    // none carries a picture. Two of them do clear that table's floor of ten fields, which is
-    // the point at which the floor stops being the reason and the picture is the whole of it.
+    // Here rather than on `mirrors` above for `DecksCleared`'s reason: none is a card row. Two of
+    // them do clear that table's floor of ten fields, so either table would hold them, and the
+    // parity check is the same on both.
     //
     // **Two of the three are structs the app _sends_, which is where a drift is loudest** —
     // `WishOptimizeApplyItem`'s lesson above, and quieter here than at any of its other sites,
@@ -5209,10 +5151,13 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // had never fenced by name, standing on the `sync:applied` payload literal above instead.
     // That literal catches a rename in an *event*, and says nothing about a field renamed or
     // dropped on the command answers this same shape rides on, `sync_relay_status` and
-    // `sync_now`. Here rather than on `mirrors` above for `DecksCleared`'s reason: neither draws
-    // a picture and neither reaches ten fields.
+    // `sync_now`. Here rather than on `mirrors` above for `DecksCleared`'s reason: neither
+    // reaches ten fields.
     ["RelayStatus", syncCommandsRs, "RelayStatus"],
     ["RelayOutcome", syncClientRs, "RelayOutcome"],
+    // The theory diff's row: ten fields when its picture left it, one short of `mirrors`' floor,
+    // and eleven with `isToken` — kept here, since a Compare line is no card wall either way.
+    ["TheoryDiffRow", deckTheoryRs, "TheoryDiffRow"],
   ];
 
   it.each(plainMirrors)(
@@ -5356,67 +5301,6 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     expect([...ts].sort()).toEqual([...own].sort());
   });
 
-  /**
-   * `PullRow`'s picture, named on its own — the assertion `mirrors` makes for the four card
-   * walls, owed here for their reason and made separately because that table's other two rules
-   * are properties of a wall's row rather than of a mirror.
-   *
-   * The pull dialog draws an art crop per row, and the failure a missing `image_uris` produces
-   * is the silent one this whole block exists for: `undefined` at the call site, a bare frame on
-   * screen, and no type error anywhere — because the field is optional on the TypeScript side,
-   * as every `imageUris` in this file is. jsdom has no network and cannot notice a picture that
-   * never arrives, so the field name agreeing on both sides is the whole of the fence.
-   *
-   * It costs the crate nothing to carry: `deck_pull` clones the value off the `DeckCardRow`s the
-   * plan is already built from, rather than running a second `front_face_selects` query.
-   */
-  it("names the front face's image URLs on both sides of the pull row", () => {
-    expect(rustFields(deckPullRs, "PullRow"), "`PullRow` (Rust) has no `image_uris`").toContain(
-      "image_uris",
-    );
-    expect(
-      tsFields(ipcSource, "DeckPullRow"),
-      "`DeckPullRow` (ipc.ts) has no `imageUris`",
-    ).toContain("imageUris");
-  });
-
-  /**
-   * `MissingRow`'s picture, for the reason one test up and not a new one: the add dialog draws an
-   * art crop per row exactly as the pull's does, the row is nine fields and so sits on
-   * `plainMirrors`, and that table asserts parity alone. Two rows now share this shape, which is
-   * the sign that the argument belongs to the *dialog* rather than to either feature — a third
-   * deck-boundary read that draws art owes this assertion too.
-   */
-  it("names the front face's image URLs on both sides of the add row", () => {
-    expect(
-      rustFields(deckMissingRs, "MissingRow"),
-      "`MissingRow` (Rust) has no `image_uris`",
-    ).toContain("image_uris");
-    expect(
-      tsFields(ipcSource, "DeckMissingRow"),
-      "`DeckMissingRow` (ipc.ts) has no `imageUris`",
-    ).toContain("imageUris");
-  });
-
-  /**
-   * A combo piece's picture, for the two above's reason and with one difference worth naming:
-   * this is not a deck-boundary read at all. It is the *card* side — every combo that names one
-   * card, most of whose pieces the reader owns nothing of — so the paragraph those two share
-   * generalises one step further than it was written. What owes this assertion is any row that
-   * **draws a card and is not on `mirrors`**, whatever it is a boundary of.
-   *
-   * The parity row above cannot make it: parity catches a field renamed on *one* side, and both
-   * sides dropping the picture together is a green table and a dialog of named, artless frames.
-   */
-  it("names the front face's image URLs on both sides of the combo piece", () => {
-    expect(
-      rustFields(combosRs, "ComboPiece"),
-      "`ComboPiece` (Rust) has no `image_uris`",
-    ).toContain("image_uris");
-    expect(tsFields(ipcSource, "ComboPiece"), "`ComboPiece` (ipc.ts) has no `imageUris`").toContain(
-      "imageUris",
-    );
-  });
 });
 
 /**

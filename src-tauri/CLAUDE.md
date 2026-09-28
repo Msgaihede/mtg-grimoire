@@ -1949,7 +1949,15 @@ Full detail, with the measurements and the traps behind each rule, is in
   2026-09-07.** Through the day before it matched on oracle id alone and ignored finish (and
   condition and language) entirely, so a foil deck row was answered by whatever copies of that
   card the group held, foil or not. `owned_by_printing` matches `(card_id, finish)` now, so a
-  foil row wants a foil copy specifically — condition and language are still ignored.
+  foil row wants a foil copy specifically — condition and language are still ignored. **And since
+  2026-09-27 each side's finish is the one the row _plays_** (issue #563's follow-up):
+  `deck::entry_finish` reads a deck row's NULL, and a collection row's `nonfoil`, as the printing's
+  `deck::sole_finish` where it is sold in only one finish (13 548 foil-only, 892 etched-only), so
+  an unsaid row of a foil-only printing owns, claims, releases and records **foil** copies. Every
+  owned/missing read and every deck write that creates or moves a copy goes through that one
+  function — `deck::played_finish`, which `deck_theory` shares, is its deck-spelling half. Why the
+  collection half too, and the whole list of sites, is in
+  [decks-storage.md](../docs/reference/decks-storage.md).
 - **The variant picks the _pool_ the owned numbers are attributed from, and `deck::get_deck` is
   the one line that decides it** (2026-09-09,
   [issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). A `live` row is answered by
@@ -2075,8 +2083,8 @@ Full detail, with the measurements and the traps behind each rule, is in
     `deck_theory::theory_slots` and `theory_diff` get none either — a virtual deck's
     `theory_enabled` is `0` by construction, so they are already unreachable for one.
   - **The column rides everything a deck-level column rides, and one of those is not optional.**
-    `DeckInput`, `DeckPatch`, `DeckRow`, `DeckBefore`, `DECK_SELECT` (**last** in the named list,
-    with `IMAGE_COL` moved along behind it — read both off `deck_row`, never off this page),
+    `DeckInput`, `DeckPatch`, `DeckRow`, `DeckBefore`, `DECK_SELECT` (**last** in the named list
+    when it landed — read its index off `deck_row`, never off this page),
     `deck_undo::DECK_FIELDS` — **beside `theory_enabled` and never without it**,
     or a Ctrl+Z could put a deck's plan back while leaving it virtual, which is `1/1` — and
     `duplicate_deck`'s INSERT, where its `DEFAULT 0` runs the failure the *other* way from the
@@ -2154,7 +2162,8 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   checks it against `format_specs` not at all: which format a *dialog* starts on is a display
   decision, and TypeScript's `newDeckFormat` is where the fallback to Commander lives.
 - **A `live` row's owned/missing is `sum(quantity)` over the deck's own group, matched by
-  `(card_id, finish)` since 2026-09-07, and there is no allocator** (schema v25). **A `theory`
+  `(card_id, finish)` since 2026-09-07 — each side's finish the one it plays,
+  `deck::entry_finish`, since 2026-09-27 — and there is no allocator** (schema v25). **A `theory`
   row's comes out of the wider pool instead** — see the deck bullet above, and read every
   sentence below as being about the live list. `deck::owned_by_printing` joins
   `collection_entries` to `collection_folders` on `f.deck_id = ?1` and groups by `e.card_id,
@@ -2432,24 +2441,21 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
 
   `decks.tokens_open` is the panel's disclosure, on the `decks` capture `Spec` beside
   `separate_x_group`, the last **named** column of `DECK_SELECT` when it landed for `deck_row`'s
-  positional reason — which moved its `IMAGE_COL` from 21 to 22 — and on no history row and no
-  `deck_undo::DECK_FIELDS`. **It is not the last named column any more** (user schema v51's
-  `token_rail_index` is, at 29, with `deck_row`'s `IMAGE_COL` at 30 — and v52's `token_mode` took
-  `token_stack`'s slot at 27 and its `?21` hole in `update_deck`, so it moved neither), and it is
-  not the only disclosure either: read both numbers off `deck_row` and never off this page.
-  **`deck_tokens.rs` has offsets of its own and they are a different list** — `printing_from`'s
-  `IMAGE_COL` counts `PRINTING_COLUMNS` and `picked_printing`'s counts that function's own
-  `SELECT`, so neither moves with a `decks` rung and neither is `deck_row`'s.
+  positional reason, and on no history row and no `deck_undo::DECK_FIELDS`. **It is not the last
+  named column any more** (user schema v51's `token_rail_index` is, at 29 — and v52's `token_mode`
+  took `token_stack`'s slot at 27 and its `?21` hole in `update_deck`, so it moved nothing), and it
+  is not the only disclosure either: read the numbers off `deck_row` and never off this page.
   ⚠️ **v43 is why this page insists on that**, and it is the sharpest case the ladder has produced:
   the rung removed `decks.notes` at column 12 *and* appended `notes_open`, so fourteen reads in
-  `deck_row` and nine in the before-image mapper each shifted down by one — and `IMAGE_COL` came
-  out at **27 both before and after**, because the two edits cancel at the end of the row and
-  nowhere in the middle of it. The one number a reader would check to decide whether the read had
-  moved is the one number that did not. The commands (the read and five writes since v52, which
-  retired `deck_token_set`, `deck_token_clear` and `deck_token_add`; since v55 the read, four
-  writes and `token_printings`, which retired `deck_token_state` and `deck_token_reset` and added
-  `deck_token_remove`), the tie-break, the sync registrations, the reconcile, `retire_hidden` and
-  every measurement: [decks-storage.md](../docs/reference/decks-storage.md).
+  `deck_row` and nine in the before-image mapper each shifted down by one — and `IMAGE_COL`, the
+  image tail's offset until 2026-09-27, came out at **27 both before and after**, because the two
+  edits cancel at the end of the row and nowhere in the middle of it. The one number a reader would
+  check to decide whether the read had moved is the one number that did not. The commands (the
+  read and five writes since v52, which retired `deck_token_set`, `deck_token_clear` and
+  `deck_token_add`; since v55 the read, four writes and `token_printings`, which retired
+  `deck_token_state` and `deck_token_reset` and added `deck_token_remove`), the tie-break, the
+  sync registrations, the reconcile, `retire_hidden` and every measurement:
+  [decks-storage.md](../docs/reference/decks-storage.md).
 
 ## Sharing a collection (`share/`)
 

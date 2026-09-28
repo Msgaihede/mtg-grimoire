@@ -63,12 +63,50 @@ function compose(S: any, key: string) {
   }, render);
 }
 
+/**
+ * The DOM half of a story's `play`, run against the stage once the dialog has taken focus.
+ *
+ * Added 2026-09-27 for `Flanked`, whose play ends on three `userEvent.tab()`s — ✕, then the
+ * previous flank, then the next — so storybook photographs the **Next** flank wearing the keyboard
+ * ring. A preview runs no play. Only the end state matters: a `keydown` Tab (what
+ * `installKeyboardModality`, mounted by `GrimoirePreviewProvider`, reads to set `html[data-kbd]`)
+ * and then focus on that flank. Waited for, not fired from the first effect: `Dialog` focuses its
+ * own panel as it opens, and a flank focused before that would simply lose the caret to it.
+ */
+type Act = (stage: HTMLElement) => void;
+
+function whenFocused(stage: HTMLElement, act: Act) {
+  let frames = 0;
+  const tick = () => {
+    const dialog = stage.querySelector('[role="dialog"]');
+    if (dialog && dialog === stage.ownerDocument.activeElement) act(stage);
+    else if (++frames < 90) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+}
+
+/** `userEvent.tab()` ×3 on a flanked dialog, as far as the caret and the modality can tell. */
+const tabToNextFlank: Act = (stage) => {
+  const next = stage.querySelector<HTMLElement>('button[aria-label^="Next card"]');
+  if (!next) return;
+  stage.ownerDocument.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  next.focus();
+};
+
 /** One cell on a stage the scrim can measure itself against. */
-function withStage(S: any, key: string) {
+function withStage(S: any, key: string, act?: Act) {
   const Cell = compose(S, key);
   return function Story() {
+    const ref = React.useRef<HTMLDivElement>(null);
+    const done = React.useRef(false);
+    React.useEffect(() => {
+      if (!act || done.current || !ref.current) return;
+      done.current = true;
+      whenFocused(ref.current, act);
+    }, []);
     return (
       <div
+        ref={ref}
         style={{
           position: "relative",
           width: STAGE.width,
@@ -87,4 +125,4 @@ function withStage(S: any, key: string) {
 export const Default = withStage(S, "Default");
 export const LongBody = withStage(S, "LongBody");
 export const PressingTheScrim = withStage(S, "PressingTheScrim");
-export const Flanked = withStage(S, "Flanked");
+export const Flanked = withStage(S, "Flanked", tabToNextFlank);

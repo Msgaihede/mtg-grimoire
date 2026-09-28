@@ -1,5 +1,4 @@
 import { describe, expect, it } from "vitest";
-import { WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
 import { tileKeyOf } from "@/lib/tileKey";
 import {
   DEFAULT_TOKEN_QUANTITY,
@@ -186,34 +185,8 @@ describe("deckTokenViews", () => {
   });
 
   /**
-   * The row's picture map, folded to one URL. The variant is read from {@link WALL_CARD_VARIANT}
-   * rather than spelled `"display"`, so the case follows the constant.
-   */
-  it("folds the wall's variant out of the row's picture map", () => {
-    const uris: Partial<Record<ImageVariant, string>> = {
-      display: "https://cards.scryfall.io/normal/front/a.jpg?1",
-      art: "https://cards.scryfall.io/art_crop/front/a.jpg?1",
-    };
-    expect(deckTokenViews([row({ imageUris: uris })])[0].imageUrl).toBe(uris[WALL_CARD_VARIANT]);
-  });
-
-  /**
-   * Three ways a row says *no art*, and all three are the same answer rather than an error: a
-   * printing the backend refused a URI for (`null`), a DTO from a build that predates the field
-   * (absent), and a printing publishing only variants this wall does not draw. **`null` is never
-   * a reason to build a URL** — the backend has already refused the host or the missing
-   * `?<epoch>` — so the frame is the answer.
-   */
-  it("answers no picture as null rather than an undefined a frame would try to load", () => {
-    expect(deckTokenViews([row({ imageUris: null })])[0].imageUrl).toBeNull();
-    expect(deckTokenViews([row()])[0].imageUrl).toBeNull();
-    expect(deckTokenViews([row({ imageUris: { thumb: "t" } })])[0].imageUrl).toBeNull();
-  });
-
-  /**
    * **The chin's facts and the price are passed through, and nothing here concludes anything
-   * from them.** Rust resolves them off the *effective* printing — the one `imageUris` already
-   * describes — and prices it at the marketplace the read was asked for, so the only way this
+   * from them.** Rust resolves them off the *effective* printing and prices it at the marketplace the read was asked for, so the only way this
    * file could be wrong about them is by dropping or renaming one on the way to the view. Every
    * value is distinct from the fixture's `null` default, so a field left uncopied fails rather
    * than passing on a coincidence.
@@ -244,21 +217,6 @@ describe("deckTokenViews", () => {
     // An unpriced printing stays unpriced: `null` is the em dash, and a `0` would be a Treasure
     // quoted as free.
     expect(deckTokenViews([row({ unitPrice: null })])[0].unitPrice).toBeNull();
-  });
-
-  /**
-   * **The whole map travels beside the resolved `imageUrl`**, not narrowed. The absent key folds
-   * to `null` for `imageUrl`'s reason: a DTO from a build that predates the field has no picture,
-   * and `undefined` is a third state nothing downstream should have to spell.
-   */
-  it("passes the row's picture map through beside the resolved URL", () => {
-    const uris: Partial<Record<ImageVariant, string>> = {
-      display: "https://cards.scryfall.io/normal/front/a.jpg?1",
-      art: "https://cards.scryfall.io/art_crop/front/a.jpg?1",
-    };
-    expect(deckTokenViews([row({ imageUris: uris })])[0].imageUris).toEqual(uris);
-    expect(deckTokenViews([row({ imageUris: null })])[0].imageUris).toBeNull();
-    expect(deckTokenViews([row()])[0].imageUris).toBeNull();
   });
 
   /**

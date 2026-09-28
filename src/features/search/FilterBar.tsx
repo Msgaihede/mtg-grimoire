@@ -27,6 +27,7 @@ import {
   CONDITION_NOT_SET,
   type Condition,
 } from "@/lib/conditions";
+import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import { FINISHES, FINISH_LABEL, type Finish } from "@/lib/finish";
 import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
 import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
@@ -638,8 +639,8 @@ function activeChips<SortKey extends string>(
  * a gold border here and a lit chip there, spread across all of it. Four things are on the bar at
  * every width — the box you type in, the colours, the mana values, and the order the results come
  * in — because those are the four a reader reaches for without looking. Everything else is behind
- * one button, and what is *on* is stated as chips under a rule, where a search can be read in a
- * glance and undone one filter at a time.
+ * one button, and what is *on* is stated as chips on a line under the bar — drawn only while
+ * something is on — where a search can be read in a glance and undone one filter at a time.
  *
  * **It lays out by its own width and not the window's**, which is what `@container` is here for.
  * The same component is the search page's bar across a maximised window and the deck editor's
@@ -668,6 +669,7 @@ export function FilterBar<SortKey extends string>({
   labels = SEARCH_LABELS,
   layoutToggle = true,
   layoutFor = "search",
+  statesFilters = true,
 }: {
   search: FilterSurface<SortKey>;
   /** What this surface calls its search box, and the `id` stem its labels bind through — see
@@ -718,6 +720,16 @@ export function FilterBar<SortKey extends string>({
    * list rather than a third opinion beside it.
    */
   layoutFor?: ListSection;
+  /**
+   * Whether the bar draws its own line of stated filters under itself.
+   *
+   * `false` on a page that states them somewhere of its own with {@link StatedFiltersLine} — the
+   * collection and the wishlist, which put the chips in their path row beside the shelf toolbar
+   * so that filtering costs the wall no height (2026-09-27, the header redesign). Never a second
+   * copy: the line below is not drawn when this is off. Defaults to `true`, so the search page,
+   * the Tags page and the docked panels keep the line under the bar.
+   */
+  statesFilters?: boolean;
 }) {
   /**
    * Whether the tray is open, and **this component's own state rather than the store's.**
@@ -1134,6 +1146,31 @@ export function FilterBar<SortKey extends string>({
         </div>
       )}
 
+      {/* **Reset all, at the far end of the bar — and drawn whether or not there is anything to
+          reset**, greyed at zero. It moved up from a line of its own under the bar on 2026-09-27
+          (the collection and wishlist header redesign, option A): that line was unconditional for
+          this button's sake alone, so on every unfiltered page it was a 57px band holding one
+          greyed control. Unconditional *here* keeps the rule it was drawn for — a control that
+          appears mid-press moves everything beside it — because it never appears: it holds its
+          width on the bar from the first paint, and the chips line below is what comes and goes.
+
+          **Three places, one per band, and each is where a line had room — swept in Storybook
+          against the real stylesheet on 2026-09-27, 230px to 2400px.** From 900 it ends the first
+          line (`order-[9]`, after the view pair in the tree, so a surface without one ends the
+          line with it too); at 1500, where the bar is one line, that costs the search box width
+          and it still reads 269px at a 1501px container. Between 640 and 900 the first line has
+          no room left — pinned there it wrapped onto a line of its own and pushed the sort onto
+          a third — so it ends the second line instead, after the sort (`order-[35]`), which has
+          room from a 685px container up; in the 640–670 sliver below that it takes a third line
+          of its own, which is still shorter than the ruled row it replaced. Below 640 it follows
+          the sort's own line (`order-[45]`), which is where the docked deck panel's narrow bar
+          has room for it. The hairline is its own, so a surface without the view pair still
+          separates it from the sort. */}
+      <div className="order-[45] flex items-center gap-2 @min-[640px]/fb:order-[35] @min-[640px]/fb:gap-x-2.5 @min-[900px]/fb:order-[9] @min-[900px]/fb:gap-x-3">
+        <div aria-hidden="true" className="hidden h-9 w-px bg-border @min-[640px]/fb:block" />
+        <ResetAll count={search.activeCount} onReset={search.resetAll} />
+      </div>
+
       {/* **The line break.** A `basis-full` flex item consumes the rest of its line, so
           everything ordered after it starts a new one. Gone at 1500, where the whole bar is one
           line and the items after it fold back into their places between `order-[2]` and
@@ -1194,38 +1231,23 @@ export function FilterBar<SortKey extends string>({
   );
 
   /**
-   * **The search, in words — and the row is drawn whether or not there is anything in it.**
+   * **The search, in words — drawn only when there is something to say.**
    *
-   * Reset all lives here now, and its own rule is why the row is unconditional: it is always
-   * drawn and greyed at zero, because a control that appears mid-press moves everything beside
-   * it. What changed is *which* things it would move. On the bar it took its width out of a
-   * `flex-1` search box and slid nine colour chips left under the finger that had just pressed
-   * one; under a rule below every control, an appearing chip moves only the wall of cards, and
-   * a wall that has just been re-queried is moving anyway.
+   * This row was unconditional until 2026-09-27, and the whole reason was Reset all, which lived
+   * at its right end: always drawn and greyed at zero, because a control that appears mid-press
+   * moves everything beside it. On every unfiltered page that made it a ruled band of 57px with
+   * one greyed button in it. Reset all is on the bar now (see the note in `row`), still
+   * unconditional there, so what is left here is the chips — and an appearing chip line moves
+   * only the wall of cards, which has just been re-queried and is moving anyway. No rule over it
+   * either: the rule separated a permanent row from the bar, and a row that is only there while
+   * the reader is filtering is read as the bar's own second line.
    */
-  const statedFilters = (
-    <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-      {chips.length > 0 && (
-        // Only when there is something to caption. `Filtering by` over an empty row is a
-        // sentence with nothing after it.
-        <span className={cn(FILTER_LABEL, "shrink-0")}>Filtering by</span>
-      )}
+  const statedFilters = chips.length > 0 && (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className={cn(FILTER_LABEL, "shrink-0")}>Filtering by</span>
       {chips.map((chip) => (
         <ActiveFilterChip key={chip.label} label={chip.label} onRemove={chip.remove} />
       ))}
-      {/* A whole line of its own below 640 and the right end of this one above it. `grid`
-          rather than `block` so the button stretches, and the arbitrary variant is what centres
-          its label once it has — `ResetAll` is `inline-flex` and would otherwise leave its two
-          words against the left edge of a 200px button.
-
-          **First when it is stacked, last when it is not**, which is the design's own call and
-          has a reason worth keeping: below 640 the chips wrap onto two and three lines as the
-          reader narrows, and a full-width button under them moves every time one does. Above
-          640 it is at the end of the line, where `ml-auto` holds it against the right edge and
-          the chips grow leftwards away from it. Either way it does not move under the press. */}
-      <div className="order-first grid basis-full [&>button]:justify-center @min-[640px]/fb:order-none @min-[640px]/fb:ml-auto @min-[640px]/fb:block @min-[640px]/fb:basis-auto">
-        <ResetAll count={search.activeCount} onReset={search.resetAll} />
-      </div>
     </div>
   );
 
@@ -1256,7 +1278,7 @@ export function FilterBar<SortKey extends string>({
         />
       )}
 
-      {statedFilters}
+      {statesFilters && statedFilters}
 
       {/* The chips a typed `otag:ramp` produces, and the note an unknown tag name gets. Under the
           stated filters rather than among them: these are the *query's* own terms, which the box
@@ -1844,4 +1866,52 @@ function ViewToggle({ section }: { section: ListSection }) {
     wishlist: setWishlistView,
   }[section];
   return <LayoutToggle view={view} onChange={onChange} />;
+}
+
+/**
+ * **The stated filters as one line a page places itself** — the collection's and the wishlist's
+ * path row, beside the shelf toolbar, where the row's left side was empty (2026-09-27, the header
+ * redesign). The bar it stands in for is told `statesFilters={false}`, so there is one copy.
+ *
+ * **One scrolling line and never a wrapped one**: the path row is a fixed height, and a row that
+ * grew a line each time a filter went on would be the wall moving under a reader who is narrowing
+ * it. `-m-1.5` against {@link DROP_MARK_ROOM}, because a scroller clips at its padding box and the
+ * room is what keeps a chip's focus ring whole — and the negative margin on *both* axes is what
+ * keeps the 38px scroller from making the 28px row taller.
+ *
+ * **No scrollbar, and a fade at the right edge instead.** A desktop's classic bar is 15px of
+ * layout, and the first chip that overflowed put it under the line and grew the path row from
+ * 28px to 41px — measured in Storybook on 2026-09-27 at a 700px story width with three kinds on.
+ * That is the wall moving under the reader who is narrowing it, the one thing this line exists to
+ * avoid, so the bar is hidden and the chips still scroll by trackpad, Shift+wheel, and Tab (a
+ * focused chip is scrolled into view). The last 1.5rem fades so a line that runs on says so; it
+ * paints over nothing while the chips fit, because the line is `grow`n wider than them.
+ *
+ * Nothing at all while nothing is filtered, because `Filtering by` over an empty line is a caption
+ * with nothing after it.
+ */
+export function StatedFiltersLine<SortKey extends string>({
+  search,
+  className,
+}: {
+  search: FilterSurface<SortKey>;
+  className?: string;
+}) {
+  const chips = activeChips(search, search.marketplace.currency);
+  if (chips.length === 0) return null;
+  return (
+    <div
+      className={cn(
+        "-m-1.5 flex min-w-0 items-center gap-2 overflow-x-auto [&::-webkit-scrollbar]:hidden",
+        "[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]",
+        DROP_MARK_ROOM,
+        className,
+      )}
+    >
+      <span className={cn(FILTER_LABEL, "shrink-0")}>Filtering by</span>
+      {chips.map((chip) => (
+        <ActiveFilterChip key={chip.label} label={chip.label} onRemove={chip.remove} />
+      ))}
+    </div>
+  );
 }

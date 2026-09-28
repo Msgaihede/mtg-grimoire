@@ -669,7 +669,7 @@ layer.
     the sum *is* the number the press files, and what the old rule shipped was `Quick add 1 copy`
     under `Add 11 cards to`, filing one card and ignoring ten. A blocked member is passed over,
     and the rows grey only when no member can be pressed. A set's two quick adds are one
-    `deck_missing_to_collection` write (`missingPicks` folds rows on `pullKey`), with
+    `deck_missing_to_collection` write (`missingPicks` folds rows on `deckCardPullKey`, the finish each plays), with
     `clearWishes` on for the unwish row — so only unambiguous wishes are cleared and nothing is
     asked, `Add missing to collection`'s own rule. A set's pull is `choosePullFor`: silent when
     every member has one answer, and the dialog over the whole set when any one does not.
@@ -763,7 +763,14 @@ layer.
   foil row is answered only by foil copies of *that* printing and an Alpha Bolt in the pool no
   longer counts toward an M10 line. (**The _grain_ is what this paragraph is about and it did not
   move on 2026-09-09**; what moved is which copies are in the pool at all, and only for a theory
-  row — issue #435, and the shortage bullet further down carries it.) **Condition and language are still ignored**, so that half of
+  row — issue #435, and the shortage bullet further down carries it.) **The finish on each side is
+  the one the row _plays_ since 2026-09-27** — `playedFinish`'s rule, spelled in Rust as
+  `deck::entry_finish` — so an unsaid row of a printing sold only in foil is answered by foil
+  copies, and the pull and missing plans report that row as `foil`. That is why a `DeckCard` is
+  matched against those plans with `pullPlan.ts`' `deckCardPullKey` and never with `pullKey` on
+  its stored finish, which misses every such row.
+  [decks-storage.md](../../../docs/reference/decks-storage.md) has the decision and the sites.
+  **Condition and language are still ignored**, so that half of
   the old sentence survives intact. What the narrowing closed is a disagreement inside one screen:
   `deck_pull::CANDIDATE_SQL` already matched at this grain, so a deck could read *N missing* with
   nothing its own pull dialog could fill. **What it costs is in
@@ -1272,7 +1279,8 @@ layer.
   here and listed on the Compare dialog, the wishlist press and the managed wishlist at once. For a
   printing sold in both finishes nothing moved: `soleFinish` answers `null` there, an unsaid row
   is still the regular copy, and a plan's foil is still not answered by it. Rust's
-  `deck_theory::played_finish` is the plan's half and `theoryMatch.ts`' `theorySlot` the live
+  `deck::played_finish` (it moved out of `deck_theory` when owned/missing began reading it too)
+  is the plan's half and `theoryMatch.ts`' `theorySlot` the live
   row's; **`TheoryAddress` makes `finishes` required** so a caller cannot leave it out and
   silently key every unsaid foil-only row as the regular copy — a token entry, whose finish is
   always stated, passes `null` and says so.
@@ -4069,6 +4077,66 @@ layer.
     the editor's page scrollbar and cap the panel 8px too wide (632 vs 640, measured). Every figure
     is in [frontend-design.md](../../../docs/reference/frontend-design.md).
 
+## The undocked bar
+
+Issue [#577](https://github.com/Msgaihede/mtg-grimoire/issues/577), 2026-09-27: a reader scrolling a
+long deck had to scroll back to the top to switch between Theory and Actual. The design was agreed on
+a claude.ai Design canvas ("Docking Deck Header") before any code, and every rule below is a decision
+taken there.
+
+- **Docked is the header exactly as it was; undocked is one bar in its place.** While any of the
+  header's third line (the toolbar) is on the page, nothing changes. Once that line has scrolled up
+  out of `AppShell`'s `main`, `DeckHeaderBar` comes down: a 50px floating bar, and it goes again as
+  the line comes back. **It stands 28px below `main`'s top edge and not the 8 the canvas drew**,
+  because a sticky inset is measured from the scroller's *content* edge and `main` is `p-5` — the
+  same 20px every other sticky thing on this page already stands in (the docked panel, the quick
+  zones), so the bar agrees with its neighbours rather than with the mock. **The whole header does not follow** — it measured
+  ~170px of a 708px page at 1280×800 on the canvas, a quarter of the deck — and the bar **does not
+  hide on scroll-down**: a switch the reader reaches for has to be where their hand expects it.
+- **What is in it, left to right: ↥, Quick add, Theory | Actual and Compare, then undo/redo,
+  Display, the filter field and `⋯`.** No deck name and no back button (the reader asked for Quick
+  add in the name's place; the header keeps both, and Escape still closes the deck), and **no
+  figures** — the ledger stays the header's. Display is the three pickers as one menu of three
+  submenus of radio rows, and `⋯` is the header's Import/Export pair and its four worded actions;
+  both open the app's one context menu (`menuClick`), so neither brought a popover or a z-index of
+  its own. Built from `VIEW_PICKER`/the group-by lists/`SORT_BY_PICKER` and from `TRANSFER` +
+  `ACTIONS`, never listed again. `Split X` stays the toolbar's alone.
+- **Every control is a second entrance to one of the header's**, on the same state and the same
+  writes — the variant, `useDeckUndo`, the pickers (`parkScroll` included), the filter text, the
+  layers. Only Quick add keeps a draft of its own: it is a second `QuickAdd`, with a wider field
+  and its status line drawn under the field (`status="below"`), because there is no room beside it.
+- **When is an observer, never a scroll listener** (`src/lib/useUndocked.ts`): the editor
+  re-renders when the answer flips, not once per frame of a scroll. jsdom's stub observer never
+  fires, so **no existing test mounts the bar** — which is also why it can share every accessible
+  name with the header's controls without a single `getByRole` in the suite finding two.
+- **The bar is mounted only while shown, and stays while it holds the caret.** Scrolling up with
+  the caret in its Quick add must not drop the caret on `<body>`; once focus leaves, it goes. It
+  hides for the length of a drag on its own `useDndDragging` monitor — the quick zones take the top
+  then — so a `dragstart` re-renders the bar and not this editor.
+- **Two other sticky things start under it** while it is down, by `DECK_BAR_CLEARANCE_PX` (66 —
+  8 + 50 + 8): the docked search panel's dock (an inline `top`, and `useDockHeight`'s third argument
+  so the height agrees) and the Table view's column header (`--sticky-top`, a `px` string, on the
+  view box — `VirtualTable`'s header reads `top-[var(--sticky-top,0px)]` **under `grow` only**, so a
+  table that is its own scroller, the panel's or a dialog's, pins at its own top whatever it
+  inherits). The page's `scroll-padding-top` is set while the bar is down, so a card the arrow keys
+  walk to is never parked under it (WCAG 2.4.11) — to `main`'s own padding **plus** 66, because
+  scroll padding is measured from the top edge where a sticky inset is measured from the content
+  edge. `useDockHeight` counts that padding too since this change; before it, a pinned dock's
+  bottom 20px hung past the window on every page that docks a column in `main`.
+- **Driven in the shipped window 2026-09-27** (`npm run tauri dev`, a **debug** build, a copy of
+  the real db, Azula — Theory + Actual, 127 cards). At 1280×800: no bar at `scrollTop` 0 or 150;
+  at 1600 the bar 1017×50 at y 120, its eleven children in the canvas's order, `scrollWidth` equal
+  to `clientWidth` (1015); the dock at y 178 (8px under the bar) with its bottom at 800; the
+  Table view's column header at 86 below `main`'s top, the bar's foot at 78; `scroll-padding-top`
+  86px. ↥ scrolled 1600 → 0 in ~450ms, took the bar away, cleared the padding and left the caret
+  on `Back to decks`. The bar's Quick add answered `sol r` with five rows, Sol Ring first, its
+  list opening under the field. At 1024×700 every control fits (bar 761 wide, no overflow) with
+  the slack at its 8px floor and the filter 2px under its 148 — the arithmetic has no room left
+  at the app's floor width, so a control added to this bar has to take width from something.
+- **↥ scrolls the page to its top and puts the caret on the header's back button**, smooth unless
+  the reader asked for reduced motion. A layer opened from the bar hands the caret back to the bar's
+  control, or to that same back button if the bar has gone by the time it closes.
+
 ## The quick add
 
 `QuickAdd.tsx` — the toolbar field, its dropdown and its status line, one component. `DeckEditor`
@@ -4114,6 +4182,23 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   focuses this very field and asserts the press reaches `window`. Escape here
   closes the list and hands focus to nobody: the field is not unmounting and is what the caret was
   in the whole time, so the hook's focus-hand-back clause has nothing to do.
+- **The field's own clear asks the press whether it was spent, never `listOpen`.** Three presses
+  from a field with text and rows under it are three rungs: the capture rung above puts the list
+  away, `clearFieldOnEscape` empties the field, and the empty field lets the third fall through to
+  the floor. What separates the first two is `defaultPrevented`, read inside the helper. It was
+  `if (!listOpen)` at the call site from 2026-08-24 to 2026-09-28, and in the shipped window that
+  flag answers about the wrong render: Chromium runs a microtask checkpoint after **every listener**
+  of a trusted keypress, React flushes the rung's `setOpen(false)` in it, and the field's
+  `onKeyDown` then runs with the list already shut — so **one Escape closed the list and emptied
+  the field**. Measured 2026-09-28 (`tauri dev`, debug build, a real deck, `sol r` with five rows)
+  by a hand on the keyboard and by `cdp.mjs key` alike, both trusted and identical: `aria-expanded`
+  already `false` at a `document` capture listener one hop after the rung, `"sol r"` at the input,
+  `""` by `window`'s bubble, deck still open. An untrusted `dispatchEvent` on the input — one
+  JavaScript call, no checkpoint — read `true` throughout and kept the text, which is the whole of
+  the difference. After the fix the same presses gave list, then text, then deck, one each. jsdom
+  never checkpoints between listeners, so `QuickAdd.test.tsx`'s one-press test stands the flush in
+  with a `document` capture `flushSync` and asserts it landed; the older three-press test there
+  passed over the bug the whole time.
 - **The list is one more `"inner"` peer on this screen and deliberately outside the `Layer` union
   above**, kept apart by focus and click mechanics rather than by structure — the same arrangement
   as the docked panel's set filter. **Most of the editor's full-window surfaces are opened by

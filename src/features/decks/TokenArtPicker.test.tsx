@@ -38,8 +38,6 @@ function entry(over: Partial<DeckTokenView> = {}): DeckTokenView {
     derived: true,
     state: "auto",
     subtitle: TREASURE_TEXT,
-    imageUrl: null,
-    imageUris: null,
     setCode: "tmom",
     collectorNumber: "12",
     setName: "March of the Machine Tokens",

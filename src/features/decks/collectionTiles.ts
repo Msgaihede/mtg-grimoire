@@ -206,10 +206,6 @@ export function foldCopies(
       setCode: first.setCode ?? "",
       collectorNumber: first.collectorNumber ?? "",
       rarity: first.rarity ?? null,
-      // Carried across with the row's other card facts, and drawn by nothing here — see
-      // `GridCard.imageUris`. Off the group's first row like every other card fact here, and for
-      // the same reason: every row behind a tile names the same printing.
-      imageUris: first.imageUris,
       copies: entries.reduce((n, e) => n + held(e.row), 0),
       typeLine: first.typeLine ?? null,
       oracleId: first.oracleId ?? null,

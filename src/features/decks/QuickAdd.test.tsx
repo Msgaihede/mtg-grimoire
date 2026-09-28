@@ -1,8 +1,11 @@
+import type { ComponentProps } from "react";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { flushSync } from "react-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { CardSummary, SearchResponse } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 
 // `vi.hoisted`, because `vi.mock` is hoisted above every `const` in this file and the factory
 // runs the moment `./QuickAdd` pulls `@/lib/ipc` in. One command: this field's three routes to
@@ -65,14 +68,17 @@ const page = (...names: string[]): SearchResponse => ({
  * The button is deliberately *outside* the control's root: `onBlur` only closes the list when
  * the focus left the root altogether, so a target inside it would prove nothing.
  */
-function mount() {
+function mount(
+  /** The two props the undocked deck bar passes; absent, the toolbar's own field. */
+  shape: Pick<ComponentProps<typeof QuickAdd>, "fieldClassName" | "status"> = {},
+) {
   const onAdd = vi.fn();
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   render(
     <QueryClientProvider client={client}>
-      <QuickAdd targetName={null} onAdd={onAdd} />
+      <QuickAdd targetName={null} onAdd={onAdd} {...shape} />
       <button type="button">Elsewhere</button>
     </QueryClientProvider>,
   );
@@ -428,6 +434,46 @@ describe("QuickAdd", () => {
   });
 
   /**
+   * **One press, and the list is all it spends — in the order the shipped window runs it.**
+   *
+   * `spends one Escape on the list…` above cannot fail for the bug this is here for, and that is
+   * the reason this exists. Chromium runs a microtask checkpoint after **every listener** of a
+   * trusted keypress, and React flushes the capture rung's `setOpen(false)` in it — so the field's
+   * own `onKeyDown` is dispatched from the *next* render, with the list already shut. jsdom runs
+   * every listener inside one JavaScript call and never checkpoints between them, so there the
+   * handler still sees the list up. A field that guarded its clear on `listOpen` passed the test
+   * above and, in the window, closed the list **and** emptied the field on one press (2026-09-28,
+   * debug build, by hand and over CDP alike).
+   *
+   * `checkpoint` stands in for that microtask: a `document` capture listener runs after every
+   * `window` capture one and before React's root, which is where the browser flushed. `atTarget`
+   * is the half that keeps this honest — it reads `aria-expanded` off the input itself, before
+   * React dispatches, and proves the render really did land in between. Without it, a React that
+   * stopped flushing here would quietly turn this back into the test above, green over the bug.
+   */
+  it("keeps the text when one press closes the list, with a render between listeners", async () => {
+    searchCards.mockResolvedValue(page("Goblin Guide", "Goblin Bushwhacker"));
+    const { field } = mount();
+    await suggest(field, "goblin");
+
+    const checkpoint = () => flushSync(() => {});
+    const atTargetSaw: (string | null)[] = [];
+    const atTarget = () => atTargetSaw.push(field.getAttribute("aria-expanded"));
+    document.addEventListener("keydown", checkpoint, true);
+    field.addEventListener("keydown", atTarget);
+    try {
+      await userEvent.keyboard("{Escape}");
+    } finally {
+      document.removeEventListener("keydown", checkpoint, true);
+      field.removeEventListener("keydown", atTarget);
+    }
+
+    expect(atTargetSaw).toEqual(["false"]);
+    expect(field).toHaveAttribute("aria-expanded", "false");
+    expect(field).toHaveValue("goblin");
+  });
+
+  /**
    * **A field can hold a name with no list under it at all**, and those are the presses the
    * clearing rule exists for: the whole first 300ms of typing, and every miss.
    *
@@ -506,5 +552,106 @@ describe("QuickAdd", () => {
     expect(await screen.findByText("No card found for “Blakc Lotus”.", {}, SETTLE)).toBeVisible();
     expect(onAdd).not.toHaveBeenCalled();
     expect(field).toHaveValue("Blakc Lotus");
+  });
+});
+
+/**
+ * The two props the undocked deck bar (`DeckHeaderBar`) draws this field with — a width of its
+ * own, and the status line under the field rather than beside it.
+ *
+ * Every class here is read through `classList`, never as a substring of `className`: a `hover:`
+ * or `focus:` spelling of a utility contains the utility, so a substring check can pass before
+ * anything has happened.
+ */
+describe("QuickAdd, as the undocked bar draws it", () => {
+  /** The toolbar's instance passes neither prop, and must come out exactly as it always has. */
+  it("draws the toolbar's field and status line when neither prop is passed", async () => {
+    const user = userEvent.setup();
+    const { field } = mount();
+    const status = screen.getByRole("status");
+
+    expect(field.classList.contains("w-52")).toBe(true);
+    expect(status.classList.contains("min-w-0")).toBe(true);
+    expect(status.classList.contains("sr-only")).toBe(false);
+    expect(status.classList.contains("absolute")).toBe(false);
+
+    // …and a sentence in it stays beside the field rather than becoming a chip.
+    await user.type(field, "Blakc Lotus{Enter}");
+    await screen.findByText("No card found for “Blakc Lotus”.", {}, SETTLE);
+    expect(status.classList.contains("absolute")).toBe(false);
+    expect(status.classList.contains("sr-only")).toBe(false);
+  });
+
+  /** `tailwind-merge` resolves the two widths to the one written last — the caller's. */
+  it("takes a field width that replaces its own", () => {
+    const { field } = mount({ fieldClassName: "w-60" });
+
+    expect(field.classList.contains("w-60")).toBe(true);
+    expect(field.classList.contains("w-52")).toBe(false);
+    // Only the width moved: the rest of the field is the toolbar's.
+    expect(field.classList.contains("h-9")).toBe(true);
+  });
+
+  /**
+   * **One live region, mounted from the start and never swapped** — a region that arrived with
+   * its sentence would announce nothing. Empty, it is visually hidden rather than an empty
+   * bordered box; with something to say, the same element is the chip under the field.
+   */
+  it("draws a miss as a chip under the field, on the live region that was already there", async () => {
+    const user = userEvent.setup();
+    const { field } = mount({ status: "below" });
+    const status = screen.getByRole("status");
+
+    expect(status).toHaveTextContent("");
+    expect(status.classList.contains("sr-only")).toBe(true);
+
+    await user.type(field, "Blakc Lotus{Enter}");
+    await screen.findByText("No card found for “Blakc Lotus”.", {}, SETTLE);
+
+    // The same element, restyled — not a second region mounted with its text inside it.
+    expect(screen.getByRole("status")).toBe(status);
+    expect(status.classList.contains("sr-only")).toBe(false);
+    for (const cls of [
+      "absolute",
+      "top-full",
+      "left-0",
+      "mt-1",
+      "whitespace-nowrap",
+      LAYER.popup,
+    ]) {
+      expect(status.classList.contains(cls)).toBe(true);
+    }
+    // The field keeps what was typed, exactly as the toolbar's does on a miss.
+    expect(field).toHaveValue("Blakc Lotus");
+  });
+
+  /**
+   * The chip and the listbox open on the same spot under the field, and while the rows are up
+   * they are what the reader is reading — so the chip steps aside, and is still heard, until the
+   * list goes.
+   */
+  it("hides the chip while the suggestions are up, and brings it back when they go", async () => {
+    searchCards.mockImplementation(({ text, limit }: { text?: string; limit: number }) =>
+      Promise.resolve(limit !== 1 && text === "gob" ? page("Goblin Guide") : page()),
+    );
+    const user = userEvent.setup();
+    const { field } = mount({ status: "below" });
+    const status = screen.getByRole("status");
+
+    await user.type(field, "Blakc Lotus{Enter}");
+    await screen.findByText("No card found for “Blakc Lotus”.", {}, SETTLE);
+    expect(status.classList.contains("absolute")).toBe(true);
+
+    await user.clear(field);
+    await user.type(field, "gob");
+    await screen.findAllByRole("option", {}, SETTLE);
+    expect(status.classList.contains("sr-only")).toBe(true);
+    expect(status.classList.contains("absolute")).toBe(false);
+    expect(status).toHaveTextContent("No card found for “Blakc Lotus”.");
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+    expect(status.classList.contains("sr-only")).toBe(false);
+    expect(status.classList.contains("absolute")).toBe(true);
   });
 });

@@ -23,8 +23,6 @@ function view(over: Partial<DeckTokenView>): DeckTokenView {
     derived: true,
     state: "auto",
     subtitle: "Colorless · {T}, Sacrifice this token: Add one mana of any color.",
-    imageUrl: null,
-    imageUris: null,
     setCode: "tclb",
     collectorNumber: "5",
     setName: "Commander Legends",

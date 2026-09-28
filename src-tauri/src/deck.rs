@@ -308,6 +308,138 @@ pub fn normalise_finish(raw: Option<&str>) -> Result<Option<String>, String> {
     }
 }
 
+/// `schema::FINISHES[0]` — the word [`normalise_finish`] maps *away* on a deck row and the one
+/// `collection_entries.finish` stores for the regular copy. Indexed rather than spelled.
+const NONFOIL: &str = crate::schema::FINISHES[0];
+
+/// The finish a printing leaves no choice about, or `None` — `src/lib/finish.ts`'s `soleFinish`,
+/// line for line, over the JSON text `cards.finishes` holds.
+///
+/// **It has to answer exactly what that function answers**, because the two are the two halves
+/// of one key: [`crate::deck_theory::theory_slots`] spells the plan's side here and
+/// `theoryMatch.ts` spells the live row's side there, and a printing the two disagreed about would
+/// miss every lookup. So an unknown word is dropped *before* counting (`parseFinishes`' rule), a
+/// printing sold in two finishes answers `None` even when neither is `nonfoil`, and `nonfoil`
+/// itself answers `None` — the regular copy is what an unsaid row already is. `deck_tokens`'
+/// `default_finish` is a different question and is not this: it picks a finish to *file*, so it
+/// answers `foil` for a printing sold in foil and etched, where this says the printing has not
+/// decided.
+///
+/// **Here rather than in `deck_theory`, where issue #563 wrote it**, because it stopped being one
+/// module's: owned/missing asks it too ([`entry_finish`]), and a rule written down twice is a
+/// rule one copy will not have.
+pub(crate) fn sole_finish(finishes: Option<&str>) -> Option<&'static str> {
+    let listed: Vec<serde_json::Value> = serde_json::from_str(finishes?).ok()?;
+    let known: Vec<&'static str> = listed
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .filter_map(|word| crate::schema::FINISHES.into_iter().find(|f| *f == word))
+        .collect();
+    match known.as_slice() {
+        [only] if *only != NONFOIL => Some(only),
+        _ => None,
+    }
+}
+
+/// The finish a deck row **plays** — its own where it names one, and the printing's
+/// [`sole_finish`] where it does not. `src/lib/finish.ts`'s `playedFinish`, in this table's
+/// spelling (`None` is the regular copy).
+///
+/// **Why every comparison reads this rather than the raw column**
+/// ([issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563)). `deck_cards.finish` is
+/// NULL where a write named no finish, and most writes name none: the search's Add, the quick
+/// add, every drag and a decklist line without a `*F*`. An add out of the binder names the copy's
+/// own. For a printing sold in both finishes that NULL is the regular copy and the two spellings
+/// are rightly two objects — but for one sold **only** in foil it can be nothing but the foil, and
+/// the deck's own views already draw it with the foil mark. Read raw, one Surge Foil Palantír was
+/// two cards to the theory comparison and a card nobody sells to owned/missing. [`normalise_finish`]
+/// names this shape — two spellings that draw identically and sum apart — as the worst a bug in
+/// that table can have; this is the one it could not see, because telling them apart needs the
+/// printing.
+///
+/// Read rather than written: the rows keep what their writers stored, so a database already
+/// holding both spellings, and a sync peer on an older build writing either, compare correctly
+/// with no rung.
+pub(crate) fn played_finish(stored: Option<String>, finishes: Option<&str>) -> Option<String> {
+    stored.or_else(|| sole_finish(finishes).map(str::to_owned))
+}
+
+/// The finish a row plays, in `collection_entries`' spelling — for a row of **either** table.
+///
+/// **A collection row's `nonfoil` is read exactly as a deck row's NULL is**, and that symmetry is
+/// the whole of this function. Each is its table's spelling of the regular copy, and a printing
+/// sold only in foil has no regular copy: an unsaid deck row of one is the foil
+/// ([`played_finish`]), and so is a binder row that says `nonfoil`, because nothing else exists
+/// for it to be. The quick add, *Add missing to collection*, a collection import that named no
+/// finish and the scanner's default finish all wrote that word for such a card, and every one of
+/// those rows answered an unsaid deck row while both sides translated to `nonfoil` — so reading
+/// only the deck side through the printing would have stopped them counting, and
+/// [`release_unclaimed_copies`] would have filed them into `Recently removed` as unclaimed.
+///
+/// **Every owned/missing comparison keys both sides on this** (2026-09-27, the follow-up to issue
+/// #563): the two pools, [`attribute_owned`], [`live_shortfall`]'s fold, both releases, the pull's
+/// candidates, the spare count, the home page's completion and the three presses that create or
+/// move a copy for a deck row. A printing sold in two finishes is untouched — [`sole_finish`]
+/// answers only where there is no choice — and so is an orphan, whose finishes went with the card.
+///
+/// `stored` is whatever the table holds: `None` or a word on a deck row, a word on a collection
+/// row. An unknown word is passed through rather than refused; [`normalise_finish`] is the input
+/// fence and this is a read.
+pub(crate) fn entry_finish(stored: Option<&str>, finishes: Option<&str>) -> String {
+    let said = stored.filter(|word| *word != NONFOIL).map(str::to_owned);
+    played_finish(said, finishes).unwrap_or_else(|| NONFOIL.to_owned())
+}
+
+/// Every word `collection_entries.finish` may hold for a copy whose [`entry_finish`] is `played` —
+/// the other direction, for the statements that select rows by finish.
+///
+/// Two words where the printing's [`sole_finish`] is `played` — the finish itself, and the
+/// `nonfoil` a writer may have stored for it — and the one word twice everywhere else, so a
+/// caller can always bind `finish IN (?, ?)` and never builds a statement per shape.
+pub(crate) fn entry_spellings<'a>(played: &'a str, finishes: Option<&str>) -> [&'a str; 2] {
+    if sole_finish(finishes) == Some(played) {
+        [played, NONFOIL]
+    } else {
+        [played, played]
+    }
+}
+
+/// [`entry_finish`] for a finish a caller **handed in** — refused by [`normalise_finish`] if it is
+/// not a word this app knows, then read against the printing it names.
+///
+/// What a press that records or matches copies for a deck row runs on the finish it was sent:
+/// the quick add, its wish read, and *Add missing to collection*'s picks. Every one of them is sent
+/// the deck card's own finish, NULL wherever the add named none, and on a printing sold only in
+/// foil that NULL is the foil — so the copies are recorded as `foil` and the wishes matched as
+/// `foil`, where each press translated it to a `nonfoil` nobody sells (2026-09-27). One spelling for
+/// the three, so a fourth press cannot validate and forget to read the printing.
+pub(crate) fn entry_finish_for(
+    conn: &Connection,
+    card_id: &str,
+    finish: Option<&str>,
+) -> Result<String, String> {
+    let said = normalise_finish(finish)?;
+    let finishes = printing_finishes(conn, card_id)?;
+    Ok(entry_finish(said.as_deref(), finishes.as_deref()))
+}
+
+/// `cards.finishes` for one printing — `None` for an orphan, whose list went with the card, and
+/// for a row that never had one. What [`entry_finish`] needs where a caller holds only a
+/// `card_id`.
+pub(crate) fn printing_finishes(
+    conn: &Connection,
+    card_id: &str,
+) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT finishes FROM cards WHERE id = ?1",
+        params![card_id],
+        |r| r.get::<_, Option<String>>(0),
+    )
+    .optional()
+    .map(Option::flatten)
+    .map_err(|e| e.to_string())
+}
+
 /// One new deck, as the "New deck" dialog sends it — **a whole configured deck, in one INSERT**.
 ///
 /// Every deck-level field the settings dialog can edit is here, because the alternative is
@@ -894,21 +1026,6 @@ pub struct DeckRow {
     /// all conclusions and all TypeScript's; this is the stored fact and the four signals the
     /// rule reads are supplied separately.
     pub bracket: i64,
-    /// **The cover printing's picture, not the deck's** — the row [`Self::cover_card_id`] names,
-    /// read off the same `LEFT JOIN cards` [`Self::cover_artist`] comes from. A deck is not a
-    /// card and has no images of its own; this is the one field on this struct that describes a
-    /// *different* row, which is why it is worth saying twice.
-    ///
-    /// The key a tile wants is [`crate::image_uri::ART_VARIANT`]. A deck's cover is a crop
-    /// rather than a card face, and it is the only cover mechanism there is since custom covers
-    /// went — so `display` is here because [`crate::image_uri::LIST_VARIANTS`] emits the pair
-    /// and not because anything on a gallery reads it.
-    ///
-    /// `None` for a deck with no cover, for a cover whose printing has left `cards`, and for a
-    /// printing with no fetchable image — three states the tile draws identically, because from
-    /// the reader's side they are one: nothing to show yet. The first two heal on the next sync,
-    /// which is [`Self::cover_artist`]'s own note.
-    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// A name a gallery can show. A deck with no name is a nameless tile, and `decks.name` has
@@ -1152,16 +1269,7 @@ fn category_name(conn: &Connection, category_id: i64) -> Result<Option<String>, 
 /// `the_gallery_count_reads_only_live_rows_in_active_categories` is what keeps the literal
 /// honest, and `an_active_maybeboard_is_part_of_the_deck_and_an_inactive_one_is_not` is what
 /// keeps the kind list in step with `SIZE_KINDS`.
-///
-/// **A `LazyLock<String>` rather than a `const`, and the `LEFT JOIN cards` is why.** That join
-/// was here for `c.artist` alone; [`crate::image_uri::front_face_selects`] reads the same row
-/// for the cover printing's picture, and the variants it emits come from
-/// [`crate::image_uri::LIST_VARIANTS`] rather than from anything spellable in a `const`. The
-/// `format!` is spent once per process — `OWNED_SPARE_SQL`'s arrangement one file over, for the
-/// same reason: a live read has to mean whatever the constant means today.
-static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
-    format!(
-        "SELECT d.id, d.name, d.format_key, fs.display_name, d.description,
+const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d.description,
             d.cover_card_id, d.cover_kind, c.artist, d.archived,
             coalesce((SELECT sum(dc.quantity) FROM deck_cards dc
                         JOIN deck_categories cat ON cat.id = dc.category_id
@@ -1174,48 +1282,12 @@ static DECK_SELECT: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
             d.virtual_only, d.stats_open, d.notes_open, d.token_mode, d.managed_wishlist_mode,
-            d.token_rail_index,
-            {images}
+            d.token_rail_index
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
-       LEFT JOIN cards c ON c.id = d.cover_card_id",
-        images = crate::image_uri::front_face_selects("c").join(", ")
-    )
-});
+       LEFT JOIN cards c ON c.id = d.cover_card_id";
 
 fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
-    /// Where `DECK_SELECT`'s image columns start — one past `d.notes_open`, the
-    /// last named column. Named rather than inlined for `deck_card_select`'s reason: the
-    /// pairing arithmetic below is `front_face_map`'s and only the *offset* is this function's.
-    ///
-    /// **It moves with every column added to the end of the named list**, and it has moved
-    /// five times: it read 21 until schema v37 put `tokens_open` there, 22 until v38
-    /// appended the first two theory marks, 24 until v39 appended the third, 25 until v40
-    /// appended the deck kind, and 26 until v42 appended the stats disclosure. Forgetting to
-    /// move it is not silent for `tokens_open`'s
-    /// kind of column — the image reads are `Option<String>` and an `INTEGER` beside them makes
-    /// rusqlite refuse the conversion rather than answer a plausible URL — but it *is* silent
-    /// the other way round, which is what the comment on the image read itself describes.
-    ///
-    /// ⚠️ **v43 moved it twice and left it here, which is the one entry in that list that is
-    /// not a number changing.** The rung dropped `notes` out of the *middle* — position 12,
-    /// pulling every index above it down by one — and appended `notes_open` at the end, pushing
-    /// them back up. The two cancel exactly, so this constant reads 27 before and after and
-    /// every `r.get(n)` below it moved anyway. A reader checking the migration against this
-    /// number alone would conclude nothing had to change; the fourteen reads between
-    /// `theory_enabled` and `stats_open` are what actually shifted.
-    ///
-    /// User schema v47 moved it to 28, appending `token_stack` after `notes_open`.
-    ///
-    /// User schema v48 moved it to 29, appending the managed-wishlist column.
-    ///
-    /// User schema v51 moved it to 30, appending `token_rail_index`.
-    ///
-    /// User schema v52 left it at 30, and unlike v43 — which also left it where it was, while
-    /// fourteen reads under it moved — nothing else moved either: `token_mode` took
-    /// `token_stack`'s slot at 27 rather than being appended. See the read at 27 for what that
-    /// swap costs instead.
-    const IMAGE_COL: usize = 30;
     Ok(DeckRow {
         id: r.get(0)?,
         name: r.get(1)?,
@@ -1347,20 +1419,6 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // hand the pile's slot to a bracket and type out perfectly; only the position tells them
         // apart.
         token_rail_index: r.get(29)?,
-        // **From 30**, last of all, for the reason written twelve comments up — the
-        // `crate::image_uri::FRONT_FACE_COLUMNS` expressions `front_face_selects` appended, in
-        // the (top-level, face) pairs `front_face_map` folds back up, one pair per variant.
-        //
-        // This read carries a failure the twenty-seven above it do not. Every one of those is
-        // caught by a value of the wrong *kind* turning up in a field; here the pair is
-        // (top-level, face) and `for_face` prefers the face, so a read one column out still
-        // answers a perfectly real URL — the right picture from the wrong slot, or the crop
-        // where the card belongs. No fixture carrying a single column can tell the two apart;
-        // `image_uri`'s `meld` row, which disagrees with itself in both columns and for both
-        // variants, is the shape that can.
-        image_uris: crate::image_uri::front_face_map(|i| {
-            r.get::<_, Option<String>>(IMAGE_COL + i)
-        })?,
     })
 }
 
@@ -1368,7 +1426,7 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
 /// caller gets back is the row the gallery would have read.
 pub(crate) fn read_deck(conn: &Connection, id: i64) -> Result<Option<DeckRow>, String> {
     conn.query_row(
-        &format!("{} WHERE d.id = ?1", *DECK_SELECT),
+        &format!("{DECK_SELECT} WHERE d.id = ?1"),
         params![id],
         deck_row,
     )
@@ -1560,17 +1618,22 @@ pub(crate) fn release_group_copies(
     let Some(group) = deck_group(tx, deck_id)? else {
         return Ok(nothing);
     };
-    // The deck row's `NULL` is the collection row's `'nonfoil'` — [`normalise_finish`]'s
-    // translation, read the other way.
-    let entry_finish = finish.unwrap_or(crate::schema::FINISHES[0]);
+    // The finish the deck row plays, in the collection's spelling, and every word a copy of it may
+    // carry — [`entry_finish`] and [`entry_spellings`]. A row that said nothing about a printing
+    // sold only in foil is backed by its foil copies (and by a `nonfoil` row a writer mislabelled
+    // it with); it was matched against `nonfoil` alone until 2026-09-27, found nothing, and a cut
+    // left the foil copy filed under a deck that no longer listed the card.
+    let finishes = printing_finishes(tx, card_id)?;
+    let played = entry_finish(finish, finishes.as_deref());
+    let [said, legacy] = entry_spellings(&played, finishes.as_deref());
     let backing: Vec<(i64, i64)> = tx
         .prepare(
             "SELECT id, quantity FROM collection_entries
-              WHERE folder_id = ?1 AND card_id = ?2 AND finish = ?3
+              WHERE folder_id = ?1 AND card_id = ?2 AND finish IN (?3, ?4)
               ORDER BY id",
         )
         .and_then(|mut s| {
-            s.query_map(params![group, card_id, entry_finish], |r| {
+            s.query_map(params![group, card_id, said, legacy], |r| {
                 Ok((r.get(0)?, r.get(1)?))
             })?
             .collect()
@@ -1701,7 +1764,8 @@ pub(crate) fn release_live_copies(
 }
 
 /// Give back every copy this deck's group holds that its live list does not claim at
-/// `(card_id, finish)`.
+/// `(card_id, finish)` — the finish each side plays, [`entry_finish`], so an unsaid row of a
+/// printing sold only in foil claims the foil copies behind it.
 ///
 /// **This is the function that makes the exact grain a rule rather than a report.**
 /// [`owned_by_printing`] narrowed the count to the printing the list names; on its own that
@@ -1751,42 +1815,68 @@ pub(crate) fn release_unclaimed_copies(
         return Ok(());
     };
 
-    // What the list names, at the grain custody is now kept at. The deck row's `NULL` finish is
-    // the collection row's `'nonfoil'`, resolved in SQL so the two sides of the comparison below
-    // are one spelling.
-    let nonfoil = crate::schema::FINISHES[0];
-    let claimed: HashMap<(String, String), i64> = tx
+    // What the list names, at the grain custody is now kept at — **both sides keyed on the finish
+    // each row plays**, [`entry_finish`]. The deck row's NULL used to be resolved to `nonfoil` in
+    // SQL, which made the foil copy an unsaid row of a foil-only printing stands for read as
+    // unclaimed: the next swap or finish change anywhere in the deck filed it into `Recently
+    // removed`. The printing's finishes ride a `LEFT JOIN`, so an orphan keeps its own spelling.
+    let mut claimed: HashMap<(String, String), i64> = HashMap::new();
+    let listed: Vec<(String, Option<String>, Option<String>, i64)> = tx
         .prepare(
-            "SELECT card_id, coalesce(finish, ?3), sum(quantity)
-               FROM deck_cards
-              WHERE deck_id = ?1 AND variant = ?2
-              GROUP BY card_id, coalesce(finish, ?3)",
+            "SELECT dc.card_id, dc.finish, c.finishes, sum(dc.quantity)
+               FROM deck_cards dc
+               LEFT JOIN cards c ON c.id = dc.card_id
+              WHERE dc.deck_id = ?1 AND dc.variant = ?2
+              GROUP BY dc.card_id, dc.finish",
         )
         .and_then(|mut s| {
-            s.query_map(params![deck_id, LIVE, nonfoil], |r| {
-                Ok((
-                    (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
-                    r.get::<_, i64>(2)?,
-                ))
+            s.query_map(params![deck_id, LIVE], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
             })?
             .collect()
         })
         .map_err(|e| e.to_string())?;
+    for (card_id, finish, finishes, quantity) in listed {
+        let key = (
+            card_id,
+            entry_finish(finish.as_deref(), finishes.as_deref()),
+        );
+        *claimed.entry(key).or_insert(0) += quantity;
+    }
 
-    let held: Vec<(String, String, i64)> = tx
+    // The group's rows folded onto the same key, in the statement's order — a `nonfoil` row and a
+    // `foil` row of one foil-only printing are one key here, so their surplus is one number. The
+    // printing's finishes are kept beside each key for [`entry_spellings`], which is how the walk
+    // below finds both kinds of row again.
+    let mut held: Vec<((String, String), i64, Option<String>)> = Vec::new();
+    let mut at: HashMap<(String, String), usize> = HashMap::new();
+    let rows: Vec<(String, String, Option<String>, i64)> = tx
         .prepare(
-            "SELECT card_id, finish, sum(quantity)
-               FROM collection_entries
-              WHERE folder_id = ?1
-              GROUP BY card_id, finish",
+            "SELECT e.card_id, e.finish, c.finishes, sum(e.quantity)
+               FROM collection_entries e
+               LEFT JOIN cards c ON c.id = e.card_id
+              WHERE e.folder_id = ?1
+              GROUP BY e.card_id, e.finish",
         )
         .and_then(|mut s| {
-            s.query_map(params![group], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
-                .collect()
+            s.query_map(params![group], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+            })?
+            .collect()
         })
         .map_err(|e| e.to_string())?;
+    for (card_id, finish, finishes, quantity) in rows {
+        let key = (card_id, entry_finish(Some(&finish), finishes.as_deref()));
+        match at.get(&key).copied() {
+            Some(i) => held[i].1 += quantity,
+            None => {
+                at.insert(key.clone(), held.len());
+                held.push((key, quantity, finishes));
+            }
+        }
+    }
 
-    for (card_id, finish, have) in held {
+    for ((card_id, finish), have, finishes) in held {
         let want = claimed
             .get(&(card_id.clone(), finish.clone()))
             .copied()
@@ -1800,15 +1890,17 @@ pub(crate) fn release_unclaimed_copies(
         let removed = removed_group(tx)?
             .ok_or_else(|| crate::collection_alloc::NO_REMOVED_FOLDER.to_owned())?;
         // Oldest row first — `take_copies`' rule and `release_group_copies`'. `id` is the
-        // primary key, so the walk is total.
+        // primary key, so the walk is total. Every spelling of the key, so a surplus split across
+        // a `foil` row and a mislabelled `nonfoil` one is walked as one.
+        let [said, legacy] = entry_spellings(&finish, finishes.as_deref());
         let rows: Vec<(i64, i64)> = tx
             .prepare(
                 "SELECT id, quantity FROM collection_entries
-                  WHERE folder_id = ?1 AND card_id = ?2 AND finish = ?3
+                  WHERE folder_id = ?1 AND card_id = ?2 AND finish IN (?3, ?4)
                   ORDER BY id",
             )
             .and_then(|mut s| {
-                s.query_map(params![group, card_id, finish], |r| {
+                s.query_map(params![group, card_id, said, legacy], |r| {
                     Ok((r.get(0)?, r.get(1)?))
                 })?
                 .collect()
@@ -3619,10 +3711,7 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
 
 /// The gallery, archived decks last and most recently touched first.
 pub fn list_decks(conn: &Connection) -> Result<Vec<DeckRow>, String> {
-    let sql = format!(
-        "{} ORDER BY d.archived ASC, d.updated_at DESC, d.id DESC",
-        *DECK_SELECT
-    );
+    let sql = format!("{DECK_SELECT} ORDER BY d.archived ASC, d.updated_at DESC, d.id DESC");
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt.query_map([], deck_row).map_err(|e| e.to_string())?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -3738,8 +3827,8 @@ pub fn pip_costs(conn: &Connection) -> Result<Vec<DeckPipCosts>, String> {
 /// filters on [`Self::category_active`], dedupes on [`Self::name`], counts
 /// [`Self::game_changer`], and its `textOf` reads [`Self::oracle_text`] and [`Self::faces`]. That
 /// is every field it touches, so this row is its input exactly and not a narrowed [`DeckCardRow`]
-/// — which carries thirty-odd columns, a price expression and four image URLs per card, none of
-/// which a bracket estimate has any use for.
+/// — which carries thirty-odd columns and a price expression per card, none of which a bracket
+/// estimate has any use for.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct BracketCardRow {
@@ -5137,17 +5226,6 @@ pub struct DeckCardRow {
     /// row in the read's own order (see [`read_deck_cards`]) and clamped to what each entry
     /// still holds — so a collection that shrank under a stored claim reads honestly.
     pub owned_quantity: i64,
-    /// The front face's picture on `cards.scryfall.io`, by variant, and `None` when this
-    /// printing has none worth fetching.
-    ///
-    /// [`crate::search::CardSummary::image_uris`] carries the argument in full: one variant
-    /// ([`crate::image_uri::LIST_VARIANT`], which is what `DECK_CARD_VARIANT` is on the other
-    /// side), face 0, the face-first precedence and the `soon.jpg` fence, every one of them
-    /// [`crate::image_uri::front_face_map`]'s and none of them respelled here.
-    ///
-    /// `None` for an orphan, whose printing has left `cards` — the same answer as every other
-    /// card fact on this row, and the state `CardArt` already draws "No card" for.
-    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// One deck and everything in it: the gallery's row, one variant's cards, and **every**
@@ -5235,10 +5313,6 @@ pub struct FormatSpecRow {
 ///
 /// The `ORDER BY` is [`read_deck_cards`]'s contract; see its doc for why it lives in SQL.
 fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
-    // The front face's picture, off the `cards` row this select already joins. Built by
-    // `image_uri::front_face_selects` so the precedence between the two columns stays that
-    // module's, rather than being respelled as a `COALESCE` here.
-    let image_uris = crate::image_uri::front_face_selects("c").join(", ");
     format!(
         "SELECT dc.id, dc.card_id,
             dc.category_id, cat.name, cat.kind, cat.is_active,
@@ -5270,12 +5344,7 @@ fn deck_card_select(marketplace: crate::sorting::Marketplace) -> String {
             -- — a Sol Ring reading as colourless-identity, a Bolt's R reading as a mana source
             -- — with every field still holding a string of legal colour letters and nothing
             -- anywhere going red.
-            c.produced_mana,
-            -- From 37, last of all, for the reason written above `dc.finish`: this read is
-            -- positional and a column added anywhere else shifts every index after it into a
-            -- field of the same SQLite type, silently. As many columns as
-            -- `image_uri::FRONT_FACE_COLUMNS` says — two per variant a list row carries.
-            {image_uris}
+            c.produced_mana
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
        LEFT JOIN deck_labels t ON t.id = dc.label_id
@@ -5364,11 +5433,6 @@ fn read_deck_cards(
     variant: &str,
     marketplace: crate::sorting::Marketplace,
 ) -> Result<Vec<DeckCardRow>, String> {
-    // Where the image pair begins — the count of every column before it, which is what makes
-    // it last. Written down rather than spelled inside the closure, for the reason
-    // `deck_card_select`'s own comment gives.
-    const IMAGE_COL: usize = 37;
-
     let sql = deck_card_select(marketplace);
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -5416,12 +5480,6 @@ fn read_deck_cards(
                 // wrong index is hardest to see, because `colors` at 21 and `color_identity`
                 // at 22 hold strings of the same letters. See the column's own comment.
                 produced_mana: r.get(36)?,
-                // From 37 — the (top-level, face) pairs `front_face_selects` added, one per
-                // variant, folded back up by the module that added them, face-first precedence
-                // and `soon.jpg` fence included.
-                image_uris: crate::image_uri::front_face_map(|i| {
-                    r.get::<_, Option<String>>(IMAGE_COL + i)
-                })?,
                 // Filled by `attribute_owned`, once the claims are known.
                 owned_quantity: 0,
             })
@@ -5644,34 +5702,61 @@ fn printed_power_toughness(json: &str) -> (Option<String>, Option<String>) {
 /// exactly. Two grains asking one question is a screen that contradicts the dialog it opens, so
 /// the count came down to meet the pull rather than the pull going up to meet the count.
 ///
-/// **No `JOIN cards`, and its absence is a behaviour change rather than a tidy-up.** The oracle
-/// version needed an INNER join to learn a row's oracle id, so an orphaned printing — a row whose
-/// `card_id` is not in `cards` — was dropped from the map and read as owned 0 until the next
+/// **No inner `JOIN cards`, and its absence is a behaviour change rather than a tidy-up.** The
+/// oracle version needed an INNER join to learn a row's oracle id, so an orphaned printing — a row
+/// whose `card_id` is not in `cards` — was dropped from the map and read as owned 0 until the next
 /// sync gave it its identity back. At this grain there is nothing to look up: the deck row and
 /// the collection row name the same `card_id`, so the copy counts.
+///
+/// **The finish is the one the copy plays, [`entry_finish`]** (2026-09-27) — the stored word,
+/// except that a `nonfoil` row of a printing sold only in foil is the foil, because that is all it
+/// can be. Only a `LEFT JOIN` for the printing's finishes, so the orphan above still counts, under
+/// its own spelling. [`fold_by_played_finish`] does the fold for both pools.
 pub(crate) fn owned_by_printing(
     conn: &Connection,
     deck_id: i64,
 ) -> Result<HashMap<(String, String), i64>, String> {
-    let mut stmt = conn
-        .prepare(
-            "SELECT e.card_id, e.finish, sum(e.quantity)
-               FROM collection_entries e
-               JOIN collection_folders f ON f.id = e.folder_id
-              WHERE f.deck_id = ?1
-              GROUP BY e.card_id, e.finish",
-        )
-        .map_err(|e| e.to_string())?;
+    fold_by_played_finish(
+        conn,
+        "SELECT e.card_id, e.finish, c.finishes, sum(e.quantity)
+           FROM collection_entries e
+           JOIN collection_folders f ON f.id = e.folder_id
+           LEFT JOIN cards c ON c.id = e.card_id
+          WHERE f.deck_id = ?1
+          GROUP BY e.card_id, e.finish",
+        params![deck_id],
+    )
+}
+
+/// Run a pool read — `card_id`, the stored finish, the printing's `finishes` and a copy count, in
+/// that order — and fold it onto `(card_id, `[`entry_finish`]`)`.
+///
+/// Summed rather than inserted, because two stored words can be one key: a `foil` row and a
+/// mislabelled `nonfoil` row of one foil-only printing are the same cardboard, and a pool that
+/// kept the second under `nonfoil` would hand it to no row at all.
+fn fold_by_played_finish(
+    conn: &Connection,
+    sql: &str,
+    args: impl rusqlite::Params,
+) -> Result<HashMap<(String, String), i64>, String> {
+    let mut stmt = conn.prepare(sql).map_err(|e| e.to_string())?;
     let rows = stmt
-        .query_map(params![deck_id], |r| {
+        .query_map(args, |r| {
             Ok((
-                (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
-                r.get::<_, i64>(2)?,
+                r.get::<_, String>(0)?,
+                r.get::<_, String>(1)?,
+                r.get::<_, Option<String>>(2)?,
+                r.get::<_, i64>(3)?,
             ))
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<rusqlite::Result<HashMap<_, _>>>()
-        .map_err(|e| e.to_string())
+    let mut pool: HashMap<(String, String), i64> = HashMap::new();
+    for row in rows {
+        let (card_id, finish, finishes, quantity) = row.map_err(|e| e.to_string())?;
+        let key = (card_id, entry_finish(Some(&finish), finishes.as_deref()));
+        *pool.entry(key).or_insert(0) += quantity;
+    }
+    Ok(pool)
 }
 
 /// Copies this deck **could hold**, per printing and finish — the pool a `theory` read is
@@ -5717,20 +5802,25 @@ pub(crate) fn available_by_printing(
         conn,
         crate::collection_source::Availability::ForDeck(deck_id),
     );
-    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    // Wrapped rather than widened: the scope's statement stays `collection_source`'s one spelling
+    // of "what this deck can use", and the printing's finishes are joined on outside it for
+    // [`fold_by_played_finish`] — [`owned_by_printing`]'s reason, one pool over. A CTE with a
+    // column list names the scope's three columns, so nothing here depends on how SQLite would
+    // have named a `sum(…)`.
+    //
     // No `params!`: `ForDeck` interpolates the deck id into the fragment itself — it is an `i64`,
     // so there is no text in it to escape, and a `?` buried inside a scope's SQL is one the next
     // caller to push a parameter positionally could not see. `collection_source`'s own note.
-    let rows = stmt
-        .query_map([], |r| {
-            Ok((
-                (r.get::<_, String>(0)?, r.get::<_, String>(1)?),
-                r.get::<_, i64>(2)?,
-            ))
-        })
-        .map_err(|e| e.to_string())?;
-    rows.collect::<rusqlite::Result<HashMap<_, _>>>()
-        .map_err(|e| e.to_string())
+    fold_by_played_finish(
+        conn,
+        &format!(
+            "WITH scoped(card_id, finish, copies) AS ({sql})
+             SELECT s.card_id, s.finish, c.finishes, s.copies
+               FROM scoped s
+               LEFT JOIN cards c ON c.id = s.card_id"
+        ),
+        params![],
+    )
 }
 
 /// Hand the held copies out to the rows that wanted them.
@@ -5775,15 +5865,15 @@ fn attribute_owned(rows: &mut [DeckCardRow], owned: &HashMap<(String, String), i
             row.owned_quantity = 0;
             continue;
         }
-        // The deck row's `NULL` is the collection row's `'nonfoil'` — [`normalise_finish`]'s
-        // translation read the other way, and the same line [`release_group_copies`] already
-        // carries. The `oracle_id` guard this replaced is gone with the join that needed it: a
-        // deck row always has a `card_id`.
+        // The finish the row plays, in the collection's spelling — [`entry_finish`], the key the
+        // pool was folded on. A NULL is the regular copy's `nonfoil` on a printing sold in it,
+        // and the sole finish on one that is not (2026-09-27): an unsaid row of a foil-only
+        // printing is answered by the foil copies, where it read missing beside them. The
+        // `oracle_id` guard this replaced is gone with the join that needed it: a deck row always
+        // has a `card_id`.
         let key = (
             row.card_id.clone(),
-            row.finish
-                .clone()
-                .unwrap_or_else(|| crate::schema::FINISHES[0].to_owned()),
+            entry_finish(row.finish.as_deref(), row.finishes.as_deref()),
         );
         let remaining = left.entry(key).or_insert(0);
         let take = (*remaining).min(row.quantity).max(0);
@@ -5813,10 +5903,15 @@ pub struct ShortfallRow {
     pub name: String,
     pub set_code: String,
     pub collector_number: String,
-    /// The deck row's finish, where `None` is nonfoil — [`normalise_finish`]'s translation
-    /// carried through unchanged, and the other half of the grain. A caller writing to
-    /// `collection_entries` reads [`crate::schema::FINISHES`]`[0]` back out of it.
+    /// The finish the deck rows **play** — [`played_finish`], where `None` is the regular copy —
+    /// and the other half of the grain. Not the column as stored: an unsaid row of a printing
+    /// sold only in foil folds here as `foil` (2026-09-27), beside a `foil` row of it if the list
+    /// holds both, because both are the one object the reader is short of. A caller writing to
+    /// `collection_entries` reads [`crate::schema::FINISHES`]`[0]` back out of a `None`.
     pub finish: Option<String>,
+    /// The printing's `cards.finishes`, `None` for an orphan — what a caller matching collection
+    /// rows needs for [`entry_spellings`]. Taken off the deck row rather than queried again.
+    pub finishes: Option<String>,
     /// Copies of this printing and finish the live list still wants, summed over its **active**
     /// piles — `quantity - owned_quantity`, which is the same subtraction the editor's missing
     /// badge draws. Always at least 1: a row that is short of nothing is not returned.
@@ -5825,11 +5920,6 @@ pub struct ShortfallRow {
     /// and never for the arithmetic**: no caller of [`live_shortfall`] writes a `deck_cards` row,
     /// so there is no pile for anything to land in and nothing here is an argument to anything.
     pub categories: Vec<String>,
-    /// The printing's picture, front face — **taken off the deck row rather than queried
-    /// again**, so [`crate::image_uri::front_face_map`]'s precedence keeps its one home. One per
-    /// row, because every copy folded into a row is the same printing. `None` for an orphan,
-    /// whose card has left `cards`.
-    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// Everything the **live** list is short of, folded at `(card_id, finish)`, in the deck's order.
@@ -5889,8 +5979,11 @@ pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRo
             continue;
         }
         // `.copied()` so the lookup's borrow of `at` is over before the `None` arm inserts into
-        // it — the shape every "find or make" in this crate takes.
-        let key = (card.card_id.clone(), card.finish.clone());
+        // it — the shape every "find or make" in this crate takes. Keyed on the finish the row
+        // plays, [`played_finish`], so an unsaid row and a `foil` row of one foil-only printing
+        // are one row here — [`attribute_owned`] already drew them from one pool.
+        let finish = played_finish(card.finish.clone(), card.finishes.as_deref());
+        let key = (card.card_id.clone(), finish.clone());
         match at.get(&key).copied() {
             Some(i) => {
                 rows[i].short += short;
@@ -5909,10 +6002,10 @@ pub fn live_shortfall(conn: &Connection, deck_id: i64) -> Result<Vec<ShortfallRo
                     name: card.name.clone(),
                     set_code: card.set_code.clone(),
                     collector_number: card.collector_number.clone(),
-                    finish: card.finish.clone(),
+                    finish,
+                    finishes: card.finishes.clone(),
                     short,
                     categories: vec![card.category_name.clone()],
-                    image_uris: card.image_uris.clone(),
                 });
             }
         }
@@ -8965,121 +9058,6 @@ mod tests {
         assert_eq!(decks[1].card_count, 0);
     }
 
-    /// **A deck row carries the *cover printing's* picture.**
-    ///
-    /// It is the one field on `DeckRow` that describes a different row, and the join it comes
-    /// off is `LEFT JOIN cards c ON c.id = d.cover_card_id` — the same one `cover_artist` uses.
-    /// So the failure this guards is not only an off-by-one: it is also reading the *deck's*
-    /// own row, which has no images at all and would answer `None` for every deck, silently,
-    /// with a suite full of decks that have no cover anyway.
-    ///
-    /// **`bolt-m10` is shaped like a `meld` printing and carries all four variants in both
-    /// columns, every one a different URL**, which is the only shape where every way of getting
-    /// this wrong gives a different answer rather than the right one by luck: face-first
-    /// precedence reversed answers `top.webp`, a pair read one column out answers the other
-    /// variant's, and a widening back to four answers extra keys that are real URLs.
-    ///
-    /// Four states, and three of them are the *same* blank frame to a reader: no cover at all,
-    /// a cover whose printing has left `cards`, and a printing whose only URL is Scryfall's
-    /// error page. `DeckTile` draws all three as "No cover" rather than as a failure.
-    #[test]
-    fn a_deck_row_carries_the_cover_printings_art() {
-        let conn = seeded();
-        conn.execute(
-            "UPDATE cards SET
-                 image_uris = json_object(
-                     'thumb','https://cards.scryfall.io/thumb/top.webp?4',
-                     'grid','https://cards.scryfall.io/grid/top.webp?4',
-                     'display','https://cards.scryfall.io/display/top.webp?4',
-                     'art','https://cards.scryfall.io/art/top.webp?4'),
-                 face_image_uris = json_array(json_object(
-                     'thumb','https://cards.scryfall.io/thumb/face0.webp?4',
-                     'grid','https://cards.scryfall.io/grid/face0.webp?4',
-                     'display','https://cards.scryfall.io/display/face0.webp?4',
-                     'art','https://cards.scryfall.io/art/face0.webp?4'))
-             WHERE id = 'bolt-m10'",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE cards SET image_uris = json_object(
-                 'art','https://errors.scryfall.com/soon.jpg')
-             WHERE id = 'bolt-jp'",
-            [],
-        )
-        .unwrap();
-
-        let cover = |card_id: &str| {
-            let deck = create_deck(&conn, &input(card_id, "commander")).unwrap();
-            update_deck(
-                &conn,
-                deck.id,
-                &DeckPatch {
-                    cover_card_id: Some(card_id.to_owned()),
-                    ..Default::default()
-                },
-            )
-            .unwrap();
-            deck.id
-        };
-        let art = cover("bolt-m10");
-        let poisoned = cover("bolt-jp");
-        let orphan = cover("gone-from-the-corpus");
-        let bare = create_deck(&conn, &input("No cover", "commander"))
-            .unwrap()
-            .id;
-
-        // Through `list_decks` *and* `read_deck`: both go through `deck_row`, and this is what
-        // says so rather than the call graph.
-        for reader in ["list", "read"] {
-            let of = |id: i64| -> Option<BTreeMap<String, String>> {
-                if reader == "list" {
-                    list_decks(&conn)
-                        .unwrap()
-                        .into_iter()
-                        .find(|d| d.id == id)
-                        .unwrap()
-                        .image_uris
-                } else {
-                    read_deck(&conn, id).unwrap().unwrap().image_uris
-                }
-            };
-
-            let uris = of(art).unwrap_or_else(|| panic!("the cover has a picture ({reader})"));
-            assert_eq!(
-                uris[crate::image_uri::ART_VARIANT],
-                "https://cards.scryfall.io/art/face0.webp?4",
-                "the tile's crop, from the face and not the top-level blob ({reader})"
-            );
-            assert_eq!(
-                uris[crate::image_uri::LIST_VARIANT],
-                "https://cards.scryfall.io/display/face0.webp?4",
-                "and the card, at its own offset ({reader})"
-            );
-            // Spelled out rather than read off `LIST_VARIANTS`: an assertion that reads the
-            // constant it is fencing can never fail when that constant moves, and the cover
-            // printing here carries all four variants, so a widening comes back as real URLs
-            // under real keys. A widening has to come here and say so.
-            assert_eq!(
-                uris.keys().map(String::as_str).collect::<Vec<_>>(),
-                ["art", "display"],
-                "what a list row carries and nothing else ({reader})"
-            );
-
-            assert_eq!(
-                of(poisoned),
-                None,
-                "an error page is a gap, not a cover ({reader})"
-            );
-            assert_eq!(
-                of(orphan),
-                None,
-                "a cover whose printing has left `cards` draws nothing ({reader})"
-            );
-            assert_eq!(of(bare), None, "and a deck with no cover ({reader})");
-        }
-    }
-
     /// The gallery's caption is about the deck the user has, and two things are not it: a
     /// **theory** row, which is a plan, and a row in a category that has been switched
     /// **off**, which counts toward nothing at all. Neither is a kind check — a main-deck
@@ -10576,20 +10554,6 @@ mod tests {
             // every deck carries and would read correct on a field that never left Rust. `2`
             // and not `3`, so it cannot be mistaken for `bracket` beside it.
             token_rail_index: 2,
-            // Two keys, both real URLs, because this is the one field on the row whose *shape*
-            // crosses the boundary rather than a scalar: `Option<BTreeMap>` has to reach
-            // TypeScript as an object of variant keys and not as a list or a bare string, and
-            // the deck tile reads `art` out of it by name.
-            image_uris: Some(BTreeMap::from([
-                (
-                    "art".to_owned(),
-                    "https://cards.scryfall.io/art/front/0/0/bolt.webp?17".to_owned(),
-                ),
-                (
-                    "display".to_owned(),
-                    "https://cards.scryfall.io/display/front/0/0/bolt.webp?17".to_owned(),
-                ),
-            ])),
         })
         .unwrap();
         assert_eq!(
@@ -10663,13 +10627,7 @@ mod tests {
                 // views read this key to know where to draw the pile, and a snake-cased one would
                 // be `undefined` — which `tokenRail.tsx` reads as *last*, so the pile would snap
                 // back on every open with no type error anywhere.
-                "tokenRailIndex": 2,
-                // The cover printing's picture, spelled out key by key: it is a map rather than
-                // a URL because `LIST_VARIANTS` decides what a row carries.
-                "imageUris": {
-                    "art": "https://cards.scryfall.io/art/front/0/0/bolt.webp?17",
-                    "display": "https://cards.scryfall.io/display/front/0/0/bolt.webp?17"
-                }
+                "tokenRailIndex": 2
             })
         );
 
@@ -11326,10 +11284,6 @@ mod tests {
             ("hidden", "off", true),
             "…including through `DECK_SELECT`'s positional reads, the neighbours untouched"
         );
-        assert!(
-            read.image_uris.is_none(),
-            "and `IMAGE_COL` did not move — a deck with no cover reads no picture"
-        );
 
         let payloads: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 20)
             .unwrap()
@@ -11770,10 +11724,6 @@ mod tests {
             (read.token_rail_index, read.managed_wishlist.as_str()),
             (1, "off"),
             "…including through `DECK_SELECT`'s positional reads, the neighbour untouched"
-        );
-        assert!(
-            read.image_uris.is_none(),
-            "and `IMAGE_COL` moved with it — a deck with no cover reads no picture"
         );
 
         let payloads: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 20)
@@ -12601,7 +12551,9 @@ mod tests {
     }
 
     /// And the case that must keep working: the deck row's `NULL` finish is the collection
-    /// row's `'nonfoil'`, which is the whole of the translation between the two tables.
+    /// row's `'nonfoil'` on a printing sold in it — Alpha printed no foils — which is the whole of
+    /// the translation between the two tables everywhere but a printing sold in one other finish
+    /// (the foil-only block at the foot of this module).
     #[test]
     fn the_exact_printing_and_finish_is_owned() {
         let conn = seeded();
@@ -14886,118 +14838,6 @@ mod tests {
     // Undoing a game change is `deck_undo.rs`'s `deck_update (game)` case, driven there over
     // the same sweep every other deck-level column goes through.
 
-    /// **A deck card carries the front face's image URL.**
-    ///
-    /// **`bolt-m10` is the row that makes the offset visible at all.** The pair starts directly
-    /// after `c.promo_types`, and with only top-level pictures in the fixture a read one column
-    /// early lands the top-level URL in the `face` slot and answers correctly anyway — the
-    /// mutation survived exactly that way. A `meld`-shaped row carrying **both** columns is the
-    /// only shape where the shifted read gives a different, wrong answer, and it pins the
-    /// face-first precedence in the same breath.
-    ///
-    /// **Both variants, since 2026-08-31**, and the second one is a second way for the offset
-    /// to be wrong rather than more of the same: with `display` and `art` the select list is
-    /// four expressions, and a read that pairs them up wrong hands the crop back under
-    /// `display` — still a URL, still on the image host, still versioned, and the wrong
-    /// picture. Every row here therefore carries a *different* URL per variant per column.
-    #[test]
-    fn a_deck_card_carries_the_front_faces_image_url() {
-        let conn = seeded();
-        conn.execute(
-            "UPDATE cards SET image_uris = json_object(
-                 'thumb','https://cards.scryfall.io/thumb/front/0/0/x.webp?17',
-                 'grid','https://cards.scryfall.io/grid/front/0/0/x.webp?17',
-                 'display','https://cards.scryfall.io/display/front/0/0/x.webp?17',
-                 'art','https://cards.scryfall.io/art/front/0/0/x.webp?17')
-             WHERE id = 'bolt-lea'",
-            [],
-        )
-        .unwrap();
-        // Scryfall's own error page: a URL with nothing to invalidate, on a host that does not
-        // serve card art. It must read as *no picture*, not as a URL a browser will request.
-        conn.execute(
-            "UPDATE cards SET image_uris = json_object(
-                 'display','https://errors.scryfall.com/soon.jpg')
-             WHERE id = 'bolt-jp'",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE cards SET
-                 image_uris = json_object(
-                     'display','https://cards.scryfall.io/display/top.webp?1',
-                     'art','https://cards.scryfall.io/art/top.webp?1'),
-                 face_image_uris = json_array(json_object(
-                     'display','https://cards.scryfall.io/display/face0.webp?1',
-                     'art','https://cards.scryfall.io/art/face0.webp?1'))
-             WHERE id = 'bolt-m10'",
-            [],
-        )
-        .unwrap();
-        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
-        let main = main_of(&conn, deck.id);
-        add(&conn, deck.id, "bolt-lea", main, 4);
-        add(&conn, deck.id, "bolt-jp", main, 1);
-        add(&conn, deck.id, "bolt-m10", main, 1);
-        // `serra-lea` carries neither image column, which is the ordinary state of 162 of the
-        // live corpus's 117 606 rows.
-        add(&conn, deck.id, "serra-lea", main, 1);
-
-        let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
-        let row = card_row(&detail, "bolt-lea", main);
-        let art = row
-            .image_uris
-            .as_ref()
-            .expect("a versioned URL on the image host is a picture");
-        assert_eq!(
-            art[crate::image_uri::LIST_VARIANT],
-            "https://cards.scryfall.io/display/front/0/0/x.webp?17"
-        );
-        assert_eq!(
-            art[crate::image_uri::ART_VARIANT],
-            "https://cards.scryfall.io/art/front/0/0/x.webp?17",
-            "the crop, under its own key — a pairing read wrong swaps these two"
-        );
-        // Spelled out rather than read off `LIST_VARIANTS`, for the reason
-        // `a_deck_row_carries_the_cover_printings_art` gives: a widening has to edit a test.
-        assert_eq!(
-            art.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["art", "display"],
-            "every variant a list row carries, and nothing else"
-        );
-        // The two columns an off-by-one would have reached, both still plausible strings.
-        assert_eq!(row.promo_types, None, "the column directly before the pair");
-        assert_eq!(row.finish, None);
-
-        // The precedence **and** the offset, for both variants. See the doc above for why no
-        // other row here can fail when the pair is read a column early.
-        let meld = card_row(&detail, "bolt-m10", main)
-            .image_uris
-            .as_ref()
-            .expect("a meld-shaped printing has a front face");
-        assert_eq!(
-            meld[crate::image_uri::LIST_VARIANT],
-            "https://cards.scryfall.io/display/face0.webp?1",
-            "the face wins over the top-level blob, and the pair is read at its own offset"
-        );
-        assert_eq!(
-            meld[crate::image_uri::ART_VARIANT],
-            "https://cards.scryfall.io/art/face0.webp?1",
-            "and the second variant's pair is read at its own offset too"
-        );
-
-        assert_eq!(
-            card_row(&detail, "bolt-jp", main).image_uris,
-            None,
-            "an error page is a gap, not a picture"
-        );
-        assert_eq!(
-            card_row(&detail, "serra-lea", main).image_uris,
-            None,
-            "a printing with neither image column carries nothing"
-        );
-    }
-
     #[test]
     fn deck_card_and_format_spec_json_use_the_camel_case_names_the_frontend_expects() {
         let value = serde_json::to_value(DeckCardRow {
@@ -15047,10 +14887,6 @@ mod tests {
             // A `None` here would pin the key's spelling and nothing about the three states.
             produced_mana: Some(String::new()),
             owned_quantity: 3,
-            image_uris: Some(BTreeMap::from([(
-                crate::image_uri::LIST_VARIANT.to_owned(),
-                "https://cards.scryfall.io/display/front/0/0/x.webp?17".to_owned(),
-            )])),
         })
         .unwrap();
         assert_eq!(
@@ -15070,10 +14906,7 @@ mod tests {
                 "everUncommon": false, "unitPrice": 400.0, "finish": "foil",
                 "promoTypes": "[\"surgefoil\"]",
                 "producedMana": "",
-                "ownedQuantity": 3,
-                "imageUris": {
-                    "display": "https://cards.scryfall.io/display/front/0/0/x.webp?17"
-                }
+                "ownedQuantity": 3
             })
         );
 
@@ -15954,6 +15787,258 @@ mod tests {
             rows[0].value,
             Some(800.00),
             "archiving a deck does not spend what is in it"
+        );
+    }
+
+    // ---- a printing sold in one finish (issue #563's follow-up) ---------------------------
+
+    /// [`sole_finish`] is `finish.ts`'s `soleFinish`, and the two sides of the theory key must
+    /// agree on every one of these — `theoryMatch.test.ts` pins the same literals from the other
+    /// end of the IPC boundary. It moved here from `deck_theory` with the function.
+    #[test]
+    fn sole_finish_answers_only_for_a_printing_with_no_choice() {
+        for (finishes, sole) in [
+            (Some(r#"["foil"]"#), Some("foil")),
+            (Some(r#"["etched"]"#), Some("etched")),
+            (Some(r#"["nonfoil"]"#), None),
+            (Some(r#"["nonfoil","foil"]"#), None),
+            (Some(r#"["foil","etched"]"#), None),
+            // A repeated word is counted twice, as `parseFinishes` keeps it twice.
+            (Some(r#"["foil","foil"]"#), None),
+            // An unknown word is dropped before counting, as `parseFinishes` drops it.
+            (Some(r#"["foil","glossy"]"#), Some("foil")),
+            (Some("not json"), None),
+            (Some(r#"{"foil":true}"#), None),
+            (None, None),
+        ] {
+            assert_eq!(sole_finish(finishes), sole, "{finishes:?}");
+        }
+    }
+
+    /// [`entry_finish`] reads both tables' spelling of the regular copy the same way, and
+    /// [`entry_spellings`] is its inverse: every word it can come from, and nothing it cannot.
+    #[test]
+    fn entry_finish_reads_the_regular_copys_two_spellings_as_one() {
+        let foil_only = Some(r#"["foil"]"#);
+        let both = Some(r#"["nonfoil","foil"]"#);
+        for (stored, finishes, played) in [
+            (None, foil_only, "foil"),
+            (Some("nonfoil"), foil_only, "foil"),
+            (Some("foil"), foil_only, "foil"),
+            (None, Some(r#"["etched"]"#), "etched"),
+            (None, both, "nonfoil"),
+            (Some("nonfoil"), both, "nonfoil"),
+            (Some("foil"), both, "foil"),
+            // An orphan keeps its own spelling: the finishes went with the card.
+            (None, None, "nonfoil"),
+            (Some("foil"), None, "foil"),
+        ] {
+            assert_eq!(
+                entry_finish(stored, finishes),
+                played,
+                "{stored:?} of {finishes:?}"
+            );
+            assert!(
+                entry_spellings(played, finishes).contains(&stored.unwrap_or("nonfoil")),
+                "{stored:?} of {finishes:?} is one of {played}'s spellings"
+            );
+        }
+        assert_eq!(entry_spellings("foil", foil_only), ["foil", "nonfoil"]);
+        assert_eq!(entry_spellings("foil", both), ["foil", "foil"]);
+        assert_eq!(entry_spellings("nonfoil", both), ["nonfoil", "nonfoil"]);
+    }
+
+    /// A printing Scryfall sells **only** in foil — issue #563's Palantír of Orthanc, HOC 85, a
+    /// Surge Foil — beside `seeded()`'s five. `deck_theory`'s suite seeds the same card for the
+    /// comparison; these tests are its owned/missing half.
+    fn foil_only(conn: &Connection) {
+        conn.execute(
+            r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,mana_cost,cmc,type_line,prices,finishes,raw)
+               VALUES ('palantir-hoc','o-palantir','Palantír of Orthanc','hoc','85','en',
+                       'normal','mythic','{3}',3.0,'Legendary Artifact','{"usd_foil":"12.00"}',
+                       '["foil"]','{}')"#,
+            [],
+        )
+        .unwrap();
+    }
+
+    /// **A row that said no finish, of a printing sold only in foil, is answered by the foil
+    /// copies in its group.** The search's Add, the quick add, every drag and a decklist line
+    /// without a `*F*` all store NULL; the collection's own add offers such a printing only in
+    /// foil. Keyed on the raw column the row wanted `nonfoil` — a copy nobody sells — and read
+    /// as missing beside the very card it lists.
+    #[test]
+    fn an_unsaid_row_of_a_foil_only_printing_owns_the_foil_copies_in_its_group() {
+        let conn = seeded();
+        foil_only(&conn);
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "palantir-hoc", main, 1);
+        file_finish_into_group(&conn, deck.id, "palantir-hoc", "foil", 1);
+
+        assert_eq!(owned_of(&conn, deck.id, "palantir-hoc", main), 1);
+        assert!(
+            live_shortfall(&conn, deck.id).unwrap().is_empty(),
+            "and the deck is short of nothing"
+        );
+    }
+
+    /// The plan's wider pool, one table over: a foil copy loose at the root answers an unsaid
+    /// theory row of the same foil-only printing.
+    #[test]
+    fn an_unsaid_plan_row_of_a_foil_only_printing_counts_the_foil_copies_it_could_use() {
+        let conn = seeded();
+        foil_only(&conn);
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        plan(&conn, deck.id, "palantir-hoc", main, 1);
+        crate::collection::add_entry(
+            &conn,
+            &crate::collection::EntryInput {
+                card_id: "palantir-hoc".to_owned(),
+                finish: "foil".to_owned(),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(plan_owned_of(&conn, deck.id, "palantir-hoc", main), 1);
+    }
+
+    /// **An unsaid row and a `foil` row of one foil-only printing are one object, so they share
+    /// one pool** — the same scarce walk two piles of one printing have always shared. One foil
+    /// copy in the group is one owned between them, never one each.
+    #[test]
+    fn an_unsaid_row_and_a_foil_row_of_a_foil_only_printing_share_one_pool() {
+        let conn = seeded();
+        foil_only(&conn);
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = kind_of(&conn, deck.id, "side");
+        add(&conn, deck.id, "palantir-hoc", main, 1);
+        add_foil(&conn, deck.id, "palantir-hoc", side, 1);
+        file_finish_into_group(&conn, deck.id, "palantir-hoc", "foil", 1);
+
+        assert_eq!(
+            owned_of(&conn, deck.id, "palantir-hoc", main)
+                + owned_of(&conn, deck.id, "palantir-hoc", side),
+            1
+        );
+        let short = live_shortfall(&conn, deck.id).unwrap();
+        assert_eq!(
+            short
+                .iter()
+                .map(|r| (r.card_id.as_str(), r.finish.as_deref(), r.short))
+                .collect::<Vec<_>>(),
+            vec![("palantir-hoc", Some("foil"), 1)],
+            "one row for the one object, spelled as the finish it plays: {short:?}"
+        );
+    }
+
+    /// **A `nonfoil` collection row of a foil-only printing is read as the foil too**, and that is
+    /// what keeps this change from taking copies away. The quick add, *Add missing to collection*,
+    /// a collection import that named no finish and the scanner all wrote `nonfoil` for a card
+    /// that has no such copy, and every one of those rows answered an unsaid deck row until now
+    /// (both sides translated to `nonfoil`). Keyed only on the deck's played finish, they would
+    /// stop counting — and the sweep would file them into `Recently removed`.
+    #[test]
+    fn a_legacy_nonfoil_copy_of_a_foil_only_printing_still_counts() {
+        let conn = seeded();
+        foil_only(&conn);
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = kind_of(&conn, deck.id, "side");
+        add(&conn, deck.id, "palantir-hoc", main, 1);
+        add_foil(&conn, deck.id, "palantir-hoc", side, 1);
+        file_finish_into_group(&conn, deck.id, "palantir-hoc", "nonfoil", 2);
+
+        assert_eq!(owned_of(&conn, deck.id, "palantir-hoc", main), 1);
+        assert_eq!(owned_of(&conn, deck.id, "palantir-hoc", side), 1);
+
+        release_unclaimed_copies(&conn, deck.id, LIVE).unwrap();
+        let group = group_of(&conn, deck.id);
+        assert_eq!(
+            folder_copies(&conn, group, "palantir-hoc"),
+            2,
+            "both rows claim the copies, so the sweep leaves them where they are"
+        );
+    }
+
+    /// **The sweep must not evict the copies an unsaid row claims** — the destructive half of the
+    /// gap. `release_unclaimed_copies` runs after every swap and every finish change, and it
+    /// read an unsaid row as claiming `nonfoil`: the foil copy the reader filed was surplus, and
+    /// the next *Use this printing* on any card in the deck filed it into `Recently removed`.
+    #[test]
+    fn the_sweep_leaves_the_foil_copies_an_unsaid_foil_only_row_claims() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        foil_only(&conn);
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "palantir-hoc", main, 1);
+        file_finish_into_group(&conn, deck.id, "palantir-hoc", "foil", 1);
+
+        release_unclaimed_copies(&conn, deck.id, LIVE).unwrap();
+
+        let group = group_of(&conn, deck.id);
+        assert_eq!(folder_copies_of(&conn, group, "palantir-hoc", "foil"), 1);
+        assert_eq!(
+            folder_copies(&conn, removed_group(&conn), "palantir-hoc"),
+            0
+        );
+    }
+
+    /// And the other direction: **cutting an unsaid foil-only row gives its foil copies back.**
+    /// `release_group_copies` looked for `nonfoil` rows behind it, found none, and left the foil
+    /// copy filed under a deck that no longer lists the card.
+    #[test]
+    fn clearing_an_unsaid_foil_only_row_files_its_foil_copies_into_recently_removed() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        foil_only(&conn);
+        let deck = create_deck(&conn, &input("Bling", "commander")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "palantir-hoc", main, 1);
+        file_finish_into_group(&conn, deck.id, "palantir-hoc", "foil", 1);
+
+        clear_category(&conn, deck.id, main, LIVE).unwrap();
+
+        let group = group_of(&conn, deck.id);
+        assert_eq!(folder_copies(&conn, group, "palantir-hoc"), 0);
+        assert_eq!(
+            folder_copies_of(&conn, removed_group(&conn), "palantir-hoc", "foil"),
+            1
+        );
+    }
+
+    /// **Only a printing with no choice is read this way.** One sold in both finishes keeps the
+    /// regular copy and the foil apart exactly as before — an unsaid row there is the regular
+    /// copy, a foil copy in the group does not answer it, and the sweep evicts that foil.
+    #[test]
+    fn a_printing_sold_in_both_finishes_still_keeps_them_apart() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-m10", main, 1);
+        file_finish_into_group(&conn, deck.id, "bolt-m10", "foil", 1);
+
+        assert_eq!(owned_of(&conn, deck.id, "bolt-m10", main), 0);
+        assert_eq!(
+            live_shortfall(&conn, deck.id)
+                .unwrap()
+                .iter()
+                .map(|r| r.finish.clone())
+                .collect::<Vec<_>>(),
+            vec![None],
+            "the regular copy it lists is what it is short of"
+        );
+        release_unclaimed_copies(&conn, deck.id, LIVE).unwrap();
+        assert_eq!(
+            folder_copies_of(&conn, removed_group(&conn), "bolt-m10", "foil"),
+            1
         );
     }
 }

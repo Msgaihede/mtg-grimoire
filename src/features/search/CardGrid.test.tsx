@@ -170,36 +170,6 @@ describe("CardGrid", () => {
   });
 
   /**
-   * A search row carries `imageUris` — the front face's URLs on `cards.scryfall.io` — so the
-   * claim is that the local cache still wins, not that nothing was passed. A wall that preferred
-   * the row's URL would refetch a screenful of art the cache already holds, over the network, on
-   * every scroll, at Scryfall's expense — and it would still draw cards, so there is nothing on
-   * screen to catch it.
-   */
-  const SCRYFALL = {
-    thumb: "https://cards.scryfall.io/small/front/a/a/aaa.jpg?1706230661",
-    grid: "https://cards.scryfall.io/normal/front/a/a/aaa.jpg?1706230661",
-    display: "https://cards.scryfall.io/large/front/a/a/aaa.jpg?1706230661",
-    art: "https://cards.scryfall.io/art_crop/front/a/a/aaa.jpg?1706230661",
-  } as const;
-
-  it("keeps drawing the cached protocol picture for a row that carries URLs", () => {
-    render(
-      <CardGrid
-        rows={[{ ...card("aaa", "Lightning Bolt"), imageUris: SCRYFALL }]}
-        onSelect={vi.fn()}
-        onNeedNextPage={vi.fn()}
-        listKey="k"
-        zoomSection="search"
-      />,
-    );
-
-    const bolt = screen.getByAltText("Lightning Bolt");
-    expect(bolt).toHaveAttribute("src", expect.stringContaining(`/${WALL_CARD_VARIANT}/aaa/0`));
-    expect(bolt.getAttribute("src")).not.toContain("scryfall.io");
-  });
-
-  /**
    * The tile's own root is what a caller may make draggable, and the art must not compete for
    * it: an `<img>` is draggable by default and the browser picks the *nearest* draggable
    * ancestor as a drag's source, so without this the deck editor's tile drag would never

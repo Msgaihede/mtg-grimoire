@@ -90,11 +90,19 @@ function runFrames(): void {
  *
  * The refs are seeded on the first render rather than attached by React, which is the honest
  * stand-in for a call site whose JSX carries `ref={dockRef}`: by the time a layout effect runs,
- * the ref holds the element either way.
+ * the ref holds the element either way. `top` left out is the hook's own default, which is what
+ * every case written before the parameter existed still drives.
  */
-function mount(dock: HTMLElement | null, anchor: HTMLElement | null) {
-  return renderHook(
-    ({ d, a }: { d: HTMLElement | null; a: HTMLElement | null }) => {
+/** What {@link mount}'s hook is rendered with — named so `rerender` may leave `t` out. */
+interface MountProps {
+  d: HTMLElement | null;
+  a: HTMLElement | null;
+  t?: number;
+}
+
+function mount(dock: HTMLElement | null, anchor: HTMLElement | null, top?: number) {
+  return renderHook<void, MountProps>(
+    ({ d, a, t }: MountProps) => {
       const dockRef = useRef<HTMLElement | null>(d);
       const anchorRef = useRef<HTMLElement | null>(a);
       dockRef.current = d;
@@ -102,9 +110,10 @@ function mount(dock: HTMLElement | null, anchor: HTMLElement | null) {
       useDockHeight(
         dockRef as RefObject<HTMLElement | null>,
         anchorRef as RefObject<HTMLElement | null>,
+        t,
       );
     },
-    { initialProps: { d: dock, a: anchor } },
+    { initialProps: { d: dock, a: anchor, t: top } },
   );
 }
 
@@ -154,6 +163,60 @@ describe("useDockHeight", () => {
     mount(dock, row);
 
     expect(dock.style.height).toBe("0px");
+  });
+
+  /**
+   * **A dock pinned below the scroller's edge stops at its own inset** — the deck editor's, under
+   * its floating header bar (issue #577). Scrolled past, the row no longer says where the dock
+   * sits; the inset does, so 600 less 66 is the whole of what the dock may fill.
+   */
+  it("takes its own sticky inset off the scrollport once the row is above it", () => {
+    const { scroller, row, dock } = tree(600);
+    topAt(scroller, 0);
+    topAt(row, -900);
+
+    mount(dock, row, 66);
+
+    expect(dock.style.height).toBe("534px");
+  });
+
+  /** While the row still starts lower than the inset, the row is what the dock sits on and the
+   *  inset changes nothing — the same 460 the first case measures with no inset at all. */
+  it("measures from the row while the row starts below the inset", () => {
+    const { scroller, row, dock } = tree(600);
+    topAt(scroller, 0);
+    topAt(row, 140);
+
+    mount(dock, row, 66);
+
+    expect(dock.style.height).toBe("460px");
+  });
+
+  /**
+   * **An inset that changes alone is measured in the commit that changed it.** The bar appearing
+   * moves the dock with no scroll and no resize to report it, so a hook that waited for either
+   * would leave the dock at its old height, reaching past the scrollport's foot by the inset. On
+   * the spot rather than on a frame, a frame already owed is dropped because this pass answered
+   * it, and neither box moved so nothing is rewired.
+   */
+  it("re-measures when the inset alone changes", () => {
+    const { scroller, row, dock } = tree(600);
+    topAt(scroller, 0);
+    topAt(row, -900);
+    const view = mount(dock, row);
+    expect(dock.style.height).toBe("600px");
+    frames = [];
+    scroller.dispatchEvent(new Event("scroll"));
+
+    view.rerender({ d: dock, a: row, t: 66 });
+    expect(dock.style.height).toBe("534px");
+    expect(cancelled).toHaveLength(1);
+
+    view.rerender({ d: dock, a: row, t: 0 });
+    expect(dock.style.height).toBe("600px");
+
+    expect(watchers).toHaveLength(1);
+    expect(watchers[0].disconnected).toBe(false);
   });
 
   /**

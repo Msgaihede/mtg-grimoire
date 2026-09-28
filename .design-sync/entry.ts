@@ -41,6 +41,15 @@ export * from "../src/components/CountTag";
 export * from "../src/components/GrimoireMark";
 export * from "../src/components/CardArt";
 export * from "../src/components/Dialog";
+// Added 2026-09-27. All three had stories since before the 2026-09-08 sync and were being dropped
+// as [TITLE_UNMAPPED] with no module to resolve against — Dropdown is the app's only select.
+export * from "../src/components/Dropdown/Dropdown";
+export * from "../src/components/WorkInProgress";
+// The tooltip is a hook and a provider, not a component: `Primitives/Tooltip` maps to
+// `TooltipProvider` in `titleMap`. `useTooltip` has to ride the same global, because its
+// `TooltipContext` is identity — a second copy compiled into a preview reads no provider at all.
+export * from "../src/components/tooltip/TooltipProvider";
+export * from "../src/components/tooltip/useTooltip";
 
 // ── Chrome ───────────────────────────────────────────────────────────────────
 export * from "../src/components/AppShell";

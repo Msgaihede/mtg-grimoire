@@ -55,6 +55,8 @@ const optionId = (id: string, index: number) => `${id}-option-${index}`;
 export function QuickAdd({
   targetName,
   onAdd,
+  fieldClassName,
+  status = "beside",
 }: {
   /**
    * What the pile the add lands in is called, or `null` under `AUTO_CATEGORY` — where there
@@ -70,6 +72,34 @@ export function QuickAdd({
    * rather than from a typed name.
    */
   onAdd: (card: CardSummary) => void;
+  /**
+   * Merged into the field's classes **after** its own, so a width here replaces the default
+   * `w-52` rather than sitting beside it — `cn` is `tailwind-merge`, and two widths in one
+   * group resolve to the last one written.
+   *
+   * For the undocked deck bar (`DeckHeaderBar`), which draws this field at widths of its own —
+   * wider than the toolbar's where the column has room, narrower where it is tight — because a
+   * bar of one fixed line cannot wrap its way out of a width the way the toolbar row does.
+   * Absent, the field is exactly the toolbar's.
+   */
+  fieldClassName?: string;
+  /**
+   * Where the one status line is drawn: `"beside"` the field, as the toolbar has always drawn
+   * it, or `"below"` it as a floating chip.
+   *
+   * **`"below"` exists because the undocked bar has no room beside anything** — every pixel of
+   * its one line is spoken for, and a sentence like `No card found for “Blakc Lotus”.` pushed in
+   * after the field would shove the controls to its right off the bar's end. Under it there is
+   * the deck, which a chip can float over for as long as it has something to say.
+   *
+   * **The `<p role="status">` is the same element in both arrangements, and it never unmounts.**
+   * Only its classes change: `sr-only` while it is empty or while the listbox is up, the chip
+   * otherwise. That is the live-region rule this component already keeps (see the region
+   * itself) — a region that mounted together with its sentence would announce nothing — so
+   * swapping the element rather than restyling it would silence exactly the sentences this is
+   * for.
+   */
+  status?: "beside" | "below";
 }): ReactElement {
   const [text, setText] = useState("");
   /** {@link text} trimmed, {@link DEBOUNCE_MS} later — the same 300ms the three list views use. */
@@ -205,6 +235,14 @@ export function QuickAdd({
     },
   });
   const failure = lookup.isError ? ipcError(lookup.error) : null;
+  /** What the live region says now — the one string both arrangements of it draw. */
+  const statusText = failure
+    ? `Could not search — ${failure}`
+    : lookup.isPending
+      ? "Looking…"
+      : miss !== null
+        ? `No card found for “${miss}”.`
+        : "";
 
   const submit = () => {
     const t = text.trim();
@@ -274,10 +312,14 @@ export function QuickAdd({
      * **Escape's second rung in this one field, and it is not a second registration.**
      *
      * The rung above owns the press while the list is up and consumes it in the **capture**
-     * phase — so by the time this target-phase handler runs, `listOpen` is exactly the test for
-     * "somebody nearer has already spent it". Guarding on the flag rather than on
-     * `e.defaultPrevented` says which layer that was, and keeps the two branches from ever
-     * double-firing on one press.
+     * phase, so by the time this target-phase handler runs the press says so itself:
+     * `defaultPrevented`, which `clearFieldOnEscape` reads. **Not `listOpen`**, which is what
+     * guarded this until 2026-09-28 and says which layer spent it only in jsdom. In the shipped
+     * window React re-renders *between* the rung's listener and this one — Chromium runs a
+     * microtask checkpoint after every listener of a trusted event, and the rung's
+     * `setOpen(false)` is flushed in it — so this handler ran from a render where the list was
+     * already shut, and one press closed the list **and** emptied the field. `QuickAdd.test.tsx`
+     * stands that checkpoint in; the whole reading is on `clearFieldOnEscape`.
      *
      * With the list closed and text in the field, that text is what the press is for: without
      * this the `"navigation"` rung would take it and close the deck the reader was about to add
@@ -288,7 +330,7 @@ export function QuickAdd({
      * suggestions under it at all — the whole first 300ms of typing, and every miss — and those
      * are the presses this exists for.
      */
-    if (!listOpen) clearFieldOnEscape(e, text, () => setText(""));
+    clearFieldOnEscape(e, text, () => setText(""));
     // Nothing to move through, so the arrows keep their native meaning — Home and End really do
     // belong to the caret in a text field with no list under it.
     if (options.length === 0) return;
@@ -357,6 +399,7 @@ export function QuickAdd({
           // another file, so it is the one that drifts silently when the row's height moves.
           "h-9 w-52 rounded-md border border-border bg-bg px-2.5 text-[0.8125rem]",
           FOCUS,
+          fieldClassName,
         )}
       />
 
@@ -429,15 +472,30 @@ export function QuickAdd({
       </AnimatePresence>
 
       {/* One live region, mounted for as long as the toolbar is: a region that appears together
-          with its text announces nothing, because there was no change to notice. */}
-      <p role="status" className="min-w-0 text-[0.6875rem] text-dim">
-        {failure
-          ? `Could not search — ${failure}`
-          : lookup.isPending
-            ? "Looking…"
-            : miss !== null
-              ? `No card found for “${miss}”.`
-              : ""}
+          with its text announces nothing, because there was no change to notice.
+
+          Under `status="below"` the same element is drawn two ways and never swapped: a chip
+          under the field while it has something to say and the listbox is not up — the two
+          would stack on one spot, and the rows are what the reader is reading then — and
+          `sr-only` otherwise, so an empty chip is never a bordered box of nothing and a sentence
+          arriving under an open list is still heard. `absolute`, so it costs the bar no width
+          and the deck under it no height; `LAYER.popup` for the listbox's reason. */}
+      <p
+        role="status"
+        className={cn(
+          "text-[0.6875rem] text-dim",
+          status === "beside"
+            ? "min-w-0"
+            : statusText !== "" && !listOpen
+              ? cn(
+                  "absolute top-full left-0 mt-1 whitespace-nowrap rounded-md border border-border",
+                  "bg-surface px-2.5 py-1 shadow-lg",
+                  LAYER.popup,
+                )
+              : "sr-only",
+        )}
+      >
+        {statusText}
       </p>
     </div>
   );

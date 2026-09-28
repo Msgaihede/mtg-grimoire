@@ -47,6 +47,7 @@
 //! list. Nothing in this module or in `deck.rs` deletes a `theory` row except the ordinary card
 //! writes the user makes against it.
 
+use crate::deck::{entry_finish, entry_spellings, played_finish};
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection};
 use serde::Serialize;
@@ -191,21 +192,6 @@ pub struct TheoryDiffRow {
     /// reader who asked for that printing asked for that printing; netting this out would turn
     /// the button into the app deciding the substitution is good enough.
     pub held_as_other_printing: i64,
-    /// Where [`Self::card_id`]'s picture is, per variant — read off the `LEFT JOIN cards` that
-    /// is already in [`diff_select`] for the oracle id, and built by
-    /// [`crate::image_uri::front_face_selects`] / `front_face_map` so the face-first precedence
-    /// and the `soon.jpg` fence are that module's and not respelled here.
-    ///
-    /// The key the dialog reads is [`crate::image_uri::ART_VARIANT`]: a diff row draws the crop
-    /// beside the name, at the arrangement the editor's zone rows use, so `display` rides along
-    /// because [`crate::image_uri::LIST_VARIANTS`] emits the pair rather than because anything
-    /// on this dialog wants it.
-    ///
-    /// **`None` is the ordinary answer for an orphan**, whose printing has left `cards` and
-    /// whose join therefore answers NULL in both columns — the same rows
-    /// [`Self::held_as_other_printing`] is `0` for, and one of the three states the frame
-    /// draws as a quiet blank.
-    pub image_uris: Option<std::collections::BTreeMap<String, String>>,
     /// Whether this line is a **token or emblem entry** rather than a deck card — the
     /// token-improvements spec §3.7, and what the dialog's **Tokens** view filters on.
     ///
@@ -268,6 +254,9 @@ const TOKEN_CATEGORY: &str = "Tokens & Emblems";
 /// two figures, and has no use for a uuid it cannot show.
 struct Grouped {
     oracle_id: Option<String>,
+    /// The printing's `cards.finishes`, for [`OWNED_SPARE_SQL`]'s [`entry_spellings`] — not on
+    /// [`TheoryDiffRow`] for `oracle_id`'s reason.
+    finishes: Option<String>,
     row: TheoryDiffRow,
 }
 
@@ -282,54 +271,6 @@ const GROUP_SEPARATOR: char = '|';
 /// [`Grouped`]'s key for one deck row: the exact card, in the exact object the row plays.
 fn group_key(card_id: &str, finish: Option<&str>) -> String {
     format!("{card_id}{GROUP_SEPARATOR}{}", finish.unwrap_or(""))
-}
-
-/// The finish a printing leaves no choice about, or `None` — `src/lib/finish.ts`'s `soleFinish`,
-/// line for line, over the JSON text `cards.finishes` holds.
-///
-/// **It has to answer exactly what that function answers**, because the two are the two halves
-/// of one key: [`theory_slots`] spells the plan's side here and `theoryMatch.ts` spells the live
-/// row's side there, and a printing the two disagreed about would miss every lookup. So an
-/// unknown word is dropped *before* counting (`parseFinishes`' rule), a printing sold in two
-/// finishes answers `None` even when neither is `nonfoil`, and `nonfoil` itself answers `None` —
-/// the regular copy is what an unsaid row already is. `deck_tokens`' `default_finish` is a
-/// different question and is not this: it picks a finish to *file*, so it answers `foil` for a
-/// printing sold in foil and etched, where this says the printing has not decided.
-fn sole_finish(finishes: Option<&str>) -> Option<&'static str> {
-    let listed: Vec<serde_json::Value> = serde_json::from_str(finishes?).ok()?;
-    let known: Vec<&'static str> = listed
-        .iter()
-        .filter_map(serde_json::Value::as_str)
-        .filter_map(|word| crate::schema::FINISHES.into_iter().find(|f| *f == word))
-        .collect();
-    match known.as_slice() {
-        [only] if *only != crate::schema::FINISHES[0] => Some(only),
-        _ => None,
-    }
-}
-
-/// The finish a deck row **plays** — its own where it names one, and the printing's
-/// [`sole_finish`] where it does not. `src/lib/finish.ts`'s `playedFinish`, and the finish half of
-/// every [`group_key`] this module builds.
-///
-/// **Why the comparison reads this rather than the raw column**
-/// ([issue #563](https://github.com/Msgaihede/mtg-grimoire/issues/563)). `deck_cards.finish` is
-/// NULL where a write named no finish, and most writes name none: the search's Add, the quick
-/// add, every drag and a decklist line without a `*F*`. An add out of the binder names the copy's
-/// own. For a printing sold in both finishes that NULL is the regular copy and the two spellings
-/// are rightly two objects — but for one sold **only** in foil it can be nothing but the foil, and
-/// the deck's own views already draw it with the foil mark. Keyed raw, the plan's `id|` and the
-/// live list's `id|foil` were one Surge Foil Palantír counted as two cards, so the copy the reader
-/// had put in both lists was on the Compare dialog, the wishlist press and the managed wishlist
-/// at once. [`crate::deck::normalise_finish`]'s doc names this shape — two spellings that draw
-/// identically and sum apart — as the worst a bug in that table can have; this is the one it
-/// could not see, because telling them apart needs the printing.
-///
-/// Read rather than written: the rows keep what their writers stored, so a database already
-/// holding both spellings, and a sync peer on an older build writing either, compare correctly
-/// with no rung.
-fn played_finish(stored: Option<String>, finishes: Option<&str>) -> Option<String> {
-    stored.or_else(|| sole_finish(finishes).map(str::to_owned))
 }
 
 /// Every row of one deck, both variants, in the editor's own order — [`theory_diff`]'s input.
@@ -349,20 +290,13 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
             dc.collector_number, dc.quantity, cat.name, c.oracle_id, dc.finish,
             -- Beside the finish it completes: [`played_finish`] reads the two together.
             c.finishes,
-            {price},
-            -- Last, and the reads below are positional, so a column added anywhere else
-            -- shifts every index after it into a field of the same SQLite type. Built by
-            -- `image_uri::front_face_selects` off the `cards` row this select already joins
-            -- for `c.oracle_id`, so the precedence between the two columns stays that
-            -- module's rather than being respelled as a `COALESCE` here.
-            {image_uris}
+            {price}
        FROM deck_cards dc
        JOIN deck_categories cat ON cat.id = dc.category_id
        LEFT JOIN cards c ON c.id = dc.card_id
       WHERE dc.deck_id = ?1 AND cat.is_active = 1
       ORDER BY cat.sort_order, cat.id, dc.name, dc.id",
-        price = crate::sorting::deck_card_price_expr(marketplace),
-        image_uris = crate::image_uri::front_face_selects("c").join(", ")
+        price = crate::sorting::deck_card_price_expr(marketplace)
     )
 }
 
@@ -405,14 +339,18 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
 /// not disagree about what a card is: "buy the foil retro-frame one" over a spare count earned
 /// by regular precon copies is a sentence about two different objects.
 ///
-/// **`?2` is the finish the line plays ([`played_finish`]), and the `coalesce` is the translation
-/// between two spellings of the regular copy**: the deck spells it NULL
-/// ([`crate::deck::normalise_finish`], so the grain's `coalesce(finish, '')` has one thing to
-/// compare) while `collection_entries.finish` is `NOT NULL` and spells it `nonfoil` outright.
-/// Binding the deck's NULL straight through would make every regular line read zero spare. It is
-/// the *played* finish rather than the stored one for the same reason one level up: an unsaid row
-/// of a foil-only printing bound as `nonfoil` counted none of the foil copies the binder holds,
-/// which are the only copies of it there are.
+/// **`?2` and `?3` are the words a copy of the line's finish may carry** —
+/// [`crate::deck::entry_spellings`] of the finish the line plays, in the collection's spelling
+/// ([`crate::deck::entry_finish`]). That is the translation between two spellings of the regular
+/// copy: the deck spells it NULL ([`crate::deck::normalise_finish`], so the grain's
+/// `coalesce(finish, '')` has one thing to compare) while `collection_entries.finish` is `NOT NULL`
+/// and spells it `nonfoil` outright, and binding the deck's NULL straight through would make every
+/// regular line read zero spare. It is the *played* finish rather than the stored one for the same
+/// reason one level up: an unsaid row of a foil-only printing bound as `nonfoil` counted none of
+/// the foil copies the binder holds, which are the only copies of it there are. And it is **both**
+/// spellings on such a printing, because a binder row stored `nonfoil` for a card sold only in foil
+/// is that foil too (2026-09-27) — the quick add, an import that named no finish and the scanner's
+/// default all wrote one. Everywhere else the two holes carry one word twice.
 ///
 /// No `LEFT JOIN cards` and no orphan arm: `collection_entries.card_id` is the printing, so an
 /// entry whose card has left the corpus is matched by exactly the same equality as every other.
@@ -447,7 +385,7 @@ static OWNED_SPARE_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|
     format!(
         "SELECT coalesce(sum(e.quantity), 0)
        FROM collection_entries e
-      WHERE e.card_id = ?1 AND e.finish = coalesce(?2, 'nonfoil')
+      WHERE e.card_id = ?1 AND e.finish IN (?2, ?3)
         AND (e.folder_id IS NULL
              OR (SELECT f.kind FROM collection_folders f
                   WHERE f.id = e.folder_id) <> '{deck}')
@@ -586,8 +524,10 @@ impl Tally {
             // built deck's stored claims and a collection stepped down under one went negative.
             // This one sums quantities off a column with `CHECK (quantity >= 0)`, so there is no
             // arithmetic left that can produce a number with no reading.
+            let played = entry_finish(grouped.row.finish.as_deref(), grouped.finishes.as_deref());
+            let [said, legacy] = entry_spellings(&played, grouped.finishes.as_deref());
             grouped.row.owned_spare = spare
-                .query_row(params![grouped.row.card_id, grouped.row.finish], |r| {
+                .query_row(params![grouped.row.card_id, said, legacy], |r| {
                     r.get::<_, i64>(0)
                 })
                 .map_err(|e| e.to_string())?;
@@ -633,9 +573,6 @@ fn grouped_diff(
     deck_id: i64,
     marketplace: crate::sorting::Marketplace,
 ) -> Result<Vec<Grouped>, String> {
-    /// Where `diff_select`'s image columns start — one past the price expression, which is the
-    /// last named column.
-    const IMAGE_COL: usize = 11;
     // Both variants in one read: two reads could not be compared, because a card write between
     // them would put a copy on one side of the subtraction and not the other.
     let sql = diff_select(marketplace);
@@ -654,16 +591,6 @@ fn grouped_diff(
                 r.get::<_, Option<String>>(8)?, // finish, as stored
                 r.get::<_, Option<String>>(9)?, // the printing's finishes
                 r.get::<_, Option<f64>>(10)?,   // unit price
-                // **From 11**, last of all, for the reason written into `diff_select` — the
-                // `image_uri::FRONT_FACE_COLUMNS` expressions it appended, folded back into the
-                // front face's variant → URL map by the module that emitted them.
-                //
-                // The offset is written here beside the read because this is the one column
-                // group whose off-by-one is invisible: each variant's pair is
-                // (top-level, face), `for_face` prefers the face, so a read one column out
-                // still answers a real URL — another variant's, or the top-level blob where the
-                // face's belongs. `image_uri`'s `meld` fixture is the shape that can fail on it.
-                crate::image_uri::front_face_map(|i| r.get::<_, Option<String>>(IMAGE_COL + i))?,
             ))
         })
         .map_err(|e| e.to_string())?;
@@ -682,7 +609,6 @@ fn grouped_diff(
             finish,
             finishes,
             unit_price,
-            image_uris,
         ) = row.map_err(|e| e.to_string())?;
         // The finish the row *plays*, not the one it happened to store — issue #563, and
         // [`played_finish`]'s whole argument. It is also what the line reports and what its wish
@@ -695,6 +621,7 @@ fn grouped_diff(
         if variant == THEORY {
             tally.want(key, quantity, || Grouped {
                 oracle_id: oracle,
+                finishes,
                 row: TheoryDiffRow {
                     card_id,
                     name,
@@ -707,7 +634,6 @@ fn grouped_diff(
                     finish,
                     owned_spare: 0,
                     held_as_other_printing: 0,
-                    image_uris,
                     is_token: false,
                 },
             });
@@ -733,9 +659,10 @@ fn grouped_diff(
 /// reads active piles only, which is [`diff_select`]'s rule from the other table.
 ///
 /// **The regular copy is spelled `None`**, as a card row spells it, where an entry always names
-/// its finish: so the dialog's key, [`OWNED_SPARE_SQL`]'s `coalesce(?2, 'nonfoil')` and the
-/// Compare views read a token line exactly as they read a card line. [`wish_finish`] spells it
-/// back out for the wish.
+/// its finish: so the dialog's key, [`OWNED_SPARE_SQL`]'s [`entry_spellings`] and the Compare
+/// views read a token line exactly as they read a card line — the entry's printing's
+/// `cards.finishes` rides on [`Grouped`] for the spare count, as a card row's does. [`wish_finish`]
+/// spells it back out for the wish.
 ///
 /// **An entry whose printing has left the corpus is an orphan**, [`grouped_diff`]'s kind: its
 /// chin reads `None` ([`crate::deck_tokens::DeckTokenRow::set_code`]'s rule), so it carries no
@@ -754,6 +681,7 @@ fn token_diff(
         let oracle = token.set_code.is_some().then_some(token.oracle_id);
         tally.want(key, token.quantity, || Grouped {
             oracle_id: oracle,
+            finishes: token.finishes,
             row: TheoryDiffRow {
                 card_id: token.card_id,
                 name: token.name,
@@ -765,7 +693,6 @@ fn token_diff(
                 finish,
                 owned_spare: 0,
                 held_as_other_printing: 0,
-                image_uris: token.image_uris,
                 is_token: true,
             },
         });
@@ -1742,92 +1669,6 @@ mod tests {
         );
     }
 
-    /// **A diff row carries its printing's picture.**
-    ///
-    /// **`bolt-m10` is shaped like a `meld` printing here** — all four variants in *both*
-    /// columns, every one a different URL — because that is the only shape where each way of
-    /// getting the read wrong gives a different answer instead of the right one by luck. The
-    /// pair `front_face_selects` emits is `(top-level, face)` and `for_face` prefers the face,
-    /// so a read one column out still hands back a real URL on the real host with a real
-    /// version: the crop under `display`, or the top-level blob where the face's belongs.
-    ///
-    /// `serra-lea` carries neither column, which is the ordinary state of 162 of the live
-    /// corpus's rows, and `bolt-lea` publishes Scryfall's error page — `None` for both, which
-    /// is the frame's quiet blank rather than a URL a browser will request.
-    #[test]
-    fn a_diff_row_carries_the_printings_art() {
-        let conn = seeded();
-        conn.execute(
-            "UPDATE cards SET
-                 image_uris = json_object(
-                     'thumb','https://cards.scryfall.io/thumb/top.webp?5',
-                     'grid','https://cards.scryfall.io/grid/top.webp?5',
-                     'display','https://cards.scryfall.io/display/top.webp?5',
-                     'art','https://cards.scryfall.io/art/top.webp?5'),
-                 face_image_uris = json_array(json_object(
-                     'thumb','https://cards.scryfall.io/thumb/face0.webp?5',
-                     'grid','https://cards.scryfall.io/grid/face0.webp?5',
-                     'display','https://cards.scryfall.io/display/face0.webp?5',
-                     'art','https://cards.scryfall.io/art/face0.webp?5'))
-              WHERE id = 'bolt-m10'",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "UPDATE cards SET image_uris = json_object(
-                 'art','https://errors.scryfall.com/soon.jpg')
-              WHERE id = 'bolt-lea'",
-            [],
-        )
-        .unwrap();
-
-        let id = deck(&conn, "Burn");
-        let main = category(&conn, id, "Main deck");
-        add(&conn, id, "bolt-m10", main, THEORY, 1);
-        add(&conn, id, "bolt-lea", main, THEORY, 1);
-        add(&conn, id, "serra-lea", main, THEORY, 1);
-
-        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
-        let of = |card_id: &str| {
-            diff.iter()
-                .find(|r| r.card_id == card_id)
-                .unwrap_or_else(|| panic!("no `{card_id}` on the list"))
-                .image_uris
-                .clone()
-        };
-
-        let uris = of("bolt-m10").expect("a printing with pictures");
-        assert_eq!(
-            uris[crate::image_uri::ART_VARIANT],
-            "https://cards.scryfall.io/art/face0.webp?5",
-            "the crop the row draws, from the face and not the top-level blob"
-        );
-        assert_eq!(
-            uris[crate::image_uri::LIST_VARIANT],
-            "https://cards.scryfall.io/display/face0.webp?5",
-            "and the card, at its own offset"
-        );
-        // Spelled out rather than read off `LIST_VARIANTS`: an assertion that reads the
-        // constant it is fencing can never fail when that constant moves, and `bolt-m10` here
-        // carries all four variants, so a widening comes back as real URLs under real keys.
-        assert_eq!(
-            uris.keys().map(String::as_str).collect::<Vec<_>>(),
-            ["art", "display"],
-            "what a list row carries and nothing else"
-        );
-
-        assert_eq!(
-            of("bolt-lea"),
-            None,
-            "an error page is a gap, not a picture"
-        );
-        assert_eq!(
-            of("serra-lea"),
-            None,
-            "and a printing with neither column carries nothing"
-        );
-    }
-
     /// **The finish is part of the identity too**, which is the other half of "the exact card".
     /// A plan calling for the foil is a plan for the foil: the regular copy in the live list
     /// does not answer it, the two are separate lines, and they are priced apart — `unit_price`
@@ -1995,6 +1836,29 @@ mod tests {
         );
     }
 
+    /// **A `nonfoil` binder copy of a foil-only printing is the foil too**, on this side of the
+    /// comparison as on the deck's: the quick add, *Add missing to collection*, an import that
+    /// named no finish and the scanner all wrote that word for a card that has no such copy.
+    /// `crate::deck::entry_finish` reads both tables the same way, so the spare figure counts it.
+    #[test]
+    fn a_legacy_nonfoil_copy_of_a_foil_only_printing_counts_as_spare() {
+        let conn = seeded();
+        foil_only(&conn);
+        own_finish(&conn, "palantir-hoc", "nonfoil", 1);
+        let id = deck(&conn, "Palantír");
+        let main = category(&conn, id, "Main deck");
+        add_finish(&conn, id, "palantir-hoc", main, THEORY, None, 1);
+
+        let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
+        assert_eq!(
+            diff.iter()
+                .map(|r| (r.finish.as_deref(), r.owned_spare))
+                .collect::<Vec<_>>(),
+            vec![(Some("foil"), 1)],
+            "{diff:?}"
+        );
+    }
+
     /// The press the Compare dialog makes, for issue #563's card. Its `only` keys are built off the
     /// diff rows, whose finish is the played one, so the dialog ticks `palantir-hoc|foil`, and that
     /// is the spelling the press has to find. The wish is pinned to the foil, the only finish the
@@ -2060,29 +1924,6 @@ mod tests {
             "bolt-lea|foil",
             "and the regular copy in the live list keeps its own key, `bolt-lea|`"
         );
-    }
-
-    /// [`sole_finish`] is `finish.ts`'s `soleFinish`, and the two sides of the theory key must
-    /// agree on every one of these — `theoryMatch.test.ts` pins the same literals from the other
-    /// end of the IPC boundary.
-    #[test]
-    fn sole_finish_answers_only_for_a_printing_with_no_choice() {
-        for (finishes, sole) in [
-            (Some(r#"["foil"]"#), Some("foil")),
-            (Some(r#"["etched"]"#), Some("etched")),
-            (Some(r#"["nonfoil"]"#), None),
-            (Some(r#"["nonfoil","foil"]"#), None),
-            (Some(r#"["foil","etched"]"#), None),
-            // A repeated word is counted twice, as `parseFinishes` keeps it twice.
-            (Some(r#"["foil","foil"]"#), None),
-            // An unknown word is dropped before counting, as `parseFinishes` drops it.
-            (Some(r#"["foil","glossy"]"#), Some("foil")),
-            (Some("not json"), None),
-            (Some(r#"{"foil":true}"#), None),
-            (None, None),
-        ] {
-            assert_eq!(sole_finish(finishes), sole, "{finishes:?}");
-        }
     }
 
     /// An inactive category counts toward nothing — on **both** sides. A card parked in the
@@ -3626,20 +3467,6 @@ mod tests {
             finish: Some("foil".to_owned()),
             owned_spare: 1,
             held_as_other_printing: 1,
-            // Two keys, both real URLs, because this is the one field on the row whose *shape*
-            // crosses the boundary rather than a scalar: `Option<BTreeMap>` has to reach
-            // TypeScript as an object of variant keys, and the dialog reads `art` out of it by
-            // name.
-            image_uris: Some(std::collections::BTreeMap::from([
-                (
-                    "art".to_owned(),
-                    "https://cards.scryfall.io/art/front/0/0/bolt.webp?17".to_owned(),
-                ),
-                (
-                    "display".to_owned(),
-                    "https://cards.scryfall.io/display/front/0/0/bolt.webp?17".to_owned(),
-                ),
-            ])),
             is_token: false,
         })
         .unwrap();
@@ -3650,10 +3477,6 @@ mod tests {
                 "quantity": 2, "unitPrice": 400.0,
                 "setCode": "lea", "collectorNumber": "161", "finish": "foil", "ownedSpare": 1,
                 "heldAsOtherPrinting": 1,
-                "imageUris": {
-                    "art": "https://cards.scryfall.io/art/front/0/0/bolt.webp?17",
-                    "display": "https://cards.scryfall.io/display/front/0/0/bolt.webp?17"
-                },
                 "isToken": false
             })
         );

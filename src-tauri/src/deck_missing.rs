@@ -62,7 +62,7 @@
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 
 /// Reused verbatim rather than respelled — this crate's standing rule, and the same one that
 /// keeps [`crate::collection::ZERO_ADD`] a single sentence for two tables. Both of these are
@@ -126,10 +126,11 @@ pub struct MissingRow {
     pub name: String,
     pub set_code: String,
     pub collector_number: String,
-    /// The deck row's finish, where `None` is nonfoil — [`crate::deck::normalise_finish`]'s
-    /// translation carried through unchanged, so a caller holding both this and a
-    /// [`crate::deck::DeckCardRow`] never has to tell two spellings of "regular" apart. The other
-    /// half of the pick's key.
+    /// The finish the deck rows **play** — [`crate::deck::played_finish`], where `None` is the
+    /// regular copy — and the other half of the pick's key. Not the column as stored: an unsaid
+    /// row of a printing sold only in foil reads `foil` here (2026-09-27), because that is the
+    /// copy the reader bought, so a caller matching a [`crate::deck::DeckCardRow`] against this
+    /// reads that row through `playedFinish` too (`pullPlan.ts`' `deckCardPullKey`).
     pub finish: Option<String>,
     /// Copies of this printing and finish the live list still wants, summed over its **active**
     /// piles — `quantity - owned_quantity`, the subtraction the editor's missing badge draws.
@@ -138,11 +139,6 @@ pub struct MissingRow {
     /// and never for the write**: this press writes no `deck_cards` row, so there is no pile for
     /// the copies to land in and nothing here is an argument to anything.
     pub categories: Vec<String>,
-    /// The printing's picture, front face — taken off the deck row rather than queried again, so
-    /// [`crate::image_uri::front_face_map`]'s precedence keeps its one home. Never `None` in
-    /// practice, because [`plan`] has already dropped the orphans that are the only rows
-    /// [`crate::deck::live_shortfall`] answers `None` for.
-    pub image_uris: Option<BTreeMap<String, String>>,
     /// Every wishlist line these copies could take down, best first —
     /// [`crate::deck_quick_add::wishes`]' answer for this printing and finish, **verbatim**. It is
     /// the same function the per-card menu calls, so the two entrances cannot come to disagree
@@ -165,7 +161,10 @@ pub struct MissingRow {
 #[serde(rename_all = "camelCase")]
 pub struct MissingPick {
     pub card_id: String,
-    /// The deck row's spelling, echoed back off [`MissingRow::finish`], where `None` is nonfoil.
+    /// The deck row's spelling, where `None` is the regular copy — echoed back off
+    /// [`MissingRow::finish`], or a deck card's own. Resolved through the printing before it is
+    /// checked ([`crate::deck::entry_finish_for`]), so on a printing sold only in foil `None` and
+    /// `foil` are the same pick.
     pub finish: Option<String>,
     /// At least one, and never more than the deck is short of. Both are checked against the plan
     /// re-read inside the transaction; neither is trusted.
@@ -265,7 +264,6 @@ pub fn plan(conn: &Connection, deck_id: i64) -> Result<Vec<MissingRow>, String> 
             finish: row.finish,
             short: row.short,
             categories: row.categories,
-            image_uris: row.image_uris,
             wishes,
         });
     }
@@ -357,9 +355,12 @@ pub fn to_collection(
         // The deck's spelling into the collection's, once per pick, and read by both halves below
         // — the `collection_entries.finish` this writes and the
         // `wishlist_entries.preferred_finish` the wish is matched against are one vocabulary, and
-        // a second translation is a second thing to drift.
-        let finish = crate::deck::normalise_finish(pick.finish.as_deref())?
-            .unwrap_or_else(|| NONFOIL.to_owned());
+        // a second translation is a second thing to drift. **The finish the row plays**,
+        // [`crate::deck::entry_finish_for`]: a pick the page built off a deck card carries that
+        // card's own NULL, a pick echoed off [`MissingRow::finish`] carries the played word, and on
+        // a printing sold only in foil both are the foil — one key, and a `foil` copy recorded,
+        // where this wrote `nonfoil` until 2026-09-27.
+        let finish = crate::deck::entry_finish_for(conn, &pick.card_id, pick.finish.as_deref())?;
         let key = (pick.card_id.clone(), finish);
         match at.get(&key).copied() {
             Some(i) => wanted[i].1 += pick.quantity,
@@ -383,7 +384,8 @@ pub fn to_collection(
         .ok_or_else(|| crate::collection_alloc::NO_DECK_GROUP.to_owned())?;
 
     // Keyed in the **collection's** spelling, so the lookup below compares like with like: the
-    // plan carries the deck row's finish and the picks were normalised a dozen lines up.
+    // plan carries the finish each row plays — already resolved through the printing, so its
+    // `None` is the regular copy and nothing else — and the picks were resolved a dozen lines up.
     let mut short_at: HashMap<(String, String), i64> = HashMap::new();
     for row in plan(&tx, deck_id)? {
         let finish = crate::deck::normalise_finish(row.finish.as_deref())?
@@ -459,10 +461,10 @@ pub fn to_collection(
 ///
 /// The finish crosses this call in the **collection's** spelling, which is the one
 /// [`crate::deck_quick_add::wishes`] normalises *from* rather than the one it wants: that function
-/// takes the deck's word and runs [`crate::deck::normalise_finish`] itself. The round trip is
-/// stable because that function maps `Some("nonfoil")` to `None`, which `wishes` then defaults
-/// back to [`NONFOIL`] — so handing it the stored word answers the same rows as handing it the
-/// deck's `None` would have.
+/// takes the deck's word and runs [`crate::deck::entry_finish_for`] itself. The round trip is
+/// stable because that function reads `Some("nonfoil")` exactly as it reads `None` — through the
+/// printing, to [`NONFOIL`] or to a foil-only card's `foil` — so handing it the stored word answers
+/// the same rows as handing it the deck's `None` would have.
 ///
 /// `take = min(recorded, the wish's quantity)`, and taking the lot **deletes** the row, because
 /// `wishlist_entries.quantity` is `CHECK (quantity > 0)` and a wish for none of something is not a
@@ -772,6 +774,56 @@ mod tests {
         let out = to_collection(&conn, deck, &[pick("bolt", 2)], true).unwrap();
         assert_eq!(out.copies, 2);
         assert_eq!(group_copies(&conn, deck, "bolt"), 2);
+    }
+
+    /// **An unsaid row of a printing sold only in foil records the foil it can only be** (issue
+    /// #563's follow-up). The row's NULL was translated to `nonfoil`, so the press wrote a copy
+    /// nobody sells — and the deck, whose other reads now key on the played finish, would go on
+    /// reading it as missing. The plan says `foil`, the finish the row plays; a pick naming the
+    /// deck card's own NULL and a pick echoing the plan's `foil` are the same pick.
+    #[test]
+    fn an_unsaid_foil_only_row_records_foil_copies() {
+        let (conn, deck, cat) = fixture();
+        conn.execute(
+            "UPDATE cards SET finishes = '[\"foil\"]' WHERE id = 'bolt'",
+            [],
+        )
+        .unwrap();
+        add_deck_card(&conn, deck, cat, "bolt", 2, None);
+
+        let rows = plan(&conn, deck).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].finish.as_deref(), Some("foil"));
+
+        to_collection(&conn, deck, &[pick("bolt", 1)], true).unwrap();
+        to_collection(
+            &conn,
+            deck,
+            &[MissingPick {
+                card_id: "bolt".to_owned(),
+                finish: Some("foil".to_owned()),
+                quantity: 1,
+            }],
+            true,
+        )
+        .unwrap();
+
+        let group = crate::deck::deck_group(&conn, deck).unwrap();
+        let by_finish: Vec<(String, i64)> = conn
+            .prepare(
+                "SELECT finish, sum(quantity) FROM collection_entries
+                  WHERE card_id = 'bolt' AND folder_id = ?1 GROUP BY finish",
+            )
+            .unwrap()
+            .query_map(params![group], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(by_finish, vec![("foil".to_owned(), 2)]);
+        assert!(
+            plan(&conn, deck).unwrap().is_empty(),
+            "and the deck counts them: nothing is short"
+        );
     }
 
     #[test]

@@ -84,6 +84,17 @@
     },
     "TitleBar": {
       "cardMode": "column"
+    },
+    "TooltipProvider": {
+      "cardMode": "single",
+      "primaryStory": "Interactive"
+    },
+    "Dropdown": {
+      "skip": [
+        "primitives-dropdown-placementprobe--in-a-scroller",
+        "primitives-dropdown-placementprobe--in-a-transformed-box",
+        "primitives-dropdown-placementprobe--at-the-bottom"
+      ]
     }
   },
   "storyImports": {
@@ -91,13 +102,15 @@
       "/components/FilterChips",
       "/lib/store",
       ".storybook/fake/",
-      "@tanstack/react-query"
+      "@tanstack/react-query",
+      "/components/tooltip/useTooltip"
     ]
   },
   "titleMap": {
     "Contextmenu": "ContextMenu",
     "Dialogshell": "Dialog",
     "FilterChips": "ToggleChip",
+    "Tooltip": "TooltipProvider",
     "Designsystem": null,
     "DetailPane": null,
     "PrintingPreview": null,

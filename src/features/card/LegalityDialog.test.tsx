@@ -56,7 +56,6 @@ const detail: CardDetail = {
   promoTypes: null,
   imageStatus: "highres_scan",
   faces: [],
-  imageUris: null,
 };
 
 const card = (over: Partial<CardDetail> = {}): CardDetail => ({ ...detail, ...over });

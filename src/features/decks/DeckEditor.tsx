@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ChevronLeft,
@@ -23,6 +23,7 @@ import {
   filterChipState,
   ToggleChip,
 } from "@/components/FilterChips";
+import type { MenuItem } from "@/components/menu/types";
 import { isTextField, useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
@@ -45,15 +46,17 @@ import {
   type DeckQuickAddWish,
   type DeckVariant,
 } from "@/lib/ipc";
-import { PRESS, statusLine } from "@/lib/motion";
+import { statusLine } from "@/lib/motion";
+import { PLAIN_PRESS } from "./headerControls";
 import { sortOptions } from "@/lib/options";
 import { matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useCardSelection } from "@/lib/useCardSelection";
-import { useDockHeight } from "@/lib/useDockHeight";
+import { nearestScroller, useDockHeight } from "@/lib/useDockHeight";
 import { useScrollPerView } from "@/lib/useScrollPerView";
+import { useUndocked } from "@/lib/useUndocked";
 import { cn } from "@/lib/utils";
 import { batchWrite, handled, NO_BATCH, newestWrite, writeFailure, type Write } from "@/lib/writes";
 import {
@@ -121,7 +124,7 @@ import { RenameField } from "./metaRows";
 import { AddLabelDialog } from "./AddLabelDialog";
 import { AddMissingToCollectionDialog } from "./AddMissingToCollectionDialog";
 import { PriceStrip } from "./PriceStrip";
-import { pullKey } from "./pullPlan";
+import { deckCardPullKey, pullKey } from "./pullPlan";
 import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
 // **`quickCollection` and not `quickAdd`**, which is a Windows filename hazard rather than a
 // naming preference: `QuickAdd.tsx` — the toolbar's quick-add field — already sits in this
@@ -134,6 +137,7 @@ import {
   missingPicks,
   type QuickAddTarget,
 } from "./quickCollection";
+import { DECK_BAR_CLEARANCE_PX, DeckHeaderBar } from "./DeckHeaderBar";
 import { QuickAdd } from "./QuickAdd";
 import { QuickUnwishDialog } from "./QuickUnwishDialog";
 import { QuickCategoryDialog, QuickZones } from "./QuickZones";
@@ -186,42 +190,6 @@ const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
 const UNDO = shortcut("deckEditor", "undo");
 const REDO = shortcut("deckEditor", "redo");
 const REMOVE = shortcut("deckEditor", "remove");
-
-/**
- * A header/toolbar press that is not a chip — since 2026-08-26 exactly the undo/redo pair and
- * the header's Categories/Labels/History/Deck settings row.
- *
- * **The toolbar's three pickers — View, Group by, Sort — drew from this same string until
- * then.** They moved onto `components/Dropdown`, whose trigger is a `<button>` rather than a
- * `<select>` and draws its own `md` geometry rather than borrowing this one; a native select and
- * a popup-driven button were never going to share one class list forever. What is left is what
- * this doc's own numbers were always about — a plain press, never a picker.
- *
- * **36px, and the number is `FILTER_CONTROL`'s rather than one of this file's own.** It was 32
- * for the same stated reason it is 36 now — "so the two rows read as rows rather than as a pile
- * of differently sized boxes" — but the rows it was measured against grew a chip since:
- * `Split X` sits in the toolbar, and `ToggleChip` is `FILTER_CONTROL`, which is 36. So a height
- * meant to unify was drawing the plain presses four pixels shorter than the chip beside them,
- * and shorter again than the `h-9` back button at the head of the header row. Every other filter
- * row in the app (search, collection, wishlist) is already 36; this is the deck editor joining
- * them rather than a size invented here. The header carried a `Built` chip of its own when this
- * was measured; that chip is gone, and 36 stands on the app-wide agreement rather than on it.
- *
- * **`text-xs` stays, and that is a width decision with a measurement behind it.** `FILTER_CONTROL`
- * carries `text-sm`, but the six controls drawn with this string are the header's widest block —
- * measured at **692px** at max-content — and 14px glyphs put it near **760**, which is more than
- * the 1017px content box a 1280×800 window leaves once the sidebar, the shell padding and the
- * editor's own scrollbar are taken off. The row is `flex-wrap`, so it does not overflow; it wraps,
- * and a wrapped header costs 44px of deck height at the app's own default window size — the
- * regression `NAME_FLOOR` (see {@link DeckNameField}) exists to keep out. Height is the axis
- * that had room.
- *
- * The press is {@link PRESS}, the app's one recipe.
- */
-const PLAIN_PRESS =
-  "h-9 rounded-md border border-border bg-surface px-2.5 text-xs text-dim " +
-  `${PRESS} ` +
-  "disabled:active:scale-100";
 
 /**
  * Narrowest the deck itself may be squeezed to, in px, before the docked search panel gives
@@ -717,8 +685,8 @@ type Layer =
    * reads the live list, because a plan holds no cardboard for a pull to move copies into), so
    * there was nothing for an arm to hold that the editor did not already know. That is still true of the *read*: a
    * deck card's `Collection ▸ Pull …` (issue #350) fetches the same plan under the same key and
-   * this arm narrows only what the dialog is handed — the rows whose {@link pullKey} matches
-   * this card, and that card's name for the subtitle.
+   * this arm narrows only what the dialog is handed — the rows whose key matches this card's
+   * {@link deckCardPullKey}, and that card's name for the subtitle.
    *
    * **So the payload is what the dialog draws, never what is read**, which is why the query's
    * gate below asks `layer?.kind === "pull"` and not {@link layerMatches}: both shapes want the
@@ -874,12 +842,14 @@ export function layerMatches(open: Layer, target: NonNullable<Layer>): boolean {
     // that card, so a bare kind test would have the band's button claim to be open while a
     // per-card dialog was up. Two *cards* can never be open at once — there is one slot — so the
     // comparison below is a courtesy rather than a case anything reaches, and it is by
-    // {@link pullKey} rather than by object identity because a `DeckCard` is a fresh object on
-    // every `deck_get`.
+    // {@link deckCardPullKey} rather than by object identity because a `DeckCard` is a fresh
+    // object on every `deck_get`. The played-finish key rather than the stored one because it is
+    // the key the dialog is narrowed by (`pulledRows`): two cards it cannot tell apart open the
+    // same rows, which is the question this asks.
     if (open.cards === undefined || target.cards === undefined) {
       return open.cards === undefined && target.cards === undefined;
     }
-    const keys = (cards: readonly DeckCard[]) => cards.map(pullKey).join("\n");
+    const keys = (cards: readonly DeckCard[]) => cards.map(deckCardPullKey).join("\n");
     return keys(open.cards) === keys(target.cards);
   }
   return true;
@@ -1281,6 +1251,54 @@ export function DeckEditor({ deckId }: { deckId: number }) {
      that view grows too now and there is no scrollport left in here at all. */
   /** The box the docked search panel is pinned inside — see {@link DeckEditor}'s dock effect. */
   const dockRef = useRef<HTMLDivElement>(null);
+  /**
+   * The header's third line, and whether it has scrolled up out of the page (issue #577).
+   *
+   * **Docked** is the header drawn where it always was; **undocked** is that line gone above the
+   * top of `AppShell`'s `main`, which is when {@link DeckHeaderBar} comes down in its place with
+   * the controls a reader reaches for mid-deck. The line rather than the whole header, because the
+   * toolbar is what the bar stands in for: while any of it is on screen there is nothing to stand
+   * in for.
+   *
+   * **An observer, never a scroll listener** — {@link useUndocked} answers only when the answer
+   * flips, so this editor re-renders twice per trip down the page rather than once per frame of it.
+   * Held in state through a callback ref because the line mounts only once `deck_get` answers.
+   * jsdom's stub observer never fires, so no existing test ever sees the bar.
+   */
+  const [toolbarLine, setToolbarLine] = useState<HTMLDivElement | null>(null);
+  const undocked = useUndocked(toolbarLine);
+  /**
+   * How far down the page the two other sticky things on it start while the bar is down: the
+   * search panel's dock (its `top`, and the height {@link useDockHeight} draws it) and the Table
+   * view's column header (through `--sticky-top`, on the view box only — the panel's own tables are
+   * scrollers of their own and must not inherit it). Neither moves for a drag, when the bar hides
+   * under the quick zones: those cover the top 92px anyway, and a drag must not re-render this.
+   */
+  const barClearance = undocked ? DECK_BAR_CLEARANCE_PX : 0;
+  /** The header's first control, where the caret goes when the bar's ↥ takes the reader back up. */
+  const backRef = useRef<HTMLButtonElement>(null);
+  /**
+   * **A caret the page scrolls to must not land under the bar** — WCAG 2.4.11, Focus Not
+   * Obscured. The arrow keys walk the desk by focusing cards, and a focus scrolls its target only
+   * as far as the scrollport's edge, which is exactly where the bar sits: the card would be
+   * reached and not be seen. `scroll-padding-top` on the scroller moves that edge for every
+   * scroll-into-view at once. It belongs to `AppShell`'s `main`, which this editor does not draw,
+   * so it is set on the node for as long as the bar is down and taken off when it goes or the
+   * editor unmounts — the one style this file writes onto an element it does not own.
+   */
+  useEffect(() => {
+    const scroller = editorRef.current ? nearestScroller(editorRef.current) : null;
+    if (!scroller || barClearance === 0) return;
+    // The bar's inset is measured from the scroller's content edge (a sticky inset always is) and
+    // scroll padding from its top edge, so the scroller's own padding sits between the two —
+    // `main`'s 20px. Without it the padding would be 66 while the bar's foot stands at 20 + 8 + 50
+    // = 78 below the top edge, so a card scrolled to would land 12px under the bar.
+    const edge = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
+    scroller.style.scrollPaddingTop = `${edge + barClearance}px`;
+    return () => {
+      scroller.style.scrollPaddingTop = "";
+    };
+  }, [barClearance]);
   /**
    * How wide the desk row is — **width only, and the height that used to sit beside it is gone**
    * (2026-08-14).
@@ -2137,9 +2155,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * bottom of it. Pinned instead, the search stays exactly where it was while the deck scrolls
    * past it, which is what the column is *for*.
    *
-   * `sticky top-0` on the dock is the pinning and CSS does all of it; the height is the part CSS
+   * `sticky` on the dock is the pinning and CSS does all of it — at the page's top edge, or
+   * {@link barClearance} below it while the undocked bar is down; the height is the part CSS
    * cannot answer, and {@link useDockHeight} is where the arithmetic for it lives — the
-   * scroller's visible height, less however much of the desk row still sits below its top.
+   * scroller's visible height, less however much of the desk row still sits below its top, and
+   * never less than the bar takes.
    *
    * **It was forty lines here until the collection and the wishlist grew the same column**
    * (2026-09-07), and the whole of what moving it cost is that the scroller is now *found* rather
@@ -2149,7 +2169,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * are the hook's doc, including the one gap it still has: a refusal banner growing in above the
    * desk moves the row's top without resizing either observed box.
    */
-  useDockHeight(dockRef, deskRef);
+  useDockHeight(dockRef, deskRef, barClearance);
 
   // **Each view keeps its own place on the page** (issue #567). All four scroll `AppShell`'s one
   // `main`, so without this a switch carried the departing view's `scrollTop` into the arriving
@@ -2157,6 +2177,69 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // lays the deck out nothing like it. `parkScroll` records where the departing view was and must
   // run **before** `setView`, while the box still holds it; `useScrollPerView` has why.
   const parkScroll = useScrollPerView(deskRef, view);
+
+  /**
+   * The bar's Display: the toolbar's three pickers as one menu of three submenus, each a column
+   * of radio rows (issue #577). **The same option lists the pickers draw** — {@link VIEW_PICKER},
+   * the two group-by lists behind {@link canGroupByTheory}, {@link SORT_BY_PICKER} — and the same
+   * three writes, `parkScroll` included, so a press here and a press in the toolbar cannot come
+   * to mean different things. `Split X` stays the toolbar's alone: it is a modifier of one
+   * grouping, drawn only beside it, and a menu row that appeared under one answer of a sibling
+   * submenu would be a row nobody finds.
+   *
+   * Built at the press, as `menuClick` asks, so the checked rows are the state of that moment.
+   */
+  const groupByPicker = canGroupByTheory ? GROUP_BY_PICKER : GROUP_BY_PICKER_NO_THEORY;
+  const displayMenu = (): MenuItem[] => [
+    {
+      kind: "submenu",
+      id: "view",
+      label: "View",
+      items: VIEW_PICKER.map(({ id, label }) => ({
+        kind: "radio",
+        id: `view-${id}`,
+        label,
+        checked: view === id,
+        onSelect: () => {
+          parkScroll();
+          setView(id);
+        },
+      })),
+    },
+    {
+      kind: "submenu",
+      id: "group-by",
+      label: "Group by",
+      items: groupByPicker.map(({ value, label }) => ({
+        kind: "radio",
+        id: `group-by-${value}`,
+        label,
+        checked: shownGroupBy === value,
+        onSelect: () => pickGroupBy(value),
+      })),
+    },
+    {
+      kind: "submenu",
+      id: "sort",
+      label: "Sort",
+      items: SORT_BY_PICKER.map(({ value, label }) => ({
+        kind: "radio",
+        id: `sort-${value}`,
+        label,
+        checked: sortBy === value,
+        onSelect: () => pickSortBy(value),
+      })),
+    },
+  ];
+  /**
+   * The Display button's name and tooltip: the three answers it is standing on, because the
+   * button is a glyph and what it would change is otherwise only visible by opening it.
+   */
+  const displayName = `Display — ${[
+    `View: ${VIEW_PICKER.find((v) => v.id === view)?.label ?? view}`,
+    `Group by: ${groupByPicker.find((o) => o.value === shownGroupBy)?.label ?? shownGroupBy}`,
+    `Sort: ${SORT_BY_PICKER.find((o) => o.value === sortBy)?.label ?? sortBy}`,
+  ].join(", ")}`;
 
   // A refused write re-reads the deck, and the read is what decides what happened: every write
   // goes through `touch_deck`, which answers "That deck is not there any more" when the deck
@@ -2315,6 +2398,65 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     () => openLayer({ kind: "bracket" }, () => bracketRef.current?.focus()),
     [openLayer],
   );
+
+  /**
+   * Where the caret goes when a layer opened from {@link DeckHeaderBar} closes: the bar's own
+   * control, **or the header's first one if the bar has gone**. The bar is mounted only while the
+   * header is scrolled away, so a control of its own can be a detached node by the time a dialog
+   * shuts, and `focus()` on one is a silent no-op that leaves the caret on `<body>` — the header
+   * is what the bar was standing in for, so the header is where the caret lands instead.
+   */
+  const handBackToBar = useCallback(
+    (trigger: HTMLElement) => () => (trigger.isConnected ? trigger : backRef.current)?.focus(),
+    [],
+  );
+
+  /**
+   * The bar's ↥: the page back to its top, where the header docks again and the bar goes away.
+   *
+   * **The caret moves to the header's back button**, the first control of the lines the bar was
+   * standing in for — without that it would stay on the ↥ it pressed, and the bar is kept mounted
+   * while it holds the caret, so it would hang over the docked header until the reader tabbed out.
+   * `preventScroll`, because the scroll is already on its way and a focus-driven one would jump it.
+   *
+   * Smooth unless the reader asked for reduced motion, read at the press rather than through
+   * `useReducedMotion`, which reads once at mount (`src/CLAUDE.md`, Motion). `scrollTo` is feature-
+   * tested because jsdom does not implement it on elements.
+   */
+  const backToTop = useCallback(() => {
+    const scroller = editorRef.current ? nearestScroller(editorRef.current) : null;
+    if (scroller) {
+      const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+      if (typeof scroller.scrollTo === "function") {
+        scroller.scrollTo({ top: 0, behavior: reduce ? "auto" : "smooth" });
+      } else {
+        scroller.scrollTop = 0;
+      }
+    }
+    backRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  /**
+   * The bar's `⋯`: the header's Import/Export pair and its four worded actions, as the app's one
+   * context menu (issue #577). **Built from {@link TRANSFER} and {@link ACTIONS} rather than
+   * listed again**, so a seventh header action reaches the bar by being added once, and each row
+   * opens exactly the layer its header button does. In the header's own order, pair first; the
+   * separator is the hairline between the pair and the row in the header.
+   */
+  const barActionsMenu = useCallback(
+    (trigger: HTMLElement): MenuItem[] => {
+      const row = ({ layer: target, label, Icon }: HeaderAction): MenuItem => ({
+        kind: "action",
+        id: label,
+        label,
+        Icon,
+        onSelect: () => openLayer(target, handBackToBar(trigger)),
+      });
+      return [...TRANSFER.map(row), { kind: "separator", id: "transfer" }, ...ACTIONS.map(row)];
+    },
+    [openLayer, handBackToBar],
+  );
+
   /**
    * **Pull from collection** — the one layer opened from the stats band at the foot of the page.
    *
@@ -2391,15 +2533,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * than frozen into the layer, so a pull made from the dialog re-reads the plan and the rows
    * under the reader's eyes are the rows a second press would write.
    *
-   * `pullKey` is `(cardId, finish)`, which is the grain the plan is folded to — the same card
-   * short in two piles is one row of it — so a deck card's key matches at most one row and the
-   * filter is a lookup rather than a subset — once per picked card.
+   * The key is `(cardId, played finish)`, which is the grain the plan is folded to — the same
+   * card short in two piles is one row of it — so a deck card's key matches at most one row and
+   * the filter is a lookup rather than a subset — once per picked card. **The card side is
+   * {@link deckCardPullKey} and the row side {@link pullKey}**, because a row carries the finish
+   * the card _plays_ (its stored finish, else the printing's sole finish): keyed on the stored
+   * column, a foil-only printing added from the search — no finish stored — looked for `id|`
+   * against a plan row `id|foil`, and the dialog opened on *Nothing to pull.* over copies the
+   * reader owns (issue #563's follow-up).
    */
   const pulledRows = useMemo(() => {
     const rows = pullPlan.data;
     if (rows === undefined) return null;
     if (pulledCards === null) return rows;
-    const wanted = new Set(pulledCards.map(pullKey));
+    const wanted = new Set(pulledCards.map(deckCardPullKey));
     return rows.filter((planRow) => wanted.has(pullKey(planRow)));
   }, [pullPlan.data, pulledCards]);
 
@@ -4617,6 +4764,52 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           themselves rather than the editor.) */}
       <QuickZones categories={categories} onDrop={applyDrops} onNewCategory={openQuickCategory} />
 
+      {/* The undocked bar (issue #577): drawn at the top of the page once the header's toolbar
+          line has scrolled away, and gone again when it comes back. **Second child, for the
+          quick zones' reason** — it is `sticky top-0` too, so it has to be a child of the page
+          itself, and it costs no layout either (`h-0 -mb-3`). It hides for the length of a drag
+          on its own monitor, which is why no `dragging` state is passed: the zones take the top
+          then, and reading the drag here would re-render this editor on every `dragstart`.
+
+          Every control in it is a second entrance to one of the header's, written once here and
+          once there against the same state and the same writes — the variant, the undo stack,
+          the three pickers, the filter text and the layers. Only Quick add keeps a draft of its
+          own, because a half-typed name in a field that is off the page is a draft nobody sees. */}
+      {row && (
+        <DeckHeaderBar
+          undocked={undocked}
+          tight={tightHeader}
+          onTop={backToTop}
+          quickAddTarget={targetName}
+          onQuickAdd={(card) => addTo(card.id, targetCategoryId, card.typeLine)}
+          lists={
+            theoryEnabled
+              ? {
+                  variant,
+                  onPick: pickVariant,
+                  onCompare: (trigger) => openLayer({ kind: "theoryDiff" }, handBackToBar(trigger)),
+                  comparing: layer?.kind === "theoryDiff",
+                }
+              : null
+          }
+          undo={{
+            label: undo.undoLabel,
+            disabled: undo.undo === null || undo.busy,
+            run: undo.runUndo,
+          }}
+          redo={{
+            label: undo.redoLabel,
+            disabled: undo.redo === null || undo.busy,
+            run: undo.runRedo,
+          }}
+          displayName={displayName}
+          displayMenu={displayMenu}
+          filter={filter}
+          onFilter={setFilter}
+          actionsMenu={barActionsMenu}
+        />
+      )}
+
       {/**
        * The deck's own ribbon, and the `py-1.5` on it is load-bearing rather than spacing.
        *
@@ -4640,6 +4833,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
        */}
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 py-1.5">
         <button
+          ref={backRef}
           type="button"
           // {@link closeDeck}, shared with Escape's `"navigation"` rung — one act, one function,
           // so the key and the button can never come to mean different things.
@@ -4971,6 +5165,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
          * two, and the groups within each are in the order they were written.
          */
         <div
+          // What {@link undocked} watches: once this line has left the page, the bar stands in.
+          ref={setToolbarLine}
           className={cn(
             "flex shrink-0 flex-wrap items-center gap-x-3 border-b border-border pb-3",
             tightHeader ? "gap-y-1.5" : "gap-y-2.5",
@@ -5391,7 +5587,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
            * below is unconditional, and all four views are drawn in one box with one rule — which
            * is also what the reader asked for, a table at its full height with no scrollbar on it.
            */}
-          <div className={cn("min-w-0 flex-1", DECK_HEIGHT_FLOOR)}>
+          <div
+            className={cn("min-w-0 flex-1", DECK_HEIGHT_FLOOR)}
+            // Where the Table view's sticky column header stops (`VirtualTable`'s
+            // `top-[var(--sticky-top,0px)]`): under the undocked bar while it is down, at the page's
+            // top otherwise. Only a `grow` table reads the variable — one that is its own scroller
+            // pins at its own top whatever it inherits — so this could sit anywhere; it sits on the
+            // box that draws the one table it is about. A length string, never a bare number:
+            // React adds no `px` to a custom property, and an unitless `top` is dropped silently.
+            style={{ "--sticky-top": `${barClearance}px` } as CSSProperties}
+          >
             {/* Neither `columnHeight` nor a measured height reaches a view any more. `StackView`
                 packs nothing — every pile is a flex item that wraps on width — and `TextView`
                 still packs, to a fixed readable target rather than to the desk, which is as tall
@@ -5418,10 +5623,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               a claim about an overlap that does not occur — see {@link panelOverWidth}. */}
           <div
             ref={dockRef}
-            className={cn(
-              "sticky top-0 flex shrink-0 self-start",
-              panelOverWidth !== undefined && LAYER.popup,
-            )}
+            className={cn("sticky flex shrink-0 self-start", panelOverWidth !== undefined && LAYER.popup)}
+            // Under the undocked bar while it is down (issue #577) — see {@link barClearance}. An
+            // inline length rather than two classes, because it is a number this editor computes,
+            // and `useDockHeight` is handed the same one so the height and the inset agree.
+            style={{ top: barClearance }}
           >
             <DeckSearchPanel
               // `deck.addCard` unwrapped since 2026-08-25 — it was `panelAdd`, the same mutation

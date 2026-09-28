@@ -3531,6 +3531,35 @@ mod tests {
                 },
             ),
             (
+                // The move arm over two finishes of one printing, with the target already holding
+                // the foil: the regular copy lands as a row of its own and the foil folds into
+                // the foil. Undo has to put both back in the deleted pile at the finish each had,
+                // and take the target's foil back to the one it held.
+                "deck_category_delete (moving a foil and a regular copy)",
+                |c, id| {
+                    for (pile, finish, quantity) in [
+                        (ramp(c, id), None, 3),
+                        (ramp(c, id), Some("foil"), 2),
+                        (draw(c, id), Some("foil"), 1),
+                    ] {
+                        crate::deck::add_card(
+                            c,
+                            id,
+                            "bolt-m10",
+                            Some(pile),
+                            None,
+                            "live",
+                            finish,
+                            quantity,
+                        )
+                        .unwrap();
+                    }
+                },
+                |c, id| {
+                    crate::deck_meta::delete_category(c, ramp(c, id), Some(draw(c, id))).unwrap();
+                },
+            ),
+            (
                 // The `default_category_id` clean-up: deleting the pile a deck files by puts
                 // the deck back on Auto, and undo has to put the pile *and* the setting back.
                 "deck_category_delete (the deck's default pile)",

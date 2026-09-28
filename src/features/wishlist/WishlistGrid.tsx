@@ -78,10 +78,6 @@ function toTile(wish: WishRow, managed: boolean): WishTile {
     setCode: wish.setCode ?? "",
     collectorNumber: wish.collectorNumber ?? "",
     rarity: wish.rarity,
-    // The image URLs of the printing this wish is *drawn as*, off the same join `artCardId` above
-    // came from. `GridCard` still carries the field; nothing draws it — the tile's picture is the
-    // `mtgimg` protocol's, built from `artCardId`.
-    imageUris: wish.imageUris,
     wish,
   };
 }

@@ -600,24 +600,6 @@ export interface CardSummary {
    */
   priceLow: number | null;
   priceHigh: number | null;
-  /**
-   * The front face's image URLs, keyed by the app's own variant names — `null` when Scryfall
-   * has no usable picture for this printing.
-   *
-   * **Front face only.** The walls draw the front; flipping lives in the card pane.
-   *
-   * `Partial`, and not decoration: a `transform` printing publishes only the variants its
-   * faces carry, and a printing whose only URL is Scryfall's `soon.jpg` error page carries
-   * **nothing** rather than a URL — the backend refuses a URI with no `?<epoch>` cache-buster
-   * or from a host that is not `cards.scryfall.io`, because such a URL answers `200` with
-   * something that is not the card. Treat a missing entry as "no art", never as a reason to
-   * build a URL of your own.
-   *
-   * Mirrors `CardSummary::image_uris` in `src-tauri/src/search.rs`, which is a
-   * `BTreeMap<String, String>`. Nothing type-checks this file against the crate —
-   * `ipc.test.ts`'s field-name pin reads both and is the only fence.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /** A page of results plus the size of the whole match set, for the pager. */
@@ -814,13 +796,6 @@ export interface CardDetail {
   promoTypes: string | null;
   imageStatus: string | null;
   faces: CardFace[];
-  /**
-   * Where this printing's picture is on `cards.scryfall.io`, per variant.
-   *
-   * A printing carrying neither picture column answers `null` — the frame's "no art" state,
-   * and **never a URL to build one from**.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /** One row of the "all printings" list. */
@@ -858,13 +833,6 @@ export interface Printing {
   frameEffects: string | null;
   borderColor: string | null;
   layout: string;
-  /**
-   * Where this printing's picture is on `cards.scryfall.io`, per variant.
-   *
-   * A printing carrying neither picture column answers `null` — the frame's "no art" state,
-   * and **never a URL to build one from**.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -1674,19 +1642,6 @@ export interface CollectionRow {
    * `null` is an orphan — the printing this entry names has left `cards`.
    */
   legalities: string | null;
-  /**
-   * The front face's image URLs, keyed by the app's own variant names — `null` when Scryfall
-   * has no usable picture for this printing.
-   *
-   * The same field, with the same rules, as {@link CardSummary.imageUris}: front face only,
-   * `Partial`, and **a missing entry means "no art"** — never a reason to build a URL of your
-   * own, because the backend has already refused a URI it cannot version or one from a host
-   * that does not serve card art.
-   *
-   * Mirrors `CollectionRow::image_uris` in `src-tauri/src/collection.rs`; `ipc.test.ts`'s
-   * field-name pin is the only fence.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 export interface CollectionPage {
@@ -1952,18 +1907,6 @@ export interface WishRow {
    * wish's oracle card. `null` is a genuine orphan — no pinned printing, no oracle match.
    */
   legalities: string | null;
-  /**
-   * The front face's image URLs of **the printing this wish is drawn as** — {@link
-   * WishRow.artCardId}'s printing, never {@link WishRow.cardId}'s, because an any-printing wish
-   * has no printing of its own. One join answers all three, so the picture, the id and the
-   * price can never disagree about which piece of cardboard is on screen.
-   *
-   * The same rules as {@link CardSummary.imageUris}: front face, `Partial`, and a missing entry
-   * is "no art".
-   *
-   * Mirrors `WishRow::image_uris` in `src-tauri/src/wishlist.rs`.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 export interface WishlistPage {
@@ -2660,8 +2603,15 @@ export interface DeckPullRow {
   setCode: string;
   collectorNumber: string;
   /**
-   * The deck row's finish, where `null` is nonfoil — `deck::normalise_finish`'s translation, so
-   * this reads exactly as {@link DeckCard.finish} does.
+   * The finish the folded deck rows **play**, where `null` is nonfoil — `deck::normalise_finish`'s
+   * spelling, so this reads as {@link DeckCard.finish} does.
+   *
+   * **Played, not stored**: a row's stored finish, else the printing's sole finish — `playedFinish`
+   * on this side. The two differ only for a printing sold in one non-regular finish, where an
+   * unsaid row can be no other object: an unsaid row of a foil-only printing is a `"foil"` row
+   * here, and one held once unsaid and once as `"foil"` is **one** row. So a {@link DeckCard} is
+   * matched to a row by `pullPlan.ts`' `deckCardPullKey` and never by its stored finish, which
+   * would look for `null` and find nothing.
    *
    * **Candidates match it exactly, and that is the deliberate narrowing this feature took**
    * (2026-09-03). A deck's owned count is attributed at the *oracle* grain — a LEA Bolt filed in
@@ -2674,11 +2624,6 @@ export interface DeckPullRow {
   short: number;
   /** The piles that are short, in the deck's own order. For the reader; never for the write. */
   categories: string[];
-  /**
-   * The printing's picture, front face, exactly as {@link CardSummary.imageUris} — one per row
-   * rather than per candidate, because every candidate for a row *is* the same printing.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
   /** Every copy that could fill it, best first — see {@link DeckPullCandidate}. Never empty. */
   candidates: DeckPullCandidate[];
 }
@@ -2781,8 +2726,6 @@ export interface DeckQuickAddWish {
   collectorNumber: string | null;
   /** The finish the wish asks for in the **wishlist's** spelling, or `null` for any finish. */
   preferredFinish: "nonfoil" | "foil" | "etched" | null;
-  /** The named printing's picture, front face, exactly as {@link CardSummary.imageUris}. */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -2836,9 +2779,14 @@ export interface DeckMissingRow {
   setCode: string;
   collectorNumber: string;
   /**
-   * The deck row's finish, where `null` is nonfoil — `deck::normalise_finish`'s translation, so
-   * this reads exactly as {@link DeckCard.finish} does. The word the copies are filed under is
-   * the collection's own `nonfoil`, and the backend does that translation.
+   * The finish the folded deck rows **play**, where `null` is nonfoil — `deck::normalise_finish`'s
+   * spelling, so this reads as {@link DeckCard.finish} does. The word the copies are filed under
+   * is the collection's own `nonfoil`, and the backend does that translation.
+   *
+   * **Played, not stored** — {@link DeckPullRow.finish}'s rule, off the same walk: a row's stored
+   * finish, else the printing's sole finish. An unsaid row of a foil-only printing is a `"foil"`
+   * row here, and the same printing held once unsaid and once as `"foil"` is one row, so a
+   * {@link DeckCard} is matched to it by `pullPlan.ts`' `deckCardPullKey`.
    *
    * **It is the other half of the address, and that is the one structural difference from the
    * pull**: a {@link DeckPullPick} points at a `collection_entries` row that exists, where a
@@ -2849,11 +2797,6 @@ export interface DeckMissingRow {
   short: number;
   /** The piles that are short, in the deck's own order. For the reader; never for the write. */
   categories: string[];
-  /**
-   * The printing's picture, front face, exactly as {@link CardSummary.imageUris} — one per row,
-   * because a row *is* one printing.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
   /**
    * Every wishlist line these copies could take down, best first —
    * {@link ipc.deckQuickAddWishes}' answer for this printing and finish, verbatim, so the
@@ -2885,7 +2828,15 @@ export interface DeckMissingRow {
  */
 export interface DeckMissingPick {
   cardId: string;
-  /** The deck row's finish, `null` for nonfoil — {@link DeckMissingRow.finish}'s spelling. */
+  /**
+   * The finish the deck row **plays**, `null` for nonfoil — {@link DeckMissingRow.finish}'s
+   * spelling and its reading, so a pick names the address the plan row it answers carries.
+   *
+   * **A `null` on a printing sold in one non-regular finish is resolved by the backend to that
+   * finish**, so `null` and `"foil"` on a foil-only printing are one pick either way. The frontend
+   * sends the played finish anyway (`pullPlan.ts`' `deckCardPlanFinish`), so the pick says what
+   * the plan says rather than relying on the other side to translate it.
+   */
   finish: DeckFinish;
   /** At least one, and never more than the deck is still short of at that address. */
   quantity: number;
@@ -3082,19 +3033,6 @@ export interface TheoryDiffRow {
    * sides.
    */
   isToken: boolean;
-  /**
-   * Where this row's printing's picture is on `cards.scryfall.io`, per variant.
-   *
-   * The dialog draws `art` (626×457), which is the crop the deck's own views draw, so that one
-   * card is not pictured two ways on one screen. The same rules as
-   * {@link CardSummary.imageUris}: front face only, `Partial`, `null` for a printing that has
-   * left `cards` or carries no usable URL — and **never a URL to build one from**.
-   *
-   * Mirrors `TheoryDiffRow::image_uris` in `src-tauri/src/deck_theory.rs`. Nothing type-checks
-   * this file against the crate — `ipc.test.ts`'s field-name pin reads both and is the only
-   * fence.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -3771,25 +3709,6 @@ export interface DeckRow {
    * have to be kept in step. They were two while a deck could wear a file instead.
    */
   coverArtist: string | null;
-  /**
-   * Where the **cover printing's** picture is on `cards.scryfall.io`, per variant.
-   *
-   * **About {@link DeckRow.coverCardId} and nothing else**, exactly as {@link coverArtist} is:
-   * it comes off the same `LEFT JOIN cards c ON c.id = d.cover_card_id`, so a deck with no
-   * cover — or a cover whose printing has left `cards` — carries `null` here as well. A deck is
-   * not a card and has no picture of its own; this is the card it points at.
-   *
-   * The gallery reads `art`, which is the only variant a cover is ever drawn at
-   * (`DeckTile`'s frame, `FolderCard`'s strip and `DeckCoverPicker`'s preview alike, and the
-   * folder strip is why this is on the *row* rather than fetched per tile: a folder card draws
-   * three of its members' covers and holds three `DeckRow`s to do it). It is `Partial` for
-   * {@link CardSummary.imageUris}' reason and carries the same fence: a missing entry is
-   * "no art" rather than a URL to build one from.
-   *
-   * Mirrors `DeckRow::image_uris` in `src-tauri/src/deck.rs`. Nothing type-checks this file
-   * against the crate — `ipc.test.ts`'s field-name pin reads both and is the only fence.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
   archived: boolean;
   /**
    * `live` copies in **active** categories of kind `main`, `commander` or `maybe` — what "a
@@ -4571,16 +4490,6 @@ export interface DeckCard {
    *   the reader's filing** — an unfiled collection reads as a deck full of red until they drag.
    */
   ownedQuantity: number;
-  /**
-   * The front face's image URLs, keyed by the app's own variant names — `null` when Scryfall
-   * has no usable picture for this printing.
-   *
-   * Keyed like {@link CardSummary.imageUris}; the deck's own views read `DECK_CARD_VARIANT`,
-   * which is the same `display`.
-   *
-   * Mirrors `DeckCardRow::image_uris` in `src-tauri/src/deck.rs`.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -4770,26 +4679,9 @@ export interface DeckTokenRow {
    */
   implicit: boolean;
   /**
-   * Where the **resolved printing's** picture is, per variant.
-   *
-   * The same field, with the same rules, as {@link CardSummary.imageUris}: front face only,
-   * `Partial`, and **a missing entry means "no art"** — never a reason to build a URL of your
-   * own, because the backend has already refused a URI it cannot version or one from a host
-   * that does not serve card art.
-   *
-   * **The printing is this entry's** ({@link cardId}), resolved in Rust, so two entries of one
-   * token draw their own two pictures — which is why `deckTokenViews` can fold it to one URL
-   * without going back for a second row.
-   *
-   * Mirrors `DeckTokenRow::image_uris` in `src-tauri/src/deck_tokens.rs`; `ipc.test.ts`'s
-   * field-name pin is the only fence.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
-  /**
-   * **This entry's printing's** chin — {@link cardId}, the same printing
-   * {@link DeckTokenRow.imageUris} is the picture of — so the token pile can draw the deck
-   * card's own foot: set · `#number` · finish · price (user schema v51's token pile,
-   * `deck_tokens.rs`).
+   * **This entry's printing's** chin — {@link cardId}, the same printing the pile draws the
+   * picture of — so the token pile can draw the deck card's own foot: set · `#number` · finish ·
+   * price (user schema v51's token pile, `deck_tokens.rs`).
    *
    * **All six are `null` together for a printing gone from the corpus**, which a stored entry
    * can outlive: the row still names its oracle card, and a chin with nothing to say is the
@@ -4898,17 +4790,16 @@ export interface DeckNote {
  * back to the oracle id itself** where the corpus has no row for one: a note must not disappear
  * from a deck because a card left the reader's copy of Scryfall's data.
  *
- * `cardId` and `imageUris` are a **representative printing**, resolved at read time so a note card
- * can draw a picture of what it names — the deck's own printing where the deck holds one, and any
- * printing the corpus has otherwise. Neither is ever matched on, written, or synced, and the same
- * row read twice may honestly name two different printings. `cardId: null` is the orphan, and it
- * draws the empty frame rather than a broken image.
+ * `cardId` is a **representative printing**, resolved at read time so a note card can draw a
+ * picture of what it names — the deck's own printing where the deck holds one, and any printing
+ * the corpus has otherwise. It is never matched on, written, or synced, and the same row read
+ * twice may honestly name two different printings. `cardId: null` is the orphan, and it draws the
+ * empty frame rather than a broken image.
  */
 export interface DeckNoteCard {
   oracleId: string;
   name: string;
   cardId: string | null;
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -5957,12 +5848,6 @@ export interface ComboPiece {
    * and produces an empty answer rather than an error.
    */
   cardId: string | null;
-  /**
-   * The front face's image URLs, exactly as {@link CardSummary.imageUris} — `Partial`, front
-   * face only, and `null` for a piece with no usable picture (which includes every piece whose
-   * {@link ComboPiece.cardId} is `null`, since there is no printing to have one).
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
   /**
    * How many copies of this card the reader owns, **across every printing and every finish** —
    * the sum the oracle key above makes possible.
@@ -7058,10 +6943,6 @@ export interface NewPrinting {
    * rows are identical on screen and the list reads as duplicated rather than complete.
    */
   lang: string;
-  /**
-   * The printing's picture, front face, exactly as {@link CardSummary.imageUris}.
-   */
-  imageUris?: Partial<Record<ImageVariant, string>> | null;
   decks: readonly NewPrintingDeck[];
 }
 

@@ -313,20 +313,6 @@ describe("the theory difference dialog", () => {
     expect(image).toHaveAttribute("draggable", "false");
   });
 
-  /** The local cache holds the crop already, so a row carrying a URL is still drawn from the
-   *  protocol rather than refetching it over the network. */
-  it("keeps drawing the protocol crop when a row carries a URL of its own", async () => {
-    deckTheoryDiff.mockResolvedValue([
-      { ...SOL_RING, imageUris: { art: "https://cards.scryfall.io/art/x.webp?1" } },
-    ]);
-
-    wrap(<TheoryDiffDialog {...props} />);
-
-    const image = within(await rowFor("Sol Ring")).getByRole("presentation", { hidden: true });
-    expect(image).toHaveAttribute("src", cardImageUrl("ring-c21", 0, "art"));
-    expect(image.getAttribute("src")).not.toContain("scryfall.io");
-  });
-
   /**
    * The three figures, and the one that is easiest to get wrong.
    *

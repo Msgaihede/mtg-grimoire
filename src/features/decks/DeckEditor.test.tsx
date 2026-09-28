@@ -2,7 +2,7 @@ import { act, fireEvent, render, screen, waitFor, within } from "@testing-librar
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 // The constant and never the two letters: what a menu quick add records moved once already, and a
@@ -1230,18 +1230,22 @@ describe("DeckEditor", () => {
    *
    * A sibling of a 7 000px desk row is drawn 7 000px tall unless it opts out, which takes its
    * search field off the top of the window and mounts tiles for a wall nobody can see at once.
-   * `sticky top-0` and `self-start` are the opt-out; the height is measured, because `100%` here
-   * is the deck's height and a viewport unit is wrong by the app chrome above the scroller — and
-   * a measured height is exactly what jsdom cannot check, so the classes are what this pins.
-   * Driven at six scroll positions in the shipped window: 489px at rest, 702 once scrolled past
-   * the header, bottom edge flush with the scrollport at every one.
+   * `sticky` at the page's top and `self-start` are the opt-out; the height is measured, because
+   * `100%` here is the deck's height and a viewport unit is wrong by the app chrome above the
+   * scroller — and a measured height is exactly what jsdom cannot check, so the classes are what
+   * this pins. Driven at six scroll positions in the shipped window: 489px at rest, 702 once
+   * scrolled past the header, bottom edge flush with the scrollport at every one.
+   *
+   * **The inset is an inline length since issue #577**, because it moves: `0` while the header is
+   * docked, and under the undocked bar while that is down. jsdom's observer never fires, so this
+   * is the docked answer — the only one a test here can reach.
    */
   it("pins the search panel's dock rather than stretching it down the deck", async () => {
     await open();
 
     const dock = screen.getByRole("region", { name: "Add cards" }).parentElement!;
     expect(dock.className).toContain("sticky");
-    expect(dock.className).toContain("top-0");
+    expect(parseFloat(dock.style.top)).toBe(0);
     expect(dock.className).toContain("self-start");
   });
 
@@ -3545,6 +3549,177 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **The undocked bar, wired** (issue #577) — the half `DeckHeaderBar.test.tsx` cannot see.
+   *
+   * That file drives the bar with every prop handed to it by hand, which passes whether or not
+   * this editor passes any of them; a feature can be fully tested there and unreachable here. So
+   * these cases put the editor on a page and scroll the header away by hand: the setup file's
+   * stub observer never fires, and without a scrolling ancestor `useUndocked` builds none at all,
+   * which is why no other test in this file ever sees the bar.
+   */
+  describe("once the header has scrolled off the page", () => {
+    /** The observers this editor built, and a way to tell them the toolbar line has gone. */
+    function scrollableHeader() {
+      const built: {
+        callback: IntersectionObserverCallback;
+        root: Element | null;
+        target: Element | null;
+      }[] = [];
+      class Recording {
+        private readonly entry: (typeof built)[number];
+        constructor(callback: IntersectionObserverCallback, options?: IntersectionObserverInit) {
+          this.entry = { callback, root: (options?.root as Element | null) ?? null, target: null };
+          built.push(this.entry);
+        }
+        observe(el: Element) {
+          this.entry.target = el;
+        }
+        unobserve() {}
+        disconnect() {
+          this.entry.target = null;
+        }
+        takeRecords() {
+          return [];
+        }
+      }
+      vi.stubGlobal("IntersectionObserver", Recording);
+      return {
+        /** Every live observer with a scroller for a root hears its target leave through the top. */
+        undock: () =>
+          act(() => {
+            for (const o of built) {
+              if (o.target === null || o.root === null) continue;
+              o.callback(
+                [
+                  {
+                    target: o.target,
+                    isIntersecting: false,
+                    boundingClientRect: { bottom: -20 } as DOMRectReadOnly,
+                    rootBounds: { top: 0 } as DOMRectReadOnly,
+                  } as IntersectionObserverEntry,
+                ],
+                {} as IntersectionObserver,
+              );
+            }
+          }),
+      };
+    }
+
+    /** The editor inside a scrolling page, as `AppShell`'s `main` puts it. */
+    async function openOnAPage() {
+      const view = wrap(
+        <div data-testid="page" style={{ overflowY: "auto" }}>
+          <DeckEditor deckId={4} />
+        </div>,
+      );
+      await screen.findByLabelText("Deck name");
+      return view;
+    }
+
+    afterEach(() => {
+      vi.unstubAllGlobals();
+    });
+
+    it("brings the bar down and starts the panel, the table header and a scroll under it", async () => {
+      const { undock } = scrollableHeader();
+      await openOnAPage();
+      expect(screen.queryByRole("group", { name: "Deck toolbar" })).not.toBeInTheDocument();
+
+      undock();
+
+      const bar = await screen.findByRole("group", { name: "Deck toolbar" });
+      expect(within(bar).getByRole("button", { name: "Back to the top" })).toBeInTheDocument();
+      expect(within(bar).getByRole("combobox", { name: /^Quick add a card/ })).toBeInTheDocument();
+      expect(within(bar).getByRole("searchbox", { name: "Filter this deck" })).toBeInTheDocument();
+      // The dock is pinned under the bar, and the view box beside it tells the Table view's
+      // sticky header the same number — as a length, because an unitless custom property makes
+      // `top` invalid and drops the pinning without a word.
+      const dock = screen.getByRole("region", { name: "Add cards" }).parentElement!;
+      expect(dock.style.top).toBe("66px");
+      expect((dock.previousElementSibling as HTMLElement).style.getPropertyValue("--sticky-top")).toBe(
+        "66px",
+      );
+      // And a caret scrolled to is parked below the bar rather than under it.
+      expect(screen.getByTestId("page").style.scrollPaddingTop).toBe("66px");
+    });
+
+    // Three cases rather than one walk through the bar, and one keystroke rather than a word: every
+    // keystroke in the filter re-renders this whole editor, and the single case this replaced was
+    // the one to cross the file's 15s budget on a loaded machine (2026-09-27, beside another
+    // worktree's cargo build) — each claim below is as strong with one letter as with four.
+    it("filters with the header's own filter from the bar", async () => {
+      const user = userEvent.setup();
+      const { undock } = scrollableHeader();
+      await openOnAPage();
+      undock();
+      const bar = await screen.findByRole("group", { name: "Deck toolbar" });
+
+      // One filter, drawn twice: typing in the bar narrows the header's field too.
+      await user.type(within(bar).getByRole("searchbox", { name: "Filter this deck" }), "b");
+      for (const field of screen.getAllByRole("searchbox", { name: "Filter this deck" })) {
+        expect(field).toHaveValue("b");
+      }
+    });
+
+    it("opens the header's own layers from the bar's ⋯, caret back on it", async () => {
+      const user = userEvent.setup();
+      const { undock } = scrollableHeader();
+      await openOnAPage();
+      undock();
+      const bar = await screen.findByRole("group", { name: "Deck toolbar" });
+
+      const actions = within(bar).getByRole("button", { name: "Deck actions" });
+      await user.click(actions);
+      await user.click(screen.getByRole("menuitem", { name: "History" }));
+      expect(await screen.findByRole("dialog", { name: "History" })).toBeInTheDocument();
+      await user.keyboard("{Escape}");
+      expect(screen.queryByRole("dialog", { name: "History" })).not.toBeInTheDocument();
+      expect(actions).toHaveFocus();
+    });
+
+    it("hands the caret to the header's first control on the way back up", async () => {
+      const user = userEvent.setup();
+      const { undock } = scrollableHeader();
+      await openOnAPage();
+      undock();
+      const bar = await screen.findByRole("group", { name: "Deck toolbar" });
+
+      await user.click(within(bar).getByRole("button", { name: "Back to the top" }));
+      expect(screen.getByRole("button", { name: /back to decks/i })).toHaveFocus();
+    });
+
+    it("switches the deck's list from the bar, and the header follows", async () => {
+      const over = { theoryEnabled: true };
+      const live = detail(over, [bolt({ quantity: 4 })]);
+      const theory = detail(over, [bolt({ quantity: 4, variant: "theory" })]);
+      deckGet.mockImplementation((_id: number, variant: string) =>
+        Promise.resolve(variant === "theory" ? theory : live),
+      );
+      const user = userEvent.setup();
+      const { undock } = scrollableHeader();
+      await openOnAPage();
+      undock();
+      const bar = await screen.findByRole("group", { name: "Deck toolbar" });
+
+      await user.click(
+        within(within(bar).getByRole("group", { name: "Deck list" })).getByRole("button", {
+          name: "Theory",
+        }),
+      );
+
+      // Both drawings of the switch say the same thing, because they are one piece of state.
+      await waitFor(() => {
+        for (const pair of screen.getAllByRole("group", { name: "Deck list" })) {
+          expect(within(pair).getByRole("button", { name: "Theory" })).toHaveAttribute(
+            "aria-pressed",
+            "true",
+          );
+        }
+      });
+    });
+  });
+
+  /**
    * The other way out of a layer, and the one no test covered: its own ✕.
    *
    * The ✕ is *inside* the layer that is about to unmount, so it is the reader saying "put me
@@ -3777,7 +3952,6 @@ describe("DeckEditor", () => {
         finish: null,
         short: 1,
         categories: ["Main deck"],
-        imageUris: null,
         wishes: [],
       },
     ]);
@@ -5557,9 +5731,9 @@ describe("layerMatches", () => {
    * while the other is up — one slot, and both are modal — so this is asserted directly, which is
    * the same reason the export case above is a unit test rather than a press.
    *
-   * The card comparison is by `pullKey` rather than by object identity, because a `DeckCard` is a
-   * fresh object on every `deck_get`: the two `bolt()` calls below are two objects naming one row,
-   * which is exactly what a refetch under an open dialog produces.
+   * The card comparison is by `deckCardPullKey` rather than by object identity, because a
+   * `DeckCard` is a fresh object on every `deck_get`: the two `bolt()` calls below are two objects
+   * naming one row, which is exactly what a refetch under an open dialog produces.
    */
   it("tells the deck-wide pull from a card's", () => {
     const deckWide = { kind: "pull" } as const;
@@ -6454,7 +6628,6 @@ describe("DeckEditor — the Collection submenu", () => {
       finish: null,
       short: 4,
       categories: ["Main deck"],
-      imageUris: null,
       candidates: entryIds.map((entryId) => ({
         entryId,
         quantity: 4,
@@ -6737,6 +6910,30 @@ describe("DeckEditor — the Collection submenu", () => {
     ).toBeInTheDocument();
     expect(within(dialog).queryByRole("checkbox", { name: /^Pull Bear/ })).not.toBeInTheDocument();
     expect(deckPullFromCollection).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A foil-only printing's row that said no finish is still narrowed to its own plan row**
+   * (issue #563's follow-up). `deck_pull_plan` folds on the finish a row *plays*, so a Surge Foil
+   * added from the search — `deck_cards.finish` NULL — comes back as a `"foil"` row. The dialog is
+   * narrowed here, in the editor, and a narrowing keyed on the stored finish handed it nothing:
+   * `Nothing to pull.` over two copies the reader owns.
+   */
+  it("opens the pull on a foil-only card's foil row when its row said no finish", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [bolt({ quantity: 4, ownedQuantity: 0, finishes: '["foil"]' })]),
+    );
+    deckPullPlan.mockResolvedValue([planRow([55, 56], { finish: "foil" })]);
+    await open();
+    await collectionMenu();
+
+    await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Pull from collection" });
+    expect(
+      within(dialog).getByRole("checkbox", { name: "Pull Lightning Bolt, 4 copies, foil" }),
+    ).toBeInTheDocument();
+    expect(within(dialog).queryByText("Nothing to pull.")).not.toBeInTheDocument();
   });
 
   /**
