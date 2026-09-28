@@ -232,7 +232,7 @@ number to compare against.
 | [data-and-sync.md](docs/reference/data-and-sync.md) | Data dir, sync timings, the schema ladder, every search-performance measurement |
 | [scryfall.md](docs/reference/scryfall.md) | Rate limits, the penalty, bulk data, `error_log`, pre-warm keys |
 | [the price-feed research](docs/superpowers/research/2026-08-12-card-kingdom-mana-pool-price-feeds.md) | Both feeds measured live — sizes, key collisions, the NM-vs-cheapest trap |
-| [image-cache.md](docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route |
+| [image-cache.md](docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route, and the budget — what eviction spares, why the used-stamp is a file's modified time, and the idle horizon that ages the old `grid` files out |
 | [search-faceting.md](docs/reference/search-faceting.md) | The in-memory index, and why faceting fails open |
 | [search-syntax.md](docs/reference/search-syntax.md) | Scryfall query syntax in every card search box — the fourteen keywords and why `:` does not mean one thing, the day `a:` and `o:` stopped being tags, FTS against LIKE measured at 82× and 277×, `kw:` and the corpus rung behind it, why tag resolution is exact, and the one arm that fails closed among all the ones that fail open |
 | [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written |
