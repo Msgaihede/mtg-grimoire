@@ -105,7 +105,7 @@ describe("decksOutcome", () => {
 
   it("says nothing happened only when nothing did", () => {
     expect(decksOutcome({ decks: 0, folders: 0 })).toBe(
-      "There were no decks or folders to clear.",
+      "There were no decks to clear.",
     );
   });
 });
@@ -123,10 +123,10 @@ describe("cacheOutcome", () => {
    */
   it("reports files that would not go, in a sentence of their own", () => {
     expect(cacheOutcome({ files: 20, bytes: 4_000, rows: 20, failed: 3 })).toBe(
-      "Freed 4 KB across 20 files. 3 files were in use and stayed.",
+      "Freed 4 KB across 20 files. 3 files were in use and couldn't be deleted.",
     );
     expect(cacheOutcome({ files: 20, bytes: 4_000, rows: 20, failed: 1 })).toBe(
-      "Freed 4 KB across 20 files. 1 file was in use and stayed.",
+      "Freed 4 KB across 20 files. 1 file was in use and couldn't be deleted.",
     );
   });
 
@@ -152,17 +152,17 @@ describe("combosOutcome", () => {
    */
   it("reports the table that came back, with separators on both figures", () => {
     expect(combosOutcome(status())).toBe(
-      "Cleared and downloaded again: 105,478 combos, naming 7,310 cards between them.",
+      "Downloaded 105,478 combos covering 7,310 cards.",
     );
   });
 
   /** The plural is per number, and both of them can be one. */
   it("agrees with a count of one on either figure", () => {
     expect(combosOutcome(status({ combos: 1, cards: 2 }))).toBe(
-      "Cleared and downloaded again: 1 combo, naming 2 cards between them.",
+      "Downloaded 1 combo covering 2 cards.",
     );
     expect(combosOutcome(status({ combos: 3, cards: 1 }))).toBe(
-      "Cleared and downloaded again: 3 combos, naming 1 card between them.",
+      "Downloaded 3 combos covering 1 card.",
     );
   });
 
@@ -176,8 +176,7 @@ describe("combosOutcome", () => {
 
     expect(said).not.toContain("0 combos");
     expect(said).toBe(
-      "The combos were cleared and the download brought none back, so the table is empty. " +
-        "Errors, further down this page, has the reason.",
+      "Combos were cleared, but the download failed. See Errors below for details.",
     );
   });
 });

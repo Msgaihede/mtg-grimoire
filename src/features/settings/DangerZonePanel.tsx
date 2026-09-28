@@ -35,33 +35,31 @@ const ROWS: readonly Row[] = [
     summary: "Every card you own, with its condition, purchase price, tags and notes.",
     warning: (
       <>
-        Deletes every entry in your collection — each one’s condition, purchase price, tags,
-        notes and acquisition story with it. Your decks are kept, but every card in them stops
-        being marked as owned. This cannot be undone.
+        Deletes every card in your collection, along with its condition, purchase price, tags,
+        notes and acquisition details. Your decks are kept, but their cards are no longer marked
+        as owned. This can&rsquo;t be undone.
       </>
     ),
   },
   {
     key: "wishlist",
     label: "Clear wishlist",
-    summary: "Every card you are looking for and every folder, with its preferred finish and notes.",
+    summary: "Every card and folder on your wishlist, with finishes and notes.",
     warning: (
       <>
-        Deletes every entry on your wishlist and every folder you filed them in, along with the
-        finish and notes recorded against each one. Your collection and decks are not touched.
-        This cannot be undone.
+        Deletes every card and folder on your wishlist, along with their finishes and notes. Your
+        collection and decks aren&rsquo;t touched. This can&rsquo;t be undone.
       </>
     ),
   },
   {
     key: "decks",
     label: "Clear decks",
-    summary: "Every deck and folder, with its cards, piles, labels, cover and history.",
+    summary: "Every deck and folder, with cards, categories, labels, covers and history.",
     warning: (
       <>
-        Deletes every deck and every folder — the cards in each deck, its piles, its labels, its
-        cover picture and its whole edit history. Your collection and wishlist are kept. This
-        cannot be undone.
+        Deletes every deck and folder, with each deck&rsquo;s cards, categories, labels, cover
+        and edit history. Your collection and wishlist are kept. This can&rsquo;t be undone.
       </>
     ),
   },
@@ -127,8 +125,8 @@ export function DangerZonePanel({ danger }: { danger: DangerZone }): JSX.Element
           better warning on its own merits, and it stopped being a compromise rather than
           becoming wrong. Restoring it is a decision about this paragraph, not a rot fix. */}
       <p className="text-sm text-dim">
-        Each of these empties one part of the app for good. There is no undo and no backup — the
-        app keeps a single copy of your data, and these buttons delete it.
+        These can&rsquo;t be undone, and there&rsquo;s no backup. Each one permanently deletes
+        part of your data.
       </p>
 
       <ul className="space-y-3">

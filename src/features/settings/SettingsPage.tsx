@@ -49,11 +49,11 @@ import { cn } from "@/lib/utils";
  * that comes back at all — the only way to have no number is to have no answer.
  */
 export function imageFailureLine(failures: number | undefined): string {
-  if (failures === undefined) return "Checking whether any card images failed to save…";
-  if (failures === 0) return "No card images have failed to save this session.";
+  if (failures === undefined) return "Checking image cache…";
+  if (failures === 0) return "No image errors this session.";
   return (
-    `${count(failures)} card image${failures === 1 ? "" : "s"} could not be saved there ` +
-    "this session — the folder may be read-only or full."
+    `Couldn't save ${count(failures)} card image${failures === 1 ? "" : "s"} there ` +
+    "this session. The folder may be read-only or full."
   );
 }
 
@@ -414,13 +414,12 @@ export function SettingsPage({ update }: { update: Update }) {
         {shown("data-folder") && (
           <SettingsSection id="data-folder" title="Data folder">
             <p className="text-sm text-dim">
-              Where this app keeps everything: the card database, your collection, your decks, and
-              the card images it has cached.
+              Where the app stores your card database, collection, decks and cached images.
             </p>
             {/* `break-all` because a Windows path has nothing to break at and this pane is ~632px
                 on a desk and ~350px on a phone — the surface this whole plan is for. */}
             <p className="break-all font-mono text-sm">
-              {folder.data?.dataDir ?? "Not known yet."}
+              {folder.data?.dataDir ?? "Unknown"}
             </p>
             {/* Plain text when there is something to report rather than the destructive red, which
                 is `ErrorLogPanel`'s tone and its reason: every affected image still displays — the
@@ -474,7 +473,7 @@ export function SettingsPage({ update }: { update: Update }) {
             found nothing is not a failure — the box above is still full of the words that did
             not match, which is the whole of what the reader needs in order to try again. */}
         {visible.length === 0 && (
-          <p className="text-sm text-dim">Nothing in Settings matches that.</p>
+          <p className="text-sm text-dim">No matching settings.</p>
         )}
       </div>
     </div>

@@ -65,9 +65,9 @@ export function TheoryMarksPanel(): JSX.Element {
           calling one of them green would be describing the screen it is sitting on wrongly. What
           it says instead is what the two marks *mean*, which is the thing that does not move. */}
       <p className="text-sm text-dim">
-        A deck with a theory list marks cards on its active list against the plan:
-        one color for the exact planned printing, another for an alternate printing,
-        and a third for cards not in the plan. Cards with quantity differences display the count to add or remove.
+        Decks with a theory list mark each card on the actual list: one color for the exact
+        printing, one for a different printing, and one for cards not in the theory list.
+        Quantity differences show how many to add or remove.
       </p>
 
       {/* `space-y-4` over a hairline the first row does not wear — `HiddenTagsPanel`'s list,
@@ -135,7 +135,7 @@ export function TheoryMarksPanel(): JSX.Element {
                         )
                       }
                       aria-expanded={drafting}
-                      aria-label={`Change the ${mark.noun}'s colour`}
+                      aria-label={`Change the ${mark.noun}'s color`}
                       className={cn(
                         "grid size-8 shrink-0 place-items-center rounded-md border border-border",
                         "transition-colors duration-150 hover:border-accent",
@@ -164,7 +164,7 @@ export function TheoryMarksPanel(): JSX.Element {
                         resetColor(mark.key);
                       }}
                       aria-disabled={untouched || undefined}
-                      aria-label={`Reset the ${mark.noun} to its default colour`}
+                      aria-label={`Reset the ${mark.noun} to its default color`}
                       className={cn(
                         BUTTON,
                         "border-border hover:bg-bg",
@@ -212,7 +212,7 @@ export function TheoryMarksPanel(): JSX.Element {
           stylesheet's on the phone beside it, and that is the design rather than a fault to be
           reported. */}
       <p className="text-sm text-dim">
-        These colors are kept only on this device. Deck theory settings and labels sync normally.
+        These colors are saved on this device only.
       </p>
 
       {/* `problem`, and this is the one hook in the app whose refusal is surfaced at all: the
@@ -313,9 +313,9 @@ const MARKS: readonly MarkRow[] = [
     tier: "exact",
     id: "theory-exact",
     title: "Matching printing",
-    blurb: "Matches the exact printing specified in the planned deck list.",
+    blurb: "The exact printing in the theory list.",
     noun: "matching-printing mark",
-    subject: "Matching printing colour",
+    subject: "Matching printing color",
     fill: "--color-theory-exact",
   },
   {
@@ -327,9 +327,9 @@ const MARKS: readonly MarkRow[] = [
     // rule is one name in all three places. The blurb says both of what the mark covers: another
     // printing, and — on a deck with `Matching printing` off — every printing, as a match.
     title: "Any printing",
-    blurb: "Card is present in another printing, or any printing if exact matching is disabled.",
+    blurb: "The right card in a different printing (or any printing, if exact matching is off).",
     noun: "any-printing mark",
-    subject: "Any printing colour",
+    subject: "Any printing color",
     fill: "--color-theory-name",
   },
   {
@@ -342,9 +342,9 @@ const MARKS: readonly MarkRow[] = [
     // thing only the theory list can say; this one is named for what a reader sees on the card,
     // because "no printing" and "no card" are not phrases anybody would recognise.
     title: "Not in the theory list",
-    blurb: "Card is present in the active deck, but not in the planned list.",
+    blurb: "In the actual list, but not in the theory list.",
     noun: "unplanned-card mark",
-    subject: "Not in the theory list colour",
+    subject: "Not in the theory list color",
     fill: "--color-theory-unplanned",
   },
 ];

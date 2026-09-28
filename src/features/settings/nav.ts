@@ -132,7 +132,7 @@ export const PANELS: Record<PanelId, PanelMeta> = {
    * app after an install, and a reader who types it wants that panel rather than this one.
    */
   "start-view": {
-    title: "Opening view",
+    title: "Start page",
     group: "appearance",
     keywords:
       "start startup launch open opens opening landing home first page screen default " +
@@ -168,7 +168,7 @@ export const PANELS: Record<PanelId, PanelMeta> = {
   labels: {
     title: "Labels",
     group: "appearance",
-    keywords: "colour color rename recolour delete swatch dot cut candidate deck card",
+    keywords: "colour color rename recolour recolor delete swatch dot cut candidate deck card",
   },
   "data-folder": {
     title: "Data folder",

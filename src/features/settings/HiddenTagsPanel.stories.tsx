@@ -56,7 +56,7 @@ type Story = StoryObj<typeof meta>;
 export const Empty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByText(/You have not hidden any tags/)).toBeInTheDocument();
+    await expect(canvas.getByText(/You haven't hidden any tags/)).toBeInTheDocument();
     await expect(canvas.queryByRole("button")).not.toBeInTheDocument();
   },
 };

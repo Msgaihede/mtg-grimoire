@@ -69,7 +69,7 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
           about. */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-t border-border pt-4">
         <p className="min-w-0 text-sm text-dim">
-          Clears and re-downloads Commander Spellbook combo definitions.
+          Re-downloads combo data from Commander Spellbook.
         </p>
         <button
           type="button"
@@ -86,7 +86,7 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
             className={cn("size-4", cache.combos.pending && "animate-spin")}
             aria-hidden="true"
           />
-          Clear combos
+          Refresh combos
         </button>
       </div>
 
@@ -106,9 +106,7 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
         onDismiss={() => setAsking(null)}
         onClose={() => setAsking(null)}
       >
-        Deletes the card images and download leftovers stored beside the database. Nothing is
-        lost — the app fetches each picture again the next time it draws that card, so the only
-        cost is that they arrive over the network once more.
+        Deletes cached card images and temporary files. Images will download again when needed.
       </ConfirmDialog>
 
       {/* Two dialogs rather than one keyed on `asking`, which is the opposite of what the danger
@@ -121,17 +119,16 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
           mounted on its own flag. */}
       <ConfirmDialog
         open={asking === "combos"}
-        title="Clear combo data"
-        confirmLabel="Clear combos"
+        title="Refresh combo data"
+        confirmLabel="Refresh combos"
         typeToConfirm={false}
         pending={cache.combos.pending}
         onConfirm={cache.combos.run}
         onDismiss={() => setAsking(null)}
         onClose={() => setAsking(null)}
       >
-        Deletes every combo held here and fetches Commander Spellbook&rsquo;s list again at once.
-        That download is 27.5 MB and the import takes a while, and a deck&rsquo;s bracket estimate
-        reads its other three signals until it finishes.
+        Deletes all combo data and downloads it again (27.5 MB). Bracket estimates skip combos
+        until it finishes.
       </ConfirmDialog>
     </SettingsSection>
   );

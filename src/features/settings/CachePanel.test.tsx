@@ -102,7 +102,7 @@ describe("CachePanel — the combo row", () => {
   it("offers a second button, named and separate from the images one", () => {
     render(<CachePanel cache={cache()} />);
 
-    expect(rowButton("Clear combos")).toBeInTheDocument();
+    expect(rowButton("Refresh combos")).toBeInTheDocument();
     expect(within(panel()).getAllByRole("button")).toHaveLength(2);
   });
 
@@ -114,7 +114,7 @@ describe("CachePanel — the combo row", () => {
   it("says what goes and that it re-downloads", () => {
     render(<CachePanel cache={cache()} />);
 
-    expect(panel()).toHaveTextContent("Clears and re-downloads Commander Spellbook combo definitions");
+    expect(panel()).toHaveTextContent("Re-downloads combo data from Commander Spellbook");
     expect(panel()).not.toHaveTextContent(/once a week|weekly/i);
   });
 
@@ -128,7 +128,7 @@ describe("CachePanel — the combo row", () => {
    */
   it("wears the plain border and a glyph of its own", () => {
     render(<CachePanel cache={cache()} />);
-    const combos = rowButton("Clear combos");
+    const combos = rowButton("Refresh combos");
 
     expect(combos.classList.contains("border-border")).toBe(true);
     expect(combos.classList.contains("border-destructive")).toBe(false);
@@ -145,12 +145,12 @@ describe("CachePanel — the combo row", () => {
     const state = cache();
     render(<CachePanel cache={state} />);
 
-    await user.click(rowButton("Clear combos"));
+    await user.click(rowButton("Refresh combos"));
 
     expect(screen.queryByRole("textbox")).not.toBeInTheDocument();
     expect(state.combos.run).not.toHaveBeenCalled();
 
-    await user.click(within(dialog()).getByRole("button", { name: "Clear combos" }));
+    await user.click(within(dialog()).getByRole("button", { name: "Refresh combos" }));
     expect(state.combos.run).toHaveBeenCalledOnce();
   });
 
@@ -159,10 +159,10 @@ describe("CachePanel — the combo row", () => {
     const user = userEvent.setup();
     render(<CachePanel cache={cache()} />);
 
-    await user.click(rowButton("Clear combos"));
+    await user.click(rowButton("Refresh combos"));
 
     expect(dialog()).toHaveTextContent("27.5 MB");
-    expect(dialog()).toHaveTextContent("takes a while");
+    expect(dialog()).toHaveTextContent("until it finishes");
   });
 
   /**
@@ -174,7 +174,7 @@ describe("CachePanel — the combo row", () => {
     const state = cache();
     render(<CachePanel cache={state} />);
 
-    await user.click(rowButton("Clear combos"));
+    await user.click(rowButton("Refresh combos"));
     await user.click(within(dialog()).getByRole("button", { name: "Cancel" }));
 
     expect(state.combos.run).not.toHaveBeenCalled();
@@ -186,7 +186,7 @@ describe("CachePanel — the combo row", () => {
    */
   it("goes inert and says it is busy for the whole round trip", () => {
     render(<CachePanel cache={cache({ combos: { run: vi.fn(), pending: true } })} />);
-    const combos = rowButton("Clear combos");
+    const combos = rowButton("Refresh combos");
 
     expect(combos).toBeDisabled();
     expect(combos).toHaveAttribute("aria-busy", "true");
@@ -229,8 +229,8 @@ describe("CachePanel — the combo row", () => {
     const state = cache();
     render(<CachePanel cache={state} />);
 
-    await user.click(rowButton("Clear combos"));
-    await user.click(within(dialog()).getByRole("button", { name: "Clear combos" }));
+    await user.click(rowButton("Refresh combos"));
+    await user.click(within(dialog()).getByRole("button", { name: "Refresh combos" }));
 
     expect(state.combos.run).toHaveBeenCalledOnce();
     expect(state.clear.run).not.toHaveBeenCalled();

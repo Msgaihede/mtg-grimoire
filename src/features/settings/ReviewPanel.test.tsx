@@ -94,12 +94,12 @@ describe("ReviewPanel", () => {
   it("files each row under a heading a person would recognise", async () => {
     render(<ReviewPanel />, { wrapper });
 
-    expect(await screen.findByRole("heading", { name: "The collection" })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: "Collection" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Decks" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Deck folders" })).toBeInTheDocument();
     // A heading with nothing under it is as wrong as a row with no heading: only the three
     // tables that have a row are drawn.
-    expect(screen.queryByRole("heading", { name: "The wishlist" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Wishlist" })).not.toBeInTheDocument();
     expect(screen.queryByText(/collection_entries|deck_cards|deck_folders/)).toBeNull();
   });
 
@@ -131,7 +131,7 @@ describe("ReviewPanel", () => {
     syncReviewList.mockResolvedValue([]);
     render(<ReviewPanel />, { wrapper });
 
-    expect(await screen.findByText(/nothing needs a look/i)).toBeInTheDocument();
+    expect(await screen.findByText(/nothing to review/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /looks fine/i })).not.toBeInTheDocument();
   });
 
@@ -139,8 +139,8 @@ describe("ReviewPanel", () => {
     syncReviewList.mockRejectedValue("The database is busy right now.");
     render(<ReviewPanel />, { wrapper });
 
-    expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
-    expect(screen.queryByText(/nothing needs a look/i)).not.toBeInTheDocument();
+    expect(await screen.findByText(/couldn't load the review list/i)).toBeInTheDocument();
+    expect(screen.queryByText(/nothing to review/i)).not.toBeInTheDocument();
   });
 
   it("shows the refusal when a clear is turned down", async () => {
@@ -178,9 +178,9 @@ describe("groupByTable", () => {
     }));
 
     expect(groupByTable(rows).map((g) => g.label)).toEqual([
-      "The collection",
+      "Collection",
       "Decks",
-      "The wishlist",
+      "Wishlist",
       "Collection folders",
       "Deck folders",
       "Wishlist folders",

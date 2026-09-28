@@ -89,7 +89,7 @@ export const TypingTheWord: Story = {
     const dialog = await page.findByRole("dialog");
     const confirm = within(dialog).getByRole("button", { name: "Clear collection" });
 
-    await expect(dialog).toHaveTextContent("This cannot be undone.");
+    await expect(dialog).toHaveTextContent("This can’t be undone.");
     await expect(confirm).toBeDisabled();
 
     await userEvent.type(within(dialog).getByRole("textbox"), "confirm");

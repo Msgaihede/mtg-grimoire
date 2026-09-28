@@ -264,7 +264,7 @@ describe("useLocalCache", () => {
     await waitFor(() =>
       expect(result.current.status).toEqual({
         tone: "plain",
-        text: "Cleared and downloaded again: 105,478 combos, naming 7,310 cards between them.",
+        text: "Downloaded 105,478 combos covering 7,310 cards.",
       }),
     );
   });

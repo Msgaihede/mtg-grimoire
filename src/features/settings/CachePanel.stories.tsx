@@ -67,7 +67,7 @@ export const Resting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText(/Missing files will be re-downloaded/)).toBeInTheDocument();
-    await expect(canvas.getByText(/Clears and re-downloads Commander Spellbook/)).toBeInTheDocument();
+    await expect(canvas.getByText(/Re-downloads combo data from Commander Spellbook/)).toBeInTheDocument();
   },
 };
 
@@ -157,14 +157,14 @@ export const ConfirmingCombos: Story = {
     const canvas = within(canvasElement);
     const page = within(document.body);
 
-    await userEvent.click(canvas.getByRole("button", { name: "Clear combos" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Refresh combos" }));
     const dialog = await page.findByRole("dialog");
 
     await expect(within(dialog).queryByRole("textbox")).not.toBeInTheDocument();
     await expect(dialog).toHaveTextContent("27.5 MB");
     await expect(args.cache.combos.run).not.toHaveBeenCalled();
 
-    await userEvent.click(within(dialog).getByRole("button", { name: "Clear combos" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Refresh combos" }));
     await expect(args.cache.combos.run).toHaveBeenCalled();
   },
 };
@@ -179,7 +179,7 @@ export const CombosDownloading: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await expect(canvas.getByRole("button", { name: "Clear combos" })).toBeDisabled();
+    await expect(canvas.getByRole("button", { name: "Refresh combos" })).toBeDisabled();
     await expect(canvas.getByRole("button", { name: "Clear cache" })).toBeEnabled();
   },
 };

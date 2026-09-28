@@ -225,7 +225,7 @@ describe("SettingsNav", () => {
   it("names what is still missing without giving it a heading", () => {
     setup();
 
-    expect(screen.getByText("Import. Coming in a later plan.")).toBeInTheDocument();
+    expect(screen.getByText("Import (coming soon)")).toBeInTheDocument();
     expect(screen.queryByRole("heading")).not.toBeInTheDocument();
   });
 });

@@ -5,8 +5,8 @@ import { TheoryMarksPanel } from "./TheoryMarksPanel";
 
 /** The exact wording of a row's two controls, so a story names a mark the way the panel does
  *  rather than by a colour the reader is free to change. `TheoryMarksPanel`'s `MarkRow.noun`. */
-const SWATCH = (noun: string) => `Change the ${noun}'s colour`;
-const RESET = (noun: string) => `Reset the ${noun} to its default colour`;
+const SWATCH = (noun: string) => `Change the ${noun}'s color`;
+const RESET = (noun: string) => `Reset the ${noun} to its default color`;
 
 /** The swatch a row is currently on, which is the one thing on this panel that is drawn in the
  *  colour itself: the two previews beside it paint from `var(--color-theory-*)`, and jsdom
@@ -127,7 +127,7 @@ export const Default: Story = {
 
     // The sentence a reader with two devices cannot do without: these colours are an `app_meta`
     // row, and `app_meta` is not one of the twelve tables sync carries.
-    await expect(canvas.getByText(/kept only on this device/)).toBeInTheDocument();
+    await expect(canvas.getByText(/saved on this device only/)).toBeInTheDocument();
     await expect(canvas.queryByRole("alert")).not.toBeInTheDocument();
   },
 };
@@ -166,7 +166,7 @@ export const Customised: Story = {
     // the vocabulary rule is that they never trade places. Left at the default, a screen-reader
     // user recolouring one of these would hear "Label colour" twice with nothing telling the two
     // rows apart.
-    const picker = canvas.getByRole("group", { name: "Any printing colour" });
+    const picker = canvas.getByRole("group", { name: "Any printing color" });
     await userEvent.click(within(picker).getByRole("button", { name: "Ember" }));
     await userEvent.click(within(picker).getByRole("button", { name: "Done" }));
 
@@ -222,7 +222,7 @@ export const UnplannedRecoloured: Story = {
     await userEvent.click(trigger);
     // Named for the mark's own sentence, which is what the card says and what `deckCardName`
     // speaks — the other two rows are named for a distinction this tier does not draw.
-    const picker = canvas.getByRole("group", { name: "Not in the theory list colour" });
+    const picker = canvas.getByRole("group", { name: "Not in the theory list color" });
     await userEvent.click(within(picker).getByRole("button", { name: "Slate" }));
     await userEvent.click(within(picker).getByRole("button", { name: "Done" }));
 
@@ -261,7 +261,7 @@ export const RefusedWrite: Story = {
     const trigger = canvas.getByRole("button", { name: SWATCH("matching-printing mark") });
 
     await userEvent.click(trigger);
-    const picker = canvas.getByRole("group", { name: "Matching printing colour" });
+    const picker = canvas.getByRole("group", { name: "Matching printing color" });
     await userEvent.click(within(picker).getByRole("button", { name: "Moss" }));
     await userEvent.click(within(picker).getByRole("button", { name: "Done" }));
 

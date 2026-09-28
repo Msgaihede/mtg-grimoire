@@ -83,7 +83,7 @@ export const NotPaired: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await expect(await canvas.findByText(/not paired with anything yet/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/not paired yet/i)).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: /enter a code/i })).toBeInTheDocument();
     // Nothing to compare and nothing to remove: the roster is not drawn at all rather than
@@ -113,7 +113,7 @@ export const OfferShown: Story = {
 
     const confirm = canvas.getByRole("button", { name: /codes match/i });
     await expect(confirm).toHaveAttribute("aria-disabled", "true");
-    await expect(canvas.getByText(/nothing to compare yet/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/available once the other device joins/i)).toBeInTheDocument();
     await expect(canvas.queryByTestId("pairing-sas")).not.toBeInTheDocument();
   },
 };
@@ -166,14 +166,14 @@ export const JoiningShowsItsOwnDigits: Story = {
     // **Pasted rather than typed, which is also what a reader does.** 105 characters is 105
     // keystrokes through `userEvent.type`, and the number is not incidental: it is what the
     // payload forces, and it is exactly why §7.5 makes the QR the primary form.
-    await userEvent.click(await canvas.findByLabelText(/code the other device is showing/i));
+    await userEvent.click(await canvas.findByLabelText(/code shown on the other device/i));
     await userEvent.paste(A_CODE);
     await userEvent.click(canvas.getByRole("button", { name: /read the code/i }));
 
     const digits = await canvas.findByTestId("pairing-sas");
     await expect(digits.textContent).toMatch(/^\d{6}$/);
     await expect(canvas.queryByRole("button", { name: /codes match/i })).not.toBeInTheDocument();
-    await expect(canvas.getByText(/press codes match there/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/click codes match on the other device/i)).toBeInTheDocument();
   },
 };
 
@@ -203,7 +203,7 @@ export const CeremonyCompletes: Story = {
     await userEvent.click(confirm);
 
     const note = await canvas.findByText(
-      /paired\. the other device is now part of this group/i,
+      /paired\. the other device is now in this group/i,
       {},
       { timeout: 5000 },
     );
@@ -260,7 +260,7 @@ export const CodeRefused: Story = {
     const canvas = within(canvasElement);
 
     await userEvent.click(await canvas.findByRole("button", { name: /enter a code/i }));
-    await userEvent.type(await canvas.findByLabelText(/code the other device is showing/i), "ABC");
+    await userEvent.type(await canvas.findByLabelText(/code shown on the other device/i), "ABC");
     await userEvent.click(canvas.getByRole("button", { name: /read the code/i }));
 
     await expect(await canvas.findByRole("alert")).toHaveTextContent(/105 characters/i);
@@ -296,7 +296,7 @@ export const Paired: Story = {
     await expect(canvas.queryByText("Removed")).not.toBeInTheDocument();
     // Two of three, and the key version is still 2 — the epoch counts rotations, and the
     // rotation happened. The seed's third row is what stops the line above being vacuous.
-    await expect(canvas.getByText(/in a group of 2, at key version 2/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/in a group of 2 devices/i)).toBeInTheDocument();
     await expect(
       canvas.queryByRole("button", { name: /remove old laptop/i }),
     ).not.toBeInTheDocument();
@@ -372,11 +372,11 @@ export const RemovingSaysWhatItCannotDo: Story = {
     const page = within(canvasElement.ownerDocument.body);
 
     await userEvent.click(await canvas.findByRole("button", { name: /remove phone/i }));
-    await expect(await page.findByText(/changes the key your devices share/i)).toBeInTheDocument();
-    await expect(page.getByText(/cannot reach into it/i)).toBeInTheDocument();
+    await expect(await page.findByText(/changes your sync key/i)).toBeInTheDocument();
+    await expect(page.getByText(/can't be wiped remotely/i)).toBeInTheDocument();
 
     await userEvent.click(page.getByRole("button", { name: /remove device/i }));
-    await expect(await canvas.findByText(/in a group of 1, at key version 3/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/in a group of 1 device./i)).toBeInTheDocument();
     // The row is gone from the screen, and it is gone from the *panel* rather than from the
     // store: the fake still holds the stamped row, exactly as `sync_devices` does.
     await expect(canvas.queryByText("Phone")).not.toBeInTheDocument();
@@ -414,20 +414,20 @@ export const LeavingSaysWhatItCosts: Story = {
     // The dialog draws at the app root, so its body is outside the panel's canvas.
     const page = within(canvasElement.ownerDocument.body);
 
-    await expect(await canvas.findByText(/in a group of 2, at key version 2/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/in a group of 2 devices/i)).toBeInTheDocument();
     await userEvent.click(canvas.getByRole("button", { name: "Leave group" }));
 
     // 1. Nothing local is deleted. 2. The others may never hear.
     const warning = await page.findByText(/your collection stays on this device/i);
-    await expect(warning).toHaveTextContent(/nothing here is deleted/i);
-    await expect(warning).toHaveTextContent(/relay cannot be reached/i);
-    await expect(warning).toHaveTextContent(/go on listing this one/i);
+    await expect(warning).toHaveTextContent(/your collection stays on this device/i);
+    await expect(warning).toHaveTextContent(/relay can't be reached/i);
+    await expect(warning).toHaveTextContent(/may still list this one/i);
 
     await userEvent.click(page.getByRole("button", { name: "Leave the group" }));
 
     // Out. The roster is gone rather than emptied, and what is drawn in its place is the offer
     // a device in no group opens on — which is the same read the panel makes on first launch.
-    await expect(await canvas.findByText(/not paired with anything yet/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/not paired yet/i)).toBeInTheDocument();
     await expect(canvas.queryByText("Phone")).not.toBeInTheDocument();
     await expect(canvas.queryByRole("list")).not.toBeInTheDocument();
     // And the press goes with the group it was about — the other end of the same gate
@@ -473,7 +473,7 @@ export const NotConnected: Story = {
     await expect(canvas.queryByText(/stays on this device/i)).not.toBeInTheDocument();
     // **The one warning that does belong here**, because it is about the press below it:
     // connecting founds a group of one, and a device in a group can never join another.
-    await expect(canvas.getByText(/pair this one to them first/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/pair this one with them first/i)).toBeInTheDocument();
     // **And the second, at the field rather than at the button** (spec §3). `/claim` *moves* a
     // binding now rather than refusing one with a 409 — which is what un-strands the payer who
     // has just left a group — and the price is paid by whoever is still in the old one: their
@@ -508,7 +508,7 @@ export const Supporting: Story = {
     await expect(canvas.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
     // ...and the advice about *which* device to connect on goes with the press it was about.
-    await expect(canvas.queryByText(/pair this one to them first/i)).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/pair this one with them first/i)).not.toBeInTheDocument();
   },
 };
 
@@ -552,9 +552,9 @@ export const SupportingThroughTheGroup: Story = {
     // between a panel that merely reads right and a device that actually works.
     await expect(canvas.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
     // The advice about which device to connect on goes with the press it was about.
-    await expect(canvas.queryByText(/pair this one to them first/i)).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/pair this one with them first/i)).not.toBeInTheDocument();
     // Still in the group it is entitled through, at the key version the removal left.
-    await expect(canvas.getByText(/key version 2/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/in a group of [0-9]+ devices?./i)).toBeInTheDocument();
   },
 };
 
@@ -628,7 +628,7 @@ export const MembershipEnded: Story = {
     await expect(canvas.getByRole("button", { name: /connect patreon/i })).toBeInTheDocument();
     await expect(canvas.queryByText(/could not|failed|error/i)).not.toBeInTheDocument();
     // The devices stay paired through a lapse, which is what makes reconnecting one press.
-    await expect(canvas.getByText(/key version 2/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/in a group of [0-9]+ devices?./i)).toBeInTheDocument();
   },
 };
 
@@ -650,7 +650,7 @@ export const ConnectingBeforePairing: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await expect(await canvas.findByText(/not paired with anything yet/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/not paired yet/i)).toBeInTheDocument();
 
     await userEvent.click(await canvas.findByLabelText(/claim code/i));
     await userEvent.paste(A_CLAIM_CODE);
@@ -659,7 +659,7 @@ export const ConnectingBeforePairing: Story = {
     // A group of one, made by the claim rather than by a pairing press.
     await expect(await canvas.findByText(/in a group of 1/i)).toBeInTheDocument();
     await expect(canvas.getByText(/nothing has synced yet/i)).toBeInTheDocument();
-    await expect(canvas.queryByText(/nowhere to sync to yet/i)).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/no other devices yet/i)).not.toBeInTheDocument();
   },
 };
 
@@ -689,7 +689,7 @@ export const OneRoundTrip: Story = {
     await userEvent.click(await canvas.findByLabelText(/claim code/i));
     await userEvent.paste(A_CLAIM_CODE);
     await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
-    await expect(await canvas.findByText(/3 changes waiting to go/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/3 changes pending/i)).toBeInTheDocument();
 
     await userEvent.click(canvas.getByRole("button", { name: /sync now/i }));
 
@@ -697,7 +697,7 @@ export const OneRoundTrip: Story = {
       await canvas.findByText(/sent 3 changes and received 0 changes/i),
     ).toBeInTheDocument();
     // The pile is empty and the stamp has moved, so both lines change together.
-    await expect(canvas.getByText(/nothing is waiting to go/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/no pending changes/i)).toBeInTheDocument();
     await expect(canvas.getByText(/last synced just now/i)).toBeInTheDocument();
   },
 };
@@ -739,9 +739,9 @@ export const AFirstExchange: Story = {
     await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
     await userEvent.click(await canvas.findByRole("button", { name: /sync now/i }));
 
-    const line = await canvas.findByText(/first exchange with a new device/i);
+    const line = await canvas.findByText(/first sync with a new device/i);
     await expect(line).toHaveTextContent(/\d+ rows synced/i);
-    await expect(line).toHaveTextContent(/\d+ of those are deck history/i);
+    await expect(line).not.toHaveTextContent(/deck history/i);
 
     await userEvent.click(canvas.getByRole("button", { name: /sync now/i }));
 
@@ -750,7 +750,7 @@ export const AFirstExchange: Story = {
     await waitFor(async () => {
       await expect(canvas.getByText(/sent 0 changes and received 0 changes/i)).toBeInTheDocument();
     });
-    await expect(canvas.queryByText(/first exchange/i)).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/first sync with a new device/i)).not.toBeInTheDocument();
   },
 };
 
@@ -773,12 +773,12 @@ export const TheReadsAreRefused: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await expect(await canvas.findByText(/could not be read/i)).toBeInTheDocument();
+    await expect((await canvas.findAllByText(/couldn't load/i)).length).toBeGreaterThan(0);
     await expect(canvas.queryByText(/not connected/i)).not.toBeInTheDocument();
     await expect(
       canvas.queryByRole("button", { name: /connect patreon/i }),
     ).not.toBeInTheDocument();
-    await expect(canvas.queryByText(/nothing is waiting to go/i)).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/no pending changes/i)).not.toBeInTheDocument();
   },
 };
 
@@ -809,6 +809,6 @@ export const SocketDropsAfterASync: Story = {
       await canvas.findByText(/not connected to the relay/i),
     ).toBeInTheDocument();
     // The one clause that matters: nothing was lost, only queued.
-    await expect(canvas.getByText(/still being kept/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/changes will sync when it's back/i)).toBeInTheDocument();
   },
 };

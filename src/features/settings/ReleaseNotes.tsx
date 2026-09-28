@@ -28,7 +28,7 @@ export function ReleaseNotes({ notes, className }: { notes: string; className?: 
   if (!blocks.length) {
     // The honest answer, said once here rather than at each of the two call sites. A release
     // really can publish an empty body, and an empty box reads as a failure to load.
-    return <p className={cn("text-xs text-dim", className)}>This release published no notes.</p>;
+    return <p className={cn("text-xs text-dim", className)}>No release notes.</p>;
   }
 
   return (
