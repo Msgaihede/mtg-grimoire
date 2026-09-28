@@ -3,8 +3,53 @@
 //! Physical millis, a logical counter, and the device id as the deterministic tiebreak, **in
 //! that order**. The order is the design: leading with the device id would sort every op by
 //! whose machine it was written on, which is not an ordering, it is an alphabet.
+//!
+//! **How far ahead a peer's stamp may be is bounded, and not in this file** — [`MAX_AHEAD_MS`]
+//! says why [`Hlc::observe`] is the wrong place. `client::pull` holds a batch stamped further
+//! ahead of this device's wall clock than the bound (the `clock` hold) until the wall clock comes
+//! within it. The relay refuses to store such a batch at the push, a **422** `code:
+//! "clock_ahead"` against its own `MAX_CLOCK_AHEAD_MS`.
 
 use serde::{Deserialize, Serialize};
+
+/// How far past this device's wall clock a peer's stamp may be before its op waits: one day.
+///
+/// **Unbounded, one wrong clock outranks the group.** Last-writer-wins trusts the stamp, so a
+/// device whose date is set a year ahead wins every edit it makes for a year, and every device
+/// that applies one of its ops is dragged a year forward with it — for good, since [`Hlc::tick`]
+/// never retreats.
+///
+/// **The receiver holds the op; it does not clamp [`Hlc::observe`].** A clock that did not move
+/// past an op it applied would stamp the reader's next edit *before* that op: here the edit
+/// stands, because it is the last write this row saw, and on every other device the op outranks
+/// it — the same row, two answers, and neither device able to see the difference. Applying an op
+/// is what obliges the clock to pass it, so the only bounded choice is not to apply it yet: the
+/// pull cursor stays where it is, and the op applies once this device's wall clock is within the
+/// bound of it. Within the bound the drag stands — a peer a few hours fast still pulls the group
+/// those hours forward, which is `observe` doing its job.
+///
+/// **Why a day.** Ordinary skew is seconds, and a clock set by hand in the wrong time zone is out
+/// by hours; both pass. A mis-set *date* is a day or more, and is what this is for. What a hold
+/// costs: the held ops wait, and the cursor with them — which pins the relay's compaction — until
+/// this device's clock reaches them less a day. Against a relay that refuses such pushes, a
+/// receiver whose own clock is right never holds: an accepted stamp was within a day of the
+/// relay's clock at the push, and this device's clock is past that moment. What it catches is a
+/// log stored before the relay refused them, and a receiver whose own clock is behind, which waits
+/// no longer than its clock takes to reach the moment of the push.
+///
+/// **It must equal `MAX_CLOCK_AHEAD_MS` in `relay/src/log.ts`**, which
+/// [`tests::the_bound_is_the_relays`] reads: a relay bound looser than this one stores what every
+/// updated receiver holds, and a tighter one refuses a push this device thought it could make.
+pub const MAX_AHEAD_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// Whether an op stamped at `stamp_ms` is too far ahead of this device's `wall_ms` to apply yet:
+/// more than [`MAX_AHEAD_MS`] past it. Exactly the bound is not too far.
+///
+/// **Saturating**, because `wall_ms` near `i64::MAX` is a clock set absurdly, not a reason to
+/// panic in a debug build or to wrap to a bound in the distant past in a release one.
+pub fn too_far_ahead(stamp_ms: i64, wall_ms: i64) -> bool {
+    stamp_ms > wall_ms.saturating_add(MAX_AHEAD_MS)
+}
 
 /// One point on the group's shared timeline.
 ///
@@ -146,5 +191,39 @@ mod tests {
         assert_eq!(json, r#"{"ms":7,"ctr":2,"device":"dev-a"}"#);
         let back: Hlc = serde_json::from_str(&json).unwrap();
         assert_eq!(back, h(7, 2, "dev-a"));
+    }
+
+    /// **Exactly a day ahead applies and one millisecond more waits.** Behind, level and inside
+    /// the bound are all ordinary, and the bound is a strict `>` — a peer precisely a day fast is
+    /// the last one let through, not the first one held.
+    #[test]
+    fn a_stamp_is_too_far_ahead_one_millisecond_past_the_bound() {
+        let wall = 1_787_000_000_000;
+        assert!(!too_far_ahead(wall - 60_000, wall));
+        assert!(!too_far_ahead(wall, wall));
+        assert!(!too_far_ahead(wall + MAX_AHEAD_MS, wall));
+        assert!(too_far_ahead(wall + MAX_AHEAD_MS + 1, wall));
+    }
+
+    /// **A wall clock at the top of the range saturates rather than overflowing** — which in a
+    /// debug build is a panic in the middle of a pull, and in a release one wraps the bound to the
+    /// far past and holds everything.
+    #[test]
+    fn the_bound_saturates_at_the_top_of_the_range() {
+        assert!(!too_far_ahead(i64::MAX, i64::MAX));
+        assert!(!too_far_ahead(i64::MAX, i64::MAX - MAX_AHEAD_MS + 1));
+        assert!(too_far_ahead(i64::MAX, 0));
+    }
+
+    /// **The bound is the relay's, read out of the relay's own source**, so moving it on one side
+    /// is red on the other.
+    #[test]
+    fn the_bound_is_the_relays() {
+        let relay = include_str!("../../../relay/src/log.ts");
+        assert_eq!(MAX_AHEAD_MS, 24 * 60 * 60 * 1000);
+        assert!(
+            relay.contains("export const MAX_CLOCK_AHEAD_MS = 24 * 60 * 60 * 1000;"),
+            "relay/src/log.ts no longer exports the bound `too_far_ahead` holds against"
+        );
     }
 }

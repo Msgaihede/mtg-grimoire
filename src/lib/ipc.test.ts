@@ -3779,6 +3779,8 @@ it("subscribes to sync:applied and hands the payload through unwrapped", async (
     deferred: 0,
     heldNewer: 0,
     dropped: 0,
+    moot: 0,
+    changed: true,
     baselineOps: 0,
     baselineHistory: 0,
   };
