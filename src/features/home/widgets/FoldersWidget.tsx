@@ -35,19 +35,23 @@
  *
  * ## Smaller decisions
  *
- * **The app's own folders are offered and labelled rather than hidden.** A `deck`-kind folder is
- * the one group standing for a deck and `removed` is the single `Recently removed` holding area;
- * every folder *picker* in this app offers `user` and only `user`, because a picker is choosing
- * somewhere to write and those two refuse every write in words. This is a shortcut rather than a
- * destination, so both are worth pinning — but a deck's group must not read as a binder the
- * reader made, so the row says which it is in words (its caption and its accessible name) as well
- * as with a glyph.
+ * **The app's own folders are folders like any other here** (issue #601). A `deck`-kind folder is
+ * the one group standing for a deck, `removed` is the single `Recently removed` holding area, and a
+ * deck's managed wishlist is the wishlist's version of the first; every folder *picker* in this app
+ * offers the reader's own and only those, because a picker is choosing somewhere to write and the
+ * app's own refuse every write in words. This is a shortcut rather than a destination, so none of
+ * that applies: they are pinned, drawn, counted and opened exactly as a binder is, in the cabinet's
+ * own colour. What still tells them apart is words — the caption and the accessible name say
+ * `Deck folder` or `Managed wishlist` — and the glyph, which is the page's own for the same fact.
  *
- * **An empty pin set falls back to the top-level drawers the reader made.** `folders` is in the
- * default layout with `config: null`, so that fallback is what every reader sees before they have
- * pinned anything, and a dead card would be the first thing the home page ever said. The fallback
- * is `user` folders only: twenty deck groups would bury the two binders that matter. **It is no
- * longer capped at six per cabinet** — that number was a wide card's glance, and the box now
+ * **An empty pin set falls back to the cabinet's top level, in the order its page draws it.**
+ * `folders` is in the default layout with `config: null`, so that fallback is what every reader
+ * sees before they have pinned anything, and a dead card would be the first thing the home page
+ * ever said. The order is `buildShelves`': the reader's own folders first, then the deck groups by
+ * name and `Recently removed`, then the managed wishlists by name — so the binders that matter still
+ * lead, and a box too small for everything cuts the app's own first. It used to be `user` folders
+ * only, which made a deck's group reachable from its page and unreachable from here until pinned.
+ * **It is not capped at six per cabinet** — that number was a wide card's glance, and the box
  * decides how many rows are a glance.
  *
  * **The press opens the view *and* the folder, through a door that is one field wide.** Which
@@ -127,14 +131,14 @@ interface WishTotals {
 const NO_CARDS: CollectionFolderTotals = { cards: 0, value: null };
 const NO_WISHES: WishTotals = { wishes: 0, copies: 0, cost: 0, unpriced: 0 };
 
-/** The glyph colours — the design's `iconColor`: a drawer of cardboard is the accent, a wish is the
- *  heart's red, and the app's own folders are dim, because a glyph is where "these are four
- *  different statements" is cheapest to say. */
+/** The glyph colours — the design's `iconColor`, one per cabinet: a drawer of cardboard is the
+ *  accent and a wish is the heart's red, whoever made the drawer. The app's own folders were dim
+ *  until issue #601, which read as a folder that was switched off; the glyph's shape is what says
+ *  whose it is. */
 const ACCENT = "var(--color-accent)";
 // Magic's red, `--color-mana-r`, drawn as a glyph on the dark ground, where the pale fill reads
 // 10:1 — the saturated red deep it replaced on 2026-09-28 read 3.7:1.
 const WISH = "var(--color-mana-r)";
-const DIM = "var(--color-dim)";
 
 /** The list's accessible name, per scope — the card's title is `Folders` either way, so the list
  *  says which cabinets it holds. */
@@ -266,7 +270,6 @@ function collectionKind(folder: CollectionFolder): {
   spoken: string;
   option: string;
   Icon: typeof Folder;
-  color: string;
 } {
   if (folder.kind === DECK_KIND) {
     return {
@@ -274,7 +277,6 @@ function collectionKind(folder: CollectionFolder): {
       spoken: "deck folder",
       option: `${folder.name} (deck)`,
       Icon: Layers,
-      color: DIM,
     };
   }
   if (folder.kind === REMOVED_KIND) {
@@ -283,7 +285,6 @@ function collectionKind(folder: CollectionFolder): {
       spoken: "removed cards",
       option: `${folder.name} (removed cards)`,
       Icon: Inbox,
-      color: DIM,
     };
   }
   return {
@@ -291,8 +292,40 @@ function collectionKind(folder: CollectionFolder): {
     spoken: "collection folder",
     option: folder.name,
     Icon: Folder,
-    color: ACCENT,
   };
+}
+
+/** App-owned folders by name, the id breaking a tie — `shelves.ts`' `byName`, which is module-
+ *  private there: nobody arranged these, so a `sort_order` on one is not an order anybody chose. */
+function byName<F extends FolderLike>(a: FolderNode<F>, b: FolderNode<F>) {
+  return a.folder.name.localeCompare(b.folder.name) || a.folder.id - b.folder.id;
+}
+
+/**
+ * The collection's top level in the order its page's shelves draw it (`buildShelves`): the reader's
+ * own folders in the tree's order, then the deck groups by name, then `Recently removed`. A kind
+ * this build has not heard of is drawn with the reader's own, as {@link collectionKind} draws it.
+ */
+function collectionTopLevel(
+  nodes: readonly FolderNode<CollectionFolder>[],
+): FolderNode<CollectionFolder>[] {
+  const ofKind = (kind: string) => nodes.filter((node) => node.folder.kind === kind).sort(byName);
+  return [
+    ...nodes.filter((node) => node.folder.kind !== DECK_KIND && node.folder.kind !== REMOVED_KIND),
+    ...ofKind(DECK_KIND),
+    ...ofKind(REMOVED_KIND),
+  ];
+}
+
+/** The wishlist's top level in its page's order: the reader's own, then the decks' managed lists by
+ *  name. A managed `Tokens` child is below its deck's folder, so it is never top level. */
+function wishlistTopLevel(
+  nodes: readonly FolderNode<WishlistFolder>[],
+): FolderNode<WishlistFolder>[] {
+  return [
+    ...nodes.filter((node) => !isManaged(node.folder)),
+    ...nodes.filter((node) => isManaged(node.folder)).sort(byName),
+  ];
 }
 
 /**
@@ -427,9 +460,7 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
 
   const collectionRows = (): FolderRowModel[] =>
     pick(config.collectionFolderIds, collection.folders, () =>
-      collectionNodes.filter(
-        (node) => node.folder.kind !== DECK_KIND && node.folder.kind !== REMOVED_KIND,
-      ),
+      collectionTopLevel(collectionNodes),
     ).map((folder) => {
       const kind = collectionKind(folder);
       const totals = cardTotals.get(folder.id) ?? NO_CARDS;
@@ -449,16 +480,15 @@ export function FoldersWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
         face: face.shown,
         spokenName: `${folder.name}, ${kind.spoken}, ${face.spoken}`,
         icon: <kind.Icon className="size-3.5" aria-hidden="true" />,
-        color: kind.color,
+        color: ACCENT,
       };
     });
 
   const wishlistRows = (): FolderRowModel[] =>
-    // Automatic is the drawers the reader made — the collection's rule above, which leaves the
-    // app's deck groups out — so a deck's **managed** wishlist (issue #512) appears here only when
-    // it is pinned by hand, and then says whose it is.
+    // Automatic is the whole top level, a deck's **managed** wishlist (issue #512) included after
+    // the reader's own (issue #601) — and a managed row says whose it is.
     pick(config.wishlistFolderIds, wishlist.folders, () =>
-      wishlistNodes.filter((node) => !isManaged(node.folder)),
+      wishlistTopLevel(wishlistNodes),
     ).map((folder) => {
       const totals = wishTotals.get(folder.id) ?? NO_WISHES;
       const face = wishFace(totals, currency);
@@ -686,7 +716,7 @@ export function FoldersWidgetSettings({ widget, onConfig }: WidgetSettingsProps)
   return (
     <div className="grid gap-3">
       <p className="m-0 text-xs text-dim">
-        With nothing pinned, a cabinet shows the top-level folders you made.
+        With nothing pinned, a cabinet shows its top-level folders, yours first.
       </p>
       {cabinets !== "wishlist" && (
         <Picker
