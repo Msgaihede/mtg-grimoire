@@ -10,7 +10,7 @@ import type { TagChip } from "@/features/tags/tagFilters";
 import type { SortSpec } from "@/lib/sort";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import type { TagToken } from "./queryLanguage";
-import { FilterBar } from "./FilterBar";
+import { FilterBar, StatedFiltersLine } from "./FilterBar";
 import { ANY_CARD, FORMATS } from "./useCardSearch";
 
 const search = (over: Record<string, unknown> = {}) =>
@@ -2244,7 +2244,43 @@ describe("FilterBar, the filters it states", () => {
 
     expect(screen.queryByText("Filtering by")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Remove filter/ })).toBeNull();
-    // The rule and Reset all stay, because that button is drawn on every row and greyed at zero.
+    // No line under the bar at all — but Reset all stays, on the bar, greyed at zero.
+    expect(screen.getByRole("button", { name: /^Reset all/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **Reset all is on the bar, in the same row as the box, and not on the line of chips** (the
+   * header redesign, 2026-09-27). That line used to be drawn unconditionally for this button's
+   * sake alone; with the button on the bar, the line can come and go with the chips without
+   * anything beside a pressed control moving. Both halves are asserted, because a Reset all
+   * mounted in both places would pass either one alone.
+   */
+  it("keeps Reset all on the bar's own row, never on the line of chips", () => {
+    render(<FilterBar search={search({ colors: ["U"], rarities: ["rare"], activeCount: 2 })} />);
+
+    const reset = screen.getByRole("button", { name: /^Reset all/ });
+    const row = screen.getByLabelText("Search cards").parentElement!;
+    expect(row).toContainElement(reset);
+    expect(screen.getByText("Filtering by").parentElement).not.toContainElement(reset);
+    expect(screen.getAllByRole("button", { name: /^Reset all/ })).toHaveLength(1);
+  });
+
+  /**
+   * **`statesFilters={false}` hands the chips to the page** — the collection and the wishlist draw
+   * them in their path row with `StatedFiltersLine`, so the bar must draw none of its own or the
+   * page would state every filter twice.
+   */
+  it("draws no line of chips when the page states them itself", () => {
+    render(
+      <FilterBar
+        search={search({ colors: ["U"], rarities: ["rare"], activeCount: 2 })}
+        statesFilters={false}
+      />,
+    );
+
+    expect(screen.queryByText("Filtering by")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Remove filter/ })).toBeNull();
+    // Reset all is the bar's, not the line's, so it stays.
     expect(screen.getByRole("button", { name: /^Reset all/ })).toBeInTheDocument();
   });
 
@@ -2361,13 +2397,14 @@ describe("FilterBar, the filters it states", () => {
   });
 
   /**
-   * **A wrapped block under the rule, and never a line of the bar's own row.** That is where
-   * `Reset all` left the bar for: on the row it took its width out of a `flex-1` search box and
-   * slid nine colour chips left under the finger that had just pressed one, while below it an
-   * appearing chip moves only the wall. The chips wrap onto further lines as they grow rather than
-   * running out of the box.
+   * **A wrapped block under the bar, and never a line of the bar's own row.** An appearing chip
+   * under the bar moves only the wall, where on the row it would take its width out of a `flex-1`
+   * search box and slide nine colour chips left under the finger that had just pressed one. The
+   * chips wrap onto further lines as they grow rather than running out of the box. `Reset all` is
+   * the other way round since 2026-09-27 — on the row, drawn from the first paint so it never
+   * appears — and "keeps Reset all on the bar's own row", in this block, pins that half.
    */
-  it("wraps the chips and Reset all in a block of their own, off the bar's row", () => {
+  it("wraps the chips in a block of their own, off the bar's row", () => {
     render(<FilterBar search={search({ colors: ["U", "R"], activeCount: 1 })} />);
 
     const block = screen.getByRole("button", {
@@ -2377,7 +2414,6 @@ describe("FilterBar, the filters it states", () => {
 
     const row = screen.getByPlaceholderText("Search cards…").parentElement!;
     expect(row).not.toContainElement(block);
-    expect(row).not.toContainElement(screen.getByRole("button", { name: /^Reset all/ }));
   });
 });
 
@@ -2526,5 +2562,35 @@ describe("FilterBar, its condition chips", () => {
     );
 
     expect(chipLabels()).toEqual([`Condition: ${CONDITION_LABEL.NONE}, LP`]);
+  });
+});
+
+/**
+ * **The chips a page places itself** — the collection's and the wishlist's path row (2026-09-27).
+ * The row is a fixed height, so the line has to scroll rather than wrap.
+ */
+describe("StatedFiltersLine", () => {
+  it("states each filter kind as a removable chip, on one scrolling line", async () => {
+    const toggleColor = vi.fn();
+    render(
+      <StatedFiltersLine
+        search={search({ colors: ["U"], rarities: ["rare"], activeCount: 2, toggleColor })}
+      />,
+    );
+
+    expect(screen.getByText("Filtering by")).toBeInTheDocument();
+    const chip = screen.getByRole("button", { name: "Remove filter — Colour: Blue" });
+    expect(screen.getByRole("button", { name: /^Remove filter — Rarity/ })).toBeInTheDocument();
+    const { classList } = chip.parentElement!;
+    expect(classList.contains("overflow-x-auto")).toBe(true);
+    expect(classList.contains("flex-wrap")).toBe(false);
+
+    await userEvent.click(chip);
+    expect(toggleColor).toHaveBeenCalledWith("U");
+  });
+
+  it("draws nothing while nothing is filtered", () => {
+    const { container } = render(<StatedFiltersLine search={search()} />);
+    expect(container).toBeEmptyDOMElement();
   });
 });

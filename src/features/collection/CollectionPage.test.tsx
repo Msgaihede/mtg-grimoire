@@ -6417,11 +6417,12 @@ describe("folding while filtering, a drawer deleted elsewhere, and the loaded ed
   });
 
   /**
-   * **The status line keeps its slot** (the re-check's new 2). `Updating…` came and went after
-   * every write, and a line that is nothing tall while empty pushed the wall down 16px for exactly
-   * the frames a reveal or a drop anchor was measured across. The line is one line of `text-xs`,
-   * `min-h-4`, whether it says anything or not — pinned as the classes, because jsdom lays nothing
-   * out.
+   * **The status line never moves the wall** (the re-check's new 2). `Updating…` came and went
+   * after every write, and a line that is nothing tall while empty pushed the wall down 16px for
+   * exactly the frames a reveal or a drop anchor was measured across. Since the header redesign
+   * (2026-09-27) the line is not a line of its own at all: it rides the path row beside the shelf
+   * toolbar, whose height it cannot change, and `truncate` holds it to one line — pinned as the
+   * classes and the parent, because jsdom lays nothing out.
    */
   it("keeps the status line's slot while it says nothing and while it says Updating…", async () => {
     const { client } = wrap(<CollectionPage />);
@@ -6435,7 +6436,8 @@ describe("folding while filtering, a drawer deleted elsewhere, and the loaded ed
     const line = await screen.findByText("Updating…");
     expect(line).toHaveAttribute("role", "status");
     const updating = line.className;
-    expect(line).toHaveClass("min-h-4");
+    expect(line).toHaveClass("truncate", "text-xs");
+    expect(line.parentElement).toContainElement(screen.getByRole("group", { name: "Shelves" }));
 
     await act(async () => answer!());
     await waitFor(() => expect(line).toHaveTextContent(""));
@@ -7424,9 +7426,12 @@ describe("a needs-review hand-off over a filed cabinet", () => {
       expect(screen.getByText("Mox Pearl")).toBeInTheDocument();
       expect(screen.getByText("Mox Sapphire")).toBeInTheDocument();
     });
-    expect(
-      onPage(screen.getAllByRole("button", { name: "Remove filter — Needs review" })),
-    ).toBeInTheDocument();
+    const chip = onPage(screen.getAllByRole("button", { name: "Remove filter — Needs review" }));
+    // Stated in the path row, beside the shelf toolbar — not on a line of its own under the bar
+    // (2026-09-27): the chip's line and the toolbar share one row.
+    expect(chip.parentElement!.parentElement).toContainElement(
+      screen.getByRole("group", { name: "Shelves" }),
+    );
     await waitFor(() => expect(useAppStore.getState().pendingReviewFilter).toBeNull());
     expect(setShelfFolds).not.toHaveBeenCalled();
   });
