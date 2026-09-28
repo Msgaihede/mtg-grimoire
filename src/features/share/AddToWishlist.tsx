@@ -249,7 +249,7 @@ export function AddToWishlist({
     <Dialog
       open={open}
       title="Add to your wishlist"
-      subtitle="One copy of each, on your own list. Their binder does not change."
+      subtitle="Adds one copy of each selected card to your wishlist."
       closeLabel="Close add to your wishlist"
       size="w-[34rem]"
       onDismiss={onClose}

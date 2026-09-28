@@ -156,8 +156,8 @@ export class SharedBoundary extends Component<{ children: ReactNode }, { failed:
         <div className="max-w-[46ch] py-14">
           <p className="font-heading text-[1.375rem] leading-snug">{SHARED_UNDRAWABLE}</p>
           <p className="mt-3 text-sm text-dim">
-            The link is good; this view could not read what it points at. Close the collection and
-            open it again, or ask for the link a second time.
+            Could not load collection data from this link. Try reopening the collection or
+            requesting an updated link.
           </p>
         </div>
       </Frame>
@@ -297,8 +297,8 @@ function Empty({ onPaste }: { onPaste: () => void }) {
         Open a collection somebody shared with you
       </h2>
       <p className="mt-3 text-sm text-dim">
-        Paste the link they sent you. You will see their binder as it was when they published it,
-        with every card checked against what you own and what is on your wishlist.
+        Paste a shared collection link to view published cards cross-referenced against your
+        collection and wishlist.
       </p>
       <button
         type="button"
@@ -409,8 +409,8 @@ function Refused({
     <div className="max-w-[46ch] py-14">
       <p className="font-heading text-[1.375rem] leading-snug">{sentence}</p>
       <p className="mt-3 text-sm text-dim">
-        A shared collection stops answering when its owner withdraws it, or when their membership
-        ends. The link cannot be revived from this side.
+        A shared collection becomes unavailable when its owner withdraws it or their subscription
+        ends.
       </p>
       <div className="mt-6 flex flex-wrap gap-2">
         <button type="button" onClick={onRetry} className={cn(BUTTON, "border-border")}>
@@ -689,8 +689,7 @@ function Binder({
         // Said out loud rather than folded into zeroes: the two are indistinguishable on screen
         // and only one of them is safe to trade on.
         <p role="status" className="pt-3 text-sm text-destructive">
-          Your own collection and wishlist could not be read, so the figures below are missing
-          rather than zero.
+          Your collection and wishlist could not be read; comparison figures are unavailable.
         </p>
       ) : (
         !figuresReady && (
@@ -756,7 +755,7 @@ function Binder({
 
       {shown.length === 0 ? (
         <p className="mt-8 text-sm text-dim">
-          Nothing here matches. Widen the search, or pick another drawer.
+          No matching cards found. Try widening your search or choosing another folder.
         </p>
       ) : (
         <ul

@@ -319,7 +319,7 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
               label: "Withdrawn",
               Icon: Link2Off,
               disabled: true,
-              reason: "the link stopped answering",
+              reason: "the link is no longer active",
               onSelect: () => {},
             },
             { kind: "separator", id: "after-withdrawn" },
@@ -481,8 +481,8 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
         }}
         onClose={() => setWithdrawing(false)}
       >
-        The link stops answering for everyone who has it, and it cannot be brought back. Your
-        cards are not touched.
+        The link will become inactive for everyone, and cannot be restored. Your
+        local cards are unaffected.
       </ConfirmDialog>
 
       <OpenShareDialog
@@ -544,7 +544,7 @@ function PublishDialog({
     <Dialog
       open={open}
       title={target.kind === "collection" ? "Share your collection" : `Share ${target.title}`}
-      subtitle="Anyone with the link sees a read-only snapshot. It needs no account."
+      subtitle="Anyone with the link can view a read-only snapshot. No account required."
       closeLabel="Close share"
       size="w-[32rem]"
       onDismiss={onClose}
@@ -659,7 +659,7 @@ function PublishForm({
             deciding whether to publish a binder is deciding about their notes and what they
             paid. */}
         <p className="text-xs text-dim">
-          Purchase price, where you got a card, when, and your notes never leave this device.
+          Purchase prices, acquisition details, dates, and private notes never leave this device.
         </p>
       </fieldset>
 

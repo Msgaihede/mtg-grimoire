@@ -343,7 +343,7 @@ describe("DecksWidget", () => {
 
       draw(null, { fit: fitFor(4, 3) });
 
-      expect(screen.getByText(/3 copies here have no price at it\./)).toBeInTheDocument();
+      expect(screen.getByText(/3 copies have no price listed\./)).toBeInTheDocument();
     });
 
     it("draws no price note on a panel narrower than a band", () => {
@@ -489,7 +489,7 @@ describe("DecksWidget", () => {
 
       draw();
 
-      expect(screen.getByText("Loading your decks…")).toBeInTheDocument();
+      expect(screen.getByText("Loading decks…")).toBeInTheDocument();
     });
 
     it("says there are no decks at all", () => {
@@ -497,7 +497,7 @@ describe("DecksWidget", () => {
 
       draw();
 
-      expect(screen.getByText(/No decks yet — make one on the Decks page/)).toBeInTheDocument();
+      expect(screen.getByText(/No decks found\. Build a deck on the Decks page/)).toBeInTheDocument();
     });
 
     /** Its own sentence: a reader with decks whose every pin has gone is not a reader with no
@@ -507,7 +507,7 @@ describe("DecksWidget", () => {
 
       draw({ scope: "pinned", deckIds: [99] });
 
-      expect(screen.getByText(/pinned here are not in this collection any more/)).toBeInTheDocument();
+      expect(screen.getByText(/pinned decks are no longer in your collection/)).toBeInTheDocument();
     });
 
     /** `Pinned` with nothing pinned points at the picker rather than drawing recent decks under a
@@ -517,7 +517,7 @@ describe("DecksWidget", () => {
 
       draw({ scope: "pinned" });
 
-      expect(screen.getByText(/No decks pinned yet/)).toBeInTheDocument();
+      expect(screen.getByText(/No pinned decks/)).toBeInTheDocument();
       expect(rowNames()).toEqual([]);
     });
 
@@ -526,7 +526,7 @@ describe("DecksWidget", () => {
 
       draw();
 
-      expect(screen.getByText(/Every deck is archived/)).toBeInTheDocument();
+      expect(screen.getByText(/All decks are archived/)).toBeInTheDocument();
     });
 
     it("says the read was refused, in the backend's own words", async () => {
@@ -552,7 +552,7 @@ describe("DecksWidget", () => {
 
       expect(screen.getByRole("button", { name: /^Burn/ })).toHaveAccessibleName(/· —$/);
       expect(
-        await screen.findByText(/Could not read what these decks are worth — No price feed\./),
+        await screen.findByText(/Could not read deck values — No price feed\./),
       ).toBeInTheDocument();
     });
   });

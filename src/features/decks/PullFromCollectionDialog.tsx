@@ -142,7 +142,7 @@ const DEFAULT_LANG = "en";
  * half a sentence.
  */
 const PULL_NOTE =
-  "The copies move into this deck. The list itself does not change, and there is no undo — " +
+  "Selected copies will move into this deck. The list itself does not change, and there is no undo — " +
   "put a copy back from the Collection tab.";
 
 /** What the body says while the read is in flight. */
@@ -160,9 +160,8 @@ const READING = "Reading your collection…";
 const NOTHING_TO_PULL = {
   headline: "Nothing to pull.",
   why:
-    "A pull moves only the exact printing and finish the list names, and never a copy another " +
-    "deck is already holding. What this deck is still short of is either a card you have not " +
-    "got or one that is filed with another deck.",
+    "Pulls require exact printing and finish matches from available collection copies. Cards in other " +
+    "decks or not yet owned cannot be pulled.",
 } as const;
 
 /**
@@ -471,7 +470,7 @@ function PullBody({
     !pull.isSuccess || pull.data === undefined
       ? ""
       : pull.data.copies === 0
-        ? "Nothing moved — the copies had already been filed somewhere else."
+        ? "No copies moved. The copies were already filed elsewhere."
         : `Pulled ${plural(pull.data.copies, "copy", "copies")} across ` +
           `${plural(pull.data.cards, "card")} into ${deckName}.`;
 
@@ -779,8 +778,7 @@ function Row({
               press, and saying so would be the control accusing them of its own state. */}
           {on && unfilled > 0 && (
             <span className="text-[0.7rem] text-dim">
-              {plural(unfilled, "copy", "copies")} still missing — nothing else you own loose
-              matches this printing.
+              {plural(unfilled, "copy", "copies")} still missing — no other matching copies in collection.
             </span>
           )}
         </span>

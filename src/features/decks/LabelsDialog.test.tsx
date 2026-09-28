@@ -184,8 +184,8 @@ describe("LabelsDialog", () => {
    */
   it("says the labels are shared in the header, and names both of its sections", async () => {
     mount();
-    expect(await screen.findByText(/A card carries at most one/)).toHaveTextContent(
-      "Labels are shared by all your decks",
+    expect(await screen.findByText(/Cards can have at most one/)).toHaveTextContent(
+      "Labels are shared across all decks",
     );
     expect(screen.getByText("On cards in this actual list")).toBeInTheDocument();
     expect(screen.getByText("Your other labels")).toBeInTheDocument();
@@ -243,13 +243,13 @@ describe("the two sections", () => {
   it("says so when nothing in this list is labelled", async () => {
     deckLabelList.mockResolvedValue([]);
     mount();
-    expect(await screen.findByText(/Nothing in this list is labelled yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No cards in this list are labelled yet/)).toBeInTheDocument();
   });
 
   it("says so when every label the reader has is already on a card here", async () => {
     deckLabelAll.mockResolvedValue([EVERY_LABEL[0]]);
     mount();
-    expect(await screen.findByText(/Every label you have is on a card in this list/)).toBeInTheDocument();
+    expect(await screen.findByText(/All existing labels are currently used in this list/)).toBeInTheDocument();
   });
 });
 
@@ -424,7 +424,7 @@ describe("labels", () => {
     deckLabelList.mockResolvedValue([]);
     deckLabelAll.mockResolvedValue([]);
     mount();
-    await screen.findByText(/None yet/);
+    await screen.findByText(/No other labels created yet/);
     const user = userEvent.setup();
 
     await user.type(screen.getByLabelText("New label name"), "Playtest");
@@ -456,7 +456,7 @@ describe("labels", () => {
 
     expect(screen.getByRole("button", { name: "Add label" })).toBeDisabled();
     expect(screen.getByRole("status")).toHaveTextContent(
-      "“Budget swap” already exists — every deck shares one list",
+      "“Budget swap” already exists. Label names must be unique across all decks.",
     );
     await user.click(screen.getByRole("button", { name: "Add label" }));
     expect(deckLabelCreate).not.toHaveBeenCalled();
@@ -474,7 +474,7 @@ describe("labels", () => {
     deckLabelList.mockResolvedValue([]);
     deckLabelAll.mockResolvedValue([]);
     mount();
-    await screen.findByText(/None yet/);
+    await screen.findByText(/No other labels created yet/);
     const user = userEvent.setup();
 
     await user.type(screen.getByLabelText("New label name"), "Playtest");

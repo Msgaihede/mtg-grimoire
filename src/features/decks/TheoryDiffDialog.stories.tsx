@@ -92,8 +92,8 @@ export const Shopping: Story = {
     // is still the full quantity, because the count is what a press writes.
     await expect(canvas.getByText("Already played as another printing")).toBeVisible();
     // The two sentences this dialog exists to say.
-    await expect(canvas.getByText(/are cuts you have already made/)).toBeVisible();
-    await expect(canvas.getByText(/A card can be in both views/)).toBeVisible();
+    await expect(canvas.getByText(/are excluded cuts/)).toBeVisible();
+    await expect(canvas.getByText(/Cards can appear in both views/)).toBeVisible();
     await expect(
       canvas.getByText("TCGplayer prices as of the last card-data sync."),
     ).toBeVisible();
@@ -445,6 +445,6 @@ export const Refused: Story = {
     );
     // The footer still says what the list is and is not. A refusal is not a reason to stop
     // explaining the surface.
-    await expect(canvas.getByText(/are cuts you have already made/)).toBeVisible();
+    await expect(canvas.getByText(/are excluded cuts/)).toBeVisible();
   },
 };

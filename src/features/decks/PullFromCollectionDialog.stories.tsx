@@ -316,7 +316,7 @@ export const PartlyCovered: Story = {
     );
 
     await expect(canvas.getByText(/still missing/)).toHaveTextContent(
-      "1 copy still missing — nothing else you own loose matches this printing.",
+      "1 copy still missing — no other matching copies in collection.",
     );
     await expect(canvas.queryByRole("alert")).toBeNull();
     await expect(canvas.getByRole("button", { name: "Pull 1 copy" })).toBeEnabled();
@@ -371,7 +371,7 @@ export const NothingToPull: Story = {
     });
 
     await expect(canvas.getByText(/exact printing and finish/)).toHaveTextContent(
-      "never a copy another deck is already holding",
+      "Cards in other decks or not yet owned cannot be pulled.",
     );
     await expect(canvas.queryByRole("alert")).toBeNull();
   },

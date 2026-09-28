@@ -559,7 +559,7 @@ function DeleteNote({
     <div {...confirm}>
       <p className="text-xs">Delete “{title}”?</p>
       <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-        The note goes for good, on this device and on every device it has synced to.
+        This note will be permanently deleted across all synced devices.
       </p>
       <div className="mt-2 flex gap-2">
         <button type="button" onClick={onDelete} className={CONFIRM_DESTRUCTIVE}>

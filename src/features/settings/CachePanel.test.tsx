@@ -31,11 +31,11 @@ describe("CachePanel", () => {
    * The promise the panel has to make on its face, because it is what separates this button
    * from the three below it: nothing a reader chose is in here.
    */
-  it("says up front that nothing the reader owns or made is touched", () => {
+  it("says up front that cached files are re-downloaded when needed", () => {
     render(<CachePanel cache={cache()} />);
 
-    expect(panel()).toHaveTextContent("fetched again when it is next needed");
-    expect(panel()).toHaveTextContent("collection and decks are not touched");
+    expect(panel()).toHaveTextContent("Cached card images");
+    expect(panel()).toHaveTextContent("re-downloaded when needed");
   });
 
   /**
@@ -111,12 +111,10 @@ describe("CachePanel — the combo row", () => {
    * straight back, and that nobody needs to press it — and no lesson about what a combo is or
    * how often the feed refreshes, which is the panel that was deleted rather than this one.
    */
-  it("says what goes, that it returns, and that nobody needs to do it", () => {
+  it("says what goes and that it re-downloads", () => {
     render(<CachePanel cache={cache()} />);
 
-    expect(panel()).toHaveTextContent("The stored combos");
-    expect(panel()).toHaveTextContent("downloaded again straight away");
-    expect(panel()).toHaveTextContent("Nothing needs this done");
+    expect(panel()).toHaveTextContent("Clears and re-downloads Commander Spellbook combo definitions");
     expect(panel()).not.toHaveTextContent(/once a week|weekly/i);
   });
 

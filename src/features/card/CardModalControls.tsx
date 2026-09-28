@@ -513,7 +513,7 @@ function CreateRow({
 
       {clash !== undefined && (
         <p role="status" className="basis-full text-[0.6875rem] text-dim">
-          “{clash.label}” already exists — this uses it.
+          “{clash.label}” already exists. Using existing label.
         </p>
       )}
     </form>

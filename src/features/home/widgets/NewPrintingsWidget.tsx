@@ -162,7 +162,7 @@ const PENDING = "Reading recent printings…";
  * `DecksWidget.NOTHING_PINNED` says the same thing the same way for the same reason.
  */
 export const NO_DECKS =
-  "No decks are being watched, so there is nothing to compare new printings against — choose them in this card's settings under Customize.";
+  "No decks are being watched. Select decks to watch in this widget's settings.";
 
 /** An explicit locale and an explicit UTC time zone, `printings.ts`' rule and its reason:
  *  `releasedAt` is a calendar date, so a formatter left on the local zone prints the day before

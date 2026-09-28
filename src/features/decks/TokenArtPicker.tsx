@@ -287,7 +287,7 @@ function SwapBody({
     // nothing.
     return (
       <p className={cn(STATE_LINE, "text-dim")}>
-        No paper printing of this token is in your card data yet.
+        No paper printings found for this token.
       </p>
     );
   }
@@ -476,7 +476,7 @@ const DeckTokensWall = memo(function DeckTokensWall({
       ) : shown.length === 0 && failures.length < distinct.length ? (
         <p className={cn(STATE_LINE, "text-dim")}>
           {needle === ""
-            ? "No paper printing of these tokens is in your card data yet."
+            ? "No paper printings found for these tokens."
             : `No printing matches “${find.trim()}”. Search by a token’s name or a set code.`}
         </p>
       ) : (

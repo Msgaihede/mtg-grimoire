@@ -463,7 +463,7 @@ export function CardModalArt({
               >
                 <span className="text-sm">{pictured}</span>
                 <span className="text-xs text-dim">
-                  No image yet — it may still be downloading. Reopen the card to try again.
+                  Image unavailable. It may still be downloading.
                 </span>
               </div>
             ) : (

@@ -739,8 +739,8 @@ export const AFirstExchange: Story = {
     await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
     await userEvent.click(await canvas.findByRole("button", { name: /sync now/i }));
 
-    const line = await canvas.findByText(/first exchange with a device/i);
-    await expect(line).toHaveTextContent(/everything here went across — \d+ rows/i);
+    const line = await canvas.findByText(/first exchange with a new device/i);
+    await expect(line).toHaveTextContent(/\d+ rows synced/i);
     await expect(line).toHaveTextContent(/\d+ of those are deck history/i);
 
     await userEvent.click(canvas.getByRole("button", { name: /sync now/i }));

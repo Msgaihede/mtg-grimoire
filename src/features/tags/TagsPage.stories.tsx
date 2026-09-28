@@ -247,7 +247,7 @@ export const ArtTagsMissing: Story = {
     // Direction rather than mood, and it is the whole of what a reader can do: there is no
     // button for this anywhere in the app.
     await expect(
-      canvas.getByText("The app fetches them in the background. Nothing here needs a press."),
+      canvas.getByText("The app fetches them in the background automatically."),
     ).toBeInTheDocument();
 
     // The rail keeps the taxonomy that *did* arrive rather than going empty…

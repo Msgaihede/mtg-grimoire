@@ -91,31 +91,11 @@ const ROW_BARE = 36;
 /** What the price note under the rows takes off the body before rows are counted. */
 const FOOTER_ROOM = 22;
 
-const LOADING = "Loading your decks…";
-const EMPTY = "No decks yet — make one on the Decks page and it will show up here.";
-/**
- * Its own sentence, because it is its own situation.
- *
- * A reader with decks who has pinned only decks that no longer exist is not a reader with no
- * decks, and quietly falling back to the most recent would answer a question they did not ask —
- * they chose a set, and every member of it has gone. Saying so is what points them at the settings.
- */
-const PINS_GONE = "The decks pinned here are not in this collection any more.";
-/**
- * `Pinned` with nothing pinned says so rather than falling back to the most recent decks.
- *
- * **The chip beside a wide card's title reads `Pinned`**, so a card drawing the recent decks under
- * it would be the card claiming something it is not doing — and the reader who picked `Pinned`
- * picked it in order to choose, so the sentence that sends them to the picker is the useful answer.
- */
-const NOTHING_PINNED = "No decks pinned yet — choose them in this card's settings under Customize.";
-/**
- * `Most recent` over a collection whose every deck is archived.
- *
- * The old widget answered this with {@link PINS_GONE}, which was the wrong sentence: nothing was
- * pinned, and nothing was gone. The shelf is there and the scope is what hides it.
- */
-const ALL_ARCHIVED = "Every deck is archived — choose Archived too in this card's settings to show them.";
+const LOADING = "Loading decks…";
+const EMPTY = "No decks found. Build a deck on the Decks page to see it here.";
+const PINS_GONE = "The pinned decks are no longer in your collection.";
+const NOTHING_PINNED = "No pinned decks. Pin decks in this widget's settings.";
+const ALL_ARCHIVED = "All decks are archived. Enable 'Archived too' in settings to show them.";
 
 /**
  * The pins, narrowed.
@@ -259,9 +239,9 @@ export function DecksWidget({ widget, fit, still }: WidgetBodyProps): ReactEleme
   // beside them, and never travel across a switch.
   const unpriced = rows.reduce((sum, deck) => sum + (values.get(deck.id)?.unpriced ?? 0), 0);
   const footer = valuesQuery.isError
-    ? `Could not read what these decks are worth — ${ipcError(valuesQuery.error)}`
+    ? `Could not read deck values — ${ipcError(valuesQuery.error)}`
     : unpriced > 0
-      ? `${pricesAsOf(marketplace)} ${plural(unpriced, "copy", "copies")} here have no price at it.`
+      ? `${pricesAsOf(marketplace)} ${plural(unpriced, "copy", "copies")} have no price listed.`
       : pricesAsOf(marketplace);
 
   /**

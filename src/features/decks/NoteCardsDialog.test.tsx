@@ -171,8 +171,7 @@ describe("naming cards in a note", () => {
 
     expect(
       screen.getByText(
-        "A note keeps the cards it names even after they leave the deck — cutting a card never " +
-          "takes the note with it.",
+        "Linked cards remain associated with this note even if removed from the deck.",
       ),
     ).toBeInTheDocument();
 

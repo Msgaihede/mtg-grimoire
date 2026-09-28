@@ -402,7 +402,7 @@ describe("the theory difference dialog", () => {
   it("says in the footer that the other direction is deliberately not listed", async () => {
     wrap(<TheoryDiffDialog {...props} />);
 
-    await screen.findByText(/Cards in Actual but not in Theory are cuts you have already made/);
+    await screen.findByText(/Cards in Actual but not in Theory are excluded cuts/);
     // Spec §5: this surface is nothing but prices, so the as-of sentence is drawn rather than
     // hung on a hover.
     expect(screen.getByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeInTheDocument();
@@ -417,8 +417,8 @@ describe("the theory difference dialog", () => {
     deckTheoryDiff.mockResolvedValue(MIXED);
     wrap(<TheoryDiffDialog {...props} />);
 
-    await screen.findByText(/A card can be in both views/);
-    expect(screen.getByText(/a different finish counts as a different printing/)).toBeVisible();
+    await screen.findByText(/Cards can appear in both views/);
+    expect(screen.getByText(/different finishes count as separate printings/)).toBeVisible();
   });
 
   /** The two lists agreeing is an answer, and an answer is a sentence. */
@@ -985,8 +985,7 @@ describe("the theory difference dialog", () => {
     );
     const zero = wishesSentNote({ wishes: 0, destination: "Ordered" });
     expect(zero).toBe(
-      "Nothing sent from the plan — those cards are no longer missing, or have left the card " +
-        "database.",
+      "No cards were sent. The cards are no longer missing or have left the card database.",
     );
     // Nothing was filed, so no drawer is named as having received it.
     expect(zero).not.toMatch(/Ordered/);

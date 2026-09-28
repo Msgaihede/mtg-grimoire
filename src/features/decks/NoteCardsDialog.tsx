@@ -54,12 +54,11 @@ const NOTHING_TO_NAME = "This deck has no cards to name yet.";
 
 /** The filter hid everything. It names both controls that could have done it, because the reader
  *  may have set one of them several presses ago. */
-const NOTHING_MATCHES = "No card in this deck matches — try a different word, or a different chip.";
+const NOTHING_MATCHES = "No card in this deck matches — try a different search or filter.";
 
 /** The standing sentence, and the whole reason a stray row exists at all. */
 const KEEPS_ITS_CARDS =
-  "A note keeps the cards it names even after they leave the deck — cutting a card never takes " +
-  "the note with it.";
+  "Linked cards remain associated with this note even if removed from the deck.";
 
 /** What a row says in place of its printing when the deck no longer holds the card — see
  *  {@link Row}, where the argument for it lives. */

@@ -442,7 +442,7 @@ export function ValueHistoryWidget({
             <p className="m-0 text-[0.8125rem] leading-[18px] text-dim">
               {firstDay
                 ? "Prices are kept once a day, so the line starts tomorrow."
-                : "No prices were kept in this range. A longer range draws the line."}
+                : "No prices recorded in this range. Select a longer range to view price history."}
             </p>
           )}
         </div>

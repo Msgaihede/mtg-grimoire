@@ -218,9 +218,8 @@ export function BackupPanel(): JSX.Element {
   return (
     <SettingsSection id="backup" title="Backup">
       <p className="text-sm text-dim">
-        Your decks, collection and wishlist, written out as plain text files in every format this
-        app can export — so that the day it will not start, the cards are still yours. The app
-        never reads these files back; the database stays the record and this is a copy of it.
+        Exports decks, collection, and wishlist as plain text files for external backup.
+        The database remains the primary record; the app does not import these files back.
       </p>
 
       {status === null ? (
@@ -279,9 +278,8 @@ export function BackupPanel(): JSX.Element {
             </button>
           </div>
           <p className="text-xs text-dim">
-            Moving it writes a fresh copy at the new folder and leaves the old one exactly where
-            it is. Deleting a folder of your cards is not a setting&rsquo;s decision to make, and
-            a file the backup did not write is never overwritten either.
+            Changing the folder copies backups to the new location without deleting the original folder
+            or overwriting existing external files.
           </p>
 
           <div className="flex flex-wrap items-center justify-between gap-3">

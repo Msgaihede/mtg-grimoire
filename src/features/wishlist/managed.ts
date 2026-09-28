@@ -75,9 +75,9 @@ export function managedIds(folders: readonly WishlistFolder[]): ReadonlySet<numb
  * *a* Tokens folder, since there is none while the deck is short of nothing.
  */
 export const MANAGED_EMPTY: Record<Exclude<ManagedWishlistMode, "off">, string> = {
-  all: "The two lists agree — everything this deck's plan asks for is already in the deck.",
-  missing: "Nothing missing — this deck has every card its plan asks for.",
-  other: "No substitutions — nothing in this deck stands in for a printing its plan asks for.",
+  all: "The two lists agree. Everything requested by the plan is already in the deck.",
+  missing: "Nothing missing. The deck includes every card in the plan.",
+  other: "No substitutions. Every card matches the planned printing.",
   // "*a* Tokens folder": the settle drops that folder when the deck is short of no token, so the
   // sentence must not point at one as though it were always there.
   tokens:
@@ -89,7 +89,7 @@ export const MANAGED_EMPTY: Record<Exclude<ManagedWishlistMode, "off">, string> 
  * page cannot find (another window deleted it between the two reads). It claims nothing about any
  * view, only what every managed folder is.
  */
-export const MANAGED_EMPTY_UNKNOWN = "Nothing here — this folder follows its deck and fills itself.";
+export const MANAGED_EMPTY_UNKNOWN = "Nothing here. This folder updates automatically with its deck.";
 
 /**
  * What an empty **Tokens child** says (user schema v55) — one sentence whichever view fills it,

@@ -554,6 +554,7 @@ describe("DeckSettingsForm", () => {
   it("draws no token mode control on any kind of deck", async () => {
     const { onChange } = form();
 
+
     for (const kind of Object.values(DECK_KIND_LABEL)) {
       await userEvent.click(screen.getByRole("button", { name: kind }));
       expect(screen.queryByRole("group", { name: "Tokens" })).not.toBeInTheDocument();

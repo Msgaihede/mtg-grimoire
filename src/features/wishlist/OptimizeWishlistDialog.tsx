@@ -92,12 +92,12 @@ const CHECKING = "Looking for cheaper printings…";
  */
 const NOTHING_IN_SCOPE = {
   headline: "Nothing to check.",
-  why: "No wishes are in scope, so there are no prices to compare. Step out of this folder, or clear a filter, and try again.",
+  why: "No wishes match the current folder or active filters.",
 } as const;
 
 const ALREADY_CHEAPEST = {
   headline: "Nothing to change.",
-  why: "Every wish here is already on the cheapest printing this marketplace lists for it. Wishes for “any printing” are counted as cheapest too — they are already priced at the cheapest printing of their card, and pinning one would take that away.",
+  why: "Every wish is already on the cheapest available printing for this marketplace. Wishes for “any printing” already use the lowest price.",
 } as const;
 
 /**
@@ -108,8 +108,7 @@ const ALREADY_CHEAPEST = {
  * number a reader has to guess at.
  */
 const SKIPPED_NOTE =
-  "Skipped: the wish names no card, or names a printing the card database no longer has, or " +
-  "nothing this marketplace prices at that finish.";
+  "Skipped: card not found, invalid printing, or no marketplace pricing available for the finish.";
 
 /** The way out, and the affirmative, in the app's two button shapes — `PullFromCollectionDialog`'s
  *  pair, which is where the app settled them. Written once because the footer draws both on one

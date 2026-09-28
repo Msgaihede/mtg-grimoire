@@ -1657,7 +1657,6 @@ function Body({
             {copyRow === null
               ? "this copy"
               : `${copyOption(copyRow).label} in ${copyOption(copyRow).hint}`}
-            {" — the finish and the printing change as you pick them."}
           </p>
         )}
 
@@ -1669,7 +1668,7 @@ function Body({
         {!pending && error === null && card === null && (
           <p className="mx-5 mt-3 text-sm text-dim">
             This printing is not in the card database any more. It may have been removed by the
-            last sync — close this and search again.
+            last sync.
           </p>
         )}
 

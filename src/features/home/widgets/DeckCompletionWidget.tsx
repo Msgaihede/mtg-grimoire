@@ -144,23 +144,12 @@ const PENDING = "Measuring your decks…";
  *  the one they are least likely to guess. **Never drawn under `Pinned`**, where an archived pin is
  *  kept and the reader has decks by definition: that is {@link PINS_UNMEASURABLE}. */
 export const NO_DECKS =
-  "No decks to measure — build one on the Decks page. Archived, virtual and empty decks are left out here.";
-/** `DecksWidget`'s sentence, for its reason: the chip reads `Pinned`, so drawing the recent decks
- *  under it would be the card claiming something it is not doing. */
+  "No decks to measure. Build a deck on the Decks page to track completion.";
 export const NOTHING_PINNED =
-  "No decks pinned yet — choose them in this card's settings under Customize.";
-/**
- * `Pinned` with pins, none of which can be measured — `DecksWidget`'s `PINS_GONE` for this card.
- *
- * That sentence has one reason (the decks are not in the collection any more) and this card has
- * three: a pin can also name a virtual deck, which `deck_completion` answers nothing for, or a deck
- * whose list asks for nothing. Its own sentence for `PINS_GONE`'s reason: the reader chose a set,
- * so the useful answer points at the choosing — not at building a deck they already have.
- */
+  "No pinned decks. Pin decks in this widget's settings.";
 export const PINS_UNMEASURABLE =
-  "None of the decks pinned here can be measured — each is gone from this collection, virtual or empty. Choose others in this card's settings under Customize.";
-/** Names the switch by the registry's own label. */
-export const ALL_COMPLETE = `Every deck here is complete — turn on ${completeWord()} in this card's settings to list them.`;
+  "Pinned decks cannot be measured. Choose active decks in this widget's settings.";
+export const ALL_COMPLETE = `All decks are complete. Enable ${completeWord()} in settings to view them.`;
 
 function orderOf(value: string | number | undefined): CompletionOrder {
   return value === "cheapest" || value === "name" ? value : "done";
@@ -320,7 +309,7 @@ export function rowHint(row: DeckCompletion, marketplace: Marketplace): string |
   const parts: string[] = [];
   if (row.list === "theory") {
     parts.push(
-      "Measured against this deck's theory list, from every copy it can use — anywhere in the collection but another deck's group or a locked drawer.",
+      "Measured against this deck's theory list using eligible copies in your collection.",
     );
   }
   if (row.missing > 0 && row.missingCost === null) {

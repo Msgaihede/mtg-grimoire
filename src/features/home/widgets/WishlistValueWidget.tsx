@@ -330,7 +330,7 @@ export function WishlistValueWidget({ widget, fit }: WidgetBodyProps): ReactElem
     // **The wishlist's sentence, not the collection's**, and no figures over it: nothing is owned
     // or unowned here, and a total cost of `$0.00` over an empty list is a price nobody quoted.
     return (
-      <WidgetMessage>You want nothing yet — wish for a card and its cost lands here.</WidgetMessage>
+      <WidgetMessage>Your wishlist is empty. Add cards to your wishlist to see costs here.</WidgetMessage>
     );
   }
 
@@ -388,7 +388,7 @@ export function WishlistValueWidget({ widget, fit }: WidgetBodyProps): ReactElem
               // copies would read as a smaller list rather than as an incomplete price.
               note:
                 totals.unpriced > 0
-                  ? `${copiesOf(totals.unpriced)} nobody quotes a price for`
+                  ? `${copiesOf(totals.unpriced)} unpriced`
                   : undefined,
               tone: "accent",
               hint: pricesAsOf(marketplace),

@@ -94,7 +94,7 @@ describe("managedEmptySentence", () => {
 
   it("keeps the words this page already said for `missing`", () => {
     expect(managedEmptySentence("missing")).toBe(
-      "Nothing missing — this deck has every card its plan asks for.",
+      "Nothing missing. The deck includes every card in the plan.",
     );
   });
 

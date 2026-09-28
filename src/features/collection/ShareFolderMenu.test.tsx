@@ -360,7 +360,7 @@ describe("a share the reader is not publishing to any more", () => {
     await user.click(await shareButton());
     const gone = await screen.findByRole("menuitem", { name: /Withdrawn/ });
     expect(gone).toHaveAttribute("aria-disabled", "true");
-    expect(gone).toHaveAccessibleName(/the link stopped answering/);
+    expect(gone).toHaveAccessibleName(/the link is no longer active/);
 
     const again = screen.getByRole("menuitem", { name: /Share this folder/ });
     expect(again).not.toHaveAttribute("aria-disabled");

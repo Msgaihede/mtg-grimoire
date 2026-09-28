@@ -57,11 +57,11 @@ function rowPx(caption: boolean, track: boolean): number {
 }
 
 const PENDING = "Counting your sets…";
-export const EMPTY = "No sets yet — the sets your cards come from will appear here.";
+export const EMPTY = "No sets found. Sets for cards in your collection will appear here.";
 /** Not "Scryfall publishes none": a corpus that has not synced since the column arrived reads
  *  `null` for every set, so the hint says what is true in both cases. */
 export const NO_SIZE_HINT =
-  "There is no printed set size to measure against, so this counts every card of the set you own.";
+  "No printed set size available; shows total cards owned from this set.";
 
 /**
  * The sets in the order the reader picked.

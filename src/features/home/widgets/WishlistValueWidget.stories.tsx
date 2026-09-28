@@ -108,7 +108,7 @@ export const ByRarity: Story = {
       await card.findByText("Common: 2 copies, $140.48, 45% of the total."),
     ).toBeInTheDocument();
     await expect(card.getByText("Rare: 6 copies, $41.58, 13% of the total.")).toBeInTheDocument();
-    await expect(card.getByText(/^\d+ cop(y|ies) nobody quotes a price for$/)).toBeInTheDocument();
+    await expect(card.getByText(/^\d+ cop(y|ies) unpriced$/)).toBeInTheDocument();
   },
 };
 
@@ -152,7 +152,7 @@ export const NothingWishedFor: Story = {
   play: async ({ canvasElement }) => {
     const card = await cardIn(canvasElement);
     await expect(
-      await card.findByText("You want nothing yet — wish for a card and its cost lands here."),
+      await card.findByText("Your wishlist is empty. Add cards to your wishlist to see costs here."),
     ).toBeInTheDocument();
     await expect(card.queryByText(/of the total\./)).not.toBeInTheDocument();
   },

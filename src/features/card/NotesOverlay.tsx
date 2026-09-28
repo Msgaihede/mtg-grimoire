@@ -58,8 +58,7 @@ function cardNotesKey(oracleId: string) {
  * to write one from here — this surface is a reader and the deck's own band is the writer.
  */
 const NO_NOTES =
-  "No notes. Nothing has been written about this card in any of your decks — " +
-  "open a deck that holds it to write the first one.";
+  "No notes. None recorded for this card in any of your decks — open a deck that holds it to write one.";
 
 /**
  * A printing with no oracle card behind it.
@@ -69,9 +68,7 @@ const NO_NOTES =
  * question to put: `card_notes` matches on oracle id, so a null id has nothing to look up and a
  * call would only be this component asking the backend to confirm that zero is zero.
  */
-const NO_ORACLE_CARD =
-  "No notes. This printing is not linked to an oracle card, and a note is attached to the card " +
-  "rather than to the printing.";
+const NO_ORACLE_CARD = "No notes. This printing is not linked to an Oracle card.";
 
 /**
  * What has been written about this card, anywhere — over the card detail modal.
