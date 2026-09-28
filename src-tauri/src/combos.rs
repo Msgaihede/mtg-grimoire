@@ -180,6 +180,10 @@ const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const BATCH: usize = 2_000;
 
 /// Let a waiting writer see the connection is free. **Call it with no guard in scope.**
+///
+/// `tags::YIELD_BETWEEN_BATCHES`' number and its limit: it hands the connection to a caller
+/// that blocks, and a user write that polls is served by [`crate::db::lock_background`], which
+/// every batch below takes the connection through (issue #551).
 const YIELD_BETWEEN_BATCHES: Duration = Duration::from_millis(5);
 
 fn stand_aside() {
@@ -711,6 +715,15 @@ pub enum ComboError {
          keeping the previous ones"
     )]
     Empty { skipped: u64, seen: u64 },
+    /// More variants were skipped than kept — [`crate::feed::mostly_unusable`], and [`Empty`]'s
+    /// larger sibling (issue #551). A healthy file skips 1.4 %.
+    ///
+    /// [`Empty`]: ComboError::Empty
+    #[error(
+        "the combo file held {kept} usable combos and {skipped} it could not use \
+         ({seen} variants); keeping the previous ones"
+    )]
+    MostlySkipped { kept: u64, skipped: u64, seen: u64 },
 }
 
 impl ComboError {
@@ -725,7 +738,9 @@ impl ComboError {
             ComboError::TooLarge => Kind::Http,
             ComboError::Io(_) => Kind::Io,
             ComboError::Db(_) => Kind::Io,
-            ComboError::Parse(_) | ComboError::Empty { .. } => Kind::Parse,
+            ComboError::Parse(_) | ComboError::Empty { .. } | ComboError::MostlySkipped { .. } => {
+                Kind::Parse
+            }
         }
     }
 }
@@ -775,9 +790,17 @@ pub fn store(
             seen: file.seen,
         });
     }
+    let kept = file.combos.len() as u64;
+    if crate::feed::mostly_unusable(kept, file.skipped) {
+        return Err(ComboError::MostlySkipped {
+            kept,
+            skipped: file.skipped,
+            seen: file.seen,
+        });
+    }
 
     {
-        let conn = crate::db::lock_blocking(db);
+        let conn = crate::db::lock_background(db);
         crate::schema::create_combo_staging(&conn)?;
     }
 
@@ -787,7 +810,7 @@ pub fn store(
     progress(0, total);
 
     for chunk in file.combos.chunks(BATCH) {
-        let mut conn = crate::db::lock_blocking(db);
+        let mut conn = crate::db::lock_background(db);
         let tx = conn.transaction()?;
         {
             // **Every column named, and that is the whole of the defence.** The four prose
@@ -847,7 +870,7 @@ pub fn store(
     }
 
     {
-        let mut conn = crate::db::lock_blocking(db);
+        let mut conn = crate::db::lock_background(db);
         let tx = conn.transaction()?;
         crate::schema::swap_combo_staging(&tx)?;
         tx.execute(
@@ -2076,6 +2099,13 @@ fn due_at_startup(meta: Option<&ComboMeta>, now: i64) -> bool {
     is_stale(meta.and_then(|m| m.checked_at), now)
 }
 
+/// [`due_at_startup`], unless the last file arrived and could not be used within the day —
+/// [`crate::feed::backoff`]. A reader's Refresh does not ask this.
+fn due_at_launch(conn: &Connection, now: i64) -> bool {
+    due_at_startup(read_meta(conn).as_ref(), now)
+        && !crate::feed::backoff::resting(conn, BACKOFF_FEED, now)
+}
+
 /// Note that Spellbook has been asked, on a run that found nothing to ingest.
 ///
 /// Best-effort and skipped rather than waited for if the connection is busy: the worst a lost
@@ -2102,7 +2132,9 @@ fn mark_checked(state: &Arc<AppState>) {
 /// reason — it is what lets the whole path be driven from a test.
 ///
 /// Every failure leaves the previous combos exactly where they were and is written to
-/// `error_log`.
+/// `error_log`. A file that arrived and could not be used — refused as too large, or failed in
+/// the ingest — also rests the feed for a day at launch ([`crate::feed::backoff`]): 27.5 MB and
+/// a 639 MB parse is what every launch used to spend on a file upstream had broken.
 pub async fn refresh(
     state: &Arc<AppState>,
     force: bool,
@@ -2151,6 +2183,11 @@ pub async fn refresh(
             // would only fail to decompress next time. (A size refusal has already removed it.)
             let _ = std::fs::remove_file(&gz);
             note_failure(&state.db, &e);
+            // A refusal on size is Spellbook's answer and will be the same at the next launch;
+            // a connection that failed or a status is this machine's network, and is not.
+            if matches!(e, ComboError::TooLarge) {
+                note_unusable(state);
+            }
             progress("error", 0, 0);
             return Err(e.to_string());
         }
@@ -2172,18 +2209,34 @@ pub async fn refresh(
 
     match joined {
         Ok(Ok(_)) => {
+            if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+                let _ = crate::feed::backoff::clear(&conn, BACKOFF_FEED);
+            }
             progress("done", 0, 0);
             Ok(status_of(state))
         }
         Ok(Err(e)) => {
             note_failure(&state.db, &e);
+            note_unusable(state);
             progress("error", 0, 0);
             Err(e.to_string())
         }
         Err(e) => {
+            note_unusable(state);
             progress("error", 0, 0);
             Err(format!("the combo file could not be processed: {e}"))
         }
+    }
+}
+
+/// This feed's name in [`crate::feed::backoff`].
+const BACKOFF_FEED: &str = "combos";
+
+/// Rest the feed for a day at launch — its file arrived and could not be used. Best-effort, for
+/// [`note_failure`]'s reason.
+fn note_unusable(state: &AppState) {
+    if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+        let _ = crate::feed::backoff::note_unusable(&conn, BACKOFF_FEED, unix_now());
     }
 }
 
@@ -2215,7 +2268,7 @@ pub async fn refresh(
 pub async fn refresh_if_due(state: &Arc<AppState>, app: &tauri::AppHandle) {
     let due = {
         let conn = crate::sync::lock_db_read(state);
-        due_at_startup(read_meta(&conn).as_ref(), unix_now())
+        due_at_launch(&conn, unix_now())
     };
     if !due {
         return;
@@ -4930,5 +4983,60 @@ mod tests {
         assert_eq!(a.seen, b.seen);
         assert_eq!(a.stamp, b.stamp);
         assert!(a.seen > 0, "the fixture must actually contain variants");
+    }
+
+    /// **A file more unusable than usable is refused like an empty one** (issue #551), before a
+    /// staging table exists. A healthy file skips 1.4 % of its variants; one that kept a single
+    /// combo out of three used to swap and leave the card modal saying "in no combo" for
+    /// nearly every card.
+    #[test]
+    fn a_mostly_skipped_file_refuses_to_swap() {
+        let db = crate::tags::testing::mem_db();
+        seed_one(&db, "old", "o-old");
+        let mut variants = vec![ok_variant("g", "C", &[("A", "oa")])];
+        variants.extend((0..2).map(|i| {
+            ok_variant(&format!("d{i}"), "C", &[("B", "ob")])
+                .replace(r#""status":"OK""#, r#""status":"NW""#)
+        }));
+        let file = parse(&document(&variants));
+
+        let err = store(&db, &file, Some("W/\"new\""), 1_800_000_000, &mut |_, _| {}).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                ComboError::MostlySkipped {
+                    kept: 1,
+                    skipped: 2,
+                    seen: 3
+                }
+            ),
+            "expected MostlySkipped, got {err:?}"
+        );
+        let conn = crate::db::lock_blocking(&db);
+        let ids: Vec<String> = conn
+            .prepare("SELECT id FROM combos")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(ids, vec!["old".to_owned()], "the previous combos stay");
+        assert!(read_meta(&conn).is_none(), "and no watermark is stamped");
+    }
+
+    /// A combo file that arrived and could not be used rests the launch's refresh for a day
+    /// (issue #551) — 27.5 MB and a 639 MB parse is what each launch used to spend on it.
+    #[test]
+    fn an_unusable_file_rests_the_launch_refresh_for_a_day() {
+        let conn = crate::schema::memory_pair();
+        let now = 1_800_000_000;
+        assert!(due_at_launch(&conn, now), "never fetched is due");
+
+        crate::feed::backoff::note_unusable(&conn, BACKOFF_FEED, now).unwrap();
+        assert!(!due_at_launch(&conn, now + 3_600));
+        assert!(due_at_launch(
+            &conn,
+            now + crate::feed::backoff::FAILURE_BACKOFF_SECS
+        ));
     }
 }

@@ -28,7 +28,7 @@
 //! duration the caller must wait — a bare marker leaves it guessing. The file origins
 //! under `*.scryfall.io` are explicitly unlimited.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -554,6 +554,17 @@ impl Client {
     /// one is restarted from scratch by the rule above. Callers must not hand a file
     /// to the ingest after this returns an error.
     ///
+    /// **A partial is resumed only from the URI it came from** (issue #551). The file's name is
+    /// fixed per dataset and its length says nothing about *which* file it is the start of, so
+    /// before this rule a partial left by yesterday's file was continued with a `Range` for
+    /// today's — Scryfall's bulk URIs carry the file's timestamp and change when it rotates —
+    /// and the join failed the ingest on a deflate or CRC error after the whole download had
+    /// been paid for. The URI is written beside the partial ([`origin_path`]) when a download
+    /// starts from zero, and a partial whose record is missing or names another URI is fetched
+    /// again from byte zero rather than continued. A missing record reads as a mismatch on
+    /// purpose: a partial of unknown provenance — one written by a build before this rule — costs
+    /// one download to discard, and continuing it is what costs the ingest.
+    ///
     /// `progress` is `Send` so that the returned future is: a download has to be
     /// spawnable (`tokio::spawn`, or an `async` Tauri command) rather than tied to the
     /// task that built it.
@@ -571,9 +582,14 @@ impl Client {
             .await
             .map(|m| m.len())
             .unwrap_or(0);
+        let origin = origin_path(dest);
+        let same_origin = tokio::fs::read_to_string(&origin)
+            .await
+            .is_ok_and(|recorded| recorded == uri);
         // A file at or past the expected size is not resumable — it is either finished
-        // or wrong. Either way the fix is to fetch it again from byte zero.
-        let mut resuming = existing > 0 && existing < expected_size;
+        // or wrong. Either way the fix is to fetch it again from byte zero. Nor is one that
+        // began as a different file, which is the other way a length can lie.
+        let mut resuming = existing > 0 && existing < expected_size && same_origin;
         let mut resp = self.get_from(uri, resuming.then_some(existing)).await?;
 
         // 416 Range Not Satisfiable: the partial on disk is longer than the resource the
@@ -607,7 +623,15 @@ impl Client {
                     existing,
                 )
             }
-            200 => (tokio::fs::File::create(dest).await?, 0),
+            200 => {
+                // Truncated and made durable *before* the origin is recorded, so no crash can
+                // leave a record naming this URI over bytes from another one: at worst the
+                // record is missing, and a missing record discards the partial.
+                let file = tokio::fs::File::create(dest).await?;
+                file.sync_all().await?;
+                tokio::fs::write(&origin, uri).await?;
+                (file, 0)
+            }
             429 => {
                 return Err(ScryfallError::RateLimited {
                     retry_after_secs: retry_after_secs(&resp),
@@ -636,6 +660,8 @@ impl Client {
                 actual,
             });
         }
+        // A whole file is no resume point, so its record has nothing left to vouch for.
+        let _ = tokio::fs::remove_file(&origin).await;
         Ok(())
     }
 
@@ -824,6 +850,24 @@ impl Client {
 /// (and a test) does not have to know which check caught it.
 fn image_too_large(bytes: u64) -> ScryfallError {
     ScryfallError::Unexpected(format!("image is too large: {bytes} bytes"))
+}
+
+/// Where [`Client::download`] records the URI a partial download at `dest` came from:
+/// `dest` with `.origin` appended (`default-cards.jsonl.gz.origin`), beside it in `tmp/`.
+pub fn origin_path(dest: &Path) -> PathBuf {
+    let mut name = dest.as_os_str().to_owned();
+    name.push(".origin");
+    PathBuf::from(name)
+}
+
+/// Delete a download that will not be resumed, and the record of where it came from.
+///
+/// What a caller runs where it used to run `remove_file(dest)` on a failure: the record on its
+/// own is harmless — a missing partial is never resumed — but it is a file in `tmp/` that
+/// nothing would ever clear.
+pub fn discard_partial(dest: &Path) {
+    let _ = std::fs::remove_file(dest);
+    let _ = std::fs::remove_file(origin_path(dest));
 }
 
 /// First byte of a `Content-Range: bytes 400-999/1000` header.
@@ -1037,15 +1081,14 @@ mod tests {
         });
         let c = Client::new(server.base_url());
         let dest = crate::scratch::path("dl-resume.gz");
+        let uri = format!("{}/resume.gz", server.base_url());
         std::fs::write(&dest, vec![7u8; 400]).unwrap();
+        std::fs::write(origin_path(&dest), &uri).unwrap();
 
         let mut reports: Vec<(u64, u64)> = Vec::new();
-        c.download(
-            &format!("{}/resume.gz", server.base_url()),
-            &dest,
-            1000,
-            &mut |done, total| reports.push((done, total)),
-        )
+        c.download(&uri, &dest, 1000, &mut |done, total| {
+            reports.push((done, total))
+        })
         .await
         .unwrap();
 
@@ -1058,6 +1101,78 @@ mod tests {
             reports.iter().all(|&(done, _)| done > 400),
             "progress must be absolute, counting the bytes already on disk: {reports:?}"
         );
+        assert!(
+            !origin_path(&dest).exists(),
+            "a whole file is no resume point, and its record must go with that"
+        );
+    }
+
+    /// **A partial is continued only from the URI it came from** (issue #551). Scryfall's bulk
+    /// URIs carry the file's timestamp, so a restart after the file rotated asks for a new URI
+    /// while the partial on disk is the start of the old one — and a `Range` would splice the
+    /// two into a file of the right length that fails the ingest on a CRC error.
+    #[tokio::test]
+    async fn a_partial_of_another_uri_is_fetched_again_from_zero() {
+        let server = MockServer::start();
+        let whole = server.mock(|when, then| {
+            when.method(GET).path("/today.gz").header_missing("range");
+            then.status(200).body(vec![1u8; 1000]);
+        });
+        let c = Client::new(server.base_url());
+        let dest = crate::scratch::path("dl-rotated.gz");
+        let today = format!("{}/today.gz", server.base_url());
+        std::fs::write(&dest, vec![7u8; 400]).unwrap();
+        std::fs::write(
+            origin_path(&dest),
+            format!("{}/yesterday.gz", server.base_url()),
+        )
+        .unwrap();
+
+        c.download(&today, &dest, 1000, &mut |_, _| {})
+            .await
+            .unwrap();
+
+        whole.assert();
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            vec![1u8; 1000],
+            "yesterday's bytes must be replaced, not continued"
+        );
+    }
+
+    /// A partial with no record at all — one a build before the record existed left behind —
+    /// is of unknown provenance, and is discarded rather than trusted. A download that starts
+    /// from zero writes the record, so the short file it leaves is resumable next time.
+    #[tokio::test]
+    async fn a_partial_with_no_record_is_fetched_again_and_a_fresh_start_records_its_uri() {
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET)
+                .path("/norecord.gz")
+                .header_missing("range");
+            then.status(200).body(vec![1u8; 600]);
+        });
+        let c = Client::new(server.base_url());
+        let dest = crate::scratch::path("dl-norecord.gz");
+        let uri = format!("{}/norecord.gz", server.base_url());
+        std::fs::write(&dest, vec![7u8; 400]).unwrap();
+        let _ = std::fs::remove_file(origin_path(&dest));
+
+        let err = c.download(&uri, &dest, 1000, &mut |_, _| {}).await;
+
+        assert!(matches!(err, Err(ScryfallError::SizeMismatch { .. })));
+        assert_eq!(
+            std::fs::read(&dest).unwrap(),
+            vec![1u8; 600],
+            "the unrecorded partial must be replaced, not continued"
+        );
+        assert_eq!(
+            std::fs::read_to_string(origin_path(&dest)).unwrap(),
+            uri,
+            "the short file this leaves is a resume point, and must say what it is the start of"
+        );
+        discard_partial(&dest);
+        assert!(!dest.exists() && !origin_path(&dest).exists());
     }
 
     /// A file at or beyond the expected size cannot be resumed — appending to it would
@@ -1129,16 +1244,11 @@ mod tests {
         });
         let c = Client::new(server.base_url());
         let dest = crate::scratch::path("dl-liar.gz");
+        let uri = format!("{}/liar.gz", server.base_url());
         std::fs::write(&dest, vec![7u8; 400]).unwrap();
+        std::fs::write(origin_path(&dest), &uri).unwrap();
 
-        let err = c
-            .download(
-                &format!("{}/liar.gz", server.base_url()),
-                &dest,
-                1000,
-                &mut |_, _| {},
-            )
-            .await;
+        let err = c.download(&uri, &dest, 1000, &mut |_, _| {}).await;
         assert!(
             matches!(&err, Err(ScryfallError::Unexpected(m)) if m.contains("expected byte 400")),
             "expected a resume-offset error, got {err:?}"
@@ -1161,16 +1271,11 @@ mod tests {
         });
         let c = Client::new(server.base_url());
         let dest = crate::scratch::path("dl-416.gz");
+        let uri = format!("{}/gone.gz", server.base_url());
         std::fs::write(&dest, vec![7u8; 400]).unwrap();
+        std::fs::write(origin_path(&dest), &uri).unwrap();
 
-        c.download(
-            &format!("{}/gone.gz", server.base_url()),
-            &dest,
-            1000,
-            &mut |_, _| {},
-        )
-        .await
-        .unwrap();
+        c.download(&uri, &dest, 1000, &mut |_, _| {}).await.unwrap();
 
         assert_eq!(
             std::fs::read(&dest).unwrap(),

@@ -1436,6 +1436,19 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   the refusal in `PassReport::skipped`, and **leaves a skipped README out of the manifest it then
   writes** (listing it would make the next pass claim it). A second fixed name anywhere in the
   mirror owes the same treatment.
+- **One folder, one installation.** The manifest's first line is `installation: <32 hex>`, this
+  installation's name from `app_meta.mirror_installation` (`settings::K_INSTALLATION`, minted by
+  `ensure_installation` in `desktop::start` on the write connection *before* the hook, so the
+  mirror still never writes to the database). `run_pass` refuses before writing anything, and
+  `set_root` refuses while choosing, when the folder's manifest names another installation — two
+  computers on one Dropbox folder otherwise overwrote each other's `Collection`/`Wishlist` files
+  and each pruned the other's decks (issue #551; reproduced by
+  `a_folder_another_installation_owns_is_refused_and_left_as_it_was` with the refusal removed:
+  24 files pruned). An unstamped manifest — every build before this — is adopted and stamped;
+  deleting the manifest hands the folder to whichever installation writes next. **The `:` in the
+  line is load-bearing**: `safe_entry` refuses any line with one, so an older build never takes
+  it for a path to delete, and `paths` strips `:` from every planned name. `app_meta` is on no
+  sync spec, so paired devices carry different names — they share a collection, not a folder.
 - **Every filesystem test in `mirror/` runs against a `tempfile` root, and none may touch
   `data/`.** The default root is `data_dir/export`, so a test that forgets to set `mirror_root`
   inside its tempdir writes into the developer's own mirror.
@@ -2599,6 +2612,45 @@ The rules, and where each is enforced, are in
   and never a boolean.
 - Failures fold into `error_log` through `errors::record`, which returns `()` and is called
   inside the caller's transaction — it can never fail the thing it describes.
+- **Every batch a feed writes takes the connection through `db::lock_background`, and every
+  user-facing write through `db::lock_for`** — the two halves of one priority rule (issue #551).
+  A `lock_for` that has to wait registers itself against that mutex, and no batch loop starts
+  another batch while one is registered. Before it, two ingests running together — the launch runs
+  both tag files and the combos at once — handed the connection straight to each other, because
+  whichever was not writing was already parked in `lock()`, and a `try_lock` poll never found it
+  free: `db::tests::a_bounded_asker_gets_its_turn_between_two_batch_loops` measured five of ten
+  asks told busy and the rest waiting 0.3–2 s, against 20–44 ms through `lock_background`. **A new
+  ingest loop that takes `lock_blocking` per batch reopens it.** The per-batch 5 ms sleep stays,
+  for callers that block rather than poll. `marketplace_feed::store` asks through `lock_for` with
+  its own 30 s `STORE_LOCK_WAIT`, because a refusal there throws away a 63.7 MiB download.
+- **A partial download is resumed only from the URI it came from.** `Client::download` writes the
+  URI to `<dest>.origin` when it starts from byte zero and resumes only when that record matches;
+  a partial with no record, or another URI's, is fetched again from zero. Scryfall's bulk URIs
+  carry the file's timestamp, so before this a restart after a rotation spliced yesterday's partial
+  onto a `Range` of today's file and failed the ingest on a CRC error. A caller discarding a partial
+  uses `scryfall::discard_partial`, which takes the record with it.
+- **Every path that calls the Scryfall API persists the lockout**, not only `run_sync`:
+  `tags::refresh` runs `sync::persist_penalty` when its check moved the deadline, because the
+  check shares the client's 429 gate and a restart must not be a way back in.
+- **Every ingest refuses a file more unusable than usable**, not only one with nothing in it —
+  `feed::mostly_unusable` (`skipped > kept`), as `MostlySkipped` in `IngestError`, `TagError`,
+  `ComboError` and `FeedError` (issue #551). Before, one good line among a hundred thousand bad
+  ones swapped: a corpus of one card with every collection row flagged for review, or a taxonomy
+  of one tag held for a week behind its ETag. The healthy files sit far inside it (0 % skipped
+  for cards and both tag files, 1.4 % for combos, at most 16 % for Mana Pool). It runs before the
+  swap and before any watermark, so a refusal leaves the previous rows exactly where they were.
+- **A feed whose file arrived and could not be used rests for a day at launch**
+  (`feed::backoff`, a `failed_at:<feed>` row in `sync_meta`). What stamps it is an ingest that
+  failed over a complete download, or a body refused on size — upstream's answer, which repeats
+  every launch until upstream fixes it (27.5 MB plus a 639 MB parse for the combos). A failure to
+  *arrive* — a check that could not connect, a dropped body, a status — stamps nothing and is
+  retried next launch as before. Only the launch's `refresh_if_due` (and the price feed's
+  `refresh_selected_if_due`) reads it; a reader's Refresh is how they ask for another try, and a
+  success clears it. A price feed's `Busy` never stamps: that is this app's connection.
+- **On a first run the optional feeds wait for the card sync to end**, success or failure
+  (`desktop::start`, gated on `sync::has_cards`). They are ~46 MB against the card file's 77 MB
+  on the same link, and the reader is watching the modal first-run wait. On every later launch
+  they start beside the sync as before.
 - **`feed::frame`'s two framers refuse rather than accumulate**, and the guard is not
   diagnostics: an uncapped framer found 63 elements in a 610.2 MB document and grew its buffer
   to 609.82 MB *without erroring*. `Elements::push` and `Lines::push` answer
@@ -2621,6 +2673,16 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 - `cards.scryfall.io` is the **only** host images come from; an off-host URI is refused. A URI
   with no `?<epoch>` cache-buster is refused at resolution, and `is_current` compares that
   stored URI character for character — that is the whole of freshness.
+- **The cache is bounded (2026-09-28), and what it spares is exactly what the pre-warm owns.**
+  `images::evict`, on the `image-upkeep` thread `images::spawn_upkeep` starts, keeps every picture
+  `prewarm_keys` would fetch and evicts the rest least-recently-used against 512 MiB and 90 days
+  unread. **Both read the one `WANTED` literal, and splitting it is the change that makes eviction
+  fight the pre-warm forever.** The used-stamp is the **file's modified time, set on purpose** — by
+  `store`, and by `Cache::flush_touches` on the upkeep thread for a hit, never on the serving path
+  and never with `create` — so it needs no corpus rung and survives a rebuilt corpus; it is never
+  read as freshness, which is still the URI. Delete the file before its row, and delete nothing
+  the walk did not rebuild through `cache_path`. [image-cache.md](../docs/reference/image-cache.md)
+  has the arithmetic.
 - **There is one route.** There was a second — `/cover/<deckId>`, which touched Scryfall not at
   all, and whose `i64` parse was the whole path-traversal fence because the id became a filename.
   It went with the custom deck cover on 2026-08-31: a cover is `decks.cover_card_id` now, so a

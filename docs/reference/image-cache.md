@@ -4,7 +4,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
 - Files live at `<data dir>/images/<variant>/<id[0..2]>/<id>-<face>.webp`; `image_cache`
   rows and files stay 1:1, and the row's `source_uri` — Scryfall's `?<epoch>` cache-buster
-  — is the only invalidation signal. Deleting `data/images` is always safe.
+  — is the only invalidation signal. Deleting `data/images` is always safe. **Since 2026-09-28
+  something holds the 1:1 from the row's side too**: the eviction pass (below) drops a row whose
+  file has gone, which is what lets the pre-warm fetch an owned card back after that delete.
 - **Settings can delete it, and `reset::cache_clear` is the one command that does** (added
   2026-08-20). It drops every `image_cache` row, sweeps `data/images/` and `data/tmp/` file by
   file, and then drains `Cache::pending` — in that order, and the order is the part worth
@@ -45,15 +47,94 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
   **The +50% per card is the wall-only case and the worst one.** The open card's art and the
   printings preview were already on `display`, so a card the reader opens used to cost two
-  cache keys (~62 KB + ~93 KB) and now costs one. Cards already cached at `grid` are **not
-  migrated or deleted** — a variant is its own directory, so the old files simply stop being
-  read and stay until the user deletes `data/images`, which is always safe. Every such card
-  re-fetches once at the new URL; nothing paces that and `cards.scryfall.io` has no rate limit.
+  cache keys (~62 KB + ~93 KB) and now costs one. Cards already cached at `grid` were **not
+  migrated or deleted** — a variant is its own directory, so the old files simply stopped being
+  read. Every such card re-fetches once at the new URL; nothing paces that and
+  `cards.scryfall.io` has no rate limit. **Until 2026-09-28 the old files then stayed until the
+  reader deleted `data/images`, and now they age out** — not by a deleter written for them, but
+  by the idle horizon in the bounded-cache bullet below. `grid` is not a dead variant: the home
+  page's recently-viewed tiles (`RecentCardsWidget`) still draw it, so the files they read stay
+  fresh and the rest go.
 
   Scryfall's `png` (745×1040) is larger still and was rejected: ~11% more linear resolution for
   roughly ten times the bytes, and it is not in the database at all — the ingest keeps four of
   the eleven image keys and drops the JPG/PNG family Scryfall's own docs mark as *replaced*
   (`card_row::webp_uris`), so it would need a schema migration and a backfill.
+- **The cache is bounded since 2026-09-28, and what it spares is exactly what the pre-warm owns.**
+  Until then nothing deleted a picture but the reader, and spec §8 called the cache *permanent*.
+  `images::evict` now runs on an `image-upkeep` thread (`images::spawn_upkeep`, started beside the
+  facet index in `desktop::start`): one pass a minute after launch, then another whenever **500**
+  pictures (`STORES_PER_PASS`, ~46 MB at `display`) have landed since the last — a store is the
+  only thing that grows the cache — and never while a sync holds the write connection.
+
+  **Spared is every card in the collection, the wishlist or a deck, face 0, at the variant the
+  pre-warm fetches it at**, and it is read from the same `WANTED` literal `prewarm_keys` reads.
+  The sharing is the contract: the one eviction that costs more than a re-fetch is a picture the
+  pre-warm wants and the budget does not, which the next pre-warm fetches back and the next pass
+  deletes, for the life of the install, with nothing saying so.
+  `the_spared_set_is_exactly_what_the_prewarm_would_fetch` pins it. Spared pictures are **outside**
+  the budget — a collection is bounded by what the reader owns, which is spec §5's scoping
+  argument — so a 10,000-card collection (~930 MB at `display`) never pushes the reader's
+  browsing out behind it. Everything else — the search walls, the printings dialog, the backs of
+  double-faced cards, deck covers' `art` crops, the recently-viewed `grid` tiles — is
+  least-recently-used against two limits.
+
+  **The budget is 512 MiB** (`CACHE_BUDGET_BYTES`, ≈ 5,770 `display` images at ~93 KB). It is
+  2.9× one pre-warm pass (`MAX_PREWARM` × 93 KB = 186 MB, which a `const` assertion keeps it
+  above, though the pre-warm's set is spared whatever the number); it holds the All tokens wall
+  below (4,357 tiles, ~405 MB at `display`) whole, so scrolling to the end and back does not
+  evict the top on the way down; and it is above the whole cache measured on 2026-08-20 —
+  329.7 MB, owned cards included.
+
+  **That last figure is why there is a second limit, and the second one is what reaches the old
+  `grid` files.** A reader whose whole cache sits under any sane budget would never have lost one
+  of them to a size limit. So an unspared picture unread for **90 days** (`MAX_IDLE`) goes, budget
+  or no budget. A choice rather than a measurement: it trades disk against one re-fetch (~127 ms
+  cold, from a host with no rate limit) of a card the reader returns to after a season away. The
+  files the 2026-08-20 move left were last written that day or before, so the last of them go at
+  the first pass after **2026-11-18**, sooner under the budget.
+
+  **The used-stamp is each file's modified time, written on purpose, and not a column — so no
+  schema rung.** `image_cache` is on the corpus side, and the corpus is the file this app deletes
+  and rebuilds when it will not open or a rung fails; the rows go with it and the files stay. An
+  evictor that read the rows could not see those files at all, so the bound it kept would be the
+  one a rebuilt corpus quietly escapes. The pass walks the disk instead, which it needed to do
+  anyway, and on Windows the directory listing carries each file's size and modified time — the
+  standard library documents `DirEntry::metadata` as making no extra call there — so the walk is
+  one listing per shard directory and nothing per file. **Nothing waits on the operating system
+  to update a timestamp by itself**: last-access times are off on most Windows volumes and are
+  never read. `store` sets the stamp by writing the file; a hit adds its key to an in-memory set —
+  one uncontended mutex, no I/O, never the write connection — and the upkeep thread writes those
+  stamps once a minute, opening each file with `write` and **never `create`**, because an empty
+  file under a row that vouches for it would be served as a zero-byte picture. The module header's
+  "no mtime" rule is about *freshness* and is untouched; a FAT32 stick rounding a stamp to two
+  seconds moves a picture in a queue measured in days. What the stamp costs: it lags by up to a
+  minute and a quit loses that minute's; the webview keeps a served picture a day
+  (`max-age=86400`), so the stamp's resolution is about a day, and the horizon is ninety of them;
+  and a folder copied by a tool that does not keep modified times starts every stamp at the copy,
+  so for ninety days after such a move only the budget evicts.
+
+  **File first, then its row.** Every interruption — a crash, a sync holding the write connection
+  past the pass's one-second wait — leaves a row outliving its file, the supported state
+  `reset::clear_cache` leans on too, and the next pass reaps it. The other order leaves bytes no
+  row vouches for, which nothing serves. The row delete is guarded by `fetched_at` < the pass's
+  start, so a picture re-fetched mid-pass keeps its new row. **Reaping** is the pass's second job:
+  a row whose file the walk did not find is dropped, which is what lets a reader who deleted
+  `data/images` have the collection warmed again — before, the pre-warm's `NOT EXISTS` read those
+  rows as pictures on disk, forever.
+
+  **Never deleted**: anything the walk did not parse as `<variant>/<id[0..2]>/<id>-<face>.webp` and
+  rebuild through `cache_path` — a crashed store's `.tmp`, a file in the wrong shard, a folder that
+  is not one of the four variants, anything a person put there; a spared picture; one whose row is
+  still owed in `Cache::pending`, because it has only just landed; one the filesystem cannot date.
+  A walk that errors on anything but a missing directory deletes nothing, because a partial walk
+  would reap the row of every file it missed. `the_walk_never_deletes_a_file_it_did_not_parse_as_its_own`
+  is the fence, and it is there for the `covers` incident's reason — see `/cover/` below.
+
+  **Measured on Linux only, which is not a figure for this app** (2026-09-28, a debug test
+  binary, a container's temp directory, 5,540 files of 60 KB with rows): the walk **34 ms**, a
+  pass deleting 3,379 idle files and their rows **91 ms**, a pass with nothing to do **17 ms**.
+  Nobody has timed a pass on Windows or against a real cache.
 - Warm serve **2–3 ms**, cold single image **~127 ms**. A cold screenful of 20 tiles is
   **80–270 ms** after the query lands — re-measured 2026-08-09, against **2 348–2 676 ms**
   for the same five searches on the commit before (same machine, same corpus, `data/images`
