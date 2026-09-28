@@ -19868,7 +19868,9 @@ export function writeHandlers(db: FakeDb) {
      * whose printing left the card database is exactly the deck whose scratchpad someone is
      * tidying, and a move that needed the id to resolve would refuse the one row that most
      * needs moving. `labelId` travels with it for the same reason — a label is the user's word
-     * about this card in this deck, and re-filing it is not a reason to lose it.
+     * about this card in this deck, and re-filing it is not a reason to lose it. **A fold keeps
+     * one too** (issue #643): the target row keeps its own label, and takes the moved row's only
+     * where it has none.
      *
      * **Either `toCategoryId` or `toCategoryName`, and at least one** — `deck_add_card`'s two-arm
      * target, mirrored here because the crate mirrors it there. The name arm is the quick zones'
@@ -19909,7 +19911,10 @@ export function writeHandlers(db: FakeDb) {
       if (target) {
         // `needs_review` is left alone where the target row already exists, and comes across
         // with a row that lands in an empty category — the fold's rule, and the reconciler's.
+        // The label is the survivor's, or the moved row's where the survivor wears none: the
+        // crate's `coalesce(deck_cards.label_id, excluded.label_id)` (issue #643).
         target.quantity += row.quantity;
+        target.labelId ??= row.labelId;
       } else {
         // A **new row**, not the old one re-filed: the statement is `INSERT … SELECT` followed
         // by a `DELETE`, so the copies land on a fresh rowid. Worth reproducing rather than
@@ -20515,7 +20520,8 @@ export function writeHandlers(db: FakeDb) {
      * of the same deck *and* the same variant ({@link CATEGORY_WRONG_LIST}), because a pile holds
      * one list's cards and a move into the other list's would file them where no tab draws them.
      * It folds on the grain, and a row the target already holds keeps its own `labelId` and
-     * `needsReview` — the existing row wins a fold.
+     * `needsReview` — the existing row wins a fold — taking the moved row's `labelId` only where
+     * it has none, `deck_move_card`'s fold rule (issue #643).
      *
      * The card count in the history is taken **before** anything moves, in copies rather than
      * rows: two printings at 2 and 3 is 5 cards, which is what the dialog warned about and the
@@ -20553,8 +20559,10 @@ export function writeHandlers(db: FakeDb) {
           // {@link deckCardAt}, the grain in full: until 2026-09-27 this was a hand-written
           // `find` without `finish`, so a moved foil summed into the target's regular row.
           const landed = deckCardAt(db, dc.deckId, dc.cardId, target, dc.variant, dc.finish);
-          if (landed) landed.quantity += dc.quantity;
-          else dc.categoryId = target;
+          if (landed) {
+            landed.quantity += dc.quantity;
+            landed.labelId ??= dc.labelId;
+          } else dc.categoryId = target;
         }
       }
       // Whatever did not fold has been re-filed above; what is left under this id either folded
