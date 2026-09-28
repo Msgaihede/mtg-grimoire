@@ -65,6 +65,7 @@ const BURN: DeckRow = {
   theoryMarkName: true,
   theoryMarkUnplanned: true,
   managedWishlist: "off",
+  managedWishlistTokens: false,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
@@ -706,6 +707,28 @@ describe("DeckSettingsDialog", () => {
     const group = screen.getByRole("group", { name: "Managed wishlist" });
     await userEvent.click(within(group).getByRole("button", { name: "All" }));
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { managedWishlist: "all" }));
+    expect(deckUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **The tokens toggle is a field of its own** (user schema v57, issue #617), read off the row
+   * and written as a patch of its own — never folded into the mode's, so the two answers stay two
+   * columns and two history lines.
+   */
+  it("reads the tokens toggle off the row and writes it as its own patch", async () => {
+    deckGet.mockResolvedValue({
+      ...withPlan(),
+      deck: { ...withPlan().deck, managedWishlist: "missing", managedWishlistTokens: true },
+    });
+    open();
+    await loaded();
+
+    const toggle = screen.getByRole("button", { name: "Tokens" });
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await userEvent.click(toggle);
+    await waitFor(() =>
+      expect(deckUpdate).toHaveBeenCalledWith(4, { managedWishlistTokens: false }),
+    );
     expect(deckUpdate).toHaveBeenCalledTimes(1);
   });
 

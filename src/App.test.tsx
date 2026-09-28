@@ -293,6 +293,7 @@ const BURN: DeckRow = {
   theoryMarkName: true,
   theoryMarkUnplanned: true,
   managedWishlist: "off",
+  managedWishlistTokens: false,
   // How the editor was last read. These three are the defaults — a deck nobody has pressed a
   // tab, a `Group by` or a `Sort` on.
   lastVariant: "live",

@@ -3109,9 +3109,10 @@ function waitingSeed(): FakeDb {
  *   outline and the badge. Deck 2's emblem is `starter`'s own hand-added token, at one copy in both
  *   lists; this one sits beside cards that make tokens, which is the case a reader meets.
  *
- * **Deck 4's managed wishlist follows `All`**, so it files the plan's missing tokens in a `Tokens`
- * subfolder inside its folder (user schema v55, spec §3.8) — and the folders are **settled rather
- * than written**: {@link settleManagedWishlist} is asked for them over the finished world, which is
+ * **Deck 4's managed wishlist follows `All` with its tokens switch on** — what v57's migration
+ * made of an `all` deck (issue #617), since All carried tokens until then — so it files the plan's
+ * missing tokens in a `Tokens` subfolder inside its folder (user schema v55, spec §3.8) — and the
+ * folders are **settled rather than written**: {@link settleManagedWishlist} is asked for them over the finished world, which is
  * the answer the crate would have left at rest, where a hand-written list would be a guess at it.
  *
  * And **deck 1 counts a second token** — two deathtouch Wurms beside its four Treasures — so its
@@ -3162,6 +3163,7 @@ function tokenPlanSeed(): FakeDb {
   const testbed = db.decks.find((d) => d.id === 4);
   if (testbed === undefined) throw new Error("the starter world has no deck 4");
   testbed.managedWishlist = "all";
+  testbed.managedWishlistTokens = true;
   settleManagedWishlist(db, 4);
   return db;
 }

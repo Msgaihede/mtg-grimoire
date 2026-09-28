@@ -76,7 +76,10 @@ picks it up from any directory under the root.
   (`PredicateField`, `PredicateOp`, a value and `negated`), and one match arm per field in
   `push_card_filters` is what reaches **all three** card searches — `search_cards`,
   `collection_list` and `wishlist_list` already call that one function with the same `"c"` alias,
-  so a predicate costs one edit rather than three. **Three of the thirteen fields emit no SQL at
+  so a predicate costs one edit rather than three. **A fourth caller since 2026-09-28 is
+  `deck_query::query_cards`** (issue #621), the deck editor's filter box over `deck_cards`, which
+  copies `collection::scope`'s FTS subquery and passes no free text — the box keeps that in the
+  webview. **Three of the thirteen fields emit no SQL at
   all**: `Name`, `TypeLine` and `OracleText` ride the FTS `MATCH` string instead, because `LIKE`
   measured 82× and 277× slower on the two warm probes. **`Name` has no keyword** — it is what a
   `-` on free text becomes (`-bolt`, `-"lightning bolt"`, issue #571), an ordered phrase on the
@@ -215,7 +218,18 @@ picks it up from any directory under the root.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v56**
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v57**
+  (2026-09-28, [issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617)) is
+  `decks.managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0`, whether a theory deck's managed
+  wishlist files the plan's missing tokens in its **Tokens** subfolder — a switch beside
+  `managed_wishlist_mode`, which loses its fifth word `tokens`. **The rung converts rows, so it
+  drops the three `decks` capture triggers first** (v52's move): its two `UPDATE`s write a synced
+  column, and a captured conversion would carry `missing` to a v56 peer that converted nothing.
+  `all` → switch on; `tokens` → `missing` with the switch on (the reader's answer); the rest keep
+  `0`. The mode's rules otherwise: on the capture spec, a history row (`managedWishlistTokens`),
+  on `deck_undo::DECK_FIELDS`, carried by `duplicate_deck`. `deck_row` reads it at 31 and
+  `update_deck` binds it at `?25`. It owes `UNDO_V57`, now the head of every chain, which drops
+  the capture triggers before the column for `UNDO_V56`'s reason. That is one above **v56**
   (2026-09-28, [the deck-stats band plan](../docs/superpowers/plans/2026-09-28-deck-stats-band-redesign.md)
   §3) is `decks.curve_creatures INTEGER NOT NULL DEFAULT 0`, whether the Deck stats band's Mana
   curve splits each bar into creatures and noncreatures — v42's `stats_open` one control further
@@ -223,8 +237,8 @@ picks it up from any directory under the root.
   `decks` capture spec, on no history row and no `deck_undo::DECK_FIELDS`, not carried by
   `duplicate_deck`. **`DEFAULT 0` is v43's answer and not v42's**, because the split is new and
   off is exactly the chart every deck already drew. `deck_row` reads it at 30 and `update_deck`
-  binds it at `?24`, both at the end of their lists. It owes `UNDO_V56`, now the head of every
-  chain, and that rewind **drops the three `decks` capture triggers before the column** — v43's
+  binds it at `?24`, both at the end of their lists. It owes `UNDO_V56`, which ran first in every
+  chain until `UNDO_V57` landed above it, and that rewind **drops the three `decks` capture triggers before the column** — v43's
   move in the rewind direction, because `sync_ins_decks` and `sync_upd_decks` read
   `NEW.curve_creatures` and SQLite refuses the `DROP COLUMN` on a fixture that ran
   `capture::install` (the v54 rung's test is one). That is one above **v55**
@@ -1308,8 +1322,9 @@ shared_cell` walks both into two databases and compares them column by column.
   left with it.
 - **A theory deck's managed wishlist folder is derived, per device, and written by
   `managed_wishlist` alone** (user schema v48, issue #512). `wishlist_folders.managed_deck_id`
-  names the deck; the folder holds `deck_theory::wanted` over the Compare view
-  `decks.managed_wishlist_mode` names (`off` by default, v49) — each view's own copies — and is
+  names the deck; the folder holds `deck_theory::wanted` over the Compare card view
+  `decks.managed_wishlist_mode` names (`off` by default, v49) — each view's own copies — plus,
+  when `decks.managed_wishlist_tokens` is on (v57, issue #617), the plan's missing tokens, and is
   rewritten after every `sync::with_write` from **TEMP triggers** that mark a deck dirty, and at
   every launch from `schema::prepare_database`. Three things bind a change near it. **Its writes
   run inside `capture::suppressed` and the column is on no capture spec** — the rule above about
@@ -1320,8 +1335,9 @@ shared_cell` walks both into two databases and compares them column by column.
   conflict clause is overridden by the outer statement's**, which is why the dirty table has no
   key: an `INSERT OR IGNORE` fired by an UPSERT failed the deck add itself.
   `db::CrossFileFence` ignores the `temp` schema for the same bookkeeping. **Since user schema v55
-  a deck can own a second managed folder**, its **Tokens** child (`managed_tokens = 1`), filled by
-  the `all` and `tokens` modes with the Compare dialog's token rows: so **every lookup of a deck's
+  a deck can own a second managed folder**, its **Tokens** child (`managed_tokens = 1`), filled with
+  the Compare dialog's token rows — by the `all` and `tokens` modes until v57, and by the tokens
+  switch under any mode since: so **every lookup of a deck's
   own folder by `managed_deck_id` adds `AND managed_tokens = 0`**, while one that means *any*
   managed folder keeps `managed_deck_id IS NOT NULL`. The token tables' triggers mark a **second**
   TEMP table, `managed_wishlist_token_dirty`, which only `settle` reads — never the card table

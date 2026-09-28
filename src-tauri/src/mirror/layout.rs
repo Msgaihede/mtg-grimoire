@@ -647,6 +647,9 @@ mod tests {
             // User schema v56's Mana curve split, `false` as a fresh deck carries it — here for
             // `bracket`'s reason: the layout reads five fields and not this one.
             curve_creatures: false,
+            // User schema v57's managed-wishlist tokens switch, `false` as a fresh deck carries
+            // it — here for `bracket`'s reason: the layout reads five fields and not this one.
+            managed_wishlist_tokens: false,
             // User schema v52's mode (v47's `token_stack` before it), `managed` as a fresh deck
             // carries it — here for `bracket`'s reason: the layout reads five fields and not this
             // one.
