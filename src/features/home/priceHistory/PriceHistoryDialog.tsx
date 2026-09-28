@@ -278,8 +278,7 @@ function Body({
       )}
       {!pending && error === null && card === null && (
         <p className="mx-5 mt-3 text-sm text-dim">
-          This printing is not in the card database any more. It may have been removed by the last
-          sync.
+          This printing is no longer in the card database.
         </p>
       )}
 
