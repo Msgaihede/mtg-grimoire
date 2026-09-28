@@ -9,20 +9,19 @@ import type { TransferCard } from "../TransferCard";
 // that stopped being true.
 import { dropsInactive, EXPORT_FORMATS, EXPORT_FORMAT_LABEL } from "./format";
 
-const exportWriteFile = vi.hoisted(() => vi.fn());
+/** The save dialog **and** the write, which are one command: Rust opens a native window nothing
+ *  in a test or a browser can reach and writes where it answered (issue #545), so this is the
+ *  one entry point that has to be stubbed rather than driven. */
+const exportSaveFile = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { exportWriteFile },
+  ipc: { exportSaveFile },
 }));
-
-const save = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/plugin-dialog", () => ({ save }));
 
 const copyText = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/clipboard", () => ({ copyText }));
 
 import { ipc } from "@/lib/ipc";
-import { save as saveMock } from "@tauri-apps/plugin-dialog";
 import { copyText as copyTextMock } from "@/lib/clipboard";
 import { useAppStore } from "@/lib/store";
 import { ExportDialog, type ExportDialogProps } from "./ExportDialog";
@@ -84,10 +83,9 @@ async function showList(user: ReturnType<typeof userEvent.setup>): Promise<void>
 }
 
 beforeEach(() => {
-  exportWriteFile.mockReset();
-  exportWriteFile.mockResolvedValue(undefined);
-  save.mockReset();
-  save.mockResolvedValue(null);
+  exportSaveFile.mockReset();
+  // Cancel, which is what a test that never meant to save would have got had it pressed Save.
+  exportSaveFile.mockResolvedValue(false);
   copyText.mockReset();
   copyText.mockResolvedValue(undefined);
   // The chosen format and fields now live in `useAppStore`'s `exportPrefs` rather than in this
@@ -814,34 +812,41 @@ describe("ExportDialog", () => {
     expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
-  it("writes the file Rust was told to write, at the path the picker answered", async () => {
+  /**
+   * The backend is handed a **name** and the text, and never a path — Rust opens the save dialog
+   * with the name and writes at whatever the reader chose there (issue #545). The extension is
+   * the chosen format's.
+   */
+  it("hands the backend the suggested name and the text, and nothing naming a folder", async () => {
     const user = userEvent.setup();
-    vi.mocked(saveMock).mockResolvedValue("D:\\decks\\Removal.txt");
+    vi.mocked(ipc.exportSaveFile).mockResolvedValue(true);
     render(
       <ExportDialog {...props} />,
     );
     await user.click(screen.getByRole("button", { name: /Save as/ }));
-    expect(vi.mocked(ipc.exportWriteFile)).toHaveBeenCalledWith(
-      "D:\\decks\\Removal.txt",
+    expect(vi.mocked(ipc.exportSaveFile)).toHaveBeenCalledWith(
+      "Removal.txt",
       "2 Lightning Bolt\n",
     );
   });
 
-  it("writes nothing when the picker is cancelled", async () => {
+  /** A cancelled save is not a failure: nothing is said, and the dialog stays with its text. */
+  it("says nothing when the save dialog is cancelled", async () => {
     const user = userEvent.setup();
-    // The picker answers null on cancel. Writing to "null" is the bug this pins.
-    vi.mocked(saveMock).mockResolvedValue(null);
-    render(
-      <ExportDialog {...props} />,
-    );
+    vi.mocked(ipc.exportSaveFile).mockResolvedValue(false);
+    const onDismiss = vi.fn();
+    render(<ExportDialog {...props} onDismiss={onDismiss} />);
     await user.click(screen.getByRole("button", { name: /Save as/ }));
-    expect(vi.mocked(ipc.exportWriteFile)).not.toHaveBeenCalled();
+    expect(vi.mocked(ipc.exportSaveFile)).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(onDismiss).not.toHaveBeenCalled();
   });
 
   it("reports a refused write rather than closing on it", async () => {
     const user = userEvent.setup();
-    vi.mocked(saveMock).mockResolvedValue("D:\\decks\\Removal.txt");
-    vi.mocked(ipc.exportWriteFile).mockRejectedValue("could not write: access denied");
+    vi.mocked(ipc.exportSaveFile).mockRejectedValue(
+      "could not write D:\\decks\\Removal.txt: access denied",
+    );
     const onDismiss = vi.fn();
     render(<ExportDialog {...props} onDismiss={onDismiss} />);
     await user.click(screen.getByRole("button", { name: /Save as/ }));
@@ -954,7 +959,7 @@ describe("the scope line", () => {
     await user.click(copyButton);
     expect(copyTextMock).not.toHaveBeenCalled();
     await user.click(saveButton);
-    expect(saveMock).not.toHaveBeenCalled();
+    expect(vi.mocked(ipc.exportSaveFile)).not.toHaveBeenCalled();
   });
 
   /**
@@ -992,7 +997,7 @@ describe("the scope line", () => {
     await user.click(copyButton);
     expect(copyTextMock).not.toHaveBeenCalled();
     await user.click(saveButton);
-    expect(saveMock).not.toHaveBeenCalled();
+    expect(vi.mocked(ipc.exportSaveFile)).not.toHaveBeenCalled();
 
     await user.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledTimes(1);

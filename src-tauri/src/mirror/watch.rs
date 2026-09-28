@@ -1831,36 +1831,24 @@ mod tests {
         assert_eq!(state.mirror.take(), None);
     }
 
-    /// The sync gate, through the one part of `run_sync`'s tail that a test can reach — that
-    /// function takes a `tauri::AppHandle` and this crate has no mock-app harness, so the
-    /// *call* to this stays untested and is reported as such. The condition is what is worth
-    /// pinning: a throttled run that downloaded nothing must not spend a full render, and a
-    /// run that did must.
+    /// The sync's mark, through the one part of it a test can reach — `do_sync` takes a
+    /// `tauri::AppHandle` and this crate has no mock-app harness, so the *call*, which sits where
+    /// the swap lands, stays untested and is reported as such. What is pinned here is what it
+    /// marks: a swapped corpus moved every mirrored price, so it is every surface.
+    ///
+    /// It was gated on `run_sync`'s result until issue #551, which is why a run that swapped the
+    /// cards and then failed at `/sets` left the mirror's prices a corpus behind.
     #[test]
-    fn only_a_sync_that_updated_something_marks_the_mirror() {
+    fn a_swapped_corpus_marks_every_surface() {
         let dir = tempfile::tempdir().unwrap();
         let state = state_at(dir.path());
-        let outcome = |updated| crate::sync::SyncOutcome {
-            updated,
-            card_count: 116_700,
-            updated_at: None,
-        };
+        assert_eq!(state.mirror.take(), None);
 
-        crate::sync::note_mirror_after_sync(&state, &Ok(outcome(false)));
-        assert_eq!(
-            state.mirror.take(),
-            None,
-            "a throttled run changed no card name and must cost no render"
-        );
-
-        crate::sync::note_mirror_after_sync(&state, &Err("no network".into()));
-        assert_eq!(state.mirror.take(), None, "and neither must a failure");
-
-        crate::sync::note_mirror_after_sync(&state, &Ok(outcome(true)));
+        crate::sync::note_mirror_after_swap(&state);
         assert_eq!(
             state.mirror.take(),
             Some(Dirty::ALL),
-            "a corrected card name reaches the files this way and no other"
+            "a corrected card name or a moved price reaches the files this way and no other"
         );
     }
 

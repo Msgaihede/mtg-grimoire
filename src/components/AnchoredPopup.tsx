@@ -113,11 +113,17 @@ export function AnchoredPopup({
    * On the **trigger**, so a caller drawing this control inside a column of same-sized controls
    * can match that column.
    *
-   * It exists for one caller and is deliberately not a general escape hatch: the wishlist tile's
-   * pencil stands under a `QuantityStepper` at `size="card"`, and a 24px button below a 36px one
-   * reads as two controls that happen to be adjacent rather than as one column. What is passed is
-   * therefore that stepper's own box, glyph and over-art tone, read off `QuantityStepper` rather
+   * It was written for one caller and is deliberately not a general escape hatch: the wishlist
+   * tile's pencil stands under a `QuantityStepper` at `size="card"`, and a 24px button below a 36px
+   * one reads as two controls that happen to be adjacent rather than as one column. What is passed
+   * is therefore that stepper's own box, glyph and over-art tone, read off `QuantityStepper` rather
    * than retyped — see `EditWishButton`'s `size` prop, which is where that recipe is written once.
+   *
+   * **The over-art tone is the other thing a square trigger is handed through here**, and it is
+   * never this component's default: a quick-add on a wall's tile stands over the picture, where the
+   * bare outline below all but disappears (issue #645), while the same square in a table row or on
+   * a home widget's title line sits on a panel. `AddToCollectionButton`'s `tone="art"` is where that
+   * one is written.
    *
    * Merged through the same `cn` as everything else on the button, so `tailwind-merge` keeps the
    * later of two conflicting sizes, radii and colours. **A caller may not use it to make the

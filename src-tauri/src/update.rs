@@ -7,11 +7,19 @@
 //! `data/` beside itself — so pointing the plugin at one would install a *second* copy into
 //! Program Files and leave the portable one, and the user's collection, behind.
 //!
-//! What that gives up is the plugin's minisign signature. What buys it back was measured
-//! against the live API on 2026-08-09: **every release asset carries a `digest`**
-//! (`sha256:…`, populated on all five), so an update is verified against a hash published
-//! by GitHub rather than against nothing. A release whose asset has no digest is refused
-//! outright — see [`verify_digest`].
+//! **Two checks stand between a download and anything that runs it, and they answer different
+//! questions.** GitHub's upload `digest` (`sha256:…`, measured on all five assets 2026-08-09) says
+//! the bytes arrived as they were uploaded — [`verify_digest`]. A **minisign signature** says who
+//! published them — [`verify_signature`], against [`SIGNING_PUBLIC_KEY`], compiled in. This
+//! module said until 2026-09-28 that the digest "buys back" the signature the plugin would have
+//! given, and it does not: anyone who can put a file on a release — a hijacked action tag in the
+//! release workflow, a leaked token — has GitHub compute a valid digest for whatever they upload,
+//! and the digest check then waves a trojaned zip through to every portable install. Both
+//! checks fail closed: an asset with no digest, a release with no `.minisig` beside the asset,
+//! and a signature from another key, over other bytes, in minisign's legacy form or **for another
+//! release or install kind** are each refused in words, the partial download deleted, and
+//! nothing extracted or staged. The last one is the trusted comment's work — see
+//! [`expected_trusted_comment`].
 //!
 //! Three rules shape the module:
 //!
@@ -25,10 +33,11 @@
 //!   release page. Guessing is how a user ends up with two copies of the app.
 
 use crate::sync::AppState;
+use minisign_verify::{PublicKey, Signature};
 use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::Path;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,6 +53,53 @@ pub const REPO: &str = "Msgaihede/mtg-grimoire";
 /// Production API host. A parameter on [`Updater::new`] so tests can point at a mock, the
 /// same arrangement `scryfall::Client` uses.
 pub const GITHUB_API: &str = "https://api.github.com";
+
+/// The public half of the key every update is signed with — minisign's base64 line,
+/// `base64("Ed" || keyid || pk32)`, as `node scripts/update-signing.mjs keygen` prints it. The
+/// secret half is the `UPDATE_SIGNING_KEY` repository secret and nothing else.
+///
+/// **Compiled in, so a build trusts exactly one key: the one it was built with.** That is what
+/// makes a rotation take effect one release late — the release that carries a new key is still
+/// verified by the installs updating *to* it, which trust the old one, so the old secret keeps
+/// signing until that release is out. `docs/reference/in-app-updates.md` has the order.
+///
+/// Key id `FD103A4C389F00B0`, generated 2026-09-28. Public on the same terms as `REPO` — the half
+/// that verifies is meant to be read. A key that is not one (the placeholder this held while the
+/// change was written, a paste that lost a character) is refused by [`signing_key`], so a build
+/// carrying it refuses every update it is offered, and a release build does not compile at all
+/// (the assertion below).
+pub const SIGNING_PUBLIC_KEY: &str = "RWSwAJ84TDoQ/QZzQ1PtYrHsfIh+ZHJUYtP/2iTFlS29AigcbjocN6wf";
+
+/// **A release build refuses to compile without a real key**, because the failure it prevents is
+/// silent and permanent: an install built with the placeholder can verify no update ever again,
+/// and learns that only when a reader presses Download. The shape is checked rather than the
+/// placeholder's spelling — every minisign Ed25519 public key is 56 characters of base64
+/// starting `RW` — so a paste that lost a character fails here too. Debug builds skip it, which
+/// is what lets the tests and `tauri dev` run against the placeholder; the tests pass their own
+/// throwaway key and never read this constant. `the_compiled_in_key_is_a_minisign_key_once_set`
+/// is the debug-build half: it decodes the key in full once it is no longer the placeholder.
+#[cfg(not(debug_assertions))]
+const _: () = assert!(
+    SIGNING_PUBLIC_KEY.len() == 56
+        && SIGNING_PUBLIC_KEY.as_bytes()[0] == b'R'
+        && SIGNING_PUBLIC_KEY.as_bytes()[1] == b'W',
+    "update::SIGNING_PUBLIC_KEY is not a minisign public key. A release built this way can never \
+     verify an update. Generate one with `node scripts/update-signing.mjs keygen` — see \
+     docs/reference/in-app-updates.md."
+);
+
+/// What a release's signature for one asset is called: the asset's own name with this appended,
+/// `mtg-grimoire-0.33.0-windows-x64-portable.zip.minisig`. The release workflow's `sign` job
+/// downloads the assets under their **uploaded** names — GitHub's dotted spelling of the NSIS
+/// setup, never the bundler's spaced one — and signs them there, so the two names line up.
+const SIGNATURE_SUFFIX: &str = ".minisig";
+
+/// A minisign signature is four short lines, about 300 bytes. This is a bound on what a bad
+/// answer can make this process read, for [`MAX_ASSET_BYTES`]'s reason.
+const MAX_SIGNATURE_BYTES: u64 = 4 * 1024;
+
+/// The product word a signature's trusted comment starts with. See [`expected_trusted_comment`].
+const SIGNED_PRODUCT: &str = "mtg-grimoire";
 
 /// How long a check stays fresh.
 ///
@@ -419,9 +475,14 @@ pub fn pick_asset(assets: &[Asset], kind: InstallKind) -> Option<&Asset> {
 
 /// Check a downloaded file against GitHub's `digest`.
 ///
-/// An absent digest is a **failure**, not a pass. This is the only integrity check the
-/// design has — there is no minisign signature behind it — so "the field was missing" must
-/// never be the path of least resistance into running a downloaded executable.
+/// **A transport check, and no more than one.** It catches a download that was cut short or
+/// corrupted between GitHub and here, which TLS mostly covers already; it cannot tell who
+/// uploaded the file, because GitHub computes the digest of whatever arrives. This doc called it
+/// "the only integrity check the design has" until 2026-09-28, which was true and was the gap:
+/// who published a download is [`verify_signature`]'s question, asked right after this one.
+///
+/// An absent digest is still a **failure**, not a pass — "the field was missing" must never be
+/// the path of least resistance into running a downloaded executable, whatever stands behind it.
 fn verify_digest(expected: Option<&str>, actual: &[u8]) -> Result<(), String> {
     let Some(expected) = expected else {
         return Err(
@@ -448,6 +509,117 @@ fn verify_digest(expected: Option<&str>, actual: &[u8]) -> Result<(), String> {
              It has been deleted."
         ))
     }
+}
+
+/// The trusted comment a signature must carry for this install to accept it:
+/// `mtg-grimoire <version> <kind>`, `kind` being `portable` or `nsis`. `None` for
+/// [`InstallKind::Other`], which downloads nothing.
+///
+/// **This is what stops a replay, and a signature alone would not.** Someone who can upload
+/// assets but not sign can still copy an *older* release's zip and its perfectly valid
+/// signature onto a new release — a downgrade to a build with a known hole — or the setup's
+/// signature beside the zip. The trusted comment is covered by minisign's global signature, so
+/// it cannot be edited without the key, and requiring it to name the very release and install
+/// kind being installed turns both into a refusal. The release workflow's `sign` job writes it
+/// from release-please's `version` output, which is `tag_name` without its `v` — the same string
+/// [`parse_release`] makes `ReleaseInfo::version` from.
+fn expected_trusted_comment(version: &str, kind: InstallKind) -> Option<String> {
+    let kind = match kind {
+        InstallKind::Portable => "portable",
+        InstallKind::Nsis => "nsis",
+        // Listed rather than swept up by a `_`, for `pick_asset`'s reason.
+        InstallKind::Other => return None,
+    };
+    Some(format!("{SIGNED_PRODUCT} {version} {kind}"))
+}
+
+/// The `.minisig` published beside `asset`, matched on the **exact** name. `pick_asset` can never
+/// pick one of these instead, since `….zip.minisig` does not end in the zip's suffix.
+fn signature_asset<'a>(assets: &'a [Asset], asset: &Asset) -> Option<&'a Asset> {
+    let name = format!("{}{SIGNATURE_SUFFIX}", asset.name);
+    assets.iter().find(|a| a.name == name)
+}
+
+/// [`SIGNING_PUBLIC_KEY`], or whatever key a test hands in, decoded. A key that does not decode —
+/// the placeholder is the one that will — refuses every download rather than skipping the check.
+fn signing_key(public_key: &str) -> Result<PublicKey, String> {
+    PublicKey::from_base64(public_key).map_err(|_| {
+        "this build carries no key to check an update's signature with, so it cannot verify a \
+         download. Download the update from the release page instead."
+            .to_owned()
+    })
+}
+
+/// Check the file at `path` against a minisign signature by `key`, and the signature's trusted
+/// comment against `expected`.
+///
+/// **Who published the download**, where [`verify_digest`] only says it arrived as uploaded.
+/// Every failure is a sentence the Settings panel shows as it stands, and the caller deletes the
+/// file on any of them.
+///
+/// **The file is read back from disk rather than hashed as it streamed in.** What this verifies is
+/// then exactly the bytes [`extract_portable_exe`] opens and the NSIS handoff runs, not the bytes
+/// that went past on the way to them; it costs one more read of a 5–7 MB file the OS has just
+/// written, and keeps `stream_to_file` a download and nothing else. In 64 KiB chunks through
+/// `verify_stream`, because `PublicKey::verify` wants the whole file in memory and the cap is
+/// [`MAX_ASSET_BYTES`].
+///
+/// **Only the prehashed `ED` form is accepted.** `verify_stream` refuses minisign's legacy `Ed`
+/// form outright — the `allow_legacy = false` of `PublicKey::verify`, with no flag to get wrong.
+/// The trusted comment is compared **after** the signature verifies, so the sentence naming
+/// another release is only ever said about a signature that really is ours.
+fn verify_signature(
+    key: &PublicKey,
+    signature: &str,
+    path: &Path,
+    expected: &str,
+) -> Result<(), String> {
+    use minisign_verify::Error;
+
+    let unreadable = || {
+        "the signature published for this download could not be read, so it cannot be verified. \
+         Download it from the release page instead."
+            .to_owned()
+    };
+    let signature = Signature::decode(signature).map_err(|_| unreadable())?;
+    let mut verifier = key.verify_stream(&signature).map_err(|e| match e {
+        Error::UnexpectedKeyId => "the download is signed with a key this build does not trust, \
+             so it was refused and has been deleted. Download it from the release page instead."
+            .to_owned(),
+        Error::UnsupportedLegacyMode => "the signature published for this download is in \
+             minisign's legacy form, which this app does not accept, so it cannot be verified. \
+             Download it from the release page instead."
+            .to_owned(),
+        _ => unreadable(),
+    })?;
+
+    let read_back =
+        |e: std::io::Error| format!("could not read the download back to check its signature: {e}");
+    let mut file = std::fs::File::open(path).map_err(read_back)?;
+    let mut chunk = vec![0u8; 64 * 1024];
+    loop {
+        match file.read(&mut chunk) {
+            Ok(0) => break,
+            Ok(n) => verifier.update(&chunk[..n]),
+            // What `io::copy` does for the same reason: a signal is not a failed read.
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(read_back(e)),
+        }
+    }
+    verifier.finalize().map_err(|_| {
+        "the download did not match its signature, so it was refused and has been deleted. \
+         Download it from the release page instead."
+            .to_owned()
+    })?;
+
+    let signed_for = signature.trusted_comment();
+    if signed_for != expected {
+        return Err(format!(
+            "the download's signature is for `{signed_for}` rather than `{expected}`, so it was \
+             refused and has been deleted. Download it from the release page instead."
+        ));
+    }
+    Ok(())
 }
 
 /// `mtg-grimoire.exe` → `mtg-grimoire.exe.old`.
@@ -821,6 +993,27 @@ async fn download_inner(
     updater: &Arc<Updater>,
     app: &tauri::AppHandle,
 ) -> Result<UpdateStatus, String> {
+    download_signed(state, updater, SIGNING_PUBLIC_KEY, &|progress| {
+        let _ = app.emit("update:progress", progress);
+    })
+    .await
+}
+
+/// [`download`] with the two things a test must supply in place of the app's: the public key,
+/// and where progress goes instead of an `AppHandle` — nothing here builds one outside a running
+/// app, and every other step is exactly what ships.
+///
+/// **The order is the design.** The key, the trusted comment and the `.minisig` asset are settled
+/// before any request, so a release that publishes no signature costs nothing to refuse; the
+/// signature is fetched before the asset, one small request ahead of a large one; and nothing is
+/// extracted or staged until the digest **and then** the signature have both passed, the partial
+/// download deleted on either failure.
+async fn download_signed(
+    state: &Arc<AppState>,
+    updater: &Arc<Updater>,
+    public_key: &str,
+    progress: &(dyn Fn(UpdateProgress) + Send + Sync),
+) -> Result<UpdateStatus, String> {
     let current = status(state, updater);
     let release = current
         .available
@@ -837,6 +1030,16 @@ async fn download_inner(
             release.version, asset.size
         ));
     }
+    let key = signing_key(public_key)?;
+    let expected = expected_trusted_comment(&release.version, current.install_kind)
+        .ok_or_else(|| "this kind of install cannot be updated from inside the app.".to_owned())?;
+    let signature_asset = signature_asset(&release.assets, &asset)
+        .ok_or_else(|| {
+            "that release publishes no signature for this download, so it cannot be verified. \
+             Download it from the release page instead."
+                .to_owned()
+        })?
+        .clone();
 
     // Named for the reason `check`'s is: it must be dropped before the answer is built, or
     // the status this resolves with reports its own download as still running and the panel
@@ -845,11 +1048,13 @@ async fn download_inner(
         return Err("an update is already downloading".into());
     };
 
-    let dir = state.data_dir.join("updates");
+    let signature = fetch_signature(updater, &signature_asset).await?;
+
+    let dir = state.data_dir.join(UPDATES_DIR);
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     let part = dir.join(format!("{}.part", asset.name));
-    let hash = stream_to_file(updater, app, &asset, &part)
+    let hash = stream_to_file(updater, &asset, &part, progress)
         .await
         .inspect_err(|_| {
             // A partial download is never a resume point here: unlike the 77 MB bulk file this
@@ -857,7 +1062,12 @@ async fn download_inner(
             // later run has to reason about.
             let _ = std::fs::remove_file(&part);
         })?;
-    if let Err(e) = verify_digest(asset.digest.as_deref(), &hash) {
+    // The digest first, so a download damaged on the way is reported as damaged. The signature's
+    // sentences say somebody other than this repository published the file, which is a claim
+    // worth making only about bytes that arrived as they were uploaded.
+    if let Err(e) = verify_digest(asset.digest.as_deref(), &hash)
+        .and_then(|()| verify_signature(&key, &signature, &part, &expected))
+    {
         let _ = std::fs::remove_file(&part);
         return Err(e);
     }
@@ -867,8 +1077,7 @@ async fn download_inner(
         // renames and nothing that can fail halfway across a volume boundary.
         InstallKind::Portable => {
             let dest = sibling(&updater.exe, ".new");
-            extract_portable_exe(&part, &dest)?;
-            let _ = std::fs::remove_file(&part);
+            stage_portable(&part, &dest)?;
             Staged {
                 kind: InstallKind::Portable,
                 path: dest,
@@ -895,16 +1104,63 @@ async fn download_inner(
     Ok(status(state, updater))
 }
 
+/// Fetch the `.minisig` published beside an asset, as text.
+///
+/// Capped at [`MAX_SIGNATURE_BYTES`] twice — against the listed size before a byte is read, and
+/// against the running total while reading, for `stream_to_file`'s reason: a listing and a header
+/// are claims. It is not parsed here; [`verify_signature`] refuses what it cannot read.
+async fn fetch_signature(updater: &Arc<Updater>, asset: &Asset) -> Result<String, String> {
+    use futures_util::StreamExt;
+
+    let too_long = || {
+        format!(
+            "the signature published for this download is longer than any signature is \
+             ({} is over {MAX_SIGNATURE_BYTES} bytes); refusing it.",
+            asset.name
+        )
+    };
+    if asset.size > MAX_SIGNATURE_BYTES {
+        return Err(too_long());
+    }
+    let resp = updater
+        .http
+        .get(&asset.url)
+        .send()
+        .await
+        .map_err(|e| format!("could not reach GitHub for the download's signature: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!(
+            "the download's signature answered {} for {}",
+            resp.status().as_u16(),
+            asset.name
+        ));
+    }
+    let mut body = Vec::new();
+    let mut stream = resp.bytes_stream();
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(|e| format!("the signature download failed: {e}"))?;
+        if (body.len() + chunk.len()) as u64 > MAX_SIGNATURE_BYTES {
+            return Err(too_long());
+        }
+        body.extend_from_slice(&chunk);
+    }
+    // Not UTF-8 is not a signature. `verify_signature` says so in its own words.
+    Ok(String::from_utf8_lossy(&body).into_owned())
+}
+
 /// Stream one asset to `dest`, hashing as it goes, and answer the digest.
 ///
 /// The size bound is enforced against the running total rather than against
 /// `Content-Length`: a header is a claim, and a chunked response makes no claim at all —
 /// `scryfall::Client::download`'s rule, for its reason.
+///
+/// `progress` rather than an `AppHandle`, so [`download_signed`] can be driven by a test: the
+/// app passes a closure that emits `update:progress`.
 async fn stream_to_file(
     updater: &Arc<Updater>,
-    app: &tauri::AppHandle,
     asset: &Asset,
     dest: &Path,
+    progress: &(dyn Fn(UpdateProgress) + Send + Sync),
 ) -> Result<Vec<u8>, String> {
     use futures_util::StreamExt;
 
@@ -929,13 +1185,10 @@ async fn stream_to_file(
     let mut last_emit = 0u64;
     let mut stream = resp.bytes_stream();
 
-    let _ = app.emit(
-        "update:progress",
-        UpdateProgress {
-            done: 0,
-            total: asset.size,
-        },
-    );
+    progress(UpdateProgress {
+        done: 0,
+        total: asset.size,
+    });
     while let Some(chunk) = stream.next().await {
         let chunk = chunk.map_err(|e| format!("the download failed: {e}"))?;
         done += chunk.len() as u64;
@@ -950,16 +1203,16 @@ async fn stream_to_file(
             .map_err(|e| format!("could not write {}: {e}", dest.display()))?;
         if done - last_emit >= PROGRESS_EMIT_BYTES || done == asset.size {
             last_emit = done;
-            let _ = app.emit(
-                "update:progress",
-                UpdateProgress {
-                    done,
-                    total: asset.size,
-                },
-            );
+            progress(UpdateProgress {
+                done,
+                total: asset.size,
+            });
         }
     }
     file.flush()
+        .map_err(|e| format!("could not finish writing {}: {e}", dest.display()))?;
+    // Durable before it is renamed into place or unpacked — [`extract_portable_exe`]'s reason.
+    file.sync_all()
         .map_err(|e| format!("could not finish writing {}: {e}", dest.display()))?;
     if done != asset.size {
         return Err(format!(
@@ -970,7 +1223,28 @@ async fn stream_to_file(
     Ok(hasher.finalize().to_vec())
 }
 
+/// Unpack the downloaded archive at `part` into the staged exe at `dest`, and delete the
+/// archive **whichever way it goes**.
+///
+/// A failed extraction used to return with `?` and leave both behind: the `.part` in
+/// `data/updates/`, where nothing ever looked again, and a half-written `.new` beside the exe
+/// (issue #551). The `.new` was swept at the next launch; the `.part` never was.
+fn stage_portable(part: &Path, dest: &Path) -> Result<(), String> {
+    let result = extract_portable_exe(part, dest);
+    let _ = std::fs::remove_file(part);
+    if result.is_err() {
+        let _ = std::fs::remove_file(dest);
+    }
+    result
+}
+
 /// Pull `mtg-grimoire.exe` out of the portable archive.
+///
+/// **Made durable before it returns** — `sync_all`, not only `flush`, which hands the bytes to
+/// the OS and promises nothing about the disk. `apply` renames this file over the running exe,
+/// and a rename can reach the disk before the data it names: a power cut between the two would
+/// leave `mtg-grimoire.exe` a file of the right name and the wrong (zero) contents, which is the
+/// one failure a portable install cannot recover from by itself.
 ///
 /// Matched on the file name rather than on a full path, because the archive's layout is the
 /// release workflow's business and `Compress-Archive` has changed how it stores single
@@ -1001,6 +1275,8 @@ fn extract_portable_exe(archive: &Path, dest: &Path) -> Result<(), String> {
     std::io::copy(&mut entry, &mut out)
         .map_err(|e| format!("could not unpack {PORTABLE_EXE}: {e}"))?;
     out.flush()
+        .map_err(|e| format!("could not finish writing {}: {e}", dest.display()))?;
+    out.sync_all()
         .map_err(|e| format!("could not finish writing {}: {e}", dest.display()))?;
     Ok(())
 }
@@ -1168,16 +1444,36 @@ pub fn predecessor_pid<I: IntoIterator<Item = String>>(args: I) -> Option<u32> {
     args.next()?.parse().ok()
 }
 
-/// Clear what an update left beside the exe: the replaced build, and any staged one that
-/// was downloaded and never applied.
+/// Clear what an update left behind: beside the exe, the replaced build and any staged one that
+/// was downloaded and never applied; in `<data dir>/updates/`, every file.
 ///
 /// Runs on every launch, and is a no-op on nearly all of them. The staged file goes too —
 /// staging lives for one session by design, and a `.new` of unknown provenance is not
 /// something a later launch should quietly install.
-pub fn clean_up(exe: &Path) {
+///
+/// **`updates/` is swept on the same argument, and was not until issue #551.** It holds an NSIS
+/// setup a download staged — run from there by [`apply`], and of no use once the build it
+/// installed is the one running this — and the `.part` of a download or an extraction that
+/// failed. Nothing else ever deleted either, so every NSIS update left its whole installer
+/// behind for good. Files only, and only that folder's own: a directory in it is nothing this
+/// app made. A file that will not go — an installer still finishing its `/R` relaunch, say —
+/// is left for the next launch.
+pub fn clean_up(exe: &Path, data_dir: &Path) {
     let _ = std::fs::remove_file(sibling(exe, ".old"));
     let _ = std::fs::remove_file(sibling(exe, ".new"));
+    let Ok(entries) = std::fs::read_dir(data_dir.join(UPDATES_DIR)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|t| t.is_file()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
+
+/// The folder under the data directory a download is written to — [`download`] and
+/// [`clean_up`] must agree on it.
+const UPDATES_DIR: &str = "updates";
 
 #[cfg(test)]
 mod tests {
@@ -1260,8 +1556,8 @@ mod tests {
         assert_eq!(parse_version("0.3.0-rc.1"), None);
     }
 
-    /// The measured shape, parsed. `digest` is the field the whole integrity story rests
-    /// on, so its presence is asserted rather than assumed.
+    /// The measured shape, parsed. `digest` is the transport check's field, so its presence is
+    /// asserted rather than assumed.
     #[test]
     fn a_release_parses_into_assets_that_keep_their_digests() {
         let release = parse_release(&live_payload()).unwrap();
@@ -1404,9 +1700,8 @@ mod tests {
         assert_eq!(classify(false, false, true), InstallKind::Other);
     }
 
-    /// An absent digest must not be a pass. This is the only integrity check in the design,
-    /// so "the field was missing" is the one path that must not lead into running a
-    /// downloaded executable.
+    /// An absent digest must not be a pass. The signature stands behind it now, and "the field was
+    /// missing" is still not a path that may lead into running a downloaded executable.
     #[test]
     fn a_download_with_no_published_checksum_is_refused() {
         let err = verify_digest(None, b"anything").unwrap_err();
@@ -1551,13 +1846,84 @@ mod tests {
         std::fs::write(sibling(&exe, ".new"), b"staged").unwrap();
         std::fs::write(sibling(&exe, ".old"), b"replaced").unwrap();
 
-        clean_up(&exe);
+        clean_up(&exe, &dir);
         assert!(!sibling(&exe, ".new").exists());
         assert!(!sibling(&exe, ".old").exists());
         assert!(exe.exists(), "the running build is never touched");
 
-        clean_up(&exe); // idempotent
+        clean_up(&exe, &dir); // idempotent, and a data dir with no `updates/` is fine
         assert!(exe.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **`updates/` is swept too** (issue #551): an NSIS setup a finished update ran from, and the
+    /// `.part` of a download that failed, were never deleted by anything, so installers piled up
+    /// one per update.
+    #[test]
+    fn cleanup_empties_the_downloads_folder_of_files_and_nothing_else() {
+        let dir = std::env::temp_dir().join("mtgtest-update-clean-downloads");
+        let _ = std::fs::remove_dir_all(&dir);
+        let updates = dir.join(UPDATES_DIR);
+        std::fs::create_dir_all(updates.join("not-ours")).unwrap();
+        let exe = dir.join("mtg-grimoire.exe");
+        std::fs::write(&exe, b"build").unwrap();
+        std::fs::write(
+            updates.join("MTG.Grimoire_0.9.0_x64-setup.exe"),
+            b"installer",
+        )
+        .unwrap();
+        std::fs::write(
+            updates.join("mtg-grimoire_0.9.1_portable.zip.part"),
+            b"half",
+        )
+        .unwrap();
+
+        clean_up(&exe, &dir);
+
+        assert!(!updates.join("MTG.Grimoire_0.9.0_x64-setup.exe").exists());
+        assert!(!updates
+            .join("mtg-grimoire_0.9.1_portable.zip.part")
+            .exists());
+        assert!(
+            updates.join("not-ours").is_dir(),
+            "a directory is nothing a download made, and is left alone"
+        );
+        assert!(exe.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A download that is not a readable archive must leave nothing behind — neither its `.part`
+    /// nor a half-written `.new` (issue #551) — and one that is must leave exactly the `.new`.
+    #[test]
+    fn staging_deletes_the_archive_whether_or_not_it_unpacks() {
+        use std::io::Write as _;
+        let dir = std::env::temp_dir().join("mtgtest-update-stage");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let part = dir.join("release.zip.part");
+        let dest = dir.join("mtg-grimoire.exe.new");
+
+        std::fs::write(&part, b"this is not a zip").unwrap();
+        stage_portable(&part, &dest).unwrap_err();
+        assert!(
+            !part.exists(),
+            "a failed extraction must not leave its download behind"
+        );
+        assert!(!dest.exists(), "nor a half-staged build");
+
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&part).unwrap());
+        zip.start_file(
+            format!("release/{PORTABLE_EXE}"),
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(b"the new build").unwrap();
+        zip.finish().unwrap();
+        stage_portable(&part, &dest).unwrap();
+        assert!(!part.exists());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"the new build");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2262,5 +2628,525 @@ mod tests {
             pick_asset(&back.assets, InstallKind::Nsis).unwrap().digest,
             Some("sha256:ef35c1863faa2193789350f68a27bed270db0ade678274e3c253e2d65a7f8040".into())
         );
+    }
+
+    // ── Signatures ──────────────────────────────────────────────────────────────────
+    //
+    // ⚠️ **Every key and signature below is a THROWAWAY TEST KEY, and nothing trusts it.** Its
+    // secret is committed beside it (`throwaway-test-key.secret`) on purpose: that is what lets
+    // `scripts/update-signing.test.mjs` re-sign these same bytes and hold the Node signer to the
+    // exact files this verifier is proven against here — one committed artifact, two languages.
+    // No build compiles it in; `SIGNING_PUBLIC_KEY` is the only key a build trusts, and no test
+    // reads that constant except to check its shape.
+    //
+    // The fixtures were made once with `scripts/update-signing.mjs`: the two good signatures
+    // through its `sign` command, the three hostile ones through its exported `sign` function.
+    // The zip holds one entry, `mtg-grimoire.exe`, whose bytes are `FIXTURE_EXE`.
+
+    const FIXTURE_PUB: &str =
+        include_str!("../tests/fixtures/update-signing/throwaway-test-key.pub");
+    const PORTABLE_NAME: &str = "mtg-grimoire-9.9.9-windows-x64-portable.zip";
+    const FIXTURE_ZIP: &[u8] = include_bytes!(
+        "../tests/fixtures/update-signing/mtg-grimoire-9.9.9-windows-x64-portable.zip"
+    );
+    const FIXTURE_ZIP_SIG: &str = include_str!(
+        "../tests/fixtures/update-signing/mtg-grimoire-9.9.9-windows-x64-portable.zip.minisig"
+    );
+    const SETUP_NAME: &str = "MTG.Grimoire_9.9.9_x64-setup.exe";
+    const FIXTURE_SETUP: &[u8] =
+        include_bytes!("../tests/fixtures/update-signing/MTG.Grimoire_9.9.9_x64-setup.exe");
+    const FIXTURE_SETUP_SIG: &str =
+        include_str!("../tests/fixtures/update-signing/MTG.Grimoire_9.9.9_x64-setup.exe.minisig");
+    /// The zip, validly signed by the test key — for `mtg-grimoire 9.9.8 portable`.
+    const SIG_FOR_OLDER: &str =
+        include_str!("../tests/fixtures/update-signing/portable-signed-for-9.9.8.minisig");
+    /// The zip, validly signed by the test key — for `mtg-grimoire 9.9.9 nsis`.
+    const SIG_AS_NSIS: &str =
+        include_str!("../tests/fixtures/update-signing/portable-signed-as-nsis.minisig");
+    /// The zip, validly signed by the test key in minisign's legacy, un-prehashed `Ed` form.
+    const SIG_LEGACY: &str =
+        include_str!("../tests/fixtures/update-signing/portable-legacy.minisig");
+    const FIXTURE_EXE: &[u8] =
+        b"not a real build: the update-signing fixture for 9.9.9, trusted by nothing\n";
+
+    /// A real minisign public key whose secret this repository has never held — the one
+    /// `minisign-verify`'s own documentation uses — standing in for somebody else's key.
+    const SOMEBODY_ELSES_KEY: &str = "RWQf6LRCGA9i53mlYecO4IzT51TGPpvWucNSCh1CBM0QTaLn73Y7GFO3";
+
+    /// [`SIGNING_PUBLIC_KEY`]'s placeholder, spelled so that replacing the placeholder string
+    /// across this file touches the constant's one line and never this.
+    const PLACEHOLDER: &str = concat!("REPLACE_WITH_", "PRODUCTION_PUBLIC_KEY");
+
+    /// The `.pub` file's second line: the key as `SIGNING_PUBLIC_KEY` would hold it.
+    fn fixture_key_line() -> &'static str {
+        FIXTURE_PUB.lines().nth(1).unwrap()
+    }
+
+    fn fixture_key() -> PublicKey {
+        signing_key(fixture_key_line()).unwrap()
+    }
+
+    /// `bytes` in a file of its own, which is what `verify_signature` reads back.
+    fn on_disk(bytes: &[u8]) -> (tempfile::TempDir, PathBuf) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("download.part");
+        std::fs::write(&path, bytes).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn the_trusted_comment_names_the_release_and_the_install_kind() {
+        assert_eq!(
+            expected_trusted_comment("9.9.9", InstallKind::Portable).as_deref(),
+            Some("mtg-grimoire 9.9.9 portable")
+        );
+        assert_eq!(
+            expected_trusted_comment("0.33.0", InstallKind::Nsis).as_deref(),
+            Some("mtg-grimoire 0.33.0 nsis")
+        );
+        assert_eq!(expected_trusted_comment("9.9.9", InstallKind::Other), None);
+    }
+
+    #[test]
+    fn a_signed_download_verifies_for_its_own_release_and_kind() {
+        let key = fixture_key();
+        let (_zip_dir, zip) = on_disk(FIXTURE_ZIP);
+        verify_signature(&key, FIXTURE_ZIP_SIG, &zip, "mtg-grimoire 9.9.9 portable").unwrap();
+        let (_setup_dir, setup) = on_disk(FIXTURE_SETUP);
+        verify_signature(&key, FIXTURE_SETUP_SIG, &setup, "mtg-grimoire 9.9.9 nsis").unwrap();
+    }
+
+    /// The case the digest cannot see: the bytes changed and nothing else did.
+    #[test]
+    fn one_changed_byte_fails_the_signature() {
+        let mut bytes = FIXTURE_ZIP.to_vec();
+        let middle = bytes.len() / 2;
+        bytes[middle] ^= 0x01;
+        let (_dir, path) = on_disk(&bytes);
+        let err = verify_signature(
+            &fixture_key(),
+            FIXTURE_ZIP_SIG,
+            &path,
+            "mtg-grimoire 9.9.9 portable",
+        )
+        .unwrap_err();
+        assert!(err.contains("did not match its signature"), "{err}");
+    }
+
+    /// minisign compares key ids before any arithmetic, so a signature by another key and our
+    /// signature checked against another key are the same refusal — and it names the key.
+    #[test]
+    fn a_signature_by_another_key_is_refused() {
+        let other = signing_key(SOMEBODY_ELSES_KEY).unwrap();
+        let (_dir, path) = on_disk(FIXTURE_ZIP);
+        let err = verify_signature(
+            &other,
+            FIXTURE_ZIP_SIG,
+            &path,
+            "mtg-grimoire 9.9.9 portable",
+        )
+        .unwrap_err();
+        assert!(err.contains("key this build does not trust"), "{err}");
+    }
+
+    /// **The downgrade.** A genuine signature, by the right key, over the right bytes — for an
+    /// older release. Somebody who can upload assets but not sign could put exactly this pair on
+    /// a new release, and only the trusted comment tells it apart.
+    #[test]
+    fn an_older_releases_signature_is_refused_though_it_is_ours() {
+        let key = fixture_key();
+        let (_dir, path) = on_disk(FIXTURE_ZIP);
+        let err = verify_signature(&key, SIG_FOR_OLDER, &path, "mtg-grimoire 9.9.9 portable")
+            .unwrap_err();
+        assert!(err.contains("`mtg-grimoire 9.9.8 portable`"), "{err}");
+        assert!(err.contains("`mtg-grimoire 9.9.9 portable`"), "{err}");
+        // ...and it is refused for what it says, not for being broken: asked for 9.9.8, it passes.
+        verify_signature(&key, SIG_FOR_OLDER, &path, "mtg-grimoire 9.9.8 portable").unwrap();
+    }
+
+    #[test]
+    fn a_signature_for_the_other_install_kind_is_refused() {
+        let (_dir, path) = on_disk(FIXTURE_ZIP);
+        let err = verify_signature(
+            &fixture_key(),
+            SIG_AS_NSIS,
+            &path,
+            "mtg-grimoire 9.9.9 portable",
+        )
+        .unwrap_err();
+        assert!(err.contains("`mtg-grimoire 9.9.9 nsis`"), "{err}");
+    }
+
+    /// minisign's un-prehashed `Ed` form is refused however valid it is — and this one is valid,
+    /// which the second half proves by asking the crate with legacy allowed.
+    #[test]
+    fn a_legacy_signature_is_refused_however_valid() {
+        let key = fixture_key();
+        let (_dir, path) = on_disk(FIXTURE_ZIP);
+        let err =
+            verify_signature(&key, SIG_LEGACY, &path, "mtg-grimoire 9.9.9 portable").unwrap_err();
+        assert!(err.contains("legacy"), "{err}");
+        let legacy = Signature::decode(SIG_LEGACY).unwrap();
+        key.verify(FIXTURE_ZIP, &legacy, true).unwrap();
+        assert!(key.verify(FIXTURE_ZIP, &legacy, false).is_err());
+    }
+
+    #[test]
+    fn a_signature_that_does_not_parse_is_refused() {
+        let (_dir, path) = on_disk(FIXTURE_ZIP);
+        let half = &FIXTURE_ZIP_SIG[..FIXTURE_ZIP_SIG.len() / 2];
+        let no_prefix = FIXTURE_ZIP_SIG.replace("trusted comment: ", "comment: ");
+        for junk in ["", "not a signature", half, no_prefix.as_str()] {
+            let err = verify_signature(&fixture_key(), junk, &path, "mtg-grimoire 9.9.9 portable")
+                .unwrap_err();
+            assert!(err.contains("could not be read"), "{junk:?}: {err}");
+        }
+    }
+
+    /// Fail closed on the build's own side too: a key that does not decode refuses every
+    /// download rather than skipping the check. The placeholder is the one that will.
+    #[test]
+    fn a_key_that_does_not_decode_refuses_rather_than_skipping_the_check() {
+        for bad in [PLACEHOLDER, "", "RW", "not base64 at all!"] {
+            let err = signing_key(bad).unwrap_err();
+            assert!(err.contains("no key to check"), "{bad:?}: {err}");
+        }
+        assert!(signing_key(fixture_key_line()).is_ok());
+    }
+
+    /// The debug-build half of the release-only `const` assertion beside [`SIGNING_PUBLIC_KEY`]:
+    /// that one checks the shape, this one decodes the key in full. The placeholder arm is kept
+    /// for a fork that blanks the key before generating its own.
+    #[test]
+    fn the_compiled_in_key_is_a_minisign_key_once_set() {
+        if SIGNING_PUBLIC_KEY == PLACEHOLDER {
+            return;
+        }
+        assert_eq!(
+            SIGNING_PUBLIC_KEY.len(),
+            56,
+            "the release build's shape check"
+        );
+        assert!(SIGNING_PUBLIC_KEY.starts_with("RW"));
+        signing_key(SIGNING_PUBLIC_KEY).unwrap();
+    }
+
+    /// The signature is found by the asset's exact name plus `.minisig`, and is never itself
+    /// the download — listed first here, where a careless suffix match would take it.
+    #[test]
+    fn a_signature_is_found_beside_its_asset_and_is_never_picked_as_the_download() {
+        let asset = |name: &str| Asset {
+            name: name.to_owned(),
+            url: String::new(),
+            size: 1,
+            digest: None,
+        };
+        let assets = [
+            asset(&format!("{PORTABLE_NAME}.minisig")),
+            asset(PORTABLE_NAME),
+            asset(&format!("{SETUP_NAME}.minisig")),
+            asset(SETUP_NAME),
+        ];
+        let zip = pick_asset(&assets, InstallKind::Portable).unwrap();
+        assert_eq!(zip.name, PORTABLE_NAME);
+        let setup = pick_asset(&assets, InstallKind::Nsis).unwrap();
+        assert_eq!(setup.name, SETUP_NAME);
+        assert_eq!(
+            signature_asset(&assets, zip).map(|a| a.name.as_str()),
+            Some("mtg-grimoire-9.9.9-windows-x64-portable.zip.minisig")
+        );
+        assert_eq!(
+            signature_asset(&assets, setup).map(|a| a.name.as_str()),
+            Some("MTG.Grimoire_9.9.9_x64-setup.exe.minisig")
+        );
+        // The setup's signature is not the zip's.
+        assert!(signature_asset(&assets[2..], zip).is_none());
+    }
+
+    // ── The download path, over HTTP ────────────────────────────────────────────────
+
+    /// A release newer than any build, cached the way a check leaves it, listing `assets`.
+    fn cache_release(state: &AppState, assets: Vec<Asset>) {
+        let release = ReleaseInfo {
+            version: "9.9.9".into(),
+            tag: "v9.9.9".into(),
+            notes: String::new(),
+            published_at: None,
+            html_url: String::new(),
+            assets,
+        };
+        let conn = crate::sync::lock_db(state);
+        set_app_meta(
+            &conn,
+            K_LATEST_SEEN,
+            &serde_json::to_string(&release).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// `bytes` served at `/dl/<name>`, listed with the size and the digest GitHub would compute
+    /// for exactly these bytes — which is what an uploader who cannot sign still gets.
+    async fn serve<'a>(
+        server: &'a httpmock::MockServer,
+        name: &str,
+        bytes: &[u8],
+    ) -> (Asset, httpmock::Mock<'a>) {
+        let path = format!("/dl/{name}");
+        let body = bytes.to_vec();
+        let mock = server
+            .mock_async(|when, then| {
+                when.method("GET").path(path.clone());
+                then.status(200).body(body);
+            })
+            .await;
+        let hex = Sha256::digest(bytes)
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        let asset = Asset {
+            name: name.to_owned(),
+            url: server.url(&path),
+            size: bytes.len() as u64,
+            digest: Some(format!("sha256:{hex}")),
+        };
+        (asset, mock)
+    }
+
+    /// An `Updater` whose exe sits in `dir/bin`, so a staged `.new` lands inside the test's own
+    /// directory — `updater_at`'s `D:\…` path is one relative file name on Linux.
+    fn updater_beside(dir: &Path, kind: InstallKind) -> Arc<Updater> {
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let mut u = Updater::new("http://127.0.0.1:1".into(), bin.join("mtg-grimoire.exe"));
+        u.kind = kind;
+        Arc::new(u)
+    }
+
+    /// Nothing is left in `updates/` but what was staged there on purpose.
+    fn no_partial_download(dir: &Path) -> bool {
+        std::fs::read_dir(dir.join("updates")).map_or(true, |entries| {
+            entries
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().ends_with(".part"))
+        })
+    }
+
+    #[tokio::test]
+    async fn a_signed_portable_update_is_verified_then_unpacked_beside_the_exe() {
+        let server = httpmock::MockServer::start_async().await;
+        let (zip, _) = serve(&server, PORTABLE_NAME, FIXTURE_ZIP).await;
+        let (sig, _) = serve(
+            &server,
+            &format!("{PORTABLE_NAME}.minisig"),
+            FIXTURE_ZIP_SIG.as_bytes(),
+        )
+        .await;
+        let (state, dir) = file_state("signed-portable");
+        cache_release(&state, vec![zip, sig]);
+        let updater = updater_beside(&dir, InstallKind::Portable);
+
+        let seen = Mutex::new(Vec::new());
+        let answered = download_signed(&state, &updater, fixture_key_line(), &|p| {
+            seen.lock().unwrap().push((p.done, p.total))
+        })
+        .await
+        .unwrap();
+
+        assert!(answered.staged);
+        assert!(
+            !answered.busy,
+            "`download`'s guard is dropped before the answer, as `check`'s is"
+        );
+        assert_eq!(
+            std::fs::read(sibling(&updater.exe, ".new")).unwrap(),
+            FIXTURE_EXE
+        );
+        assert!(no_partial_download(&dir));
+        let total = FIXTURE_ZIP.len() as u64;
+        assert_eq!(seen.lock().unwrap().last(), Some(&(total, total)));
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[tokio::test]
+    async fn a_signed_installer_is_verified_then_stored_for_the_handoff() {
+        let server = httpmock::MockServer::start_async().await;
+        let (setup, _) = serve(&server, SETUP_NAME, FIXTURE_SETUP).await;
+        let (sig, _) = serve(
+            &server,
+            &format!("{SETUP_NAME}.minisig"),
+            FIXTURE_SETUP_SIG.as_bytes(),
+        )
+        .await;
+        let (state, dir) = file_state("signed-nsis");
+        cache_release(&state, vec![setup, sig]);
+        let updater = updater_beside(&dir, InstallKind::Nsis);
+
+        let answered = download_signed(&state, &updater, fixture_key_line(), &|_| {})
+            .await
+            .unwrap();
+        assert!(answered.staged);
+        assert_eq!(
+            std::fs::read(dir.join("updates").join(SETUP_NAME)).unwrap(),
+            FIXTURE_SETUP
+        );
+        assert!(no_partial_download(&dir));
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Every refusal below leaves the same state behind, and this is it: nothing staged, no
+    /// `.new` beside the exe, no `.part` in `updates/`.
+    fn assert_nothing_staged(state: &Arc<AppState>, updater: &Arc<Updater>, dir: &Path) {
+        assert!(!status(state, updater).staged);
+        assert!(!sibling(&updater.exe, ".new").exists());
+        assert!(no_partial_download(dir));
+    }
+
+    /// Fail closed, and before a byte is fetched: a release that publishes no signature for the
+    /// asset cannot be installed however the download goes.
+    #[tokio::test]
+    async fn a_release_with_no_signature_is_refused_before_anything_is_fetched() {
+        let server = httpmock::MockServer::start_async().await;
+        let (zip, zip_mock) = serve(&server, PORTABLE_NAME, FIXTURE_ZIP).await;
+        // A signature for a *different* asset does not count.
+        let (other_sig, _) = serve(
+            &server,
+            &format!("{SETUP_NAME}.minisig"),
+            FIXTURE_SETUP_SIG.as_bytes(),
+        )
+        .await;
+        let (state, dir) = file_state("unsigned");
+        cache_release(&state, vec![zip, other_sig]);
+        let updater = updater_beside(&dir, InstallKind::Portable);
+
+        let err = download_signed(&state, &updater, fixture_key_line(), &|_| {})
+            .await
+            .unwrap_err();
+        assert!(err.contains("publishes no signature"), "{err}");
+        assert_eq!(zip_mock.calls_async().await, 0);
+        assert_nothing_staged(&state, &updater, &dir);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **The attack the issue names**: someone who can upload re-uploads the zip, and GitHub
+    /// computes a correct digest for the new bytes. The digest passes; the signature does not.
+    #[tokio::test]
+    async fn a_reuploaded_build_whose_digest_matches_is_refused_by_its_signature() {
+        let mut trojan = FIXTURE_ZIP.to_vec();
+        let at = trojan.len() / 2;
+        trojan[at] ^= 0x01;
+        let server = httpmock::MockServer::start_async().await;
+        let (zip, zip_mock) = serve(&server, PORTABLE_NAME, &trojan).await;
+        let (sig, _) = serve(
+            &server,
+            &format!("{PORTABLE_NAME}.minisig"),
+            FIXTURE_ZIP_SIG.as_bytes(),
+        )
+        .await;
+        let (state, dir) = file_state("trojan");
+        cache_release(&state, vec![zip, sig]);
+        let updater = updater_beside(&dir, InstallKind::Portable);
+
+        let err = download_signed(&state, &updater, fixture_key_line(), &|_| {})
+            .await
+            .unwrap_err();
+        assert!(err.contains("did not match its signature"), "{err}");
+        assert_eq!(
+            zip_mock.calls_async().await,
+            1,
+            "it was downloaded, and then refused"
+        );
+        assert_nothing_staged(&state, &updater, &dir);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The downgrade, end to end: an older release's genuine zip-and-signature pair re-published
+    /// as 9.9.9. Here the bytes are the 9.9.9 fixture's and the signature says 9.9.8 — the same
+    /// check, with the same refusal.
+    #[tokio::test]
+    async fn an_older_releases_signed_build_is_refused_as_a_downgrade() {
+        let server = httpmock::MockServer::start_async().await;
+        let (zip, _) = serve(&server, PORTABLE_NAME, FIXTURE_ZIP).await;
+        let (sig, _) = serve(
+            &server,
+            &format!("{PORTABLE_NAME}.minisig"),
+            SIG_FOR_OLDER.as_bytes(),
+        )
+        .await;
+        let (state, dir) = file_state("downgrade");
+        cache_release(&state, vec![zip, sig]);
+        let updater = updater_beside(&dir, InstallKind::Portable);
+
+        let err = download_signed(&state, &updater, fixture_key_line(), &|_| {})
+            .await
+            .unwrap_err();
+        assert!(err.contains("9.9.8"), "{err}");
+        assert_nothing_staged(&state, &updater, &dir);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A listing is a claim: the signature says 300 bytes and is 5 000. The running cap refuses
+    /// it — and since the signature is fetched first, the asset is never fetched at all.
+    #[tokio::test]
+    async fn a_signature_longer_than_any_signature_is_refused() {
+        let server = httpmock::MockServer::start_async().await;
+        let (zip, zip_mock) = serve(&server, PORTABLE_NAME, FIXTURE_ZIP).await;
+        let (mut sig, _) = serve(
+            &server,
+            &format!("{PORTABLE_NAME}.minisig"),
+            &vec![b'A'; 5_000],
+        )
+        .await;
+        sig.size = 300;
+        let (state, dir) = file_state("long-signature");
+        cache_release(&state, vec![zip, sig]);
+        let updater = updater_beside(&dir, InstallKind::Portable);
+
+        let err = download_signed(&state, &updater, fixture_key_line(), &|_| {})
+            .await
+            .unwrap_err();
+        assert!(err.contains("longer than any signature"), "{err}");
+        assert_eq!(zip_mock.calls_async().await, 0);
+        assert_nothing_staged(&state, &updater, &dir);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// What a build carrying the placeholder does with a perfectly signed release: refuses it,
+    /// before any request, rather than installing it unverified.
+    #[tokio::test]
+    async fn a_build_without_a_key_refuses_every_download_before_fetching_it() {
+        let server = httpmock::MockServer::start_async().await;
+        let (zip, zip_mock) = serve(&server, PORTABLE_NAME, FIXTURE_ZIP).await;
+        let (sig, sig_mock) = serve(
+            &server,
+            &format!("{PORTABLE_NAME}.minisig"),
+            FIXTURE_ZIP_SIG.as_bytes(),
+        )
+        .await;
+        let (state, dir) = file_state("no-key");
+        cache_release(&state, vec![zip, sig]);
+        let updater = updater_beside(&dir, InstallKind::Portable);
+
+        let err = download_signed(&state, &updater, PLACEHOLDER, &|_| {})
+            .await
+            .unwrap_err();
+        assert!(err.contains("no key to check"), "{err}");
+        assert_eq!(zip_mock.calls_async().await, 0);
+        assert_eq!(sig_mock.calls_async().await, 0);
+        assert_nothing_staged(&state, &updater, &dir);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

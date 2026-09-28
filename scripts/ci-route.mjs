@@ -44,12 +44,19 @@ export const ARMS = [
   // sake**, which installs no Rust.
   { match: ["rust-toolchain.toml", ".github/actions/rust-toolchain/*"], jobs: RUST_SIDE },
 
-  // The two workflows outside this gate. No job in `ci.yml` runs them, but
-  // `scripts/toolchain.test.mjs` reads both — a release built on a floating `stable` is the
-  // worst version of the drift the pin exists to stop — so a change to either runs that test.
-  // **Above the prose arm**, where `release.yml` sat until the test existed.
+  // The two workflows outside this gate, and Dependabot's config. No job in `ci.yml` runs any of
+  // them, but `scripts/toolchain.test.mjs` reads both workflows — a release built on a floating
+  // `stable` is the worst version of the drift the pin exists to stop — and
+  // `scripts/actions-pinned.test.mjs` reads all three (every action pinned by SHA, every checkout
+  // without its token, the signing secret in one job, Dependabot watching every pin), so a change
+  // to any of them runs those tests. **Above the prose arm**, where `release.yml` sat until the
+  // first test existed.
   {
-    match: [".github/workflows/release.yml", ".github/workflows/scanner-bundle.yml"],
+    match: [
+      ".github/workflows/release.yml",
+      ".github/workflows/scanner-bundle.yml",
+      ".github/dependabot.yml",
+    ],
     jobs: ["frontend"],
   },
 

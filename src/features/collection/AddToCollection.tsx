@@ -5,7 +5,7 @@ import { AnchoredPopup } from "@/components/AnchoredPopup";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { filterChipState } from "@/components/FilterChips";
-import { QuantityStepper } from "@/components/QuantityStepper";
+import { BUTTON_OVER_ART, QuantityStepper } from "@/components/QuantityStepper";
 import { cardDetailKey } from "@/features/card/cardDetailKey";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { CONDITIONS, CONDITION_LABEL, MENU_CONDITION, type Condition } from "@/lib/conditions";
@@ -53,6 +53,23 @@ export const REVEAL_ON_HOVER =
  */
 const CHIP = cn("rounded-md border px-2 py-1 text-xs", PRESS);
 
+/**
+ * The trigger drawn **over a card's illustration** — {@link AddToCollectionButton}'s `tone="art"`.
+ *
+ * `CardGrid` puts a tile's `action` in a strip across the foot of the picture, and
+ * `AnchoredPopup`'s square is a bare 1px outline with a dim glyph: over art of any brightness it
+ * all but disappears, which is the control {@link BUTTON_OVER_ART} was written to stop drawing and
+ * issue #645 found on the deck editor's search column. So it takes that felt backing and
+ * full-strength glyph, and {@link PRESS} with them — what the deck column's `+` and the deck's own
+ * card steppers carry, so a `+` on one wall and a `+` on the next are one kind of button.
+ *
+ * On the caller's word rather than in `AnchoredPopup`'s default, because the same square is drawn
+ * in the search page's table rows, on a panel, where a backing is a box around nothing. The size is
+ * left alone: `AnchoredPopup`'s is the one that scales with the wall's zoom, and the deck column's
+ * flat `size-6` would undo that under `tailwind-merge`.
+ */
+const TRIGGER_OVER_ART = cn(BUTTON_OVER_ART, PRESS);
+
 const MODES = ["collection", "wishlist"] as const;
 type Mode = (typeof MODES)[number];
 
@@ -74,6 +91,7 @@ export function AddToCollectionButton({
   folderNodes,
   folderName,
   lockMode,
+  tone = "panel",
 }: {
   target: AddTarget;
   className?: string;
@@ -123,6 +141,12 @@ export function AddToCollectionButton({
    * belong to — and it would offer the collection's folder tree for a wishlist add.
    */
   lockMode?: Mode;
+  /**
+   * What the trigger is drawn over — `QuantityStepper`'s prop of the same name. `art` for a
+   * wall's tile, where it stands over the picture; see {@link TRIGGER_OVER_ART}. The table row
+   * leaves it at `panel`.
+   */
+  tone?: "panel" | "art";
 }) {
   // Which list is being filled lives out here, above the panel that changes it, because it is
   // half of what this button's name says — a trigger reading "…to Collection" over an open
@@ -169,6 +193,7 @@ export function AddToCollectionButton({
       icon={<Plus className="size-[calc(0.875rem*var(--control-scale,1))]" aria-hidden="true" />}
       align={align}
       className={className}
+      triggerClassName={tone === "art" ? TRIGGER_OVER_ART : undefined}
       panelClassName="w-64 space-y-3"
     >
       <AddForm

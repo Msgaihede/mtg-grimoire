@@ -713,7 +713,8 @@ const THEORY_VARIANT: &str = crate::schema::DECK_VARIANTS[1];
 /// cannot reach what arrives after it.
 ///
 /// **A card already filed in the target pile is folded into it** rather than refused by the
-/// unique index — the stray row's copies are added to it, then the stray is deleted. That is the
+/// unique index — the stray row's copies are added to it, and its label where the row it lands on
+/// wears none (`deck::move_card`'s fold rule, issue #643), then the stray is deleted. That is the
 /// one arm that is not idempotent across devices, and it is why a paired device waits for a pull
 /// before repairing at launch: behind a pull it has heard a peer's fold of the same stray, and
 /// finds nothing left to fold.
@@ -789,9 +790,13 @@ pub fn refile_stray_theory_cards(conn: &Connection) -> Result<usize, String> {
             match filed {
                 Some(into) => {
                     tx.execute(
-                        "UPDATE deck_cards SET quantity = quantity + ?2, updated_at = unixepoch()
+                        "UPDATE deck_cards
+                            SET quantity = quantity + ?2,
+                                label_id = coalesce(label_id,
+                                    (SELECT label_id FROM deck_cards WHERE id = ?3)),
+                                updated_at = unixepoch()
                           WHERE id = ?1",
-                        params![into, quantity],
+                        params![into, quantity, row],
                     )
                     .map_err(|e| e.to_string())?;
                     tx.execute("DELETE FROM deck_cards WHERE id = ?1", params![row])
@@ -1313,9 +1318,11 @@ pub fn delete_category(
     }
     if let Some(target) = move_to_category_id {
         // `deck::move_card`'s INSERT … SELECT … ON CONFLICT shape verbatim, over categories
-        // instead of zones. The `DO UPDATE` touches only `quantity`/`updated_at`: a row the
-        // target already holds keeps its own `label_id` and `needs_review`, never the moved
-        // row's — the same "the existing row wins a fold" rule `move_card`'s comment names.
+        // instead of zones. A row the target already holds keeps its own `needs_review` and its
+        // own `label_id` — the same "the existing row wins a fold" rule `move_card`'s comment
+        // names — and **takes the moved row's label where it wears none**, `move_card`'s
+        // `coalesce` verbatim: a label falls off when the reader removes it or the card, and
+        // deleting the pile the card was moved out of is neither (issue #643).
         //
         // **Every column the row owns is carried except five**: `id`, which the INSERT mints;
         // `category_id`, which is the move; the two timestamps, which are the move's, as in
@@ -1333,6 +1340,7 @@ pub fn delete_category(
                FROM deck_cards WHERE category_id = ?1
              ON CONFLICT({grain}) DO UPDATE SET
                 quantity = deck_cards.quantity + excluded.quantity,
+                label_id = coalesce(deck_cards.label_id, excluded.label_id),
                 updated_at = unixepoch()",
             grain = crate::schema::DECK_CARD_GRAIN
         );
@@ -3408,6 +3416,58 @@ mod tests {
         assert_eq!(folder_copies(&conn, removed_group(&conn), "bolt-lea"), 0);
     }
 
+    /// **A delete that folds keeps the label** — `deck::move_card`'s fold rule, and issue #643's:
+    /// a label falls off only when the reader removes it or the card, and deleting a pile the
+    /// cards are moved out of is neither. A target row that already wears a label keeps its own;
+    /// one that wears none takes the label the moved copies wore.
+    #[test]
+    fn deleting_a_category_that_folds_keeps_the_label_unless_the_surviving_row_has_its_own() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let from = category(&conn, deck_id, "main", "Creatures");
+        let to = category(&conn, deck_id, "main", "Main deck");
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        crate::schema::tests::seed_card(&conn, "bolt-m10", "m10", "146");
+        let flex = create_label(&conn, None, "Flex", "amber").unwrap();
+        let keep = create_label(&conn, None, "Keep", "slate").unwrap();
+        let wear = |row: i64, label: i64| {
+            conn.execute(
+                "UPDATE deck_cards SET label_id = ?2 WHERE id = ?1",
+                params![row, label],
+            )
+            .unwrap();
+        };
+        // Both moved rows labelled; one target row bare, the other wearing a label of its own.
+        let moved_lea = deck_card(&conn, deck_id, "bolt-lea", from, 3);
+        let moved_m10 = deck_card(&conn, deck_id, "bolt-m10", from, 1);
+        deck_card(&conn, deck_id, "bolt-lea", to, 2);
+        let kept_m10 = deck_card(&conn, deck_id, "bolt-m10", to, 1);
+        wear(moved_lea, flex.id);
+        wear(moved_m10, flex.id);
+        wear(kept_m10, keep.id);
+
+        delete_category(&conn, from, Some(to)).unwrap();
+
+        let label_of = |card: &str| -> Option<i64> {
+            conn.query_row(
+                "SELECT label_id FROM deck_cards WHERE category_id = ?1 AND card_id = ?2",
+                params![to, card],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            label_of("bolt-lea"),
+            Some(flex.id),
+            "the unlabelled survivor took it"
+        );
+        assert_eq!(
+            label_of("bolt-m10"),
+            Some(keep.id),
+            "the surviving row's own label stands"
+        );
+    }
+
     /// The move folds on the grain into the target, **within one list**: a live pile moves into
     /// a live pile and a theory pile into a theory pile, each summing into what its target
     /// already held, and neither reaching the other list's rows (user schema v53).
@@ -5194,6 +5254,51 @@ mod tests {
             theory_filing(&conn, d),
             [("Ramp".to_owned(), "theory".to_owned(), 5)],
             "one row, the copies of both"
+        );
+    }
+
+    /// The fold keeps a label, `deck::move_card`'s rule one repair over (issue #643): the plan's
+    /// row keeps its own label where it has one and takes the stray's where it has none.
+    #[test]
+    fn a_folded_stray_keeps_its_label_unless_the_plans_row_has_its_own() {
+        let conn = conn();
+        let (d, live) = stray(&conn, "u-ramp", 3);
+        deck_card_variant(&conn, d, "bolt-m10", live, "theory", 1);
+        let plan = theory_category(&conn, d, "main", "Ramp");
+        deck_card_variant(&conn, d, "bolt", plan, "theory", 2);
+        let kept = deck_card_variant(&conn, d, "bolt-m10", plan, "theory", 1);
+        let flex = create_label(&conn, None, "Flex", "amber").unwrap();
+        let keep = create_label(&conn, None, "Keep", "slate").unwrap();
+        conn.execute(
+            "UPDATE deck_cards SET label_id = ?2 WHERE category_id = ?1",
+            params![live, flex.id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE deck_cards SET label_id = ?2 WHERE id = ?1",
+            params![kept, keep.id],
+        )
+        .unwrap();
+
+        assert_eq!(refile_stray_theory_cards(&conn).unwrap(), 2);
+
+        let label_of = |card: &str| -> Option<i64> {
+            conn.query_row(
+                "SELECT label_id FROM deck_cards WHERE category_id = ?1 AND card_id = ?2",
+                params![plan, card],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            label_of("bolt"),
+            Some(flex.id),
+            "the unlabelled plan row took it"
+        );
+        assert_eq!(
+            label_of("bolt-m10"),
+            Some(keep.id),
+            "the plan row's own label stands"
         );
     }
 

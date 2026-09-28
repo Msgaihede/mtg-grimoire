@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ReactElement } from "react";
+import { BUTTON_OVER_ART } from "@/components/QuantityStepper";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
 import { SEARCH_OVER_ATTR } from "@/features/search/CardSearchPanel";
@@ -197,6 +198,14 @@ describe("WishlistSearchPanel", () => {
 
     const column = await screen.findByRole("region", { name: "Add cards to your wishlist" });
     expect(column).toHaveAttribute(SEARCH_OVER_ATTR, "wishlist");
+  });
+
+  /** Issue #645, one column over: the `+` stands over the tile's art, so it is backed the way the
+   *  deck's card steppers are. jsdom draws nothing; the classes are pinned. */
+  it("backs its `+` the way the deck's card steppers are backed", async () => {
+    mount(panel());
+
+    expect(await plus("Wishlist")).toHaveClass(...BUTTON_OVER_ART.split(" "));
   });
 
   /**

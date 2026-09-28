@@ -12,14 +12,42 @@ It dials a WebSocket that `tauri-plugin-mcp-bridge` opens **inside the running a
 none of them worked, and `driver_session status` answered `{"connected":false}` with nothing
 to say why. That is the whole of what was wrong — there was no bug to find in the app.
 
-Four pieces, and the bridge is dark if any one is missing:
+Five pieces, and the bridge is dark if any one is missing:
 
 | Piece | Where | Why |
 | --- | --- | --- |
 | `tauri-plugin-mcp-bridge = "0.12"` | `src-tauri/Cargo.toml` | the server half |
 | `Builder::new().bind_address("127.0.0.1").build()` | `src-tauri/src/desktop.rs`, under `#[cfg(debug_assertions)]` | opens the port |
+| **`MTG_GRIMOIRE_MCP_BRIDGE=1`** | the environment `npm run tauri dev` is launched from | since 2026-09-28 the registration is also inside an `if` on it — see below |
 | `"withGlobalTauri": true` | `src-tauri/tauri.conf.json` | `bridge.js` reaches IPC through `window.__TAURI__` |
-| three `mcp-bridge:` permissions | `src-tauri/capabilities/default.json` | the ACL gates the webview's half |
+| three `mcp-bridge:` permissions | `src-tauri/capabilities/desktop.json` | the ACL gates the webview's half |
+
+(This table named `capabilities/default.json` until 2026-09-28; the file is `desktop.json`.)
+
+## Off unless a launch asks for it
+
+**A debug launch opens no port unless `MTG_GRIMOIRE_MCP_BRIDGE` is exactly `1`** (issue #545).
+The loopback bind below keeps the LAN out and keeps nothing on this machine out: the plugin's
+`accept_async` never reads the handshake's `Origin` header and has no authentication option, and
+browsers apply no CORS to a WebSocket. So a page open in the developer's own browser could scan
+9223–9322, send `execute_js`, and — because `withGlobalTauri` puts `window.__TAURI__` in reach of
+that script — `invoke` any command the app registers. Whether a page may reach the loopback at all
+is the browser's local-network policy, which varies by browser and version and is not a fence this
+app owns. With the variable unset the port is simply shut, which is what most dev launches want.
+
+```powershell
+$env:MTG_GRIMOIRE_MCP_BRIDGE = "1"
+npm run tauri dev
+```
+
+The app prints one stderr line when it opens the port, so a launch that forgot the variable reads
+as a bridge that is off rather than one that is broken — `driver_session status` answers
+`connected: false` either way. **While the variable is set the exposure above is back**, for that
+launch: close the browser tabs you do not trust, or accept it knowingly.
+`the_mcp_bridge_is_gated_on_a_debug_build` pins both gates, the `cfg` and the `if`.
+The other fix on the table was vendoring the plugin and refusing any handshake that carries an
+`Origin` (the Node client sends none); it is the one to reach for if the bridge ever has to be on
+by default again.
 
 **Keep the crate and the npm package on the same minor.** They are one protocol in two
 packages, so `.mcp.json` pins `@0.12` against the crate's `"0.12"`. The `-y` beside it is
@@ -78,7 +106,9 @@ went through it came back in full, tens of kilobytes of it. Filter it.
 - **`127.0.0.1`, not the plugin's `0.0.0.0` default.** The bridge executes arbitrary
   JavaScript and any command in the handler on request, and authenticates nothing. Upstream
   binds every interface so you can drive a phone on your LAN; here that would offer a
-  local-only app's whole IPC surface to whatever network the machine is on.
+  local-only app's whole IPC surface to whatever network the machine is on. **The bind is not
+  the whole fence, and never was** — the loopback is reachable from a browser tab on the same
+  machine, which is what the environment gate above is for.
 - **Port 9223**, and the plugin counts *upward* from it when it is busy — so a second app
   would answer on 9224 and `driver_session` would connect to the wrong one. It cannot
   happen here, because single-instance means there is never a second app. 9223 is
@@ -97,5 +127,6 @@ went through it came back in full, tens of kilobytes of it. Filter it.
 
 ## Where else this is written down
 
-`src-tauri/CLAUDE.md` carries the binding rules — the permission set, the bind address, and
-what keeps `withGlobalTauri` honest in a release build.
+`src-tauri/CLAUDE.md` carries the binding rules — the permission set, the bind address, the
+environment gate, and what keeps `withGlobalTauri` honest in a release build. The
+`running-the-app` skill's launch snippet sets the variable.

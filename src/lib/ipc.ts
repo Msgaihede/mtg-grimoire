@@ -9530,21 +9530,25 @@ export const ipc = {
   deckImportCommit: (deckId: number, variant: DeckVariant, mode: ImportMode, items: ImportItem[]) =>
     invoke<ImportOutcome>("deck_import_commit", { deckId, variant, mode, items }),
   /**
-   * A decklist file the reader picked, as text.
+   * Let the reader choose a decklist file, and answer its text — or `null` for Cancel, which is
+   * not a failure.
    *
-   * **Takes a path — Rust opens the file.** That is the contract that makes `dialog:allow-open`
-   * sufficient and is why **no `fs:` permission is granted anywhere**: pass the path
-   * `@tauri-apps/plugin-dialog`'s `open()` answered and let the backend read it. A page that
-   * read the bytes itself would need a filesystem capability this app deliberately does not
-   * have.
+   * **Takes no path, and that is the contract** (issue #545). Rust opens the OS dialog, modal to
+   * the calling window, and reads what it answered, so the path never reaches this side and
+   * nothing here can name one. It used to be `import_read_file(path)`, taking the path the
+   * plugin's `open()` answered — which any script in the page could call with any path at all.
+   * The webview is granted no `dialog:` and no `fs:` permission.
    *
-   * Capped at 1 MB. **Never refused for its bytes** (issue #555): valid UTF-8 is read as such, a
-   * UTF-16 byte-order mark is honoured, and anything else is decoded as Windows-1252 — Excel's
-   * CSV on a Western European Windows — rather than lossily, which used to turn every `é` in a
-   * cp1252 file into `U+FFFD`. {@link ImportFile.encoding} says which, so the dialog can say so.
-   * Parsing the text is this side's, exactly as it is for a paste.
+   * **Two failures, and the rejection says which**: the file picker could not be opened, or the
+   * file would not read (missing, refused, over 1 MB). Frame it with words true of both.
+   *
+   * **Never refused for its bytes** (issue #555): valid UTF-8 is read as such, a UTF-16
+   * byte-order mark is honoured, and anything else is decoded as Windows-1252 — Excel's CSV on a
+   * Western European Windows — rather than lossily, which used to turn every `é` in a cp1252 file
+   * into `U+FFFD`. {@link ImportFile.encoding} says which, so the dialog can say so. Parsing the
+   * text is this side's, exactly as it is for a paste.
    */
-  importReadFile: (path: string) => invoke<ImportFile>("import_read_file", { path }),
+  importPickFile: () => invoke<ImportFile | null>("import_pick_file"),
   /** The format rules as data, in picker order. Seeded by the migration, so this changes at
    *  most once per app version — cached for the session by `useFormatSpecs`. */
   formatSpecs: () => invoke<FormatSpec[]>("format_specs_list"),
@@ -10470,14 +10474,18 @@ export const ipc = {
   cardImageUri: (cardId: string, variant: ImageVariant) =>
     invoke<string | null>("card_image_uri", { cardId, variant }),
   /**
-   * Write an export at a path the reader chose in the OS save dialog.
+   * Ask the reader where to save `contents` — the OS save dialog, opened with `fileName` — and
+   * write it there. Resolves `true` when a file was written and `false` for Cancel, which is not
+   * a failure.
    *
-   * Rust writes the file because `dialog:allow-save` answers a *path* and nothing more, and
-   * writing at it from here would need an `fs:` permission this app grants nowhere. It is the
-   * last command of that shape: `deck_set_cover_image` was the other, and it is gone.
+   * **`fileName` is a suggestion and never a place** (issue #545): Rust keeps only its last
+   * component, opens the dialog itself and writes at the path it answered, so no path crosses
+   * IPC in either direction. It used to be `export_write_file(path, contents)` — a write
+   * anywhere, for any script in the page. The rejection is either the save dialog's or the
+   * disk's, and says which.
    */
-  exportWriteFile: (path: string, contents: string) =>
-    invoke<void>("export_write_file", { path, contents }),
+  exportSaveFile: (fileName: string, contents: string) =>
+    invoke<boolean>("export_save_file", { fileName, contents }),
   /**
    * The plain-text mirror's whole state, in one round trip — the Backup panel's only read.
    *
@@ -10492,17 +10500,19 @@ export const ipc = {
    *  holds the write connection, like every other write here. */
   mirrorSetEnabled: (enabled: boolean) => invoke<void>("mirror_set_enabled", { enabled }),
   /**
-   * Point the mirror at a folder, as an **absolute** path.
+   * Let the reader choose the mirror's folder — the OS folder picker, opened at the current
+   * root — and point the mirror there. Resolves `true` when it moved and `false` for Cancel,
+   * which is not a failure.
    *
-   * Three refusals, each a sentence rather than a code: a relative path (it resolves against
-   * wherever the app was started from, which for a portable install is not the same folder
-   * twice), a path whose parent does not exist, and a path that is already a file. The folder
-   * itself need not exist — the first pass creates it.
+   * **Takes no path** (issue #545): Rust opens the picker and saves what it answered, so nothing
+   * here can aim the mirror's writes at a folder. It used to be `mirror_set_root(root)`. The
+   * rejection is the picker's own sentence, `BUSY` if a sync holds the write connection, or
+   * the crate's refusal of a folder it cannot store.
    *
    * **The old folder is left alone**, deliberately: those files are the reader's cards in plain
    * text, and changing a setting is not consent to delete them.
    */
-  mirrorSetRoot: (root: string) => invoke<void>("mirror_set_root", { root }),
+  mirrorPickRoot: () => invoke<boolean>("mirror_pick_root"),
   /**
    * Rewrite every file the mirror owns, now, and answer what the pass did.
    *

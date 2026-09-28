@@ -171,9 +171,9 @@ rewrites the whole `cards` table — ~116,700 printings on the 2026-08-25 corpus
 refresh rewrites `marketplace_prices` wholesale; a Card Kingdom refresh driven live the same day
 wrote 149,321 rows. Mapping either to a surface would fire the hook that many times per refresh and
 turn every sync into a mirror rebuild triggered a hundred thousand times over. **What those two
-change instead enters through one full pass after the refresh *completes*** — `sync::run_sync` and
-`marketplace_feed::refresh` each call `Mask::mark_all` — which is a bounded event rather than a
-per-row storm.
+change instead enters through one full pass after the refresh *lands*** — `sync::do_sync` the
+moment its swap has committed, and `marketplace_feed::refresh` on success, each call
+`Mask::mark_all` — which is a bounded event rather than a per-row storm.
 
 **Writing it as a match on a fixed list, with `_ => None` as the default, is also how a table added
 by a future migration stays safe.** A prefix test would have got `deck_audit` wrong. What keeps
@@ -213,8 +213,10 @@ the rows that pass read.
 
 ### Everything that runs a full pass
 
-Startup; a completed sync (gated on `outcome.updated`, so a launch that found nothing new spends no
-render); a completed price-feed refresh; `Rebuild now`; the mirror being switched off and back on;
+Startup; a sync whose card swap has landed (marked at the swap itself, so a launch that found
+nothing new spends no render and a run that swaps and then fails at `/sets` still marks — until
+2026-09-28 this was gated on `outcome.updated`, which that run never reached); a completed price-feed
+refresh; `Rebuild now`; the mirror being switched off and back on;
 the root being changed; the marketplace being changed; a **failed** pass (`mark_all`, not a re-mark
 of the surfaces it was carrying, because the mask cannot describe what was missed while the root was
 gone); and **a pass that finds no `.mirror-manifest` under a root that exists** — see below.
@@ -340,7 +342,8 @@ Two arms make it work rather than merely refuse:
   by the one two seconds later — the guard undone by the file that authorises it. It stays in
   `prune`'s `wanted` set unconditionally, so it can never be deleted either.
 
-`mirror_set_root` was **deliberately not** made to refuse a populated folder. The only file it could
+`set_root` — behind `mirror_pick_root`, which was `mirror_set_root` until 2026-09-28 — was
+**deliberately not** made to refuse a populated folder. The only file it could
 refuse over is exactly the one now protected, refusing turns a folder the mirror can use perfectly
 well into one the reader cannot choose at all, and it could not cover the default root or a README
 dropped in later — a second, weaker fence in front of the real one. The panel's sentence says the
@@ -383,6 +386,33 @@ like any rename, which `a_case_only_rename_leaves_the_deck_under_its_new_spellin
   alone. `two_decks_one_case_apart_hand_the_name_over_when_the_first_goes` pins that what is left is
   one `azula` holding the survivor's list.
 
+### One folder, one installation (2026-09-28)
+
+**Two installations pointed at one folder destroyed each other's backups**, and nothing in the
+folder said which installation had written it ([issue #551](https://github.com/Msgaihede/mtg-grimoire/issues/551)).
+A Dropbox folder chosen on two computers is the case: the second one's pass read the first one's
+manifest, `put` its own `Collection/*` and `Wishlist/*` over the first one's — every installation
+plans those under the same names — and `prune` deleted every file the manifest listed that its own
+plan did not, which was all of the first one's decks. Its manifest then replaced the first one's,
+and the first one's next pass did the same to the second's decks. What was lost was the backup of
+last resort rather than any row, and the reader's own files were never at risk (they are in no
+manifest).
+
+**The manifest's first line now names the installation that wrote it** — `installation: <32 hex
+digits>`, `app_meta.mirror_installation`, minted once at launch — and a pass over a folder whose
+manifest names another installation refuses before writing anything, with a sentence the panel
+shows; `set_root` refuses the same folder while it is being chosen. A per-installation manifest
+name was considered and rejected: it stops the pruning and the manifest overwrite but not the
+`Collection`/`Wishlist`/`README.txt` overwrites, and only a single writer per folder stops all
+three. An unstamped manifest is adopted and stamped, so the upgrade costs no folder anything, and
+deleting the manifest hands the folder to whichever installation writes next — `README.txt` says so.
+
+**What it still does not cover**: two installations writing their *first* manifest into an empty
+shared folder before either sync delivers the other's — Dropbox keeps one and renames the other a
+conflicted copy, the loser is refused from its next pass on, and the files it wrote first stay as
+orphans. And a copied `data/` folder carries the same name, which is right for a move and does not
+stop both copies writing one folder.
+
 ### What a reader loses if they delete `.mirror-manifest`
 
 **Stale files in directories the current plan no longer names are orphaned permanently, not for one
@@ -398,10 +428,15 @@ reintroduces guessing, which is the thing the manifest exists to remove.
 A `BackupPanel` beside Cache, Marketplace, Hidden tags, Update and Danger Zone. On by default; the
 root with a **Change folder…** button; when the last pass ran and how it went; **Rebuild now**.
 
-**No new permission.** The picker is `tauri-plugin-dialog`'s open verb with `directory: true`, and
-`capabilities/default.json` has granted `dialog:allow-open` since the cover picker shipped. (It has
-granted `dialog:allow-save` since the export dialog shipped, which `Cargo.toml`'s comment beside the
-plugin went on denying for a whole plan before this one corrected it.)
+**No new permission — and since 2026-09-28, no dialog permission at all.** The picker was
+`tauri-plugin-dialog`'s open verb with `directory: true`, called from the page on the strength of the
+`dialog:allow-open` grant the cover picker had brought, and the folder it answered went to
+`mirror_set_root(root)`. That command took any path a script in the page sent it, so it could aim
+the background pass — a few hundred files, rewritten on every change — at any folder the reader can
+write to. **Issue #545 moved the picker into Rust**: `mirror_pick_root` opens the folder dialog
+itself, at the current root (or its parent before the first pass has made it), and hands the folder
+to `set_root_now` without it crossing IPC. `capabilities/desktop.json` grants no `dialog:`
+permission now, and `src-tauri/CLAUDE.md`'s capabilities section is the rule.
 
 **Two settings, two `app_meta` keys, no migration** — `mirror_enabled` and `mirror_root`, exactly the
 shape `marketplace` settled on. Reading can never fail: a missing row, a hand-edited row, or a row a
@@ -584,7 +619,10 @@ away and back orphaned 21 files. All three now have tests.
    instance, a half-written file on a volume that disappears mid-write.
 2. **The native folder picker has never been clicked.** `Change folder…` opens the OS dialog, which
    no CDP harness can drive; every root change in the live pass went through `ipc.mirrorSetRoot`,
-   which is the same command the button calls with the picker's answer. `Rebuild now` was likewise
+   which is the same command the button calls with the picker's answer. *(2026-09-28: that route is
+   gone. The button's command is `mirror_pick_root` now, which opens the picker from Rust and takes
+   no folder — issue #545 — so a root can no longer be set over IPC at all, and the gap is the
+   native dialog's alone. `starting_folder`, where it opens, is unit tested.)* `Rebuild now` was likewise
    pressed through IPC, so the button's own disabled and pending states are unexercised outside the
    suite.
 3. **`mirror_set_enabled`'s off→on full pass was never driven live.** The arm exists and is unit
@@ -602,12 +640,18 @@ away and back orphaned 21 files. All three now have tests.
    or `note_failure`'s `Duration::ZERO` `try_lock` dropping rows under contention, and **the two were
    not separated**. What matters for the design — one row, never one per file — is settled; the
    cadence is not.
-6. **`run_sync`'s `note_mirror_after_sync` call site is unreachable from any automated test.**
-   `run_sync` takes a `tauri::AppHandle` and this crate has no mock-app harness, so nothing in the
-   suite can enter it. The *condition* is extracted and tested; the single line above it is not.
-   **The live pass verified it works** — the launch sync's completion produced a full pass that
+6. **`do_sync`'s `note_mirror_after_swap` call site is unreachable from any automated test.**
+   `do_sync` takes a `tauri::AppHandle` and this crate has no mock-app harness, so nothing in the
+   suite can enter it. What it marks is extracted and tested; the single line that calls it is not.
+   **The live pass verified the mark works** — the launch sync's completion produced a full pass that
    rewrote exactly the ten price-bearing CSVs — so this is a coverage gap rather than an unknown, and
    the same shape applies to `marketplace_feed::refresh`'s twin (also verified live, 149,321 rows).
+   **The call moved on 2026-09-28** ([issue #551](https://github.com/Msgaihede/mtg-grimoire/issues/551)):
+   it was `run_sync`'s `note_mirror_after_sync`, gated on `Ok` with `updated`, so a run that swapped
+   the cards and then failed at `/sets` never marked the mirror, and every later run took the 304 path
+   and marked nothing either — the mirrored prices stayed a corpus behind until Scryfall next rotated
+   the bulk file. It is now called where the swap lands, beside the facet index's `clear`. The live
+   pass above predates the move and has not been repeated.
 
 ### The regression a ruling caused
 
