@@ -17,10 +17,30 @@
  * answer and the dialog's apply — which invalidates `["wishlist"]` — refreshes this card with it.
  * The marketplace decides every figure, and it rides inside the query object that ends the key.
  *
- * **What it inherits from the plan and does not paper over**: wishes in a deck's managed wishlist
- * and digital printings are skipped (`wishlist_optimize.rs:201-204, 270`), and the cheaper printing
- * may be in another language — the plan has no language filter. The card says what the dialog will
- * offer; a language rule, if one is wanted, belongs to the plan and both surfaces.
+ * **What it inherits from the plan and does not paper over**: digital printings are skipped
+ * (`wishlist_optimize.rs`'s candidate query), and the cheaper printing may be in another language —
+ * the plan has no language filter. A language rule, if one is wanted, belongs to the plan and both
+ * surfaces.
+ *
+ * ## Two settings, and both are the question (issue #598)
+ *
+ * **The decks' managed wishlists are counted by default** — `includeManaged`, the `managed` switch
+ * on. They are still wishlists: a card a deck is short of is money the reader has yet to spend, and
+ * the saving on it is as real as on any wish they filed by hand. What differs is only who can take
+ * it — the wish is the deck's printing and the deck is the only thing that repoints it — so the
+ * dialog a press opens draws those rows with no checkbox (`optimizePlan.ts`'s `canApply`). Until
+ * issue #598 the plan left them out unconditionally, which made a reader whose wishlist was all
+ * decks' see *No wishlist items found* over a wishlist full of wishes.
+ *
+ * **`Which wishlists` narrows the count to the folders the reader chose** in
+ * {@link WishlistSavingsWidgetSettings}' checklist, `Not in a folder` among them. A chosen folder
+ * brings every folder inside it ({@link sweepScopeOf}), because a reader who picks `Commander`
+ * means the drawer and not only the wishes lying loose in it — which is also what the wishlist's
+ * own shelves sum.
+ *
+ * **Both ride in the key and in the press**: {@link sweepScopeOf}'s answer is the last segment of
+ * `wishlistSavingsKey` and what `setPendingOptimize` hands the Wishlist page, so the dialog still
+ * plans exactly what this card counted, from the same cache entry.
  *
  * ## Money that is not there is said, never summed
  *
@@ -62,9 +82,10 @@
  *
  * ## A press opens the dialog
  *
- * A row or the figure writes `setActiveView("wishlist")` and then `setPendingOptimize()` — the view
- * first, because the view change clears every hand-off — and `WishlistPage` opens
- * `OptimizeWishlistDialog` over the whole list without touching the reader's own flatten setting.
+ * A row or the figure writes `setActiveView("wishlist")` and then `setPendingOptimize(scope)` — the
+ * view first, because the view change clears every hand-off — and `WishlistPage` opens
+ * `OptimizeWishlistDialog` over this card's scope without touching the reader's own folder or
+ * filters.
  *
  * **No `@container` here or on the page that draws this**, and no z-index that is not from
  * `LAYER` — `fit.ts`'s module doc has the argument.
@@ -72,9 +93,20 @@
 import { useQuery } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 
-import { wholeWishlistQuery } from "@/features/wishlist/wholeWishlistQuery";
+import { MultiDropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
+import { isManaged } from "@/features/wishlist/managed";
+import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
+import { wholeWishlistQuery, type SweepScope } from "@/features/wishlist/wholeWishlistQuery";
 import { count, plural } from "@/lib/counts";
-import { ipc, ipcError, type WishOptimizeMove } from "@/lib/ipc";
+import { buildFolderTree, flattenFolders, folderDescendants } from "@/lib/folderTree";
+import {
+  ipc,
+  ipcError,
+  type HomeWidget,
+  type WishlistFolder,
+  type WishOptimizeMove,
+} from "@/lib/ipc";
 import type { Currency, Marketplace } from "@/lib/marketplace";
 import { sortOptions } from "@/lib/options";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -83,6 +115,7 @@ import { useMarketplace } from "@/lib/useMarketplace";
 
 import { bodyGapPx, footerLinePx, type WidgetFit } from "../fit";
 import { wishlistSavingsKey } from "../keys";
+import { widgetConfig } from "../layout";
 import {
   WidgetFigures,
   WidgetFooterLine,
@@ -91,7 +124,10 @@ import {
   WidgetRowList,
   type FooterWords,
 } from "../WidgetParts";
-import type { WidgetBodyProps } from "../widgetProps";
+import type { WidgetBodyProps, WidgetSettingsProps } from "../widgetProps";
+import { widgetMeta } from "../widgets";
+import { pickOf, toggleOnOf } from "../widgetSettings";
+import { wishlistFolderOption } from "./FoldersWidget";
 
 /** A row with a caption is 51px, a bare one 36 — `SetCompletionWidget.tsx`'s `rowPx` sum. */
 const ROW_CAPTIONED = 51;
@@ -105,6 +141,60 @@ export const NO_WISHES =
   "No wishlist items found. Pin a wishlist card to track cheaper printings.";
 export const ALL_CHEAPEST =
   "All pinned wishes are already on their cheapest printings.";
+/** `Chosen` with nothing chosen — `DecksWidget`'s `NOTHING_PINNED`, one widget over. */
+export const NOTHING_CHOSEN =
+  "No wishlists chosen. Choose them in this widget's settings.";
+/** Every chosen folder has been deleted or renamed away since — a race another surface won, and
+ *  never a reason to count the whole wishlist in their place. */
+export const CHOSEN_GONE = "The chosen wishlists are no longer on your wishlist.";
+
+/** The id the checklist gives the root — `WishlistQuery.shelves`' own `0`, wishes filed in no
+ *  folder. No folder has it: `wishlist_folders.id` is an `INTEGER PRIMARY KEY`. */
+export const ROOT_SHELF = 0;
+
+/**
+ * The folders the reader chose, narrowed — `pinnedDeckIds`' rule: `widgetConfig`'s shape check is
+ * shallow, so a hand-edited `["3"]` or a `NaN` is dropped here the way a deleted folder is. A fresh
+ * fallback per call, so no two widgets share one array.
+ */
+export function savingsFolderIds(widget: HomeWidget): number[] {
+  return widgetConfig(widget, { folderIds: [] as number[] }).folderIds.filter((id) =>
+    Number.isInteger(id),
+  );
+}
+
+/** Whether this card counts the folders its reader chose, rather than every wishlist. */
+export function countsChosen(widget: HomeWidget): boolean {
+  return pickOf(widget, "scope") === "chosen";
+}
+
+/**
+ * The question this card asks — {@link SweepScope} — from its settings and the folders there are.
+ *
+ * * `includeManaged` is the `managed` switch, on unless the reader turned it off.
+ * * `shelves` is `null` under `All wishlists`. Under `Chosen` it is every chosen folder **and
+ *   every folder inside one**, because `WishlistQuery.shelves` answers direct members only and a
+ *   chosen drawer means the drawer — a deck's managed folder brings its Tokens child this way. A
+ *   chosen id no folder carries any more is dropped; {@link ROOT_SHELF} always stands.
+ *
+ * Sorted, so the key does not move when the reader ticks the same set in another order.
+ */
+export function sweepScopeOf(widget: HomeWidget, folders: readonly WishlistFolder[]): SweepScope {
+  const includeManaged = toggleOnOf(widget, "managed");
+  if (!countsChosen(widget)) return { includeManaged, shelves: null };
+  const known = new Set(folders.map((folder) => folder.id));
+  const shelves = new Set<number>();
+  for (const id of savingsFolderIds(widget)) {
+    if (id === ROOT_SHELF) {
+      shelves.add(ROOT_SHELF);
+      continue;
+    }
+    if (!known.has(id)) continue;
+    shelves.add(id);
+    for (const inside of folderDescendants(folders, id)) shelves.add(inside);
+  }
+  return { includeManaged, shelves: [...shelves].sort((a, b) => a - b) };
+}
 
 /**
  * The moves split by whether they can be priced: the priced ones **biggest saving first** (ties by
@@ -236,19 +326,48 @@ export function savingsLayout(
   return { rows: 0, cut: false, lines: Math.min(lines, fitting) };
 }
 
-export function WishlistSavingsWidget({ fit, still }: WidgetBodyProps): ReactElement {
+export function WishlistSavingsWidget({ widget, fit, still }: WidgetBodyProps): ReactElement {
   const { marketplace, currency } = useMarketplace();
   const setActiveView = useAppStore((s) => s.setActiveView);
   const setPendingOptimize = useAppStore((s) => s.setPendingOptimize);
 
+  // The folders are read only when a chosen set has to be expanded into them — a card counting
+  // every wishlist has no use for the tree.
+  const chosen = countsChosen(widget);
+  const chosenIds = savingsFolderIds(widget);
+  const needsFolders = chosen && chosenIds.length > 0;
+  const folderList = useWishlistFolderList({ enabled: needsFolders });
+  const scope = sweepScopeOf(widget, folderList.folders);
+  const asks = !chosen || (folderList.query.isSuccess && (scope.shelves?.length ?? 0) > 0);
+
   const query = useQuery({
-    queryKey: wishlistSavingsKey(marketplace.id),
+    queryKey: wishlistSavingsKey(marketplace.id, scope),
     // `useWishlistOptimize`'s own payload for this question, spelled the same way: the key is the
     // hook's, so the value cached under it has to be the answer the hook would have fetched.
     // `limit`/`offset` are required by `WishlistQuery` and ignored by the command.
     queryFn: () =>
-      ipc.wishlistOptimizePlan({ ...wholeWishlistQuery(marketplace.id), limit: 0, offset: 0 }),
+      ipc.wishlistOptimizePlan({
+        ...wholeWishlistQuery(marketplace.id, scope),
+        limit: 0,
+        offset: 0,
+      }),
+    // Not asked until the chosen folders are known: a chosen set read against an empty tree would
+    // count the root alone, and that answer would be drawn for a moment as if it were the card's.
+    enabled: asks,
   });
+
+  if (chosen && chosenIds.length === 0) return <WidgetMessage>{NOTHING_CHOSEN}</WidgetMessage>;
+  if (needsFolders && folderList.query.isError) {
+    return (
+      <WidgetMessage tone="destructive">
+        Could not read your wishlists — {ipcError(folderList.query.error)}
+      </WidgetMessage>
+    );
+  }
+  if (needsFolders && folderList.query.isPending) return <WidgetMessage>{PENDING}</WidgetMessage>;
+  if (chosen && (scope.shelves?.length ?? 0) === 0) {
+    return <WidgetMessage>{CHOSEN_GONE}</WidgetMessage>;
+  }
 
   if (query.isError) {
     return (
@@ -298,7 +417,7 @@ export function WishlistSavingsWidget({ fit, still }: WidgetBodyProps): ReactEle
     ? undefined
     : () => {
         setActiveView("wishlist");
-        setPendingOptimize();
+        setPendingOptimize(scope);
       };
   const totalText = formatPrice(total, currency);
   const wishes = plural(priced.length, "wish", "wishes");
@@ -361,5 +480,96 @@ export function WishlistSavingsWidget({ fit, still }: WidgetBodyProps): ReactEle
         <WidgetFooterLine key={words.line} {...words} />
       ))}
     </>
+  );
+}
+
+/**
+ * The words the `Which wishlists` row and its `Chosen` option carry, read off the registry — so the
+ * sentence that points at them cannot come to name a control that has been renamed. `DecksWidget`'s
+ * `scopeWords`, for its reason.
+ */
+function scopeWords(): { row: string; chosen: string } {
+  const pick = widgetMeta("wishlistSavings").picks.find((entry) => entry.key === "scope");
+  return {
+    row: pick?.label ?? "Which wishlists",
+    chosen: pick?.options.find((option) => option.id === "chosen")?.label ?? "Chosen",
+  };
+}
+
+/** The root's row in the checklist: the wishes filed in no folder, which are a wishlist too. */
+const ROOT_OPTION = "Not in a folder";
+
+/**
+ * The checklist behind `Chosen`: the root, then every folder in the tree's own order — the reader
+ * arranged it, so it is not sorted (`src/CLAUDE.md`'s exemption) — each named as the Folders
+ * widget's picker names it, a deck's managed wishlist saying so. **The managed folders are left out
+ * while the `managed` switch is off**, because ticking one would count nothing — the plan leaves
+ * them out — and a control whose every press changes nothing reads as broken. The ticks are kept
+ * while hidden, `DecksWidgetSettings`' rule, so switching back brings them back.
+ *
+ * **Drawn only under `Chosen`**, with a sentence in its place otherwise, for that same reason.
+ */
+export function WishlistSavingsWidgetSettings({
+  widget,
+  onConfig,
+}: WidgetSettingsProps): ReactElement {
+  const chosen = countsChosen(widget);
+  const { query, folders } = useWishlistFolderList({ enabled: chosen });
+  const folderIds = savingsFolderIds(widget);
+
+  if (!chosen) {
+    const words = scopeWords();
+    return (
+      <p className="m-0 text-xs text-dim">
+        Choose {words.chosen} under {words.row} to pick the wishlists this card counts.
+      </p>
+    );
+  }
+
+  const managed = toggleOnOf(widget, "managed");
+  const options: DropdownOption[] = [
+    { value: String(ROOT_SHELF), label: ROOT_OPTION },
+    ...flattenFolders(buildFolderTree(folders, []))
+      .filter((node) => managed || !isManaged(node.folder))
+      .map((node) => ({
+        value: String(node.folder.id),
+        label: wishlistFolderOption(node.folder, folders),
+      })),
+  ];
+
+  /** Add at the end, remove in place. The page merges the patch, so every other key is kept. */
+  const toggle = (value: string) => {
+    const id = Number(value);
+    onConfig({
+      folderIds: folderIds.includes(id)
+        ? folderIds.filter((each) => each !== id)
+        : [...folderIds, id],
+    });
+  };
+
+  // What the trigger counts is what the list can show, so a tick hidden with the managed switch
+  // off is not counted as a wishlist the card is reading.
+  const shown = folderIds.filter((id) => options.some((option) => option.value === String(id)));
+
+  return (
+    <div className="flex flex-col gap-2">
+      <MultiDropdown
+        fill
+        size="sm"
+        label="Wishlists to count"
+        // `DecksWidgetSettings`' threshold, for its reason: a list for a few, a box for many.
+        searchable={options.length > 8}
+        searchLabel="Search wishlists"
+        options={options}
+        selected={shown.map(String)}
+        onToggle={toggle}
+        triggerLabel={shown.length === 0 ? "None chosen" : plural(shown.length, "wishlist")}
+      />
+      {query.isError && (
+        <p className="m-0 text-xs text-destructive">
+          Could not read your wishlists — {ipcError(query.error)}
+        </p>
+      )}
+    </div>
   );
 }

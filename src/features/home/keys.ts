@@ -89,7 +89,7 @@
 import type { QueryKey } from "@tanstack/react-query";
 
 import { optimizePlanKey } from "@/features/wishlist/useWishlistOptimize";
-import { wholeWishlistQuery } from "@/features/wishlist/wholeWishlistQuery";
+import { wholeWishlistQuery, type SweepScope } from "@/features/wishlist/wholeWishlistQuery";
 import type { Finish } from "@/lib/finish";
 import type {
   DeckCompletionCompare,
@@ -353,10 +353,11 @@ export const wishlistReviewCountKey: QueryKey = ["wishlist", "reviewCount"];
  * shape.** The widget's press opens the Wishlist's sweep dialog over the same list (`store.ts`'s
  * `pendingOptimize`), so the two are one question and should be one cache entry: the dialog opens
  * on the widget's answer, and the dialog's apply — which invalidates `["wishlist"]` — refreshes the
- * widget with it. The marketplace rides inside the query object, which is the key's last segment.
+ * widget with it. The marketplace rides inside the query object, which is the key's last segment —
+ * and so does the widget's {@link SweepScope} (issue #598), which the press hands the dialog too.
  */
-export const wishlistSavingsKey = (marketplace: MarketplaceId): QueryKey =>
-  optimizePlanKey(wholeWishlistQuery(marketplace));
+export const wishlistSavingsKey = (marketplace: MarketplaceId, scope?: SweepScope): QueryKey =>
+  optimizePlanKey(wholeWishlistQuery(marketplace, scope));
 
 /**
  * How many copies the scanner's review tray holds, and how many of its rows still wait on a

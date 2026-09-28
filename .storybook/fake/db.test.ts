@@ -4360,6 +4360,83 @@ describe("the cheapest-printing plan", () => {
     expect(plan(db).moves).toHaveLength(0);
     expect(plan(db).alreadyCheapest).toBe(1);
   });
+
+  /**
+   * **A deck's managed wishlist is out of scope unless the caller asks for it** (issue #598).
+   * Folder 1 is deck 4's managed folder and folder 2 its `Tokens` child — which carries the
+   * deck's `managedDeckId` too, and is what makes it managed rather than its name — and folder 3
+   * is the reader's own. The same $620.00 Alpha Bolt is filed in each and at the root, so all
+   * four wishes classify identically and the only thing that can tell them apart is `managed`.
+   * Flattened, because the plan's scope is the list's and the root query would see only the root.
+   */
+  function managedWorld(): FakeDb {
+    return makeDb({
+      wishlistFolders: [
+        { id: 1, parentId: null, name: "Deck 4", sortOrder: 0, managedDeckId: 4 },
+        { id: 2, parentId: 1, name: "Tokens", sortOrder: 0, managedDeckId: 4, managedTokens: true },
+        { id: 3, parentId: null, name: "Ordered", sortOrder: 1 },
+      ],
+      wishlistEntries: [
+        wish({ id: 1, cardId: BOLT.id }),
+        wish({ id: 2, cardId: BOLT.id, folderId: 1 }),
+        wish({ id: 3, cardId: BOLT.id, folderId: 2 }),
+        wish({ id: 4, cardId: BOLT.id, folderId: 3 }),
+      ],
+    });
+  }
+
+  /** Today's behaviour exactly: left out of the scope rather than skipped, so it is counted in
+   *  none of the four numbers — and `includeManaged: false` is the same answer as absent. */
+  it("leaves a managed wish out of every count unless asked, and marks nothing managed", () => {
+    const db = managedWorld();
+    for (const answer of [
+      plan(db, { flatten: true }),
+      readHandlers(db).wishlist_optimize_plan({
+        query: { limit: 10, offset: 0, flatten: true },
+        includeManaged: false,
+      }),
+    ]) {
+      expect(answer.moves.map((m) => [m.wishId, m.managed])).toEqual([
+        [1, false],
+        [4, false],
+      ]);
+      expect(answer.considered).toBe(2);
+      expect(answer.alreadyCheapest + answer.skipped).toBe(0);
+    }
+  });
+
+  /** Asked for, a managed wish is classified exactly like any other — the same move, the same
+   *  saving — and carries `managed: true`, from the deck's folder and its Tokens child alike. */
+  it("classifies a managed wish like any other when asked, and says it is managed", () => {
+    const db = managedWorld();
+    const answer = readHandlers(db).wishlist_optimize_plan({
+      query: { limit: 10, offset: 0, flatten: true },
+      includeManaged: true,
+    });
+
+    expect(answer.considered).toBe(4);
+    expect(answer.moves.map((m) => [m.wishId, m.folderId, m.managed])).toEqual([
+      [1, null, false],
+      [2, 1, true],
+      [3, 2, true],
+      [4, 3, false],
+    ]);
+    for (const m of answer.moves) {
+      expect(m).toMatchObject({
+        from: { cardId: BOLT.id, price: 620 },
+        to: { cardId: BOLT_2X2.id, price: 2.5 },
+        savedPerCopy: 617.5,
+      });
+    }
+    // Scoped to the Tokens child alone, the switch still decides: nothing in scope without it.
+    expect(plan(db, { folderId: 2 }).considered).toBe(0);
+    expect(
+      readHandlers(db).wishlist_optimize_plan({
+        query: { limit: 10, offset: 0, folderId: 2 },
+        includeManaged: true,
+      }).moves,
+    ).toEqual([expect.objectContaining({ wishId: 3, managed: true })]);
+  });
 });
 
 /**

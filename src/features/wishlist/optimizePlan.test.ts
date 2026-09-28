@@ -6,6 +6,7 @@ import type {
   WishOptimizeStatus,
 } from "@/lib/ipc";
 import {
+  canApply,
   defaultTicked,
   everyMove,
   NOTHING_TICKED,
@@ -33,6 +34,7 @@ function move(
     fromPrice,
     toPrice = 2,
     folderId = null,
+    managed = false,
   }: {
     name?: string;
     quantity?: number;
@@ -41,6 +43,8 @@ function move(
     fromPrice?: number | null;
     toPrice?: number;
     folderId?: number | null;
+    /** In a deck's managed wishlist — drawn, never offered (issue #598). */
+    managed?: boolean;
   },
 ): WishOptimizeMove {
   return {
@@ -65,6 +69,7 @@ function move(
     },
     savedPerCopy: perCopy,
     saved: perCopy === null ? null : perCopy * quantity,
+    managed,
   };
 }
 
@@ -164,6 +169,45 @@ describe("selectionOf", () => {
     const second = selectionOf(moves, new Set([1])).items[0];
     expect(first).not.toBe(second);
     expect(first).toEqual(second);
+  });
+});
+
+/**
+ * **Issue #598: a deck's managed wishlist is read-only**, changed only by changing the deck — so
+ * its moves are drawn for their saving and never reach the payload, which inside the one apply
+ * transaction would take every ticked row down with the backend's refusal.
+ */
+describe("a managed wishlist's moves", () => {
+  const moves = [
+    move(1, { perCopy: 3 }),
+    move(2, { perCopy: 4, managed: true }),
+    move(3, { perCopy: null }),
+  ];
+
+  it("can never be applied", () => {
+    expect(canApply(moves[0])).toBe(true);
+    expect(canApply(moves[1])).toBe(false);
+  });
+
+  it("are never ticked by default, by select-all, or by a tick naming one", () => {
+    expect([...defaultTicked(planOf(moves))]).toEqual([1]);
+    expect([...everyMove(moves)]).toEqual([1, 3]);
+    const selection = selectionOf(moves, new Set([1, 2, 3]));
+    expect(selection.items.map((item) => item.wishId)).toEqual([1, 3]);
+    expect(selection.saved).toBe(3);
+  });
+
+  it("are counted out of what select-all means", () => {
+    const selection = selectionOf(moves, new Set([1, 3]));
+    expect(selection.applicable).toBe(2);
+    expect(selection.all).toBe("all");
+  });
+
+  it("leave nothing to tick when every move is managed", () => {
+    const managed = [move(1, { perCopy: 3, managed: true })];
+    expect(defaultTicked(planOf(managed))).toBe(NOTHING_TICKED);
+    expect(everyMove(managed)).toBe(NOTHING_TICKED);
+    expect(selectionOf(managed, new Set([1]))).toMatchObject({ count: 0, applicable: 0, all: "none" });
   });
 });
 

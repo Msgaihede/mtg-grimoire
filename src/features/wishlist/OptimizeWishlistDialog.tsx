@@ -61,6 +61,7 @@ import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import {
+  canApply,
   defaultTicked,
   everyMove,
   optimizeScope,
@@ -99,6 +100,13 @@ const ALREADY_CHEAPEST = {
   headline: "Nothing to change.",
   why: "Every wish is already on the cheapest available printing for this marketplace. Wishes for “any printing” already use the lowest price.",
 } as const;
+
+/**
+ * What a managed wishlist's row says in place of its checkbox (issue #598). The wish is the deck's
+ * printing — the folder follows the deck and is rewritten after every change to it — so the
+ * saving is real and the place to take it is the deck.
+ */
+const MANAGED_ROW = "In a deck's managed wishlist — change the printing in the deck.";
 
 /**
  * What a passed-over wish means, for the counts line.
@@ -349,18 +357,26 @@ function OptimizeBody({
                 it is about the whole list, and a control that shared a row with one wish would
                 read as that wish's. */}
             <div className="flex items-center gap-2 border-b border-border px-2 pb-2 pt-1">
-              <SelectAll
-                id={`${id}-all`}
-                state={selection.all}
-                onChange={(on) => setTouched(on ? everyMove(moves) : new Set<WishId>())}
-              />
-              <label htmlFor={`${id}-all`} className="text-xs text-dim">
-                Select all
-              </label>
+              {/* Not drawn over a list of managed wishes alone (issue #598): there is nothing it
+                  could tick, and a select-all that selects nothing reads as broken. */}
+              {selection.applicable > 0 && (
+                <>
+                  <SelectAll
+                    id={`${id}-all`}
+                    state={selection.all}
+                    onChange={(on) => setTouched(on ? everyMove(moves) : new Set<WishId>())}
+                  />
+                  <label htmlFor={`${id}-all`} className="text-xs text-dim">
+                    Select all
+                  </label>
+                </>
+              )}
               {/* Beside the control rather than inside its label: the name of a checkbox must not
-                  move as the reader ticks, or the control renames itself under their finger. */}
+                  move as the reader ticks, or the control renames itself under their finger.
+                  Counted against the moves a press can make, which leaves a managed wishlist's
+                  rows out — they are drawn for their saving and switched in their deck. */}
               <span className="ml-auto font-mono text-xs tabular-nums text-dim">
-                {selection.count} of {moves.length} selected
+                {selection.count} of {selection.applicable} selected
               </span>
             </div>
 
@@ -532,6 +548,7 @@ function Row({
   folder: string | null;
   onToggle: (on: boolean) => void;
 }) {
+  const applicable = canApply(move);
   return (
     <li
       className={cn(
@@ -541,16 +558,23 @@ function Row({
       )}
     >
       <div className="flex items-start gap-3">
-        <input
-          type="checkbox"
-          checked={on}
-          onChange={(e) => onToggle(e.target.checked)}
-          // Named for the card, never a bare "Select": a column of forty checkboxes with one name
-          // is forty controls a screen reader cannot tell apart. The name does **not** move with
-          // the tick — it says what the row is, not what the row is currently doing.
-          aria-label={`Switch ${saidAs(move)}`}
-          className={cn("mt-1 size-4 shrink-0 accent-accent", FOCUS)}
-        />
+        {applicable ? (
+          <input
+            type="checkbox"
+            checked={on}
+            onChange={(e) => onToggle(e.target.checked)}
+            // Named for the card, never a bare "Select": a column of forty checkboxes with one
+            // name is forty controls a screen reader cannot tell apart. The name does **not** move
+            // with the tick — it says what the row is, not what the row is currently doing.
+            aria-label={`Switch ${saidAs(move)}`}
+            className={cn("mt-1 size-4 shrink-0 accent-accent", FOCUS)}
+          />
+        ) : (
+          // **No checkbox at all for a managed wishlist's wish** (issue #598), `managed.ts`'s
+          // rule: a greyed control whose only outcome is the backend's refusal teaches nothing its
+          // absence does not. The box keeps the column so the names still line up.
+          <span aria-hidden="true" className="mt-1 size-4 shrink-0" />
+        )}
 
         <span className="flex min-w-0 flex-1 flex-col gap-1">
           <span className="flex min-w-0 items-center gap-1.5">
@@ -584,6 +608,9 @@ function Row({
             <span className="sr-only">to</span>
             <span className="text-text">{printingFace(move.to)}</span>
           </span>
+          {!applicable && (
+            <span className="text-[0.7rem] leading-snug text-dim">{MANAGED_ROW}</span>
+          )}
         </span>
 
         <span className="flex w-40 shrink-0 flex-col items-end gap-0.5 pt-0.5 text-right">

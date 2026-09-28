@@ -26,7 +26,8 @@
 //! frontend's `isManaged` cover it without a word about it. The cost is on the other side: a
 //! lookup of *the deck's* folder by `managed_deck_id` alone now answers either row, so every such
 //! lookup names `managed_tokens = 0` ([`managed_folder`]). A lookup that means *any managed
-//! folder* — the guard, `reset::clear_wishlist`, the optimize preview, quick add — reads
+//! folder* — the guard, `reset::clear_wishlist`, the optimize preview (and its `managed` mark on a
+//! move, issue #598), quick add — reads
 //! `managed_deck_id IS NOT NULL` and is right to cover both.
 //!
 //! ## Derived per device, never synced

@@ -33,6 +33,7 @@ function move(
     fromLang = "en",
     toLang = "en",
     folderId = null,
+    managed = false,
   }: {
     name?: string;
     quantity?: number;
@@ -43,6 +44,8 @@ function move(
     fromLang?: string;
     toLang?: string;
     folderId?: number | null;
+    /** In a deck's managed wishlist — drawn, never offered (issue #598). */
+    managed?: boolean;
   },
 ): WishOptimizeMove {
   return {
@@ -67,6 +70,7 @@ function move(
     },
     savedPerCopy: perCopy,
     saved: perCopy === null ? null : perCopy * quantity,
+    managed,
   };
 }
 
@@ -370,6 +374,42 @@ describe("OptimizeWishlistDialog", () => {
       folderNameOf: (id) => (id === 4 ? "Backordered" : null),
     });
     expect(within(rowFor("Lightning Bolt")).getByText("in Backordered")).toBeInTheDocument();
+  });
+
+  /**
+   * **Issue #598: a deck's managed wishlist is read-only.** Its row is drawn for the saving it names,
+   * with no checkbox and a sentence saying where the printing is changed, and the press never
+   * carries it.
+   */
+  it("draws a managed wishlist's move with no checkbox and never sends it", async () => {
+    const user = userEvent.setup();
+    const apply = idleWrite();
+    draw({
+      plan: planOf([
+        move(1, { name: "Lightning Bolt", perCopy: 3 }),
+        move(2, { name: "Sol Ring", perCopy: 4, managed: true }),
+      ]),
+      apply,
+    });
+
+    expect(screen.getByText("Sol Ring")).toBeInTheDocument();
+    expect(screen.queryByRole("checkbox", { name: /Sol Ring/ })).toBeNull();
+    expect(
+      screen.getByText("In a deck's managed wishlist — change the printing in the deck."),
+    ).toBeInTheDocument();
+    expect(screen.getByText("1 of 1 selected")).toBeInTheDocument();
+
+    await user.click(applyButton());
+    expect(apply.mutate).toHaveBeenCalledWith([
+      { wishId: 1, fromCardId: "from-1", toCardId: "to-1" },
+    ]);
+  });
+
+  it("draws no select-all over a list of managed moves alone", () => {
+    draw({ plan: planOf([move(2, { name: "Sol Ring", perCopy: 4, managed: true })]) });
+
+    expect(screen.queryByLabelText("Select all")).toBeNull();
+    expect(screen.getByText("0 of 0 selected")).toBeInTheDocument();
   });
 
   it("mounts nothing while it is closed", () => {

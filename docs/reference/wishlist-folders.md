@@ -1488,7 +1488,8 @@ drops it, its wishes first, when the deck is short of none.
   and the frontend's `isManaged` cover it without a word about it. The cost is on the other side:
   a lookup of *the deck's own* folder by `managed_deck_id` now answers either row, so **every such
   lookup names `managed_tokens = 0`** (`managed_wishlist::managed_folder`), while one that means
-  *any managed folder* — the guard, `reset::clear_wishlist`, the optimize preview, quick add —
+  *any managed folder* — the guard, `reset::clear_wishlist`, the optimize preview (its exclusion and
+  its `managed` mark alike), quick add —
   reads `managed_deck_id IS NOT NULL` and is right to cover both. The guard's `UPDATE` trigger
   names `managed_tokens` among its columns, because it is identity rather than bookkeeping.
   `settle_deck` deletes the child's wishes before the child, and the child before the parent.
@@ -1540,7 +1541,10 @@ their folders.
   (`sync_state.applying`). The `UPDATE` guards are `UPDATE OF <columns>`, so a `sync_uid` or
   `needs_review` write is never refused. Two readers were narrowed rather than left to hit it:
   `reset::clear_wishlist` sweeps everything but managed folders, and the optimize preview never
-  offers a managed wish.
+  offers a managed wish **as something to apply**. Since issue #598 it can *read* them — the home
+  page's Wishlist savings widget asks with `include_managed`, because they are still wishlists —
+  and each such move comes back marked `managed`, drawn in the dialog with no checkbox and never
+  put in the apply payload. The Wishlist page's own Optimise button still asks without it.
 - **The frontend draws no editing control for a managed folder or wish**, and never offers one
   as a destination; the deck hooks' `invalidate` helpers fire `["wishlist"]` with `["decks"]`
   because every deck write can rewrite a folder. Since 2026-09-26 the folders are shelves under

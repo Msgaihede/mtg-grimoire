@@ -228,6 +228,21 @@ describe("shape", () => {
     expect(wishlistSavingsKey("manapool")).not.toEqual(wishlistSavingsKey("cardmarket"));
   });
 
+  // Issue #598: the widget's scope is part of the question, so it is part of the key — and the
+  // dialog the press opens builds the same key from the same scope.
+  it("files each savings scope under a key of its own, the same one the dialog builds", () => {
+    const scope = { includeManaged: true, shelves: [0, 7] };
+    expect(wishlistSavingsKey("manapool", scope)).toEqual([
+      "wishlist",
+      "optimize",
+      { flatten: true, marketplace: "manapool", includeManaged: true, shelves: [0, 7] },
+    ]);
+    expect(wishlistSavingsKey("manapool", scope)).toEqual(
+      optimizePlanKey(wholeWishlistQuery("manapool", scope)),
+    );
+    expect(wishlistSavingsKey("manapool", scope)).not.toEqual(wishlistSavingsKey("manapool"));
+  });
+
   // `["scanner", "tray"]` *is* the tray in the window that owns the scanner, written with
   // `setQueryData`; a count that shared it would be a second reader able to refetch it out from
   // under the scanner's own write.

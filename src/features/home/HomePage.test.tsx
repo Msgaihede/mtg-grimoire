@@ -72,7 +72,10 @@ vi.mock("./widgets/DeckCompletionWidget", () => ({
   DeckCompletionWidgetSettings: () => "the deck completion picker",
 }));
 vi.mock("./widgets/ToReviewWidget", () => ({ ToReviewWidget: stubs.body }));
-vi.mock("./widgets/WishlistSavingsWidget", () => ({ WishlistSavingsWidget: stubs.body }));
+vi.mock("./widgets/WishlistSavingsWidget", () => ({
+  WishlistSavingsWidget: stubs.body,
+  WishlistSavingsWidgetSettings: stubs.settings,
+}));
 vi.mock("./widgets/ComingSoonWidget", () => ({ ComingSoonWidget: stubs.body }));
 
 /**

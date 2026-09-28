@@ -267,7 +267,13 @@ describe("WIDGETS", () => {
       // On by default: Recently removed is a holding area rather than a problem, and the switch
       // exists for the reader who uses it as an archive.
       toReview: { picks: {}, toggles: { removed: true }, chip: undefined },
-      wishlistSavings: { picks: {}, toggles: {}, chip: undefined },
+      // Issue #598: every wishlist unless the reader chooses some, and the decks' managed
+      // wishlists counted by default — they are still wishlists.
+      wishlistSavings: {
+        picks: { scope: { ids: ["all", "chosen"], dflt: undefined } },
+        toggles: { managed: true },
+        chip: undefined,
+      },
       // `newPrintings`' window, word for word and default for default, so a reader who set one
       // has learnt the other.
       comingSoon: {

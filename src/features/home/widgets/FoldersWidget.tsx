@@ -351,9 +351,10 @@ function wishlistFolderName(folder: WishlistFolder, all: readonly WishlistFolder
 /**
  * A wishlist folder's row in the settings picker — {@link wishlistFolderName}, and a deck's
  * managed list saying so, as {@link collectionKind}'s `(deck)` does one picker up: a shortcut may
- * point at one.
+ * point at one. The Wishlist savings widget's checklist draws its rows with this too, so one
+ * folder is one row in both pickers.
  */
-function wishlistFolderOption(folder: WishlistFolder, all: readonly WishlistFolder[]): string {
+export function wishlistFolderOption(folder: WishlistFolder, all: readonly WishlistFolder[]): string {
   const name = wishlistFolderName(folder, all);
   return isManaged(folder) ? `${name} (managed)` : name;
 }

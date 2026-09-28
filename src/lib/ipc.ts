@@ -2004,6 +2004,17 @@ export interface WishOptimizeMove {
   savedPerCopy: number | null;
   /** {@link savedPerCopy} times {@link quantity}, or `null` with it. */
   saved: number | null;
+  /**
+   * The wish is filed in a deck's **managed wishlist** — the deck's own folder or its Tokens
+   * child ([issue #598](https://github.com/Msgaihede/mtg-grimoire/issues/598)). Only ever `true`
+   * on a plan asked for with `includeManaged`; `false` on every other.
+   *
+   * **Informational, never applicable.** The wish is the deck's printing, and repointing it is a
+   * hand edit the backend refuses (`managed_wishlist::MANAGED`) — which inside
+   * `wishlist_optimize_apply`'s one transaction would roll back every other row with it. So no
+   * surface sends one: the reader changes the printing in the deck, and the folder follows.
+   */
+  managed: boolean;
 }
 
 /**
@@ -2023,6 +2034,19 @@ export interface WishOptimizeMove {
  * relabels. A second copy of that fact travelling in the answer is one more thing that can
  * disagree with the hook, which is the rule `src/CLAUDE.md` states for every price surface.
  */
+/**
+ * What `wishlist_optimize_plan` is asked: the list's own query, plus whether a deck's **managed
+ * wishlist** is in scope ([issue #598](https://github.com/Msgaihede/mtg-grimoire/issues/598)).
+ *
+ * `includeManaged` is a second command argument on the wire rather than a field of
+ * {@link WishlistQuery}, because nothing but the plan reads it: on the list query it would be a
+ * field `list_wishes` silently ignores. Absent is `false`, which is the Wishlist page's Optimise
+ * button — a sweep that offers only what it can apply. The home page's Wishlist savings widget is
+ * the caller that sends `true` (unless its reader switched it off), because a managed wish is
+ * still a wish and its saving is still money.
+ */
+export type OptimizePlanQuery = WishlistQuery & { includeManaged?: boolean };
+
 export interface WishlistOptimizePlan {
   moves: WishOptimizeMove[];
   /** How many wishes the sweep looked at — the list's own `total` for the same query. */
@@ -8184,9 +8208,12 @@ export const ipc = {
    *
    * The **`marketplace` on the query decides every figure in the answer**, so it belongs in the
    * caller's query key like every other priced read — see {@link WishlistOptimizePlan}.
+   *
+   * `includeManaged` travels as its own argument — {@link OptimizePlanQuery} has why — and puts
+   * the decks' managed wishlists in scope, each of their moves marked `managed`.
    */
-  wishlistOptimizePlan: (query: WishlistQuery) =>
-    invoke<WishlistOptimizePlan>("wishlist_optimize_plan", { query }),
+  wishlistOptimizePlan: ({ includeManaged = false, ...query }: OptimizePlanQuery) =>
+    invoke<WishlistOptimizePlan>("wishlist_optimize_plan", { query, includeManaged }),
   /**
    * Commit the ticked rows of a plan — **one transaction**, {@link ipc.wishlistImportCommit}'s
    * rule: a sweep seen half done is a shopping list nobody can reason about.

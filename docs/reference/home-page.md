@@ -170,7 +170,7 @@ stores nothing). All of it lives in `config` — the extension rule below.
 | `newPrintings` | reprints of cards the watched decks hold, in release-day groups | `{ scope: all·chosen, deckIds, window: 30·90·365, langs: en·all·chosen, langIds, virtual, theory, basics }` |
 | `deckCompletion` | each deck's actual list against the collection or against its plan, with the cost of the rest | `{ compare: collection·theory, scope: all·chosen, deckIds, order: done·cheapest·name, complete }` |
 | `toReview` | scanned cards waiting, flagged binder entries, wishes and deck cards, and Recently removed — each row opening its list | `{ removed }` |
-| `wishlistSavings` | pinned wishes with a cheaper printing, biggest saving first | — |
+| `wishlistSavings` | pinned wishes with a cheaper printing, biggest saving first | `{ scope: all·chosen, folderIds, managed }` |
 | `comingSoon` | unreleased sets, how many of their cards are previewed, and how many are already in your decks | `{ window: 30·90·365 }` |
 
 **A config written before the grid keeps its meaning.** `dimension` and `limit` kept their keys
@@ -1812,6 +1812,30 @@ answer, and the dialog's apply — which invalidates `["wishlist"]` — refreshe
 builder rather than two literals, because a reader who pressed a row has to meet a dialog planning
 the same wishes.
 
+**The decks' managed wishlists are counted, and the reader can narrow the card** ([issue
+#598](https://github.com/Msgaihede/mtg-grimoire/issues/598), 2026-09-28). Until then the plan left
+every wish in a managed folder out unconditionally, because repointing one is a hand edit
+`managed_wishlist`'s guard refuses — so a reader whose wishlist was mostly decks' read *No wishlist
+items found* over a wishlist full of wishes. They are still wishlists, and the saving on one is
+still money. Two settings now, both part of the question rather than its drawing:
+
+* **`managed`** (`Deck-managed wishlists`, **on** by default) sends `includeManaged` — a second
+  command argument rather than a `WishlistQuery` field, since nothing but the plan reads it. Every
+  move then carries `managed`, true for a wish in a deck's folder or its Tokens child.
+* **`scope`** (`Which wishlists`: `All wishlists` · `Chosen`) with `folderIds` — a checklist of the
+  root (`Not in a folder`, shelf `0`) and every folder in tree order, the managed ones marked and
+  hidden while `managed` is off. `sweepScopeOf` expands each chosen folder into every folder inside
+  it, because `WishlistQuery.shelves` answers direct members only; a chosen set that names no
+  surviving folder says so rather than counting everything.
+
+The resulting `SweepScope` is the key's last segment **and** what the press hands the Wishlist page,
+so the dialog still plans exactly what the card counted from the same cache entry. **A managed
+wishlist is read-only — only a change to its deck changes it** — so the dialog draws those moves for
+their saving with no checkbox and a sentence saying to change the printing in the deck, and
+`optimizePlan.ts`'s `canApply` keeps them out of the default ticks, the select-all and the apply
+payload: one refused row inside `wishlist_optimize_apply`'s single transaction would roll back every
+row ticked beside it.
+
 **A price that is not there is said, never summed.** `saved` is `null` exactly when `from.price`
 is — a pinned printing the marketplace does not list. `splitSavings` leaves those moves out of
 `Could save` and counts them on a line of their own (*n more have no current price*); a card whose
@@ -2031,13 +2055,14 @@ hold there. jsdom lays nothing out, so `holdInView.test.ts` and `SettingsPage.te
 mechanism with a stand-in observer the tests fire; where the panel lands in the real window is the
 next live pass's to confirm.
 
-**`pendingOptimize: boolean`** — Wishlist savings' press, answered by `WishlistPage`, which opens
-`OptimizeWishlistDialog` with a **scope override**, `sweepOver: "whole"`, planning
-`wholeWishlistQuery` — **never by writing a filter or a view state**, so closing the dialog
+**`pendingOptimize: SweepScope | null`** — Wishlist savings' press, answered by `WishlistPage`, which
+opens `OptimizeWishlistDialog` with a **scope override**, `sweepOver` set to the widget's scope,
+planning `wholeWishlistQuery` over it (a boolean until issue #598 gave the card settings) — **never by writing a filter or a view state**, so closing the dialog
 leaves the page exactly as the reader left it. (This said *never by writing `wishlistFlattened`*
 until folder shelves deleted that store flag on 2026-09-26; the page has no Flatten to write.) The
 override is left standing when the dialog closes, deliberately: the panel outlives the flag by its
 fade, and a scope put back on close would re-key the
 plan mid-fade and flash its loading sentence; the page's own Optimise button writes `"page"` on its
-press instead. A boolean because there is nothing else to say — the widget only ever asks about the
-whole list.
+press instead. It said *a boolean because there is nothing else to say — the widget only ever asks
+about the whole list* until issue #598, when the card's managed switch and chosen folders became
+things to say.

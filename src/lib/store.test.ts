@@ -329,6 +329,9 @@ describe("the home page's three other hand-offs", () => {
     spent: unknown;
   }
 
+  /** The savings widget's scope, as a press hands it over — managed wishlists in, one shelf. */
+  const SWEEP = { includeManaged: true, shelves: [4] } as const;
+
   const HANDOFFS: readonly Handoff[] = [
     {
       name: "pendingReviewFilter",
@@ -349,10 +352,10 @@ describe("the home page's three other hand-offs", () => {
     {
       name: "pendingOptimize",
       view: "wishlist",
-      write: () => useAppStore.getState().setPendingOptimize(),
+      write: () => useAppStore.getState().setPendingOptimize(SWEEP),
       read: () => useAppStore.getState().pendingOptimize,
-      written: true,
-      spent: false,
+      written: SWEEP,
+      spent: null,
     },
   ];
 
@@ -368,14 +371,14 @@ describe("the home page's three other hand-offs", () => {
     useAppStore.getState().clearPendingReviewFilter();
     expect(useAppStore.getState().pendingReviewFilter).toBeNull();
     expect(useAppStore.getState().pendingSettingsPanel).toBe("review");
-    expect(useAppStore.getState().pendingOptimize).toBe(true);
+    expect(useAppStore.getState().pendingOptimize).toBe(SWEEP);
 
     useAppStore.getState().clearPendingSettingsPanel();
     expect(useAppStore.getState().pendingSettingsPanel).toBeNull();
-    expect(useAppStore.getState().pendingOptimize).toBe(true);
+    expect(useAppStore.getState().pendingOptimize).toBe(SWEEP);
 
     useAppStore.getState().clearPendingOptimize();
-    expect(useAppStore.getState().pendingOptimize).toBe(false);
+    expect(useAppStore.getState().pendingOptimize).toBeNull();
   });
 
   /** A hand-off nobody read does not outlive the navigation it was made for. */

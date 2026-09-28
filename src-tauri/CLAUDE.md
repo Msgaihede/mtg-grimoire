@@ -1330,7 +1330,8 @@ shared_cell` walks both into two databases and compares them column by column.
   run inside `capture::suppressed` and the column is on no capture spec** — the rule above about
   writes every device derives for itself. **A TEMP guard refuses any other write touching a
   managed folder or wish** with `managed_wishlist::MANAGED`, so a new bulk wishlist write must
-  skip managed rows (as `reset::clear_wishlist` and the optimize preview do) or it fails whole;
+  skip managed rows (as `reset::clear_wishlist` does, and the optimize apply does by never being
+  handed one — the preview *reads* them when asked with `include_managed`, issue #598) or it fails whole;
   its `UPDATE` guards name columns, so bookkeeping columns stay writable. **And a trigger body's
   conflict clause is overridden by the outer statement's**, which is why the dirty table has no
   key: an `INSERT OR IGNORE` fired by an UPSERT failed the deck add itself.

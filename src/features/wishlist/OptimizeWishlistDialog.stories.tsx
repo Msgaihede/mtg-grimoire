@@ -35,6 +35,7 @@ function move(over: Partial<WishOptimizeMove> & Pick<WishOptimizeMove, "wishId" 
     to: { cardId: "to", setCode: "2x2", collectorNumber: "117", lang: "en", price: 2 },
     savedPerCopy: 3,
     saved: 3,
+    managed: false,
   };
   return { ...base, ...over };
 }
@@ -264,6 +265,33 @@ export const EveryFolder: Story = {
     });
     await expect(canvas.getByText("Every folder, matching your filters")).toBeVisible();
     await expect(canvas.getByText("in Backordered")).toBeVisible();
+  },
+};
+
+/**
+ * **A deck's managed wishlist, opened from the home page's Wishlist savings widget** (issue #598).
+ *
+ * The widget counts the decks' managed wishlists — they are still wishlists — and its press opens
+ * this dialog on the same plan. A managed wishlist is read-only and changes only when its deck
+ * does, so the row is drawn for the saving it names with **no checkbox**, a sentence saying where
+ * the printing is changed, and no place in the count or the press.
+ */
+export const ManagedWishlist: Story = {
+  args: {
+    scope: { folder: "Wishlist", everyFolder: true, filtered: false },
+    plan: planOf([BOLT, { ...RAGAVAN, folderId: 5, managed: true }]),
+    folderNameOf: (id: number | null) => (id === 5 ? "Burn" : "Wishlist"),
+  },
+  play: async ({ canvas }) => {
+    await waitFor(async () => expect(await canvas.findByText("Lightning Bolt")).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
+    await expect(canvas.getByText("Ragavan, Nimble Pilferer")).toBeVisible();
+    await expect(canvas.queryByRole("checkbox", { name: /Ragavan/ })).toBeNull();
+    await expect(
+      canvas.getByText("In a deck's managed wishlist — change the printing in the deck."),
+    ).toBeVisible();
+    await expect(canvas.getByText("1 of 1 selected")).toBeVisible();
   },
 };
 
