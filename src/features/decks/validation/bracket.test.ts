@@ -1065,8 +1065,8 @@ describe("bracketWarning", () => {
     const message = bracketWarning(1, estimateBracket([TIME_WARP, GRIZZLY_BEARS, islands(60)]));
 
     expect(message).toBe(
-      "Set to bracket 1, but this deck reads as bracket 2 or higher " +
-        "(1 extra-turn card: Time Warp) — worth a word with the table before the game.",
+      "Set to bracket 1, but the cards suggest bracket 2+ " +
+        "(1 extra-turn card: Time Warp). Worth mentioning to your playgroup.",
     );
   });
 
@@ -1074,16 +1074,16 @@ describe("bracketWarning", () => {
     const message = bracketWarning(2, armageddonDeck());
 
     expect(message).toBe(
-      "Set to bracket 2, but this deck reads as bracket 4 or higher " +
-        "(mass land denial: Armageddon) — worth a word with the table before the game.",
+      "Set to bracket 2, but the cards suggest bracket 4+ " +
+        "(mass land denial: Armageddon). Worth mentioning to your playgroup.",
     );
   });
 
   it("fires on every rung below the floor", () => {
     const estimate = estimateBracket([gameChanger("Rhystic Study"), islands(60)]);
 
-    expect(bracketWarning(1, estimate)).toContain("bracket 3 or higher");
-    expect(bracketWarning(2, estimate)).toContain("bracket 3 or higher");
+    expect(bracketWarning(1, estimate)).toContain("bracket 3+");
+    expect(bracketWarning(2, estimate)).toContain("bracket 3+");
     expect(bracketWarning(3, estimate)).toBeNull();
   });
 
@@ -1107,7 +1107,7 @@ describe("bracketWarning", () => {
     const message = bracketWarning(2, armageddonDeck()) ?? "";
 
     expect(message).not.toMatch(/illegal|invalid|error|must not|not allowed|violat/i);
-    expect(message).toContain("worth a word with the table");
+    expect(message).toContain("Worth mentioning to your playgroup");
   });
 });
 

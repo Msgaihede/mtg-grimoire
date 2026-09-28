@@ -203,7 +203,7 @@ export const NewNoteFromACard: Story = {
     draft: { kind: "newFromCard", card: { oracleId: "o-bolt", name: "Lightning Bolt" } },
   },
   play: async ({ canvas }) => {
-    await expect(await canvas.findByText(/will name Lightning Bolt/)).toBeInTheDocument();
+    await expect(await canvas.findByText(/Linked to Lightning Bolt/)).toBeInTheDocument();
     // Still the create's verb and still the create's heading: the card narrows the sentence and
     // nothing else about the dialog moves.
     await expect(await canvas.findByRole("heading", { name: "New note" })).toBeInTheDocument();

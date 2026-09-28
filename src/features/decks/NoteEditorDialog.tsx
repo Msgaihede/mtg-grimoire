@@ -118,8 +118,8 @@ export function NoteEditorDialog({
       // Said here rather than in the body, because it is a fact about what the dialog was opened
       // to do and not about what has been typed into it. The attachment itself is the host's
       // write — this line is the promise the press already made.
-      subtitle={draft.kind === "newFromCard" ? `This note will name ${draft.card.name}` : undefined}
-      closeLabel="Close the note editor"
+      subtitle={draft.kind === "newFromCard" ? `Linked to ${draft.card.name}` : undefined}
+      closeLabel="Close"
       size="w-[40rem]"
       onDismiss={onClose}
       onClose={onClose}
@@ -174,7 +174,7 @@ function Body({
       <div className="min-h-60 px-5 py-4">
         {/* A sentence rather than a spinner: the chunk arrives off local disk, so what a reader
             actually sees is one frame of type, and a spinner for one frame is a flash. */}
-        <Suspense fallback={<p className="text-[0.6875rem] text-dim">Opening the editor…</p>}>
+        <Suspense fallback={<p className="text-[0.6875rem] text-dim">Loading editor…</p>}>
           <NoteEditor value={body} onChange={setBody} ariaLabel={`Body of ${heading}`} />
         </Suspense>
       </div>

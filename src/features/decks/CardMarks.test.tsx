@@ -425,7 +425,7 @@ describe("QuantityTag", () => {
       <QuantityTag quantity={2} name="Fast mana" color="#d3202a" gameChanger />,
       "2",
     );
-    expect(await tooltipOf(tag)).toHaveTextContent(/^Fast mana · 2 in this pile · Game changer$/);
+    expect(await tooltipOf(tag)).toHaveTextContent(/^Fast mana · 2 in this category · Game changer$/);
   });
 
   /**
@@ -438,14 +438,14 @@ describe("QuantityTag", () => {
       <QuantityTag quantity={2} name="Fast mana" color="#d3202a" gameChanger={false} />,
       "2",
     );
-    expect(await tooltipOf(tag)).toHaveTextContent(/^Fast mana · 2 in this pile$/);
+    expect(await tooltipOf(tag)).toHaveTextContent(/^Fast mana · 2 in this category$/);
   });
 
   /** And the unlabelled arm, which is the same append over the shorter of the tag's two strings —
    *  a card with no label says the count alone and then, if it is one, the fact. */
   it("appends it to the unlabelled sentence too", async () => {
     const tag = drawTag(<QuantityTag quantity={4} name={null} color={null} gameChanger />, "4");
-    expect(await tooltipOf(tag)).toHaveTextContent(/^4 in this pile · Game changer$/);
+    expect(await tooltipOf(tag)).toHaveTextContent(/^4 in this category · Game changer$/);
   });
 
   /**
@@ -581,7 +581,7 @@ describe("QuantityTag", () => {
         "4",
       );
       expect(await tooltipOf(tag)).toHaveTextContent(
-        /^Ramp · 4 in this pile · Game changer · Has a note$/,
+        /^Ramp · 4 in this category · Game changer · Has a note$/,
       );
     });
 
@@ -592,7 +592,7 @@ describe("QuantityTag", () => {
         <QuantityTag quantity={1} name="Ramp" color="#3b7d3b" gameChanger={false} noted />,
         "1",
       );
-      expect(await tooltipOf(tag)).toHaveTextContent(/^Ramp · 1 in this pile · Has a note$/);
+      expect(await tooltipOf(tag)).toHaveTextContent(/^Ramp · 1 in this category · Has a note$/);
     });
 
     /** And on the shorter of the tag's two strings, which is the unlabelled card. */
@@ -601,7 +601,7 @@ describe("QuantityTag", () => {
         <QuantityTag quantity={2} name={null} color={null} gameChanger={false} noted />,
         "2",
       );
-      expect(await tooltipOf(tag)).toHaveTextContent(/^2 in this pile · Has a note$/);
+      expect(await tooltipOf(tag)).toHaveTextContent(/^2 in this category · Has a note$/);
     });
 
     /**

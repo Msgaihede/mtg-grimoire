@@ -504,7 +504,7 @@ describe("DeckSettingsForm", () => {
     expect(screen.getByRole("switch", { name: /not in the theory list/i })).toBeInTheDocument();
     expect(screen.getByText("Not in the theory list")).toBeInTheDocument();
     expect(
-      screen.getByText("A green mark on a card that is the exact printing your plan names."),
+      screen.getByText("Green: the exact printing the theory list uses."),
     ).toBeInTheDocument();
     // The half a reader cannot see coming: switching the strict mark off does not leave the card
     // unmarked, it draws the loose one instead — on every printing, the named one included, and
@@ -512,14 +512,14 @@ describe("DeckSettingsForm", () => {
     // control as broken.
     expect(
       screen.getByText(
-        "A blue mark on a card your plan asks for in a printing it does not name. Turning the green one off draws this one on every printing instead, as a match.",
+        "Blue: the right card in a different printing. With green off, blue marks every printing.",
       ),
     ).toBeInTheDocument();
     // And the red one's own half: it is not a third answer to *which printing*, so the caption
     // says outright that it makes no claim about one.
     expect(
       screen.getByText(
-        "A red mark on a card your plan does not ask for at all — a stand-in, a spare or an experiment. It says nothing about the printing; the two marks above do.",
+        "Red: a card that isn't in the theory list.",
       ),
     ).toBeInTheDocument();
   });
@@ -667,7 +667,7 @@ describe("DeckSettingsForm", () => {
     // The view's line, then the tokens' — one caption for the one folder.
     expect(
       screen.getByText(
-        /the cards the deck doesn't play in any printing\..*Its Tokens subfolder holds the token printings the plan is short of\./,
+        /cards this deck doesn't have in any printing\..*Missing tokens go in its Tokens subfolder\./,
       ),
     ).toBeVisible();
     // Picking a different view leaves the toggle as it was: the two are independent.
@@ -748,7 +748,7 @@ describe("DeckSettingsForm", () => {
   it("reports a folder list it could not read, and disables the move", () => {
     form({ folders: { paths: [], unread: "Database is busy.", loading: false, pending: false } });
 
-    expect(screen.getByText("Could not read the folders — Database is busy.")).toBeInTheDocument();
+    expect(screen.getByText("Couldn't load the folders — Database is busy.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Folder" })).toBeDisabled();
   });
 
@@ -764,7 +764,7 @@ describe("DeckSettingsForm", () => {
   it("says when the deck is in a folder the list does not carry", () => {
     form({ value: { ...VALUE, folderId: 99 } });
 
-    expect(screen.getByText("In a folder this list does not carry")).toBeInTheDocument();
+    expect(screen.getByText("In a folder not shown here")).toBeInTheDocument();
   });
 
   /**
@@ -809,18 +809,18 @@ describe("DeckSettingsForm", () => {
   it("says in words where an add will land, and flags a pile that is switched off", () => {
     const auto = form();
     expect(
-      screen.getByText("Removal, Ramp, Draw — decided per card from what it does."),
+      screen.getByText("Cards are sorted into Removal, Ramp, Draw and more by what they do."),
     ).toBeInTheDocument();
     auto.unmount();
 
     const picked = form({ value: { ...VALUE, defaultCategoryId: 12 } });
-    expect(screen.getByText("Every add lands in Sideboard.")).toBeInTheDocument();
+    expect(screen.getByText("New cards go to Sideboard.")).toBeInTheDocument();
     picked.unmount();
 
     form({ value: { ...VALUE, defaultCategoryId: 13 } });
     expect(
       screen.getByText(
-        "Every add lands in Maybeboard, which is switched off and counts toward nothing.",
+        "New cards go to Maybeboard, which is inactive and doesn't count.",
       ),
     ).toBeInTheDocument();
   });

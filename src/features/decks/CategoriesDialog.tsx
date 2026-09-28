@@ -121,7 +121,7 @@ export function CategoriesDialog({
     <Dialog
       open={open}
       title="Categories"
-      closeLabel="Close categories"
+      closeLabel="Close"
       size="w-[48rem]"
       onDismiss={onDismiss}
       onClose={onClose}
@@ -230,14 +230,13 @@ function CategoriesBody({ deckId, variant }: { deckId: number; variant: DeckVari
       {/* No heading of its own — the dialog is titled "Categories" one element up, and a second
           "Categories" under it would be the same word twice with nothing between them. */}
       <p className="mb-2.5 text-[0.6875rem] leading-relaxed text-dim">
-        Only active categories count toward the deck — a switched-off pile counts toward no size, no
-        copy limit and no legality check, and reserves no copy from your collection. Drag a row by
-        its handle to reorder, or press the up and down arrow keys on it. The four categories every
-        deck starts with can be switched off, but not renamed or deleted.
+        Inactive categories don&rsquo;t count toward deck size, copy limits or legality, and
+        don&rsquo;t reserve cards from your collection. Drag to reorder. The four default
+        categories can be turned off but not renamed or deleted.
       </p>
 
       {categoriesQuery.isPending ? (
-        <p className="text-xs text-dim">Reading this deck’s categories…</p>
+        <p className="text-xs text-dim">Loading categories…</p>
       ) : ordered.length === 0 ? (
         <p className="text-xs text-dim">This deck has no categories.</p>
       ) : (
@@ -615,7 +614,7 @@ export function DeleteCategory({
    *  is no folder to promise — `ClearCategory`'s middle arm, for the reason it gives there. */
   const copiesGo =
     category.variant === "theory"
-      ? "A theory list holds no copies, so nothing else moves."
+      ? "The theory list doesn't use your collection, so no cards are moved."
       : "Any copies you own go back to Recently removed.";
   /** The question is only asked when there is something to lose *and* somewhere to put it. */
   const choosing = cards > 0 && others.length > 0;
@@ -665,10 +664,10 @@ export function DeleteCategory({
         )}
       >
         {cards === 0
-          ? "It is empty, so nothing goes with it."
+          ? "It's empty."
           : losing
-            ? `The ${count} in it go with it. ${copiesGo}`
-            : `The ${count} in it move to “${target?.name}”. Nothing is lost.`}
+            ? `Its ${count} will be removed. ${copiesGo}`
+            : `Its ${count} will move to “${target?.name}”.`}
       </p>
 
       <div className="mt-2 flex gap-2">
@@ -686,7 +685,7 @@ export function DeleteCategory({
           {moveTo === null ? `Delete “${category.name}”` : `Move ${count} and delete`}
         </button>
         <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
-          Keep it
+          Cancel
         </button>
       </div>
     </div>
@@ -744,16 +743,16 @@ function AutoCategorise({ meta, cards }: { meta: DeckMeta; cards: readonly DeckC
           FOCUS,
         )}
       >
-        File cards by what they do
+        Auto-categorize
       </button>
       <p role="status" className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
         {autoCategorise.isPending
-          ? "Filing cards…"
+          ? "Categorizing cards…"
           : moved === undefined
-            ? "Files the cards nobody has filed by what they do — Removal, Ramp, Draw — falling back to the card’s type. Categories you made are left alone."
+            ? "Sorts uncategorized cards into Removal, Ramp, Draw and more, or by card type. Your own categories aren’t changed."
             : moved === 0
-              ? "Nothing to file — every card is already in a pile somebody chose."
-              : `Filed ${moved} ${moved === 1 ? "card" : "cards"}.`}
+              ? "All cards are already categorized."
+              : `Categorized ${moved} ${moved === 1 ? "card" : "cards"}.`}
       </p>
       {refusal && (
         <p role="alert" className="mt-1 text-[0.6875rem] leading-relaxed text-destructive">

@@ -666,7 +666,7 @@ describe.each(VIEWS)("$name", ({ render: renderView }) => {
       {},
       { timeout: TOOLTIP_OPEN_MS + 1000 },
     );
-    expect(tooltip.textContent).toContain("counts toward");
+    expect(tooltip.textContent).toContain("count toward");
   });
 
   /**
@@ -1170,7 +1170,7 @@ describe.each(VIEWS.filter((v) => v.name !== "TableView"))("$name", ({ render: r
 
     const sol = screen.getByRole("button", { name: /^Sol Ring/ });
     expect(sol.getAttribute("aria-label")).toContain("rule break: Sol Ring is banned here.");
-    expect(sol.getAttribute("aria-label")).toContain("game changer");
+    expect(sol.getAttribute("aria-label")).toContain("Game Changer");
   });
 
   /**
@@ -3330,8 +3330,8 @@ describe("TextView lines", () => {
 
     // The words are the button's on this view, as they are on the two card faces: a line with an
     // explicit `aria-label` announces nothing that is inside it.
-    expect(crowned.getAttribute("aria-label")).toContain("game changer");
-    expect(plain.getAttribute("aria-label")).not.toContain("game changer");
+    expect(crowned.getAttribute("aria-label")).toContain("Game Changer");
+    expect(plain.getAttribute("aria-label")).not.toContain("Game Changer");
   });
 });
 
@@ -3617,15 +3617,15 @@ describe("TableView", () => {
 
     // The quantity cell: the crown, and the words beside it.
     expect(quantity.querySelector(".lucide-crown")).not.toBeNull();
-    expect(within(quantity).getByText("Game changer")).toHaveClass("sr-only");
+    expect(within(quantity).getByText("Game Changer")).toHaveClass("sr-only");
     // The name cell keeps the rule break's sentence and says nothing about the game changer —
     // the stripe there is `rowMarkColor`'s and is the one mark that did not move.
     expect(within(name).getByText("Rule break: Sol Ring is banned here.")).toHaveClass("sr-only");
     expect(name.querySelector(".lucide-crown")).toBeNull();
-    expect(within(name).queryByText("Game changer")).not.toBeInTheDocument();
+    expect(within(name).queryByText("Game Changer")).not.toBeInTheDocument();
 
     // Said once in the whole table, not once per cell that could have said it.
-    expect(screen.getAllByText("Game changer")).toHaveLength(1);
+    expect(screen.getAllByText("Game Changer")).toHaveLength(1);
   });
 
   /**
@@ -3668,14 +3668,14 @@ describe("TableView", () => {
     const crowned = quantityCell("Sol Ring");
     expect(crowned.querySelector("[data-no-drag]")).not.toBeNull();
     expect(gutter(crowned).firstElementChild).toHaveClass("lucide-crown");
-    expect(within(crowned).getByText("Game changer")).toHaveClass("sr-only");
+    expect(within(crowned).getByText("Game Changer")).toHaveClass("sr-only");
 
     // An ordinary row: the same cell, the same gutter in the same place, and nothing in it.
     // Reserved rather than conditional, which is what holds the numbers beside it in one column.
     const plain = quantityCell("Arcane Signet");
     expect(gutter(plain)).toHaveAttribute("aria-hidden", "true");
     expect(gutter(plain).children).toHaveLength(0);
-    expect(within(plain).queryByText("Game changer")).not.toBeInTheDocument();
+    expect(within(plain).queryByText("Game Changer")).not.toBeInTheDocument();
   });
 
   /**

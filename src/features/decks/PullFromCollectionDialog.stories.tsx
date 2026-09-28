@@ -285,7 +285,7 @@ export const OneCard: Story = {
     await waitFor(
       async () =>
         await expect(
-          await canvas.findByText("Copies of Boros Charm you already own — into Boros Burn"),
+          await canvas.findByText("Copies of Boros Charm you own for Boros Burn"),
         ).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
@@ -293,7 +293,7 @@ export const OneCard: Story = {
     // The heading is unchanged, which is the half a reader would notice if it were not.
     await expect(canvas.getByRole("heading", { name: "Pull from collection" })).toBeVisible();
     await expect(
-      canvas.queryByText("Cards this deck is short of that you already own — into Boros Burn"),
+      canvas.queryByText("Cards you own that Boros Burn is missing"),
     ).toBeNull();
     await expect(canvas.getByText("2 copies across 1 card")).toBeVisible();
   },
@@ -316,7 +316,7 @@ export const PartlyCovered: Story = {
     );
 
     await expect(canvas.getByText(/still missing/)).toHaveTextContent(
-      "1 copy still missing — no other matching copies in collection.",
+      "1 copy still missing (no other matching copies owned).",
     );
     await expect(canvas.queryByRole("alert")).toBeNull();
     await expect(canvas.getByRole("button", { name: "Pull 1 copy" })).toBeEnabled();
@@ -329,7 +329,7 @@ export const Reading: Story = {
   args: { rows: null, loading: true },
   play: async ({ canvas }) => {
     await waitFor(
-      async () => expect(await canvas.findByText("Reading your collection…")).toBeVisible(),
+      async () => expect(await canvas.findByText("Loading your collection…")).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
     await expect(canvas.queryByText("Nothing to pull.")).toBeNull();
@@ -370,9 +370,9 @@ export const NothingToPull: Story = {
       timeout: FRAME_WAIT,
     });
 
-    await expect(canvas.getByText(/exact printing and finish/)).toHaveTextContent(
-      "Cards in other decks or not yet owned cannot be pulled.",
-    );
+    await expect(
+      canvas.getByText("Only unassigned copies with a matching printing and finish can be pulled."),
+    ).toBeInTheDocument();
     await expect(canvas.queryByRole("alert")).toBeNull();
   },
 };

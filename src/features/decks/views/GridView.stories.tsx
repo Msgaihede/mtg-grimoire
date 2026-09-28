@@ -94,7 +94,7 @@ export const Default: Story = {
       within(crowned).queryByRole("img", { name: GAME_CHANGER_LABEL }),
     ).not.toBeInTheDocument();
     // The words themselves are the button's, which is what a screen reader gets either way.
-    expect(crowned).toHaveAccessibleName(expect.stringContaining("game changer"));
+    expect(crowned).toHaveAccessibleName(expect.stringContaining("Game Changer"));
   },
 };
 

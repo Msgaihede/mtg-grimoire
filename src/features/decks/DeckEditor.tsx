@@ -1646,7 +1646,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     // **One sentence, where there were two.** The other said a card had no pile of its own to go
     // in and had stayed put; since 2026-08-16 it goes to `Uncategorized` instead, so the only
     // press that changes nothing is one aimed at the pile the card is already in.
-    return `${named} is already filed under ${refileAnswer.category}.`;
+    return `${named} is already in ${refileAnswer.category}.`;
   }, [refileAnswer, refileSlot, deck.cards]);
 
   /**
@@ -5424,7 +5424,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               <ToggleChip
                 label="Split X"
                 pressed={separateX}
-                title="Split X — give cards with X in their cost a group of their own, instead of counting X as zero"
+                title="Split X — group X-cost cards separately instead of counting X as 0"
                 onClick={() => deck.update.mutate({ separateXGroup: !separateX })}
               />
             )}
@@ -5553,7 +5553,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               role="alert"
               className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
             >
-              Could not change this deck — {bannerFailure}
+              Couldn't change this deck — {bannerFailure}
             </p>
           </motion.div>
         )}
@@ -5627,20 +5627,19 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
       {loading && (
         <p role="status" className="py-16 text-center text-sm text-dim">
-          Opening your deck…
+          Loading deck…
         </p>
       )}
 
       {readFailure && (
         <p role="alert" className="py-16 text-center text-sm text-destructive">
-          Could not open this deck — {readFailure}
+          Couldn't open this deck — {readFailure}
         </p>
       )}
 
       {gone && (
         <p className="mx-auto max-w-prose py-16 text-center text-sm text-dim">
-          This deck is not there any more. It may have been deleted from the gallery — go back and
-          pick another one.
+          This deck no longer exists. It may have been deleted.
         </p>
       )}
 
@@ -6192,7 +6191,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         title={deletedCategory === null ? "Delete category" : `Delete “${deletedCategory.name}”`}
         // Named for what it closes, like every other dialog here — two controls called "Close"
         // on one screen are two a screen reader cannot tell apart.
-        closeLabel="Close delete category"
+        closeLabel="Close"
         // Narrow, because the body is one question, one picker and two buttons — the width class
         // is written out whole, since Tailwind emits no rule for a class built at runtime.
         size="w-[28rem]"
@@ -6214,7 +6213,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 role="alert"
                 className="mb-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
               >
-                Could not delete that category — {ipcError(meta.deleteCategory.error)}
+                Couldn't delete that category — {ipcError(meta.deleteCategory.error)}
               </p>
             )}
             <DeleteCategory
@@ -6241,7 +6240,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       <Dialog
         open={layer?.kind === "clearCategory"}
         title={clearedCategory === null ? "Clear stack" : `Clear “${clearedCategory.name}”`}
-        closeLabel="Close clear stack"
+        closeLabel="Close"
         size="w-[28rem]"
         onDismiss={dismiss}
         onClose={close}
@@ -6253,7 +6252,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 role="alert"
                 className="mb-2 rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
               >
-                Could not clear that stack — {ipcError(deck.clearCategory.error)}
+                Couldn't clear that stack — {ipcError(deck.clearCategory.error)}
               </p>
             )}
             <ClearCategory
@@ -6403,7 +6402,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         pending={meta.createCategory.isPending}
         failure={
           meta.createCategory.isError
-            ? `Could not make that category — ${ipcError(meta.createCategory.error)}`
+            ? `Couldn't create that category — ${ipcError(meta.createCategory.error)}`
             : null
         }
         onCreate={createQuickCategory}

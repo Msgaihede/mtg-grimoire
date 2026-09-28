@@ -307,7 +307,7 @@ export const HandAddedToken: Story = {
       "true",
     );
     await expect(art.parentElement?.classList.contains("ring-destructive")).toBe(true);
-    await expect(within(tile as HTMLElement).getByText("Added by hand")).toBeInTheDocument();
+    await expect(within(tile as HTMLElement).getByText("Added manually")).toBeInTheDocument();
     await expect(
       within(region).getByRole("button", { name: `Remove ${ENTRY.oko}` }),
     ).toBeInTheDocument();

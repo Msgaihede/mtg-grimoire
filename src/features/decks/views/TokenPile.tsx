@@ -176,7 +176,7 @@ export function hasTokenPile(pile: TokenPile | undefined): pile is TokenPile {
 export function tokenMadeBy(view: DeckTokenView): string {
   return view.sources.length > 0
     ? `From ${view.sources.map((source) => source.name).join(", ")}`
-    : "Added by hand";
+    : "Added manually";
 }
 
 /**

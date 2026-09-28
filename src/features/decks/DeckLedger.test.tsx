@@ -71,7 +71,7 @@ describe("DeckLedger", () => {
     // 5 sized, and the +4 is everything switched on that the size rule does not count.
     expect(term("Cards").querySelector("dd")?.textContent).toBe("5+4");
     expect(await openTooltip(term("Cards"))).toHaveTextContent(
-      "plus 3 sideboard + 1 companion it does not",
+      "plus 3 sideboard + 1 companion (not counted)",
     );
   });
 
@@ -115,7 +115,7 @@ describe("DeckLedger", () => {
 
     expect(term("Lands").querySelector("dd")?.textContent).toBe("38+2 MDFC");
     expect(await openTooltip(term("Lands"))).toHaveTextContent(
-      "Lands by type line, and 2 modal double-faced cards that play as a land off the back.",
+      "Lands by type, plus 2 MDFCs with a land back face.",
     );
   });
 
@@ -161,7 +161,7 @@ describe("DeckLedger", () => {
 
     expect(term("Lands").querySelector("dd")?.textContent).toBe("38+1 MDFC");
     expect(await openTooltip(term("Lands"))).toHaveTextContent(
-      "1 modal double-faced card that plays as a land off the back.",
+      "1 MDFC with a land back face.",
     );
   });
 
@@ -303,13 +303,13 @@ describe("DeckLedger", () => {
   it("counts the game changers", () => {
     ledger([card({ name: "Bolt" })], { gameChangers: 2, hasGameChangers: true });
 
-    expect(screen.getByRole("button", { name: "2 game changers" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "2 Game Changers" })).toBeInTheDocument();
   });
 
   it("counts one game changer in the singular", () => {
     ledger([card({ name: "Bolt" })], { gameChangers: 1, hasGameChangers: true });
 
-    expect(screen.getByRole("button", { name: "1 game changer" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "1 Game Changer" })).toBeInTheDocument();
   });
 
   /** Nothing at all for a deck that draws none — no chip to press and no words. The gate is
@@ -331,7 +331,7 @@ describe("DeckLedger", () => {
     ledger([card({ name: "Bolt" })], { gameChangers: 0, hasGameChangers: true });
 
     expect(screen.getByRole("button", { name: "Game Changers" })).toBeInTheDocument();
-    expect(screen.queryByText(/0 game changers/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 Game Changers/)).not.toBeInTheDocument();
   });
 
   /**
@@ -348,8 +348,8 @@ describe("DeckLedger", () => {
     ledger([card({ name: "Bolt" })], { gameChangers: 6, hasGameChangers: true, tight: true });
 
     expect(screen.getByText("6 GC")).toHaveAttribute("aria-hidden", "true");
-    expect(screen.getByText("6 game changers")).toHaveClass("sr-only");
-    expect(screen.getByRole("button", { name: "6 game changers" })).toBeInTheDocument();
+    expect(screen.getByText("6 Game Changers")).toHaveClass("sr-only");
+    expect(screen.getByRole("button", { name: "6 Game Changers" })).toBeInTheDocument();
   });
 
   /**
@@ -371,7 +371,7 @@ describe("DeckLedger", () => {
       onGameChangersOnlyToggle: () => presses.push(1),
     });
 
-    const chip = screen.getByRole("button", { name: "6 game changers" });
+    const chip = screen.getByRole("button", { name: "6 Game Changers" });
     expect(chip).toHaveAttribute("aria-pressed", "false");
     expect(chip.querySelector("svg")).not.toBeNull();
     // At rest the chip is the line's dim mono with the common edge. The accent is what it wears
@@ -395,7 +395,7 @@ describe("DeckLedger", () => {
       gameChangersOnly: true,
     });
 
-    const chip = screen.getByRole("button", { name: "6 game changers" });
+    const chip = screen.getByRole("button", { name: "6 Game Changers" });
     expect(chip).toHaveAttribute("aria-pressed", "true");
     expect(chip).not.toHaveAttribute("aria-label");
     expect(chip.className).toContain("border-accent");
@@ -415,7 +415,7 @@ describe("DeckLedger", () => {
       bracket: <button type="button">Bracket ~4</button>,
     });
 
-    const wanted = ["2 issues", "2 game changers", "Bracket ~4"];
+    const wanted = ["2 issues", "2 Game Changers", "Bracket ~4"];
     const drawn = [...document.querySelectorAll("dl button")]
       .map((el) => el.textContent ?? "")
       .filter((text) => wanted.includes(text));
@@ -502,7 +502,7 @@ describe("DeckLedger", () => {
         expect(screen.getByText(label, { selector: "dt" })).toBeInTheDocument();
       }
       expect(screen.getByText("2 issues")).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "2 game changers" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "2 Game Changers" })).toBeInTheDocument();
       expect(screen.getByText("Bracket ~4")).toBeInTheDocument();
     });
 

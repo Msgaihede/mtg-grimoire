@@ -47,15 +47,15 @@ import { META_SUBMIT } from "./metaRows";
 /** What the dialog is for, under the note's own name. Pulled out because the tests and the
  *  stories address the subtitle by it, and a dialog that reworded itself under them would go red
  *  for a reason that is not about the picker. */
-const SUBTITLE = "Which cards this note is about";
+const SUBTITLE = "Cards linked to this note";
 
 /** The deck has nothing to offer — which is not the same sentence as *your search missed*, and
  *  drawing one where the other belongs is how an empty picker reads as broken. */
-const NOTHING_TO_NAME = "This deck has no cards to name yet.";
+const NOTHING_TO_NAME = "This deck has no cards to link yet.";
 
 /** The filter hid everything. It names both controls that could have done it, because the reader
  *  may have set one of them several presses ago. */
-const NOTHING_MATCHES = "No card in this deck matches — try a different search or filter.";
+const NOTHING_MATCHES = "No cards match. Try a different search or filter.";
 
 /** The standing sentence, and the whole reason a stray row exists at all. */
 const KEEPS_ITS_CARDS =
@@ -104,7 +104,7 @@ export function NoteCardsDialog({
       // otherwise truncate the heading.
       title={title}
       subtitle={SUBTITLE}
-      closeLabel="Close the card picker"
+      closeLabel="Close"
       // `w-[47.5rem]` and not the pull dialog's `w-[52rem]`: the row here carries no source
       // dropdown, so the widest thing in it is a card name over a set code.
       size="w-[47.5rem]"
@@ -242,7 +242,7 @@ function Picker({
               and two live boxes sharing an `id` is a `getByLabelText` that cannot tell them
               apart. */}
           <label htmlFor={findId} className="sr-only">
-            Find a card to name in {title}
+            Find a card to link to {title}
           </label>
           <input
             ref={findRef}
@@ -306,7 +306,7 @@ function Picker({
               looking at a chip that says something else. Spelled out rather than run through
               `plural`, because "named" does not pluralise. */}
           <span className="ml-auto shrink-0 font-mono text-xs tabular-nums text-dim">
-            {named.length} named
+            {named.length} linked
           </span>
         </div>
       </div>
@@ -432,7 +432,7 @@ function Row({
           // pressing it does not hear the control rename itself under their finger. The note is in
           // it because a reader may meet this dialog over several notes in one session, and `Name
           // Mountain` alone says nothing about which note is being written.
-          aria-label={`Name ${row.name} in ${title}`}
+          aria-label={`Link ${row.name} to ${title}`}
           // `FOCUS_INSET` rather than `FOCUS`, because everything here is inside a box that clips:
           // an outline standing 2px *off* a control in a scroller is painted in the clipped region
           // on the rows at either end of it and is never seen at all, which is a WCAG 2.4.7

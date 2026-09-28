@@ -411,7 +411,7 @@ export const FoldersUnread: Story = {
     const canvas = within(canvasElement);
 
     await expect(
-      await canvas.findByText("Could not read the folders — Database is busy."),
+      await canvas.findByText("Couldn't load the folders — Database is busy."),
     ).toBeVisible();
     await expect(canvas.getByRole("button", { name: "Folder" })).toBeDisabled();
   },

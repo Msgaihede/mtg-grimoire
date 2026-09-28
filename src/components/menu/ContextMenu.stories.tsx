@@ -880,7 +880,7 @@ export const MoveDeckToFolder: Story = {
 
     const here = await canvas.findByRole("menuitem", { name: /Constructed › Commander/ });
     await expect(here).toHaveAttribute("aria-disabled", "true");
-    await expect(within(here).getByText("Here now")).toBeInTheDocument();
+    await expect(within(here).getByText("Current")).toBeInTheDocument();
 
     await userEvent.click(root);
     await expect(args.act).toHaveBeenCalledWith(`file:${DECK.id}:root`);
@@ -913,7 +913,7 @@ export const Folder: Story = {
     // SQLite would walk forever the day the folder is deleted.
     const itself = await canvas.findByRole("menuitem", { name: /Constructed › Commander/ });
     await expect(itself).toHaveAttribute("aria-disabled", "true");
-    await expect(within(itself).getByText("Cannot go inside itself")).toBeInTheDocument();
+    await expect(within(itself).getByText("A folder can't go inside itself")).toBeInTheDocument();
 
     await userEvent.click(canvas.getByRole("menuitem", { name: /Ideas/ }));
     await expect(args.act).toHaveBeenCalledWith(`move-folder:${FOLDER.id}:3`);

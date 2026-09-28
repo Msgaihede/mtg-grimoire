@@ -680,7 +680,7 @@ describe("the create deck dialog", () => {
     await userEvent.click(submitButton());
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not create the deck — The card database is busy finishing a sync.",
+      "Couldn't create the deck — The card database is busy finishing a sync.",
     );
     // Still open, still holding every answer: the reader presses again rather than retyping.
     expect(screen.getByLabelText("Name")).toHaveValue("Sunday burn");

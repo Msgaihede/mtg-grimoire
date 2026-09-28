@@ -139,7 +139,7 @@ describe("DeckCoverPicker", () => {
   it("says the deck has nothing to pick from yet", () => {
     picker({ deckCards: [] });
 
-    expect(screen.getByText(/Nothing to pick from yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Add cards to this deck to pick a cover/)).toBeInTheDocument();
     expect(screen.queryByRole("list")).toBeNull();
   });
 
@@ -236,7 +236,7 @@ describe("DeckCoverPicker", () => {
     await userEvent.type(screen.getByLabelText("Search every card"), "bolt");
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not search the cards — Database is busy.",
+      "Couldn't search the cards — Database is busy.",
     );
     // And it does not also claim the word matched nothing — one sentence per thing that happened.
     expect(screen.queryByText(/No card matches/)).toBeNull();
@@ -251,7 +251,7 @@ describe("DeckCoverPicker", () => {
     await userEvent.type(screen.getByLabelText("Search every card"), "zzzz");
 
     expect(await screen.findByText(/No card matches “zzzz”\./)).toBeInTheDocument();
-    expect(screen.queryByText(/Nothing to pick from yet/)).toBeNull();
+    expect(screen.queryByText(/Add cards to this deck to pick a cover/)).toBeNull();
   });
 
   /** One page and no pager, so the reader has to be told when the page is not the whole of it. */

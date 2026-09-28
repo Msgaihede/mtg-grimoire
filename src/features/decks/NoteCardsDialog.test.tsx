@@ -76,7 +76,7 @@ describe("naming cards in a note", () => {
   it("names the note in its heading and says what the dialog is for", async () => {
     open();
     expect(await screen.findByRole("heading", { name: "Mana base" })).toBeInTheDocument();
-    expect(screen.getByText("Which cards this note is about")).toBeInTheDocument();
+    expect(screen.getByText("Cards linked to this note")).toBeInTheDocument();
   });
 
   it("gives every checkbox the card's own name, never a bare Select", async () => {
@@ -135,12 +135,12 @@ describe("naming cards in a note", () => {
     await userEvent.clear(box);
     await userEvent.type(box, "zzz");
     expect(screen.queryByRole("checkbox")).not.toBeInTheDocument();
-    expect(screen.getByText(/No card in this deck matches/)).toBeInTheDocument();
+    expect(screen.getByText(/No cards match/)).toBeInTheDocument();
   });
 
   it("says a deck with nothing in it has nothing to name, which is not a no-match", async () => {
     open({ attachable: [] });
-    expect(screen.getByText("This deck has no cards to name yet.")).toBeInTheDocument();
+    expect(screen.getByText("This deck has no cards to link yet.")).toBeInTheDocument();
   });
 
   it("keeps a card the note names even when the deck no longer holds it", async () => {

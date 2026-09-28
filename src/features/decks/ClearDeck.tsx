@@ -117,8 +117,7 @@ export function ClearDeck({
           destructive questions follow, and the reason holds here too: this is the line a reader's
           eye is on while they decide. */}
       <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-destructive">
-        The {plural(cardCount, "card")} in it {verb(cardCount, "leaves", "leave")} the deck{" "}
-        and the piles stay.{" "}
+        {plural(cardCount, "card")} will be removed from the deck. Categories stay.{" "}
         {/* **Three answers, and the middle one is the new arm rather than a special case of
             either.** The `Recently removed` promise is true of a list whose rows are backed by
             collection rows in this deck's group; a virtual deck's rows are `live` rows with no
@@ -127,10 +126,10 @@ export function ClearDeck({
             copies* — because that is the fact, and a reader who has just been told their cards
             are leaving should be told plainly that none of them were cardboard. */}
         {virtual
-          ? "This deck keeps no copies, so nothing else moves."
+          ? "This deck doesn't use your collection, so no cards are moved."
           : variant === "live"
             ? "Any copies you own go back to Recently removed."
-            : "A theory list holds no copies, so nothing else moves."}
+            : "The theory list doesn't use your collection, so no cards are moved."}
       </p>
       {otherCount > 0 && (
         <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
@@ -149,7 +148,7 @@ export function ClearDeck({
           Remove {plural(cardCount, "card")}
         </button>
         <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
-          Keep them
+          Cancel
         </button>
       </div>
     </div>

@@ -153,7 +153,7 @@ export const Everything: Story = {
     // rule that leaves it out.
     await expect(term("Owned")).toHaveTextContent("64");
     // The count is the chip's own caption, and the chip is a toggle standing at rest.
-    await expect(canvas.getByRole("button", { name: "2 game changers" })).toHaveAttribute(
+    await expect(canvas.getByRole("button", { name: "2 Game Changers" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
@@ -183,7 +183,7 @@ export const GameChangersFilterOn: Story = {
   },
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
-    const chip = canvas.getByRole("button", { name: "2 game changers" });
+    const chip = canvas.getByRole("button", { name: "2 Game Changers" });
 
     await expect(chip).toHaveAttribute("aria-pressed", "true");
     // The name is the chip's own contents and does not change with the press — the words a test
@@ -214,7 +214,7 @@ export const GameChangersParked: Story = {
     const canvas = within(canvasElement);
 
     await expect(canvas.getByRole("button", { name: "Game Changers" })).toBeInTheDocument();
-    await expect(canvas.queryByText(/0 game changers/)).toBeNull();
+    await expect(canvas.queryByText(/0 Game Changers/)).toBeNull();
   },
 };
 
@@ -285,7 +285,7 @@ export const ModalLands: Story = {
     const tip = await canvas.findByRole("tooltip", undefined, {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
-    await expect(tip).toHaveTextContent("2 modal double-faced cards that play as a land");
+    await expect(tip).toHaveTextContent("2 MDFCs with a land back face");
   },
 };
 
@@ -350,8 +350,8 @@ export const Tight: Story = {
     // than a courtesy: the name is computed from the chip's own contents, so an `aria-label` here
     // would replace them and announce the abbreviation to nobody. The chip is a press again since
     // 2026-09-10 and still carries no label, which is what keeps these two strings the name.
-    await expect(canvas.getByText("6 game changers")).toHaveClass("sr-only");
-    await expect(canvas.getByRole("button", { name: "6 game changers" })).toBeInTheDocument();
+    await expect(canvas.getByText("6 Game Changers")).toHaveClass("sr-only");
+    await expect(canvas.getByRole("button", { name: "6 Game Changers" })).toBeInTheDocument();
   },
 };
 
@@ -416,6 +416,6 @@ export const OnAVirtualDeck: Story = {
     for (const label of ["Format", "Cards", "Lands", "Avg. mana", "Price"]) {
       await expect(canvas.getByText(label, { selector: "dt" })).toBeInTheDocument();
     }
-    await expect(canvas.getByRole("button", { name: "2 game changers" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "2 Game Changers" })).toBeInTheDocument();
   },
 };

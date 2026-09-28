@@ -453,7 +453,7 @@ function NoteBody({ body }: { body: string }): JSX.Element {
     // empty box is. It is stated as a **sentence** and not as blank space because the line above
     // is a name and deliberately not a heading (see the title span), so nothing else on the card
     // would tell a reader that this note has no prose in it from a note whose prose did not load.
-    return <p className="text-[0.6875rem] text-dim">No notes yet. Click Edit to add content.</p>;
+    return <p className="text-[0.6875rem] text-dim">No content yet. Click Edit to add some.</p>;
   }
 
   return (

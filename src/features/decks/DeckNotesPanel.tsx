@@ -786,11 +786,10 @@ export function NotesBand({
               </ul>
             ) : answered ? (
               <p className="text-xs text-dim">
-                No notes on this deck yet — press <span className="text-text">New note</span> to
-                write one.
+                No notes yet. Click <span className="text-text">New note</span> to add one.
               </p>
             ) : failure === null ? (
-              <p className="text-xs text-dim">Reading this deck&rsquo;s notes…</p>
+              <p className="text-xs text-dim">Loading notes…</p>
             ) : null}
           </div>
         )}
@@ -978,7 +977,7 @@ function DeleteNoteDialog({
       // one rung down: an empty string is a *name*, and the one thing this template must never be
       // able to spell is `Delete “”?`.
       title={title === null ? "Delete note" : `Delete “${title}”?`}
-      closeLabel="Close the delete question"
+      closeLabel="Close"
       // Narrower than the picker's `w-[47.5rem]` and the editor's `w-[40rem]`: the widest thing in
       // it is one sentence, and a question set across 760px reads as a page rather than a prompt.
       size="w-[26rem]"
@@ -988,8 +987,8 @@ function DeleteNoteDialog({
       <div className="px-5 py-4">
         <p className="text-xs leading-relaxed text-dim">
           {cardCount === 0
-            ? "The note goes for good."
-            : `The note goes for good, and stops naming its ${plural(cardCount, "card")}. The cards themselves stay in the deck.`}
+            ? "This note will be deleted."
+            : `This note will be deleted and unlinked from ${plural(cardCount, "card")}. The cards stay in the deck.`}
         </p>
       </div>
 
@@ -998,7 +997,7 @@ function DeleteNoteDialog({
           Delete note
         </button>
         <button type="button" onClick={onClose} className={CONFIRM_CANCEL}>
-          Keep it
+          Cancel
         </button>
       </footer>
     </Dialog>

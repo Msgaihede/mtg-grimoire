@@ -452,8 +452,8 @@ function copyIssues(
           severity: "warning",
           code: "unknown-copy-limit",
           message:
-            `${name}'s text allows up to "${unreadable}" copies, a number this app cannot ` +
-            `read; its ${quantity} copies were not checked.`,
+            `Couldn't read ${name}'s copy limit ("${unreadable}"), so its ${quantity} copies ` +
+            `weren't checked.`,
           cardIds,
         });
       }
@@ -544,8 +544,8 @@ function cardIssues(
         code: "orphan",
         message: card.needsReview
           ? `${card.name}: ${card.needsReview}`
-          : `${card.name} is not in the card database, so it was not checked against ` +
-            `${spec.displayName}'s rules.`,
+          : `${card.name} isn't in the card database, so it wasn't checked against ` +
+            `${spec.displayName} rules.`,
         cardIds: [card.cardId],
       });
       continue;
@@ -587,7 +587,7 @@ function legalityIssues(
   const { name } = card;
   const format = spec.displayName;
   if (read.kind === "unreadable") {
-    return [warning("unknown-legality", `${name}'s ${format} legality could not be read.`, card)];
+    return [warning("unknown-legality", `Couldn't read ${name}'s ${format} legality.`, card)];
   }
   // A list that does not mention a card is a pool that does not contain it.
   if (read.kind === "missing") {
@@ -608,7 +608,7 @@ function legalityIssues(
       return [
         warning(
           "unknown-legality",
-          `${name}'s ${format} legality is "${read.status}", which this app does not know.`,
+          `${name} has an unrecognized ${format} legality ("${read.status}").`,
           card,
         ),
       ];

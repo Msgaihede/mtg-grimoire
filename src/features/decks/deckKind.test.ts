@@ -93,7 +93,7 @@ describe("the kind vocabulary", () => {
    */
   it("says what the two moving presses cost", () => {
     expect(DECK_KIND_HINT.virtual).toContain("Recently removed");
-    expect(DECK_KIND_HINT.theory).toContain("actual list empty");
+    expect(DECK_KIND_HINT.theory).toContain("starts Actual empty");
   });
 
   it("has three distinct labels", () => {

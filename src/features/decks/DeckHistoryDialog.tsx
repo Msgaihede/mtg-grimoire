@@ -192,7 +192,7 @@ export function DeckHistoryDialog({ deckId, open, onDismiss, onClose }: DeckHist
     <Dialog
       open={open}
       title="History"
-      closeLabel="Close history"
+      closeLabel="Close"
       size="w-[48rem]"
       onDismiss={onDismiss}
       onClose={onClose}
@@ -342,26 +342,25 @@ function Body({
   // changes recorded yet" would tell the reader their history is gone.
   if (error !== null) {
     return (
-      <Notice title="This deck's history could not be read.">
+      <Notice title="Couldn't load this deck's history.">
         {error instanceof Error && error.message
           ? error.message
-          : "The app could not reach its own database."}{" "}
-        Close the dialog and open it again to try once more.
+          : "Couldn't reach the database."}{" "}
+        Close and reopen to try again.
       </Notice>
     );
   }
-  if (pending) return <Notice title="Reading this deck's history…" />;
+  if (pending) return <Notice title="Loading history…" />;
   if (empty) {
     return (
       <Notice title="No changes recorded yet.">
-        Every edit lists here — a card added, a category renamed, a printing swapped, the format
-        changed. Make one and it becomes the first line.
+        Every change to this deck shows up here.
       </Notice>
     );
   }
   return (
     <Notice title="Nothing matches these filters.">
-      This deck has history; none of it is the kind you are looking at.{" "}
+      No changes match this filter.{" "}
       <button
         type="button"
         onClick={onShowEverything}

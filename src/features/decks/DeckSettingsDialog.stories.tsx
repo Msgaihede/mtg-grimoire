@@ -176,7 +176,7 @@ export const DescriptionAndTheory: Story = {
     });
     // The caption is the answer to the press, so it changes with it — and it is the one place
     // the deck's cards being poured into the plan is said before it happens.
-    await expect(canvas.getByText(/starts the actual list empty/)).toBeInTheDocument();
+    await expect(canvas.getByText(/starts Actual empty/)).toBeInTheDocument();
     await expect(description).toHaveValue(
       "Swap the Bolts for Bowmasters when the sideboard arrives.",
     );
@@ -218,13 +218,13 @@ export const VirtualDeck: Story = {
 
     await expect(canvas.queryByText("Fill this deck from your collection")).toBeNull();
     await expect(
-      canvas.queryByRole("button", { name: /Import missing cards from collection/ }),
+      canvas.queryByRole("button", { name: /Pull owned cards/ }),
     ).toBeNull();
 
     // And the section that stays: one press, and no `Clear theory list…` beside it — a virtual
     // deck's `theoryEnabled` is `false` by construction, so that arm's existing gate is the whole
     // of what keeps it away.
-    await expect(canvas.getByText("Empty a list")).toBeInTheDocument();
+    await expect(canvas.getByText("Clear a list")).toBeInTheDocument();
     const clears = canvas.getAllByRole("button", { name: /^Clear / });
     await expect(clears).toHaveLength(1);
   },
@@ -291,7 +291,7 @@ export const WriteRefused: Story = {
     await userEvent.clear(name);
     await userEvent.type(name, "Modern Goodstuff II{Enter}");
 
-    await expect(await canvas.findByRole("alert")).toHaveTextContent(/Could not save that change/);
+    await expect(await canvas.findByRole("alert")).toHaveTextContent(/Couldn't save that change/);
   },
 };
 
@@ -304,7 +304,7 @@ export const DeckIsGone: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await expect(await canvas.findByText(/This deck is gone/)).toBeInTheDocument();
+    await expect(await canvas.findByText(/This deck was deleted/)).toBeInTheDocument();
   },
 };
 
@@ -330,7 +330,7 @@ export const ImportFromCollection: Story = {
     await canvas.findByLabelText("Name");
 
     const trigger = await canvas.findByRole("button", {
-      name: "Import missing cards from collection…",
+      name: "Pull owned cards…",
     });
     await userEvent.click(trigger);
 
@@ -341,7 +341,7 @@ export const ImportFromCollection: Story = {
     // The deck-wide sentence, which is the whole of what passing no `cardName` buys: the per-card
     // entrance says "Copies of X you already own" instead.
     await expect(
-      within(pull).getByText(/Cards this deck is short of that you already own/),
+      within(pull).getByText(/Cards you own that .* is missing/),
     ).toBeInTheDocument();
     await expect(canvas.getByRole("dialog", { name: "Deck settings" })).toBeInTheDocument();
 
@@ -382,7 +382,7 @@ export const NothingToImport: Story = {
     await canvas.findByLabelText("Name");
 
     await userEvent.click(
-      await canvas.findByRole("button", { name: "Import missing cards from collection…" }),
+      await canvas.findByRole("button", { name: "Pull owned cards…" }),
     );
     const pull = await canvas.findByRole("dialog", { name: "Pull from collection" });
     // `ImportFromCollection`'s wait, for its reason: a `motion` surface inside another one.
@@ -396,7 +396,7 @@ export const NothingToImport: Story = {
     );
     await expect(
       await canvas.findByRole("button", {
-        name: "Import missing cards from collection… (nothing to import)",
+        name: "Pull owned cards… (nothing to pull)",
       }),
     ).toBeDisabled();
   },

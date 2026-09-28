@@ -269,7 +269,7 @@ describe("writing a note in a dialog", () => {
         onClose={vi.fn()}
       />,
     );
-    expect(await screen.findByText(/will name Lightning Bolt/)).toBeInTheDocument();
+    expect(await screen.findByText(/Linked to Lightning Bolt/)).toBeInTheDocument();
   });
 
   it("writes nothing when the reader backs out", async () => {

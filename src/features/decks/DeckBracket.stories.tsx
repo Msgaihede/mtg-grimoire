@@ -140,8 +140,8 @@ export const ThreeGameChangers: Story = {
     // The headline is one text run rather than styled spans, so it is a sentence something can
     // read back: a fact split across elements is one nothing — screen reader, test, or reader
     // skimming — puts together.
-    await expect(panel).toHaveTextContent("Bracket ~3 · 3 game changers");
-    await expect(panel).toHaveTextContent(/never a rule this deck can fail/);
+    await expect(panel).toHaveTextContent("Bracket ~3 · 3 Game Changers");
+    await expect(panel).toHaveTextContent(/Your playgroup decides the real bracket/);
     // The one sentence a panel may only write once a list has actually answered.
     await expect(
       await within(panel).findByText("No two-card combo in the list matches this deck."),
@@ -149,7 +149,7 @@ export const ThreeGameChangers: Story = {
 
     // The disclosure is closed until asked, and **what it says is the reason the number is worth
     // showing at all**: a reader who disagrees with a heuristic can see which card caused it.
-    const why = within(panel).getByRole("button", { name: "What this read" });
+    const why = within(panel).getByRole("button", { name: "How this was estimated" });
     await expect(why).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(why);
     await expect(why).toHaveAttribute("aria-expanded", "true");
@@ -167,7 +167,7 @@ export const ThreeGameChangers: Story = {
  *
  * The one card fact that decides the number is a column a sync fills, so a deck the estimate can
  * see nothing in reads as a floor rather than as nothing at all — and there is no disclosure,
- * because an empty "What this read" is a control promising an answer it has not got.
+ * because an empty "How this was estimated" is a control promising an answer it has not got.
  *
  * **That floor is `~2` and not `~1` since 2026-09-01.** Bracket 1 Exhibition is described by what
  * its builder is *for* — "prioritize a goal, theme, or idea over power" — which is exactly the
@@ -180,8 +180,8 @@ export const NothingToSee: Story = {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("dialog", { name: "Bracket estimate" });
 
-    await expect(panel).toHaveTextContent("Bracket ~2 · 0 game changers");
-    await expect(within(panel).queryByRole("button", { name: "What this read" })).toBeNull();
+    await expect(panel).toHaveTextContent("Bracket ~2 · 0 Game Changers");
+    await expect(within(panel).queryByRole("button", { name: "How this was estimated" })).toBeNull();
   },
 };
 
@@ -216,7 +216,7 @@ export const SetByTheReader: Story = {
     const panel = canvas.getByRole("dialog", { name: "Bracket estimate" });
     // The headline is still the *reading*, whatever the reader set — the picker below is the
     // answer, and the two are different claims that belong in different places.
-    await expect(panel).toHaveTextContent("Bracket ~3 · 3 game changers");
+    await expect(panel).toHaveTextContent("Bracket ~3 · 3 Game Changers");
 
     const group = within(panel).getByRole("radiogroup", { name: "Bracket for this deck" });
     await expect(within(group).getByRole("radio", { name: "4 Optimized" })).toBeChecked();
@@ -274,7 +274,7 @@ export const BelowTheFloor: Story = {
     // The mismatch leads, above the reading it is about — and it never says illegal, invalid or
     // must, because the reader is the one who knows whether their playgroup cares.
     await expect(
-      await within(panel).findByText(/Set to bracket 2, but this deck reads as bracket 4/),
+      await within(panel).findByText(/Set to bracket 2, but the cards suggest bracket 4\+/),
     ).toBeInTheDocument();
 
     // The combo that set the floor, in Spellbook's own words for its own letter.
@@ -296,7 +296,7 @@ export const BelowTheFloor: Story = {
     ).toBeInTheDocument();
 
     // The possible one, on its own line, said in words rather than left to a heading.
-    await expect(within(panel).getByText(/Possible, and not counted/)).toBeInTheDocument();
+    await expect(within(panel).getByText(/Possible combos \(not counted\)/)).toBeInTheDocument();
     await expect(
       within(panel).getByText("Thrasios, Triton Hero + Sol Ring"),
     ).toBeInTheDocument();
@@ -333,10 +333,10 @@ export const CombosNeverFetched: Story = {
     const panel = canvas.getByRole("dialog", { name: "Bracket estimate" });
 
     await expect(
-      await within(panel).findByText(/No combo list has been downloaded/),
+      await within(panel).findByText(/Combo data hasn’t downloaded yet/),
     ).toBeInTheDocument();
     // The arrival, said in words — the half a reader needs now that there is no button.
-    await expect(panel).toHaveTextContent(/downloads on its own shortly after launch/);
+    await expect(panel).toHaveTextContent(/downloads automatically after launch/);
     // Never this, on a database that has looked at nothing.
     await expect(
       within(panel).queryByText("No two-card combo in the list matches this deck."),

@@ -1137,8 +1137,8 @@ function DeleteConfirm({
     >
       <p>Delete “{deck.name}”?</p>
       <p className="mt-1 text-dim">
-        Its {cards} {deck.cardCount === 1 ? "moves" : "move"} to Recently removed. Archiving
-        keeps the deck instead.
+        Its {cards} {deck.cardCount === 1 ? "moves" : "move"} to Recently removed. To keep the
+        deck, archive it instead.
       </p>
       <div className="mt-2 flex gap-2">
         <button

@@ -400,8 +400,7 @@ describe("the companion zone", () => {
         severity: "warning",
         code: "companion-unknown",
         message:
-          "Treizeci, Sun of Serra's companion ability is one this app does not know, so your " +
-          "deck was not checked against it.",
+          "Treizeci, Sun of Serra's companion condition isn't supported yet, so it wasn't checked.",
         cardIds: ["c-Treizeci, Sun of Serra"],
       },
     ]);

@@ -1441,7 +1441,7 @@ function ShowStackButton({
       type="button"
       onClick={() => onShow(categoryId)}
       aria-label={`Show ${name}`}
-      {...tip("Hidden — press to show its cards")}
+      {...tip("Hidden. Click to show.")}
       className={cn(
         "grid size-4 shrink-0 place-items-center rounded-sm text-text",
         "transition-colors duration-150 hover:text-accent motion-reduce:transition-none",

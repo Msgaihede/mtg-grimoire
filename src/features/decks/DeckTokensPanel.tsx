@@ -429,7 +429,7 @@ export function DeckTokensPanel({
 
         {readFailure !== null && (
           <p role="alert" className="text-xs text-destructive">
-            Could not read this deck&rsquo;s tokens — {readFailure}
+            Couldn&rsquo;t load this deck&rsquo;s tokens — {readFailure}
           </p>
         )}
 
@@ -507,7 +507,7 @@ function TokenWall({
           the hook hands one sentence over rather than a map of them. */}
       {tokens.failure !== null && (
         <p role="alert" className="mb-2 text-xs text-destructive">
-          Could not save that change — {tokens.failure}
+          Couldn't save that change — {tokens.failure}
         </p>
       )}
 
@@ -592,7 +592,7 @@ function TokenTile({
   const why =
     view.sources.length > 0
       ? `From ${view.sources.map((source) => source.name).join(", ")}`
-      : "Added by hand";
+      : "Added manually";
 
   return (
     <div

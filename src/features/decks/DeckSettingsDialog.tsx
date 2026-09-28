@@ -97,7 +97,7 @@ export function DeckSettingsDialog({
     <Dialog
       open={open}
       title="Deck settings"
-      closeLabel="Close deck settings"
+      closeLabel="Close"
       size="w-[55rem]"
       onDismiss={onDismiss}
       onClose={onClose}
@@ -455,15 +455,15 @@ function Settings({ deckId }: { deckId: number }) {
     // The body's own scroller: the shell owns the header and nothing under it, because the
     // deck-builder modals do not agree about what scrolls inside them.
     <div className="min-h-0 flex-1 overflow-y-auto p-5">
-      {loading && <p className="text-sm text-dim">Reading the deck…</p>}
+      {loading && <p className="text-sm text-dim">Loading deck…</p>}
       {readFailure !== null && (
         <p role="alert" className="text-sm text-destructive">
-          Could not read the deck — {readFailure}
+          Couldn't load the deck — {readFailure}
         </p>
       )}
       {gone && (
         <p className="text-sm text-dim">
-          This deck is gone — another view deleted it while these settings were open.
+          This deck was deleted.
         </p>
       )}
 
@@ -557,8 +557,7 @@ function Settings({ deckId }: { deckId: number }) {
             <div className="mt-5 border-t border-border pt-4">
               <h3 className="text-xs">Fill this deck from your collection</h3>
               <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-                Copies you already own move into this deck&rsquo;s folder. Nothing is added to the
-                list and nothing is bought.
+                Moves copies you already own into this deck&rsquo;s folder.
               </p>
               {/* The small print states the one thing a reader standing here has not seen: this
                   writes no `deck_cards` row, so a 4-copy line the deck is 3 short of stays a
@@ -573,8 +572,8 @@ function Settings({ deckId }: { deckId: number }) {
                   onClick={() => setImporting(true)}
                 >
                   {nothingToPull
-                    ? "Import missing cards from collection… (nothing to import)"
-                    : "Import missing cards from collection…"}
+                    ? "Pull owned cards… (nothing to pull)"
+                    : "Pull owned cards…"}
                 </RowAction>
               </div>
             </div>
@@ -607,9 +606,9 @@ function Settings({ deckId }: { deckId: number }) {
               reader only meets where there is a plan, so the word comes from {@link listName}
               rather than from a literal here. See the row itself. */}
           <div className="mt-5 border-t border-border pt-4">
-            <h3 className="text-xs">Empty a list</h3>
+            <h3 className="text-xs">Clear a list</h3>
             <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-              Every card leaves the list. The piles it was filed in stay where they are.
+              Removes every card from the list. Categories stay.
             </p>
 
             {asking === null ? (
@@ -693,7 +692,7 @@ function Settings({ deckId }: { deckId: number }) {
               this banner's business as a refused rename. */}
           {bannerFailure !== null && (
             <p role="alert" className="mt-3.5 text-xs text-destructive">
-              Could not save that change — {bannerFailure}
+              Couldn't save that change — {bannerFailure}
             </p>
           )}
 

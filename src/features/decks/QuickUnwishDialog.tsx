@@ -81,7 +81,7 @@ const ROOT_LABEL = "Wishlist";
 /** What the body says when the layer is up with no wishes in it — a state the editor cannot
  *  produce (`chooseWish` only opens this for two or more) and which a story or a stale payload
  *  can. It says so rather than drawing an empty fieldset with a live button over it. */
-const NO_WISHES = "No wishlist line matches this printing any more.";
+const NO_WISHES = "This printing is no longer on your wishlist.";
 
 /**
  * One wish said aloud — where it sits and what it asks for, in that order.
@@ -181,17 +181,16 @@ export function QuickUnwishDialog({
   return (
     <Dialog
       open={open}
-      title="Which wish?"
+      title="Which wishlist item?"
       // The card and the count are the subtitle rather than the heading, for
       // `PullFromCollectionDialog`'s reason: the heading is what the press *is* and stays the
       // same every time, and a card name in a 20px Cinzel heading is the half that truncates.
       subtitle={
         cardName === null
           ? undefined
-          : `${plural(copies, "copy", "copies")} of ${cardName} — which wishlist line ` +
-            "do they come off?"
+          : `Remove ${plural(copies, "copy", "copies")} of ${cardName} from which wishlist item?`
       }
-      closeLabel="Close which wish"
+      closeLabel="Close"
       size="w-[30rem]"
       onDismiss={onDismiss}
       onClose={onClose}
@@ -274,7 +273,7 @@ function QuickUnwishBody({
           {/* The legend is the question in the subtitle said again for a screen reader, because
               a `subtitle` is a sibling of this form and names the *dialog* rather than this
               group — a radio group with no legend is N options with no question over them. */}
-          <legend className="sr-only">Which wishlist line these copies come off</legend>
+          <legend className="sr-only">Wishlist item to update</legend>
           {wishes.map((wish) => (
             <WishRow
               key={wish.id}
@@ -305,7 +304,7 @@ function QuickUnwishBody({
             role="alert"
             className="overflow-hidden text-[0.6875rem] text-destructive"
           >
-            Could not record those copies — {failure}
+            Couldn't record those copies — {failure}
           </motion.p>
         )}
       </AnimatePresence>

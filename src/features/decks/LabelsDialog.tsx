@@ -116,7 +116,7 @@ export function LabelsDialog({
       open={open}
       title="Labels"
       subtitle={LABELS_SUBTITLE}
-      closeLabel="Close labels"
+      closeLabel="Close"
       size="w-[36rem]"
       onDismiss={onDismiss}
       onClose={onClose}
@@ -272,7 +272,7 @@ function LabelsBody({ deckId, variant }: { deckId: number; variant: DeckVariant 
         </form>
         {clash !== undefined && (
           <p className="mt-1.5 text-[0.6875rem] text-dim" role="status">
-            “{clash.name}” already exists. Label names must be unique across all decks.
+            “{clash.name}” already exists.
           </p>
         )}
         {pickerOpen && (
@@ -285,10 +285,10 @@ function LabelsBody({ deckId, variant }: { deckId: number; variant: DeckVariant 
       <section>
         <p className={SECTION}>On cards in this {LIST_NAME[variant]} list</p>
         {labelsQuery.isPending ? (
-          <p className="text-xs text-dim">Reading this deck’s labels…</p>
+          <p className="text-xs text-dim">Loading labels…</p>
         ) : labels.length === 0 ? (
           <p className="text-xs text-dim">
-            No cards in this list are labelled yet. Right-click a card to apply a label.
+            No cards in this list are labeled yet. Right-click a card to apply a label.
           </p>
         ) : (
           <ul className="flex flex-col gap-1">
@@ -312,12 +312,12 @@ function LabelsBody({ deckId, variant }: { deckId: number; variant: DeckVariant 
       <section>
         <p className={SECTION}>Your other labels</p>
         {allLabelsQuery.isPending ? (
-          <p className="text-xs text-dim">Reading your labels…</p>
+          <p className="text-xs text-dim">Loading labels…</p>
         ) : others.length === 0 ? (
           <p className="text-[0.6875rem] text-dim">
             {allLabels.length === 0
-              ? "No other labels created yet. Add one above, then right-click a card to apply it."
-              : "All existing labels are currently used in this list."}
+              ? "No other labels yet. Create one above."
+              : "All your labels are used in this list."}
           </p>
         ) : (
           <ul className="flex flex-col gap-1">
@@ -398,7 +398,7 @@ function LabelShell({
           type="button"
           onClick={onPick}
           aria-expanded={picking}
-          aria-label={`Change colour of ${label.name}`}
+          aria-label={`Change color of ${label.name}`}
           {...tip(`#${labelColorHex(shown)}`)}
           className={cn(
             "grid size-[1.125rem] shrink-0 place-items-center rounded border border-border",
@@ -604,12 +604,12 @@ function RemoveFromDeck({
   return (
     <div {...confirm}>
       <p className="text-xs">
-        Take “{label.name}” off this {LIST_NAME[variant]} list?
+        Remove “{label.name}” from this {LIST_NAME[variant]} list?
       </p>
       <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
         {label.cardCount === 1
-          ? "Its 1 card stays in the deck and loses the label"
-          : `Its ${label.cardCount} cards stay in the deck and lose the label`}
+          ? "The card stays in the deck without the label"
+          : `The ${label.cardCount} cards stay in the deck without the label`}
         {". The label itself stays in your list"}
         {elsewhere !== null && elsewhere > 0
           ? `, and stays on the ${elsewhere === 1 ? "1 other deck" : `${elsewhere} other decks`} using it.`
@@ -625,7 +625,7 @@ function RemoveFromDeck({
           Remove from deck
         </button>
         <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
-          Keep it
+          Cancel
         </button>
       </div>
     </div>
@@ -666,15 +666,14 @@ function DeleteLabel({
   const decks = label.deckCount === 1 ? "1 deck" : `${label.deckCount} decks`;
   const wearing =
     label.cardCount === 1
-      ? `Its 1 card, in ${decks}, stays where it is and loses the label.`
-      : `Its ${label.cardCount} cards, across ${decks}, stay where they are and lose the label.`;
+      ? `The card in ${decks} loses the label.`
+      : `${label.cardCount} cards across ${decks} lose the label.`;
 
   return (
     <div {...confirm}>
       <p className="text-xs">Delete “{label.name}” everywhere?</p>
       <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-        {label.deckCount === 0 ? "No deck is using it." : wearing} This takes it out of your label
-        list for good.
+        {label.deckCount === 0 ? "No deck is using it." : wearing} This can&rsquo;t be undone.
       </p>
       <div className="mt-2 flex gap-2">
         <button
@@ -686,7 +685,7 @@ function DeleteLabel({
           Delete label
         </button>
         <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
-          Keep it
+          Cancel
         </button>
       </div>
     </div>

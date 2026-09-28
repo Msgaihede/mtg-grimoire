@@ -69,7 +69,7 @@ function open(options: Options = {}) {
 }
 
 /** The panel, addressed the way the app's other dialog suites address one. */
-const panel = () => screen.getByRole("dialog", { name: "Which wish?" });
+const panel = () => screen.getByRole("dialog", { name: "Which wishlist item?" });
 
 describe("QuickUnwishDialog", () => {
   /**
@@ -83,7 +83,7 @@ describe("QuickUnwishDialog", () => {
   it("names each wish by its folder and what it asks for", async () => {
     open({ wishes: [wish({ quantity: 1 }), TWO[1]] });
 
-    const rows = within(await screen.findByRole("dialog", { name: "Which wish?" })).getAllByRole(
+    const rows = within(await screen.findByRole("dialog", { name: "Which wishlist item?" })).getAllByRole(
       "radio",
     );
     expect(rows).toHaveLength(2);
@@ -105,7 +105,7 @@ describe("QuickUnwishDialog", () => {
       ],
     });
 
-    const rows = within(await screen.findByRole("dialog", { name: "Which wish?" })).getAllByRole(
+    const rows = within(await screen.findByRole("dialog", { name: "Which wishlist item?" })).getAllByRole(
       "radio",
     );
     expect(rows[0]).toHaveAccessibleName("Modern staples · LEA 161 · Foil · 2 copies");
@@ -195,7 +195,7 @@ describe("QuickUnwishDialog", () => {
     const { onConfirm, onDismiss, onClose } = open();
 
     await userEvent.click(
-      within(await screen.findByRole("dialog")).getByRole("button", { name: "Close which wish" }),
+      within(await screen.findByRole("dialog")).getByRole("button", { name: "Close" }),
     );
 
     expect(onConfirm).not.toHaveBeenCalled();
@@ -212,7 +212,7 @@ describe("QuickUnwishDialog", () => {
     open({ failure: "that wishlist line is not there any more" });
 
     expect(await within(panel()).findByRole("alert")).toHaveTextContent(
-      "Could not record those copies — that wishlist line is not there any more",
+      "Couldn't record those copies — that wishlist line is not there any more",
     );
     // Still answerable: a refusal leaves the question open with its button live, which is what
     // makes a second press possible at all.
@@ -238,7 +238,7 @@ describe("QuickUnwishDialog", () => {
     open({ wishes: [] });
 
     expect(
-      await screen.findByText("No wishlist line matches this printing any more."),
+      await screen.findByText("This printing is no longer on your wishlist."),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Record 4 copies" })).toBeDisabled();
   });

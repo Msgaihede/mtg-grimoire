@@ -226,7 +226,7 @@ export const ACoverFromTheSearch: Story = {
     const canvas = within(canvasElement);
 
     await userEvent.type(await canvas.findByLabelText("Name"), "Bolt tribal");
-    await expect(canvas.getByText(/Nothing to pick from yet/)).toBeVisible();
+    await expect(canvas.getByText(/Add cards to this deck to pick a cover/)).toBeVisible();
 
     // 300 ms of debounce before a keystroke becomes a query, which is why the wait is generous.
     await userEvent.type(canvas.getByLabelText("Search every card"), "Lightning Bolt");
@@ -270,7 +270,7 @@ export const Refused: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Create deck" }));
 
     await waitFor(async () => {
-      await expect(await canvas.findByRole("alert")).toHaveTextContent("Could not create the deck");
+      await expect(await canvas.findByRole("alert")).toHaveTextContent("Couldn't create the deck");
     });
     // Still holding them, so the reader presses again rather than retyping.
     await expect(canvas.getByLabelText("Name")).toHaveValue("Sunday burn");

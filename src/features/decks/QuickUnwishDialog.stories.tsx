@@ -257,7 +257,7 @@ export const Refused: Story = {
     );
 
     await expect(canvas.getByRole("alert")).toHaveTextContent(
-      "Could not record those copies — That wishlist line is not there any more.",
+      "Couldn't record those copies — That wishlist line is not there any more.",
     );
     await expect(canvas.getByRole("button", { name: "Record 4 copies" })).toBeEnabled();
   },

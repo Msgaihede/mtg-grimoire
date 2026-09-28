@@ -83,7 +83,7 @@ const RULE_KINDS: readonly CategoryKind[] = ["commander", "side", "companion"];
  * `Inactive`, because it is the word the heading's own tooltip and the category menu's
  * `Deactivate` row are both about — the pile's switch.
  */
-export const MARKER_WORDS = { rule: "Rules pile", inactive: "Switched off" } as const;
+export const MARKER_WORDS = { rule: "Required", inactive: "Inactive" } as const;
 
 /**
  * A 14px chip holding one glyph — the shape both marks take (token stacks, 2026-09-26).
@@ -277,7 +277,7 @@ export function GroupHeader({
             <Marker
               icon={Gavel}
               words={MARKER_WORDS.rule}
-              title="Format rules read this pile by name; it cannot be renamed or removed."
+              title="Required by the format. Can't be renamed or removed."
             />
           </>
         )}
@@ -287,7 +287,7 @@ export function GroupHeader({
             <Marker
               icon={PowerOff}
               words={MARKER_WORDS.inactive}
-              title="Switched off: nothing counts toward deck size, copy limits, legality, or collection reservations."
+              title="Inactive: doesn't count toward deck size, copy limits, legality or your collection."
             />
           </>
         )}

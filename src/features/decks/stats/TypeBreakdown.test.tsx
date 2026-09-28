@@ -100,7 +100,7 @@ describe("TypeBreakdown", () => {
 
     expect(screen.getByRole("heading", { name: "Land 10" })).toBeInTheDocument();
     expect(
-      screen.getByText("Plus 2 modal double-faced cards with a land back, counted as spells."),
+      screen.getByText("Plus 2 MDFCs with a land back face, counted as spells."),
     ).toBeInTheDocument();
   });
 });

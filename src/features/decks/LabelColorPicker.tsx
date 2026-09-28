@@ -64,7 +64,7 @@ export type ColourSubject = string;
 
 /** What every caller got before there was anything but a label to colour, and what they still get
  *  for passing nothing. */
-const DEFAULT_SUBJECT: ColourSubject = "Label colour";
+const DEFAULT_SUBJECT: ColourSubject = "Label color";
 
 /**
  * The three names one subject becomes.

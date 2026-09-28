@@ -141,8 +141,8 @@ export function ManaCurveChart({
             onClick={() => onSplitChange(!split)}
             {...tip(
               split
-                ? "Draw each mana value as one bar."
-                : "Split each bar into creatures and noncreatures.",
+                ? "Show one bar per mana value"
+                : "Split bars into creatures and noncreatures",
             )}
             className={cn(
               // Mana pips' `Hide` box, so the two toggles on the band are one control.
@@ -187,7 +187,7 @@ export function ManaCurveChart({
           their deck size finds cards missing with nothing on screen to account for them. */}
       {stats.unknownManaValue > 0 && (
         <p className="text-xs tabular-nums text-dim">
-          {plural(stats.unknownManaValue, "card")} with no mana value, not counted
+          {plural(stats.unknownManaValue, "card")} without a mana value (not counted)
         </p>
       )}
     </StatsCard>

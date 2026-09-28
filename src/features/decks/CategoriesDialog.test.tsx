@@ -284,7 +284,7 @@ describe("CategoriesDialog", () => {
   it("is a dialog named Categories, dismissed by Escape and closed by the scrim", async () => {
     const { onDismiss, onClose } = mount();
     const dialog = await screen.findByRole("dialog", { name: "Categories" });
-    expect(within(dialog).getByRole("button", { name: "Close categories" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Close" })).toBeInTheDocument();
 
     const press = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
     window.dispatchEvent(press);
@@ -320,7 +320,7 @@ describe("CategoriesDialog", () => {
   it("says what an inactive category costs", async () => {
     mount();
     expect(
-      await screen.findByText(/Only active categories count toward the deck/),
+      await screen.findByText(/Inactive categories don’t count toward deck size/),
     ).toBeInTheDocument();
   });
 });
@@ -493,7 +493,8 @@ describe("categories", () => {
     expect(within(row("Commander")).getByText(rule)).toBeInTheDocument();
     expect(within(row("Sideboard")).getByText(rule)).toBeInTheDocument();
     expect(within(row("Maybeboard")).queryByText(rule)).not.toBeInTheDocument();
-    expect(within(row("Maybeboard")).getByText(inactive)).toBeInTheDocument();
+    // The marker and the Active/Inactive chip beside it now share one word.
+    expect(within(row("Maybeboard")).getAllByText(inactive)).toHaveLength(2);
     expect(within(row("Ramp")).queryByText(rule)).not.toBeInTheDocument();
   });
 
@@ -742,7 +743,7 @@ describe("categories", () => {
     expect(
       within(dialog).getByRole("button", { name: "Its 12 cards" }),
     ).toHaveTextContent("move to “Commander”");
-    expect(within(dialog).getByText(/move to “Commander”\. Nothing is lost/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/will move to “Commander”\./)).toBeInTheDocument();
     // A pile belongs to one list, so there is never a sentence about a second one.
     expect(within(dialog).queryByText(/both the theory and actual lists/)).not.toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Move 12 cards and delete" }));
@@ -774,11 +775,11 @@ describe("categories", () => {
 
     // Anchored on the sentence's own opening: `move to “Commander”` alone also matches the
     // picker's own row saying the same thing, which is a different control.
-    expect(within(dialog).getByText(/^The 2 cards in it move to “Commander”/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/^Its 2 cards will move to “Commander”/)).toBeInTheDocument();
     expect(within(dialog).queryByText(/both the theory and actual lists/)).not.toBeInTheDocument();
 
     await pickOption(user, "Its 2 cards", "go with it");
-    expect(within(dialog).getByText(/^The 2 cards in it go with it/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/^Its 2 cards will be removed/)).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Delete “Ramp”" }));
 
     expect(deckCategoryDelete).toHaveBeenCalledWith(2, null);
@@ -803,7 +804,7 @@ describe("categories", () => {
     await pickOption(user, "Its 3 cards", "go with it");
 
     expect(
-      within(dialog).getByText(/go with it\. A theory list holds no copies, so nothing else moves/),
+      within(dialog).getByText(/will be removed\. The theory list doesn't use your collection, so no cards are moved/),
     ).toBeInTheDocument();
     expect(within(dialog).queryByText(/Recently removed/)).not.toBeInTheDocument();
   });
@@ -839,7 +840,7 @@ describe("categories", () => {
 
     // "Keep it" is a control, and a control hands the caret back. It cannot do so until the
     // render that re-enables the trigger, which is why the component owes this to an effect.
-    await user.click(within(dialog).getByRole("button", { name: "Keep it" }));
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     const back = within(row("Ramp")).getByRole("button", { name: "Delete" });
     await waitFor(() => expect(back).toHaveFocus());
   });
@@ -856,7 +857,7 @@ describe("categories", () => {
     // The destructive arm says where the cards actually end up: the `deck_cards` rows go, and
     // the copies the reader owns are filed into `Recently removed` rather than destroyed.
     expect(
-      within(dialog).getByText(/go with it.*Any copies you own go back to Recently removed/),
+      within(dialog).getByText(/will be removed.*Any copies you own go back to Recently removed/),
     ).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Delete “Ramp”" }));
 
@@ -875,7 +876,7 @@ describe("categories", () => {
     await user.click(within(row("Draw")).getByRole("button", { name: "Delete" }));
     const dialog = await screen.findByRole("group", { name: "Delete Draw" });
     expect(within(dialog).queryByText(/^Its \d+ cards$/)).not.toBeInTheDocument();
-    expect(within(dialog).getByText("It is empty, so nothing goes with it.")).toBeInTheDocument();
+    expect(within(dialog).getByText("It's empty.")).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole("button", { name: "Delete “Draw”" }));
     expect(deckCategoryDelete).toHaveBeenCalledWith(7, null);
@@ -894,10 +895,10 @@ describe("categories", () => {
     await screen.findByText("Ramp");
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "File cards by what they do" }));
+    await user.click(screen.getByRole("button", { name: "Auto-categorize" }));
     // An empty deck moves nothing, which is the sentence a reader needs — this dialog draws no
     // cards, so without a count there is no way to tell a no-op from a failure.
-    expect(await screen.findByText(/Nothing to file/)).toBeInTheDocument();
+    expect(await screen.findByText(/All cards are already categorized/)).toBeInTheDocument();
     expect(deckGet).toHaveBeenCalledWith(1, "live", "tcgplayer");
     // An empty deck is nothing to file, and nothing to ask about either.
     expect(oracleTagsForPrintings).not.toHaveBeenCalled();
@@ -923,17 +924,17 @@ describe("categories", () => {
     await screen.findByText("Ramp");
     const user = userEvent.setup();
 
-    await user.click(screen.getByRole("button", { name: "File cards by what they do" }));
+    await user.click(screen.getByRole("button", { name: "Auto-categorize" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/^Could not organize cards by category\./);
+    expect(alert).toHaveTextContent(/^Couldn't auto-categorize cards: tag data failed to load\./);
     expect(alert).toHaveTextContent("The database is busy.");
     // Not one card moved, and not one pile made: the refusal is the whole press.
     expect(deckMoveCard).not.toHaveBeenCalled();
     expect(deckCategoryCreate).not.toHaveBeenCalled();
     // And the count sentence claims nothing — "Filed 12 cards" beside that alert would be two
     // answers to one press.
-    expect(screen.queryByText(/^Filed /)).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Categorized /)).not.toBeInTheDocument();
   });
 });
 

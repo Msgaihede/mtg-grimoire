@@ -321,7 +321,7 @@ export const Ordered: Story = {
     });
 
     await userEvent.click(
-      canvas.getByRole("button", { name: "Sort direction: ascending — press for descending" }),
+      canvas.getByRole("button", { name: "Sort ascending (click for descending)" }),
     );
 
     await waitFor(async () => {
@@ -330,7 +330,7 @@ export const Ordered: Story = {
     // The button names the press rather than the state alone, so its name is the other half of
     // what the turned arrow says.
     await expect(
-      canvas.getByRole("button", { name: "Sort direction: descending — press for ascending" }),
+      canvas.getByRole("button", { name: "Sort descending (click for ascending)" }),
     ).toBeInTheDocument();
   },
 };
@@ -431,7 +431,7 @@ export const DeleteAsksFirst: Story = {
     await expect(dialog).not.toHaveAttribute("aria-modal");
     await expect(dialog).toHaveTextContent("Delete “Modern Goodstuff”?");
     await expect(dialog).toHaveTextContent(
-      "Its 60 cards move to Recently removed. Archiving keeps the deck instead.",
+      "Its 60 cards move to Recently removed. To keep the deck, archive it instead.",
     );
     // Neither button is focused: the reader has not decided yet, and a stray Enter should not
     // decide for them. The panel itself holds the caret so Escape has something to hand back.
@@ -783,7 +783,7 @@ export const FoldersUnavailable: Story = {
     // kept because the claim it makes is the stronger one either way — a line that never arrived
     // still times out here.
     await waitFor(async () =>
-      expect(await within(tree).findByText(/^Could not read your folders/)).toBeVisible(),
+      expect(await within(tree).findByText(/^Couldn't load your folders/)).toBeVisible(),
     );
 
     // Every live deck, at the top level, exactly as it would be with no folders at all —
@@ -794,7 +794,7 @@ export const FoldersUnavailable: Story = {
     await expect(within(wall).getByText("Rhystic Testbed")).toBeInTheDocument();
     await expect(within(tree).getByRole("button", { name: "All decks, 3 decks" })).toBeVisible();
     // The wall's own refusal line is a different one and is not up: nothing was written.
-    await expect(canvas.queryByText(/Could not change your decks/)).toBeNull();
+    await expect(canvas.queryByText(/Couldn't change your decks/)).toBeNull();
   },
 };
 
@@ -932,7 +932,7 @@ export const Busy: Story = {
 
     const alert = await canvas.findByRole("alert");
     await expect(alert).toHaveTextContent(
-      "Could not change your decks — The card database is busy finishing a sync. " +
+      "Couldn't change your decks — The card database is busy finishing a sync. " +
         "Try that again in a moment.",
     );
     // Nothing was copied, and nothing else moved.

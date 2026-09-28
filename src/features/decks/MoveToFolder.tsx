@@ -138,7 +138,7 @@ export function MoveToFolder({
             <Folder className="size-3.5 flex-none" aria-hidden="true" />
           )}
           <span className="min-w-0 flex-1 truncate">{name}</span>
-          {id === currentId && <span className="flex-none text-[0.7rem] text-dim">Here now</span>}
+          {id === currentId && <span className="flex-none text-[0.7rem] text-dim">Current</span>}
         </button>
       </li>
     );

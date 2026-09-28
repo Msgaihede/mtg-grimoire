@@ -252,7 +252,7 @@ export function DeckCoverPicker({
             of the reader. */}
         {searchFailure !== null && (
           <p role="alert" className="mb-1.5 text-xs text-destructive">
-            Could not search the cards — {searchFailure}
+            Couldn't search the cards — {searchFailure}
           </p>
         )}
 
@@ -270,7 +270,7 @@ export function DeckCoverPicker({
           />
         ) : choices.length === 0 ? (
           <p className="text-xs text-dim">
-            Nothing to pick from yet — a card in the deck is a cover this deck can wear.
+            Add cards to this deck to pick a cover.
           </p>
         ) : (
           <ul aria-labelledby={headingId} className={CHOICE_GRID}>
@@ -349,7 +349,7 @@ function SearchResults({
       {total > results.length && (
         <p className="mt-1 text-[0.6875rem] text-dim">
           Showing {results.length} of {count(total)}
-          {capped ? "+" : ""} matches — a narrower word reaches the rest.
+          {capped ? "+" : ""} matches. Refine your search to see more.
         </p>
       )}
     </>

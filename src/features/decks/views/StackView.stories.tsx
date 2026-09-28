@@ -207,7 +207,7 @@ export const Default: Story = {
     expect(tag).toHaveAttribute("aria-hidden", "true");
     expect(tag.textContent).toBe("1");
     // The words are the button's, as every mark on this card face is decoration once it is named.
-    expect(crowned).toHaveAccessibleName(expect.stringContaining("game changer"));
+    expect(crowned).toHaveAccessibleName(expect.stringContaining("Game Changer"));
   },
 };
 

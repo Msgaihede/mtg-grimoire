@@ -542,7 +542,7 @@ function CreateDeckBody({
               needs no tween. */}
         {createFailure !== null && (
           <p role="alert" className="min-w-0 flex-1 text-xs text-destructive">
-            Could not create the deck — {createFailure}
+            Couldn't create the deck — {createFailure}
           </p>
         )}
 

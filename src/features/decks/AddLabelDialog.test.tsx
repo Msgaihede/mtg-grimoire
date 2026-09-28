@@ -97,7 +97,7 @@ describe("AddLabelDialog", () => {
     const user = userEvent.setup();
 
     await user.type(screen.getByLabelText("Find or name a label"), "Sac outlet");
-    expect(screen.getByText(/No other label matches “Sac outlet”/)).toBeInTheDocument();
+    expect(screen.getByText(/No label named “Sac outlet”/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Moss" }));
     await user.click(screen.getByRole("button", { name: "Create “Sac outlet”" }));
@@ -133,7 +133,7 @@ describe("AddLabelDialog", () => {
   it("says so when every label the reader has is already in this list", async () => {
     mount({ choices: [] });
     expect(
-      await screen.findByText(/Every label you have is already in this list/),
+      await screen.findByText(/All your labels are already in this list/),
     ).toBeInTheDocument();
   });
 

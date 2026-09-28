@@ -425,7 +425,7 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    expect(await screen.findByText(/Could not read the folders/)).toBeInTheDocument();
+    expect(await screen.findByText(/Couldn't load the folders/)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Folder" })).toBeDisabled();
   });
 
@@ -851,7 +851,7 @@ describe("DeckSettingsDialog", () => {
     await userEvent.click(await screen.findByRole("option", { name: "Commander › Legends" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not save that change — Database is busy.",
+      "Couldn't save that change — Database is busy.",
     );
   });
 
@@ -861,7 +861,7 @@ describe("DeckSettingsDialog", () => {
     deckGet.mockResolvedValue(null);
     open();
 
-    expect(await screen.findByText(/This deck is gone/)).toBeInTheDocument();
+    expect(await screen.findByText(/This deck was deleted/)).toBeInTheDocument();
   });
 
   /*
@@ -963,7 +963,7 @@ describe("DeckSettingsDialog", () => {
     expect(within(live).getByRole("button", { name: "Remove 7 cards" })).toBeInTheDocument();
     expect(within(live).getByText(/8 cards in the other list/)).toBeInTheDocument();
 
-    await user.click(within(live).getByRole("button", { name: "Keep them" }));
+    await user.click(within(live).getByRole("button", { name: "Cancel" }));
 
     await user.click(screen.getByRole("button", { name: /Clear theory list/ }));
     const theory = screen.getByRole("group", { name: "Clear the theory list" });
@@ -1001,7 +1001,7 @@ describe("DeckSettingsDialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Remove 7 cards" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not save that change — Database is busy.",
+      "Couldn't save that change — Database is busy.",
     );
     expect(screen.getByRole("group", { name: "Clear the actual list" })).toBeInTheDocument();
   });
@@ -1019,7 +1019,7 @@ describe("DeckSettingsDialog", () => {
     await loadedWithPlan();
 
     await userEvent.click(screen.getByRole("button", { name: /Clear theory list/ }));
-    await userEvent.click(screen.getByRole("button", { name: "Keep them" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(screen.queryByRole("group", { name: /^Clear the/ })).toBeNull();
     await waitFor(() =>
@@ -1107,7 +1107,7 @@ describe("DeckSettingsDialog", () => {
     deckGet.mockResolvedValue(null);
     open();
 
-    expect(await screen.findByText(/This deck is gone/)).toBeInTheDocument();
+    expect(await screen.findByText(/This deck was deleted/)).toBeInTheDocument();
     expect(deckPullPlan).not.toHaveBeenCalled();
   });
 
@@ -1117,7 +1117,7 @@ describe("DeckSettingsDialog", () => {
     await loaded();
 
     const button = await screen.findByRole("button", {
-      name: "Import missing cards from collection…",
+      name: "Pull owned cards…",
     });
     expect(button).toBeEnabled();
     await waitFor(() => expect(deckPullPlan).toHaveBeenCalledWith(4));
@@ -1139,7 +1139,7 @@ describe("DeckSettingsDialog", () => {
     await loaded();
 
     const button = await screen.findByRole("button", {
-      name: "Import missing cards from collection… (nothing to import)",
+      name: "Pull owned cards… (nothing to pull)",
     });
     expect(button).toBeDisabled();
   });
@@ -1160,7 +1160,7 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    const button = screen.getByRole("button", { name: "Import missing cards from collection…" });
+    const button = screen.getByRole("button", { name: "Pull owned cards…" });
     expect(button).toBeEnabled();
   });
 
@@ -1172,7 +1172,7 @@ describe("DeckSettingsDialog", () => {
     await loaded();
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "Import missing cards from collection…" }),
+      await screen.findByRole("button", { name: "Pull owned cards…" }),
     );
 
     const pull = await screen.findByRole("dialog", { name: "Pull from collection" });
@@ -1187,12 +1187,12 @@ describe("DeckSettingsDialog", () => {
     await loaded();
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "Import missing cards from collection…" }),
+      await screen.findByRole("button", { name: "Pull owned cards…" }),
     );
 
     expect(await screen.findByRole("dialog", { name: "Pull from collection" })).toBeInTheDocument();
     expect(screen.getByRole("dialog", { name: "Deck settings" })).toBeInTheDocument();
-    expect(screen.getByText(/Cards this deck is short of that you already own/)).toBeInTheDocument();
+    expect(screen.getByText(/Cards you own that .* is missing/)).toBeInTheDocument();
   });
 
   /**
@@ -1209,7 +1209,7 @@ describe("DeckSettingsDialog", () => {
     await loaded();
 
     await user.click(
-      await screen.findByRole("button", { name: "Import missing cards from collection…" }),
+      await screen.findByRole("button", { name: "Pull owned cards…" }),
     );
     await screen.findByRole("dialog", { name: "Pull from collection" });
 
@@ -1243,7 +1243,7 @@ describe("DeckSettingsDialog", () => {
     await loaded();
 
     const trigger = await screen.findByRole("button", {
-      name: "Import missing cards from collection…",
+      name: "Pull owned cards…",
     });
     await user.click(trigger);
     await screen.findByRole("dialog", { name: "Pull from collection" });
@@ -1268,13 +1268,15 @@ describe("DeckSettingsDialog", () => {
     await loaded();
 
     await user.click(
-      await screen.findByRole("button", { name: "Import missing cards from collection…" }),
+      await screen.findByRole("button", { name: "Pull owned cards…" }),
     );
-    await user.click(await screen.findByRole("button", { name: "Close the pull list" }));
+    // Two dialogs are open, and each has a "Close"; the pull's is the one drawn last.
+    const closes = await screen.findAllByRole("button", { name: "Close" });
+    await user.click(closes[closes.length - 1]);
 
     await waitFor(() =>
       expect(
-        screen.getByRole("button", { name: "Import missing cards from collection…" }),
+        screen.getByRole("button", { name: "Pull owned cards…" }),
       ).toHaveFocus(),
     );
   });
@@ -1294,7 +1296,7 @@ describe("DeckSettingsDialog", () => {
     await loaded();
 
     await userEvent.click(
-      await screen.findByRole("button", { name: "Import missing cards from collection…" }),
+      await screen.findByRole("button", { name: "Pull owned cards…" }),
     );
     await userEvent.click(await screen.findByRole("button", { name: "Pull 3 copies" }));
 
@@ -1333,7 +1335,7 @@ describe("DeckSettingsDialog", () => {
     await loaded();
 
     expect(screen.queryByText("Fill this deck from your collection")).toBeNull();
-    expect(screen.queryByRole("button", { name: /Import missing cards from collection/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /Pull owned cards/ })).toBeNull();
     expect(deckPullPlan).not.toHaveBeenCalled();
   });
 
@@ -1351,7 +1353,7 @@ describe("DeckSettingsDialog", () => {
 
     expect(screen.getByText("Fill this deck from your collection")).toBeInTheDocument();
     expect(
-      await screen.findByRole("button", { name: /Import missing cards from collection/ }),
+      await screen.findByRole("button", { name: /Pull owned cards/ }),
     ).toBeInTheDocument();
     await waitFor(() => expect(deckPullPlan).toHaveBeenCalledWith(4));
   });
@@ -1379,7 +1381,7 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    expect(screen.getByText("Empty a list")).toBeInTheDocument();
+    expect(screen.getByText("Clear a list")).toBeInTheDocument();
     const clears = screen.getAllByRole("button", { name: /^Clear / });
     expect(clears).toHaveLength(1);
     expect(clears[0]).toBeEnabled();

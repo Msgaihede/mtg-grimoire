@@ -175,7 +175,7 @@ describe("PullFromCollectionDialog", () => {
   it("says the read is in flight, and nothing else", async () => {
     open({ loading: true, rows: null });
 
-    expect(await screen.findByText("Reading your collection…")).toBeInTheDocument();
+    expect(await screen.findByText("Loading your collection…")).toBeInTheDocument();
     expect(screen.queryByText("Nothing to pull.")).not.toBeInTheDocument();
   });
 
@@ -184,7 +184,7 @@ describe("PullFromCollectionDialog", () => {
 
     expect(await screen.findByText("database is locked")).toBeInTheDocument();
     expect(screen.queryByText("Nothing to pull.")).not.toBeInTheDocument();
-    expect(screen.queryByText("Reading your collection…")).not.toBeInTheDocument();
+    expect(screen.queryByText("Loading your collection…")).not.toBeInTheDocument();
   });
 
   /**
@@ -199,9 +199,9 @@ describe("PullFromCollectionDialog", () => {
     open({ rows: [] });
 
     expect(await screen.findByText("Nothing to pull.")).toBeInTheDocument();
-    expect(screen.getByText(/exact printing and finish/)).toHaveTextContent(
-      "Cards in other decks or not yet owned cannot be pulled.",
-    );
+    expect(
+      screen.getByText("Only unassigned copies with a matching printing and finish can be pulled."),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -211,11 +211,11 @@ describe("PullFromCollectionDialog", () => {
     expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
     const bolt = rowFor("Lightning Bolt");
     expect(within(bolt).getByText("M10 · 146")).toBeInTheDocument();
-    expect(within(bolt).getByText("Short in Removal")).toBeInTheDocument();
+    expect(within(bolt).getByText("Missing from Removal")).toBeInTheDocument();
     // The count column, in the words a screen reader gets rather than the two loose numbers the
     // eye reads under a heading it can see.
     expect(within(bolt).getByText("Pulling 3 of 3 copies")).toBeInTheDocument();
-    expect(within(rowFor("Sol Ring")).getByText("Short in Ramp, Artifacts")).toBeInTheDocument();
+    expect(within(rowFor("Sol Ring")).getByText("Missing from Ramp, Artifacts")).toBeInTheDocument();
   });
 
   /**
@@ -350,7 +350,7 @@ describe("PullFromCollectionDialog", () => {
 
     const note = screen.getByText(/still missing/);
     expect(note).toHaveTextContent(
-      "2 copies still missing — no other matching copies in collection.",
+      "2 copies still missing (no other matching copies owned).",
     );
     expect(note).toHaveClass("text-dim");
     expect(note).not.toHaveAttribute("role");
@@ -424,7 +424,7 @@ describe("PullFromCollectionDialog", () => {
     );
 
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Could not pull — entry 11 is no longer where you left it",
+      "Couldn't pull — entry 11 is no longer where you left it",
     );
   });
 
@@ -567,7 +567,7 @@ describe("PullFromCollectionDialog", () => {
 
     expect(
       await screen.findByText(
-        "Cards this deck is short of that you already own — into Burn",
+        "Cards you own that Burn is missing",
       ),
     ).toBeInTheDocument();
   });
@@ -588,10 +588,10 @@ describe("PullFromCollectionDialog", () => {
     open({ cardName: "Lightning Bolt", rows: [row()] });
 
     expect(
-      await screen.findByText("Copies of Lightning Bolt you already own — into Burn"),
+      await screen.findByText("Copies of Lightning Bolt you own for Burn"),
     ).toBeInTheDocument();
     expect(
-      screen.queryByText("Cards this deck is short of that you already own — into Burn"),
+      screen.queryByText("Cards you own that Burn is missing"),
     ).not.toBeInTheDocument();
   });
 

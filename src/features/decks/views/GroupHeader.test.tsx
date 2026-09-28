@@ -161,7 +161,7 @@ describe("GroupHeader markers", () => {
     // On the chip itself — the element the binding is spread on — not on the words inside it.
     fireEvent.pointerEnter(chip(RULE));
     const ruleTip = await screen.findByRole("tooltip", {}, { timeout: TOOLTIP_OPEN_MS + 1000 });
-    expect(ruleTip).toHaveTextContent("rules read this pile");
+    expect(ruleTip).toHaveTextContent("Required by the format");
     fireEvent.pointerLeave(chip(RULE));
 
     fireEvent.pointerEnter(chip(OFF));
@@ -170,7 +170,7 @@ describe("GroupHeader markers", () => {
       {},
       { timeout: TOOLTIP_OPEN_MS + 1000 },
     );
-    expect(inactiveTip).toHaveTextContent("Switched off");
+    expect(inactiveTip).toHaveTextContent("Inactive");
   });
 });
 

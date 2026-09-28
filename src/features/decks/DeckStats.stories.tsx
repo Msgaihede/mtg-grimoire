@@ -221,7 +221,7 @@ export const ManaCurve: Story = {
     // The line without which the bars silently fail to sum to the deck. It says "2 cards"
     // rather than "2": `plural` writes the noun, so a reader counting the columns against their
     // deck size is told what the two are.
-    await expect(curve.getByText("2 cards with no mana value, not counted")).toBeInTheDocument();
+    await expect(curve.getByText("2 cards without a mana value (not counted)")).toBeInTheDocument();
     // The average belongs to this curve and to nothing else on the band, so it is drawn on the
     // card's own heading line rather than among the Figures. The *number* is pinned in the two
     // `{X}` stories below, whose twelve rows can be added up by hand.
@@ -571,7 +571,7 @@ export const WishlistDestination: Story = {
     const canvas = within(canvasElement);
     const send = canvas.getByRole("button", { name: "Send missing to wishlist" });
     const destination = canvas.getByRole("button", {
-      name: "Which wishlist folder this deck's shortfall goes to",
+      name: "Wishlist folder for missing cards",
     });
 
     // **Containment, not document order** — an implementation that drew the picker fourth in the
@@ -639,7 +639,7 @@ export const SentToWishlist: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Send missing to wishlist" }));
 
     await expect(region).toHaveTextContent(
-      "Added 2 wishes — one per card, for every copy you are short.",
+      "Added 2 cards to your wishlist.",
     );
     await expect(region).toHaveClass("text-accent");
     await expect(region.querySelector("svg.lucide-circle-check")).not.toBeNull();
@@ -696,7 +696,7 @@ export const OnTheTheoryList: Story = {
     // The destination stays with the press it modifies (issue #437). A plan's shopping list is as
     // filable as any other, so nothing about a folder is a fact about which list is on screen.
     await expect(
-      canvas.getByRole("button", { name: "Which wishlist folder this deck's shortfall goes to" }),
+      canvas.getByRole("button", { name: "Wishlist folder for missing cards" }),
     ).toBeInTheDocument();
   },
 };
@@ -747,7 +747,7 @@ export const OnAVirtualDeck: Story = {
       "Send missing to wishlist",
       // The destination goes with the press it modifies (issue #437): a deck with no binder
       // behind it is short of nothing, so there is no shopping list to file anywhere.
-      "Which wishlist folder this deck's shortfall goes to",
+      "Wishlist folder for missing cards",
     ]) {
       await expect(canvas.queryByRole("button", { name })).toBeNull();
     }
@@ -785,7 +785,7 @@ export const EmptyDeck: Story = {
   args: { cards: [] },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByText(/Nothing to measure yet/)).toBeInTheDocument();
+    await expect(canvas.getByText(/Add cards to see stats/)).toBeInTheDocument();
     // Claims about things that are not there, which is exactly what a screenshot cannot show.
     for (const title of [
       "Mana pips",
@@ -1028,7 +1028,7 @@ export const SourcesUnknown: Story = {
     const pips = canvas.getByRole("region", { name: "Mana pips" });
 
     await expect(
-      within(pips).getByText("Mana sources arrive with the next card sync"),
+      within(pips).getByText("Mana sources appear after the next card sync."),
     ).toBeInTheDocument();
     // No `Sources:` band at all — an empty track beside a filled Cost one *is* the row of zeroes
     // this state exists to refuse.

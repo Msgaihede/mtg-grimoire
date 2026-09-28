@@ -99,17 +99,17 @@ export const RuleAndInactive: Story = {
     // Predefined, and carrying no rule mark: the rules have no role for a maybeboard.
     const maybe = await row("Maybeboard");
     await expect(within(maybe).queryByText(rule)).toBeNull();
-    await expect(within(maybe).getByText(inactive)).toBeInTheDocument();
+    await expect(within(maybe).getAllByText(inactive)).toHaveLength(2);
 
     // The reader's own switched-off pile, marked identically.
     const cuts = await row("Cut list");
     await expect(within(cuts).queryByText(rule)).toBeNull();
-    await expect(within(cuts).getByText(inactive)).toBeInTheDocument();
+    await expect(within(cuts).getAllByText(inactive)).toHaveLength(2);
 
     const sideboard = await row("Sideboard");
     await userEvent.click(within(sideboard).getByRole("button", { name: /^Active/ }));
     await waitFor(async () => {
-      await expect(within(sideboard).getByText(inactive)).toBeInTheDocument();
+      await expect(within(sideboard).getAllByText(inactive)).toHaveLength(2);
     });
     await expect(within(sideboard).getByText(rule)).toBeInTheDocument();
   },
@@ -130,7 +130,7 @@ export const PredefinedIsSwitchableOnly: Story = {
 
     await userEvent.click(within(commander).getByRole("button", { name: /^Active/ }));
     await waitFor(async () => {
-      await expect(within(commander).getByText(MARKER_WORDS.inactive)).toBeInTheDocument();
+      await expect(within(commander).getAllByText(MARKER_WORDS.inactive)).toHaveLength(2);
     });
   },
 };
@@ -170,7 +170,7 @@ export const DeletingACategory: Story = {
     await userEvent.click(within(ramp).getByRole("button", { name: "Delete" }));
 
     const dialog = await canvas.findByRole("group", { name: "Delete Ramp" });
-    await expect(within(dialog).getByText(/Nothing is lost/)).not.toHaveTextContent(
+    await expect(within(dialog).getByText(/will move to/)).not.toHaveTextContent(
       "both the theory and actual lists",
     );
     await expect(
@@ -190,7 +190,7 @@ export const DeletingACategoryAndItsCards: Story = {
     await pickOption(userEvent.setup(), "Its 2 cards", "go with it");
     await expect(
       within(dialog).getByText(/Any copies you own go back to Recently removed/),
-    ).toHaveTextContent("The 2 cards in it go with it");
+    ).toHaveTextContent("Its 2 cards will be removed");
     await expect(within(dialog).getByRole("button", { name: "Delete “Ramp”" })).toBeInTheDocument();
   },
 };
@@ -218,10 +218,10 @@ export const AutoCategorised: Story = {
   args: { deckId: 1 },
   play: async ({ canvas }) => {
     await canvas.findByText("Main deck");
-    await userEvent.click(canvas.getByRole("button", { name: "File cards by what they do" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Auto-categorize" }));
 
     await waitFor(async () => {
-      await expect(canvas.getByText(/^Filed \d+ cards\.$/)).toBeInTheDocument();
+      await expect(canvas.getByText(/^Categorized \d+ cards\.$/)).toBeInTheDocument();
     });
     await expect(canvas.getByText("Land")).toBeInTheDocument();
   },

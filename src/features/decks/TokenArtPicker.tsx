@@ -169,10 +169,10 @@ export function TokenArtPicker({
         mode?.kind === "swap"
           ? (mode.entry.subtitle ?? undefined)
           : mode?.kind === "add"
-            ? "Any printing of a token or emblem this deck makes — or, with All tokens, of any in the game — added at one copy."
+            ? "Add one copy of any token or emblem this deck makes. Turn on All tokens to search every token."
             : undefined
       }
-      closeLabel={mode?.kind === "add" ? "Close the printing picker" : "Close the art picker"}
+      closeLabel="Close"
       // **`AllPrintingsDialog`'s three numbers, verbatim, and the reason is the same one it
       // gives**: this is a grid to pick out of rather than a form or a list, so its width is a
       // proportion of the window with a floor and a ceiling either side, and its height is
@@ -271,13 +271,13 @@ function SwapBody({
   if (failure !== null) {
     return (
       <p role="alert" className={cn(STATE_LINE, "text-destructive")}>
-        Could not read this token&rsquo;s printings — {failure}
+        Couldn&rsquo;t load this token&rsquo;s printings — {failure}
       </p>
     );
   }
 
   if (query.isPending) {
-    return <p className={cn(STATE_LINE, "text-dim")}>Reading the printings…</p>;
+    return <p className={cn(STATE_LINE, "text-dim")}>Loading printings…</p>;
   }
 
   if (items.length === 0) {
@@ -463,21 +463,21 @@ const DeckTokensWall = memo(function DeckTokensWall({
           role="alert"
           className="shrink-0 px-5 pt-3 text-xs text-destructive"
         >
-          Could not read the printings of {token.name} — {ipcError(read?.error)}
+          Couldn&rsquo;t load the printings of {token.name} — {ipcError(read?.error)}
         </p>
       ))}
 
       {distinct.length === 0 ? (
         <p className={cn(STATE_LINE, "text-dim")}>
-          This deck makes no token or emblem to add a printing of.
+          This deck doesn&rsquo;t make any tokens or emblems.
         </p>
       ) : pending ? (
-        <p className={cn(STATE_LINE, "text-dim")}>Reading the printings…</p>
+        <p className={cn(STATE_LINE, "text-dim")}>Loading printings…</p>
       ) : shown.length === 0 && failures.length < distinct.length ? (
         <p className={cn(STATE_LINE, "text-dim")}>
           {needle === ""
             ? "No paper printings found for these tokens."
-            : `No printing matches “${find.trim()}”. Search by a token’s name or a set code.`}
+            : `No printing matches “${find.trim()}”. Search by token name or set code.`}
         </p>
       ) : (
         <div className={cn(WALL_SCROLLER, "space-y-5")}>
@@ -634,19 +634,19 @@ const EveryTokenWall = memo(function EveryTokenWall({
   if (query.isError) {
     return (
       <p role="alert" className={cn(STATE_LINE, "text-destructive")}>
-        Could not read every token&rsquo;s printings — {ipcError(query.error)}
+        Couldn&rsquo;t load all token printings — {ipcError(query.error)}
       </p>
     );
   }
   if (query.isPending) {
-    return <p className={cn(STATE_LINE, "text-dim")}>Reading every token…</p>;
+    return <p className={cn(STATE_LINE, "text-dim")}>Loading tokens…</p>;
   }
   if (shown.length === 0) {
     return (
       <p className={cn(STATE_LINE, "text-dim")}>
         {needle === ""
-          ? "No paper token or emblem is in your card data yet."
-          : `No printing matches “${find.trim()}”. Search by a token’s name or a set code.`}
+          ? "No tokens or emblems in your card data yet."
+          : `No printing matches “${find.trim()}”. Search by token name or set code.`}
       </p>
     );
   }

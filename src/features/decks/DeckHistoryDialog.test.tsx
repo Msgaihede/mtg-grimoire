@@ -183,7 +183,7 @@ describe("DeckHistoryDialog", () => {
     expect(screen.getByText("Swapped printing of Sol Ring")).toBeInTheDocument();
     // Set codes are stored lowercase and printed in capitals; the fold is the half that has to
     // be said, because a list that silently loses a line reads like a bug.
-    expect(screen.getByText("CMM → 3ED · folded into one row")).toBeInTheDocument();
+    expect(screen.getByText("CMM → 3ED · merged into one row")).toBeInTheDocument();
     // A `<time>` per row, carrying the machine-readable stamp its 24-hour label is short for.
     const times = panel.querySelectorAll("time");
     expect(times).toHaveLength(2);
@@ -364,7 +364,7 @@ describe("DeckHistoryDialog", () => {
         mountedAtDismiss = screen.queryByRole("dialog", { name: "History" }) !== null;
       });
 
-      await userEvent.click(screen.getByRole("button", { name: "Close history" }));
+      await userEvent.click(screen.getByRole("button", { name: "Close" }));
 
       expect(onDismiss).toHaveBeenCalledTimes(1);
       expect(onClose).not.toHaveBeenCalled();
@@ -398,7 +398,7 @@ describe("DeckHistoryDialog", () => {
       deckAuditList.mockReturnValue(new Promise(() => {}));
       draw();
 
-      expect(await screen.findByText("Reading this deck's history…")).toBeInTheDocument();
+      expect(await screen.findByText("Loading history…")).toBeInTheDocument();
     });
 
     /**
@@ -409,7 +409,7 @@ describe("DeckHistoryDialog", () => {
       deckAuditList.mockRejectedValue(new Error("BUSY: the database is being written to"));
       await drawn();
 
-      expect(await screen.findByText("This deck's history could not be read.")).toBeInTheDocument();
+      expect(await screen.findByText("Couldn't load this deck's history.")).toBeInTheDocument();
       expect(screen.getByText(/BUSY: the database is being written to/)).toBeInTheDocument();
       expect(screen.queryByText("No changes recorded yet.")).toBeNull();
     });

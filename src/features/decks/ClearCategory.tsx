@@ -38,7 +38,7 @@
  * {@link ClearDeck}'s own doc gives at length: *which list* and *does this deck own cardboard*
  * stopped being the same question the moment a virtual deck's one list was a `live` one.
  */
-import { plural, verb } from "@/lib/counts";
+import { plural } from "@/lib/counts";
 import type { DeckCategory, DeckVariant } from "@/lib/ipc";
 import { listName } from "./listNames";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
@@ -88,16 +88,16 @@ export function ClearCategory({
       {/* The sentence carries the outcome, not the button — `DeleteCategory`'s rule, and the
           reason holds here too: this is the line a reader's eye is on while they decide. */}
       <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-destructive">
-        The {plural(here, "card")} in it {verb(here, "leaves", "leave")}{" "}
-        the {listName(variant, { virtual })} and the pile stays.{" "}
+        {plural(here, "card")} will be removed from the {listName(variant, { virtual })}. The
+        category stays.{" "}
         {/* The three answers {@link ClearDeck} argues, in the same order and for the same
             reason — a virtual deck has no group, so the middle arm is the one the variant
             could not reach. */}
         {virtual
-          ? "This deck keeps no copies, so nothing else moves."
+          ? "This deck doesn't use your collection, so no cards are moved."
           : variant === "live"
             ? "Any copies you own go back to Recently removed."
-            : "A theory list holds no copies, so nothing else moves."}
+            : "The theory list doesn't use your collection, so no cards are moved."}
       </p>
 
       <div className="mt-2 flex gap-2">
@@ -110,7 +110,7 @@ export function ClearCategory({
           Remove {plural(here, "card")}
         </button>
         <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
-          Keep them
+          Cancel
         </button>
       </div>
     </div>
