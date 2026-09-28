@@ -294,8 +294,8 @@ function ImportBody({
             )}
           />
           <p className="mt-1 text-[0.6875rem] text-dim">
-            One card a line, count first — <span className="font-mono">4 Lightning Bolt</span>.
-            Arena, Moxfield and MTGO exports read as they come, headings and all.
+            One card per line, quantity first (e.g. <span className="font-mono">4 Lightning Bolt</span>).
+            Supports Arena, Moxfield, and MTGO exports.
           </p>
           {/* The counts as they are typed, so the box says what it has read before the
               reader commits to a preview. */}
