@@ -8901,6 +8901,89 @@ describe("the deck grain (deck, variant, category, card)", () => {
     expect(db.deckCards).toHaveLength(1);
   });
 
+  /**
+   * Issue #643, the crate's `a_swap_keeps_the_rows_label_and_everything_else_about_it` one side
+   * over: a swap rewrites the row in place, so the label the reader put on it survives the new
+   * art — and so does the row's id, which is what {@link takeFromDeckList} orders by.
+   */
+  it("keeps the row's label and id when a swap changes its printing", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 7, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2, labelId: 3 }),
+      ],
+    });
+    writeHandlers(db).deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT_A.id,
+      toCardId: BOLT_B.id,
+      ...MAIN,
+    });
+    expect(db.deckCards).toHaveLength(1);
+    expect(db.deckCards[0]).toMatchObject({ id: 7, cardId: BOLT_B.id, labelId: 3, quantity: 2 });
+  });
+
+  it("gives a folded swap's unlabelled survivor the label the moved copies wore", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2, labelId: 3 }),
+        deckCard({ id: 2, deckId: 1, cardId: BOLT_B.id, categoryKind: "main", quantity: 1 }),
+      ],
+    });
+    writeHandlers(db).deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT_A.id,
+      toCardId: BOLT_B.id,
+      ...MAIN,
+    });
+    expect(db.deckCards).toEqual([expect.objectContaining({ id: 2, quantity: 3, labelId: 3 })]);
+  });
+
+  it("keeps a folded swap's survivor's own label over the moved copies'", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_A.id, categoryKind: "main", quantity: 2, labelId: 3 }),
+        deckCard({ id: 2, deckId: 1, cardId: BOLT_B.id, categoryKind: "main", quantity: 1, labelId: 4 }),
+      ],
+    });
+    writeHandlers(db).deck_swap_printing({
+      deckId: 1,
+      fromCardId: BOLT_A.id,
+      toCardId: BOLT_B.id,
+      ...MAIN,
+    });
+    expect(db.deckCards).toEqual([expect.objectContaining({ id: 2, labelId: 4 })]);
+  });
+
+  it("gives a finish fold's unlabelled survivor the moved row's label", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 2 }),
+        deckCard({
+          id: 2,
+          deckId: 1,
+          cardId: BOLT_2X2.id,
+          categoryKind: "main",
+          quantity: 1,
+          finish: "foil",
+          labelId: 3,
+        }),
+      ],
+    });
+    writeHandlers(db).deck_set_card_finish({
+      deckId: 1,
+      cardId: BOLT_2X2.id,
+      categoryId: MAIN.categoryId,
+      variant: "live",
+      fromFinish: "foil",
+      toFinish: null,
+    });
+    expect(db.deckCards).toEqual([expect.objectContaining({ id: 1, quantity: 3, labelId: 3 })]);
+  });
+
   it("refuses a swap to a different oracle card", () => {
     const other = CARDS.find((c) => c.oracleId !== BOLT.oracleId)!;
     const db = makeDeckDb({

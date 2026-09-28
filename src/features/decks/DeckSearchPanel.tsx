@@ -15,6 +15,7 @@ import { FOCUS } from "@/lib/focus";
 import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { ADD_BUTTON } from "./addButton";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
 import { CollectionSearchTab } from "./CollectionSearchTab";
 import { isTokenPrinting } from "./deckTokens";
@@ -891,12 +892,7 @@ function OpenPanel({
                 { onSuccess: (change) => onAdded?.(change.id) },
               )
             }
-            className={cn(
-              "grid size-6 shrink-0 place-items-center rounded-md border border-border text-dim",
-              "transition-colors duration-150 motion-reduce:transition-none",
-              "hover:border-accent hover:text-accent",
-              FOCUS,
-            )}
+            className={cn(ADD_BUTTON, "hover:border-accent hover:text-accent")}
           >
             <Plus className="size-3.5" aria-hidden="true" />
           </button>

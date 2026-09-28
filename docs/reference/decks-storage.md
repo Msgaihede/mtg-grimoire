@@ -1842,7 +1842,7 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   callbacks).
 - **`deck_swap_printing` is one transaction that folds on `DECK_CARD_GRAIN`.** Swapping a
   row to a printing the same category already holds is not an error and not two rows: the
-  `ON CONFLICT (deck_id, variant, category_id, card_id) DO UPDATE` sums the quantities and the
+  target row's quantity takes the sum, the moved row is deleted, and the
   answer carries `folded: true` with the landed total, which the pane announces ("Folded into
   one row of 2 in Main deck." — the category's own name, out of `paneDeckContext`, which
   carries a category id **and** its name because the pane is a sibling of the editor and has no
@@ -1853,6 +1853,19 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   deliberately does _not_ check it against the target printing's `finishes`: a swap onto a
   printing sold in no foil would then be refused outright, where what a reader wants is the
   printing they picked.
+- **A swap with nothing to fold into rewrites the row in place, and that is what keeps its
+  label** ([issue #643](https://github.com/Msgaihede/mtg-grimoire/issues/643), 2026-09-28). It
+  was an `INSERT … ON CONFLICT` of a fresh row followed by a `DELETE` of the old one, and the
+  insert named no `label_id` — so changing a card's art took the reader's label off it. An
+  `UPDATE` of the printing columns (`card_id`, `set_code`, `collector_number`, `lang`, `name`,
+  plus `needs_review = NULL`) keeps the row's id, label, `created_at` and `sync_uid`, and any
+  column added later, with no one having to remember to copy it. It reaches a paired device as a
+  field update on the same row — `deck_set_card_finish`'s shape — rather than a delete and a
+  put. **The fold keeps a label too**: the surviving row's
+  own label stands and an unlabelled survivor takes the moved row's
+  (`label_id = coalesce(label_id, ?)`), so a label falls off only when the reader removes it or
+  the card. Deck notes were never at risk: `deck_note_cards` names a card by `oracle_id`, and a
+  swap never changes it.
 - **Two surfaces press it now, through one hook.** The card pane's printings rows were the only
   presser until 2026-08-18; `AllPrintingsDialog` is the second, and it reaches the same
   `useSwapFromPane(context, variant)` rather than mounting its own mutation — which is the point
@@ -1867,7 +1880,8 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   reason it shares its `SwapResult`: the deck plays a different physical object of the same
   card. It **folds** the same way — setting a row to a finish the pile already holds adds the
   quantities and deletes the row that moved, with `label_id` and `needs_review` the surviving
-  row's (`add_card`'s rule: the row that was already there is the one the reader labelled) — and
+  row's (`add_card`'s rule: the row that was already there is the one the reader labelled),
+  except that a survivor with no label takes the moved row's (issue #643) — and
   it records the same **`swap` audit kind** rather than a tenth word, because `AUDIT_KINDS` is
   CHECK-constrained and a new word would mean rebuilding every reader's whole deck history for a
   spelling. Three refusals, each its own sentence: `SAME_FINISH` (and `nonfoil` compares equal to
