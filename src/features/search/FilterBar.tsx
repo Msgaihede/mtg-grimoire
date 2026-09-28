@@ -1019,7 +1019,7 @@ export function FilterBar<SortKey extends string>({
 
             The widening goes here rather than on the deck editor's label for the reason that
             decides every one of these: that one has only to be unambiguous where it is mounted,
-            and this one has to be unambiguous *wherever* it is. `PrintingsFilterBar.tsx:380` made
+            and this one has to be unambiguous *wherever* it is. `PrintingsFilterBar` made
             the same call and wrote down the same trap — a bare verb names an action and not the
             thing it acts on, which is why it draws `Sort printings by` and not `Sort by`. */}
         <label
