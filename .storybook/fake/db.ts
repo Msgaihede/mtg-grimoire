@@ -19983,31 +19983,25 @@ export function writeHandlers(db: FakeDb) {
       const target = deckCardAt(db, args.deckId, args.toCardId, category.id, variant, finish);
       let landed: number;
       if (target) {
+        // The fold: the surviving row keeps its own label and takes the moved row's only where
+        // it has none — a label falls off when the reader removes it, never because the art
+        // changed (issue #643).
         target.quantity += quantity;
+        target.labelId ??= row.labelId;
         landed = target.quantity;
+        db.deckCards = db.deckCards.filter((dc) => dc !== row);
       } else {
-        // `add_card`'s insert, which means a **new row** — and then the old one is deleted.
-        // Same reason `move_card` above pushes rather than mutating: the rowid is what
-        // {@link takeFromDeckList} takes in.
-        db.deckCards.push({
-          id: nextId(db.deckCards),
-          deckId: args.deckId,
-          categoryId: category.id,
-          variant,
-          cardId: args.toCardId,
-          // `add_card`'s insert names no `label_id`, so the copies land unlabelled.
-          labelId: null,
-          quantity,
-          name: to.name,
-          setCode: to.setCode,
-          collectorNumber: to.collectorNumber,
-          lang: to.lang,
-          finish,
-          needsReview: null,
-        });
+        // The crate rewrites the row **in place**, so its id, its label and everything else the
+        // reader attached to it stay; only the printing changes. It was a new row plus a delete,
+        // and the new row landed unlabelled (issue #643).
+        row.cardId = args.toCardId;
+        row.name = to.name;
+        row.setCode = to.setCode;
+        row.collectorNumber = to.collectorNumber;
+        row.lang = to.lang;
+        row.needsReview = null;
         landed = quantity;
       }
-      db.deckCards = db.deckCards.filter((dc) => dc !== row);
       deck.updatedAt = stamp(db);
       // §2.2's sweep, after the rewrite rather than a targeted release before it: a swap can
       // *fold* into a line the deck already has, and reading the finished list against the
@@ -20024,7 +20018,8 @@ export function writeHandlers(db: FakeDb) {
      * `deck_swap_printing` one axis over, so it answers the same `SwapResult` and **folds** the
      * same way: setting a row to a finish the pile already holds adds the quantities and takes
      * the row that moved away, and the surviving row keeps its own id, its label and its sentence
-     * (`add_card`'s rule — the row that was already there is the one the reader labelled).
+     * (`add_card`'s rule — the row that was already there is the one the reader labelled) —
+     * taking the moved row's label only where it has none of its own (issue #643).
      *
      * Three refusals, and the second is the one worth having in the fake: the target finish is
      * checked against `cards.finishes`, so a story that points this at a printing sold only in
@@ -20061,6 +20056,8 @@ export function writeHandlers(db: FakeDb) {
       let result: SwapResult;
       if (target) {
         target.quantity += row.quantity;
+        // The survivor's own label stands; an unlabelled one takes the moved row's (issue #643).
+        target.labelId ??= row.labelId;
         db.deckCards = db.deckCards.filter((dc) => dc !== row);
         result = { folded: true, quantity: target.quantity };
       } else {

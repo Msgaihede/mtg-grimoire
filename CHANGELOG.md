@@ -30,6 +30,57 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.33.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.32.1...v0.33.0) (2026-09-28)
+
+
+### Features
+
+* **decks:** add a card to the deck's other list from its menu ([6506c48](https://github.com/Msgaihede/mtg-grimoire/commit/6506c48db01c938459c595af3ab3731e5312d183))
+* **decks:** add a card to the deck's other list, into that list's counterpart pile ([611d48d](https://github.com/Msgaihede/mtg-grimoire/commit/611d48d7d84992beeaf82ff7d3b6aa8713819291))
+* **decks:** Add to actual / Add to theory on a deck card's right-click ([d448a49](https://github.com/Msgaihede/mtg-grimoire/commit/d448a491ab44d7b087803a721553932c3095f32c))
+* **decks:** full-width token controls under the card, colour and stats below them ([584fe70](https://github.com/Msgaihede/mtg-grimoire/commit/584fe70f91bc302309ae1979f8c0f492b9b74eab))
+* **decks:** full-width token controls under the card, colour and stats below them ([98b13a2](https://github.com/Msgaihede/mtg-grimoire/commit/98b13a2abd5eca6332fb21aeed699c80169da744)), closes [#615](https://github.com/Msgaihede/mtg-grimoire/issues/615)
+* **decks:** make the managed wishlist's tokens a toggle of their own ([41a58c6](https://github.com/Msgaihede/mtg-grimoire/commit/41a58c60976af8ba74a3ea58e9d55137782e394d))
+* **decks:** make the managed wishlist's tokens a toggle of their own ([a15f430](https://github.com/Msgaihede/mtg-grimoire/commit/a15f4304a2ded6dab40d8e6d6d35b9e5a42dcb75))
+* **decks:** read search syntax in the deck editor's filter box ([34f9932](https://github.com/Msgaihede/mtg-grimoire/commit/34f993201bc77fc44e8aebf7790a8ceaa3584450))
+* **decks:** read search syntax in the deck editor's filter box ([f222416](https://github.com/Msgaihede/mtg-grimoire/commit/f2224165b44af43dec9923de552c03901937c076))
+* **decks:** three-column stats band, circled mana curves, creature split and type breakdown ([e95bd19](https://github.com/Msgaihede/mtg-grimoire/commit/e95bd1971ce3b29a1833de7bfbfd8a78b2597abb))
+* **decks:** three-column stats band, circled mana curves, creature split and type breakdown ([6623a0a](https://github.com/Msgaihede/mtg-grimoire/commit/6623a0a9726321af47ca840aa0e8055941f2574a))
+* **decks:** wire the other-list add through ipc, useDeck and the fake ([4c3f2ab](https://github.com/Msgaihede/mtg-grimoire/commit/4c3f2abc66f14f572cd012abd48cf32b81d7f24e))
+* hide stacks in the Stacks view, and move the count pill beside the name ([cb40060](https://github.com/Msgaihede/mtg-grimoire/commit/cb40060af57bb413108df7f6138655d46e5d6f83))
+* hide stacks in the Stacks view, and move the count pill beside the name ([1395cb5](https://github.com/Msgaihede/mtg-grimoire/commit/1395cb51d955a037a5c743c686160a62187a7ab2))
+* **home:** count deck-managed wishlists in the Wishlist savings widget ([518a5f4](https://github.com/Msgaihede/mtg-grimoire/commit/518a5f4a33d605c027685937f26a1c81f052b2f9))
+* **home:** count deck-managed wishlists in the Wishlist savings widget ([12aca95](https://github.com/Msgaihede/mtg-grimoire/commit/12aca959f67c4d723422176d5bd09626569f67a6))
+* **home:** deck completion compares against the collection or the theory list ([2bfb0cb](https://github.com/Msgaihede/mtg-grimoire/commit/2bfb0cbdea848f241af134141b4bc38c49e22a19))
+* **home:** deck completion compares against the collection or the theory list ([a7bc955](https://github.com/Msgaihede/mtg-grimoire/commit/a7bc9551803a5db042a96bcb4361f499eba2b171))
+* **search:** move the colour Exact toggle beside the colour chips ([8e61457](https://github.com/Msgaihede/mtg-grimoire/commit/8e6145708a8b55679a1213d2c9c662b318fd8038))
+* **search:** move the colour Exact toggle beside the colour chips ([9b326dc](https://github.com/Msgaihede/mtg-grimoire/commit/9b326dced18ab9aeb358babeb0700ccf9872d11f))
+* **shelves:** fold a folder from its name, open it from a → button ([2362b2a](https://github.com/Msgaihede/mtg-grimoire/commit/2362b2a948632feed6c12720e631b7c55f85fb13))
+* **shelves:** fold a folder from its name, open it from a → button ([fd617ff](https://github.com/Msgaihede/mtg-grimoire/commit/fd617ffdfba880bfbc381324cd6c57b7af8af364))
+
+
+### Bug Fixes
+
+* **a11y:** AZERTY view chords, aria-disabled typed submits, arrow-key radiogroups ([0725d2c](https://github.com/Msgaihede/mtg-grimoire/commit/0725d2c6166ffbab60ab4556782421437994f853))
+* **a11y:** keyboard and accessibility gaps ([#558](https://github.com/Msgaihede/mtg-grimoire/issues/558)) ([3ecc3ed](https://github.com/Msgaihede/mtg-grimoire/commit/3ecc3ed0593a5e777967fe68407377714584bd68))
+* **a11y:** roving tab stop for table rows and card walls ([6ab90ca](https://github.com/Msgaihede/mtg-grimoire/commit/6ab90caf691c517cd45116e71d9c8bc9942b6ed6))
+* **card:** redesign the all-printings header as one centred toolbar ([#622](https://github.com/Msgaihede/mtg-grimoire/issues/622)) ([48b1fae](https://github.com/Msgaihede/mtg-grimoire/commit/48b1faef5f9cc27b0588660c211eb5563763d981))
+* **cards:** a nonfoil copy never wears a foil sheen, on any wall ([f16816e](https://github.com/Msgaihede/mtg-grimoire/commit/f16816ef7e7060806c628654657d020e233d8e1b))
+* **cards:** a nonfoil copy never wears a foil sheen, on any wall ([161e05e](https://github.com/Msgaihede/mtg-grimoire/commit/161e05ee3d9421805760b13d7434feda6aeabdcd)), closes [#616](https://github.com/Msgaihede/mtg-grimoire/issues/616)
+* **collection:** close the import, export and bulk-write gaps ([#555](https://github.com/Msgaihede/mtg-grimoire/issues/555)) ([aa27e9b](https://github.com/Msgaihede/mtg-grimoire/commit/aa27e9b5e4fbc09de826ad2adc0cc46c3552427f))
+* **collection:** close the import, export and bulk-write gaps ([#555](https://github.com/Msgaihede/mtg-grimoire/issues/555)) ([729d56a](https://github.com/Msgaihede/mtg-grimoire/commit/729d56a1a82687bd5a10037038289ea82d01d4a2))
+* **decks:** open token card details from the deck editor's token pile ([d6bfb45](https://github.com/Msgaihede/mtg-grimoire/commit/d6bfb4556b35bf660d6e1d08146ac40510fca0d0))
+* **decks:** open token card details from the deck editor's token pile ([f966208](https://github.com/Msgaihede/mtg-grimoire/commit/f96620881edf1349a4b00533fcf620941e02f98c)), closes [#619](https://github.com/Msgaihede/mtg-grimoire/issues/619)
+* **decks:** wrap the land legend under the pie when the panel is narrow ([3f71bcd](https://github.com/Msgaihede/mtg-grimoire/commit/3f71bcd02ad1fe12dfee5e5a8e337531b03fdf57))
+* **home:** the Folders widget treats managed folders like any other ([c64b78d](https://github.com/Msgaihede/mtg-grimoire/commit/c64b78d016585b4fec234eb9ab11aeb7ed2451c6))
+* **home:** the Folders widget treats managed folders like any other ([631da67](https://github.com/Msgaihede/mtg-grimoire/commit/631da67c72ae039b2726d23e663fb511eb67e788)), closes [#601](https://github.com/Msgaihede/mtg-grimoire/issues/601)
+* **import:** read an Archidekt pile heading ending in a parenthesis ([d98b76e](https://github.com/Msgaihede/mtg-grimoire/commit/d98b76e8d44a7b97be355d2acea54ea1312dbb7c))
+* **import:** read an Archidekt pile heading ending in a parenthesis ([a521960](https://github.com/Msgaihede/mtg-grimoire/commit/a521960a5474b181553966a0dd3a210d386a3ab3))
+* **shelves:** always draw Not sorted, empty included, as a drop target ([95895a3](https://github.com/Msgaihede/mtg-grimoire/commit/95895a3dd1797243d39c378316e8da174ecb9874))
+* **shelves:** always draw Not sorted, empty included, as a drop target ([7d7e222](https://github.com/Msgaihede/mtg-grimoire/commit/7d7e2222c8961e937ec6346663da6ab27b25b947)), closes [#597](https://github.com/Msgaihede/mtg-grimoire/issues/597)
+* **transfer:** name an import mode radio by its label alone ([829874b](https://github.com/Msgaihede/mtg-grimoire/commit/829874bd6db1a0e3a66931eaffb1f5df0bc61e80))
+* **transfer:** name an import mode radio by its label alone ([5ad4482](https://github.com/Msgaihede/mtg-grimoire/commit/5ad4482955449fc9c9cab89644bdceae10b994a7))
+
 ## [0.32.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.32.0...v0.32.1) (2026-09-28)
 
 
