@@ -64,9 +64,9 @@ export function managedIds(folders: readonly WishlistFolder[]): ReadonlySet<numb
  * and not in the dashed drawer a reader's empty folder draws.
  */
 export const MANAGED_EMPTY: Record<Exclude<ManagedWishlistMode, "off">, string> = {
-  all: "The two lists agree — everything this deck's plan asks for is already in the deck.",
-  missing: "Nothing missing — this deck has every card its plan asks for.",
-  other: "No substitutions — nothing in this deck stands in for a printing its plan asks for.",
+  all: "The two lists agree. Everything requested by the plan is already in the deck.",
+  missing: "Nothing missing. The deck includes every card in the plan.",
+  other: "No substitutions. Every card matches the planned printing.",
 };
 
 /**
@@ -74,7 +74,7 @@ export const MANAGED_EMPTY: Record<Exclude<ManagedWishlistMode, "off">, string> 
  * page cannot find (another window deleted it between the two reads). It claims nothing about any
  * view, only what every managed folder is.
  */
-export const MANAGED_EMPTY_UNKNOWN = "Nothing here — this folder follows its deck and fills itself.";
+export const MANAGED_EMPTY_UNKNOWN = "Nothing here. This folder updates automatically with its deck.";
 
 /**
  * {@link MANAGED_EMPTY} for a mode, or {@link MANAGED_EMPTY_UNKNOWN} where there is none to read —
