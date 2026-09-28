@@ -34,7 +34,7 @@
  * distinct arts (spec §2), which is a wall of pictures rather than a list of words: the reader is
  * choosing a *picture*, so the picture has to be the thing they press.
  */
-import { useDeferredValue, useId, useMemo, useState, type JSX } from "react";
+import { memo, useDeferredValue, useId, useMemo, useState, type JSX } from "react";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { CardArt } from "@/components/CardArt";
 import { CardChin } from "@/components/CardChin";
@@ -346,6 +346,17 @@ function AddBody({
 }) {
   const findId = useId();
   const [find, setFind] = useState("");
+  /**
+   * **The box's text as the wall reads it — a beat behind the box, on purpose** (2026-09-28).
+   *
+   * The live pass measured a keystroke at **816–1,152 ms** with `All tokens` on over the debug
+   * corpus's whole wall (4,863 tiles): the box's own state lived here, so every key re-rendered
+   * the wall in the same urgent render that drew the letter, and the letter waited for it. Now
+   * the urgent render draws the box and hands both walls the text they already had — they are
+   * `memo`, so they bail out there — and the wall narrows in a background render React drops the
+   * moment the next key lands. The box answers at the speed of typing; the wall catches up.
+   */
+  const wallFind = useDeferredValue(find);
   // Read once, at mount: the body is keyed and mounted afresh per open, and a deck gaining its
   // first token while the dialog is up must not flip the wall under the reader's pointer.
   const [everyToken, setEveryToken] = useState(() => tokens.length === 0);
@@ -385,9 +396,9 @@ function AddBody({
       </div>
 
       {everyToken ? (
-        <EveryTokenWall find={find} zoom={zoom} onPick={onPick} />
+        <EveryTokenWall find={wallFind} zoom={zoom} onPick={onPick} />
       ) : (
-        <DeckTokensWall tokens={tokens} find={find} zoom={zoom} onPick={onPick} />
+        <DeckTokensWall tokens={tokens} find={wallFind} zoom={zoom} onPick={onPick} />
       )}
     </>
   );
@@ -397,16 +408,18 @@ function AddBody({
  * The deck's own tokens, grouped — Add printing's wall with `All tokens` off, which is the wall it
  * always was: one `card_printings` read per token, each the card modal's own cache entry. Split
  * out of {@link AddBody} only so the toggle can swap it for {@link EveryTokenWall}; every state
- * and every sentence is the one it had.
+ * and every sentence is the one it had. `memo` for {@link AddBody}'s `wallFind`: the urgent
+ * render of a keystroke hands it the text it already has, and it bails out.
  */
-function DeckTokensWall({
+const DeckTokensWall = memo(function DeckTokensWall({
   tokens,
   find,
   zoom,
   onPick,
 }: {
   tokens: readonly DeckTokenView[];
-  /** The box's text, as typed — narrowed here by a token's name or a printing's set code. */
+  /** The box's text, a beat behind the box — narrowed here by a token's name or a printing's
+   *  set code. */
   find: string;
   zoom: number;
   onPick: (to: TokenPick) => void;
@@ -499,7 +512,7 @@ function DeckTokensWall({
       )}
     </>
   );
-}
+});
 
 /**
  * **How tall one token's group is drawn before the browser has laid it out** — the heading and
@@ -518,10 +531,12 @@ function groupRowHeight(zoom: number): number {
   return 48 + Math.round((stackCardWidth(zoom) * 7) / 5) + chinHeight(zoom) + Math.round(18 * zoom);
 }
 
-/** One token of {@link EveryTokenWall}: its facts off its first printing, and its printings. */
+/** One token of {@link EveryTokenWall}: its facts off its first printing, its printings, and
+ *  every tile they make — built once per answer, so an unnarrowed group hands the same list on. */
 interface EveryTokenGroup {
   first: TokenPrinting;
   printings: TokenPrinting[];
+  tiles: PrintingTileData[];
 }
 
 /**
@@ -552,12 +567,23 @@ interface EveryTokenGroup {
  *   press on a tile — rather than one block the reader waits on. The spec's bar is about a second
  *   to first paint in the shipped window, and a wall that misses it is virtualised; this is the
  *   cheaper answer, and the change's record has the figure it measured.
+ *
+ * **And a keystroke in the box costs the groups it changes, and none of the rest** (2026-09-28).
+ * The live pass measured a keystroke over the debug corpus's full wall — 4,863 tiles — at
+ * **816–1,152 ms**, because every key re-rendered every group and every tile in the urgent render
+ * that drew the letter: the deferral below only ever deferred the *list*, and the groups it drew
+ * were not memoised, so even the stale list was drawn again in full. Three moves, one reason:
+ * {@link AddBody} hands this wall the box's text through `useDeferredValue` and this wall is
+ * `memo`, so the urgent render stops at the box; each group's tiles are built once per answer, and
+ * a group the box leaves whole hands on that same list; and a group is {@link EveryTokenGroupItem},
+ * `memo` over that list, so the background render redraws only the groups whose tiles changed.
  */
-function EveryTokenWall({
+const EveryTokenWall = memo(function EveryTokenWall({
   find,
   zoom,
   onPick,
 }: {
+  /** The box's text, a beat behind the box — {@link AddBody}'s `wallFind`. */
   find: string;
   zoom: number;
   onPick: (to: TokenPick) => void;
@@ -568,34 +594,38 @@ function EveryTokenWall({
     queryFn: () => ipc.tokenPrintings(marketplace.id),
   });
 
-  /** The answer grouped by token, in the order it arrived — memoised on the answer, because a
-   *  keystroke in the box re-renders this wall and the grouping is the same every time. */
+  /** The answer grouped by token, in the order it arrived, each group's tiles made once —
+   *  memoised on the answer, because a keystroke in the box re-renders this wall and the grouping
+   *  is the same every time. */
   const groups = useMemo(() => {
-    const byToken = new Map<string, EveryTokenGroup>();
+    const byToken = new Map<string, { first: TokenPrinting; printings: TokenPrinting[] }>();
     for (const printing of query.data ?? []) {
       const group = byToken.get(printing.oracleId);
       if (group === undefined) byToken.set(printing.oracleId, { first: printing, printings: [printing] });
       else group.printings.push(printing);
     }
-    return [...byToken.values()];
+    return [...byToken.values()].map(
+      (group): EveryTokenGroup => ({ ...group, tiles: printingTiles(group.printings) }),
+    );
   }, [query.data]);
 
   const needle = find.trim().toLowerCase();
-  /** What the box leaves — memoised, so the deferred render below compares one answer with the
-   *  last by identity rather than seeing a new list on every render. */
+  /**
+   * What the box leaves — memoised, so the deferred render below compares one answer with the
+   * last by identity rather than seeing a new list on every render.
+   *
+   * **A group the box leaves whole hands on the tiles it was built with** — a name hit, and a set
+   * search every printing of the token matches — so its {@link EveryTokenGroupItem} is handed the
+   * list it already drew and skips. A set search narrows the tiles rather than the printings, which
+   * is the same answer: a tile is a printing in a finish, and the finish does not change its set.
+   */
   const shown = useMemo(
     () =>
       groups
-        .map(({ first, printings }) => {
-          const nameHit = needle === "" || first.name.toLowerCase().includes(needle);
-          return {
-            first,
-            tiles: printingTiles(
-              nameHit
-                ? printings
-                : printings.filter((p) => p.setCode.toLowerCase().includes(needle)),
-            ),
-          };
+        .map(({ first, tiles }): ShownTokenGroup => {
+          if (needle === "" || first.name.toLowerCase().includes(needle)) return { first, tiles };
+          const hits = tiles.filter((tile) => tile.printing.setCode.toLowerCase().includes(needle));
+          return { first, tiles: hits.length === tiles.length ? tiles : hits };
         })
         .filter((group) => group.tiles.length > 0),
     [groups, needle],
@@ -628,7 +658,7 @@ function EveryTokenWall({
       onPick={onPick}
     />
   );
-}
+});
 
 /**
  * **How many groups the first frame draws** — comfortably more than a window shows at the smallest
@@ -670,33 +700,65 @@ function EveryTokenGroups({
   const intrinsic = `auto ${groupRowHeight(zoom)}px`;
   return (
     <div className={cn(WALL_SCROLLER, "space-y-5")}>
-      {drawn.map(({ first, tiles }) => {
-        // `tokenSubtitle` reads the same facts a deck's token row carries, and the read's row
-        // carries every one of them — the type line and the printing's layout included.
-        const subtitle = tokenSubtitle(first);
-        const label = subtitle === null ? first.name : `${first.name}, ${subtitle}`;
-        return (
-          <div
-            key={first.oracleId}
-            style={{ contentVisibility: "auto", containIntrinsicSize: intrinsic }}
-          >
-            <h3 className="text-sm text-text">{first.name}</h3>
-            {subtitle !== null && <p className="text-xs leading-snug text-dim">{subtitle}</p>}
-            <PrintingWall
-              className="mt-2"
-              label={label}
-              tiles={tiles}
-              tokenName={first.name}
-              zoom={zoom}
-              currency={currency}
-              onPick={onPick}
-            />
-          </div>
-        );
-      })}
+      {drawn.map(({ first, tiles }) => (
+        <EveryTokenGroupItem
+          key={first.oracleId}
+          first={first}
+          tiles={tiles}
+          intrinsic={intrinsic}
+          zoom={zoom}
+          currency={currency}
+          onPick={onPick}
+        />
+      ))}
     </div>
   );
 }
+
+/**
+ * One token's group on the every-token wall — its name, its subtitle and its tiles.
+ *
+ * **`memo`, and every prop is a value or a stable reference**: `first` is the answer's own row,
+ * `tiles` the list {@link EveryTokenWall} built once per answer and hands on while the box leaves
+ * the group whole, and the rest are the wall's. So a keystroke redraws the groups whose tiles it
+ * changed and skips the rest — a thousand comparisons rather than 4,863 tiles.
+ */
+const EveryTokenGroupItem = memo(function EveryTokenGroupItem({
+  first,
+  tiles,
+  intrinsic,
+  zoom,
+  currency,
+  onPick,
+}: {
+  first: TokenPrinting;
+  tiles: readonly PrintingTileData[];
+  /** `contain-intrinsic-size` — see {@link groupRowHeight}. */
+  intrinsic: string;
+  zoom: number;
+  currency: Currency;
+  onPick: (to: TokenPick) => void;
+}) {
+  // `tokenSubtitle` reads the same facts a deck's token row carries, and the read's row carries
+  // every one of them — the type line and the printing's layout included.
+  const subtitle = tokenSubtitle(first);
+  const label = subtitle === null ? first.name : `${first.name}, ${subtitle}`;
+  return (
+    <div style={{ contentVisibility: "auto", containIntrinsicSize: intrinsic }}>
+      <h3 className="text-sm text-text">{first.name}</h3>
+      {subtitle !== null && <p className="text-xs leading-snug text-dim">{subtitle}</p>}
+      <PrintingWall
+        className="mt-2"
+        label={label}
+        tiles={tiles}
+        tokenName={first.name}
+        zoom={zoom}
+        currency={currency}
+        onPick={onPick}
+      />
+    </div>
+  );
+});
 
 /**
  * One run of tiles — a token's printings, one tile per printing per finish.
