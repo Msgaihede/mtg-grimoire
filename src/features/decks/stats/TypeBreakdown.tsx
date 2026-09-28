@@ -148,7 +148,10 @@ function LandPanel({
       ) : (
         <div className="flex flex-wrap items-center gap-3">
           <Pie slices={slices} total={count} />
-          <ul aria-label="Land types" className="flex min-w-0 flex-1 flex-col gap-1">
+          {/* `min-w-44` is what wraps the legend under the pie rather than beside it when the
+              panel cannot hold both: beside a 112px pie in the three-column band's ~250px panel
+              the names had ~60px and truncated to "No ba…" (shipped window, 2026-09-28). */}
+          <ul aria-label="Land types" className="flex min-w-44 flex-1 flex-col gap-1">
             {slices.map((slice) => (
               <li
                 key={slice.key}
