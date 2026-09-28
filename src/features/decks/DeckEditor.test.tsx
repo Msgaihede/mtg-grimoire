@@ -4285,7 +4285,7 @@ describe("DeckEditor", () => {
 
     // The count is the variant's own copies, not the deck's: 2 Bolts and 1 Bear.
     expect(
-      await screen.findByLabelText("Replace — removes the 3 cards in Theory first"),
+      await screen.findByLabelText("Replace — remove the 3 cards in Theory first"),
     ).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Import" }));

@@ -22,9 +22,9 @@ describe("CsvNotes", () => {
     render(
       <CsvNotes list={listWith({ delimiter: ",", ignoredColumns: [], hasQuantity: true })} />,
     );
-    expect(screen.getByText("Read as a spreadsheet.")).toBeInTheDocument();
+    expect(screen.getByText("Read as CSV.")).toBeInTheDocument();
     expect(screen.queryByText(/Not read/)).toBeNull();
-    expect(screen.queryByText(/no quantity column/)).toBeNull();
+    expect(screen.queryByText(/No quantity column/)).toBeNull();
   });
 
   it("names every column it did not read, in the file's own words", () => {
@@ -38,7 +38,7 @@ describe("CsvNotes", () => {
       />,
     );
     expect(
-      screen.getByText("Read as a spreadsheet. Not read: Printing Id, Artist Proof, Promo."),
+      screen.getByText("Read as CSV. Ignored columns: Printing Id, Artist Proof, Promo."),
     ).toBeInTheDocument();
   });
 
@@ -48,7 +48,7 @@ describe("CsvNotes", () => {
     );
     expect(
       screen.getByText(
-        "This spreadsheet has no quantity column, so every row is read as one copy.",
+        "No quantity column found, so each row counts as one copy.",
       ),
     ).toBeInTheDocument();
   });
@@ -57,8 +57,8 @@ describe("CsvNotes", () => {
   it("reads what the parser said about a real-shaped export", () => {
     render(<CsvNotes list={parseDecklist("Name,Set code,Scryfall ID\nSol Ring,LTC,abc\n")} />);
     expect(
-      screen.getByText("Read as a spreadsheet. Not read: Scryfall ID."),
+      screen.getByText("Read as CSV. Ignored columns: Scryfall ID."),
     ).toBeInTheDocument();
-    expect(screen.getByText(/no quantity column/)).toBeInTheDocument();
+    expect(screen.getByText(/No quantity column/)).toBeInTheDocument();
   });
 });

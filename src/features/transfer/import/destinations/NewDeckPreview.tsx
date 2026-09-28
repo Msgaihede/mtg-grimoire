@@ -224,7 +224,7 @@ export function NewDeckPreview({
         disabled={items.length === 0 || nameMissing}
         message={
           importIntoNewDeck.error !== null
-            ? `Could not import the list — ${ipcError(importIntoNewDeck.error)}`
+            ? `Couldn't import the list — ${ipcError(importIntoNewDeck.error)}`
             : nameMissing
               ? "Name the deck first."
               : ""

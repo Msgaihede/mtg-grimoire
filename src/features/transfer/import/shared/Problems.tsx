@@ -31,13 +31,13 @@ export function ImportProblems({
     <div className="space-y-3">
       {unmatched.length > 0 && (
         <ProblemList
-          caption={`${plural(unmatched.length, "line")} named a card this app has not got`}
+          caption={`${plural(unmatched.length, "line")} didn't match any card`}
           lines={unmatched.map((line) => `line ${line.lineNumber} · "${line.raw.trim()}"`)}
         />
       )}
       {hintMisses.length > 0 && (
         <ProblemList
-          caption={`${plural(hintMisses.length, "printing")} could not be found, so another was used`}
+          caption={`${plural(hintMisses.length, "printing")} not found, so another printing was used`}
           lines={hintMisses.map(
             (miss) => `line ${miss.lineNumber} · ${miss.name} — used ${miss.used} instead`,
           )}
@@ -45,7 +45,7 @@ export function ImportProblems({
       )}
       {parseIssues.length > 0 && (
         <ProblemList
-          caption={`${plural(parseIssues.length, "line")} could not be read`}
+          caption={`${plural(parseIssues.length, "line")} couldn't be read`}
           lines={parseIssues.map(
             (issue) => `line ${issue.lineNumber} · "${issue.raw.trim()}" — ${issue.reason}`,
           )}

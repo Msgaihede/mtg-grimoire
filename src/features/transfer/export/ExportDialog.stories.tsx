@@ -565,8 +565,8 @@ export const Tcgplayer: Story = {
     // The switched-off pile is in the cart with everything else, and nothing is said about
     // omissions because nothing was omitted — by the format or by the reader.
     await expect(preview(canvasElement)).toHaveTextContent("6 Forest [UNF] 239");
-    await expect(canvas.queryByText(/not written in this format/)).toBeNull();
-    await expect(canvas.queryByText(/inactive categories are not written/)).toBeNull();
+    await expect(canvas.queryByText(/can't include inactive categories/)).toBeNull();
+    await expect(canvas.queryByText(/inactive categories are left out/)).toBeNull();
     // Flat: not one of the section words the grouped formats write.
     await expect(preview(canvasElement).textContent).not.toMatch(/Deck|Maybeboard|Cuts/);
 
@@ -657,7 +657,7 @@ export const SwitchedOffPile: Story = {
 
     await userEvent.click(canvas.getByRole("radio", { name: "Arena" }));
     await expect(
-      canvas.getByText("6 cards in switched-off piles are not written in this format."),
+      canvas.getByText("This format can't include inactive categories, so 6 cards are left out."),
     ).toBeVisible();
     // **And no box beside it.** The whole of `dropsInactive` is that these two have already
     // answered the question, so the reader is not offered it — the fence is the format's, not
@@ -679,7 +679,7 @@ export const SwitchedOffPile: Story = {
     // nobody has checked — and these two are a hand-written `Set`, not something derived.
     await userEvent.click(canvas.getByRole("radio", { name: "MTGO" }));
     await expect(
-      canvas.getByText("6 cards in switched-off piles are not written in this format."),
+      canvas.getByText("This format can't include inactive categories, so 6 cards are left out."),
     ).toBeVisible();
     await expect(
       canvas.queryByRole("checkbox", { name: "Include inactive categories" }),
@@ -693,7 +693,7 @@ export const SwitchedOffPile: Story = {
     const inactive = canvas.getByRole("checkbox", { name: "Include inactive categories" });
     await expect(inactive).not.toBeChecked();
     await expect(
-      canvas.getByText("6 cards in inactive categories are not written."),
+      canvas.getByText("6 cards in inactive categories are left out."),
     ).toBeVisible();
     await expect(preview(canvasElement).textContent).not.toMatch(/Forest/);
 
@@ -701,8 +701,8 @@ export const SwitchedOffPile: Story = {
     // maybeboard, nothing left out, and both count lines gone.
     await userEvent.click(inactive);
     await expect(preview(canvasElement)).toHaveTextContent("Maybeboard 6 Forest (UNF) 239");
-    await expect(canvas.queryByText(/not written in this format/)).toBeNull();
-    await expect(canvas.queryByText(/inactive categories are not written/)).toBeNull();
+    await expect(canvas.queryByText(/can't include inactive categories/)).toBeNull();
+    await expect(canvas.queryByText(/inactive categories are left out/)).toBeNull();
 
     // Archidekt keeps the reader's own word for the pile and flags it, which is what makes an
     // export and a re-import agree about a maybeboard. The tick came across the format switch
@@ -715,7 +715,7 @@ export const SwitchedOffPile: Story = {
     await expect(preview(canvasElement)).toHaveTextContent(
       "Cuts 6x Forest (unf) 239 [Cuts{noDeck}]",
     );
-    await expect(canvas.queryByText(/not written in this format/)).toBeNull();
+    await expect(canvas.queryByText(/can't include inactive categories/)).toBeNull();
 
     // Put the store back, for {@link OnlyCardsArenaHas}'s reason.
     await userEvent.click(canvas.getByRole("checkbox", { name: "Include inactive categories" }));
@@ -773,10 +773,10 @@ export const InactiveCategoriesLeftOut: Story = {
 
     // Read with the preview still shut, and in copies.
     await expect(canvas.getByRole("button", { name: /Show decklist/ })).toBeVisible();
-    await expect(canvas.getByText("6 cards in inactive categories are not written.")).toBeVisible();
+    await expect(canvas.getByText("6 cards in inactive categories are left out.")).toBeVisible();
     // The format's own sentence is not the one on screen: plain text omits nothing by itself, so
     // claiming "in this format" here would blame the writer for the reader's answer.
-    await expect(canvas.queryByText(/not written in this format/)).toBeNull();
+    await expect(canvas.queryByText(/can't include inactive categories/)).toBeNull();
     // Nothing failed, so nothing shouts.
     await expect(canvas.queryByRole("alert")).toBeNull();
 
@@ -843,8 +843,8 @@ export const IncludeInactiveCategories: Story = {
       "Show decklist (6 lines)",
     );
     // Both count lines are gone: nothing is being held back by the reader or by the format.
-    await expect(canvas.queryByText(/inactive categories are not written/)).toBeNull();
-    await expect(canvas.queryByText(/not written in this format/)).toBeNull();
+    await expect(canvas.queryByText(/inactive categories are left out/)).toBeNull();
+    await expect(canvas.queryByText(/can't include inactive categories/)).toBeNull();
 
     await expand(canvasElement);
     await expect(preview(canvasElement)).toHaveTextContent(
@@ -865,7 +865,7 @@ export const IncludeInactiveCategories: Story = {
     // fail, and puts the store back for the next story on the page.
     await userEvent.click(again);
     await expect(preview(canvasElement).textContent).not.toMatch(/Forest/);
-    await expect(canvas.getByText("6 cards in inactive categories are not written.")).toBeVisible();
+    await expect(canvas.getByText("6 cards in inactive categories are left out.")).toBeVisible();
   },
 };
 
@@ -923,7 +923,7 @@ export const OnlyCardsArenaHas: Story = {
     await expect(preview(canvasElement)).toHaveTextContent(
       "Deck 2 Lightning Bolt (2X2) 117 1 Sol Ring (C21) 263",
     );
-    await expect(canvas.queryByText(/not in MTG Arena/)).toBeNull();
+    await expect(canvas.queryByText(/on MTG Arena/)).toBeNull();
 
     await userEvent.click(box);
     // Lightning Bolt stays: it is banned in Historic and legal in Timeless, and Arena plainly
@@ -931,12 +931,12 @@ export const OnlyCardsArenaHas: Story = {
     // "legal in Arena".
     await expect(preview(canvasElement)).toHaveTextContent("Deck 2 Lightning Bolt (2X2) 117");
     await expect(preview(canvasElement).textContent).not.toMatch(/Sol Ring/);
-    await expect(canvas.getByText("1 card is not in MTG Arena and is not written.")).toBeVisible();
+    await expect(canvas.getByText("1 card isn't on MTG Arena and is left out.")).toBeVisible();
 
     // The two lines count different things and never the same card twice: the six Forests are
     // held back by their switched-off pile, the one Sol Ring by the filter.
     await expect(
-      canvas.getByText("6 cards in switched-off piles are not written in this format."),
+      canvas.getByText("This format can't include inactive categories, so 6 cards are left out."),
     ).toBeVisible();
 
     // Leaving the format takes the question with it, and nothing else's export is narrowed.
@@ -1054,7 +1054,7 @@ export const SaveRefused: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Save as…" }));
 
     const alert = await canvas.findByRole("alert");
-    await expect(alert).toHaveTextContent("Could not save that export");
+    await expect(alert).toHaveTextContent("Couldn't save that export");
     // The file the reader named, and the reason — both halves of the sentence.
     await expect(alert).toHaveTextContent("Ramp.txt");
     await expect(alert).toHaveTextContent("Access is denied");
@@ -1266,7 +1266,7 @@ export const SweepFailed: Story = {
     await waitFor(async () => await expect(dialog).toBeVisible(), { timeout: FRAME_WAIT });
 
     await expect(canvas.getByRole("alert")).toHaveTextContent(
-      "Could not read the cards to export — database is locked",
+      "Couldn't load the cards to export — database is locked",
     );
     await expect(canvas.queryByText("3,000 cards matching your filters")).toBeNull();
 

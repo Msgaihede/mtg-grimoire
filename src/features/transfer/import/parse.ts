@@ -353,9 +353,9 @@ function csvQuantity(cell: string): number | string {
   if (!/^\d+$/.test(cell)) return `\`${cell}\` is not a whole number of copies`;
   const quantity = Number(cell);
   // The per-line reader's own sentence, so one refusal reads one way whichever reader made it.
-  if (quantity === 0) return "A count of zero is not an import.";
+  if (quantity === 0) return "Quantity can't be zero.";
   if (quantity > MAX_COPIES) {
-    return `\`${cell}\` is more than the ${MAX_COPIES} copies one row can hold`;
+    return `\`${cell}\` exceeds the maximum of ${MAX_COPIES} copies per row`;
   }
   return quantity;
 }
@@ -1146,7 +1146,7 @@ export function parseDecklist(text: string): ParsedList {
       // reading here defaults *towards* an import; `0 Shock` is the one where a default would
       // add a card the list explicitly counted to none. Quoted back instead, so the reader
       // decides.
-      issues.push({ lineNumber, raw, reason: "A count of zero is not an import." });
+      issues.push({ lineNumber, raw, reason: "Quantity can't be zero." });
       continue;
     }
 

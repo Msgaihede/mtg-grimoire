@@ -834,7 +834,7 @@ describe("the import dialog", () => {
 
     const merge = await screen.findByLabelText(/^Merge/);
     expect(merge).toBeChecked();
-    const replace = screen.getByLabelText("Replace — removes the 42 cards in Actual first");
+    const replace = screen.getByLabelText("Replace — remove the 42 cards in Actual first");
     await userEvent.click(replace);
     // And where that cardboard goes, which is the other half of what the press does — issue
     // #336. The label above is asserted verbatim, so the sentence being a note under the radios
@@ -865,7 +865,7 @@ describe("the import dialog", () => {
     await userEvent.click(go);
 
     expect(await screen.findByRole("status")).toHaveTextContent(
-      "Could not import the list — The card database is busy finishing a sync.",
+      "Couldn't import the list — The card database is busy finishing a sync.",
     );
     // Still open, and Back still holds what was pasted: the retry is one press, not a retype.
     await userEvent.click(screen.getByRole("button", { name: "Back" }));
@@ -968,12 +968,12 @@ describe("the import dialog", () => {
     );
     await panel();
 
-    expect(await screen.findByLabelText("Import into this deck")).toBeChecked();
+    expect(await screen.findByLabelText("this deck")).toBeChecked();
     // The header line is the *chosen* destination's, which is why it cannot be a host prop: the
     // header is drawn on both steps and the radios only on the first.
     expect(await screen.findByText("Into Sisay · Actual")).toBeInTheDocument();
 
-    await userEvent.click(screen.getByLabelText("Import into a new deck"));
+    await userEvent.click(screen.getByLabelText("a new deck"));
 
     // The new deck has no deck to name, so it says nothing and the host's fallback stands.
     await waitFor(() => expect(screen.queryByText("Into Sisay · Actual")).not.toBeInTheDocument());
@@ -1056,7 +1056,7 @@ describe("the import dialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      `Could not read a decklist from a file — ${refusal}`,
+      `Couldn't read a decklist from a file — ${refusal}`,
     );
     expect(screen.getByLabelText("Decklist")).toHaveValue("");
   });
@@ -1079,8 +1079,8 @@ describe("the import dialog", () => {
     await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
 
     const notice = await screen.findByText(
-      "This file was not saved as UTF-8, so it was read as Windows-1252 (Western European). " +
-        "If accented names look wrong, save it as UTF-8 and pick it again.",
+      "This file isn't UTF-8, so it was read as Windows-1252 (Western European). If accented " +
+        "names look wrong, save it as UTF-8 and try again.",
     );
     expect(notice).not.toHaveAttribute("role");
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
@@ -1163,8 +1163,8 @@ describe("the import dialog", () => {
     wrap(<Harness />);
     const go = await preview("Name,Set code,Scryfall ID\nSol Ring,LTC,abc\n");
 
-    const notes = await screen.findByText("Read as a spreadsheet. Not read: Scryfall ID.");
-    expect(screen.getByText(/no quantity column/)).toBeInTheDocument();
+    const notes = await screen.findByText("Read as CSV. Ignored columns: Scryfall ID.");
+    expect(screen.getByText(/No quantity column/)).toBeInTheDocument();
     expect(notes.compareDocumentPosition(go) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
@@ -1173,7 +1173,7 @@ describe("the import dialog", () => {
     await preview("1 Sol Ring");
 
     expect(await screen.findByText("1 card")).toBeInTheDocument();
-    expect(screen.queryByText(/Read as a spreadsheet/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Read as CSV/)).not.toBeInTheDocument();
   });
 
   /**
@@ -1194,7 +1194,7 @@ describe("the import dialog", () => {
     );
     await panel();
 
-    const collection = screen.getByRole("radio", { name: "Import into your collection" });
+    const collection = screen.getByRole("radio", { name: "your collection" });
     expect(collection).toBeEnabled();
     expect(collection).not.toHaveAttribute("aria-disabled");
     expect(collection).not.toBeChecked();
@@ -1202,7 +1202,7 @@ describe("the import dialog", () => {
     await userEvent.click(collection);
 
     expect(collection).toBeChecked();
-    expect(screen.getByRole("radio", { name: "Import into your wishlist" })).not.toBeChecked();
+    expect(screen.getByRole("radio", { name: "your wishlist" })).not.toBeChecked();
   });
 
   /**
@@ -1228,8 +1228,8 @@ describe("the import dialog", () => {
     );
     const go = await preview("1 Sol Ring");
 
-    await pickOption(user, "Condition when the file doesn't say", "Lightly played");
-    await pickOption(user, "Finish when the file doesn't say", "Foil");
+    await pickOption(user, "Default condition", "Lightly played");
+    await pickOption(user, "Default finish", "Foil");
     await user.click(go);
 
     await waitFor(() =>
@@ -1254,7 +1254,7 @@ describe("the import dialog", () => {
     );
     const go = await preview("1 Sol Ring");
 
-    await pickOption(user, "Finish when the file doesn't say", "Etched");
+    await pickOption(user, "Default finish", "Etched");
     await user.click(go);
 
     await waitFor(() =>
