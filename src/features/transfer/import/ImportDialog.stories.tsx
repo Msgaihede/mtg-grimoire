@@ -406,7 +406,7 @@ export const IntoCollection: Story = {
       canvas.getByRole("button", { name: /Finish when the file doesn.t say/ }),
     ).toBeInTheDocument();
     // `add`/`set`, and `add` first — never `replace`, which belongs to the deck's own preview.
-    await expect(canvas.getByLabelText(/^Add these copies/)).toBeChecked();
+    await expect(canvas.getByRole("radio", { name: "Add these copies" })).toBeChecked();
     await expect(canvas.queryByText(/^Replace/)).toBeNull();
     await expect(canvas.getByRole("button", { name: "Import" })).toBeEnabled();
   },
@@ -435,7 +435,7 @@ export const IntoWishlist: Story = {
       canvas.getByRole("button", { name: /Finish when the file doesn.t say/ }),
     ).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: /Condition/ })).toBeNull();
-    await expect(canvas.getByLabelText(/^Add these wishes/)).toBeChecked();
+    await expect(canvas.getByRole("radio", { name: "Add these wishes" })).toBeChecked();
     await expect(canvas.getByRole("button", { name: "Import" })).toBeEnabled();
   },
 };

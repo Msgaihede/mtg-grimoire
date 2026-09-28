@@ -74,9 +74,8 @@ function mount(csv: string) {
   return { onDone };
 }
 
-/** The radio's name is its whole label, hint included — `ModeRadios` wraps both in one `<label>`
- *  — so it is found by its opening words. */
-const setRadio = () => screen.getByRole("radio", { name: /^Set these quantities/ });
+/** The radio's name is its label alone — `ModeRadios` makes the hint its description. */
+const setRadio = () => screen.getByRole("radio", { name: "Set these quantities" });
 
 const CAPTION =
   "1 line had a purchase price this app could not read, and will be added without one";
@@ -213,16 +212,13 @@ describe("CollectionPreview under set", () => {
     expect(collectionImportCommit).toHaveBeenCalledWith(expect.any(Array), "set");
   });
 
-  /** By its text rather than through the radio's accessible name: `ModeRadios` runs the label
-   *  and the hint together (`…quantitiesThe file's…`), which is that component's to fix. */
+  /** On the radio itself, as its description — the sentence a reader hears after the name. */
   it("says the file's number is the total, folders included", () => {
     mount("1 Sol Ring\n");
 
-    expect(
-      screen.getByText(
-        "The file's number becomes how many you hold, copies filed in folders included.",
-      ),
-    ).toBeInTheDocument();
+    expect(setRadio()).toHaveAccessibleDescription(
+      "The file's number becomes how many you hold, copies filed in folders included.",
+    );
   });
 });
 
