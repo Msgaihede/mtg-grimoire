@@ -257,7 +257,7 @@ export const NothingYet: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const summary = within(await canvas.findByRole("region", { name: "Summary" }));
-    await expect(await summary.findByText(/^Nothing to add up yet\./)).toBeInTheDocument();
+    await expect(await summary.findByText(/^Nothing to count yet\./)).toBeInTheDocument();
     // Not a row of zeroes: the presses are gone with the figures, so there is nothing to open a
     // view that has nothing in it.
     await expect(summary.queryByRole("button", { name: /^Collection:/ })).not.toBeInTheDocument();
@@ -278,7 +278,7 @@ export const StillReading: Story = {
     const canvas = within(canvasElement);
     const summary = within(await canvas.findByRole("region", { name: "Summary" }));
     await expect(
-      summary.getByText("Adding up your collection, decks and wishlist…"),
+      summary.getByText("Loading totals…"),
     ).toBeInTheDocument();
     await expect(summary.queryByRole("button", { name: /^Collection:/ })).not.toBeInTheDocument();
   },

@@ -208,7 +208,7 @@ const GHOST_REFUSED = "border-destructive bg-destructive/12";
 function UnknownWidgetBody(): ReactElement {
   return (
     <p className="text-sm text-dim">
-      This widget came from a newer version of MTG Grimoire. Update to display it here, or remove it.
+      This widget needs a newer version of MTG Grimoire. Update the app or remove it.
     </p>
   );
 }

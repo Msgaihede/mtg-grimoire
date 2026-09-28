@@ -84,9 +84,9 @@ const FOOTER_PX = 22;
 /** The minus sign every signed figure draws — never a hyphen. */
 const MINUS = "−";
 
-const PENDING = "Reading price history…";
+const PENDING = "Loading price history…";
 export const NO_HISTORY =
-  "No price history yet. Price changes will appear here as price data is collected over time.";
+  "No price history yet. Price changes show up here over time.";
 
 function windowOf(value: string | number | undefined): PriceMoverWindow {
   return value === "30d" || value === "all" ? value : "7d";
@@ -125,7 +125,7 @@ export function emptySentence(
 ): string | null {
   if (answer.days < 2) return NO_HISTORY;
   if (answer.since === null) {
-    return `Prices have been remembered for ${plural(answer.days, "day")} so far — not long enough to measure ${windowPhrase(range)} yet.`;
+    return `Only ${plural(answer.days, "day")} of price history so far. Not enough for ${windowPhrase(range)} yet.`;
   }
   if (answer.movers.length > 0) return null;
   const span = range === "all" ? "since the oldest price kept" : `over ${windowPhrase(range)}`;
@@ -150,7 +150,7 @@ export function PriceMoversWidget({ widget, fit, still }: WidgetBodyProps): Reac
   if (query.isError) {
     return (
       <WidgetMessage tone="destructive">
-        Could not read price history — {ipcError(query.error)}
+        Couldn't load price history — {ipcError(query.error)}
       </WidgetMessage>
     );
   }
@@ -187,7 +187,8 @@ export function PriceMoversWidget({ widget, fit, still }: WidgetBodyProps): Reac
       </WidgetRowList>
       {footer && (
         <WidgetFooter>
-          Against {windowPhrase(range)} of {marketplace.label} prices.
+          {marketplace.label} prices{" "}
+          {range === "all" ? "since the oldest price kept" : `over ${windowPhrase(range)}`}.
         </WidgetFooter>
       )}
     </>

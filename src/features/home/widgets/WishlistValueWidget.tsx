@@ -156,7 +156,7 @@ function bucketLabel(dimension: BreakdownDimension, row: BreakdownRow): string {
  *  question attached. */
 const REST: Record<BreakdownDimension, string> = {
   rarity: "Every other rarity",
-  color: "Every other colour",
+  color: "Every other color",
   set: "Every other set",
   finish: "Every other finish",
 };
@@ -172,7 +172,7 @@ const REST: Record<BreakdownDimension, string> = {
  * redesign, the one word the two had drifted on).
  */
 function colorLabel(key: string): string {
-  if (key === "multi") return "Multicolour";
+  if (key === "multi") return "Multicolor";
   if (key === "c") return MANA_LABEL.C;
   return isManaKey(key) ? MANA_LABEL[key] : key;
 }
@@ -278,7 +278,7 @@ function barSentence(
   marketplaceLabel: string,
 ): string {
   if (bucket.value === null) {
-    return `${bucket.spoken}: ${copiesOf(bucket.cards)}, no price to buy at ${marketplaceLabel}.`;
+    return `${bucket.spoken}: ${copiesOf(bucket.cards)}, no ${marketplaceLabel} price.`;
   }
   // Omitted rather than drawn as an em dash mid-sentence: there is nothing to take a percentage
   // of when the list itself totals nothing, and a clause saying so would be noise.
@@ -321,17 +321,17 @@ export function WishlistValueWidget({ widget, fit }: WidgetBodyProps): ReactElem
 
   if (refusal !== null) {
     return (
-      <WidgetMessage tone="destructive">Could not price your wishlist — {refusal}</WidgetMessage>
+      <WidgetMessage tone="destructive">Couldn't load wishlist prices — {refusal}</WidgetMessage>
     );
   }
   if (totals === undefined || rows === undefined) {
-    return <WidgetMessage>Adding up what your wishlist would cost…</WidgetMessage>;
+    return <WidgetMessage>Loading wishlist prices…</WidgetMessage>;
   }
   if (totals.wishes === 0) {
     // **The wishlist's sentence, not the collection's**, and no figures over it: nothing is owned
     // or unowned here, and a total cost of `$0.00` over an empty list is a price nobody quoted.
     return (
-      <WidgetMessage>Your wishlist is empty. Add cards to your wishlist to see costs here.</WidgetMessage>
+      <WidgetMessage>Your wishlist is empty. Add cards to see costs here.</WidgetMessage>
     );
   }
 
@@ -403,7 +403,7 @@ export function WishlistValueWidget({ widget, fit }: WidgetBodyProps): ReactElem
       {rows.length === 0 ? (
         // A list with wishes on it and no buckets to show is the marketplace's silence, not an
         // empty wishlist — two different sentences, and this is the rarer one.
-        <WidgetMessage>Nothing in this slice has a price yet.</WidgetMessage>
+        <WidgetMessage>No prices for these cards yet.</WidgetMessage>
       ) : !charted ? null : asList ? (
         <WidgetRowList fit={fit}>
           {bars.map((bar) =>

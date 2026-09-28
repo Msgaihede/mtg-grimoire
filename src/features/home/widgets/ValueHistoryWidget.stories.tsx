@@ -159,7 +159,7 @@ export const Colour8x4: Story = {
   args: { widget: graph(8, 4, { split: "color" }) },
   play: async ({ canvasElement }) => {
     const card = await cardIn(canvasElement);
-    await expect(await card.findByRole("group", { name: "Line to follow" })).toBeInTheDocument();
+    await expect(await card.findByRole("group", { name: "Series" })).toBeInTheDocument();
   },
 };
 

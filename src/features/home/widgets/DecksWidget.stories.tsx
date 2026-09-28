@@ -158,7 +158,7 @@ export const PinnedDecksGone: Story = {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "Decks" }));
     await expect(
-      await card.findByText("The pinned decks are no longer in your collection."),
+      await card.findByText("The pinned decks no longer exist."),
     ).toBeInTheDocument();
   },
 };

@@ -100,8 +100,8 @@ export interface ReviewRow {
 const ROW_CAPTIONED = 51;
 const ROW_BARE = 36;
 
-const PENDING = "Looking for anything waiting on you…";
-export const EMPTY = "Nothing waiting for you.";
+const PENDING = "Loading review items…";
+export const EMPTY = "Nothing to review.";
 const FLAGGED = "Flagged for review";
 
 /** The flagged wishes, as a one-row page: `total` is the count, and `flatten` reaches every
@@ -169,8 +169,8 @@ export function reviewRows(counts: ReviewCounts, opts: { removed: boolean }): Re
       value: count(counts.scanned),
     });
   }
-  if (counts.binder > 0) rows.push(flaggedRow("binder", "Binder entries", counts.binder));
-  if (counts.wishes > 0) rows.push(flaggedRow("wishes", "Wishes", counts.wishes));
+  if (counts.binder > 0) rows.push(flaggedRow("binder", "Collection entries", counts.binder));
+  if (counts.wishes > 0) rows.push(flaggedRow("wishes", "Wishlist items", counts.wishes));
   if (counts.deckCards > 0) rows.push(flaggedRow("deckCards", "Deck cards", counts.deckCards));
   if (opts.removed && counts.removed > 0 && counts.removedFolderId !== null) {
     const held = copies(counts.removed);
@@ -245,7 +245,7 @@ export function ToReviewWidget({ widget, fit, still }: WidgetBodyProps): ReactEl
   if (failure !== null) {
     return (
       <WidgetMessage tone="destructive">
-        Could not read what is waiting — {ipcError(failure)}
+        Couldn't load review items — {ipcError(failure)}
       </WidgetMessage>
     );
   }

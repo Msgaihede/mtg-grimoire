@@ -413,7 +413,7 @@ describe("the sentences", () => {
 
     draw();
 
-    expect(await screen.findByText("Reading recent printings…")).toBeInTheDocument();
+    expect(await screen.findByText("Loading new printings…")).toBeInTheDocument();
   });
 
   /**
@@ -469,12 +469,12 @@ describe("the sentences", () => {
 
     expect(
       await screen.findByText(
-        "Could not read recent printings — BUSY: the database is being written to",
+        "Couldn't load new printings — BUSY: the database is being written to",
       ),
     ).toBeInTheDocument();
     expect(screen.queryByText(/has been reprinted/)).toBeNull();
     expect(screen.queryByText(NO_DECKS)).toBeNull();
-    expect(screen.queryByText("Reading recent printings…")).toBeNull();
+    expect(screen.queryByText("Loading new printings…")).toBeNull();
   });
 });
 
@@ -577,7 +577,7 @@ describe("what a card has room for", () => {
     expect(screen.getByText("August 2026")).toBeInTheDocument();
     expect(screen.queryByText("September 2026")).toBeNull();
     expect(
-      screen.getByText("Nothing older than 28 August in this window."),
+      screen.getByText("Nothing before 28 August in this period."),
     ).toBeInTheDocument();
   });
 
@@ -604,7 +604,7 @@ describe("what a card has room for", () => {
 
     await screen.findByText("Card 0");
     expect(screen.getAllByRole("listitem")).toHaveLength(40);
-    expect(screen.queryByText(/^Nothing older than/)).toBeNull();
+    expect(screen.queryByText(/^Nothing before/)).toBeNull();
   });
 
   /**
@@ -860,7 +860,7 @@ describe("the printing dialog", () => {
     expect(cardDetail).toHaveBeenCalledWith("sld-1", "tcgplayer");
     expect(qc.getQueryData(["card", "sld-1", "tcgplayer"])).toMatchObject({ id: "sld-1" });
 
-    const decks = within(dialog).getByRole("region", { name: "In 2 watched decks" });
+    const decks = within(dialog).getByRole("region", { name: "In 2 tracked decks" });
     // A deck holding the card only in a theory pile says so rather than counting copies nobody
     // owns.
     expect(within(decks).getByRole("button", { name: "Atraxa · 2 copies" })).toBeInTheDocument();
@@ -1021,7 +1021,7 @@ describe("the printing dialog", () => {
     await act(() => qc.invalidateQueries({ queryKey: NEW_PRINTINGS_ROOT }));
 
     expect(
-      await screen.findByText("Could not read recent printings — The card database is busy."),
+      await screen.findByText("Couldn't load new printings — The card database is busy."),
     ).toBeInTheDocument();
     expect(dialog).toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Atraxa · 2 copies" })).toBeInTheDocument();
@@ -1070,7 +1070,7 @@ describe("the printing dialog", () => {
     const dialog = await screen.findByRole("dialog", { name: /^Sol Ring/ });
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Could not read this card — The card database is busy.",
+      "Couldn't load this card — The card database is busy.",
     );
     expect(within(dialog).getByRole("button", { name: "Atraxa · 2 copies" })).toBeInTheDocument();
   });
