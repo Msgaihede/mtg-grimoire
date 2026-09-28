@@ -9,6 +9,13 @@ both, `cargo fmt --check` and the frontend. (It ran neither `clippy` nor `fmt` u
 while this line said it ran the first.) The toolchain is `rust-toolchain.toml`'s pin — rustup
 picks it up from any directory under the root.
 
+**A test that needs a real file takes its path from `crate::scratch::path`, never from
+`std::env::temp_dir()` directly.** The temp directory is one folder for every worktree's
+`cargo test`, so a fixed name there is one database written by two runs at once — measured
+2026-09-28 at 11 failing runs of 12 for two concurrent `ingest::tests`, and 0 of 12 through the
+helper. `scratch.rs` has the layout and why a run's files are deleted by the next run rather
+than by the test.
+
 ## Hard rules — database
 
 - **`cards` is dropped and recreated on every sync** (`schema::swap_staging`, with
@@ -1429,6 +1436,19 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   the refusal in `PassReport::skipped`, and **leaves a skipped README out of the manifest it then
   writes** (listing it would make the next pass claim it). A second fixed name anywhere in the
   mirror owes the same treatment.
+- **One folder, one installation.** The manifest's first line is `installation: <32 hex>`, this
+  installation's name from `app_meta.mirror_installation` (`settings::K_INSTALLATION`, minted by
+  `ensure_installation` in `desktop::start` on the write connection *before* the hook, so the
+  mirror still never writes to the database). `run_pass` refuses before writing anything, and
+  `set_root` refuses while choosing, when the folder's manifest names another installation — two
+  computers on one Dropbox folder otherwise overwrote each other's `Collection`/`Wishlist` files
+  and each pruned the other's decks (issue #551; reproduced by
+  `a_folder_another_installation_owns_is_refused_and_left_as_it_was` with the refusal removed:
+  24 files pruned). An unstamped manifest — every build before this — is adopted and stamped;
+  deleting the manifest hands the folder to whichever installation writes next. **The `:` in the
+  line is load-bearing**: `safe_entry` refuses any line with one, so an older build never takes
+  it for a path to delete, and `paths` strips `:` from every planned name. `app_meta` is on no
+  sync spec, so paired devices carry different names — they share a collection, not a folder.
 - **Every filesystem test in `mirror/` runs against a `tempfile` root, and none may touch
   `data/`.** The default root is `data_dir/export`, so a test that forgets to set `mirror_root`
   inside its tempdir writes into the developer's own mirror.
@@ -1466,18 +1486,26 @@ with the arithmetic behind the 105-character code and the crate pins, is
   dropped nobody** — `identity::supersede`, run by `adopt_epoch` and `commit_rotation` before
   either touches the roster. Exactly one epoch ahead, a view of the group **exists**, and every
   device in it (the live roster **and the last manifest's ids**, because `adopt_epoch` never
-  inserts) is still on the new manifest; anything else forgets them all. **An absent
+  inserts — less the rows in `sync_state.prune_deferred`, below) is still on the new manifest;
+  anything else forgets them all. **An absent
   `last_manifest` is no view, never an empty one**: only `identity::found_group` seeds it, with
   `[itself]`, because only a device minting its group knows all of it — a joiner's pairing blob
   names nobody but the initiator, and an upgraded install has never read a manifest. It is what
   lets `client::pull` open the backlog behind a join, which every device offline across a pairing
   used to step over for good. **Never relax it to "keep them all"**: the group key is symmetric
-  and the relay does not refuse a push at a stale epoch, so a device still opening *N* after a
-  removal takes writes from the removed device. **Its one trust in the relay**: the manifest's
+  and a relay that does not refuse a push at a stale epoch — the deployed one, until issue #546's
+  `stale_epoch` is — hands a device still opening *N* after a removal the removed device's writes. **Its one trust in the relay**: the manifest's
   device list is the relay's report and only the epoch is sealed, so a malicious relay colluding
   with a removed device could get pre-removal-epoch writes applied (confidentiality still holds).
-  An authenticated join/removal marker would close it and is not built — its trade-offs are in
-  [sync.md](../docs/reference/sync.md). Bounded at `identity::KEY_HISTORY` epochs, current included — the relay's
+  **The authenticated join/removal marker is built (issue #546) and narrows that trust to a
+  one-step rotation**: a join advances the epoch by `identity::JOIN_STEP` (1), a removal or a
+  departure by `identity::REMOVAL_STEP` (2), and the epoch is bound into every rewrapped blob, so
+  the relay cannot relabel one as the other — a device adopting `+2` forgets whatever `devices`
+  says. A device plans `+2` only once `/keys` has advertised `removalStep: 2`
+  (`client::removal_step`, latched in `sync_state` and never un-latched), so an older relay goes on
+  receiving `+1` removals — the case where the manifest's honesty is still relied on — and a relay
+  that has advertised the step cannot quietly downgrade one. A removal now spends two of
+  `EPOCH_HISTORY`'s eight epochs. [sync.md](../docs/reference/sync.md) has the trade-offs. Bounded at `identity::KEY_HISTORY` epochs, current included — the relay's
   `EPOCH_HISTORY`.
 - **No key crosses the IPC boundary.** `identity::Device.public_key` is `#[serde(skip)]` — a key
   on a list of devices is a key in a screenshot — and every field of `pairing::Pending` is
@@ -1501,8 +1529,9 @@ with the arithmetic behind the 105-character code and the crate pins, is
   press away. Full record: [sync.md](../docs/reference/sync.md).
 - **A removal rotates the key, publishes the rotation, and commits only when the relay accepts
   it — in that order, and the order is the rule.** `pairing::remove_device` refuses a group with
-  no membership, makes a round trip that emits no baseline, calls `identity::plan_rotation` (which
-  writes nothing), posts to `/g/{group}/rotate`, and only then calls `identity::commit_rotation`.
+  no membership, makes a round trip that emits no baseline, calls `identity::plan_rotation_by`
+  with `client::removal_step` (which writes nothing), posts to `/g/{group}/rotate`, and only then
+  calls `identity::commit_rotation`.
   **`identity::revoke_device` is gone and that sequence is what replaced it**: it rotated locally
   in one transaction and reached nobody, so the removing device moved to epoch *N+1* while every
   remaining device sat at *N* with `client::pull` holding its cursor for ever — **one removal
@@ -1520,7 +1549,13 @@ with the arithmetic behind the 105-character code and the crate pins, is
   `devices: Object.keys(manifest.keys)` — and there is no public key anywhere in one, so a device
   adopting somebody else's rotation *cannot* add a peer it has never met even in principle. It
   therefore learns **who left** and never **who joined**, and any device that has been told about a
-  join only by adopting an epoch is holding a partial roster. `client::publish_join` reads `/keys`
+  join only by adopting an epoch is holding a partial roster. **So `client::check_keys`' catch-up
+  walk (`/keys?epoch=`, issue #546) prunes only at the newest epoch**: every epoch it passes goes
+  through `identity::adopt_passing_epoch`, which lets `supersede` decide against that epoch's own
+  manifest but deletes no roster row — it parks the omitted ids in `sync_state.prune_deferred`,
+  which `supersede`'s view leaves out, and the newest adoption prunes and clears them. Pruning at
+  every step dropped a device removed at *N+2* and paired back at *N+3* for good, since the
+  *N+3* adoption could not re-insert it. `client::publish_join` reads `/keys`
   first and publishes **only when the manifest it would publish is a superset of the relay's
   current one**; otherwise it marks `roster_dirty`, publishes nothing and answers `Ok(())`. Without
   that check an ordinary pairing *evicts*: the manifest's key set is the roster on every device
@@ -1547,9 +1582,13 @@ with the arithmetic behind the 105-character code and the crate pins, is
   publish a rotation — and rotating locally anyway is the bug above. ⚠️ **Re-counted 2026-08-30**:
   three, then four when the membership check landed, five now.
 - **A device can leave its group, and "always possible" is literal.** `sync_group_leave` →
-  `pairing::leave_group_now` is `identity::plan_departure` (the manifest is everyone *but* this
-  device), `client::post_rotation` **best effort**, then `identity::leave_group` **and**
-  `entitlement::clear` **unconditionally**. ⚠️ **Everything after the in-a-group check is best
+  `pairing::leave_group_now` is `identity::plan_departure_by` with `client::removal_step` (the
+  manifest is everyone *but* this device), `client::post_rotation` **best effort**, then
+  `identity::leave_group` **and** `entitlement::clear` **unconditionally**. **And it waits for the
+  write connection as long as a sync trip holds it** (`sync::with_write_waiting`, issue #546): every
+  other press answers `db::BUSY` after `WRITE_LOCK_WAIT`, which made a leave pressed during a slow
+  trip fail — "always possible" had quietly depended on the lock. It is the one sanctioned
+  unbounded wait: a trip always ends, because every request it makes has a timeout. ⚠️ **Everything after the in-a-group check is best
   effort, planning included** — `plan_departure` seals a blob to every peer, so one bad roster row
   would otherwise be a device that can never get out of its group. What a failed plan costs is the
   courtesy, never the departure: nothing is published and the others go on listing this device
@@ -1648,7 +1687,11 @@ record, with every measurement, is
   named plus `src/lib/userTables.json` and `crossWindow.ts`' `TABLE_KEYS`, which any new *user*
   table owes, synced or not, and a thirteenth for a `WITHOUT ROWID` one,
   `changes::MARKED_BY_COMMAND` or `changes::WRITTEN_BY_THE_APP`, which v54's unsynced `sync_gone`
-  found missing from the list; dropping a synced *column* costs nothing on the
+  found missing from the list — and **`src/lib/syncedTables.json` for a synced one** (issue #546),
+  the list a pull's query refresh is derived from, which `changes.rs`' test holds to
+  `SYNCED_TABLES` and `crossWindow.test.ts` to `TABLE_KEYS`: a synced table missing from it was a
+  screen a pull never refreshed, which is how a sticky note came to overwrite another device's
+  edit; dropping a synced *column* costs nothing on the
   wire at all, because `apply::updates()` walks the **local** spec's field list and looks each
   name up in the incoming op, so a field a v42 peer goes on sending is skipped rather than
   deferred. An unknown *table* from a newer peer holds that peer's ops from the first one on until
@@ -1719,15 +1762,27 @@ record, with every measurement, is
   device's watermark at its first *held* op and leaves its later ops in the page unapplied, and
   `client::pull` keeps `PULL_CURSOR` — and so the ack — where it was, so the relay hands the page
   back and the watermark makes that re-delivery safe.
-  **Beside the epoch hold — an envelope sealed at an epoch ahead of this device's, which holds until
-  `check_keys` brings the key — two reasons hold, and nothing else does** (`apply::classify`, spec
+  **Beside the epoch hold — an envelope sealed at an epoch ahead of this device's *and at or below
+  the epoch `/keys` answered this trip*, which holds until `check_keys` brings the key — three
+  reasons hold, and nothing else does** (`apply::classify`, spec
   2026-09-27 §3.2): a group a **newer** schema sealed — `Op::schema > Some(USER_SCHEMA_VERSION)`,
   stamped by `wire::seal_batch` and never at capture — holds with no bound, until this device
   upgrades, and an envelope that opens under the key and does not parse counts as one **only when
   an op in it carries such a schema** (`WireError::Newer`; a `Malformed` one is stepped over like
-  an altered envelope, or it would pin the log for good); an **unknown parent** from a same or
-  older schema holds until the same blocks have been seen on 3 pulls spanning at least 600 s, and
-  then `apply_held(.., Waiting::Release)` skips it. The state is `sync_state.pull_hold`, no rung,
+  an altered envelope, or it would pin the log for good); a **clock** hold (issue #546) holds
+  **every** batch in the page from a sender with an op above its `sync_peers` watermark stamped
+  more than `hlc::MAX_AHEAD_MS` (a day) past this device's wall clock — the whole sender, because
+  a baseline's chunks are stamped from `updated_at` in table order and one that applied could lift
+  the watermark past ops in a held sibling — bounded by time itself — applying it would drag this device's clock
+  forward for good, and clamping `observe` instead would stamp the reader's next edit *before* the
+  op it followed, which diverges (`hlc::MAX_AHEAD_MS` has the argument); and an **unknown parent**
+  from a same or older schema holds until the same blocks have been seen on 3 pulls spanning at
+  least 600 s, and then `apply_held(.., Waiting::Release)` skips it. Precedence is behind > newer
+  > clock > waiting. **An envelope claiming an epoch above the relay's is not an epoch hold**: the
+  relay stores `epoch` as sent, so `pull` measures it against the epoch `/keys` answered, asks
+  `/keys` once more per pull for a rotation that landed mid-trip, and otherwise steps it over as
+  unreadable — held, anyone with a token could freeze every peer's cursor and the relay's
+  compaction with `{epoch: 1e12}`. The state is `sync_state.pull_hold`, no rung,
   and **it stores the blocks it holds on** (`apply::Held`): a block not in the stored set starts
   the bound over, so a wait that has run its course cannot release a new one with it — the final
   review's I1 — and `identity::leave_group` deletes the key with the group.
@@ -1796,8 +1851,11 @@ record, with every measurement, is
   pre-removal envelopes no longer open and are stepped over as unreadable. The cursor advances
   unless the newer device's new-epoch batches still hold it, and the pre-removal part is lost
   either way: the documented *a removal costs the backlog behind it*, now as long as the hold.
-  The relay refusing a push below the group's epoch is the recorded follow-up that would let the
-  keys be kept.
+  **The relay refuses a push below the group's epoch since issue #546** (409 `stale_epoch`, not yet
+  deployed), which was recorded as what would let the keys be kept — **and they are still
+  forgotten across a removal, on purpose**: keeping them would trust the relay to enforce that
+  refusal, and the two-step removal marker exists precisely so that a removal no longer rests on
+  the relay's word.
   [sync.md](../docs/reference/sync.md) *Held while it can resolve, skipped when it cannot*.
 - **Six tables can hold a `needs_review` sentence** since v29, and `sync_engine::commands::REVIEWABLE`
   is the list, held to `sqlite_master` by a test. The sentences are Rust's, following
@@ -1819,17 +1877,25 @@ record, with every measurement, is
   removal stick. The sealed plaintext is
   `<group_id>\0<epoch>\0<32-byte key>` and **anything ever added goes before the key**, which is
   the only field that can hold a zero byte of its own.
-- **A 401 on the group door is NOT a lapse**, and copying the sync routes' handling would be the
-  worst mistake in `client.rs`. The credential is derived from the group key, so a rotation this
-  device has not caught up with produces exactly the refusal a cancelled membership does.
+- **A *bare* 401 on the group door is NOT a lapse**, and copying the sync routes' handling would
+  be the worst mistake in `client.rs`. The credential is derived from the group key, so a rotation
+  this device has not caught up with produces exactly the refusal a cancelled membership does.
   `entitlement::STALE_GROUP_AUTH` names it, and `/keys` — which accepts an auth up to eight epochs
   old — is what tells the two apart out of band. Revoking on it would tell a reader their
-  membership ended because a sibling device removed somebody an hour ago.
+  membership ended because a sibling device removed somebody an hour ago. **A 401 carrying
+  `code: "membership_ended"` IS one** (issue #546): the relay stamps it only when the caller
+  presented the group's *current* auth and the membership settled dead, so there is nothing left to
+  confuse it with, and `group_door` revokes on it — before that, a device that held no refresh
+  secret read *Supporting since …* for ever over a pledge that had ended. `entitlement::Answer`
+  keeps the two apart, matched on the code and never on the sentence; a 403 still never reaches
+  either.
 - **`/rotate` and `/keys` stand ahead of the bearer gate, and that is the design rather than a
   hole.** A device that has just been rotated away from cannot mint a token, so a `/keys` behind
-  the gate would refuse exactly the caller it exists to serve. Both are D1 only and **never reach
-  the Durable Object**, so nothing they can be made to spend is on the metered line — which is
-  what makes standing outside affordable.
+  the gate would refuse exactly the caller it exists to serve. Every refusal either can give is
+  decided out of D1 in the Worker, so **a refused request never reaches the Durable Object** and
+  nothing junk can be made to spend is on the metered line — which is what makes standing outside
+  affordable. An *accepted* rotation reaches it once, to post its roster (issue #546), and only a
+  caller holding the group's current auth can make one.
 - **The relay's address is `entitlement::RELAY_BASE`, compiled in and public, and this reverses
   what this file said.** One deployment serves every reader, so an address stopped being a
   setting: `entitlement::base` answers the override when `sync_state.relay_url` holds one and
@@ -1885,7 +1951,23 @@ record, with every measurement, is
 - **A sync failure goes to `error_log` under `Source::Relay`; an entitlement failure goes
   nowhere.** `client.rs` records `push`/`pull`/`ack` through its own `note`, folding on the
   existing grain so a bad afternoon is one row with a count, and `pushed_at` is stamped only on a
-  200. This line read "**every** relay failure", and `entitlement.rs` is the exception:
+  200 — **with one exception since issue #546**: an op so large that it seals past the relay's
+  `wire::MAX_SEALED_CHARS` on its own can never be sent, so it is recorded once, stamped and
+  stepped over rather than stopping every op queued behind it. It stays in `sync_ops` as this
+  device's history; "pending" would have been a promise that never resolves. Refusals from an
+  updated relay are matched on the body's `code`: `stale_epoch` is retried once after a fresh
+  `check_keys`, and **`too_large`, `quota`, `clock_ahead` and `epoch_ahead` defer the push rather
+  than fail the trip** (`client::Deferral`) — the ops stay pending and the trip still pulls and
+  acks, because a device whose every trip died at a refused push stopped reading too and, on
+  `quota`, pinned the relay's compaction floor at its old ack. A baseline is skipped behind
+  `quota` or `clock_ahead`, and never started while a row in it is stamped a day ahead.
+  **`clock_ahead` is first mended by `client::rebase`** when this device's clock has been set
+  right: `sync_clock` only ratchets forward, so one write made under a date a year ahead stamps
+  every later op a year ahead too. Pending ops stamped past `base` — the latest of the wall
+  clock, every peer's watermark and this device's own pushed stamps — are re-stamped from it in
+  one transaction, never when `base` is itself a day ahead (a future stamp already reached the
+  group, so re-stamping under it would reorder this device's history on the others). This line
+  read "**every** relay failure", and `entitlement.rs` is the exception:
   **nothing in that module writes to `error_log` on any path.** A 401 there means the membership
   ended, and routing it through `errors::record` like a network failure tells the reader their
   sync is broken when in fact their pledge lapsed — the wrong sentence, pointing at the wrong fix
@@ -2592,6 +2674,45 @@ The rules, and where each is enforced, are in
   and never a boolean.
 - Failures fold into `error_log` through `errors::record`, which returns `()` and is called
   inside the caller's transaction — it can never fail the thing it describes.
+- **Every batch a feed writes takes the connection through `db::lock_background`, and every
+  user-facing write through `db::lock_for`** — the two halves of one priority rule (issue #551).
+  A `lock_for` that has to wait registers itself against that mutex, and no batch loop starts
+  another batch while one is registered. Before it, two ingests running together — the launch runs
+  both tag files and the combos at once — handed the connection straight to each other, because
+  whichever was not writing was already parked in `lock()`, and a `try_lock` poll never found it
+  free: `db::tests::a_bounded_asker_gets_its_turn_between_two_batch_loops` measured five of ten
+  asks told busy and the rest waiting 0.3–2 s, against 20–44 ms through `lock_background`. **A new
+  ingest loop that takes `lock_blocking` per batch reopens it.** The per-batch 5 ms sleep stays,
+  for callers that block rather than poll. `marketplace_feed::store` asks through `lock_for` with
+  its own 30 s `STORE_LOCK_WAIT`, because a refusal there throws away a 63.7 MiB download.
+- **A partial download is resumed only from the URI it came from.** `Client::download` writes the
+  URI to `<dest>.origin` when it starts from byte zero and resumes only when that record matches;
+  a partial with no record, or another URI's, is fetched again from zero. Scryfall's bulk URIs
+  carry the file's timestamp, so before this a restart after a rotation spliced yesterday's partial
+  onto a `Range` of today's file and failed the ingest on a CRC error. A caller discarding a partial
+  uses `scryfall::discard_partial`, which takes the record with it.
+- **Every path that calls the Scryfall API persists the lockout**, not only `run_sync`:
+  `tags::refresh` runs `sync::persist_penalty` when its check moved the deadline, because the
+  check shares the client's 429 gate and a restart must not be a way back in.
+- **Every ingest refuses a file more unusable than usable**, not only one with nothing in it —
+  `feed::mostly_unusable` (`skipped > kept`), as `MostlySkipped` in `IngestError`, `TagError`,
+  `ComboError` and `FeedError` (issue #551). Before, one good line among a hundred thousand bad
+  ones swapped: a corpus of one card with every collection row flagged for review, or a taxonomy
+  of one tag held for a week behind its ETag. The healthy files sit far inside it (0 % skipped
+  for cards and both tag files, 1.4 % for combos, at most 16 % for Mana Pool). It runs before the
+  swap and before any watermark, so a refusal leaves the previous rows exactly where they were.
+- **A feed whose file arrived and could not be used rests for a day at launch**
+  (`feed::backoff`, a `failed_at:<feed>` row in `sync_meta`). What stamps it is an ingest that
+  failed over a complete download, or a body refused on size — upstream's answer, which repeats
+  every launch until upstream fixes it (27.5 MB plus a 639 MB parse for the combos). A failure to
+  *arrive* — a check that could not connect, a dropped body, a status — stamps nothing and is
+  retried next launch as before. Only the launch's `refresh_if_due` (and the price feed's
+  `refresh_selected_if_due`) reads it; a reader's Refresh is how they ask for another try, and a
+  success clears it. A price feed's `Busy` never stamps: that is this app's connection.
+- **On a first run the optional feeds wait for the card sync to end**, success or failure
+  (`desktop::start`, gated on `sync::has_cards`). They are ~46 MB against the card file's 77 MB
+  on the same link, and the reader is watching the modal first-run wait. On every later launch
+  they start beside the sync as before.
 - **`feed::frame`'s two framers refuse rather than accumulate**, and the guard is not
   diagnostics: an uncapped framer found 63 elements in a 610.2 MB document and grew its buffer
   to 609.82 MB *without erroring*. `Elements::push` and `Lines::push` answer
@@ -2614,6 +2735,16 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 - `cards.scryfall.io` is the **only** host images come from; an off-host URI is refused. A URI
   with no `?<epoch>` cache-buster is refused at resolution, and `is_current` compares that
   stored URI character for character — that is the whole of freshness.
+- **The cache is bounded (2026-09-28), and what it spares is exactly what the pre-warm owns.**
+  `images::evict`, on the `image-upkeep` thread `images::spawn_upkeep` starts, keeps every picture
+  `prewarm_keys` would fetch and evicts the rest least-recently-used against 512 MiB and 90 days
+  unread. **Both read the one `WANTED` literal, and splitting it is the change that makes eviction
+  fight the pre-warm forever.** The used-stamp is the **file's modified time, set on purpose** — by
+  `store`, and by `Cache::flush_touches` on the upkeep thread for a hit, never on the serving path
+  and never with `create` — so it needs no corpus rung and survives a rebuilt corpus; it is never
+  read as freshness, which is still the URI. Delete the file before its row, and delete nothing
+  the walk did not rebuild through `cache_path`. [image-cache.md](../docs/reference/image-cache.md)
+  has the arithmetic.
 - **There is one route.** There was a second — `/cover/<deckId>`, which touched Scryfall not at
   all, and whose `i64` parse was the whole path-traversal fence because the id became a filename.
   It went with the custom deck cover on 2026-08-31: a cover is `decks.cover_card_id` now, so a

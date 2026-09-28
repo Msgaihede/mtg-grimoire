@@ -1050,7 +1050,7 @@ async fn download_signed(
 
     let signature = fetch_signature(updater, &signature_asset).await?;
 
-    let dir = state.data_dir.join("updates");
+    let dir = state.data_dir.join(UPDATES_DIR);
     std::fs::create_dir_all(&dir)
         .map_err(|e| format!("could not create {}: {e}", dir.display()))?;
     let part = dir.join(format!("{}.part", asset.name));
@@ -1077,8 +1077,7 @@ async fn download_signed(
         // renames and nothing that can fail halfway across a volume boundary.
         InstallKind::Portable => {
             let dest = sibling(&updater.exe, ".new");
-            extract_portable_exe(&part, &dest)?;
-            let _ = std::fs::remove_file(&part);
+            stage_portable(&part, &dest)?;
             Staged {
                 kind: InstallKind::Portable,
                 path: dest,
@@ -1212,6 +1211,9 @@ async fn stream_to_file(
     }
     file.flush()
         .map_err(|e| format!("could not finish writing {}: {e}", dest.display()))?;
+    // Durable before it is renamed into place or unpacked — [`extract_portable_exe`]'s reason.
+    file.sync_all()
+        .map_err(|e| format!("could not finish writing {}: {e}", dest.display()))?;
     if done != asset.size {
         return Err(format!(
             "the download stopped early ({done} of {} bytes).",
@@ -1221,7 +1223,28 @@ async fn stream_to_file(
     Ok(hasher.finalize().to_vec())
 }
 
+/// Unpack the downloaded archive at `part` into the staged exe at `dest`, and delete the
+/// archive **whichever way it goes**.
+///
+/// A failed extraction used to return with `?` and leave both behind: the `.part` in
+/// `data/updates/`, where nothing ever looked again, and a half-written `.new` beside the exe
+/// (issue #551). The `.new` was swept at the next launch; the `.part` never was.
+fn stage_portable(part: &Path, dest: &Path) -> Result<(), String> {
+    let result = extract_portable_exe(part, dest);
+    let _ = std::fs::remove_file(part);
+    if result.is_err() {
+        let _ = std::fs::remove_file(dest);
+    }
+    result
+}
+
 /// Pull `mtg-grimoire.exe` out of the portable archive.
+///
+/// **Made durable before it returns** — `sync_all`, not only `flush`, which hands the bytes to
+/// the OS and promises nothing about the disk. `apply` renames this file over the running exe,
+/// and a rename can reach the disk before the data it names: a power cut between the two would
+/// leave `mtg-grimoire.exe` a file of the right name and the wrong (zero) contents, which is the
+/// one failure a portable install cannot recover from by itself.
 ///
 /// Matched on the file name rather than on a full path, because the archive's layout is the
 /// release workflow's business and `Compress-Archive` has changed how it stores single
@@ -1252,6 +1275,8 @@ fn extract_portable_exe(archive: &Path, dest: &Path) -> Result<(), String> {
     std::io::copy(&mut entry, &mut out)
         .map_err(|e| format!("could not unpack {PORTABLE_EXE}: {e}"))?;
     out.flush()
+        .map_err(|e| format!("could not finish writing {}: {e}", dest.display()))?;
+    out.sync_all()
         .map_err(|e| format!("could not finish writing {}: {e}", dest.display()))?;
     Ok(())
 }
@@ -1419,16 +1444,36 @@ pub fn predecessor_pid<I: IntoIterator<Item = String>>(args: I) -> Option<u32> {
     args.next()?.parse().ok()
 }
 
-/// Clear what an update left beside the exe: the replaced build, and any staged one that
-/// was downloaded and never applied.
+/// Clear what an update left behind: beside the exe, the replaced build and any staged one that
+/// was downloaded and never applied; in `<data dir>/updates/`, every file.
 ///
 /// Runs on every launch, and is a no-op on nearly all of them. The staged file goes too —
 /// staging lives for one session by design, and a `.new` of unknown provenance is not
 /// something a later launch should quietly install.
-pub fn clean_up(exe: &Path) {
+///
+/// **`updates/` is swept on the same argument, and was not until issue #551.** It holds an NSIS
+/// setup a download staged — run from there by [`apply`], and of no use once the build it
+/// installed is the one running this — and the `.part` of a download or an extraction that
+/// failed. Nothing else ever deleted either, so every NSIS update left its whole installer
+/// behind for good. Files only, and only that folder's own: a directory in it is nothing this
+/// app made. A file that will not go — an installer still finishing its `/R` relaunch, say —
+/// is left for the next launch.
+pub fn clean_up(exe: &Path, data_dir: &Path) {
     let _ = std::fs::remove_file(sibling(exe, ".old"));
     let _ = std::fs::remove_file(sibling(exe, ".new"));
+    let Ok(entries) = std::fs::read_dir(data_dir.join(UPDATES_DIR)) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_type().is_ok_and(|t| t.is_file()) {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
+
+/// The folder under the data directory a download is written to — [`download`] and
+/// [`clean_up`] must agree on it.
+const UPDATES_DIR: &str = "updates";
 
 #[cfg(test)]
 mod tests {
@@ -1708,7 +1753,7 @@ mod tests {
     /// goes wrong.
     #[test]
     fn the_swap_moves_the_old_build_aside_and_puts_the_new_one_in_place() {
-        let dir = std::env::temp_dir().join("mtgtest-update-swap");
+        let dir = crate::scratch::path("update-swap");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("mtg-grimoire.exe");
@@ -1772,7 +1817,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn deleting_a_file_that_is_still_open_succeeds_on_windows() {
-        let dir = std::env::temp_dir().join("mtgtest-update-posix-delete");
+        let dir = crate::scratch::path("update-posix-delete");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("held.bin");
@@ -1793,7 +1838,7 @@ mod tests {
     /// which is nearly every launch.
     #[test]
     fn cleanup_removes_a_stale_staged_build_and_does_nothing_when_there_is_none() {
-        let dir = std::env::temp_dir().join("mtgtest-update-clean");
+        let dir = crate::scratch::path("update-clean");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("mtg-grimoire.exe");
@@ -1801,13 +1846,84 @@ mod tests {
         std::fs::write(sibling(&exe, ".new"), b"staged").unwrap();
         std::fs::write(sibling(&exe, ".old"), b"replaced").unwrap();
 
-        clean_up(&exe);
+        clean_up(&exe, &dir);
         assert!(!sibling(&exe, ".new").exists());
         assert!(!sibling(&exe, ".old").exists());
         assert!(exe.exists(), "the running build is never touched");
 
-        clean_up(&exe); // idempotent
+        clean_up(&exe, &dir); // idempotent, and a data dir with no `updates/` is fine
         assert!(exe.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **`updates/` is swept too** (issue #551): an NSIS setup a finished update ran from, and the
+    /// `.part` of a download that failed, were never deleted by anything, so installers piled up
+    /// one per update.
+    #[test]
+    fn cleanup_empties_the_downloads_folder_of_files_and_nothing_else() {
+        let dir = crate::scratch::path("update-clean-downloads");
+        let _ = std::fs::remove_dir_all(&dir);
+        let updates = dir.join(UPDATES_DIR);
+        std::fs::create_dir_all(updates.join("not-ours")).unwrap();
+        let exe = dir.join("mtg-grimoire.exe");
+        std::fs::write(&exe, b"build").unwrap();
+        std::fs::write(
+            updates.join("MTG.Grimoire_0.9.0_x64-setup.exe"),
+            b"installer",
+        )
+        .unwrap();
+        std::fs::write(
+            updates.join("mtg-grimoire_0.9.1_portable.zip.part"),
+            b"half",
+        )
+        .unwrap();
+
+        clean_up(&exe, &dir);
+
+        assert!(!updates.join("MTG.Grimoire_0.9.0_x64-setup.exe").exists());
+        assert!(!updates
+            .join("mtg-grimoire_0.9.1_portable.zip.part")
+            .exists());
+        assert!(
+            updates.join("not-ours").is_dir(),
+            "a directory is nothing a download made, and is left alone"
+        );
+        assert!(exe.exists());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A download that is not a readable archive must leave nothing behind — neither its `.part`
+    /// nor a half-written `.new` (issue #551) — and one that is must leave exactly the `.new`.
+    #[test]
+    fn staging_deletes_the_archive_whether_or_not_it_unpacks() {
+        use std::io::Write as _;
+        let dir = crate::scratch::path("update-stage");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let part = dir.join("release.zip.part");
+        let dest = dir.join("mtg-grimoire.exe.new");
+
+        std::fs::write(&part, b"this is not a zip").unwrap();
+        stage_portable(&part, &dest).unwrap_err();
+        assert!(
+            !part.exists(),
+            "a failed extraction must not leave its download behind"
+        );
+        assert!(!dest.exists(), "nor a half-staged build");
+
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(&part).unwrap());
+        zip.start_file(
+            format!("release/{PORTABLE_EXE}"),
+            zip::write::SimpleFileOptions::default(),
+        )
+        .unwrap();
+        zip.write_all(b"the new build").unwrap();
+        zip.finish().unwrap();
+        stage_portable(&part, &dest).unwrap();
+        assert!(!part.exists());
+        assert_eq!(std::fs::read(&dest).unwrap(), b"the new build");
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2123,7 +2239,7 @@ mod tests {
     /// arrangement, for its reason.
     fn file_state(name: &str) -> (Arc<AppState>, std::path::PathBuf) {
         use std::sync::atomic::AtomicBool;
-        let dir = std::env::temp_dir().join(format!("mtgtest-update-{name}"));
+        let dir = crate::scratch::path(&format!("update-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();

@@ -93,9 +93,9 @@ const FOOTER_ROOM = 22;
 
 const LOADING = "Loading decks…";
 const EMPTY = "No decks found. Build a deck on the Decks page to see it here.";
-const PINS_GONE = "The pinned decks are no longer in your collection.";
+const PINS_GONE = "The pinned decks no longer exist.";
 const NOTHING_PINNED = "No pinned decks. Pin decks in this widget's settings.";
-const ALL_ARCHIVED = "All decks are archived. Enable 'Archived too' in settings to show them.";
+const ALL_ARCHIVED = "All decks are archived. Choose Archived too in this widget's settings to show them.";
 
 /**
  * The pins, narrowed.
@@ -192,7 +192,7 @@ export function DecksWidget({ widget, fit, still }: WidgetBodyProps): ReactEleme
   if (decksQuery.isError) {
     return (
       <WidgetMessage tone="destructive">
-        Could not read your decks — {ipcError(decksQuery.error)}
+        Couldn't load your decks — {ipcError(decksQuery.error)}
       </WidgetMessage>
     );
   }
@@ -239,7 +239,7 @@ export function DecksWidget({ widget, fit, still }: WidgetBodyProps): ReactEleme
   // beside them, and never travel across a switch.
   const unpriced = rows.reduce((sum, deck) => sum + (values.get(deck.id)?.unpriced ?? 0), 0);
   const footer = valuesQuery.isError
-    ? `Could not read deck values — ${ipcError(valuesQuery.error)}`
+    ? `Couldn't load deck values — ${ipcError(valuesQuery.error)}`
     : unpriced > 0
       ? `${pricesAsOf(marketplace)} ${plural(unpriced, "copy", "copies")} have no price listed.`
       : pricesAsOf(marketplace);
@@ -336,7 +336,7 @@ export function DecksWidgetSettings({ widget, onConfig }: WidgetSettingsProps): 
     const words = scopeWords();
     return (
       <p className="m-0 text-xs text-dim">
-        Choose {words.pinned} under {words.row} to pick the decks this card shows.
+        Choose {words.pinned} under {words.row} to pick the decks this widget shows.
       </p>
     );
   }
@@ -386,7 +386,7 @@ export function DecksWidgetSettings({ widget, onConfig }: WidgetSettingsProps): 
       />
       {decksQuery.isError && (
         <p className="m-0 text-xs text-destructive">
-          Could not read your decks — {ipcError(decksQuery.error)}
+          Couldn't load your decks — {ipcError(decksQuery.error)}
         </p>
       )}
     </div>

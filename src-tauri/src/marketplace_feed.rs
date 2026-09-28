@@ -605,6 +605,13 @@ pub enum FeedError {
     /// an empty bulk file for the same reason.
     #[error("the price feed held no prices ({skipped} rows skipped); keeping the previous ones")]
     Empty { skipped: u64 },
+    /// More rows produced no price than produced one — [`crate::feed::mostly_unusable`], and
+    /// [`FeedError::Empty`]'s larger sibling (issue #551). Mana Pool skips at most 16 % when
+    /// healthy, Card Kingdom well under 1 %.
+    #[error(
+        "the price feed priced {priced} rows and could not use {skipped}; keeping the previous ones"
+    )]
+    MostlySkipped { priced: u64, skipped: u64 },
     #[error("{0}")]
     Busy(&'static str),
 }
@@ -622,7 +629,9 @@ impl FeedError {
             FeedError::TooLarge { .. } => Kind::Http,
             FeedError::Io(_) => Kind::Io,
             FeedError::Db(_) => Kind::Io,
-            FeedError::Parse(_) | FeedError::Empty { .. } => Kind::Parse,
+            FeedError::Parse(_) | FeedError::Empty { .. } | FeedError::MostlySkipped { .. } => {
+                Kind::Parse
+            }
             FeedError::Busy(_) => Kind::Other,
         }
     }
@@ -631,6 +640,17 @@ impl FeedError {
 // ---------------------------------------------------------------------------------------
 // Storage
 // ---------------------------------------------------------------------------------------
+
+/// How long [`store`] waits for the write connection before answering [`FeedError::Busy`].
+///
+/// **Six times a user-facing write's [`crate::db::WRITE_LOCK_WAIT`], because giving up here
+/// costs a download that has already landed**: a refused store deletes its temp file and
+/// leaves the watermark where it was, so the next launch fetches the same 63.7 MiB again
+/// (issue #551). A button would rather hear "busy" than freeze; a background refresh would
+/// rather wait. It asks through [`crate::db::lock_for`], so while it waits no ingest starts
+/// another batch — what it can still be kept waiting by is a single long hold, the card
+/// corpus's swap and index rebuild being the longest this app makes.
+pub const STORE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
 
 /// What a completed refresh did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -658,15 +678,25 @@ pub struct Ingested {
 /// 1.50 s debug over a 15 MiB body, and more over the real 63.7 MiB one) runs with no lock
 /// held at all.
 ///
-/// Answers [`FeedError::Busy`] rather than queueing if a sync holds the connection, which is
-/// what every user-facing write in this crate does.
+/// Answers [`FeedError::Busy`] rather than queueing forever if something holds the connection
+/// past [`STORE_LOCK_WAIT`] — longer than a user-facing write's wait, for that constant's
+/// reason.
 pub fn store(db: &Mutex<Connection>, feed: &Feed, fetched_at: i64) -> Result<Ingested, FeedError> {
     if feed.prices.is_empty() {
         return Err(FeedError::Empty {
             skipped: feed.skipped,
         });
     }
-    let Some(mut conn) = crate::db::lock_for(db, crate::db::WRITE_LOCK_WAIT) else {
+    // Rows that priced something, counting a collision's loser: it was a usable row, it merely
+    // lost its key to a better one.
+    let priced = feed.rows_seen.saturating_sub(feed.skipped);
+    if crate::feed::mostly_unusable(priced, feed.skipped) {
+        return Err(FeedError::MostlySkipped {
+            priced,
+            skipped: feed.skipped,
+        });
+    }
+    let Some(mut conn) = crate::db::lock_for(db, STORE_LOCK_WAIT) else {
         return Err(FeedError::Busy(crate::db::BUSY));
     };
     let tx = conn.transaction()?;
@@ -947,7 +977,9 @@ pub(crate) fn hold_refresh_for_test(name: &'static str) -> RefreshGuard {
 /// reason — it is what lets the whole path be driven from a test.
 ///
 /// Every failure leaves the previous prices exactly where they were and is written to
-/// `error_log`.
+/// `error_log`. A feed that arrived and could not be used — refused as too large, or failed in
+/// the parse or the store — also rests for a day at launch ([`crate::feed::backoff`]); a
+/// [`FeedError::Busy`] does not, because that is this app's own connection and not the feed.
 pub async fn refresh(
     state: &Arc<AppState>,
     marketplace: &str,
@@ -984,6 +1016,9 @@ pub async fn refresh(
         // ranges) and a half-written body would only fail to parse next time.
         let _ = std::fs::remove_file(&path);
         note_failure(&state.db, provider, &e);
+        if matches!(e, FeedError::TooLarge { .. }) {
+            note_unusable(&state.db, provider);
+        }
         progress("error", 0, 0);
         return Err(e.to_string());
     }
@@ -1010,17 +1045,38 @@ pub async fn refresh(
             // refresh is what tells the mirror the `Price` column in every mirrored CSV has
             // moved. One line, at the one place this path succeeds.
             state.mirror.mark_all();
+            if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+                let _ = crate::feed::backoff::clear(&conn, &backoff_feed(provider));
+            }
             progress("done", 0, 0);
             Ok(status_of(state, provider))
         }
         Ok(Err(e)) => {
+            if !matches!(e, FeedError::Busy(_)) {
+                note_unusable(&state.db, provider);
+            }
             progress("error", 0, 0);
             Err(e.to_string())
         }
         Err(e) => {
+            note_unusable(&state.db, provider);
             progress("error", 0, 0);
             Err(format!("the price feed could not be processed: {e}"))
         }
+    }
+}
+
+/// A provider's name in [`crate::feed::backoff`] — the `error_log` operation it already writes
+/// under, so the two read as one feed.
+fn backoff_feed(provider: &dyn FeedProvider) -> String {
+    format!("marketplace_feed:{}", provider.marketplace())
+}
+
+/// Rest `provider`'s feed for a day at launch — it arrived and could not be used. Best-effort,
+/// for [`note_failure`]'s reason.
+fn note_unusable(db: &Mutex<Connection>, provider: &dyn FeedProvider) {
+    if let Some(conn) = crate::db::lock_for(db, crate::db::WRITE_LOCK_WAIT) {
+        let _ = crate::feed::backoff::note_unusable(&conn, &backoff_feed(provider), unix_now());
     }
 }
 
@@ -1182,16 +1238,21 @@ pub async fn marketplace_feed_status(
 /// Silent and best-effort: this runs before there is a window to complain in, the failure is
 /// already in `error_log`, and the honest fallback is the prices already on disk.
 pub async fn refresh_selected_if_due(state: &Arc<AppState>, app: &tauri::AppHandle) {
-    let (marketplace, fetched_at) = {
+    let (marketplace, fetched_at, resting) = {
         let conn = crate::sync::lock_db_read(state);
         let id = crate::marketplace::stored(&conn);
-        let at = provider_for(&id).map(|p| read_status(&conn, p, unix_now()).fetched_at);
-        (id, at)
+        let now = unix_now();
+        let provider = provider_for(&id);
+        let at = provider.map(|p| read_status(&conn, p, now).fetched_at);
+        // A feed that arrived and could not be used rests for a day — [`crate::feed::backoff`].
+        let resting =
+            provider.is_some_and(|p| crate::feed::backoff::resting(&conn, &backoff_feed(p), now));
+        (id, at, resting)
     };
     let Some(fetched_at) = fetched_at else {
         return; // Not a feed-backed marketplace: nothing to download, ever.
     };
-    if !is_stale(fetched_at, unix_now()) {
+    if !is_stale(fetched_at, unix_now()) || resting {
         return;
     }
     let app = app.clone();
@@ -1609,6 +1670,46 @@ mod tests {
         );
     }
 
+    /// **A feed more unusable than usable is refused like an empty one** (issue #551), before the
+    /// `DELETE` that would have replaced every price with the few that survived — under an as-of
+    /// line that said the table was fresh. Mana Pool skips at most 16 % when healthy.
+    #[test]
+    fn a_mostly_unusable_feed_leaves_the_previous_prices_intact() {
+        let db = mem_db();
+        let good = collect(
+            &CardKingdom,
+            r#"{"data":[
+                {"id":1,"scryfall_id":"a","is_foil":"false","price_retail":"0.35"},
+                {"id":2,"scryfall_id":"b","is_foil":"false","price_retail":"1.00"}
+            ]}"#,
+        )
+        .unwrap();
+        store(&db, &good, 1_800_000_000).unwrap();
+        let before = stored_prices(&db, "cardkingdom");
+
+        let thin = collect(
+            &CardKingdom,
+            r#"{"data":[
+                {"id":1,"scryfall_id":"a","is_foil":"false","price_retail":"0.40"},
+                {"id":2,"name":"Sealed"},
+                {"id":3,"name":"Also sealed"}
+            ]}"#,
+        )
+        .unwrap();
+        let err = store(&db, &thin, 1_800_086_400).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                FeedError::MostlySkipped {
+                    priced: 1,
+                    skipped: 2
+                }
+            ),
+            "expected MostlySkipped, got {err:?}"
+        );
+        assert_eq!(stored_prices(&db, "cardkingdom"), before);
+    }
+
     /// **A failed fetch leaves the previous prices in place**, and says why in `error_log`.
     /// Stale prices with an honest as-of line beat an empty table — so the parse has to fail
     /// before the `DELETE`, not after it.
@@ -1628,7 +1729,7 @@ mod tests {
         store(&db, &good, 1_800_000_000).unwrap();
         let before = stored_prices(&db, "cardkingdom");
 
-        let dir = std::env::temp_dir().join("mtgtest-marketplace-feed-failures");
+        let dir = crate::scratch::path("marketplace-feed-failures");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 
@@ -1880,11 +1981,7 @@ mod tests {
     /// An `AppState` pointed at a scratch directory and a database of its own.
     fn test_state() -> (Arc<AppState>, PathBuf) {
         use std::sync::atomic::AtomicBool;
-        let dir = std::env::temp_dir().join(format!(
-            "mtgtest-feed-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let dir = crate::scratch::path("feed-state");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::schema::prepare_data_dir(&dir).unwrap();
@@ -1940,7 +2037,7 @@ mod tests {
             .await;
         let url: &'static str = Box::leak(server.url("/pricelist").into_boxed_str());
 
-        let dir = std::env::temp_dir().join("mtgtest-feed-download");
+        let dir = crate::scratch::path("feed-download");
         let _ = std::fs::remove_dir_all(&dir);
         let dest = dir.join("tmp").join("cardkingdom-prices.json");
         let mut seen: Vec<(u64, u64)> = Vec::new();
@@ -1968,7 +2065,7 @@ mod tests {
             .await;
         let url: &'static str = Box::leak(server.url("/pricelist").into_boxed_str());
 
-        let dir = std::env::temp_dir().join("mtgtest-feed-refused");
+        let dir = crate::scratch::path("feed-refused");
         let _ = std::fs::remove_dir_all(&dir);
         let dest = dir.join("tmp").join("cardkingdom-prices.json");
 

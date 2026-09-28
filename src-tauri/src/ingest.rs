@@ -13,9 +13,10 @@
 //! Bad input is never fatal. Scryfall's bulk file has held truncated lines and
 //! non-card objects, and one of those must not cost the user their whole card
 //! database — unparseable lines are counted in [`IngestStats::skipped`] and the
-//! stream continues. The one exception is a file that yields *no* cards at all:
-//! that is a failed download, not an empty collection, and it must not be swapped
-//! in. See [`IngestError::Empty`].
+//! stream continues. The exception is a file that yields *no* cards at all, or more
+//! unusable lines than cards: that is a failed download, not a smaller collection, and
+//! it must not be swapped in. See [`IngestError::Empty`] and
+//! [`IngestError::MostlySkipped`].
 
 use crate::{card_row::CardRow, schema};
 use rusqlite::{params, Connection};
@@ -47,6 +48,16 @@ pub enum IngestError {
     /// may be allowed to replace the user's collection with an empty table.
     #[error("no card rows found in bulk file ({skipped} lines skipped)")]
     Empty { skipped: u64 },
+    /// More of the file was unusable than usable — [`crate::feed::mostly_unusable`]. [`Empty`]'s
+    /// larger sibling: one good line among a hundred thousand bad ones used to swap in a corpus
+    /// of one card.
+    ///
+    /// [`Empty`]: IngestError::Empty
+    #[error(
+        "only {inserted} lines of the bulk file were cards and {skipped} were not; \
+         keeping the previous card database"
+    )]
+    MostlySkipped { inserted: u64, skipped: u64 },
 }
 
 /// Stream a gzipped Scryfall JSONL file into `cards_staging`, then swap it into
@@ -127,7 +138,7 @@ impl<'a> StreamIngest<'a> {
     /// never gets a byte still leaves a database in the state the next run expects.
     pub fn begin(db: &'a Mutex<Connection>) -> Result<Self, IngestError> {
         {
-            let conn = crate::db::lock_blocking(db);
+            let conn = crate::db::lock_background(db);
             schema::create_staging(&conn)?;
         }
         Ok(StreamIngest {
@@ -221,22 +232,32 @@ impl<'a> StreamIngest<'a> {
         // that has not existed since the user/corpus split and left the real one standing —
         // silently, because `IF EXISTS` succeeds on nothing. `schema::prepare_database`
         // qualifies its copy of the same statement.
-        if self.stats.inserted == 0 {
-            let conn = crate::db::lock_blocking(self.db);
+        //
+        // **And a file mostly skipped is refused the same way** (issue #551): one good line among
+        // a hundred thousand bad ones is not a smaller corpus, and swapping it would flag nearly
+        // every collection row for review and stamp the file as ingested.
+        let IngestStats { inserted, skipped } = self.stats;
+        let refusal = if inserted == 0 {
+            Some(IngestError::Empty { skipped })
+        } else if crate::feed::mostly_unusable(inserted, skipped) {
+            Some(IngestError::MostlySkipped { inserted, skipped })
+        } else {
+            None
+        };
+        if let Some(err) = refusal {
+            let conn = crate::db::lock_background(self.db);
             conn.execute_batch(&format!(
                 "DROP TABLE IF EXISTS {}.cards_staging",
                 crate::db::CORPUS
             ))?;
-            return Err(IngestError::Empty {
-                skipped: self.stats.skipped,
-            });
+            return Err(err);
         }
 
         // The swap is the last thing and belongs to the sink, so it lives here rather than in
         // `ingest_gz`: a stream that filled staging and never swapped would leave the
         // reader's `cards` table untouched while reporting success.
         {
-            let conn = crate::db::lock_blocking(self.db);
+            let conn = crate::db::lock_background(self.db);
             schema::swap_staging(&conn)?;
         }
         progress(self.stats.inserted);
@@ -295,7 +316,7 @@ fn flush_full_batches(
 /// writes anything, and [`schema::prepare_database`] at the next launch, which is the one
 /// that matters because a throttled sync may not run for days.
 fn write_batch(db: &Mutex<Connection>, batch: &mut Vec<CardRow>) -> Result<(), IngestError> {
-    let mut conn = crate::db::lock_blocking(db);
+    let mut conn = crate::db::lock_background(db);
     let tx = conn.transaction()?;
     {
         let mut stmt = tx.prepare_cached(STAGING_INSERT)?;
@@ -897,7 +918,7 @@ mod tests {
             conn.execute("INSERT INTO cards_staging (id,name,set_code,collector_number,lang,layout,raw) VALUES ('half','Half','x','1','en','normal','{}')", []).unwrap();
         }
 
-        let missing = std::env::temp_dir().join("mtgtest-does-not-exist.jsonl.gz");
+        let missing = crate::scratch::path("does-not-exist.jsonl.gz");
         let _ = std::fs::remove_file(&missing);
         let err = ingest_gz(&db, &missing, &mut |_| {}).unwrap_err();
         assert!(
@@ -949,7 +970,7 @@ mod tests {
         let rows: Vec<String> = (0..3000).map(card_line).collect();
         let lines: Vec<&str> = rows.iter().map(String::as_str).collect();
         let good = gz_fixture(&lines);
-        let truncated = std::env::temp_dir().join("mtgtest-truncated.jsonl.gz");
+        let truncated = crate::scratch::path("truncated.jsonl.gz");
         let bytes = std::fs::read(&good).unwrap();
         std::fs::write(&truncated, &bytes[..bytes.len() * 9 / 10]).unwrap();
 
@@ -1026,7 +1047,7 @@ mod tests {
     fn a_writer_gets_the_connection_between_batches_of_an_ingest() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-        let dir = std::env::temp_dir().join("mtgtest-ingest-chunked");
+        let dir = crate::scratch::path("ingest-chunked");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();
@@ -1083,6 +1104,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Bad lines are counted and stepped over — and a file exactly half bad still swaps, because
+    /// the floor ([`crate::feed::mostly_unusable`]) is strictly more unusable than usable.
     #[test]
     fn bad_lines_are_skipped_not_fatal() {
         let db = mem_db();
@@ -1090,10 +1113,52 @@ mod tests {
             r#"{"object":"card","id":"a","name":"Good","lang":"en","layout":"normal","set":"x","collector_number":"1","games":["paper"],"finishes":["nonfoil"],"digital":false}"#,
             "NOT JSON",
             r#"{"object":"token"}"#,
+            &card_line(2),
         ]);
         let stats = ingest_gz(&db, &p, &mut |_| {}).unwrap();
-        assert_eq!(stats.inserted, 1);
+        assert_eq!(stats.inserted, 2);
         assert_eq!(stats.skipped, 2);
+    }
+
+    /// **A file more unusable than usable is refused like an empty one** (issue #551). One good
+    /// line among a hundred thousand bad ones used to swap in a corpus of one card, flag nearly
+    /// every collection row for review and stamp the file as ingested.
+    #[test]
+    fn a_mostly_skipped_file_refuses_to_swap() {
+        let db = mem_db();
+        crate::db::lock_blocking(&db).execute("INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw) VALUES ('keep','Keep','x','1','en','normal','{}')", []).unwrap();
+
+        // More than a batch of each, so the good rows have really been committed to staging
+        // before the refusal — the refusal has to drop them, not merely never write them.
+        let good: Vec<String> = (0..BATCH + 1).map(card_line).collect();
+        let junk: Vec<String> = (0..BATCH + 2)
+            .map(|i| format!("<html>{i}</html>"))
+            .collect();
+        let lines: Vec<&str> = good.iter().chain(&junk).map(String::as_str).collect();
+        let err = ingest_gz(&db, &gz_fixture(&lines), &mut |_| {}).unwrap_err();
+        assert!(
+            matches!(err, IngestError::MostlySkipped { inserted, skipped }
+                if inserted == BATCH + 1 && skipped == BATCH + 2),
+            "expected MostlySkipped, got {err:?}"
+        );
+
+        let conn = crate::db::lock_blocking(&db);
+        let ids: Vec<String> = conn
+            .prepare("SELECT id FROM cards")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(ids, vec!["keep".to_owned()], "the live table is untouched");
+        let staging: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM corpus.sqlite_master WHERE name='cards_staging'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(staging, 0, "the refused staging table is dropped");
     }
 
     /// The new entry point must produce exactly what the file-shaped one does.

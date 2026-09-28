@@ -632,14 +632,64 @@ mod tests {
                 r#"{"object":"card","id":"x"}"#,
                 r#"{"object":"tag","id":"b1"}"#, // no slug
                 &tag("c1", "removal", &[], &["oid-2"]),
+                // Two more good lines, so the file is more usable than not — the floor
+                // `crate::feed::mostly_unusable` holds, which is `a_mostly_skipped_file_…`'s.
+                &tag("d1", "draw", &[], &["oid-3"]),
+                &tag("e1", "tutor", &[], &["oid-4"]),
             ],
         )
         .unwrap();
 
-        assert_eq!(stats.tags, 2);
+        assert_eq!(stats.tags, 4);
         assert_eq!(stats.skipped_lines, 3);
         assert_eq!(slugs_for(&db, "oid-1"), vec!["ramp".to_owned()]);
         assert_eq!(slugs_for(&db, "oid-2"), vec!["removal".to_owned()]);
+    }
+
+    /// **A file more unusable than usable is refused like an empty one** (issue #551), and the
+    /// previous taxonomy and its watermark stay exactly where they were. One good line among
+    /// thousands of bad ones used to swap in a taxonomy of one tag — held for a week, because the
+    /// swap stamps the ETag the next check replays.
+    #[test]
+    fn a_mostly_skipped_file_refuses_to_swap() {
+        let db = mem_db();
+        ingest(
+            &db,
+            &[
+                &tag("a1", "ramp", &[], &["oid-1"]),
+                &tag("a2", "removal", &[], &["oid-2"]),
+            ],
+        )
+        .unwrap();
+
+        let err = ingest(
+            &db,
+            &[
+                &tag("b1", "draw", &[], &["oid-9"]),
+                "not json",
+                "<html>",
+                r#"{"object":"card"}"#,
+            ],
+        )
+        .unwrap_err();
+        assert!(
+            matches!(
+                err,
+                TagError::MostlySkipped {
+                    tags: 1,
+                    skipped: 3
+                }
+            ),
+            "expected MostlySkipped {{ tags: 1, skipped: 3 }}, got {err:?}"
+        );
+        assert_eq!(slugs_for(&db, "oid-1"), vec!["ramp".to_owned()]);
+        assert!(slugs_for(&db, "oid-9").is_empty());
+        let conn = crate::db::lock_blocking(&db);
+        assert_eq!(
+            crate::tags::read_meta(&ORACLE, &conn).map(|m| m.tag_count),
+            Some(2),
+            "and the watermark still describes the rows that are there"
+        );
     }
 
     /// A gzipped error page, the wrong dataset, a file of nothing but cards — each decodes
@@ -743,7 +793,7 @@ mod tests {
         let db = mem_db();
         ingest(&db, &[&tag("a1", "ramp", &[], &["oid-1"])]).unwrap();
 
-        let missing = std::env::temp_dir().join("mtgtest-tags-does-not-exist.jsonl.gz");
+        let missing = crate::scratch::path("tags-does-not-exist.jsonl.gz");
         let _ = std::fs::remove_file(&missing);
         let err = ingest_gz(
             &ORACLE,
@@ -777,7 +827,7 @@ mod tests {
         // A file-backed database, as the app has: an in-memory one writes far faster than
         // the probe below can ask, which would make the count a measure of the fixture
         // rather than of the locking.
-        let dir = std::env::temp_dir().join("mtgtest-oracle-tags-chunked");
+        let dir = crate::scratch::path("oracle-tags-chunked");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();
@@ -1301,15 +1351,17 @@ mod tests {
         ));
     }
 
+    /// Held by every test here that runs [`refresh`] on [`ORACLE`]. The refresh claim is
+    /// process-wide per dataset — [`crate::tags::RefreshGuard`] — and the suite runs in
+    /// parallel, so two of these at once would have one answered "already being refreshed": an
+    /// `Err` a test expecting a refusal would happily accept, for the wrong reason.
+    static ORACLE_REFRESHES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
     /// An `AppState` pointed at a scratch directory, a database of its own, and a Scryfall
     /// that is really a mock server — [`crate::marketplace_feed`]'s `test_state`, with the
     /// base URL injected, which is what lets the whole refresh be driven here.
     fn test_state(base_url: String) -> (Arc<AppState>, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "mtgtest-tags-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let dir = crate::scratch::path("tags-state");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::schema::prepare_data_dir(&dir).unwrap();
@@ -1368,6 +1420,7 @@ mod tests {
     /// date is "due" again on the very next launch and spends one API call per start forever.
     #[tokio::test]
     async fn a_refresh_checks_downloads_ingests_and_then_304s() {
+        let _serial = ORACLE_REFRESHES.lock().await;
         use httpmock::prelude::*;
         let body = gz_bytes(&[
             &tag("p1", "tutor", &[], &[]),
@@ -1452,6 +1505,123 @@ mod tests {
             second.checked_at
         );
         assert_eq!(second.tag_count, Some(2), "and the rows are untouched");
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **A 429 a tag check earns survives a restart** (issue #551). The check shares the one
+    /// Scryfall client, so the lockout is the application's — and only the card sync used to
+    /// write it down, so an app restarted after a tag check's 429 asked again at once.
+    #[tokio::test]
+    async fn a_429_on_the_tag_check_is_written_down_for_the_next_launch() {
+        let _serial = ORACLE_REFRESHES.lock().await;
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(GET).path("/bulk-data/oracle_tags");
+            then.status(429).header("retry-after", "45");
+        });
+        let (state, dir) = test_state(server.base_url());
+        let asked_at = crate::scryfall::unix_now();
+
+        let err = refresh(&ORACLE, &state, true, &mut |_, _, _| {})
+            .await
+            .unwrap_err();
+
+        assert!(
+            err.contains("429") || err.to_lowercase().contains("rate"),
+            "{err}"
+        );
+        let stored: u64 = crate::app_meta::get_app_meta(
+            &crate::db::lock_blocking(&state.db),
+            crate::sync::K_SCRYFALL_PENALTY_UNTIL,
+        )
+        .and_then(|v| v.parse().ok())
+        .expect("the lockout must be on disk, where the next launch restores it from");
+        assert!(
+            stored >= asked_at + 45,
+            "the stored deadline {stored} must cover the 45 s Scryfall asked for (asked at {asked_at})"
+        );
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **A file that arrives and cannot be used rests the launch's refresh for a day**, and the
+    /// reader's own Refresh does not wait on that (issue #551). Before, the watermark was left
+    /// untouched and the dataset was exactly as due at the next launch, so a file upstream had
+    /// broken was downloaded and refused again on every start.
+    #[tokio::test]
+    async fn an_unusable_file_rests_the_launch_refresh_until_a_good_one_lands() {
+        let _serial = ORACLE_REFRESHES.lock().await;
+        use httpmock::prelude::*;
+        let junk = gz_bytes(&["<html>not a tag file</html>"]);
+        let good = gz_bytes(&[&tag("a1", "ramp", &[], &["oid-1"])]);
+        let server = MockServer::start_async().await;
+        let mut bad_file = server.mock(|when, then| {
+            when.method(GET).path("/oracle-tags.jsonl.gz");
+            then.status(200).body(junk.clone());
+        });
+        let mut listing = server.mock(|when, then| {
+            when.method(GET).path("/bulk-data/oracle_tags");
+            then.status(200).json_body(serde_json::json!({
+                "object": "bulk_data",
+                "type": "oracle_tags",
+                "updated_at": "2026-08-14T21:00:00.000+00:00",
+                "jsonl_download_uri": server.url("/oracle-tags.jsonl.gz"),
+                "compressed_size": junk.len() as u64
+            }));
+        });
+        let (state, dir) = test_state(server.base_url());
+        let now = crate::tags::unix_now();
+        assert!(
+            crate::tags::due_at_launch(&ORACLE, &state, now),
+            "a dataset never fetched is due"
+        );
+
+        refresh(&ORACLE, &state, false, &mut |_, _, _| {})
+            .await
+            .expect_err("a file with no tag in it is refused");
+        assert!(
+            !crate::tags::due_at_launch(&ORACLE, &state, now),
+            "the next launch must not fetch the same broken file again"
+        );
+        assert!(
+            crate::tags::due_at_launch(
+                &ORACLE,
+                &state,
+                now + crate::feed::backoff::FAILURE_BACKOFF_SECS
+            ),
+            "but a day later it tries again"
+        );
+
+        // The reader presses Refresh, and upstream has fixed the file in the meantime.
+        bad_file.delete();
+        listing.delete();
+        server.mock(|when, then| {
+            when.method(GET).path("/oracle-tags.jsonl.gz");
+            then.status(200).body(good.clone());
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/bulk-data/oracle_tags");
+            then.status(200).json_body(serde_json::json!({
+                "object": "bulk_data",
+                "type": "oracle_tags",
+                "updated_at": "2026-08-15T21:00:00.000+00:00",
+                "jsonl_download_uri": server.url("/oracle-tags.jsonl.gz"),
+                "compressed_size": good.len() as u64
+            }));
+        });
+        let status = refresh(&ORACLE, &state, true, &mut |_, _, _| {})
+            .await
+            .expect("a reader's Refresh is not rested");
+        assert_eq!(status.tag_count, Some(1));
+        assert_eq!(
+            crate::feed::backoff::failed_at(&crate::db::lock_blocking(&state.db), BULK_NAME),
+            None,
+            "a success clears the rest"
+        );
 
         drop(state);
         let _ = std::fs::remove_dir_all(dir);

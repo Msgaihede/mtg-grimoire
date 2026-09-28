@@ -235,7 +235,7 @@ export interface ShelfFigures {
 /** `6 wishes · $312.00 · 1 unpriced`, or the wishes alone for a folder holding none — the folder
  *  card's face, read across to the heading it became. */
 function face(figures: ShelfFigures, currency: Currency): string {
-  const wishes = plural(figures.wishes, "wish", "wishes");
+  const wishes = plural(figures.wishes, "card");
   if (figures.copies === 0) return wishes;
   return [
     wishes,
@@ -290,7 +290,7 @@ export function shelfStat({
     const matched = matchedBelow(shelf, shelves, counts);
     return subtotal === null
       ? `${matched} matching`
-      : `${matched} of ${plural(subtotal.wishes, "wish", "wishes")}`;
+      : `${matched} of ${plural(subtotal.wishes, "card")}`;
   }
   if (shelf.kind === "unfiled") {
     const own = counts.get(UNFILED_SHELF);

@@ -381,10 +381,10 @@ describe("countCaption", () => {
    * the hint is a hover away, and "81 of 100" beside a deck whose sleeved list holds 60 would read
    * as the widget disagreeing with the deck.
    */
-  it("starts a figure measured on the theory list with Plan", () => {
-    expect(countCaption(PLAN_AT)).toBe("Plan · 81 of 100 · 19 missing");
+  it("starts a figure measured on the theory list with Theory", () => {
+    expect(countCaption(PLAN_AT)).toBe("Theory · 81 of 100 · 19 missing");
     expect(countCaption(completion({ deckId: 8, list: "theory" }))).toBe(
-      "Plan · 60 of 60 · complete",
+      "Theory · 60 of 60 · complete",
     );
   });
 });
@@ -399,10 +399,10 @@ describe("rowHint", () => {
   it("says which copies the figure leaves out", () => {
     expect(
       rowHint(completion({ deckId: 1, missing: 4, missingCost: 9, unpricedMissing: 1 }), tcg),
-    ).toBe("1 missing copy with no price at TCGplayer is not in this figure.");
+    ).toBe("1 missing copy without a TCGplayer price isn't included.");
     expect(
       rowHint(completion({ deckId: 1, missing: 3, missingCost: 0, unpricedMissing: 3 }), tcg),
-    ).toBe("3 missing copies with no price at TCGplayer are not in this figure.");
+    ).toBe("3 missing copies without a TCGplayer price aren't included.");
   });
 
   it("says when nothing on the list is priced at all", () => {
@@ -413,7 +413,7 @@ describe("rowHint", () => {
 
   it("says a theory row is the actual list measured against the plan", () => {
     expect(rowHint(completion({ deckId: 1, list: "theory" }), tcg)).toBe(
-      "This deck's actual list, measured against its theory list.",
+      "This deck's actual list, compared to its theory list.",
     );
   });
 });
@@ -656,14 +656,14 @@ describe("DeckCompletionWidget", () => {
     });
 
     /** The caption says the figure is the plan's, and so does the name a reader drives by. */
-    it("says Plan on a row measured on the theory list", () => {
+    it("says Theory on a row measured on the theory list", () => {
       seed([PLAN], [PLAN_AT], "theory");
 
       draw(THEORY);
 
       const plan = screen.getByRole("button", { name: /^Esper Control/ });
-      expect(plan).toHaveAccessibleName("Esper Control · Plan · 81 of 100 · 19 missing · $50.00");
-      expect(within(plan).getByText("Plan · 81 of 100 · 19 missing")).toBeInTheDocument();
+      expect(plan).toHaveAccessibleName("Esper Control · Theory · 81 of 100 · 19 missing · $50.00");
+      expect(within(plan).getByText("Theory · 81 of 100 · 19 missing")).toBeInTheDocument();
     });
 
     it("moves the shortfall under the name on a two-cell tile", () => {
@@ -678,13 +678,13 @@ describe("DeckCompletionWidget", () => {
       expect(screen.queryByText(/to finish/)).toBeNull();
     });
 
-    it("keeps Plan in the shortfall a tile moves under the name", () => {
+    it("keeps Theory in the shortfall a tile moves under the name", () => {
       seed([PLAN], [PLAN_AT], "theory");
 
       draw(THEORY, { fit: fitFor(2, 3) });
 
       expect(screen.getByRole("button", { name: /^Esper Control/ })).toHaveTextContent(
-        "Esper ControlPlan · 19 missing · $50.00",
+        "Esper ControlTheory · 19 missing · $50.00",
       );
     });
 
@@ -704,17 +704,17 @@ describe("DeckCompletionWidget", () => {
      * price and the track beside `Esper Control` are the plan's, so the word alone is its caption —
      * and a live row, under `Collection`, stays bare.
      */
-    it("keeps the word Plan as the caption of a theory row on a compact card", () => {
+    it("keeps the word Theory as the caption of a theory row on a compact card", () => {
       seed([PLAN], [PLAN_AT], "theory");
 
       const { unmount } = draw(THEORY, { fit: fitFor(3, 3, "compact") });
 
       const plan = screen.getByRole("button", { name: /^Esper Control/ });
-      expect(plan).toHaveTextContent(/^Esper ControlPlan\$50\.00$/);
-      expect(within(plan).getByText("Plan")).toBeInTheDocument();
+      expect(plan).toHaveTextContent(/^Esper ControlTheory\$50\.00$/);
+      expect(within(plan).getByText("Theory")).toBeInTheDocument();
       expect(within(plan).queryByText(/81 of 100/)).toBeNull();
       // The name a reader drives by still carries the whole caption.
-      expect(plan).toHaveAccessibleName("Esper Control · Plan · 81 of 100 · 19 missing · $50.00");
+      expect(plan).toHaveAccessibleName("Esper Control · Theory · 81 of 100 · 19 missing · $50.00");
       unmount();
 
       seed([BURN], [BURN_AT]);
@@ -764,7 +764,7 @@ describe("DeckCompletionWidget", () => {
 
     /**
      * **One row height for the whole list, and it has to be the tallest row drawn.** A compact
-     * panel of live decks is bare rows (42px with the track); a theory row carries the `Plan` line,
+     * panel of live decks is bare rows (42px with the track); a theory row carries the `Theory` line,
      * so under `Theory` every row is counted at the captioned 57px — counting at 42 would cut the
      * list to more rows than the box holds. The fixture is chosen so the two counts differ.
      */
@@ -799,7 +799,7 @@ describe("DeckCompletionWidget", () => {
 
       draw();
 
-      expect(screen.getByText("Measuring your decks…")).toBeInTheDocument();
+      expect(screen.getByText("Loading decks…")).toBeInTheDocument();
     });
 
     it("says a refusal in the backend's words", async () => {
@@ -809,7 +809,7 @@ describe("DeckCompletionWidget", () => {
       draw();
 
       expect(
-        await screen.findByText("Could not measure your decks — The database is busy."),
+        await screen.findByText("Couldn't load deck progress — The database is busy."),
       ).toBeInTheDocument();
     });
 
@@ -955,7 +955,7 @@ describe("DeckCompletionWidget", () => {
 
     draw();
 
-    expect(screen.getByText("Measuring your decks…")).toBeInTheDocument();
+    expect(screen.getByText("Loading decks…")).toBeInTheDocument();
     expect(screen.queryByText("$12.50")).toBeNull();
     expect(
       await screen.findByRole("button", { name: "Burn · 56 of 60 · 4 missing · €9.50" }),
@@ -1057,16 +1057,16 @@ describe("DeckCompletionWidgetSettings", () => {
   }
 
   async function offered(user: ReturnType<typeof userEvent.setup>): Promise<string[]> {
-    await user.click(screen.getByRole("button", { name: "Decks to measure" }));
+    await user.click(screen.getByRole("button", { name: "Decks to track" }));
     return screen.getAllByRole("option").map((el) => el.textContent ?? "");
   }
 
   it("points at the scope row instead of drawing a picker that would do nothing", () => {
     settings(null);
 
-    expect(screen.queryByRole("button", { name: "Decks to measure" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Decks to track" })).toBeNull();
     expect(
-      screen.getByText("Choose Chosen… under Which decks to pick the decks this card measures."),
+      screen.getByText("Choose Chosen… under Which decks to pick the decks this widget tracks."),
     ).toBeInTheDocument();
   });
 
@@ -1101,8 +1101,8 @@ describe("DeckCompletionWidgetSettings", () => {
     const user = userEvent.setup();
     const onConfig = settings({ scope: "pinned", compare: "theory", deckIds: [1, 8] });
 
-    expect(screen.getByRole("button", { name: "Decks to measure" })).toHaveTextContent("1 deck");
-    await user.click(screen.getByRole("button", { name: "Decks to measure" }));
+    expect(screen.getByRole("button", { name: "Decks to track" })).toHaveTextContent("1 deck");
+    await user.click(screen.getByRole("button", { name: "Decks to track" }));
     await user.click(screen.getByRole("option", { name: /Arena Plan/ }));
 
     expect(onConfig).toHaveBeenCalledWith({ deckIds: [1, 8, 10], scope: "chosen" });

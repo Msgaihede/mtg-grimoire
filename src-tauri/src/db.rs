@@ -325,11 +325,23 @@ const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 ///
 /// Poisoning is recovered exactly as [`lock_blocking`] does: the panicking thread's
 /// `Connection` survives, and refusing the lock forever would brick the app for no gain.
+///
+/// **A caller that has to wait says so, and every background batch loop stands aside for it.**
+/// From its first failed `try_lock` until it returns, the ask is registered against this mutex
+/// in [`WAITING`], and [`lock_background`] — which every ingest takes the connection through,
+/// batch by batch — will not start another batch while it is. That is what makes the wait
+/// about one batch however many ingests are running: two loops that take the connection with
+/// a blocking `lock()` hand it straight to each other, because whichever is not writing is
+/// already parked when the other lets go, and a `try_lock` poll never finds it free (issue
+/// #551, and `a_bounded_asker_gets_its_turn_between_two_batch_loops`). A zero timeout never
+/// registers, because it never waits.
 pub fn lock_for(
     mutex: &Mutex<Connection>,
     timeout: Duration,
 ) -> Option<MutexGuard<'_, Connection>> {
     let deadline = Instant::now() + timeout;
+    // Held until this returns, the lock or `None` alike, and withdrawn by its `Drop`.
+    let mut waiting: Option<Waiting> = None;
     loop {
         match mutex.try_lock() {
             Ok(guard) => return Some(guard),
@@ -338,10 +350,91 @@ pub fn lock_for(
                 if Instant::now() >= deadline {
                     return None;
                 }
+                waiting.get_or_insert_with(|| Waiting::register(key_of(mutex)));
                 std::thread::sleep(LOCK_POLL_INTERVAL);
             }
         }
     }
+}
+
+/// The bounded asks ([`lock_for`]) waiting on each connection right now, as `(mutex address,
+/// count)`.
+///
+/// **Keyed on the mutex, not global**, because the test suite runs hundreds of connections in
+/// one process: a single counter would make every ingest test pause whenever any other test
+/// waited on its own connection. The app has one write connection, so in the shipped build
+/// this is one entry or none. A `Vec` because it is never longer than the number of
+/// connections being waited on at once.
+static WAITING: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+
+/// How long [`lock_background`] will stand aside before it takes its turn anyway.
+///
+/// A cap rather than an unbounded deference, so a steady stream of asks — or one that never
+/// withdraws — cannot park an ingest for good. [`WRITE_LOCK_WAIT`] because no user-facing ask
+/// waits longer than that, so a loop that has stood aside this long is no longer standing aside
+/// *for* anyone who is still going to get an answer.
+const BACKGROUND_DEFERENCE_CAP: Duration = WRITE_LOCK_WAIT;
+
+/// How often [`lock_background`] looks again while it stands aside. Well under
+/// [`LOCK_POLL_INTERVAL`], so a loop resumes promptly once the ask it deferred to is served.
+const BACKGROUND_DEFERENCE_POLL: Duration = Duration::from_millis(5);
+
+fn key_of(mutex: &Mutex<Connection>) -> usize {
+    mutex as *const Mutex<Connection> as usize
+}
+
+/// One registered ask in [`WAITING`], withdrawn when it is dropped.
+struct Waiting(usize);
+
+impl Waiting {
+    fn register(key: usize) -> Waiting {
+        let mut waiting = lock_plain(&WAITING);
+        match waiting.iter_mut().find(|(k, _)| *k == key) {
+            Some((_, n)) => *n += 1,
+            None => waiting.push((key, 1)),
+        }
+        Waiting(key)
+    }
+}
+
+impl Drop for Waiting {
+    fn drop(&mut self) {
+        let mut waiting = lock_plain(&WAITING);
+        if let Some(i) = waiting.iter().position(|(k, _)| *k == self.0) {
+            waiting[i].1 -= 1;
+            if waiting[i].1 == 0 {
+                waiting.swap_remove(i);
+            }
+        }
+    }
+}
+
+fn someone_is_waiting(key: usize) -> bool {
+    lock_plain(&WAITING).iter().any(|(k, _)| *k == key)
+}
+
+/// Take the write connection for **one batch of background work**, after any bounded ask
+/// already waiting on it has had its turn.
+///
+/// Every loop that writes a feed into staging a batch at a time takes the connection through
+/// here — the card ingest, both tag ingests and the combos — and a user-facing write takes it
+/// through [`lock_for`]. The two halves are the whole of the priority rule: while a
+/// [`lock_for`] is waiting, no batch loop starts another batch, so the ask is served when the
+/// batch in hand commits rather than whenever it happens to catch the connection free. Without
+/// it, three ingests running together (the launch fetches both tag files and the combos at
+/// once) left a collection edit "busy" after its five seconds, and the price feed's `store`,
+/// which asks the same way, dropped a 63.7 MiB download it had already paid for.
+///
+/// Background work waiting on background work is unchanged: this blocks like
+/// [`lock_blocking`] once no ask is waiting, and two ingests share the connection exactly as
+/// they did. The deference is capped at [`BACKGROUND_DEFERENCE_CAP`].
+pub fn lock_background(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
+    let key = key_of(mutex);
+    let deadline = Instant::now() + BACKGROUND_DEFERENCE_CAP;
+    while someone_is_waiting(key) && Instant::now() < deadline {
+        std::thread::sleep(BACKGROUND_DEFERENCE_POLL);
+    }
+    lock_blocking(mutex)
 }
 
 /// Fold the write-ahead log back into the database and truncate the `-wal` file to zero.
@@ -488,10 +581,68 @@ mod tests {
         );
     }
 
+    /// **Two batch loops at once hand the connection straight to each other, so a bounded asker
+    /// needs them to stand aside for it** (issue #551). The loops are the ingests' shape with the parsing taken
+    /// out — take the connection, hold it for a batch, let go, stand aside five milliseconds —
+    /// and the batch is the ~15 ms the tag ingest's own comment measures. One such loop leaves a
+    /// 5 ms gap a 20 ms poll lands in within a few tries; with two, whichever is not writing is
+    /// already parked in `lock()` when the other lets go, so there is no gap at all.
+    ///
+    /// Synthetic on purpose: a real ingest's parse happens with no lock held, so whether two of
+    /// them saturate the connection depends on how fast this machine parses JSON against how
+    /// fast it commits — a debug build on a RAM disk parses slowly enough to leave gaps (the
+    /// real-ingest version of this test, `tags::tests::
+    /// a_bounded_writer_gets_its_turn_while_two_ingests_run_at_once`, measured a worst wait of
+    /// ~400 ms over a 4.5 s overlap on Linux), a release build writing to a real disk does not.
+    /// This holds the lock discipline to account independent of either.
+    ///
+    /// Measured on Linux (debug) with the loops on `lock_blocking`, before [`lock_background`]
+    /// existed: five of ten `lock_for(2 s)` asks across two runs were told busy, and the rest
+    /// waited 0.3–2 s. Through [`lock_background`] every ask was served in 20–44 ms.
+    #[test]
+    fn a_bounded_asker_gets_its_turn_between_two_batch_loops() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let mutex = Mutex::new(Connection::open_in_memory().unwrap());
+        let stop = AtomicBool::new(false);
+        let mut asks: Vec<(Duration, bool)> = Vec::new();
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(|| {
+                    while !stop.load(Ordering::SeqCst) {
+                        let batch = lock_background(&mutex);
+                        std::thread::sleep(Duration::from_millis(15));
+                        drop(batch);
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                });
+            }
+            // Both loops are running before the first ask.
+            std::thread::sleep(Duration::from_millis(60));
+            for _ in 0..5 {
+                let asked = Instant::now();
+                let got = lock_for(&mutex, Duration::from_secs(2)).is_some();
+                asks.push((asked.elapsed(), got));
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            stop.store(true, Ordering::SeqCst);
+        });
+
+        let worst = asks.iter().map(|(w, _)| *w).max().unwrap_or_default();
+        assert!(
+            asks.iter().all(|(_, got)| *got),
+            "an asker was told busy between two batch loops: {asks:?}"
+        );
+        assert!(
+            worst < Duration::from_millis(500),
+            "an asker waited {worst:?} between two 15 ms batch loops: {asks:?}"
+        );
+    }
+
     /// A scratch directory of its own per test — these all touch real files, and the
     /// suite runs them in parallel.
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("mtgtest-db-{name}"));
+        let dir = crate::scratch::path(&format!("db-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

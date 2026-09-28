@@ -97,6 +97,7 @@ describe("the census", () => {
     expect(tsPaths).toContain("src-tauri/tauri.conf.json");
     expect(tsPaths).toContain("crates/card-scanner/src/session.rs");
     expect(rustPaths).toContain("src/lib/userTables.json");
+    expect(rustPaths).toContain("src/lib/syncedTables.json");
     expect(rustPaths).toContain("src/features/transfer/__golden__");
     expect(rustPaths).toContain("src/features/transfer/__golden__/corpus.json");
     expect(rustPaths).toContain("share-worker/wrangler.jsonc");
@@ -161,6 +162,7 @@ describe("the arms", () => {
     ["src/features/transfer/__golden__/deck.arena.all.txt", T, T, F, T],
     ["src/features/transfer/__golden__/corpus.json", T, T, F, T],
     ["src/lib/userTables.json", T, T, F, T],
+    ["src/lib/syncedTables.json", T, T, F, T],
     ["src/features/decks/DeckEditor.tsx", T, F, F, T],
     ["public/favicon.svg", T, F, F, T],
     ["index.html", T, F, F, T],

@@ -139,7 +139,7 @@ export const Default: Story = {
     await expect(
       await card.findByRole(
         "button",
-        { name: /^Could save \$[\d,.]+ on 2 wishes · Optimise prices$/ },
+        { name: /^Could save \$[\d,.]+ on 2 cards · Optimize prices$/ },
         LANDED,
       ),
     ).toBeInTheDocument();

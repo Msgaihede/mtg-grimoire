@@ -352,13 +352,13 @@ describe("the elsewhere mark", () => {
     const rows = [{ ...BOLT, elsewhere: 2 }];
     const { unmount } = wall(rows);
     expect(
-      screen.getByRole("img", { name: "Also on your wishlist as 2 other wishes" }),
+      screen.getByRole("img", { name: "Also on your wishlist 2 more times" }),
     ).toBeInTheDocument();
     unmount();
 
     list(rows);
     expect(
-      screen.getByRole("img", { name: "Also on your wishlist as 2 other wishes" }),
+      screen.getByRole("img", { name: "Also on your wishlist 2 more times" }),
     ).toBeInTheDocument();
   });
 
@@ -367,7 +367,7 @@ describe("the elsewhere mark", () => {
   it("says one wish in the singular", () => {
     wall([{ ...BOLT, elsewhere: 1 }]);
     expect(
-      screen.getByRole("img", { name: "Also on your wishlist as 1 other wish" }),
+      screen.getByRole("img", { name: "Also on your wishlist 1 more time" }),
     ).toBeInTheDocument();
   });
 });

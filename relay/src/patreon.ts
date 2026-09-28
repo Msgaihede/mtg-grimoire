@@ -51,7 +51,7 @@ const IDENTITY_URL =
  */
 const REDIRECT_PATH = "/oauth/patreon/callback";
 
-/** What the OAuth exchange and the daily refresh both answer. */
+/** What the OAuth exchange and the reconciliation's refresh both answer. */
 export interface PatreonTokens {
   accessToken: string;
   refreshToken: string;
@@ -114,7 +114,7 @@ export function exchangeCode(code: string, env: Env): Promise<PatreonTokens> {
 }
 
 /**
- * Trade a stored refresh token for a fresh access token, for the daily reconciliation.
+ * Trade a stored refresh token for a fresh access token, for the reconciliation.
  *
  * **Patreon rotates the refresh token on every use**, so the caller has to store the one that
  * comes back. Keeping the old one costs the next pass a `400` and the row silently stops being

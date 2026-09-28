@@ -203,9 +203,9 @@ describe("FoldersWidget", () => {
     draw({ wishlistFolderIds: [10] });
 
     const row = screen.getByRole("button", {
-      name: "Buy soon, wishlist folder, 3 wishes, $12.50, 1 unpriced",
+      name: "Buy soon, wishlist folder, 3 cards, $12.50, 1 unpriced",
     });
-    expect(within(row).getByText("Wishlist · 3 wishes · 1 unpriced")).toBeInTheDocument();
+    expect(within(row).getByText("Wishlist · 3 cards · 1 unpriced")).toBeInTheDocument();
   });
 
   /**
@@ -230,7 +230,7 @@ describe("FoldersWidget", () => {
     const trades = screen.getByRole("button", { name: "Trades, collection folder, 0 cards" });
     expect(trades).toHaveTextContent("TradesCollection · 0 cards");
     expect(
-      screen.getByRole("button", { name: "Later, wishlist folder, 0 wishes" }),
+      screen.getByRole("button", { name: "Later, wishlist folder, 0 cards" }),
     ).toBeInTheDocument();
   });
 
@@ -264,11 +264,11 @@ describe("FoldersWidget", () => {
       "Trades, collection folder, 0 cards",
       "Blue Tempo, deck folder, 2 cards, not priced",
       "Recently removed, removed cards, 0 cards",
-      "Buy soon, wishlist folder, 3 wishes, $12.50, 1 unpriced",
-      "Later, wishlist folder, 0 wishes",
+      "Buy soon, wishlist folder, 3 cards, $12.50, 1 unpriced",
+      "Later, wishlist folder, 0 cards",
       // A deck's `Tokens` child sits inside its deck's folder, so it is not top level.
-      "Burn, managed wishlist, 0 wishes",
-      "Elves, managed wishlist, 0 wishes",
+      "Burn, managed wishlist, 0 cards",
+      "Elves, managed wishlist, 0 cards",
     ]);
   });
 
@@ -317,7 +317,7 @@ describe("FoldersWidget", () => {
 
     expect(rows()).toEqual([
       "Binder, collection folder, 12 cards, $30.00",
-      "Later, wishlist folder, 0 wishes",
+      "Later, wishlist folder, 0 cards",
     ]);
   });
 
@@ -333,9 +333,9 @@ describe("FoldersWidget", () => {
     );
 
     expect(rows()).toEqual([
-      "Burn › Tokens, managed wishlist, 0 wishes",
-      "Elves › Tokens, managed wishlist, 0 wishes",
-      "Burn, managed wishlist, 0 wishes",
+      "Burn › Tokens, managed wishlist, 0 cards",
+      "Elves › Tokens, managed wishlist, 0 cards",
+      "Burn, managed wishlist, 0 cards",
     ]);
     expect(screen.getByText("Burn › Tokens")).toBeInTheDocument();
     expect(screen.getByText("Elves › Tokens")).toBeInTheDocument();
@@ -359,8 +359,8 @@ describe("FoldersWidget", () => {
 
       expect(screen.getByRole("list", { name: "Wishlist folders" })).toBeInTheDocument();
       expect(rows()).toEqual([
-        "Buy soon, wishlist folder, 3 wishes, $12.50, 1 unpriced",
-        "Later, wishlist folder, 0 wishes",
+        "Buy soon, wishlist folder, 3 cards, $12.50, 1 unpriced",
+        "Later, wishlist folder, 0 cards",
       ]);
     });
 
@@ -423,7 +423,7 @@ describe("FoldersWidget", () => {
       expect(rows()).toEqual([
         "Drawer 1, collection folder, 0 cards",
         "Drawer 2, collection folder, 0 cards",
-        "Wish 1, wishlist folder, 0 wishes",
+        "Wish 1, wishlist folder, 0 cards",
       ]);
     });
 
@@ -508,7 +508,7 @@ describe("FoldersWidget", () => {
       vi.spyOn(ipc, "collectionFolderSummary").mockReturnValue(new Promise(() => {}));
       draw(null, { seed: { skip: "collection" } });
 
-      expect(screen.getByText("Reading your collection folders…")).toBeInTheDocument();
+      expect(screen.getByText("Loading collection folders…")).toBeInTheDocument();
       // One cabinet still out is not two.
       expect(rows()).toHaveLength(2);
     });
@@ -516,15 +516,15 @@ describe("FoldersWidget", () => {
     it("says when there are no folders at all", () => {
       draw(null, { seed: { collection: [], collectionRows: [], wishlist: [], wishlistRows: [] } });
 
-      expect(screen.getByText(/No collection folders to show/)).toBeInTheDocument();
-      expect(screen.getByText(/No wishlist folders to show/)).toBeInTheDocument();
+      expect(screen.getByText(/No collection folders yet/)).toBeInTheDocument();
+      expect(screen.getByText(/No wishlist folders yet/)).toBeInTheDocument();
       expect(screen.queryByRole("list")).toBeNull();
     });
 
     it("says nothing about a cabinet the card does not draw", () => {
       draw({ cabinets: "collection" }, { seed: { wishlist: [], wishlistRows: [] } });
 
-      expect(screen.queryByText(/No wishlist folders to show/)).toBeNull();
+      expect(screen.queryByText(/No wishlist folders yet/)).toBeNull();
     });
 
     /** A read the backend refused says so, and says what it said. */
@@ -534,7 +534,7 @@ describe("FoldersWidget", () => {
       draw(null, { seed: { skip: "collection" } });
 
       expect(
-        await screen.findByText(/Could not read your collection folders — database is locked/),
+        await screen.findByText(/Couldn't load collection folders — database is locked/),
       ).toBeInTheDocument();
     });
   });

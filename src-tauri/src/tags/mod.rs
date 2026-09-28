@@ -229,6 +229,15 @@ const DOWNLOAD_EMIT_BYTES: u64 = 512 * 1024;
 /// index. Five milliseconds against a batch that measures ~10–20 ms puts a waiting writer in
 /// within a handful of polls, and costs a full oracle refresh (~470 batches over the
 /// 2026-08-14 file) roughly 2.4 s — which is a weekly background task's to spend.
+///
+/// **It answers one ingest and not two, and since issue #551 it is not what serves a user
+/// write.** With two batch loops running — the launch runs both tag files and the combos at
+/// once — whichever is not writing is already parked in `lock()` when the other lets go, so the
+/// connection passes straight between them and the gap this sleep opens is never free. Every
+/// batch here takes the connection through [`crate::db::lock_background`], which does not start
+/// a batch while a [`crate::db::lock_for`] is waiting; that is what serves the user write. The
+/// sleep stays for the callers that block rather than poll — another ingest, or a `lock_db` —
+/// which it still hands the connection to.
 const YIELD_BETWEEN_BATCHES: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// Let go of the connection long enough for a waiting writer to see that it is free.
@@ -484,6 +493,16 @@ pub enum TagError {
     /// [`Empty`]: TagError::Empty
     #[error("the tag file held {tags} tags and not one tagging; keeping the previous ones")]
     Untagged { tags: u64 },
+    /// More lines were unusable than were tags — [`crate::feed::mostly_unusable`], and
+    /// [`Empty`]'s larger sibling (issue #551). One good line among thousands of bad ones used to
+    /// swap in a taxonomy of one tag, and stamp the watermark that kept it for a week.
+    ///
+    /// [`Empty`]: TagError::Empty
+    #[error(
+        "only {tags} lines of the tag file were tags and {skipped} were not; \
+         keeping the previous ones"
+    )]
+    MostlySkipped { tags: u64, skipped: u64 },
 }
 
 impl TagError {
@@ -492,7 +511,9 @@ impl TagError {
         use crate::errors::Kind;
         match self {
             TagError::Io(_) | TagError::Db(_) => Kind::Io,
-            TagError::Empty { .. } | TagError::Untagged { .. } => Kind::Parse,
+            TagError::Empty { .. } | TagError::Untagged { .. } | TagError::MostlySkipped { .. } => {
+                Kind::Parse
+            }
         }
     }
 }
@@ -673,7 +694,7 @@ impl<'a> StreamTags<'a> {
     /// StreamIngest::begin`]'s reason.
     pub fn begin(ds: &'a Dataset, db: &'a Mutex<Connection>) -> Result<Self, TagError> {
         {
-            let conn = crate::db::lock_blocking(db);
+            let conn = crate::db::lock_background(db);
             (ds.create_staging)(&conn)?;
         }
         Ok(StreamTags {
@@ -782,17 +803,24 @@ impl<'a> StreamTags<'a> {
         // because it does not self-heal. A swap would write an empty closure *and* the watermark
         // in one transaction, and the next weekly check would replay that ETag, take its 304 and
         // leave the taxonomy empty forever with nothing in `error_log` to explain it.
-        let refusal = match (g.tags.is_empty(), stats.taggings) {
-            (true, _) => Some(TagError::Empty {
+        //
+        // **And a third: more lines unusable than tags** — [`crate::feed::mostly_unusable`].
+        let tags = g.tags.len() as u64;
+        let refusal = match (tags, stats.taggings) {
+            (0, _) => Some(TagError::Empty {
                 skipped: stats.skipped_lines,
             }),
-            (false, 0) => Some(TagError::Untagged {
-                tags: g.tags.len() as u64,
-            }),
+            (_, 0) => Some(TagError::Untagged { tags }),
+            _ if crate::feed::mostly_unusable(tags, stats.skipped_lines) => {
+                Some(TagError::MostlySkipped {
+                    tags,
+                    skipped: stats.skipped_lines,
+                })
+            }
             _ => None,
         };
         if let Some(err) = refusal {
-            let conn = crate::db::lock_blocking(db);
+            let conn = crate::db::lock_background(db);
             (ds.drop_staging)(&conn)?;
             return Err(err);
         }
@@ -807,7 +835,7 @@ impl<'a> StreamTags<'a> {
             staging = staging(ds.tags_table)
         );
         for chunk in g.tags.chunks(BATCH) {
-            let mut conn = crate::db::lock_blocking(db);
+            let mut conn = crate::db::lock_background(db);
             let tx = conn.transaction()?;
             {
                 let mut stmt = tx.prepare_cached(&tags_sql)?;
@@ -851,7 +879,7 @@ impl<'a> StreamTags<'a> {
         stats.closure_rows = write_closure(ds, db, &g, &closures, &mut written, progress)?;
 
         {
-            let mut conn = crate::db::lock_blocking(db);
+            let mut conn = crate::db::lock_background(db);
             let tx = conn.transaction()?;
             (ds.swap_staging)(&tx)?;
             // In the same transaction as the swap, and that is the contract: a watermark without
@@ -940,7 +968,7 @@ fn write_taggings(
         staging = staging(ds.taggings_table),
         subject = ds.subject_column
     );
-    let mut conn = crate::db::lock_blocking(db);
+    let mut conn = crate::db::lock_background(db);
     let tx = conn.transaction()?;
     {
         let mut stmt = tx.prepare_cached(&sql)?;
@@ -998,7 +1026,7 @@ fn flush_edges(
         "INSERT OR IGNORE INTO {staging} (child_slug, parent_slug) VALUES (?1, ?2)",
         staging = staging(ds.parents_table)
     );
-    let mut conn = crate::db::lock_blocking(db);
+    let mut conn = crate::db::lock_background(db);
     let tx = conn.transaction()?;
     {
         let mut stmt = tx.prepare_cached(&sql)?;
@@ -1100,7 +1128,7 @@ fn flush_closure(
     } else {
         format!("INSERT OR IGNORE INTO {table} ({subject}, slug) VALUES (?1, ?2)")
     };
-    let mut conn = crate::db::lock_blocking(db);
+    let mut conn = crate::db::lock_background(db);
     let tx = conn.transaction()?;
     {
         let mut stmt = tx.prepare_cached(&sql)?;
@@ -1440,8 +1468,32 @@ fn mark_checked(ds: &Dataset, state: &Arc<AppState>, etag: Option<Option<&str>>)
 /// Every failure leaves the previous tags exactly where they were, and every one that came
 /// from Scryfall or from the file it served is written to `error_log`. (A listing with no
 /// size, and a `tmp/` that cannot be created, are refusals *before* any of that and are
-/// returned as a sentence — there is nothing about the outside world to record.)
+/// returned as a sentence — there is nothing about the outside world to record.) A file that
+/// arrived and could not be used also rests the dataset for a day at launch —
+/// [`crate::feed::backoff`].
+///
+/// **A 429 the check earns is written to disk before this returns** (issue #551). The check
+/// goes through the one Scryfall client, so the lockout is charged to the whole application,
+/// but only [`crate::sync::run_sync`] used to persist it — so a restart after a tag check's
+/// 429 walked straight back into the lockout the docs forbid ignoring. Written only when this
+/// run moved the deadline, so a refresh that talked to nobody writes nothing.
 pub async fn refresh(
+    ds: &'static Dataset,
+    state: &Arc<AppState>,
+    force: bool,
+    progress: &mut (dyn FnMut(&str, u64, u64) + Send),
+) -> Result<TagStatus, String> {
+    let penalty_before = state.client.penalty_until_unix();
+    let result = refresh_once(ds, state, force, progress).await;
+    if state.client.penalty_until_unix() != penalty_before {
+        crate::sync::persist_penalty(state);
+    }
+    result
+}
+
+/// [`refresh`] without the lockout bookkeeping, which it wraps so that no return below can
+/// skip it.
+async fn refresh_once(
     ds: &'static Dataset,
     state: &Arc<AppState>,
     force: bool,
@@ -1540,8 +1592,12 @@ pub async fn refresh(
         note_failure(ds, &state.db, crate::errors::kind_of(&e), &e.to_string());
         // A short file is a resume point and is kept on purpose; anything else must not leave
         // a partial behind that every future resume then argues with.
-        if !matches!(e, crate::scryfall::ScryfallError::SizeMismatch { .. }) {
-            let _ = std::fs::remove_file(&gz);
+        if matches!(e, crate::scryfall::ScryfallError::SizeMismatch { .. }) {
+            // The body ended and disagreed with the manifest's size: upstream's answer, and it
+            // will be the same answer next launch.
+            note_unusable(ds, &state.db);
+        } else {
+            crate::scryfall::discard_partial(&gz);
         }
         progress("error", 0, 0);
         return Err(e.to_string());
@@ -1562,19 +1618,24 @@ pub async fn refresh(
         })
         .await
     };
-    let _ = std::fs::remove_file(&gz);
+    crate::scryfall::discard_partial(&gz);
 
     match joined {
         Ok(Ok(_)) => {
+            if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+                let _ = crate::feed::backoff::clear(&conn, ds.bulk_name);
+            }
             progress("done", 0, 0);
             Ok(status_of(ds, state))
         }
         Ok(Err(e)) => {
             note_failure(ds, &state.db, e.kind(), &e.to_string());
+            note_unusable(ds, &state.db);
             progress("error", 0, 0);
             Err(e.to_string())
         }
         Err(e) => {
+            note_unusable(ds, &state.db);
             progress("error", 0, 0);
             Err(format!(
                 "the {} file could not be processed: {e}",
@@ -1584,22 +1645,27 @@ pub async fn refresh(
     }
 }
 
+/// Rest `ds` for a day at launch: its file arrived whole and could not be used, and fetching
+/// it again at the next start would only fail the same way — [`crate::feed::backoff`].
+/// Best-effort for [`note_failure`]'s reason.
+fn note_unusable(ds: &Dataset, db: &Mutex<Connection>) {
+    if let Some(conn) = crate::db::lock_for(db, crate::db::WRITE_LOCK_WAIT) {
+        let _ = crate::feed::backoff::note_unusable(&conn, ds.bulk_name, unix_now());
+    }
+}
+
 /// Refresh `ds` at startup if it is due.
 ///
 /// **Silent, best-effort and never blocking.** It runs before there is a window to complain
 /// in, a failure is already in `error_log`, and the honest fallback is the tags already on
 /// disk — or, on a first run that fails, whatever the app did before that taxonomy existed.
 /// Neither the launch nor the card sync may ever wait on it.
+///
+/// **A dataset whose last file arrived and could not be used rests for a day first**
+/// ([`crate::feed::backoff`]), which [`refresh`] itself does not: a reader's Refresh is how they
+/// ask for another try.
 pub async fn refresh_if_due(ds: &'static Dataset, state: &Arc<AppState>, app: &tauri::AppHandle) {
-    let due = {
-        let conn = crate::sync::lock_db_read(state);
-        is_stale(
-            read_meta(ds, &conn).map(|m| m.checked_at),
-            ds.refresh_interval_secs,
-            unix_now(),
-        )
-    };
-    if !due {
+    if !due_at_launch(ds, state, unix_now()) {
         return;
     }
     let app = app.clone();
@@ -1610,6 +1676,16 @@ pub async fn refresh_if_due(ds: &'static Dataset, state: &Arc<AppState>, app: &t
     {
         eprintln!("could not refresh {}: {e}", ds.bulk_name);
     }
+}
+
+/// Should the launch refresh `ds` at `now`? Stale, and not resting after an unusable file.
+fn due_at_launch(ds: &Dataset, state: &AppState, now: i64) -> bool {
+    let conn = crate::sync::lock_db_read(state);
+    is_stale(
+        read_meta(ds, &conn).map(|m| m.checked_at),
+        ds.refresh_interval_secs,
+        now,
+    ) && !crate::feed::backoff::resting(&conn, ds.bulk_name, now)
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1970,5 +2046,126 @@ mod tests {
             "the running count must never go backwards: {all:?}"
         );
         assert_eq!(stats.taggings, 2 * cards.len() as u64);
+    }
+
+    /// **Two ingests at once must not starve a user write**, which is the case the per-batch
+    /// release alone could not answer (issue #551). One ingest lets go between batches and a
+    /// polling writer eventually lands in the gap; two ingests hand the connection straight to
+    /// each other, because whichever is not writing is already parked in `lock()` when the
+    /// other lets go, so a `try_lock` poll never finds it free. The launch runs three of them
+    /// together — both tag files and the combos — so this is the shape the app is actually in
+    /// for the first minute after a weekly refresh comes due.
+    ///
+    /// A file-backed database for `oracle::tests::a_writer_gets_the_connection_between_batches`'
+    /// reason, and the writer only counts an ask that **began while both ingests were
+    /// running**: an ask made after one of them finished is the single-ingest case, which
+    /// already worked.
+    ///
+    /// **On Linux this passes with or without [`crate::db::lock_background`]**, and that is
+    /// measured rather than assumed: a debug build parses JSON slowly enough, with no lock held,
+    /// that two ingests leave gaps a poll lands in (worst wait ~400 ms over a 4.5 s overlap
+    /// before the fix, 2026-09-28). Whether they saturate the connection is a ratio of parse
+    /// speed to commit speed, which is a fact about the machine; `db::tests::
+    /// a_bounded_asker_gets_its_turn_between_two_batch_loops` takes the parse out and is the test
+    /// that fails without the fix. This one is the fence over the real ingest path, on whichever
+    /// runner's ratio does saturate.
+    #[test]
+    fn a_bounded_writer_gets_its_turn_while_two_ingests_run_at_once() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        use std::time::{Duration, Instant};
+
+        let dir = crate::scratch::path("tags-two-ingests-at-once");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        crate::split::convert(&dir).unwrap();
+        let db = Mutex::new(crate::db::open_write(&dir).unwrap());
+
+        // Many lines of a hundred taggings each, so each ingest runs dozens of batches of
+        // taggings and as many again of closure rows — the real files' shape (~50 taggings a
+        // line in the oracle file), rather than one line the framer folds into one batch.
+        let fixture = |ds: &Dataset| {
+            let lines: Vec<String> = (0..1000)
+                .map(|t| {
+                    let taggings = (0..100)
+                        .map(|s| format!(r#"{{"{}":"s-{t}-{s}"}}"#, ds.subject_column))
+                        .collect::<Vec<_>>()
+                        .join(",");
+                    format!(
+                        r#"{{"object":"tag","id":"t{t}","slug":"tag-{t}","parent_ids":[],"taggings":[{taggings}]}}"#
+                    )
+                })
+                .collect();
+            let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+            gz_fixture(&refs)
+        };
+        let oracle = fixture(&crate::tags::oracle::ORACLE);
+        let art = fixture(&crate::tags::art::ART);
+
+        let running = AtomicUsize::new(2);
+        let started = [AtomicBool::new(false), AtomicBool::new(false)];
+        let mut asks: Vec<(Duration, bool)> = Vec::new();
+        let mut overlap = Duration::ZERO;
+        std::thread::scope(|scope| {
+            let jobs = [
+                (&crate::tags::oracle::ORACLE, &oracle, &started[0]),
+                (&crate::tags::art::ART, &art, &started[1]),
+            ];
+            for (ds, path, started) in jobs {
+                let (db, running) = (&db, &running);
+                scope.spawn(move || {
+                    let result = ingest_gz(
+                        ds,
+                        db,
+                        path,
+                        &FileStamp::default(),
+                        1_800_000_000,
+                        &mut |_| started.store(true, Ordering::SeqCst),
+                    );
+                    // Before the unwrap: a failed ingest must still release the writer's loop.
+                    running.fetch_sub(1, Ordering::SeqCst);
+                    result.unwrap();
+                });
+            }
+            // Both have committed a batch, so both are demonstrably mid-run.
+            while !started.iter().all(|s| s.load(Ordering::SeqCst)) {
+                if running.load(Ordering::SeqCst) < 2 {
+                    return;
+                }
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            let overlap_began = Instant::now();
+            while running.load(Ordering::SeqCst) == 2 {
+                let asked = Instant::now();
+                let got = crate::db::lock_for(&db, crate::db::WRITE_LOCK_WAIT).is_some();
+                asks.push((asked.elapsed(), got));
+                std::thread::sleep(Duration::from_millis(20));
+            }
+            overlap = overlap_began.elapsed();
+        });
+
+        assert!(
+            asks.len() >= 3,
+            "the two ingests overlapped for only {overlap:?} ({} asks) — too short to prove \
+             anything; make the fixture larger",
+            asks.len()
+        );
+        let refused = asks.iter().filter(|(_, got)| !got).count();
+        let worst = asks.iter().map(|(w, _)| *w).max().unwrap_or_default();
+        assert_eq!(
+            refused,
+            0,
+            "{refused} of {} asks were told busy while two ingests ran ({overlap:?} overlap)",
+            asks.len()
+        );
+        // Half the refusal wait rather than a batch's worth, because one hold here is
+        // legitimately long: each swap drops the live tables, renames staging and rebuilds
+        // their indexes in one transaction, and an ask that lands behind it waits for all of
+        // it (~1 s over this fixture in a debug build). A batch is ~60–100 ms.
+        assert!(
+            worst < crate::db::WRITE_LOCK_WAIT / 2,
+            "a user write waited {worst:?} for the connection while two ingests ran \
+             ({overlap:?} overlap, {} asks); it must wait about a batch, not an ingest",
+            asks.len()
+        );
     }
 }

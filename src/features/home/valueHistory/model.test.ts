@@ -263,7 +263,7 @@ describe("viewOf — the fold", () => {
       ["R", "Red", "#cc3f2f"],
       ["G", "Green", "#53be70"],
       ["c", MANA_LABEL.C, "#5c6b7a"],
-      ["multi", "Multicolour", "#deb459"],
+      ["multi", "Multicolor", "#deb459"],
     ]);
     expect(IDENTITY_FILL).toEqual({
       W: "#dfd19d",

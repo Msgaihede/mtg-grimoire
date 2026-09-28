@@ -147,7 +147,7 @@ function isManaKey(key: string): key is ManaKey {
 /** What a `color` bucket is called. `"c"` is lowercase on the wire where `MANA_LABEL` keys it
  *  uppercase, which is the one translation this file makes. */
 function colourLabel(key: string): string {
-  if (key === MULTI_KEY) return "Multicolour";
+  if (key === MULTI_KEY) return "Multicolor";
   if (key === COLOURLESS_KEY) return MANA_LABEL.C;
   return isManaKey(key) ? MANA_LABEL[key] : key;
 }
@@ -178,7 +178,7 @@ function capitalised(word: string): string {
  */
 const SAID: Record<BreakdownDimension, { one: (label: string) => string; rest: string }> = {
   rarity: { one: (label) => `of ${label} rarity`, rest: "of every other rarity" },
-  color: { one: (label) => `in ${label}`, rest: "in every other colour" },
+  color: { one: (label) => `in ${label}`, rest: "in every other color" },
   set: { one: (label) => `from ${label}`, rest: "from every other set" },
   finish: { one: (label) => `in ${label}`, rest: "in every other finish" },
 };
@@ -325,12 +325,12 @@ export function CollectionValueWidget({ widget, fit }: WidgetBodyProps): ReactEl
   if (failure !== null) {
     return (
       <WidgetMessage tone="destructive">
-        Your collection could not be read. {ipcError(failure)}
+        Couldn't load your collection. {ipcError(failure)}
       </WidgetMessage>
     );
   }
   if (total.data === undefined || breakdown.data === undefined) {
-    return <WidgetMessage>Counting your collection…</WidgetMessage>;
+    return <WidgetMessage>Loading collection value…</WidgetMessage>;
   }
 
   const summary = total.data;

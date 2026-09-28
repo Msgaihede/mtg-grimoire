@@ -28,7 +28,7 @@ CREATE TABLE IF NOT EXISTS entitlements (
   group_id       TEXT,                     -- bound on first claim, trust-on-first-use
   refresh_secret TEXT,                     -- NULL once revoked, or once its device is off the
                                            -- roster; minted afresh by every claim
-  patreon_refresh TEXT,                    -- for the daily reconciliation
+  patreon_refresh TEXT,                    -- for the cron's reconciliation
   created_at     INTEGER NOT NULL,
   checked_at     INTEGER NOT NULL
 );
@@ -165,3 +165,42 @@ ALTER TABLE entitlements ADD COLUMN group_auth  TEXT;
 -- On an existing database this is `relay/migrations/2026-09-26-refresh-device.sql`, run as its
 -- own `--command` for the reason the paragraph above the first `ALTER` gives.
 ALTER TABLE entitlements ADD COLUMN refresh_device TEXT;
+
+-- When the cron last tried to reconcile this subject with Patreon — **tried**: `reconcile` stamps
+-- every row it selects before attempting any of them, so a row whose attempt throws goes to the
+-- back of the queue rather than heading it for ever. NULL is *never*, and is what every existing
+-- row reads on the day this lands, which is also the front of the queue: SQLite sorts NULL below
+-- every value, so `ORDER BY reconciled_at` asks about the never-asked first.
+--
+-- ⚠️ **Its own column, and not `checked_at`, which looks like the same fact and is not.**
+-- `/token` stamps `checked_at` on every trip, so ordering by it would put the subjects actually
+-- syncing — the only ones a missed cancellation costs anything — permanently at the back.
+--
+-- On an existing database this is `relay/migrations/2026-09-28-reconciled-at.sql`: this `ALTER`
+-- and then the index below, each as its own `--command`, for the reason the paragraph above the
+-- first `ALTER` gives.
+ALTER TABLE entitlements ADD COLUMN reconciled_at INTEGER;
+
+-- The hourly pass's queue: live rows, least recently reconciled first, which is `reconcile`'s
+-- `WHERE status <> 'dead' … ORDER BY reconciled_at, subject LIMIT ?` read straight off an index.
+--
+-- **The one statement in this file below an `ALTER`, and it has to be**: it indexes the column the
+-- `ALTER` above adds. It is idempotent itself; what makes it safe here is only that this file is
+-- for a database that has never been migrated, where nothing above it can fail.
+--
+-- **Partial, on `status <> 'dead'`, because the rows it leaves out are the table's growing half.**
+-- Nothing deletes a lapsed subject, so dead rows only accumulate, and the pass never selects
+-- one. Measured on SQLite 3.45.1 (Python's `sqlite3`, not D1) over 20 000 rows: without an index
+-- the query is `SCAN entitlements` plus `USE TEMP B-TREE FOR ORDER BY` — every row read and
+-- sorted, dead ones included, twenty-four times a day — and with this one it is
+-- `SCAN entitlements USING INDEX entitlements_reconcile` with no sort, stopping at the `LIMIT`: a
+-- few hundred VM steps against about 220 000 with a backlog, and dead rows never visited at all.
+-- With nothing due it still walks every live entry, because the `IS NULL OR <` gives the planner
+-- no range to stop at.
+--
+-- **It costs the hot route nothing.** SQLite maintains an index only when an `UPDATE` writes one
+-- of its columns or a column of its `WHERE`; `/token`'s `SET checked_at = ?` writes neither and
+-- was measured doing no index insert or delete. What pays is the rare writer of `status` or
+-- `reconciled_at` — a claim, a webhook, a revocation, the cron itself.
+CREATE INDEX IF NOT EXISTS entitlements_reconcile
+  ON entitlements (reconciled_at, subject) WHERE status <> 'dead';

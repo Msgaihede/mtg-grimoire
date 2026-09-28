@@ -225,7 +225,7 @@ describe("shelfStat", () => {
   it("reads a folder's own recursive figures, and a dash before they have answered", () => {
     const subtotal = { wishes: 6, copies: 7, cost: 312, unpriced: 1 };
     expect(shelfStat({ ...base, shelf: tree[0], shelves: tree, counts: counts(), subtotal })).toBe(
-      "6 wishes · $312.00 · 1 unpriced",
+      "6 cards · $312.00 · 1 unpriced",
     );
     expect(
       shelfStat({ ...base, shelf: tree[0], shelves: tree, counts: counts(), subtotal: null }),
@@ -235,7 +235,7 @@ describe("shelfStat", () => {
   it("says a folder holding nothing in wishes alone, with no money beside it", () => {
     const subtotal = { wishes: 0, copies: 0, cost: null, unpriced: 0 };
     expect(shelfStat({ ...base, shelf: tree[0], shelves: tree, counts: counts(), subtotal })).toBe(
-      "0 wishes",
+      "0 cards",
     );
   });
 
@@ -243,7 +243,7 @@ describe("shelfStat", () => {
     const own = counts(count(0, 5, { copies: 8, value: 163.96, unpriced: 1 }));
     expect(
       shelfStat({ ...base, shelf: tree[2], shelves: tree, counts: own, subtotal: null }),
-    ).toBe("5 wishes · $163.96 · 1 unpriced");
+    ).toBe("5 cards · $163.96 · 1 unpriced");
   });
 
   /** Spec §3.4: under a filter a heading reads `3 of 42` — the matches in it *and below it*, over
@@ -259,7 +259,7 @@ describe("shelfStat", () => {
         counts: counts(count(1, 1), count(2, 2)),
         subtotal,
       }),
-    ).toBe("3 of 42 wishes");
+    ).toBe("3 of 42 cards");
     expect(
       shelfStat({
         ...filtered,
