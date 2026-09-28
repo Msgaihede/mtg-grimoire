@@ -221,7 +221,8 @@ describe("chipLabel", () => {
  */
 describe("round two's rows, through the settings readers", () => {
   it("defaults each pick to its registry answer", () => {
-    expect(pickDefault(pickFor("deckCompletion", "scope"))).toBe("recent");
+    expect(pickDefault(pickFor("deckCompletion", "compare"))).toBe("collection");
+    expect(pickDefault(pickFor("deckCompletion", "scope"))).toBe("all");
     expect(pickDefault(pickFor("deckCompletion", "order"))).toBe("done");
     // `dflt` names 90 while listing 30 first — `activity`'s shape, and `newPrintings`' number.
     expect(pickDefault(pickFor("comingSoon", "window"))).toBe(90);
@@ -239,8 +240,8 @@ describe("round two's rows, through the settings readers", () => {
   });
 
   it("draws a chip for the two kinds that name one, and nothing for the two that do not", () => {
-    expect(chipLabel(widget("deckCompletion"))).toBe("Nearest done");
-    expect(chipLabel(widget("deckCompletion", { order: "cheapest" }))).toBe("Cheapest to finish");
+    expect(chipLabel(widget("deckCompletion"))).toBe("Collection");
+    expect(chipLabel(widget("deckCompletion", { compare: "theory" }))).toBe("Theory");
     expect(chipLabel(widget("comingSoon"))).toBe("90 days");
     expect(chipLabel(widget("comingSoon", { window: 365 }))).toBe("A year");
     expect(chipLabel(widget("toReview"))).toBe("");

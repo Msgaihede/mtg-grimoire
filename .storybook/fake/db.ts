@@ -11669,22 +11669,39 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_completion::deck_completion` — owned against wanted for every deck, **counted the way
-     * {@link readHandlers.deck_get} counts it** and then summed the way the editor's `deckStats`
-     * sums it.
+     * `deck_completion::deck_completion` — how far every deck is along under `compare`, **counted
+     * the way the screen that answers the same question counts it**. Two comparisons, and the
+     * word picks one; anything else, or none, is `collection` — `Marketplace`'s forgiving shape, so
+     * a word a newer build wrote measures the default rather than refusing.
      *
-     * **The measured list is the deck's kind's**: `theory` for a deck that keeps a plan, attributed
-     * from {@link theoryPool}, and `live` otherwise, attributed from {@link ownedByPrinting} — the
-     * same two pools `deck_get` picks between, handed to the same {@link attributeOwned} in the
-     * same {@link deckReadOrder}, so one `(card_id, finish)` in two piles shares one pool — and
-     * the finish is {@link entryFinish}'s, so an unsaid row and a `foil` row of one foil-only
-     * printing are that one key rather than a regular want nothing can fill. **Every
-     * active pile counts**, sideboard and companion included — `deckStats`' `counted`, and
-     * deliberately wider than {@link readHandlers.deck_values}' size pile.
+     * **`collection`** — every deck that is not virtual, its **live** list against
+     * {@link ownedByPrinting}, the copies filed in the deck's own group: the editor's `Actual` tab,
+     * owned for owned, which {@link readHandlers.deck_get} counts from the same pool handed to the
+     * same {@link attributeOwned} in the same {@link deckReadOrder}. **A deck that keeps a plan is
+     * measured on its live list too** (issue #600), where it used to be measured by the plan
+     * against {@link theoryPool}: *how much of this deck do I own* is a question about the
+     * cardboard the deck is, and a plan holds none. So `list` is always `live` here. **A virtual
+     * deck answers no row** — it holds nothing by definition, and 0 % of every deck is not a
+     * finding. Archived and empty decks answer one, ordered by id; which to draw is the widget's
+     * decision.
      *
-     * **A virtual deck answers no row**: it holds nothing by definition, and 0 % of every deck is
-     * not a finding. Archived and empty decks answer one, ordered by id; which to draw is the
-     * widget's decision.
+     * **`theory`** — every deck with a plan, **virtual ones included**, its **theory** list against
+     * its **live** one: how much of the plan is already sleeved. The pool is the live list's
+     * active piles summed per `(card_id, finish)`, and the theory rows draw on it in the read's
+     * order, so the answer is {@link theoryDiff}'s arithmetic — a copy counts only in the exact
+     * printing and finish, and `missing` is the Compare dialog's non-token lines summed, which
+     * `db.test.ts` fences deck by deck. The collection is not consulted at all, and that is why a
+     * virtual deck is not filtered out: its live list is a list whatever the cardboard is. (No
+     * patch reaches `theoryEnabled` and `virtualOnly` together — {@link deckKind} clears one as it
+     * sets the other — but `deck_create` writes what it is handed, and a read that dropped the pair
+     * would be a second, silent resolution of a tie the write side already owns.) The plan's
+     * tokens are not counted — a token is not a copy of anything a pile can be short of.
+     *
+     * **Either way every active pile counts**, sideboard and companion included — `deckStats`'
+     * `counted`, and deliberately wider than {@link readHandlers.deck_values}' size pile — and a
+     * switched-off pile on either side counts toward nothing. The key's finish is
+     * {@link entryFinish}'s, so an unsaid row and a `foil` row of one foil-only printing are one
+     * key rather than a regular want nothing can fill.
      *
      * `missingCost` is `deckStats`' `missingPrice` exactly — `null` while nothing counted is priced
      * at this marketplace, else the priced rows' `unit × short` summed (so a complete, priced deck
@@ -11692,21 +11709,35 @@ export function readHandlers(db: FakeDb) {
      * missing **copies** with no price. The unit is {@link deckPriceAt}, which is what this fake's
      * deck rows quote — so a story's widget and the editor it opens can never disagree.
      */
-    deck_completion: (args: { marketplace?: MarketplaceId | null }): DeckCompletion[] => {
+    deck_completion: (args: {
+      marketplace?: MarketplaceId | null;
+      compare?: string | null;
+    }): DeckCompletion[] => {
       const mp = marketplaceOf(args.marketplace);
+      const theory = args.compare === "theory";
+      const active = (dc: FakeDeckCard) => categoryById(db, dc.categoryId)?.isActive === true;
       return [...db.decks]
-        .filter((d) => !d.virtualOnly)
+        .filter((d) => (theory ? d.theoryEnabled : !d.virtualOnly))
         .sort((a, b) => a.id - b.id)
         .map((d): DeckCompletion => {
-          const list: DeckCompletion["list"] = d.theoryEnabled ? "theory" : "live";
+          const list: DeckCompletion["list"] = theory ? "theory" : "live";
           const rows = db.deckCards
             .filter((dc) => dc.deckId === d.id && dc.variant === list)
             .sort(deckReadOrder(db));
-          const owned = attributeOwned(
-            db,
-            rows,
-            list === "live" ? ownedByPrinting(db, d.id) : theoryPool(db, d.id),
-          );
+          let pool: Map<string, number>;
+          if (theory) {
+            // The live list as a pool of copies — its active piles only, for the reason a
+            // switched-off pile wants nothing: a card parked in the Maybeboard is not played.
+            pool = new Map();
+            for (const dc of db.deckCards) {
+              if (dc.deckId !== d.id || dc.variant !== LIVE || !active(dc)) continue;
+              const key = entryKey(db, dc.cardId, dc.finish);
+              pool.set(key, (pool.get(key) ?? 0) + dc.quantity);
+            }
+          } else {
+            pool = ownedByPrinting(db, d.id);
+          }
+          const owned = attributeOwned(db, rows, pool);
           const row: DeckCompletion = {
             deckId: d.id,
             list,
@@ -11719,7 +11750,7 @@ export function readHandlers(db: FakeDb) {
           for (const dc of rows) {
             // A switched-off pile counts toward nothing — `attributeOwned` already handed it no
             // copies, and it is not part of what the deck wants either.
-            if (categoryById(db, dc.categoryId)?.isActive !== true) continue;
+            if (!active(dc)) continue;
             const have = Math.min(owned.get(dc.id) ?? 0, dc.quantity);
             const short = dc.quantity - have;
             row.wanted += dc.quantity;
