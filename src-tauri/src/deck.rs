@@ -4728,7 +4728,10 @@ pub fn clear_variant(conn: &Connection, deck_id: i64, variant: &str) -> Result<i
 /// needs moving.
 ///
 /// `label_id` travels with it too, where the printing does — a label is the user's word about
-/// *this card in this deck*, and re-filing it is not a reason to lose it.
+/// *this card in this deck*, and re-filing it is not a reason to lose it. **A fold keeps one as
+/// well** (issue #643): the row the target already holds keeps its own label, and takes the
+/// moved row's only where it has none — so a label falls off when the reader removes it or the
+/// card, never because the card changed piles.
 ///
 /// **Either `to_category_id` or `to_category_name`**, and at least one ([`NO_CATEGORY`]) —
 /// [`add_card`]'s two-arm target, copied deliberately rather than approximated, because the two
@@ -4836,6 +4839,11 @@ pub fn move_card(
     // that lands in an empty category and is left alone where the target row already exists —
     // the fold's rule in `reconcile::fold_deck_card_into_existing`, for its reason.
     //
+    // **`label_id` coalesces where `quantity` sums**, the import's `ON CONFLICT` exactly: the
+    // target's own label stands, and a target with none takes the moved row's. Left out of the
+    // `DO UPDATE`, re-filing a labelled card onto an unlabelled row of the same printing took the
+    // label off it (issue #643).
+    //
     // **`finish` is selected across**, so the row lands in the new pile as whatever object it
     // was — and the fold above it is on the five-column grain, so a foil copy moved onto a pile
     // holding the regular one is two rows there rather than one wrong one.
@@ -4850,6 +4858,7 @@ pub fn move_card(
             AND coalesce(finish, '') = coalesce(?6, '')
          ON CONFLICT({grain}) DO UPDATE SET
             quantity = deck_cards.quantity + excluded.quantity,
+            label_id = coalesce(deck_cards.label_id, excluded.label_id),
             updated_at = unixepoch()",
         grain = crate::schema::DECK_CARD_GRAIN
     );
@@ -8700,6 +8709,86 @@ mod tests {
             (category, quantity, name.as_str(), set.as_str()),
             (scratch, 5, "Lightning Bolt", "lea"),
             "an orphaned row still moves, still counted and still sayable"
+        );
+    }
+
+    /// **A folded move keeps the label too** (issue #643's rule): a label falls off only when the
+    /// reader removes it or the card. The row that was already there keeps its own label —
+    /// [`add_card`]'s rule, because that is the label the reader put on it — and a row that was
+    /// already there **unlabelled** takes the label of the copies moved onto it. The fold's
+    /// `ON CONFLICT` touched only `quantity`, so re-filing a labelled card onto an unlabelled row
+    /// of the same printing took the reader's label off it.
+    #[test]
+    fn a_folded_move_keeps_the_label_unless_the_surviving_row_has_its_own() {
+        let conn = seeded();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        let side = kind_of(&conn, deck.id, "side");
+        let flex = crate::deck_meta::create_label(&conn, Some(deck.id), "Flex", "amber").unwrap();
+        let keep = crate::deck_meta::create_label(&conn, Some(deck.id), "Keep", "slate").unwrap();
+        let label_on = |card: &str, category: i64, label: i64| {
+            crate::deck_meta::set_card_label(
+                &conn,
+                deck.id,
+                card,
+                category,
+                LIVE,
+                None,
+                Some(label),
+            )
+            .unwrap();
+        };
+        let side_label = || -> Option<i64> {
+            conn.query_row(
+                "SELECT label_id FROM deck_cards WHERE category_id = ?1 AND card_id = 'bolt-lea'",
+                params![side],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+
+        // Labelled copies folded onto an unlabelled row.
+        add(&conn, deck.id, "bolt-lea", main, 3);
+        add(&conn, deck.id, "bolt-lea", side, 1);
+        label_on("bolt-lea", main, flex.id);
+        move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            Some(side),
+            None,
+            LIVE,
+            None,
+        )
+        .unwrap();
+        assert_eq!(count(&conn, "deck_cards"), 1, "folded, not two rows");
+        assert_eq!(
+            side_label(),
+            Some(flex.id),
+            "the unlabelled survivor took it"
+        );
+
+        // Both rows labelled, and the one that was already there wins.
+        add(&conn, deck.id, "bolt-lea", main, 1);
+        label_on("bolt-lea", main, flex.id);
+        label_on("bolt-lea", side, keep.id);
+        move_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            main,
+            Some(side),
+            None,
+            LIVE,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            side_label(),
+            Some(keep.id),
+            "the surviving row's own label stands"
         );
     }
 

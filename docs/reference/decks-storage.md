@@ -1365,6 +1365,19 @@ variant)`; `deck_missing_to_wishlist(deckId, folderId?)`, which reads `live` and
     precisely what the id arm's caller-side guard exists to prevent. Nothing can have been created
     on that path: `category_for_name` answers a **new** id when it makes a pile, and a new id is
     never a pile the card is already in.
+  - **A move onto a pile that already holds the printing folds, and the fold keeps a label**
+    ([issue #643](https://github.com/Msgaihede/mtg-grimoire/issues/643), 2026-09-28). The
+    quantities add and `needs_review` stays the surviving row's; the label is
+    `label_id = coalesce(deck_cards.label_id, excluded.label_id)` — the surviving row's own label
+    stands, and an unlabelled survivor takes the moved row's. The `DO UPDATE` used to set
+    `quantity` alone, so re-filing a labelled card onto an unlabelled row of the same printing
+    took the reader's label off it, where the issue's rule is that a label falls off only when
+    the reader removes it or the card. **Three other folds of a `deck_cards` row onto another
+    follow the same rule**, each fixed in the same change: `deck_category_delete`'s move arm
+    (`move_card`'s statement over a whole pile), `deck_meta::refile_stray_theory_cards` (v53's
+    net for a theory card left in a live pile) and `reconcile::fold_deck_card_into_existing` (a
+    Scryfall merge landing on a row the pile already holds). The import's `ON CONFLICT` already
+    coalesced.
 - **`deck_add_card_to_other_list` → `deck::add_card_to_other_list` copies a card into the deck's
   other list** (2026-09-28, issue [#592](https://github.com/Msgaihede/mtg-grimoire/issues/592),
   behind the card menu's `Add to actual` / `Add to theory`). `variant` is the list the card goes

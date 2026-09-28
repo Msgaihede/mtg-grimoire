@@ -9134,6 +9134,49 @@ describe("the deck grain (deck, variant, category, card)", () => {
     expect(db.deckCards[0]).toMatchObject({ categoryId: MAIN.categoryId, quantity: 3 });
   });
 
+  /**
+   * Issue #643's rule, the crate's `a_folded_move_keeps_the_label_unless_the_surviving_row_has_its_own`
+   * one side over: a label falls off only when the reader removes it or the card, so re-filing
+   * labelled copies onto an unlabelled row of the same printing gives that row the label.
+   */
+  it("gives a folded move's unlabelled survivor the label the moved copies wore", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "maybe", quantity: 2, labelId: 3 }),
+        deckCard({ id: 2, cardId: BOLT.id, categoryKind: "main", quantity: 1 }),
+      ],
+    });
+    writeHandlers(db).deck_move_card({
+      deckId: 1,
+      cardId: BOLT.id,
+      fromCategoryId: categoryId(1, "maybe"),
+      toCategoryId: MAIN.categoryId,
+      toCategoryName: null,
+      variant: "live",
+    });
+    expect(db.deckCards).toEqual([expect.objectContaining({ id: 2, quantity: 3, labelId: 3 })]);
+  });
+
+  it("keeps a folded move's survivor's own label over the moved copies'", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "maybe", quantity: 2, labelId: 3 }),
+        deckCard({ id: 2, cardId: BOLT.id, categoryKind: "main", quantity: 1, labelId: 4 }),
+      ],
+    });
+    writeHandlers(db).deck_move_card({
+      deckId: 1,
+      cardId: BOLT.id,
+      fromCategoryId: categoryId(1, "maybe"),
+      toCategoryId: MAIN.categoryId,
+      toCategoryName: null,
+      variant: "live",
+    });
+    expect(db.deckCards).toEqual([expect.objectContaining({ id: 2, labelId: 4 })]);
+  });
+
   it("moves within one variant, leaving the other list where it was", () => {
     // A move is a re-filing, never a promotion of a theory row into the live deck.
     const db = makeDeckDb({
@@ -14243,6 +14286,43 @@ describe("categories, labels, folders, history and the plan", () => {
       ["", 2],
       ["etched", 4],
       ["foil", 1],
+    ]);
+  });
+
+  /** Issue #643's rule, `deck_move_card`'s fold one command over: a target row wearing a label
+   *  keeps its own, and one wearing none takes the label the moved copies wore. */
+  it("keeps the label when a moved card folds, unless the surviving row has its own", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT_B.id, categoryKind: "main", quantity: 1, labelId: 4 }),
+        deckCard({ id: 3, cardId: BOLT.id, categoryId: 99, quantity: 3, labelId: 3 }),
+        deckCard({ id: 4, cardId: BOLT_B.id, categoryId: 99, quantity: 1, labelId: 3 }),
+      ],
+      deckCategories: [
+        ...categoriesOf([deck({ id: 1 })]),
+        {
+          id: 99,
+          deckId: 1,
+          variant: "live",
+          name: "Doomed",
+          kind: "main",
+          isActive: true,
+          sortOrder: 9,
+          origin: "user",
+        },
+      ],
+    });
+
+    writeHandlers(db).deck_category_delete({
+      id: 99,
+      moveToCategoryId: categoryId(1, "main"),
+    });
+
+    expect(db.deckCards).toEqual([
+      expect.objectContaining({ id: 1, cardId: BOLT.id, quantity: 5, labelId: 3 }),
+      expect.objectContaining({ id: 2, cardId: BOLT_B.id, quantity: 2, labelId: 4 }),
     ]);
   });
 
