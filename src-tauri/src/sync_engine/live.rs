@@ -479,6 +479,11 @@ async fn credentials(state: &Arc<AppState>) -> Result<(String, String, String, S
 ///
 /// `0` when the key is missing or unreadable, which is a device that has never pulled: every
 /// frame then reads as news, and the worst that costs is one round trip that finds nothing.
+///
+/// **Read from SQLite on every frame and never kept here**, which is what lets
+/// `identity::forget_log_position` reach it. The key is a place in one group's log, and a value
+/// carried in from the last group would make every frame the new one sends up to that number read
+/// as old news: the doorbell stays silent for them.
 async fn pull_cursor(state: &Arc<AppState>) -> i64 {
     let owned = state.clone();
     tokio::task::spawn_blocking(move || {

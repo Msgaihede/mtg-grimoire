@@ -1743,7 +1743,7 @@ record, with every measurement, is
   then `apply_held(.., Waiting::Release)` skips it. The state is `sync_state.pull_hold`, no rung,
   and **it stores the blocks it holds on** (`apply::Held`): a block not in the stored set starts
   the bound over, so a wait that has run its course cannot release a new one with it — the final
-  review's I1 — and `identity::leave_group` deletes the key with the group.
+  review's I1 — and `identity::leave_group` deletes the key with the group (the next bullet).
   Everything else is **consumed** and blocks nothing: a child of a parent deleted in the page, or
   anywhere a delete has ever reached this device — `gone` reads `sync_gone` since user schema v54,
   whose rows are tombstones saying a parent went (not `del` ops), written by its trigger for this
@@ -1812,6 +1812,17 @@ record, with every measurement, is
   The relay refusing a push below the group's epoch is the recorded follow-up that would let the
   keys be kept.
   [sync.md](../docs/reference/sync.md) *Held while it can resolve, skipped when it cannot*.
+- ⚠️ **`pull_cursor`, `last_acked` and `pull_hold` are a place in ONE group's log, and they go
+  when the group goes.** The relay's `seq` is an `AUTOINCREMENT` per Durable Object, and there is
+  one Durable Object per group. So a cursor carried into the next group asks that group's log for
+  rows from a number it never reached, and `group.ts` answers no envelopes and the same number
+  back. Every row below it is lost, and the ack beside it lets that group compact what this device
+  never read. The doorbell stays silent too, because `live::pull_cursor` reads the same key.
+  `identity::forget_log_position` deletes all three. **`leave_group` calls it, and so do `found_group` and `join_group` whenever the
+  group id moves**; that second call is for devices that left under a build before 2026-09-28 and
+  still hold the old cursor. **Key the join's reset on the group id, never on the epoch or the
+  key**: a re-pair into the same group is the same log, and forgetting there re-downloads all of it.
+  [sync.md](../docs/reference/sync.md) *A cursor is a place in one group's log*.
 - **Six tables can hold a `needs_review` sentence** since v29, and `sync_engine::commands::REVIEWABLE`
   is the list, held to `sqlite_master` by a test. The sentences are Rust's, following
   `reconcile.rs`, and the first message wins.

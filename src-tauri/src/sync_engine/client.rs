@@ -73,6 +73,10 @@ use serde::{Deserialize, Serialize};
 pub const RELAY_URL: &str = "relay_url";
 
 /// How far this device has consumed the relay's log. The relay's `seq`, not a clock.
+///
+/// **One group's `seq`**: it is an `AUTOINCREMENT` per Durable Object, which is one per group, so
+/// `identity::forget_log_position` deletes this, [`LAST_ACKED`] and [`PULL_HOLD`] whenever the
+/// group changes. Carried across, it asks the next group's log from a row it never reached.
 pub const PULL_CURSOR: &str = "pull_cursor";
 
 /// The cursor this device last successfully handed to `/ack`.
@@ -93,7 +97,8 @@ pub const LAST_SYNC_AT: &str = "last_sync_at";
 /// Why [`PULL_CURSOR`] is being held, as `{"kind":"newer"|"waiting","since":<unix seconds>,
 /// "pulls":<n>,"blocks":{"<device>":[<ms>,<ctr>]},"noted":[["<device>",<ms>,<ctr>]]}`; absent
 /// when it is not. [`pull`] writes it, the Sync panel reads its kind (`RelayStatus::pull_held`),
-/// and `identity::leave_group` deletes it with the group. Spec 2026-09-27 §3.3.
+/// and `identity::forget_log_position` deletes it with the group, beside [`PULL_CURSOR`]. Spec
+/// 2026-09-27 §3.3.
 ///
 /// **A hold costs the relay**, which is why each kind is bounded by what can still resolve it:
 /// the relay compacts nothing above this device's ack, the ack follows the cursor, and every pull
