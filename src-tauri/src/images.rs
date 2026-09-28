@@ -1,6 +1,6 @@
-//! The permanent, disposable image cache and the resolution rule behind it.
+//! The disposable, bounded image cache and the resolution rule behind it.
 //!
-//! Three rules run through everything here:
+//! Four rules run through everything here:
 //!
 //! * **Per face, never per card.** 3.7% of printings carry no top-level `image_uris` at
 //!   all — `transform`, `modal_dfc`, `double_faced_token`, `art_series` and
@@ -8,12 +8,19 @@
 //!   `(card, face, variant)` triple and the front/back distinction is physical.
 //! * **The URI is the version.** Scryfall's `?<epoch>` cache-buster equals
 //!   `image_updated_at`, so "are these bytes current" is a string comparison against the
-//!   URI they came from. No clock, no mtime, nothing a FAT32 stick can round away.
+//!   URI they came from. No clock, no mtime, nothing a FAT32 stick can round away. (The one
+//!   modified time this module reads is [`evict`]'s used-stamp, which puts pictures in an
+//!   order and never vouches for one.)
 //!   The corollary is a rule in its own right: a URI with *no* cache-buster is one this
 //!   cache must never hold, because bytes stored under it would answer "current" for the
 //!   life of the installation ([`crate::image_uri::is_fetchable`]).
 //! * **The cache is disposable.** `image_cache` records what was fetched; deleting
 //!   `data/images` is always safe and costs only re-downloads (spec §8).
+//! * **The cache is bounded, and what it spares is what the pre-warm owns.** Spec §8 called it
+//!   *permanent*, and until 2026-09-28 nothing ever deleted a picture but the reader. Now
+//!   [`evict`] runs on the `image-upkeep` thread: every picture of a card the reader owns, wants
+//!   or has in a deck is kept at the variant the pre-warm fetches it at, and everything else is
+//!   least-recently-used against [`BUDGET`] — see the "Upkeep" section below.
 
 // `rate_limit_penalty` is the *API* client's clamp, imported rather than copied: the API's
 // lockout and this cache's are separate deadlines over separate hosts, but they are one
@@ -24,11 +31,11 @@ use crate::scryfall::{self, rate_limit_penalty, ScryfallError};
 // re-spelled because the stderr line below names it.
 use crate::image_uri::IMAGE_HOST;
 use rusqlite::{params, Connection, OptionalExtension};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 /// Images in flight at once — and the whole of the pacing, because there is deliberately
 /// no interval between fetch *starts* any more.
@@ -61,6 +68,16 @@ pub enum Variant {
 }
 
 impl Variant {
+    /// Every variant, in [`crate::schema::IMAGE_VARIANTS`] order — and so every directory
+    /// [`evict`]'s walk may enter. It lists these four names rather than reading `images/`,
+    /// so a folder it does not know is a folder it never opens.
+    pub const ALL: [Variant; 4] = [
+        Variant::Thumb,
+        Variant::Grid,
+        Variant::Display,
+        Variant::Art,
+    ];
+
     /// The only way a string becomes a `Variant`.
     ///
     /// A security boundary as much as a policy one: the variant becomes a directory name
@@ -141,6 +158,31 @@ pub fn cache_path(images_dir: &Path, key: &ImageKey) -> Option<PathBuf> {
 /// Faces this app will serve. Every physical Magic card has at most two sides, and the
 /// number goes into a file name — an unbounded one is an unbounded directory.
 const MAX_FACE: u8 = 1;
+
+/// `<id>-<face>.webp`, found in `variant`'s directory → the key [`cache_path`] wrote it for,
+/// or `None` for anything else.
+///
+/// The walk's half of the path-traversal fence, run in the other direction: the file name is
+/// read off the disk rather than out of a URL, but it decides what gets **deleted**, so it is
+/// held to [`parse_request_path`]'s standard — a Scryfall id, a face in range, one digit — and
+/// [`walk`] then rebuilds the path from the key and keeps the file only if the two agree. A
+/// `.tmp` a crashed [`store`] left, a file in the wrong shard or anything a person put there
+/// is not a cache file, and nothing here will touch it.
+fn parse_cache_file_name(name: &str, variant: Variant) -> Option<ImageKey> {
+    let (card_id, face) = name.strip_suffix(".webp")?.rsplit_once('-')?;
+    if face.len() != 1 {
+        return None;
+    }
+    let face: u8 = face.parse().ok()?;
+    if face > MAX_FACE || !is_card_id(card_id) {
+        return None;
+    }
+    Some(ImageKey {
+        card_id: card_id.to_owned(),
+        face,
+        variant,
+    })
+}
 
 /// `/<variant>/<card_id>/<face>` → a key, or `None`.
 ///
@@ -363,7 +405,10 @@ pub enum ImageError {
     Db(String),
 }
 
-/// The on-disk image cache: lazy, permanent, paced.
+/// The on-disk image cache: lazy, bounded, paced.
+///
+/// *Permanent* until 2026-09-28, when [`evict`] arrived — and it is still permanent for every
+/// picture the pre-warm owns, which is the part of the old word worth keeping.
 pub struct Cache {
     dir: PathBuf,
     /// Caps images in flight. A grid that scrolls fast can queue hundreds of tiles.
@@ -404,6 +449,17 @@ pub struct Cache {
     /// [`Cache::store_failures`]: the cost is a re-fetch, and a number that only climbs is
     /// what makes an invisible degradation findable.
     dropped_records: AtomicU64,
+    /// Pictures served from disk since the upkeep thread last wrote down that they were used.
+    ///
+    /// **This set is the whole cost a cache hit pays for eviction**: one uncontended mutex and
+    /// one hash insert, and no I/O. The stamp itself is the file's modified time, which
+    /// [`Cache::flush_touches`] moves forward in a batch on the `image-upkeep` thread — see
+    /// [`evict`] for why the stamp lives on the file and not in `image_cache`.
+    touched: Mutex<HashSet<ImageKey>>,
+    /// Pictures written to disk this session: what the upkeep thread compares against
+    /// [`STORES_PER_PASS`] to decide a pass is owed, since a store is the only way the cache
+    /// grows.
+    stores: AtomicU64,
 }
 
 /// What [`record`] needs, held until the write connection can take it.
@@ -420,6 +476,10 @@ struct PendingRecord {
 /// window measured in the gaps of one sync. If it ever fills, the app has a much larger
 /// problem than a re-fetch, and dropping is still better than growing without limit.
 const MAX_PENDING_RECORDS: usize = 4_096;
+
+/// How many served pictures [`Cache::touched`] holds between two flushes. The owed-row
+/// queue's bound, for its reason: a key is a few dozen bytes, so this is well under a megabyte.
+const MAX_TOUCHED: usize = 4_096;
 
 /// How long an image failure waits for the write connection before giving up on being
 /// logged.
@@ -441,7 +501,47 @@ impl Cache {
             inflight: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
             dropped_records: AtomicU64::new(0),
+            touched: Mutex::new(HashSet::new()),
+            stores: AtomicU64::new(0),
         }
+    }
+
+    /// Note that `key` was just served from disk. See [`Cache::touched`].
+    ///
+    /// Bounded like the owed-row queue, and for its reason. A key that does not fit is not
+    /// counted: what it loses is that one picture looking older to the next pass than it is,
+    /// and the set is drained every [`UPKEEP_TICK`] — the webview keeps what it was served for
+    /// a day ([`IMAGE_MAX_AGE`]), so a minute of distinct hits is a few screenfuls, never
+    /// thousands.
+    fn touch(&self, key: &ImageKey) {
+        let mut touched = crate::sync::lock_plain(&self.touched);
+        if touched.len() < MAX_TOUCHED || touched.contains(key) {
+            touched.insert(key.clone());
+        }
+    }
+
+    /// Write down, on each file, that the pictures served since the last call were used —
+    /// by setting its modified time to `now`. Returns how many files took the stamp.
+    ///
+    /// **Never on the path that served them.** Each is an open and a metadata write, and a
+    /// served tile pays for neither: [`spawn_upkeep`]'s thread calls this once a tick, and
+    /// [`evict`] calls it first so the pass it runs sees them.
+    ///
+    /// A file that is gone — swept by [`crate::reset::clear_cache`], evicted, never stored —
+    /// is skipped, and **the open never creates one**. That is the property worth the test: an
+    /// empty file at a key's path, under a row that vouches for it, would be served as a
+    /// zero-byte picture until Scryfall next re-scanned the card.
+    pub fn flush_touches(&self, now: SystemTime) -> usize {
+        let owed: Vec<ImageKey> = crate::sync::lock_plain(&self.touched).drain().collect();
+        owed.iter()
+            .filter_map(|key| cache_path(&self.dir, key))
+            .filter(|path| stamp_used(path, now).is_ok())
+            .count()
+    }
+
+    /// How many pictures this session has written to disk.
+    pub fn stores(&self) -> u64 {
+        self.stores.load(Ordering::Relaxed)
     }
 
     /// Hold a row until the write connection is free.
@@ -656,6 +756,9 @@ impl Cache {
                 // is the best moment to pay off any rows owed from a busier one. Costs one
                 // uncontended mutex when nothing is owed, which is almost always.
                 self.flush_records(write, Duration::ZERO);
+                // The one thing eviction asks of a hit, and it is not I/O: the stamp is written
+                // on the upkeep thread, never here.
+                self.touch(key);
                 return Ok(Served {
                     bytes,
                     content_type: WEBP,
@@ -763,6 +866,7 @@ impl Cache {
             // means an ingest, and parking a worker thread per image through one is still
             // the wrong trade. What changed is that losing the race no longer loses the row.
             Ok(()) => {
+                self.stores.fetch_add(1, Ordering::Relaxed);
                 self.queue_record(key, uri, bytes.len());
                 self.flush_records(write, Duration::ZERO);
             }
@@ -1107,6 +1211,22 @@ pub const COLLECTION_PREWARM: Variant = Variant::Display;
 /// warms its own covers in `DecksPage`.
 pub const DECK_PREWARM: Variant = Variant::Display;
 
+/// Every card the reader owns, wants or has put in a deck, **paired with the variant the screen
+/// that shows it draws** — `?1` is [`COLLECTION_PREWARM`] and `?2` [`DECK_PREWARM`].
+///
+/// **One literal with two readers, and the sharing is the contract.** [`prewarm_keys`] fetches
+/// the rows of it that are not on disk; [`spared_keys`] answers the rows [`evict`] may never
+/// delete. Two copies would drift, and the drift is the one failure eviction can make that
+/// costs more than a re-fetch: a picture the pre-warm wants and the budget evicts is fetched
+/// back at the next pre-warm and evicted again at the next pass, for the life of the
+/// installation, with nothing anywhere saying so.
+const WANTED: &str = "WITH wanted(card_id, variant) AS (
+            SELECT card_id, ?1 FROM collection_entries
+            UNION
+            SELECT card_id, ?1 FROM wishlist_entries WHERE card_id IS NOT NULL
+            UNION
+            SELECT card_id, ?2 FROM deck_cards)";
+
 /// The cards the user owns, wants, or has put in a deck, that have no cached image yet —
 /// **each paired with the variant the screen that shows it actually draws**.
 ///
@@ -1120,19 +1240,14 @@ pub const DECK_PREWARM: Variant = Variant::Display;
 /// what makes that automatic. The arms stay separate because the pairing, not the count, is the
 /// contract: the day a deck surface wants a different picture again, only its own arm moves.
 pub fn prewarm_keys(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<ImageKey>> {
-    let mut stmt = conn.prepare(
-        "WITH wanted(card_id, variant) AS (
-            SELECT card_id, ?1 FROM collection_entries
-            UNION
-            SELECT card_id, ?1 FROM wishlist_entries WHERE card_id IS NOT NULL
-            UNION
-            SELECT card_id, ?2 FROM deck_cards)
+    let mut stmt = conn.prepare(&format!(
+        "{WANTED}
          SELECT w.card_id, w.variant FROM wanted w
           WHERE NOT EXISTS (
                 SELECT 1 FROM image_cache c
                  WHERE c.card_id = w.card_id AND c.variant = w.variant AND c.face = 0)
-          LIMIT ?3",
-    )?;
+          LIMIT ?3"
+    ))?;
     let rows = stmt.query_map(
         params![COLLECTION_PREWARM.key(), DECK_PREWARM.key(), limit as i64],
         |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
@@ -1211,6 +1326,497 @@ async fn warm(
         }
     }
     attempted
+}
+
+// ── Upkeep: the budget, and the pass that keeps it ─────────────────────────────────────────
+
+/// How many bytes of pictures the reader has **not** made their own this cache keeps —
+/// **512 MiB**, about 5,770 `display` images at ~93 KB.
+///
+/// **A spared picture is outside it, and that is what lets it be this small.** A card in the
+/// collection, the wishlist or a deck is kept at the variant the pre-warm fetches it at
+/// ([`spared_keys`]) whatever that costs — a 10,000-card collection is ~930 MB of those alone,
+/// bounded by what the reader owns, which is spec §5's own scoping argument. What this number
+/// bounds is everything else: the search walls, the printings dialog, the backs of double-faced
+/// cards, deck covers' `art` crops, the home page's `grid` tiles, and the `grid` files every
+/// other surface stopped reading on 2026-08-20.
+///
+/// The arithmetic, against what this repo has measured:
+///
+/// * **One pre-warm pass is 186 MB** ([`MAX_PREWARM`] × 93 KB) and this is 2.9× that. The
+///   pre-warm's set is spared outright, so the two could not fight at any size; the `const`
+///   assertion below holds the line anyway, as a second fence behind the first.
+/// * **The largest wall `image-cache.md` records is All tokens, 4,357 tiles** (its 2026-09-28
+///   live pass), ~405 MB at `display`. It fits whole, so a reader who scrolls it to the end and
+///   back is not evicting the top of it on the way down.
+/// * **The whole cache measured on 2026-08-20 was 329.7 MB in 5,540 files**, owned cards
+///   included. That reader is under this, which is why [`MAX_IDLE`] exists: a budget alone
+///   would never have deleted the `grid` files that asked for eviction in the first place.
+const CACHE_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+
+const _: () = assert!(CACHE_BUDGET_BYTES > MAX_PREWARM as u64 * 93_000);
+
+/// How long an unspared picture may go unread before it goes, budget or no budget — **90 days**.
+///
+/// A choice rather than a measurement, and what it trades is disk against one re-fetch — ~127 ms
+/// cold, from a host with no rate limit — of a card the reader comes back to after a season
+/// away. It is the half of eviction that reaches the `grid` files the 2026-08-20 move left: the
+/// home page's recently-viewed tiles are the only thing that still draws `grid`, so those stay
+/// fresh, and the last of the rest go at the first pass after 2026-11-18 — sooner under the
+/// budget.
+///
+/// Many times the stamp's own resolution, which is about a day: the webview keeps what it was
+/// served for [`IMAGE_MAX_AGE`], so a picture on screen every day reaches [`Cache::get`] — and is
+/// touched — about once a day.
+const MAX_IDLE: Duration = Duration::from_secs(90 * 24 * 60 * 60);
+
+/// [`CACHE_BUDGET_BYTES`] and [`MAX_IDLE`] together, so a test can hand [`evict`] a small cache.
+#[derive(Debug, Clone, Copy)]
+struct Budget {
+    bytes: u64,
+    idle: Duration,
+}
+
+const BUDGET: Budget = Budget {
+    bytes: CACHE_BUDGET_BYTES,
+    idle: MAX_IDLE,
+};
+
+/// How often the upkeep thread wakes: to stamp what was served since, and to see whether a pass
+/// is owed.
+const UPKEEP_TICK: Duration = Duration::from_secs(60);
+
+/// Pictures stored between two passes — ~46 MB at `display`, so the cache overshoots its budget
+/// by at most 9% of it before a pass brings it back. The launch's pass runs one tick in, whatever
+/// this says.
+const STORES_PER_PASS: u64 = 500;
+
+/// How long a pass waits for the write connection to drop the rows of what it deleted. Short,
+/// because a held connection means a sync — and a row left behind is a row outliving its file,
+/// the supported state, which the next pass reaps.
+const EVICT_LOCK_WAIT: Duration = Duration::from_secs(1);
+
+/// What one [`evict`] pass did: the upkeep thread's log line, and what the tests read.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Upkeep {
+    /// Files that took a used-stamp before the walk ([`Cache::flush_touches`]).
+    touched: u64,
+    /// Cache files deleted.
+    files: u64,
+    /// Their size, as the walk read it.
+    bytes: u64,
+    /// Files chosen that would not go — held open without share-delete by something else, on
+    /// Windows. Their rows stay, so each is still a consistent pair, and the next pass chooses
+    /// it again.
+    failed: u64,
+    /// `image_cache` rows dropped: the deleted files' and any whose file was already gone.
+    rows: u64,
+    /// Rows left because the write connection was not had within [`EVICT_LOCK_WAIT`]. Each is a
+    /// row outliving its file, and the next pass reaps it.
+    rows_owed: u64,
+}
+
+/// One picture the walk found.
+#[derive(Debug, Clone)]
+struct OnDisk {
+    key: ImageKey,
+    bytes: u64,
+    /// When it was last used, as far as this cache has written down: the file's modified time,
+    /// which [`store`] sets by writing it and [`Cache::flush_touches`] moves forward. `None`
+    /// when the filesystem would not say, and a picture that cannot be dated is never evicted.
+    used: Option<SystemTime>,
+}
+
+/// Set `path`'s modified time to `when` — the used-stamp.
+///
+/// `write(true)` and **never** `create(true)`: a key whose file is gone must stay gone. See
+/// [`Cache::flush_touches`] for what an empty file there would cost.
+fn stamp_used(path: &Path, when: SystemTime) -> std::io::Result<()> {
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(path)?
+        .set_modified(when)
+}
+
+/// `read_dir`, with a directory that is not there answered as an empty one.
+///
+/// Absent is an ordinary state — no picture of that variant was ever stored, or
+/// [`crate::reset::clear_cache`] is mid-sweep. Anything else (a permission, an I/O error) is
+/// returned, and [`evict`] then does nothing at all: a partial walk would read every file it
+/// missed as gone and reap the rows that vouch for them.
+fn read_dir_if_present(dir: &Path) -> std::io::Result<Option<std::fs::ReadDir>> {
+    match std::fs::read_dir(dir) {
+        Ok(entries) => Ok(Some(entries)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(e),
+    }
+}
+
+/// Every cache file under `images_dir`, with its size and its used-stamp.
+///
+/// **Bounded by the layout rather than by a counter, and blind to everything but the layout.**
+/// It enters the four [`Variant::ALL`] directories by name, the shard directories inside them,
+/// and the files inside those; it follows no symlink (a `DirEntry`'s type is the link's own);
+/// and it keeps a file only when [`parse_cache_file_name`] reads a key out of its name **and**
+/// [`cache_path`] rebuilds exactly that path from the key. So the paths [`evict`] deletes are
+/// paths this cache writes, and nothing else under `data/` can become one.
+///
+/// **On Windows it is one directory listing per shard and no call per file**: `DirEntry`'s
+/// metadata there comes out of the listing itself (the standard library documents it as making
+/// no extra system call), which is where both the size and the stamp are read from.
+fn walk(images_dir: &Path) -> std::io::Result<Vec<OnDisk>> {
+    use std::io::ErrorKind::NotFound;
+
+    let mut found = Vec::new();
+    for variant in Variant::ALL {
+        let Some(shards) = read_dir_if_present(&images_dir.join(variant.key()))? else {
+            continue;
+        };
+        for shard in shards {
+            let shard = shard?;
+            match shard.file_type() {
+                Ok(kind) if kind.is_dir() => {}
+                Ok(_) => continue,
+                Err(e) if e.kind() == NotFound => continue,
+                Err(e) => return Err(e),
+            }
+            let Some(files) = read_dir_if_present(&shard.path())? else {
+                continue;
+            };
+            for file in files {
+                let file = file?;
+                match file.file_type() {
+                    Ok(kind) if kind.is_file() => {}
+                    Ok(_) => continue,
+                    Err(e) if e.kind() == NotFound => continue,
+                    Err(e) => return Err(e),
+                }
+                let Some(key) = file
+                    .file_name()
+                    .to_str()
+                    .and_then(|name| parse_cache_file_name(name, variant))
+                else {
+                    continue;
+                };
+                if cache_path(images_dir, &key).as_deref() != Some(file.path().as_path()) {
+                    continue;
+                }
+                // Found, even when it cannot be measured: a file that is there keeps its row.
+                let meta = file.metadata().ok();
+                found.push(OnDisk {
+                    key,
+                    bytes: meta.as_ref().map_or(0, |m| m.len()),
+                    used: meta.and_then(|m| m.modified().ok()),
+                });
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// The pictures [`evict`] may never delete: **exactly the keys [`prewarm_keys`] would fetch if
+/// they were missing** — the same [`WANTED`] rows, face 0, at the variant each is paired with.
+///
+/// Sparing anything less makes the two fight (see [`WANTED`]); sparing more — every face, every
+/// variant of an owned card — would keep the art crops and backs the reader looked at once, and
+/// those are what the budget is for. An unreadable row is an error rather than a card left
+/// unspared, so a bad read stops the pass instead of deleting part of the collection's pictures.
+fn spared_keys(conn: &Connection) -> rusqlite::Result<HashSet<ImageKey>> {
+    let mut stmt = conn.prepare(&format!("{WANTED} SELECT card_id, variant FROM wanted"))?;
+    let rows = stmt.query_map(params![COLLECTION_PREWARM.key(), DECK_PREWARM.key()], |r| {
+        Ok((r.get::<_, Option<String>>(0)?, r.get::<_, String>(1)?))
+    })?;
+    let mut spared = HashSet::new();
+    for row in rows {
+        let (Some(card_id), variant) = row? else {
+            continue;
+        };
+        if let Some(variant) = Variant::parse(&variant) {
+            spared.insert(ImageKey {
+                card_id,
+                face: 0,
+                variant,
+            });
+        }
+    }
+    Ok(spared)
+}
+
+/// Every `image_cache` row, with its `fetched_at`.
+fn cached_rows(conn: &Connection) -> rusqlite::Result<Vec<(ImageKey, i64)>> {
+    let mut stmt = conn.prepare("SELECT card_id, face, variant, fetched_at FROM image_cache")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, i64>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, i64>(3)?,
+        ))
+    })?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (card_id, face, variant, fetched_at) = row?;
+        let (Ok(face), Some(variant)) = (u8::try_from(face), Variant::parse(&variant)) else {
+            continue;
+        };
+        out.push((
+            ImageKey {
+                card_id,
+                face,
+                variant,
+            },
+            fetched_at,
+        ));
+    }
+    Ok(out)
+}
+
+/// Which of `found` go, as indices into it: **least recently used first**, among the pictures
+/// `spared` does not claim.
+///
+/// A picture goes when the unspared bytes still on disk exceed `budget.bytes`, or when nobody
+/// has used it within `budget.idle` of `now`. Both are read off one oldest-first order, so the
+/// walk stops at the first picture that is neither — everything after it is newer, and the rest
+/// already fits.
+///
+/// An undated picture is never chosen, and its bytes still count against the budget: they are
+/// on the disk whether or not this can put them in order. Ties break on the key, so a pass over
+/// the same disk chooses the same files.
+fn choose_evictions(
+    found: &[OnDisk],
+    spared: impl Fn(&ImageKey) -> bool,
+    budget: Budget,
+    now: SystemTime,
+) -> Vec<usize> {
+    let unspared: Vec<usize> = (0..found.len())
+        .filter(|&i| !spared(&found[i].key))
+        .collect();
+    let mut over: u64 = unspared.iter().map(|&i| found[i].bytes).sum();
+    let mut oldest_first: Vec<(SystemTime, usize)> = unspared
+        .iter()
+        .filter_map(|&i| Some((found[i].used?, i)))
+        .collect();
+    oldest_first.sort_by(|(a, i), (b, j)| {
+        let (x, y) = (&found[*i].key, &found[*j].key);
+        a.cmp(b)
+            .then_with(|| x.card_id.cmp(&y.card_id))
+            .then_with(|| x.face.cmp(&y.face))
+            .then_with(|| x.variant.key().cmp(y.variant.key()))
+    });
+    let idle_before = now.checked_sub(budget.idle);
+
+    let mut chosen = Vec::new();
+    for (used, i) in oldest_first {
+        let idle = idle_before.is_some_and(|cut| used < cut);
+        if !idle && over <= budget.bytes {
+            break;
+        }
+        chosen.push(i);
+        over = over.saturating_sub(found[i].bytes);
+    }
+    chosen
+}
+
+/// Drop the rows of `keys`, but only those written before the pass began — one transaction.
+///
+/// The `fetched_at < ?4` is what makes deleting the file first safe against a fetch landing in
+/// the middle of the pass: a key re-fetched after the pass started carries a newer row, which
+/// vouches for a newer file, and both are left alone. `started` is whole seconds and so is
+/// `unixepoch()`, so a row written in the pass's own second is kept — the safe side of the tie.
+fn drop_rows(conn: &Connection, keys: &[ImageKey], started: i64) -> rusqlite::Result<u64> {
+    let tx = conn.unchecked_transaction()?;
+    let mut dropped = 0u64;
+    {
+        let mut stmt = tx.prepare(
+            "DELETE FROM image_cache
+              WHERE card_id = ?1 AND face = ?2 AND variant = ?3 AND fetched_at < ?4",
+        )?;
+        for key in keys {
+            dropped += stmt.execute(params![
+                key.card_id,
+                key.face as i64,
+                key.variant.key(),
+                started
+            ])? as u64;
+        }
+    }
+    tx.commit()?;
+    Ok(dropped)
+}
+
+/// One eviction pass: stamp what was served, walk the disk, delete what the budget and the idle
+/// horizon choose, and drop the rows that vouched for it. Runs on the `image-upkeep` thread and
+/// nowhere near a served picture.
+///
+/// **The used-stamp is each file's modified time, and not a column — which is why this needed no
+/// schema rung.** `image_cache` is on the corpus side, and the corpus is the file this app
+/// deletes and rebuilds when it will not open, or when a rung fails (`schema::prepare_database`);
+/// the rows go with it and the files do not. An evictor that read the rows could not see those
+/// files at all, so the bound it kept would be the one a rebuilt corpus quietly escapes. This
+/// walks the disk instead, which it would have to do regardless, and on Windows the walk hands
+/// over each file's modified time for free ([`walk`]). **Nothing here waits on the operating
+/// system to update a timestamp by itself** — last-access times are off on most Windows volumes
+/// and are never read. The stamp is written deliberately: by [`store`] when a picture lands, and
+/// by [`Cache::flush_touches`] when one is served. The module header's "no mtime" rule is about
+/// *freshness* and is untouched — whether the bytes are current is still the URI comparison; a
+/// FAT32 stick rounding a used-stamp to two seconds moves a picture in a queue measured in days.
+///
+/// **Order: the file, then its row.** Every interruption between the two — a crash, a sync
+/// holding the write connection past [`EVICT_LOCK_WAIT`] — leaves a row that outlives its file:
+/// [`Cache::get`] reads "cached", fails the read and fetches, which is the supported state
+/// [`crate::reset::clear_cache`] leans on too, and the next pass reaps the row. The other order
+/// would leave bytes that no row vouches for, which nothing ever serves.
+///
+/// **Reaping is the pass's second job**: a row whose file the walk did not find is dropped too.
+/// Before this, a reader who deleted `data/images` kept every row, and [`prewarm_keys`]'s
+/// `NOT EXISTS` read those rows as pictures on disk — so the collection was never warmed again.
+///
+/// Never deleted: anything [`walk`] did not parse as its own, a [`spared_keys`] picture, one
+/// whose row is still owed ([`Cache::pending`] — it has just landed), and one it cannot date.
+/// **A walk that fails deletes nothing**, for [`read_dir_if_present`]'s reason.
+fn evict(
+    cache: &Cache,
+    read: &Mutex<Connection>,
+    write: &Mutex<Connection>,
+    budget: Budget,
+    now: SystemTime,
+) -> Result<Upkeep, String> {
+    let mut done = Upkeep {
+        touched: cache.flush_touches(now) as u64,
+        ..Upkeep::default()
+    };
+    let started = now
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+
+    let found =
+        walk(&cache.dir).map_err(|e| format!("could not read {}: {e}", cache.dir.display()))?;
+    let (spared, rows) = {
+        let conn = crate::sync::lock_conn(read);
+        (
+            spared_keys(&conn).map_err(|e| e.to_string())?,
+            cached_rows(&conn).map_err(|e| e.to_string())?,
+        )
+    };
+    let owed: HashSet<ImageKey> = crate::sync::lock_plain(&cache.pending)
+        .keys()
+        .cloned()
+        .collect();
+
+    let chosen = choose_evictions(
+        &found,
+        |key| spared.contains(key) || owed.contains(key),
+        budget,
+        now,
+    );
+    let mut forget: Vec<ImageKey> = Vec::new();
+    for i in chosen {
+        let picture = &found[i];
+        let Some(path) = cache_path(&cache.dir, &picture.key) else {
+            continue;
+        };
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                done.files += 1;
+                done.bytes += picture.bytes;
+                forget.push(picture.key.clone());
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => forget.push(picture.key.clone()),
+            Err(_) => done.failed += 1,
+        }
+    }
+
+    let on_disk: HashSet<&ImageKey> = found.iter().map(|f| &f.key).collect();
+    forget.extend(
+        rows.into_iter()
+            .filter(|(key, fetched_at)| *fetched_at < started && !on_disk.contains(key))
+            .map(|(key, _)| key),
+    );
+    if forget.is_empty() {
+        return Ok(done);
+    }
+    let Some(conn) = crate::db::lock_for(write, EVICT_LOCK_WAIT) else {
+        done.rows_owed = forget.len() as u64;
+        return Ok(done);
+    };
+    done.rows = drop_rows(&conn, &forget, started).map_err(|e| e.to_string())?;
+    Ok(done)
+}
+
+/// Start the `image-upkeep` thread: the one caller of [`evict`] and of [`Cache::flush_touches`].
+///
+/// It wakes every [`UPKEEP_TICK`]. The first wake runs a pass — a minute after launch, so the
+/// window, the facet index and the first page of tiles are not competing with a directory walk —
+/// and after that a pass is owed once [`STORES_PER_PASS`] pictures have landed since the last,
+/// because a store is the only thing that grows the cache. Every other wake just stamps what was
+/// served, so the used-stamps lag the reader by a minute at most, and what a quit loses is the
+/// last minute's.
+///
+/// **A pass waits out a sync** rather than running beside one: the ingest holds the write
+/// connection for ~80 s, and a pass that could not drop its rows would only leave them for the
+/// next. A pass that fails is written to the error log (`image_store`, `image_evict`) and is not
+/// retried until the next one is owed, so an unreadable folder costs one row per 500 pictures
+/// rather than one a minute.
+///
+/// Detached, like [`crate::index::lifecycle::spawn_build`]: nothing waits on it, and a process
+/// that exits mid-pass leaves the interruption [`evict`]'s order was chosen for.
+pub fn spawn_upkeep(state: &Arc<crate::sync::AppState>) {
+    let state = Arc::clone(state);
+    let spawned = std::thread::Builder::new()
+        .name("image-upkeep".into())
+        .spawn(move || {
+            let mut stores_at_last_pass: Option<u64> = None;
+            loop {
+                std::thread::sleep(UPKEEP_TICK);
+                let stores = state.images.stores();
+                let owed = stores_at_last_pass
+                    .is_none_or(|at| stores.saturating_sub(at) >= STORES_PER_PASS);
+                if !owed || state.syncing.load(Ordering::Relaxed) {
+                    state.images.flush_touches(SystemTime::now());
+                    continue;
+                }
+                stores_at_last_pass = Some(stores);
+                match evict(
+                    &state.images,
+                    &state.db_read,
+                    &state.db,
+                    BUDGET,
+                    SystemTime::now(),
+                ) {
+                    Ok(done)
+                        if done.files > 0
+                            || done.rows > 0
+                            || done.failed > 0
+                            || done.rows_owed > 0 =>
+                    {
+                        eprintln!(
+                            "image cache: evicted {} files ({} bytes), dropped {} rows; \
+                         {} would not go, {} rows owed, {} stamped used",
+                            done.files,
+                            done.bytes,
+                            done.rows,
+                            done.failed,
+                            done.rows_owed,
+                            done.touched
+                        )
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("image cache: eviction pass skipped: {e}");
+                        state.images.note(
+                            &state.db,
+                            crate::errors::Source::ImageStore,
+                            "image_evict",
+                            &ImageError::Io(e),
+                            &state.images.dir().display().to_string(),
+                        );
+                    }
+                }
+            }
+        });
+    if let Err(e) = spawned {
+        eprintln!("image cache: could not start the upkeep thread, so nothing is evicted: {e}");
+    }
 }
 
 /// A wait in whole seconds, rounded **up**.
@@ -2820,5 +3426,400 @@ mod tests {
         }
         assert_eq!(cache.pending_records(), MAX_PENDING_RECORDS);
         assert_eq!(cache.dropped_records(), 5);
+    }
+
+    // ── Upkeep ──────────────────────────────────────────────────────────────────────────
+
+    fn days(n: u64) -> Duration {
+        Duration::from_secs(n * 24 * 60 * 60)
+    }
+
+    fn found(id: &str, variant: Variant, bytes: u64, used: Option<SystemTime>) -> OnDisk {
+        OnDisk {
+            key: key(id, 0, variant),
+            bytes,
+            used,
+        }
+    }
+
+    fn chosen_ids(found: &[OnDisk], chosen: &[usize]) -> Vec<String> {
+        chosen
+            .iter()
+            .map(|&i| found[i].key.card_id.clone())
+            .collect()
+    }
+
+    const A: &str = "aa000000-0000-0000-0000-00000000000a";
+    const B: &str = "bb000000-0000-0000-0000-00000000000b";
+    const C: &str = "cc000000-0000-0000-0000-00000000000c";
+    const D: &str = "dd000000-0000-0000-0000-00000000000d";
+    const E: &str = "ee000000-0000-0000-0000-00000000000e";
+
+    /// The budget arithmetic: oldest first, and not one picture past the point where the rest
+    /// fits. An undated picture is never chosen — nothing can say it is old — but its bytes are
+    /// on the disk, so they count.
+    #[test]
+    fn eviction_takes_the_least_recently_used_first_and_stops_once_the_rest_fits() {
+        let now = UNIX_EPOCH + days(1_000);
+        let disk = [
+            found(A, Variant::Display, 100, Some(now - days(5))),
+            found(B, Variant::Display, 100, Some(now - days(1))),
+            found(C, Variant::Display, 100, Some(now - days(3))),
+            found(D, Variant::Display, 100, None),
+        ];
+        let budget = Budget {
+            bytes: 250,
+            idle: days(90),
+        };
+
+        let chosen = choose_evictions(&disk, |_| false, budget, now);
+
+        // 400 on disk: A (the oldest) brings it to 300, still over; C brings it to 200, which fits.
+        assert_eq!(chosen_ids(&disk, &chosen), vec![A, C]);
+
+        let roomy = Budget {
+            bytes: 400,
+            ..budget
+        };
+        assert!(
+            choose_evictions(&disk, |_| false, roomy, now).is_empty(),
+            "a cache inside its budget, with nothing idle, loses nothing"
+        );
+    }
+
+    /// A picture the pre-warm wants is never chosen, however old or large — and it is outside
+    /// the budget, so a collection bigger than the whole budget does not push the reader's
+    /// browsing out behind it.
+    #[test]
+    fn a_picture_the_prewarm_wants_is_never_evicted_and_is_not_charged_to_the_budget() {
+        let now = UNIX_EPOCH + days(1_000);
+        let disk = [
+            found(A, Variant::Display, 10_000, Some(now - days(900))),
+            found(B, Variant::Display, 100, Some(now - days(1))),
+        ];
+        let owned = key(A, 0, Variant::Display);
+        let budget = Budget {
+            bytes: 200,
+            idle: days(90),
+        };
+
+        let chosen = choose_evictions(&disk, |k| *k == owned, budget, now);
+
+        assert!(
+            chosen.is_empty(),
+            "the owned picture is spared and the other fits: {:?}",
+            chosen_ids(&disk, &chosen)
+        );
+    }
+
+    /// The case the issue was about. The `grid` files the 2026-08-20 move left behind sit well
+    /// inside any budget, so it is the idle horizon — not the size — that takes them: anything
+    /// unread for longer than it goes, and nothing younger does.
+    #[test]
+    fn a_picture_nobody_has_used_within_the_idle_horizon_goes_even_under_the_budget() {
+        let now = UNIX_EPOCH + days(1_000);
+        let disk = [
+            found(A, Variant::Grid, 60_000, Some(now - days(91))),
+            found(A, Variant::Display, 93_000, Some(now - days(89))),
+        ];
+        let budget = Budget {
+            bytes: u64::MAX,
+            idle: days(90),
+        };
+
+        let chosen = choose_evictions(&disk, |_| false, budget, now);
+
+        assert_eq!(chosen.len(), 1);
+        assert_eq!(disk[chosen[0]].key.variant, Variant::Grid);
+    }
+
+    /// Never evicting what the pre-warm needs rests on this: the spared set *is* the pre-warm's
+    /// set, read from the one [`WANTED`] literal. Were it narrower, every owned picture outside it
+    /// would be fetched back by the next pre-warm and evicted by the next pass, forever.
+    #[test]
+    fn the_spared_set_is_exactly_what_the_prewarm_would_fetch() {
+        let conn = seeded();
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,created_at,updated_at)
+             VALUES (?1,'lea','161','en','nonfoil','NM',1,unixepoch(),unixepoch())",
+            [BOLT],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO wishlist_entries (oracle_id,card_id,name,quantity,created_at,updated_at)
+             VALUES ('o1',?1,'Wanted',1,unixepoch(),unixepoch())",
+            [A],
+        )
+        .unwrap();
+
+        let spared = spared_keys(&conn).unwrap();
+        let prewarm: HashSet<ImageKey> = prewarm_keys(&conn, MAX_PREWARM)
+            .unwrap()
+            .into_iter()
+            .collect();
+
+        assert_eq!(spared.len(), 2);
+        assert_eq!(spared, prewarm);
+    }
+
+    impl Fixture {
+        /// A picture on disk and the row that vouches for it: `bytes` long, last used at
+        /// `used`, recorded at `fetched_at`.
+        fn put(&self, k: &ImageKey, bytes: usize, used: SystemTime, fetched_at: i64) {
+            self.file(k, bytes, used);
+            self.write
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO image_cache (card_id, face, variant, source_uri, bytes, fetched_at)
+                     VALUES (?1, ?2, ?3, 'https://cards.scryfall.io/x.webp?1', ?4, ?5)",
+                    params![k.card_id, k.face as i64, k.variant.key(), bytes as i64, fetched_at],
+                )
+                .unwrap();
+        }
+
+        /// A picture on disk with no row at all.
+        fn file(&self, k: &ImageKey, bytes: usize, used: SystemTime) -> PathBuf {
+            let path = cache_path(self.cache.dir(), k).unwrap();
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(&path, vec![7u8; bytes]).unwrap();
+            stamp_used(&path, used).unwrap();
+            path
+        }
+
+        fn on_disk(&self, k: &ImageKey) -> bool {
+            cache_path(self.cache.dir(), k).unwrap().exists()
+        }
+
+        fn rows(&self) -> HashSet<ImageKey> {
+            cached_rows(&self.write.lock().unwrap())
+                .unwrap()
+                .into_iter()
+                .map(|(k, _)| k)
+                .collect()
+        }
+
+        fn own(&self, id: &str) {
+            self.write
+                .lock()
+                .unwrap()
+                .execute(
+                    "INSERT INTO collection_entries
+                        (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                         created_at,updated_at)
+                     VALUES (?1,'lea','161','en','nonfoil','NM',1,unixepoch(),unixepoch())",
+                    [id],
+                )
+                .unwrap();
+        }
+
+        fn evict(&self, budget: Budget, now: SystemTime) -> Upkeep {
+            evict(&self.cache, &self.read, &self.write, budget, now).unwrap()
+        }
+    }
+
+    fn epoch_secs(t: SystemTime) -> i64 {
+        t.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    }
+
+    /// The whole pass over a real disk and a real database: what goes is deleted file **and**
+    /// row, what the pre-warm owns stays whatever its age, a file whose row is still owed stays,
+    /// and a file with no row at all is an ordinary candidate. Afterwards every row has its file
+    /// and every file but the owed one has its row.
+    #[test]
+    fn an_eviction_pass_deletes_file_and_row_together_and_spares_what_the_prewarm_owns() {
+        let f = Fixture::new("upkeep-pass");
+        let now = SystemTime::now();
+        let before = epoch_secs(now) - 1_000;
+        let owned = key(A, 0, COLLECTION_PREWARM);
+        let orphan = key(A, 0, Variant::Grid);
+        let (b, c, rowless, owed) = (
+            key(B, 0, Variant::Display),
+            key(C, 0, Variant::Display),
+            key(D, 0, Variant::Display),
+            key(E, 0, Variant::Display),
+        );
+        f.own(A);
+        f.put(&owned, 1_000, now - days(200), before);
+        f.put(&orphan, 1_000, now - days(100), before);
+        f.put(&b, 1_000, now - days(10), before);
+        f.put(&c, 1_000, now - days(1), before);
+        f.file(&rowless, 1_000, now - days(20));
+        f.file(&owed, 1_000, now - days(300));
+        f.cache
+            .queue_record(&owed, "https://cards.scryfall.io/e.webp?1", 1_000);
+
+        let done = f.evict(
+            Budget {
+                bytes: 1_500,
+                idle: days(90),
+            },
+            now,
+        );
+
+        // 4 000 unspared bytes: the idle `grid` orphan goes whatever the budget says, then the
+        // rowless file (20 days) and B (10 days) until the 1 000 left fits under 1 500.
+        assert!(
+            f.on_disk(&owned),
+            "the owned picture is 200 days old and stays"
+        );
+        assert!(!f.on_disk(&orphan), "the grid orphan is idle and goes");
+        assert!(!f.on_disk(&rowless));
+        assert!(!f.on_disk(&b));
+        assert!(f.on_disk(&c), "the most recently used one fits and stays");
+        assert!(
+            f.on_disk(&owed),
+            "a file whose row is still owed has only just landed"
+        );
+        assert_eq!((done.files, done.bytes, done.failed), (3, 3_000, 0));
+        assert_eq!(
+            done.rows, 2,
+            "the orphan's row and B's; the rowless file had none"
+        );
+
+        assert_eq!(
+            f.rows(),
+            HashSet::from([owned.clone(), c.clone()]),
+            "every row left has its file, and every file but the owed one has its row"
+        );
+    }
+
+    /// A row whose file has gone — a reader who deleted `data/images` — is reaped, and that is
+    /// what lets the pre-warm fetch an owned card's picture back: before, the row stood in for
+    /// the file in its `NOT EXISTS` forever. A row written after the pass began is left alone,
+    /// because it vouches for a file a fetch has just stored.
+    #[test]
+    fn a_row_whose_file_is_gone_is_reaped_but_one_written_after_the_pass_began_is_kept() {
+        let f = Fixture::new("upkeep-reap");
+        let now = SystemTime::now();
+        let gone = key(A, 0, COLLECTION_PREWARM);
+        let landing = key(B, 0, Variant::Display);
+        f.own(A);
+        f.put(&gone, 1_000, now, epoch_secs(now) - 100);
+        f.put(&landing, 1_000, now, epoch_secs(now) + 100);
+        std::fs::remove_dir_all(f.cache.dir()).unwrap();
+        let wanted = |f: &Fixture| prewarm_keys(&f.read.lock().unwrap(), MAX_PREWARM).unwrap();
+        assert!(
+            wanted(&f).is_empty(),
+            "the stale row hides the owned card from the pre-warm"
+        );
+
+        let done = f.evict(BUDGET, now);
+
+        assert_eq!(done.rows, 1);
+        assert_eq!(f.rows(), HashSet::from([landing]));
+        assert_eq!(
+            wanted(&f),
+            vec![gone],
+            "and the pre-warm can see the card again"
+        );
+    }
+
+    /// LRU and not first-in-first-out: a picture served from disk is stamped as used, and so
+    /// outlives one that was fetched at the same time and not looked at since.
+    #[tokio::test]
+    async fn a_served_picture_is_stamped_used_and_outlives_an_older_unread_one() {
+        let f = Fixture::new("upkeep-touch");
+        let server = MockServer::start();
+        server.mock(|when, then| {
+            when.method(GET);
+            then.status(200).body(vec![7u8; 16]);
+        });
+        f.card(A, &format!("{}/grid/a.webp?1", server.base_url()));
+        f.card(B, &format!("{}/grid/b.webp?1", server.base_url()));
+        let client = scryfall::Client::new(server.base_url());
+        let (read_again, left_alone) = (key(A, 0, Variant::Grid), key(B, 0, Variant::Grid));
+        f.get(&client, &read_again).await.unwrap();
+        f.get(&client, &left_alone).await.unwrap();
+        let month_ago = SystemTime::now() - days(30);
+        for k in [&read_again, &left_alone] {
+            stamp_used(&cache_path(f.cache.dir(), k).unwrap(), month_ago).unwrap();
+        }
+
+        f.get(&client, &read_again).await.unwrap(); // a hit: touched, and nothing written yet
+        let done = f.evict(
+            Budget {
+                bytes: 16,
+                idle: days(90),
+            },
+            SystemTime::now() + Duration::from_secs(5),
+        );
+
+        assert_eq!(done.touched, 1);
+        assert!(
+            f.on_disk(&read_again),
+            "the picture read a moment ago stays"
+        );
+        assert!(!f.on_disk(&left_alone), "the one unread for a month goes");
+        assert_eq!(f.rows(), HashSet::from([read_again]));
+    }
+
+    /// The stamp opens the file for writing, and a key whose file is gone must stay gone: an
+    /// empty file there, under a row that vouches for it, would be served as a zero-byte picture
+    /// until Scryfall next re-scanned the card.
+    ///
+    /// **The shard directory is there and the file is not**, because that is what an eviction
+    /// leaves — it deletes files, never directories. With no directory the open fails on the
+    /// missing parent whatever its flags say, and this test would pass with `create(true)` in
+    /// the stamp; it did, the first time it was written.
+    #[test]
+    fn stamping_a_picture_whose_file_has_gone_never_creates_one() {
+        let dir = std::env::temp_dir().join("mtgtest-images-upkeep-stamp");
+        let _ = std::fs::remove_dir_all(&dir);
+        let cache = Cache::new(dir.clone());
+        let k = key(A, 0, Variant::Display);
+        let path = cache_path(&dir, &k).unwrap();
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+
+        cache.touch(&k);
+        assert_eq!(cache.flush_touches(SystemTime::now()), 0);
+
+        assert!(
+            !path.exists(),
+            "an evicted picture must not come back empty"
+        );
+    }
+
+    /// What a pass deletes is a path this cache writes, rebuilt from a key it parsed — never a
+    /// path it merely found. A crashed store's temporary, a file in the wrong shard, a face out
+    /// of range, a folder that is not a variant, and anything a person put there all survive a
+    /// pass that is told to delete everything it can.
+    #[test]
+    fn the_walk_never_deletes_a_file_it_did_not_parse_as_its_own() {
+        let f = Fixture::new("upkeep-foreign");
+        let long_ago = SystemTime::now() - days(1_000);
+        let ours = key(A, 0, Variant::Display);
+        f.file(&ours, 10, long_ago);
+        let root = f.cache.dir().to_path_buf();
+        let foreign = [
+            root.join("display").join("aa").join("notes.txt"),
+            root.join("display").join("aa").join(format!("{A}-0.7.tmp")),
+            root.join("display").join("bb").join(format!("{A}-0.webp")),
+            root.join("display").join("aa").join(format!("{A}-2.webp")),
+            root.join("display").join("aa").join(format!("{A}-01.webp")),
+            root.join("display").join(format!("{A}-0.webp")),
+            root.join("png").join("aa").join(format!("{A}-0.webp")),
+            root.join(format!("{A}-0.webp")),
+        ];
+        for path in &foreign {
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, b"not the cache's").unwrap();
+            stamp_used(path, long_ago).unwrap();
+        }
+
+        let done = f.evict(
+            Budget {
+                bytes: 0,
+                idle: Duration::from_secs(1),
+            },
+            SystemTime::now(),
+        );
+
+        assert_eq!(done.files, 1);
+        assert!(!f.on_disk(&ours));
+        for path in &foreign {
+            assert!(path.exists(), "{} must survive", path.display());
+        }
     }
 }

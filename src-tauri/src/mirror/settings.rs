@@ -36,6 +36,43 @@ pub const K_ENABLED: &str = "mirror_enabled";
 /// The `app_meta` key holding the folder the mirror writes into, as an absolute path.
 pub const K_ROOT: &str = "mirror_root";
 
+/// `app_meta` key: this installation's name, 32 hex digits, stamped as the first line of every
+/// manifest the mirror writes — [`crate::mirror::run::folder_owner`] is the other half.
+///
+/// **One folder, one installation** (issue #551). Two installations pointed at one folder — the
+/// same Dropbox folder on two computers is the case `text-mirror.md` names — overwrite each
+/// other's `Collection` and `Wishlist` files, which every installation plans under the same
+/// names, and each prunes the other's decks, because the manifest is the pruner's only authority
+/// and each one's plan leaves the other's decks out. Only a single writer per folder stops all
+/// three. `app_meta` is on no sync spec, so paired devices carry different names, which is the
+/// point: they share a collection, not a folder.
+pub const K_INSTALLATION: &str = "mirror_installation";
+
+/// This installation's name, if it has one and it is well formed. A hand-edited value that is
+/// not 32 hex digits reads as none, rather than being stamped into a manifest.
+pub fn installation(conn: &Connection) -> Option<String> {
+    crate::app_meta::get_app_meta(conn, K_INSTALLATION)
+        .filter(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// Name this installation if it has no name yet, and answer the name.
+///
+/// Run once at launch, on the write connection and **before the mirror's hook is installed**, so
+/// the mirror still never writes to the database and no pass ever runs without it. A failure
+/// leaves the installation unnamed: its manifests carry no stamp, which is exactly what every
+/// build before the stamp wrote — so it is refused by a folder another installation owns and
+/// claims none of its own.
+pub fn ensure_installation(conn: &Connection) -> Result<String, String> {
+    if let Some(id) = installation(conn) {
+        return Ok(id);
+    }
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| format!("no randomness to name it with: {e}"))?;
+    let id: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    crate::app_meta::set_app_meta(conn, K_INSTALLATION, &id).map_err(|e| e.to_string())?;
+    Ok(id)
+}
+
 /// The mirror runs unless somebody says otherwise.
 ///
 /// On rather than off because the whole point of the feature is the day the app will not
@@ -136,6 +173,13 @@ pub fn set_root(conn: &Connection, path: &Path) -> Result<(), String> {
             "\"{}\" is a file, not a folder. The mirror needs a folder of its own.",
             path.display()
         ));
+    }
+    // Refused here as well as at every pass, so the reader hears it while choosing rather than
+    // as a failed pass afterwards — see [`K_INSTALLATION`].
+    if let Some(owner) = crate::mirror::run::folder_owner(path) {
+        if installation(conn).as_deref() != Some(owner.as_str()) {
+            return Err(crate::mirror::run::another_installation(path));
+        }
     }
     crate::app_meta::set_app_meta(conn, K_ROOT, text)
         .map_err(|e| format!("could not save the mirror folder: {e}"))
@@ -418,6 +462,44 @@ mod tests {
                 "a stored `{junk}` must read as the default, not be resolved against the cwd"
             );
         }
+    }
+
+    /// Named once and then the same name for good: a manifest stamped with it has to be
+    /// recognised as ours on every later launch.
+    #[test]
+    fn an_installation_is_named_once_and_keeps_its_name() {
+        let conn = migrated_memory_db();
+        assert_eq!(installation(&conn), None);
+        let first = ensure_installation(&conn).unwrap();
+        assert_eq!(first.len(), 32);
+        assert!(first.bytes().all(|b| b.is_ascii_hexdigit()));
+        assert_eq!(ensure_installation(&conn).unwrap(), first);
+        assert_eq!(installation(&conn), Some(first));
+    }
+
+    /// Choosing a folder another installation owns is refused while choosing, not left to fail
+    /// at the first pass — and the same folder is accepted once it names this installation.
+    #[test]
+    fn a_folder_another_installation_owns_cannot_be_chosen() {
+        let conn = migrated_memory_db();
+        crate::app_meta::set_app_meta(&conn, K_INSTALLATION, &"a".repeat(32)).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest = tmp.path().join(crate::mirror::run::MANIFEST_NAME);
+
+        std::fs::write(
+            &manifest,
+            format!("installation: {}\nREADME.txt\n", "b".repeat(32)),
+        )
+        .unwrap();
+        let err = set_root(&conn, tmp.path()).unwrap_err();
+        assert!(err.contains("another MTG Grimoire installation"), "{err}");
+
+        std::fs::write(
+            &manifest,
+            format!("installation: {}\nREADME.txt\n", "a".repeat(32)),
+        )
+        .unwrap();
+        set_root(&conn, tmp.path()).unwrap();
     }
 
     #[test]
