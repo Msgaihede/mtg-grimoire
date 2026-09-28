@@ -11,13 +11,13 @@ import { sortOptions } from "@/lib/options";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { plural } from "@/lib/counts";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
-import { FOCUS } from "@/lib/focus";
 import { ipcError, type CollectionRow, type DeckCategory } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { tileKeyOf } from "@/lib/tileKey";
 import { cn } from "@/lib/utils";
+import { ADD_BUTTON } from "./addButton";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
 import { foldCopies, type CopyTile } from "./collectionTiles";
 import type { DragPayload } from "./dnd";
@@ -730,10 +730,10 @@ function AddButton({
         else onCommit(tile, lands.id);
       }}
       className={cn(
-        "grid size-6 shrink-0 place-items-center rounded-md border border-border text-dim",
-        "transition-colors duration-150 motion-reduce:transition-none",
-        refusal ? "cursor-not-allowed opacity-45" : "hover:border-accent hover:text-accent",
-        FOCUS,
+        ADD_BUTTON,
+        refusal
+          ? "cursor-not-allowed opacity-45 active:scale-100"
+          : "hover:border-accent hover:text-accent",
       )}
     >
       <Plus className="size-3.5" aria-hidden="true" />
