@@ -13,6 +13,7 @@ import {
   notMadeByDeckHint,
   pileTokens,
   tokenArtName,
+  tokenCardName,
   tokenEntryName,
   tokenSubtitle,
   type DeckTokenRow,
@@ -407,6 +408,11 @@ describe("the not-made-by-deck mark", () => {
     expect(tokenArtName(made)).toBe(tokenEntryName("Change the art for", made));
     expect(tokenArtName(byHand)).toBe(
       `${tokenEntryName("Change the art for", byHand)}, not made by deck`,
+    );
+    // The card press (issue #619) folds the same words, since it is drawn over the badge.
+    expect(tokenCardName(made)).toBe(tokenEntryName("Show details for", made));
+    expect(tokenCardName(byHand)).toBe(
+      `${tokenEntryName("Show details for", byHand)}, not made by deck`,
     );
   });
 });

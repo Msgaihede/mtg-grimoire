@@ -4711,7 +4711,7 @@ function tokenView(over: Partial<DeckTokenView> = {}): DeckTokenView {
 /** A pile of `tokens` at the rail's last slot, which is where every deck's pile starts — the
  *  column's `DEFAULT -1`. `over` names a slot, or a `moveTo`, where a case is about one. */
 function tokenPileOf(tokens: readonly DeckTokenView[], over: Partial<TokenPile> = {}): TokenPile {
-  return { tokens, setQuantity: vi.fn(), pickArt: vi.fn(), railIndex: -1, ...over };
+  return { tokens, setQuantity: vi.fn(), pickArt: vi.fn(), openCard: vi.fn(), railIndex: -1, ...over };
 }
 
 /**
@@ -4811,6 +4811,14 @@ describe.each(VIEWS)("$name token pile", ({ name, render: renderView }) => {
     );
     fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Change the art for", wurm) }));
     expect(pile!.pickArt).toHaveBeenCalledWith(wurm);
+  });
+
+  it("opens the card details when the token itself is pressed (issue #619)", () => {
+    const { pile } = setup(TOKENS);
+    const wurm = TOKENS[1];
+    fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Show details for", wurm) }));
+    expect(pile!.openCard).toHaveBeenCalledWith(wurm);
+    expect(pile!.pickArt).not.toHaveBeenCalled();
   });
 
   it("gives the two Wurms two different names", () => {

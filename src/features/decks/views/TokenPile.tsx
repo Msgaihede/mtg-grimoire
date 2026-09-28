@@ -20,15 +20,17 @@
  * ## A token is not a deck row, and nothing here may pretend it is
  *
  * Being *drawn* as a deck card is not being one. It is not a `deck_cards` row, so no deck write
- * may reach it: **no drag source, no drop target, no deck card menu, no card modal, no selection
- * ring, and it is not in `StackView`'s arrow walk.** None of `cardControl.tsx`'s per-card spreads
- * are used here — not `deckCardProps`, not `deckCardBodyProps`, not `deckCardMenuProps` — because
- * each one of them is a promise to some listener that the element is a deck card, and every one
- * of those listeners would then act on a row that does not exist. What a token *can* be asked is
- * the band's two questions: how many to bring (the stepper) and which printing (a press on it
- * opens the one printing picker the editor mounts, to swap **that entry**). The **pile** may be
- * moved along the rail, by the grip the caller hands {@link TokenStackPile} — the cards in it
- * never are.
+ * may reach it: **no drag source, no drop target, no deck card menu, no selection ring, and it is
+ * not in `StackView`'s arrow walk.** None of `cardControl.tsx`'s per-card spreads are used here —
+ * not `deckCardProps`, not `deckCardBodyProps`, not `deckCardMenuProps` — because each one of them
+ * is a promise to some listener that the element is a deck card, and every one of those listeners
+ * would then act on a row that does not exist. What a token *can* be asked is three questions:
+ * **what it is** (a press on the card opens the card details, as a press on a deck card does —
+ * issue #619, and the one thing a token shares with a deck row, since the card modal reads a
+ * printing and writes nothing to the deck from it), how many to bring (the stepper) and which
+ * printing (**Change the art**, a button of its own beside the stepper, opens the one printing
+ * picker the editor mounts, to swap **that entry**). The **pile** may be moved along the rail, by
+ * the grip the caller hands {@link TokenStackPile} — the cards in it never are.
  *
  * ## One card per entry, since token stacks PR 2
  *
@@ -109,6 +111,7 @@ import {
   NOT_MADE_BY_DECK,
   notMadeByDeckHint,
   tokenArtName,
+  tokenCardName,
   tokenEntryName,
   type DeckTokenView,
   type TokenEntryRef,
@@ -139,8 +142,16 @@ export interface TokenPile {
    */
   remove?: (entry: TokenEntryRef) => void;
   /** Open the one printing picker the editor mounts, to swap this entry. The whole view, so the
-   *  editor can hold its `entryKey` — the editor keeps the key, never the view. */
+   *  editor can hold its `entryKey` — the editor keeps the key, never the view. **Change the art**
+   *  is its own button in all four views; the card itself opens {@link openCard}. */
   pickArt: (view: DeckTokenView) => void;
+  /**
+   * Open the card details on this entry's printing — what a press on the token's card (Stacks,
+   * Grid), its line (Text) or its name (Table) does, exactly as a press on a deck card opens the
+   * card modal (issue #619). A token is no deck row, so the host opens the printing alone and
+   * names no deck context: nothing in the modal may write to the deck on the token's behalf.
+   */
+  openCard: (view: DeckTokenView) => void;
   /** The drawn index: the in-flight move, else the stored column (`-1` is last). */
   railIndex: number;
   /** Move the pile to rail slot `index` (`-1` = last). Absent: the pile draws no grip. */
@@ -248,6 +259,61 @@ function CardRemove({ view, pile }: { view: DeckTokenView; pile: TokenPile }) {
       {...TOKEN_REMOVE_MARK}
     >
       <Trash2 aria-hidden="true" className={QUANTITY_STEPPER_CARD_ICON} />
+    </button>
+  );
+}
+
+/**
+ * **Change the art on a card** — the picture glyph in the controls column, between the stepper and
+ * Remove printing, in {@link CardRemove}'s box and backing so the column reads as one set of
+ * controls. It is the pile's way to the printing picker since issue #619 gave the card's own press
+ * to the card details; named through `tokenArtName`, so each entry's press is its own and a
+ * hand-added token's carries the badge's words as the old picture press did.
+ */
+function CardArtButton({ view, pile }: { view: DeckTokenView; pile: TokenPile }) {
+  const tip = useTooltip();
+  return (
+    <button
+      type="button"
+      onClick={() => pile.pickArt(view)}
+      aria-label={tokenArtName(view)}
+      {...tip("Change the art", { describes: false })}
+      className={cn(
+        "grid shrink-0 place-items-center border border-border",
+        QUANTITY_STEPPER_CARD_BOX,
+        BUTTON_OVER_ART,
+        PRESS,
+        FOCUS_INSET,
+      )}
+      {...TOKEN_ART_MARK}
+    >
+      <ImageIcon aria-hidden="true" className={QUANTITY_STEPPER_CARD_ICON} />
+    </button>
+  );
+}
+
+/**
+ * **Change the art on a line of the Text drawing** — {@link CardArtButton}'s press at the compact
+ * scale, in {@link LineRemove}'s 20px box beside the stepper that rides over the line's tail. The
+ * line itself opens the card details (issue #619), so the picker needs a press of its own.
+ */
+function LineArt({ view, pile }: { view: DeckTokenView; pile: TokenPile }) {
+  const tip = useTooltip();
+  return (
+    <button
+      type="button"
+      onClick={() => pile.pickArt(view)}
+      aria-label={tokenArtName(view)}
+      {...tip("Change the art", { describes: false })}
+      className={cn(
+        "grid size-5 shrink-0 place-items-center rounded-md border border-border text-dim",
+        "hover:text-text",
+        PRESS,
+        FOCUS,
+      )}
+      {...TOKEN_ART_MARK}
+    >
+      <ImageIcon aria-hidden="true" className="size-3.5" />
     </button>
   );
 }
@@ -458,7 +524,8 @@ export function TokenStackPile({
             {/* The stacked card's controls column, at its offset: `top-9` clears the 27px title
                 bar the quantity tag and the plan's mark are in. Over the card and taking no height,
                 so the list is still `stackHeight` of the count. `gap-1` is `DeckCardControls`'
-                column's, so the stepper and Remove printing under it are one column of controls. */}
+                column's, so the stepper, Change the art and Remove printing under it are one
+                column of controls. */}
             <span
               className={cn(
                 "absolute top-9 right-1.5 flex flex-col items-end gap-1",
@@ -475,6 +542,7 @@ export function TokenStackPile({
                 label={tokenEntryName("Quantity of", view)}
                 onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
+              <CardArtButton view={view} pile={pile} />
               <CardRemove view={view} pile={pile} />
             </span>
           </motion.li>
@@ -485,9 +553,13 @@ export function TokenStackPile({
 }
 
 /**
- * One token entry as the deck's card: `DeckCardFace` inside the press that opens the printing
- * picker on this entry, and `CardChin` under it. Shared by Stacks and Grid, whose boxes differ
- * and whose card does not.
+ * One token entry as the deck's card: `DeckCardFace` inside the press that opens the **card
+ * details** on this entry's printing, and `CardChin` under it. Shared by Stacks and Grid, whose
+ * boxes differ and whose card does not.
+ *
+ * **The press opens the card modal, as a press on a deck card does** (issue #619). It opened the
+ * printing picker until then, which made the one card on the desk a reader could not click to read
+ * the token they were looking at; the picker is {@link CardArtButton} in the controls column now.
  *
  * **The face is the deck card's, marks and all** — the grey `QuantityTag` top-left (a token wears
  * no label) and, where the pile is given a plan, `TheoryMatchMark` top-right. Both are
@@ -521,9 +593,9 @@ function TokenFace({
   currency: Currency;
 }) {
   const tip = useTooltip();
-  const press = useCallback(() => pile.pickArt(view), [pile, view]);
+  const press = useCallback(() => pile.openCard(view), [pile, view]);
   const mark = pile.theoryMark?.(view) ?? null;
-  const name = tokenArtName(view);
+  const name = tokenCardName(view);
   const handAdded = isHandAdded(view);
   return (
     <>
@@ -541,7 +613,6 @@ function TokenFace({
         // Inset, for the stacked card's reason: the button *is* the card face, so an outline
         // standing off it would be drawn over the chin and read as a thicker card.
         className={cn("block w-full cursor-pointer text-left", FOCUS_INSET)}
-        {...TOKEN_ART_MARK}
       >
         <DeckCardFace
           card={tokenFaceFacts(view)}
@@ -652,6 +723,7 @@ export function TokenGridPile({
                 label={tokenEntryName("Quantity of", view)}
                 onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
+              <CardArtButton view={view} pile={pile} />
               <CardRemove view={view} pile={pile} />
             </span>
           </li>
@@ -668,10 +740,11 @@ export function TokenGridPile({
 /**
  * The Text view's pile — a trailing group of lines in `TextRow`'s grammar: a 22px line per entry
  * with the quantity in the data face and the name, the subtitle dim after it and the entry's finish
- * mark in the tail. The line itself is the press that opens the printing picker on that entry; the
- * stepper rides over its tail on hover, as a deck line's does, with **Remove printing** beside it
- * ({@link LineRemove}). A token nothing in the deck makes carries `NOT MADE BY DECK` as a tag right
- * after its name ({@link NotMadeByDeckTag}).
+ * mark in the tail. The line itself is the press that opens the card details on that entry's
+ * printing (issue #619, as a deck line's press does); the stepper rides over its tail on hover, as
+ * a deck line's does, with **Change the art** ({@link LineArt}) and **Remove printing**
+ * ({@link LineRemove}) beside it. A token nothing in the deck makes carries `NOT MADE BY DECK` as
+ * a tag right after its name ({@link NotMadeByDeckTag}).
  */
 export function TokenTextPile({ pile }: { pile: TokenPile }) {
   const headingId = useId();
@@ -691,16 +764,15 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
           <li key={view.entryKey} {...tokenEntryProps(view)} className="group relative rounded">
             <button
               type="button"
-              onClick={() => pile.pickArt(view)}
+              onClick={() => pile.openCard(view)}
               // The mark's words are in this name for a hand-added token, since the tag inside the
               // button is covered by it — an `aria-label` replaces its element's content.
-              aria-label={tokenArtName(view)}
+              aria-label={tokenCardName(view)}
               className={cn(
                 "flex h-[22px] w-full cursor-pointer items-center gap-1.5 rounded px-1 text-xs",
                 "transition-colors duration-150 hover:bg-surface motion-reduce:transition-none",
                 FOCUS,
               )}
-              {...TOKEN_ART_MARK}
             >
               {/* The crown's gutter on a deck line — reserved here too, so the numbers of the two
                   groups sit in one column down the view. */}
@@ -735,6 +807,7 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
                 label={tokenEntryName("Quantity of", view)}
                 onChange={(next) => pile.setQuantity(entryRef(view), next)}
               />
+              <LineArt view={view} pile={pile} />
               <LineRemove view={view} pile={pile} size="line" />
             </span>
           </li>
@@ -753,8 +826,9 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
  * than more `VirtualTable` rows: its columns (price, owned, rarity, printing) are facts about a
  * deck card that a token does not have, and a row with six empty cells reads as a row that failed
  * to load. Five things per entry: the stepper, the name (with the entry's finish mark, and
- * `NOT MADE BY DECK` after it for a token the deck does not make) over its subtitle, what makes
- * it, the press that opens the printing picker on that entry, and **Remove printing**
+ * `NOT MADE BY DECK` after it for a token the deck does not make) over its subtitle — the name a
+ * press that opens the card details (issue #619) — what makes it, the press that opens the
+ * printing picker on that entry, and **Remove printing**
  * ({@link LineRemove}) — its own column, empty on an implicit entry, so every row's art button
  * stays in one column down the list.
  */
@@ -793,7 +867,20 @@ export function TokenTablePile({ pile }: { pile: TokenPile }) {
                 the name line is still one word and one mark rather than a phrase built of two. */}
             <span className="flex min-w-0 flex-col">
               <span className="flex min-w-0 items-center gap-1.5">
-                <span className="truncate">{view.name}</span>
+                {/* The name is the press that opens the card details (issue #619) — the table's
+                    card, as a deck row's press is. The art has its own button in the fourth
+                    column, so this one is named for what it opens rather than for the picture. */}
+                <button
+                  type="button"
+                  onClick={() => pile.openCard(view)}
+                  aria-label={tokenCardName(view)}
+                  className={cn(
+                    "min-w-0 cursor-pointer truncate rounded-sm text-left hover:underline",
+                    FOCUS,
+                  )}
+                >
+                  {view.name}
+                </button>
                 <NotMadeByDeckTag view={view} />
                 <DeckFinishMark card={entryFinishFacts(view)} />
               </span>

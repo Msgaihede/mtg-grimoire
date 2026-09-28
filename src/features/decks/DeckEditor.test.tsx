@@ -8962,6 +8962,28 @@ describe("DeckEditor — the token pile (issue #507)", () => {
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
       expect(document.activeElement).toBe(art);
     });
+
+    /**
+     * Issue #619: a press on a token in the pile opens the card details on that entry's printing,
+     * as a press on a deck card does — and names no deck row, since a token is not one, so the
+     * modal can offer no swap or finish write against a row that does not exist.
+     */
+    it("a press on a token in the pile opens its card details, never the picker", async () => {
+      deckTokens.mockResolvedValue(twoEntries());
+      deckWith({ tokensOpen: false });
+      const user = userEvent.setup();
+      await open();
+      await waitFor(() => expect(pile()).not.toBeNull());
+
+      await press(
+        user,
+        within(pile()!).getByRole("button", { name: /^Show details for Treasure.*TMH3 · 12, Foil$/ }),
+      );
+
+      expect(useAppStore.getState().selectedCardId).toBe("t-a");
+      expect(useAppStore.getState().paneDeckContext).toBeNull();
+      expect(screen.queryByRole("dialog", { name: /printing/i })).toBeNull();
+    });
   });
 
   /**

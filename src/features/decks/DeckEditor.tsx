@@ -4388,6 +4388,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     tokenPickerOpener.current = focusable(document.activeElement);
     setPickingToken({ kind: "swap", entryKey: view.entryKey });
   }, []);
+  /**
+   * A press on a token's card in the pile: open the card details on that entry's printing
+   * (issue #619), as a press on a deck card does. **`setSelectedCardId` and never
+   * `openCardFromDeck`**: a token is no `deck_cards` row, so there is no deck slot to name, and the
+   * store's own clearing of `paneDeckContext` is what keeps the modal from offering a swap or a
+   * finish write against a row that does not exist. Stable, because the pile's memo holds it.
+   */
+  const openTokenCard = useCallback(
+    (view: DeckTokenView) => setSelectedCardId(view.printingId),
+    [setSelectedCardId],
+  );
   /** The band's Add printing. */
   const addTokenEntry = useCallback(() => {
     tokenPickerOpener.current = focusable(document.activeElement);
@@ -4540,7 +4551,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * Its tokens are {@link pileTokenList} — **the counted entries only**, one view per entry, so a
    * token with two printings is two cards and one at 0 is none. The stepper writes the entry it is
-   * on (`setQuantity` takes the entry's address), a press opens the picker to swap that entry
+   * on (`setQuantity` takes the entry's address), a press on the card opens the card details
+   * ({@link openTokenCard}, issue #619), **Change the art** opens the picker to swap that entry
    * ({@link pickTokenEntry}), and **Remove printing** deletes it (`remove`, managed tokens spec
    * §3.4) — the same stable write the band's tile presses.
    *
@@ -4597,6 +4609,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             setQuantity: setTokenQuantity,
             remove: removePileToken,
             pickArt: pickTokenEntry,
+            openCard: openTokenCard,
             railIndex: tokenRailIndex,
             moveTo: moveTokenPile,
             theoryMark:
@@ -4609,6 +4622,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       setTokenQuantity,
       removePileToken,
       pickTokenEntry,
+      openTokenCard,
       tokenRailIndex,
       moveTokenPile,
       tokenPlan,
