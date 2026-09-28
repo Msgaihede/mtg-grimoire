@@ -190,6 +190,42 @@ describe("DeckTokensPanel", () => {
     errors.mockRestore();
   });
 
+  /**
+   * **The tile reads card, controls, subtitle, source — and draws no name line** (issue #615). The
+   * picture prints the token's name on the card, so a line repeating it only pushed the controls
+   * down; it is gone, the controls come straight after the card and span the tile, and the
+   * colour-and-stats line the owner kept on the issue sits under them, the source under that.
+   *
+   * jsdom lays nothing out, so "full width" is pinned as the structure that produces it: the
+   * stepper at `fill` (its group `w-full`, its number box `flex-1`) inside a `flex-1` box that
+   * shares one row with Remove printing.
+   */
+  it("draws the card, then full-width controls, then the subtitle and the source, and no name line", () => {
+    band();
+
+    const tile = tileOf(`Change the art for ${TMOM_PLAIN}`);
+    // The name is the first term of every control's accessible name, and no line of type.
+    expect(within(tile).queryByText("Treasure")).toBeNull();
+
+    const art = within(tile).getByRole("button", { name: `Change the art for ${TMOM_PLAIN}` });
+    const stepper = within(tile).getByRole("spinbutton", { name: `Quantity of ${TMOM_PLAIN}` });
+    const subtitle = within(tile).getByText(TREASURE_TEXT);
+    const source = within(tile).getByText("From Smothering Tithe");
+    const precedes = (a: Node, b: Node) =>
+      (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
+    expect(precedes(art, stepper)).toBe(true);
+    expect(precedes(stepper, subtitle)).toBe(true);
+    expect(precedes(subtitle, source)).toBe(true);
+
+    const group = stepper.parentElement!;
+    expect(stepper.classList.contains("flex-1")).toBe(true);
+    expect(group.classList.contains("w-full")).toBe(true);
+    const grows = group.parentElement!;
+    expect(grows.classList.contains("flex-1")).toBe(true);
+    const remove = within(tile).getByRole("button", { name: `Remove ${TMOM_PLAIN}` });
+    expect(remove.parentElement).toBe(grows.parentElement);
+  });
+
   /** The foil entry's picture wears the sheen; the plain copy of the same printing does not. */
   it("draws each entry's own finish on its picture", () => {
     band();

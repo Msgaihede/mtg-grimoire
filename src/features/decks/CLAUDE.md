@@ -4995,12 +4995,19 @@ already effective, and `viewOf` copies them.
   - **The subtitle is clamped in CSS and never in the string.** Oracle text is the term that
     separates the two Wurms, so a truncation short enough to fit a 150px tile would fold them back
     together in the one case this exists for.
-  - **The name and the subtitle are two elements, and every accessible name is spelled rather than
-    assembled.** Two flex children with a `gap` between them compute to a name with the words run
-    together (`"Missing2"`), so every control on a tile goes through one
-    `tokenEntryName(verb, view)` — `Quantity of …`, `Change the art for …` (through
-    `tokenArtName`, below), `Remove …` — rather than being left to the DOM to concatenate. One
-    helper, so a control added later cannot be the one that forgets a term.
+  - **Every accessible name is spelled rather than assembled.** Two flex children with a `gap`
+    between them compute to a name with the words run together (`"Missing2"`), so every control on
+    a tile goes through one `tokenEntryName(verb, view)` — `Quantity of …`, `Change the art for …`
+    (through `tokenArtName`, below), `Remove …` — rather than being left to the DOM to concatenate.
+    One helper, so a control added later cannot be the one that forgets a term.
+  - **The band's tile draws no name line since [issue #615](https://github.com/Msgaihede/mtg-grimoire/issues/615)**
+    (2026-09-28): the picture prints the name on the card, so the tile reads top to bottom as the
+    card and its chin, **the controls row across the tile's full width** (the stepper at `fill`
+    inside a `min-w-0 flex-1` box, Remove printing at the far end), **then the subtitle**, then
+    the source line. The issue asked for the subtitle row to go as well and the owner's comment on
+    it kept it, moved under the controls: it is what separates the two `Wurm`s for the eye. The
+    name stays the first term of every control's accessible name, and `CardArt`'s `name` still
+    draws it on a frame whose picture never loads.
   - **Since v52 a token does not identify a tile either**, because one token is several tiles:
     a Treasure kept as a plain and a foil copy of one printing shares its name *and* its subtitle,
     and only `Nonfoil` against `Foil` separates the two steppers. So the name is
