@@ -121,16 +121,18 @@ same-file = "1.0.6"
 # readers.
 card-scanner = { path = "../crates/card-scanner", features = ["corpus", "ocr"] }
 tauri = { version = "2", features = [] }
+# Opening a link in the reader's browser, and nothing else: `capabilities/desktop.json` grants
+# `opener:allow-open-url` and its scope `opener:allow-default-urls`, never `opener:default`, whose
+# third entry reveals an unscoped list of paths in the file manager and has no caller here.
 tauri-plugin-opener = "2"
-# The system file picker. The webview cannot name a file on disk on its own, and the commands
-# behind it — `import_read_file`, `export_write_file`, and the mirror's "Change folder…" — take
-# a path the backend reads or writes rather than bytes, so this plugin is what stands between a
-# button and a command that already exists. (`deck_set_cover_image` was a fourth until custom
-# deck covers were removed on 2026-08-31.)
-# `capabilities/desktop.json` grants `dialog:allow-open` **and `dialog:allow-save`** — the
-# second since the export dialog shipped, which this comment went on denying for a whole plan.
-# The other three verbs (message, ask, confirm) are not permitted; the app's own questions are
-# drawn in the page. Never `dialog:default`.
+# The system file dialogs — choosing a decklist (`import_pick_file`), saving an export
+# (`export_save_file`) and moving the mirror (`mirror_pick_root`) — **used from Rust only,
+# through `DialogExt`** (`src/file_dialog.rs`, issue #545). Each command opens its own dialog
+# and reads or writes the path it answered, so no path crosses IPC in either direction. Until
+# 2026-09-28 the page opened the dialog and handed the path to a command, and the
+# `dialog:allow-open`/`allow-save` grants that made that possible fenced nothing: an app's own
+# command takes whatever the page sends. `capabilities/desktop.json` now grants **no `dialog:`
+# permission at all**, and a future file command follows the same shape — never a path argument.
 tauri-plugin-dialog = "2"
 # The one write it is here for: putting a decklist export on the clipboard. Grants
 # `clipboard-manager:allow-write-text` and nothing else — not `:default`, which also grants

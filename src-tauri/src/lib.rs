@@ -75,6 +75,10 @@ pub mod decksort;
 pub mod errors;
 pub mod export;
 pub mod feed;
+/// **Every file dialog the app shows, opened from Rust** (issue #545) — so the path the reader
+/// chose goes to the read or the write without crossing IPC, and no command takes a path from
+/// the page. The rule for the next file command is in the module doc.
+pub mod file_dialog;
 pub mod filters;
 /// **[`markcolors`]'s shape with a document instead of a map.** One `app_meta` row, an
 /// infallible read that answers the default layout for anything it cannot parse, and a write

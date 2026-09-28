@@ -953,7 +953,8 @@ bug.
 
 ### CSV round trip, condition included
 
-The native `dialog:allow-save` / `dialog:allow-open` pickers are windows CDP cannot drive — the same
+The native save and open dialogs (`dialog:allow-save` / `dialog:allow-open` on the day; opened from
+Rust since issue #545, with no `dialog:` permission granted) are windows CDP cannot drive — the same
 limit `src/features/transfer/CLAUDE.md`'s Import and Export sections already state for their own
 tests — so this pass verified the **text** round trip the file system carries byte for byte, rather
 than the picker gesture:

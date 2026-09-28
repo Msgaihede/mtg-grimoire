@@ -17,7 +17,7 @@ const deckCreate = vi.hoisted(() => vi.fn());
 const deckDelete = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
 const importResolve = vi.hoisted(() => vi.fn());
-const importReadFile = vi.hoisted(() => vi.fn());
+const importPickFile = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 const collectionImportCommit = vi.hoisted(() => vi.fn());
 const collectionFolderList = vi.hoisted(() => vi.fn());
@@ -28,7 +28,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckDelete,
     deckImportCommit,
     importResolve,
-    importReadFile,
+    importPickFile,
     oracleTagsForPrintings,
     collectionImportCommit,
     collectionFolderList,
@@ -138,7 +138,7 @@ beforeEach(() => {
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckImportCommit.mockReset().mockResolvedValue(OUTCOME);
   importResolve.mockReset().mockResolvedValue([]);
-  importReadFile.mockReset().mockResolvedValue("");
+  importPickFile.mockReset().mockResolvedValue(null);
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   collectionImportCommit.mockReset().mockResolvedValue(OWNED);
   collectionFolderList.mockReset().mockResolvedValue(FOLDERS);

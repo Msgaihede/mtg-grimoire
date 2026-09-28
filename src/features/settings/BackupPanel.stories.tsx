@@ -188,12 +188,14 @@ export const RootUnwritable: Story = {
 /**
  * Change folder…, pressed — and the one control on this panel that cannot work in a browser.
  *
- * The picker is the operating system's: `open()` from `@tauri-apps/plugin-dialog` reaches
- * Tauri's `invoke`, and outside the app window there is nothing behind it. So the press ends in
- * the refusal line rather than in a folder dialog, which is exactly what the panel does when a
- * picker cannot be opened. (`DeckCoverPicker` carried a `PickerUnavailable` story making the
- * same point until 2026-08-31; it went with custom deck covers, so this is now the only place
- * the workbench shows that gap.)
+ * The picker is the operating system's, and Rust opens it — `mirror_pick_root` shows the folder
+ * dialog and saves what it answered, so no path crosses IPC (issue #545). Outside the app window
+ * there is nothing behind it, so the fake answers with the crate's own sentence for a picker that
+ * could not be shown, and the press ends in that refusal line rather than in a folder dialog —
+ * which is exactly what the panel does when a picker cannot be opened. (`DeckCoverPicker` carried
+ * a `PickerUnavailable` story making the same point until 2026-08-31; it went with custom deck
+ * covers, so this is now the only place the workbench shows that gap beside the import dialog's
+ * Choose file….)
  *
  * The two answers a *working* picker gives — a chosen folder and a cancel — are unit-tested
  * instead, because only the OS can produce either.
@@ -205,7 +207,7 @@ export const PickerUnavailable: Story = {
     await userEvent.click(await canvas.findByRole("button", { name: /Change folder/ }));
 
     await expect(await canvas.findByRole("alert")).toHaveTextContent(
-      /Could not open the folder picker/,
+      /The folder picker could not be opened/,
     );
     // The setting is untouched, which is the property that matters: a picker that would not
     // open must not move a mirror.

@@ -229,24 +229,69 @@ pub async fn mirror_set_enabled(
     .map_err(|e| format!("the mirror setting could not be saved: {e}"))?
 }
 
-/// Point the mirror at a folder. Refuses a relative path and one whose parent is not there,
-/// each in a sentence — see [`set_root`].
+/// Where the folder picker opens: the mirror's current root, or the folder it would be created in
+/// when no pass has made it yet, or `None` for the OS's own choice when neither is there.
+///
+/// **The current root because a reader moving a backup is nearly always moving it to somewhere
+/// beside where it is.** The parent because `data/export` does not exist until the first pass
+/// writes it, and a dialog handed a folder that is not there opens wherever the platform decides
+/// — which on a portable install is not the folder the app lives in.
+pub fn starting_folder(root: &Path) -> Option<&Path> {
+    [Some(root), root.parent()]
+        .into_iter()
+        .flatten()
+        .find(|folder| folder.is_dir())
+}
+
+/// Let the reader choose the mirror's folder — the OS folder picker, modal to the window that
+/// asked and opened at the current root — and point the mirror there. Answers whether it moved:
+/// `false` is Cancel, which is not a failure.
+///
+/// **It takes no path, and that is the command's whole contract** (issue #545). This used to be
+/// `mirror_set_root(root)`, taking the folder the page's `open({ directory: true })` had answered
+/// — so any script in the page could aim a background pass that writes a few hundred files, on
+/// every change from then on, at any folder the reader can write to. The picker is opened here
+/// ([`crate::file_dialog`]) and the folder goes to [`set_root_now`] without crossing IPC.
+///
+/// Refusals are [`set_root`]'s sentences, and [`crate::db::BUSY`] if a sync holds the write
+/// connection — after the reader has chosen, which is where the real write waits. A folder the
+/// picker answered is absolute, exists and is a folder, so three of `set_root`'s four refusals
+/// no longer meet a caller here; the one that can is a folder name that is not valid Unicode,
+/// which a disk can hold and `app_meta` cannot. The other three stay, because [`root`] discards
+/// a bad row silently and a validator is cheaper than finding out which.
 ///
 /// The old folder is **not** cleaned up, deliberately: the files under it are the reader's
 /// cards in plain text, and a setting change is not consent to delete them. Moving the
 /// mirror leaves the previous copy where it was.
 #[tauri::command]
-pub async fn mirror_set_root(
+pub async fn mirror_pick_root(
+    window: tauri::WebviewWindow,
     state: tauri::State<'_, Arc<AppState>>,
-    root: String,
-) -> Result<(), String> {
+) -> Result<bool, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || set_root_now(&state, Path::new(&root)))
+    let reading = state.clone();
+    let dialog = move || {
+        // Read on the blocking pool, beside the dialog it steers: `db_read` is the mutex a
+        // search holds, and the async runtime is not where a wait for it belongs.
+        let current = root(&crate::sync::lock_db_read(&reading), &reading.data_dir);
+        let picker = crate::file_dialog::modal_to(&window).set_title("Choose the backup folder");
+        match starting_folder(&current) {
+            Some(folder) => picker.set_directory(folder),
+            None => picker,
+        }
+        .blocking_pick_folder()
+    };
+    let Some(chosen) = crate::file_dialog::show(crate::file_dialog::FOLDER_PICKER, dialog).await?
+    else {
+        return Ok(false);
+    };
+    tauri::async_runtime::spawn_blocking(move || set_root_now(&state, &chosen))
         .await
-        .map_err(|e| format!("the mirror folder could not be saved: {e}"))?
+        .map_err(|e| format!("the mirror folder could not be saved: {e}"))??;
+    Ok(true)
 }
 
-/// [`mirror_set_root`]'s body, with the `AppState` handed in.
+/// [`mirror_pick_root`]'s body after the picker, with the `AppState` handed in.
 ///
 /// Split out for [`rebuild_now`]'s reason — a `#[tauri::command]` taking `tauri::State` cannot
 /// be entered from a test, and the line worth testing here is the one after the save.
@@ -416,6 +461,35 @@ mod tests {
             dir.to_str(),
             "the path is stored verbatim"
         );
+    }
+
+    /// The picker opens where the mirror already writes — the one half of `mirror_pick_root`
+    /// that is not a native window, so the one half a test can hold it to.
+    #[test]
+    fn the_picker_opens_at_the_current_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("export");
+        std::fs::create_dir(&root).unwrap();
+        assert_eq!(starting_folder(&root), Some(root.as_path()));
+    }
+
+    /// **Before the first pass `data/export` is not there**, and a dialog handed a folder that
+    /// does not exist opens wherever the platform decides. The folder it would be created in is
+    /// the next best answer and the one a reader recognises.
+    #[test]
+    fn a_root_not_written_yet_opens_the_picker_at_its_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("export");
+        assert_eq!(starting_folder(&root), Some(tmp.path()));
+    }
+
+    /// A root whose whole branch has gone — an unplugged stick — leaves the choice to the OS
+    /// rather than aiming the picker at a folder that is not there.
+    #[test]
+    fn a_root_whose_parent_is_gone_leaves_the_picker_where_the_os_puts_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("unplugged").join("export");
+        assert_eq!(starting_folder(&root), None);
     }
 
     /// A refused write must leave the previous choice alone: `root` discards junk silently,

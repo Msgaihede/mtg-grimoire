@@ -230,8 +230,9 @@ rows went on reading as open until 2026-09-27:
   cannot reach, so `deck_set_cover_image` was exercised by invoking the command directly with a
   path. The encode → write → serve → render half is measured; **the picker → path half is not.**
   **Moot since 2026-08-31**: the command is gone and a cover is picked from a grid of cards
-  inside the page, which CDP drives like any other control. `import_read_file` is the remaining
-  `dialog:allow-open` caller and inherits the gap whole —
+  inside the page, which CDP drives like any other control. `import_read_file` was the remaining
+  `dialog:allow-open` caller and inherited the gap whole; since 2026-09-28 Rust opens that dialog
+  itself (`import_pick_file`, issue #545) and the page is granted no `dialog:` permission —
   [decks-storage.md](decks-storage.md) is where that now stands.
 - **The whole-card frame (2026-08-12) has never been seen painted.** Its geometry is pinned by
   `CardStack.test.tsx` — the derivation, the two Tailwind literals and the no-reflow property —
@@ -859,7 +860,8 @@ because a reader can reach it.
 
 ### CSV round trip, condition included
 
-`dialog:allow-save`/`dialog:allow-open` are native windows this harness cannot drive — the same
+The native save and open dialogs (`dialog:allow-save`/`dialog:allow-open` on the day; opened from
+Rust since issue #545) are windows this harness cannot drive — the same
 limit this file's other entries already note for a file picker — so this checked the **text**
 round trip the file system would carry byte for byte, rather than the picker gesture itself.
 Pasted `Quantity,Name,Set,Collector number,Finish,Condition` naming a nonfoil Lightning Bolt at

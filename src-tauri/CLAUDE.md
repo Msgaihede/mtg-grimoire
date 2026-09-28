@@ -2608,30 +2608,43 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 
 ## Tauri capabilities
 
-- **`@tauri-apps/plugin-dialog` names files and never opens them, and the capability says so.**
-  `capabilities/desktop.json` grants **`dialog:allow-open`** (choosing a decklist to import; it
-  was granted for choosing a deck cover, and that caller went on 2026-08-31 while the grant
-  stayed, because `import_read_file` had always needed it too) and
-  **`dialog:allow-save`** (naming an export's destination, added 2026-08-14) — never
-  `dialog:default`, so message, ask and confirm stay unreachable from the webview however the
-  plugin is initialised. The app's own questions are drawn in the page instead, which is
-  deliberate rather than an oversight: a native message box cannot be styled, driven over CDP or
-  read by the story runner.
-- **A dialog verb answers a _path_, and a path is not permission to touch what is at it — which is
-  why every one of them has a Rust command behind it.** `import_read_file` (`import.rs`) takes
-  the path `open()` gave and Rust reads the decklist; `export_write_file` (`export.rs`) takes the
-  path `save()` gave and Rust writes the text. Doing either from the page would need an `fs:`
-  permission, and **no `fs:` permission is granted anywhere**. So this is the app's **habit** now
-  rather than one precedent, and it is the shape to copy: the day one of these is "simplified"
-  into a `readTextFile`/`writeTextFile` from the page, the answer is another twelve-line command,
-  never a wider capability. **There was a third, `deck_set_cover_image`** — it took the path
-  `open()` gave and Rust read the *image* — and it is the one place this habit has ever been
-  undone: custom deck covers went on 2026-08-31 and a cover became a card id, so the picker it
-  needed is not narrower, it is absent. Deleting the caller is the cheapest form of this rule
-  there is. **`rfd` entered `Cargo.lock` transitively** as one of the dialog plugin's own
-  dependencies and is **unreachable**, and **`tauri-plugin-fs` came in the same way**: nothing
-  registers it and it is granted **no `fs:` permission**. Adding a plugin means adding its
-  narrowest permission, never its `:default`.
+- **Every file dialog is opened by Rust, no path crosses IPC in either direction, and the page is
+  granted no `dialog:` permission at all** (issue #545, 2026-09-28). `import_pick_file`
+  (`import.rs`) shows the open dialog and reads the decklist it answered; `export_save_file`
+  (`export.rs`) shows the save dialog and writes the text there; `mirror_pick_root`
+  (`mirror/settings.rs`) shows the folder picker at the current root and saves the folder. Each
+  takes the calling `WebviewWindow` so the dialog is modal to the window that asked, and goes
+  through `file_dialog.rs`'s `modal_to` and `show` — the plugin's `blocking_*` calls on the
+  blocking pool, never the main thread. `tauri_plugin_dialog::init()` stays registered because
+  `DialogExt` is its Rust half; nothing in `src/` calls the plugin and `@tauri-apps/plugin-dialog`
+  is not a dependency. The app's own questions — message, ask, confirm — are drawn in the page,
+  which is deliberate rather than an oversight: a native message box cannot be styled, driven over
+  CDP or read by the story runner.
+- ⚠️ **A command never takes a path argument from the page — this is the rule for the next file
+  command, and the capability cannot enforce it for you.** Until 2026-09-28 the page's `open()` and
+  `save()` answered a path and `import_read_file(path)`, `export_write_file(path, contents)` and
+  `mirror_set_root(root)` took it, on the argument that `dialog:allow-open`/`allow-save` were the
+  fence. They fenced nothing: the ACL gates `plugin:` and `core:` commands, and **an app's own
+  `#[tauri::command]` is always callable with whatever arguments a script in the page sends**. So
+  those three were a read of any text file up to 1 MB (`~/.ssh/id_ed25519`, handed straight
+  back), a write anywhere the reader can write, and a mirror aimed at any folder — each one line
+  of JavaScript from anyone who got a script into the webview. The shape to copy is the one above:
+  take the window, open the dialog in Rust, act on what it answered, and answer the page the
+  *outcome* (the text, a `bool` for saved or moved, `null`/`false` for Cancel). A place the reader
+  chose once and the app remembers — the mirror's root — is read back from where Rust stored it,
+  never from the page. **Rust still does every read and write, and no `fs:` permission is granted
+  anywhere**: the day one of these is "simplified" into a `readTextFile`/`writeTextFile` from the
+  page, the answer is another command, never a wider capability. **`rfd` entered `Cargo.lock`
+  transitively** as one of the dialog plugin's own dependencies and is what `DialogExt` drives,
+  and **`tauri-plugin-fs` came in the same way**: nothing registers it and it is granted **no
+  `fs:` permission**. Adding a plugin means adding its narrowest permission, never its `:default`
+  — and `the_capability_grants_no_default_but_core_s` holds that for every plugin at once.
+- **`tauri-plugin-opener` is granted `opener:allow-open-url` and `opener:allow-default-urls`, never
+  `opener:default`** (2026-09-28). The page opens links and nothing else (`src/lib/externalLinks.ts`;
+  `update_open_release_page` calls the opener from Rust, where the ACL is not in the path).
+  `allow-default-urls` is the scope `allow-open-url` needs to open `http(s)`, `mailto` and `tel` at
+  all; `:default` is those two plus **`allow-reveal-item-in-dir`**, which takes an unscoped list of
+  paths and was never called. The deleted Android capability had already narrowed it this way.
 - **`tauri-plugin-clipboard-manager` is granted `clipboard-manager:allow-write-text` and
   deliberately not the read half.** Nothing in this app reads the clipboard; `:default` grants
   both, and a page that can read the clipboard can read whatever the reader last copied out of
@@ -2695,7 +2708,7 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   the second window is `window-2`, the third `window-3`, from `window::LABEL_PREFIX` (a test pins
   the glob against that constant). Without the second entry a new window is granted **nothing**:
   no `core:`, so `listen` rejects and `core/tauri.ts` swallows the rejection, and no window verbs,
-  dialog, clipboard or snap-layout either — a window that draws and hears nothing, with no error
+  clipboard, opener or snap-layout either — a window that draws and hears nothing, with no error
   anywhere.
 - **`cfg(windows)` still matters, because CI compiles the Linux desktop build too.** When adding a
   `cfg`, prefer a `bool` parameter over a `cfg!` inside a body — `update::classify` takes
