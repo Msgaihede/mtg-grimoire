@@ -12822,6 +12822,13 @@ const CATEGORY_WRONG_DECK = "That category belongs to a different deck.";
  *  pile of the other would draw in a list that does not show that pile — a third sentence, since
  *  "not yours" would send a reader looking for another deck that is not there. */
 const CATEGORY_WRONG_LIST = "That category belongs to the other list.";
+/** `deck::NO_OTHER_LIST` (issue #592): a regular or a virtual deck keeps one list, so "the other
+ *  list" names nothing. The card menu draws no row for such a deck; this is the sentence a stale
+ *  editor gets. */
+const NO_OTHER_LIST = "This deck keeps one list, so there is no other list to add to.";
+/** `deck::SAME_LIST` — the source pile is already in the list the card is going to, so the
+ *  caller has named the target where it was asked for the pile the card is in now. */
+const SAME_LIST = "That category is already in the list the card is going to.";
 /** `deck_meta::CATEGORY_MIXED_LISTS` — a reorder naming both lists' piles (v53). Each list keeps
  *  its own `sortOrder`, so a mixed list is an order neither of them has. */
 const CATEGORY_MIXED_LISTS = "Those categories belong to two different lists.";
@@ -15322,25 +15329,30 @@ function createDeckGroup(db: FakeDb, deckId: number, name: string): FakeCollecti
 }
 
 /**
-/**
- * `deck_theory`'s find-or-create of **the theory pile a live pile corresponds to** (user schema
- * v53) — the rule {@link moveLiveToTheory} files a card by.
+ * `deck_meta::counterpart_in` — find or make **the pile in list `variant` that stands for
+ * `source`**, a pile of the deck's other list (user schema v53). The rule {@link moveLiveToTheory}
+ * files a card by, and {@link writeHandlers.deck_add_card_to_other_list}'s, in either direction.
  *
  * A predefined zone (`kind <> 'main'`) is matched by its **kind**, because the reader may have
- * renamed either list's Sideboard and it is still the Sideboard; a pile of their own is matched
- * by **name** within the theory list. A pile that has to be made copies the live one's kind,
- * `isActive`, `sortOrder` and `origin`, so the plan opens looking like the deck it came from —
- * and from there the two lists are independent.
+ * renamed either list's Sideboard and it is still the Sideboard; any other pile by **name**
+ * within the target list, which a zone the target somehow lacks falls through to as well. A pile
+ * that has to be made copies the source's kind, `isActive`, `sortOrder` and `origin`, so a card
+ * out of a switched-off pile does not arrive in one that counts — and from there the two lists
+ * are independent.
  */
-function theoryPileFor(db: FakeDb, live: FakeDeckCategory): FakeDeckCategory {
-  const theory = db.deckCategories.filter(
-    (c) => c.deckId === live.deckId && c.variant === THEORY,
+function counterpartIn(
+  db: FakeDb,
+  variant: DeckVariant,
+  source: FakeDeckCategory,
+): FakeDeckCategory {
+  const target = db.deckCategories.filter(
+    (c) => c.deckId === source.deckId && c.variant === variant,
   );
   const found =
-    (live.kind !== "main" ? theory.find((c) => c.kind === live.kind) : undefined) ??
-    theory.find((c) => c.name === live.name);
+    (source.kind !== "main" ? target.find((c) => c.kind === source.kind) : undefined) ??
+    target.find((c) => c.name === source.name);
   if (found) return found;
-  const made: FakeDeckCategory = { ...live, id: nextId(db.deckCategories), variant: THEORY };
+  const made: FakeDeckCategory = { ...source, id: nextId(db.deckCategories), variant };
   db.deckCategories.push(made);
   return made;
 }
@@ -15368,7 +15380,7 @@ function theoryPileFor(db: FakeDb, live: FakeDeckCategory): FakeDeckCategory {
  * number of rows moved.
  *
  * **The piles are cloned, not moved** (user schema v53, issue #561). Every live pile gets its
- * theory counterpart ({@link theoryPileFor}) — all of them, used or not, so the plan opens with
+ * theory counterpart ({@link counterpartIn}) — all of them, used or not, so the plan opens with
  * the structure the deck had — and each moved row is filed into its pile's clone. The live piles
  * stay where they are, now empty, so the Actual list keeps its shape; from here the two lists
  * are separate versions of the deck and no pile is shared. The step's snapshot holds the deck's
@@ -15379,7 +15391,7 @@ function moveLiveToTheory(db: FakeDb, deckId: number): number {
     .filter((c) => c.deckId === deckId && c.variant === LIVE)
     .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
   const clones = new Map<number, number>();
-  for (const pile of piles) clones.set(pile.id, theoryPileFor(db, pile).id);
+  for (const pile of piles) clones.set(pile.id, counterpartIn(db, THEORY, pile).id);
   const live = db.deckCards.filter((dc) => dc.deckId === deckId && dc.variant === LIVE);
   for (const row of live) {
     row.variant = THEORY;
@@ -18905,6 +18917,76 @@ export function writeHandlers(db: FakeDb) {
         id: nextId(db.deckCards),
         deckId: args.deckId,
         categoryId: category.id,
+        variant,
+        cardId: args.cardId,
+        labelId: null,
+        quantity: args.quantity,
+        name: card.name,
+        setCode: card.setCode,
+        collectorNumber: card.collectorNumber,
+        lang: card.lang,
+        finish,
+        needsReview: null,
+      };
+      db.deckCards.push(row);
+      return { id: row.id, quantity: row.quantity, removed: false };
+    },
+
+    /**
+     * `deck_add_card_to_other_list` — the card menu's `Add to actual` / `Add to theory` (issue
+     * #592): copies of one printing and finish into the deck's **other** list, filed in the pile
+     * there that stands for `fromCategoryId` ({@link counterpartIn}, found or made).
+     *
+     * **`variant` is the list the card goes into; `fromCategoryId` is the pile it is in now.**
+     * The crate runs it through `add_card`'s own body, so the refusals are that command's (busy,
+     * the variant, the finish, a zero, an unknown card) and then, in order, a deck that is gone,
+     * a deck that keeps one list ({@link NO_OTHER_LIST}), a pile that is not this deck's — read
+     * by id *and* deck, as `counterpart_in` reads it, so it is {@link CATEGORY_GONE} rather than
+     * the wrong-deck sentence — and a pile already in the target list ({@link SAME_LIST}). Every
+     * one of them comes before the pile is made, so a refused press invents no category. The fold
+     * is `deck_add_card`'s, and so is the token reroute: unreachable from a deck row, which is
+     * never a token, and kept so the two sides answer one printing the same way.
+     */
+    deck_add_card_to_other_list: (args: {
+      deckId: number;
+      cardId: string;
+      fromCategoryId: number;
+      variant: DeckVariant;
+      finish?: DeckFinish;
+      quantity: number;
+    }): EntryChange => {
+      refuseIfBusy(db);
+      const variant = validVariant(args.variant);
+      const finish = normaliseFinish(args.finish);
+      if (args.quantity <= 0) throw refuse(ZERO_ADD);
+      const card = requireCard(db, args.cardId);
+      if (isTokenCard(card)) {
+        const quantity = addTokenPrinting(
+          db,
+          args.deckId,
+          variant,
+          args.cardId,
+          finish,
+          args.quantity,
+        );
+        return { id: 0, quantity, removed: false };
+      }
+      const deck = requireDeck(db, args.deckId);
+      if (!deck.theoryEnabled) throw refuse(NO_OTHER_LIST);
+      const source = categoryById(db, args.fromCategoryId);
+      if (!source || source.deckId !== args.deckId) throw refuse(CATEGORY_GONE);
+      if (source.variant === variant) throw refuse(SAME_LIST);
+      const target = counterpartIn(db, variant, source);
+      const existing = deckCardAt(db, args.deckId, args.cardId, target.id, variant, finish);
+      deck.updatedAt = stamp(db);
+      if (existing) {
+        existing.quantity += args.quantity;
+        return { id: existing.id, quantity: existing.quantity, removed: false };
+      }
+      const row: FakeDeckCard = {
+        id: nextId(db.deckCards),
+        deckId: args.deckId,
+        categoryId: target.id,
         variant,
         cardId: args.cardId,
         labelId: null,
@@ -23492,13 +23574,13 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
  * all — an untouched patch, a stepper landing on an already-empty slot — files nothing, because
  * a step for a change that did not happen is a press that appears to do nothing.
  *
- * **Known gap, and it is this fake's rather than this feature's**: the seven card writes
- * (`deck_add_card`, `deck_set_card_quantity`, `deck_move_card`, `deck_swap_printing`,
- * `deck_set_card_finish`, `deck_category_clear` and `deck_clear`) record no history row here,
- * though their Rust twins do and `deck_audit.rs`'s
+ * **Known gap, and it is this fake's rather than this feature's**: the card writes
+ * (`deck_add_card`, `deck_add_card_to_other_list`, `deck_set_card_quantity`, `deck_move_card`,
+ * `deck_swap_printing`, `deck_set_card_finish`, `deck_category_clear` and `deck_clear`) record
+ * no history row here, though their Rust twins do and `deck_audit.rs`'s
  * `every_deck_write_leaves_exactly_one_audit_row` pins the four of them that sweep drives. So
  * Storybook's history drawer has never listed a card add, and — consistently — its Undo button
- * does not offer to take one back. The app is unaffected; closing it means giving those seven
+ * does not offer to take one back. The app is unaffected; closing it means giving those
  * handlers a `record(…)` call, which is a change to what the *history* stories draw and belongs
  * with them.
  *
@@ -23510,7 +23592,7 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
  * writes a `REMOVE` row with no card and a `scope` of the whole list.
  *
  * **`collection_to_deck` and `deck_to_collection` are outside that gap and always were.** They
- * are not among the seven, and closing the gap on the add side alone would have left the pair
+ * are not among those, and closing the gap on the add side alone would have left the pair
  * telling a reader a half-story — a Collection Search add in the drawer with the cut that
  * reverses it missing — so both record, and both are on {@link NO_UNDO_STEP} above rather than
  * relying on the wrapper finding no deck id.

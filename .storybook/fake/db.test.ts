@@ -8463,6 +8463,139 @@ describe("the deck grain (deck, variant, category, card)", () => {
   });
 });
 
+/**
+ * **`Add to actual` / `Add to theory`** (issue #592) — `deck_add_card_to_other_list`, which is
+ * handed the pile a card is in *now* and files the copy in the pile of the other list that stands
+ * for it: `deck_meta::counterpart_in`'s rule, a zone by its kind, anything else by its name, and a
+ * pile the other list lacks made there as a copy of the source.
+ */
+describe("adding a card to the deck's other list", () => {
+  /** A user pile of the given list, id chosen well clear of {@link categoryId}'s. */
+  const pile = (over: Partial<FakeDeckCategory>): FakeDeckCategory => ({
+    id: 90,
+    deckId: 1,
+    variant: "live",
+    name: "Ramp",
+    kind: "main",
+    isActive: true,
+    sortOrder: 5,
+    origin: "user",
+    ...over,
+  });
+  const planDeck = (extra: FakeDeckCategory[] = []) => {
+    const decks = [deck({ id: 1, theoryEnabled: true, updatedAt: 100 }), deck({ id: 2 })];
+    return makeDeckDb({ decks, deckCategories: [...categoriesOf(decks), ...extra] });
+  };
+  type OtherListAdd = Parameters<ReturnType<typeof writeHandlers>["deck_add_card_to_other_list"]>[0];
+  /** From the actual list's Main deck into the plan — the press `Add to theory` makes. */
+  const add: OtherListAdd = {
+    deckId: 1,
+    cardId: BOLT.id,
+    fromCategoryId: categoryId(1, "main"),
+    variant: "theory",
+    finish: null,
+    quantity: 1,
+  };
+
+  it("lands in the other list's pile of the same name, and a second press folds", () => {
+    const db = planDeck([pile({ id: 90 }), pile({ id: 91, variant: "theory", sortOrder: 9 })]);
+    const w = writeHandlers(db);
+
+    const first = w.deck_add_card_to_other_list({ ...add, fromCategoryId: 90 });
+    const second = w.deck_add_card_to_other_list({ ...add, fromCategoryId: 90 });
+
+    expect(db.deckCards).toHaveLength(1);
+    expect(db.deckCards[0]).toMatchObject({ categoryId: 91, variant: "theory", quantity: 2 });
+    expect(second).toEqual({ id: first.id, quantity: 2, removed: false });
+    // The seeded Main deck is a `main` pile too, and it is found by its name the same way.
+    w.deck_add_card_to_other_list(add);
+    expect(db.deckCards[1].categoryId).toBe(categoryId(1, "main", "theory"));
+    expect(db.decks[0].updatedAt).toBeGreaterThan(100);
+  });
+
+  it("matches a zone by its kind whatever either list calls it, in both directions", () => {
+    const db = planDeck();
+    const planSide = db.deckCategories.find((c) => c.id === categoryId(1, "side", "theory"))!;
+    planSide.name = "Board B";
+    const w = writeHandlers(db);
+
+    w.deck_add_card_to_other_list({ ...add, fromCategoryId: categoryId(1, "side") });
+    expect(db.deckCards[0]).toMatchObject({ categoryId: planSide.id, variant: "theory" });
+
+    // Theory → actual: the plan's Maybeboard lands in the deck's own.
+    w.deck_add_card_to_other_list({
+      ...add,
+      fromCategoryId: categoryId(1, "maybe", "theory"),
+      variant: "live",
+      finish: "foil",
+    });
+    expect(db.deckCards[1]).toMatchObject({
+      categoryId: categoryId(1, "maybe"),
+      variant: "live",
+      finish: "foil",
+    });
+    expect(db.deckCategories).toHaveLength(20);
+  });
+
+  it("makes a pile the other list lacks as a copy of the source, switch and origin included", () => {
+    const db = planDeck([pile({ id: 90, isActive: false, sortOrder: 7, origin: "auto" })]);
+    const w = writeHandlers(db);
+
+    w.deck_add_card_to_other_list({ ...add, fromCategoryId: 90, finish: "foil" });
+
+    const made = db.deckCategories.find((c) => c.variant === "theory" && c.name === "Ramp")!;
+    expect(made).toMatchObject({
+      deckId: 1,
+      kind: "main",
+      isActive: false,
+      sortOrder: 7,
+      origin: "auto",
+    });
+    expect(made.id).not.toBe(90);
+    expect(db.deckCards[0]).toMatchObject({ categoryId: made.id, finish: "foil", quantity: 1 });
+    // The source is untouched: it is still the actual list's pile.
+    expect(db.deckCategories.find((c) => c.id === 90)!.variant).toBe("live");
+  });
+
+  it("refuses in the crate's words and order, and writes nothing", () => {
+    const db = planDeck();
+    db.decks.push(deck({ id: 3, theoryEnabled: false, virtualOnly: true }));
+    const w = writeHandlers(db);
+    const piles = db.deckCategories.length;
+    const refused = (over: Partial<OtherListAdd>) => () =>
+      w.deck_add_card_to_other_list({ ...add, ...over });
+
+    expect(refused({ variant: "sideways" as DeckVariant })).toThrow(/not a deck variant/);
+    expect(refused({ finish: "shiny" as OtherListAdd["finish"] })).toThrow(/not a finish/);
+    expect(refused({ quantity: 0 })).toThrow(/at least one/);
+    expect(refused({ cardId: "no-such-card" })).toThrow(/no card with the id/);
+    expect(refused({ deckId: 9 })).toThrow(/deck is not there any more/);
+    // A regular deck and a virtual one both keep one list.
+    expect(refused({ deckId: 2 })).toThrow(/keeps one list/);
+    expect(refused({ deckId: 3 })).toThrow(/keeps one list/);
+    // Another deck's pile is not "yours": `counterpart_in` reads it by id and deck together.
+    expect(refused({ fromCategoryId: categoryId(2, "main") })).toThrow(/category is not there/);
+    expect(refused({ fromCategoryId: 999 })).toThrow(/category is not there/);
+    expect(refused({ fromCategoryId: categoryId(1, "main", "theory") })).toThrow(
+      /already in the list the card is going to/,
+    );
+    // The order: a zero is heard before the deck is asked about, the plan before the pile.
+    expect(refused({ deckId: 9, quantity: 0 })).toThrow(/at least one/);
+    expect(refused({ deckId: 2, fromCategoryId: 999 })).toThrow(/keeps one list/);
+
+    expect(db.deckCards).toHaveLength(0);
+    expect(db.deckCategories).toHaveLength(piles);
+    expect(db.decks[0].updatedAt).toBe(100);
+  });
+
+  it("refuses while a sync holds the database", () => {
+    const db = planDeck();
+    db.fault = "busy";
+    expect(() => writeHandlers(db).deck_add_card_to_other_list(add)).toThrow(/busy/);
+    expect(db.deckCards).toHaveLength(0);
+  });
+});
+
 describe("what a card write does to the deck row", () => {
   it("bumps updatedAt even on a removal that found nothing to remove", () => {
     const db = makeDeckDb({ decks: [deck({ id: 1, updatedAt: 100 })] });
@@ -11162,7 +11295,9 @@ describe("the busy fault", () => {
     // 122 → 123 on `main` when `collection_set_printing` (issue #564) met that removal — the
     // parse's answer over the merged table, not either side's literal plus one. 122 when managed
     // tokens met it, read from `left` after that merge.
-    expect(names).toHaveLength(122);
+    // 122 → 123 on 2026-09-28 with `deck_add_card_to_other_list` (issue #592), a plain
+    // `sync::with_write` deck write — read from `left` on this tree.
+    expect(names).toHaveLength(123);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

@@ -1056,6 +1056,21 @@ describe("ipc argument names match the Rust command signatures", () => {
       quantity: 1,
     });
 
+    // The card menu's `Add to actual` / `Add to theory` (issue #592): the pile is the one the
+    // card is in **now**, spelled `fromCategoryId` because it is a source rather than where the
+    // copy lands — Rust finds that — and `variant` is the list it goes **into**. A payload that
+    // said `categoryId`, as every sibling does, is refused before the command runs: the
+    // parameter is not an `Option`, so its absent key is a missing argument.
+    await ipc.deckAddCardToOtherList(4, "p1", 7, "theory", "foil", 1);
+    expect(invoke).toHaveBeenCalledWith("deck_add_card_to_other_list", {
+      deckId: 4,
+      cardId: "p1",
+      fromCategoryId: 7,
+      variant: "theory",
+      finish: "foil",
+      quantity: 1,
+    });
+
     await ipc.deckSetCardQuantity(4, "p1", 7, "live", null, 0);
     expect(invoke).toHaveBeenCalledWith("deck_set_card_quantity", {
       deckId: 4,
@@ -1491,7 +1506,7 @@ describe("ipc argument names match the Rust command signatures", () => {
   const snake = (s: string) => s.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`);
 
   /** The keys of the object literal a command is invoked with. Shorthand only, which is what
-   *  all three of these use — a `key: value` pair is read by its key just the same. */
+   *  all of these use — a `key: value` pair is read by its key just the same. */
   const payloadKeys = (src: string, command: string): string[] => {
     const marker = `"${command}", {`;
     const start = src.indexOf(marker);
@@ -1541,6 +1556,9 @@ describe("ipc argument names match the Rust command signatures", () => {
     ["deck_card_set_label", deckMetaRs],
     ["deck_set_card_finish", deckRs],
     ["deck_quick_add_wishes", deckQuickAddRs],
+    // Issue #592's `Add to actual` / `Add to theory`: a dropped `finish` would copy a foil row
+    // into the other list as the regular copy, so the two lists would hold different objects.
+    ["deck_add_card_to_other_list", deckRs],
   ];
 
   it.each(finishBearing)("%s declares every argument ipc.ts sends it", (command, rustSource) => {
