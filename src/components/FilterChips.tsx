@@ -1,4 +1,11 @@
-import { LayoutGrid, Rows3, SlidersHorizontal, X } from "lucide-react";
+import {
+  LayoutGrid,
+  Rows3,
+  SlidersHorizontal,
+  SquaresIntersect,
+  SquaresUnite,
+  X,
+} from "lucide-react";
 import { RarityGem } from "@/components/RarityGem";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
@@ -166,6 +173,43 @@ export const MANA_VALUES = [0, 1, 2, 3, 4, 5, 6, 7, 8] as const;
 const MANA_X_LABEL = "Cards with X in their mana cost";
 
 /**
+ * The round chip's whole class list — the circle, the press, the focus outline and the three
+ * states — for {@link ManaChip} and {@link ColorExactChip}, which differ only in their fill.
+ *
+ * Module-private and one function rather than two copies, because the second chip is on the
+ * same line as the first six and the whole point of drawing it round is that it is the same
+ * control: a ring 1px off or a dim at 50 rather than 60 is the row growing a seventh kind of chip.
+ */
+function roundChipClass(pressed: boolean, disabled: boolean): string {
+  return cn(
+    "grid size-9 place-items-center rounded-full text-lg leading-none",
+    // 44×44 for a finger. This chip writes its own property list rather than taking
+    // `FILTER_SHAPE`, so it says the floor itself — both axes, because it is a circle and
+    // a height alone would make it an ellipse. See `FILTER_SHAPE` for why it is a
+    // *minimum* rather than a size: a minimum is not in the specificity contest that made
+    // 9a call a conditional `coarse:` spelling a coin toss.
+    "coarse:min-h-[var(--target-min)] coarse:min-w-[var(--target-min)]",
+    // Its own property list rather than `FILTER_CONTROL`'s, because this chip's on state
+    // is a ring and a ring is a box shadow — but `transform` joins it so the colour chips
+    // depress like every other chip in the row, and a row where half the chips answer a
+    // press is worse than one where none of them do.
+    "transition-[opacity,box-shadow,transform,scale] duration-[var(--duration-fast)] ease-standard",
+    "active:scale-[0.97] aria-disabled:active:scale-100 motion-reduce:transition-none",
+    // Clear of the pressed ring, so a focused chip that is already on shows both.
+    "focus-visible:outline-2 focus-visible:outline-offset-[5px] focus-visible:outline-accent",
+    // 60%, not 40: below about half, the fills stop being cream/sky/bone/salmon/sage
+    // and become six shades of the same brown, which is the moment the row goes back
+    // to being letters in circles. The gold ring is what says "on"; the dimming only
+    // has to say "and these are not".
+    pressed && "opacity-100 ring-2 ring-accent ring-offset-2 ring-offset-bg",
+    !pressed && !disabled && "opacity-60 hover:opacity-85",
+    // Last, so tailwind-merge resolves the opacity in its favour: a chip that is somehow
+    // both on and out of reach keeps its ring and takes the dimming.
+    disabled && FILTER_UNAVAILABLE,
+  );
+}
+
+/**
  * One colour chip: the printed symbol, on the printed fill.
  *
  * Pressed is the card's own colour at full strength with a gold ring; unpressed is the
@@ -212,36 +256,59 @@ export function ManaChip({
       // `aria-describedby` would have a screen reader hear it twice.
       {...tip(name, { describes: false })}
       style={{ backgroundColor: `var(--color-mana-${symbol.toLowerCase()})` }}
-      className={cn(
-        "grid size-9 place-items-center rounded-full text-lg leading-none text-black",
-        // 44×44 for a finger. This chip writes its own property list rather than taking
-        // `FILTER_SHAPE`, so it says the floor itself — both axes, because it is a circle and
-        // a height alone would make it an ellipse. See `FILTER_SHAPE` for why it is a
-        // *minimum* rather than a size: a minimum is not in the specificity contest that made
-        // 9a call a conditional `coarse:` spelling a coin toss.
-        "coarse:min-h-[var(--target-min)] coarse:min-w-[var(--target-min)]",
-        // Its own property list rather than `FILTER_CONTROL`'s, because this chip's on state
-        // is a ring and a ring is a box shadow — but `transform` joins it so the colour chips
-        // depress like every other chip in the row, and a row where half the chips answer a
-        // press is worse than one where none of them do.
-        "transition-[opacity,box-shadow,transform,scale] duration-[var(--duration-fast)] ease-standard",
-        "active:scale-[0.97] aria-disabled:active:scale-100 motion-reduce:transition-none",
-        // Clear of the pressed ring, so a focused chip that is already on shows both.
-        "focus-visible:outline-2 focus-visible:outline-offset-[5px] focus-visible:outline-accent",
-        // 60%, not 40: below about half, the fills stop being cream/sky/bone/salmon/sage
-        // and become six shades of the same brown, which is the moment the row goes back
-        // to being letters in circles. The gold ring is what says "on"; the dimming only
-        // has to say "and these are not".
-        pressed && "opacity-100 ring-2 ring-accent ring-offset-2 ring-offset-bg",
-        !pressed && !disabled && "opacity-60 hover:opacity-85",
-        // Last, so tailwind-merge resolves the opacity in its favour: a chip that is somehow
-        // both on and out of reach keeps its ring and takes the dimming.
-        disabled && FILTER_UNAVAILABLE,
-      )}
+      className={cn(roundChipClass(pressed, disabled), "text-black")}
     >
       {/* The glyph itself comes from the bundled `mana-font`; the fill is ours, because
           the font's own `--ms-mana-*` values are a shade off the direction doc's. */}
       <i className={manaSymbolClass(symbol)} aria-hidden="true" />
+    </button>
+  );
+}
+
+/**
+ * The colour row's **reading** — loose (subset) or exact identity — as one more round chip at
+ * the end of the colour group, since 2026-09-28.
+ *
+ * **{@link ManaChip}'s circle, press, ring and dimming, and not its fill.** It sits on the colour
+ * chips' line and modifies them, so it has to read as the same control; but a pastel fill would
+ * make it a seventh colour, and a pale one reads as White or Colourless. So it is the app's own
+ * surface with a hairline and a glyph in the text colour that **switches with the press**:
+ * lucide `squares-intersect` pressed — AND, every one of these colours and no other — and
+ * `squares-unite` unpressed — OR, any of them, the loose subset reading.
+ *
+ * **Never greyed and carrying no count**, unlike its neighbours: `colorDisabled` asks whether a
+ * press would *broaden*, which is subset semantics' question, and a count answered by the loose
+ * facets would describe a different search from the one this press makes.
+ *
+ * The accessible name is the sentence rather than the glyph, and it leads with the word `Exact`
+ * so the control can still be asked for by name — there is no visible word to match (WCAG 2.5.3
+ * binds visible text), but every caller and test that knew it as `Exact` still finds it.
+ */
+export function ColorExactChip({
+  pressed,
+  onClick,
+}: {
+  pressed: boolean;
+  onClick: () => void;
+}) {
+  const tip = useTooltip();
+  const name = pressed
+    ? "Exact — cards whose colour identity is exactly these colours"
+    : "Exact — cards whose colour identity fits within these colours";
+  // The glyph follows the press, where the colour chips' glyph never does: the ring already says
+  // *on*, and what this chip has to say besides is *which reading* — AND or OR — which a fixed
+  // glyph cannot.
+  const Glyph = pressed ? SquaresIntersect : SquaresUnite;
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={pressed}
+      aria-label={name}
+      {...tip(name, { describes: false })}
+      className={cn(roundChipClass(pressed, false), "border border-border bg-surface text-text")}
+    >
+      <Glyph className="size-5" aria-hidden="true" />
     </button>
   );
 }

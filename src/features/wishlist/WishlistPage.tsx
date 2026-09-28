@@ -383,7 +383,6 @@ const WISHLIST_LABELS: FilterLabels = { idStem: "wishlist", search: "Search your
 // missing pair, which asked the backend which wishes the collection already covered. It went with
 // every other comparison this list made against the binder.
 const WISHLIST_TRAY: readonly TrayCell[] = [
-  "exact",
   "set",
   "format",
   "rarity",

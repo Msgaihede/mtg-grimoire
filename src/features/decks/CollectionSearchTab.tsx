@@ -59,7 +59,6 @@ const TILE_BASE = 150;
  * it is on the collection page.
  */
 const COLLECTION_TRAY: readonly TrayCell[] = [
-  "exact",
   "set",
   "format",
   "decks",

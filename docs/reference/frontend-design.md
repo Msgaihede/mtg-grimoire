@@ -2308,7 +2308,23 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     deck editor's docked panel at its `MIN_PANEL_WIDTH_PX` floor of **206** — a self-explaining
     label would be paid for in that column at every width.
 
-- **`Exact` is the tray's first cell, and it is a reading rather than a filter** (2026-09-22 with
+- **`Exact` is back on the bar since 2026-09-28, as `ColorExactChip` — a round chip closing the
+  colour group — and the tray cell below is its history.** The owner asked for it next to the
+  colour chips it modifies and drawn in their style. It takes `ManaChip`'s circle, press, gold
+  ring and 60% dimming through one shared `roundChipClass`, so the seven cannot drift apart, but
+  **not its fill**: in that row a filled circle *is* a colour, and a pale fill reads as White or
+  Colourless. It is `bg-surface` with a hairline and a glyph in the text colour that **switches
+  with the press** — lucide `squares-intersect` for AND (exact) and `squares-unite` for OR
+  (loose), the owner's pick — because the ring already says *on* and the glyph has to say which
+  reading.
+  It is inside the `Color identity` group rather than beside it, so it wraps with the six at the
+  deck panel's 206px floor. Everything the bullets below say about the flag still holds — always
+  drawn, never greyed, no facet count, not in `activeFilterCount`, stated as `exactly` inside the
+  colour chip, and a name that is the sentence and leads with `Exact`. What no longer holds is
+  every sentence about the tray: `"exact"` is gone from `TrayCell` and from all four lists. The
+  2026-09-23 objection to a chip in this group was that it **came and went**; an always-drawn
+  chip answers that, and the reflow it caused was the chip appearing, not the chip being there.
+- **`Exact` was the tray's first cell, and it is a reading rather than a filter** (2026-09-22 with
   strict colour matching, moved into the tray and renamed on 2026-09-23). Every colour filter in
   the app reads `color_identity` as a *subset* — `RW` answers mono-R, mono-W, RW and every
   colourless card, because a colourless card fits in any deck — and this toggle switches the same
