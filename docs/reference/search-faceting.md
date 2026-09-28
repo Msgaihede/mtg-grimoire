@@ -183,7 +183,7 @@ using it.
   the wire keeps them apart as `printedFinishes` against `finishes`, and a collection query
   carrying both ANDs them. Nothing here has been timed either.
 - **Strict colours have no dimension of their own — they change what `apply_colors` means, and
-  that function has two call sites.** The tray’s `Exact` toggle is a *modifier* on the colour filter
+  that function has two call sites.** The `Exact` chip closing the colour group (a tray cell 2026-09-23 to 09-28) is a *modifier* on the colour filter
   rather than a filter beside it, so `FacetResponse` grows no field for it and `Skip` grows no variant: the
   request carries `colorsStrict` and every base computed under it is narrower. The mirror is the
   usual one — `index/facets.rs` holds a second implementation of `push_card_filters`' colour arm

@@ -31,8 +31,8 @@ const search = (over: Record<string, unknown> = {}) =>
     toggleColor: vi.fn(),
     // **Required on `FilterSurface`, beside `colors`** — every surface that has colours can
     // answer it, so a stub without one is a shape no mounted surface has. `false` is the
-    // unfiltered value, and the toggle it drives is the tray's `"exact"` cell, drawn whether or
-    // not a colour is picked.
+    // unfiltered value, and the toggle it drives is the round `Exact` chip closing the colour
+    // group, drawn whether or not a colour is picked.
     colorsStrict: false,
     toggleColorsStrict: vi.fn(),
     sets: [] as string[],
@@ -1680,45 +1680,48 @@ describe("FilterBar, its rarity chips", () => {
 });
 
 /**
- * The tray's `Exact` cell — **the reading the five colour chips on the bar get**.
+ * The `Exact` chip — **the reading the colour chips get**, drawn round at the end of their group.
  *
  * Loose is the default and the deckbuilder's question: `RW` answers mono-R, mono-W, RW and the
- * colourless cards that fit in any deck. Strict is the issue's ask said out loud — the RW cards
- * alone — and it is a *modifier* on the colour filter rather than a filter of its own, which is
- * why it is not in the badge's count and why the strip states it inside the colour chip.
+ * colourless cards that fit in any deck. Strict is the RW cards alone, and it is a *modifier* on
+ * the colour filter rather than a filter of its own, which is why it is not in the badge's count
+ * and why the strip states it inside the colour chip.
  *
- * **It was a sixth chip in the colour group until 2026-09-23, drawn only while a colour was
- * picked, and most of this block used to assert when it was on screen at all.** Those cases are
- * inverted rather than deleted: the whole point of the move is that there is no longer a screen
- * on which a reader is looking for a control that is not drawn. What the old draw condition
- * bought — no dead control over an empty colour row — is bought on the wire instead now, by each
- * hook's `strictParam`, which is that hook's own suite to assert.
+ * **It was a tray cell from 2026-09-23 to 2026-09-28**, and before that a sixth chip drawn only
+ * while a colour was picked. It is back in the group and always drawn, so these cases assert it
+ * is on the bar with the tray shut, whatever the colour row holds.
  */
-describe("FilterBar, its Exact cell", () => {
-  /** Matched on a **prefix**: the toggle's accessible name is its own `title`, which names the
-   *  state as well as the label, and the sentence changes with the press. */
+describe("FilterBar, its Exact chip", () => {
+  /** Matched on a **prefix**: the chip's accessible name is its own sentence, which names the
+   *  state as well as the word, and the sentence changes with the press. */
   const exact = () => screen.queryByRole("button", { name: /^Exact\b/ });
 
-  /** **The bar itself draws none of it**, which is the half of the move a query over the whole
-   *  document cannot see: with the tray shut there is no `Exact` anywhere, and in particular not
-   *  in the colour group it used to be the sixth chip of. */
-  it("is behind the disclosure and not on the bar", () => {
-    render(<FilterBar search={search({ colors: ["W"] })} />);
+  /** **In the colour group, with the tray shut** — the whole of the move. A query over the whole
+   *  document would also pass with it in the tray once opened; this one cannot. */
+  it("is on the bar, last in the colour group, and not behind the disclosure", () => {
+    render(<FilterBar search={search()} />);
 
-    expect(exact()).toBeNull();
-    expect(
-      within(screen.getByRole("group", { name: "Color identity" })).queryByRole("button", {
-        name: /^Exact\b/,
-      }),
-    ).toBeNull();
+    const group = screen.getByRole("group", { name: "Color identity" });
+    const buttons = within(group).getAllByRole("button");
+    expect(buttons).toHaveLength(7);
+    expect(buttons[buttons.length - 1]).toHaveAccessibleName(/^Exact\b/);
+    expect(screen.getByRole("button", { name: /^Show filters/ })).toBeInTheDocument();
   });
 
-  /** **Drawn with nothing picked at all**, which is the whole of what changed. The old chip was
-   *  rendered only once a colour was picked, so a reader had to press a colour to discover the
-   *  control that says what pressing a colour means. */
-  it("draws the Exact toggle with no colour picked, unpressed", async () => {
+  /** The tray's old cell is gone rather than kept as a second way in: two controls on one flag
+   *  are two tab stops and two accessible names for one decision. */
+  it("is not drawn a second time once the tray is open", async () => {
     render(<FilterBar search={search()} />);
     await openTray();
+
+    expect(screen.getAllByRole("button", { name: /^Exact\b/ })).toHaveLength(1);
+    expect(screen.queryByText("Colour")).toBeNull();
+  });
+
+  /** **Drawn with nothing picked at all.** The chip before the tray was rendered only once a
+   *  colour was picked, so a reader had to press a colour to discover what pressing one means. */
+  it("draws the Exact chip with no colour picked, unpressed", () => {
+    render(<FilterBar search={search()} />);
 
     expect(exact()).toHaveAttribute("aria-pressed", "false");
   });
@@ -1726,28 +1729,37 @@ describe("FilterBar, its Exact cell", () => {
   /** …and pressed, over that same empty row. It filters nothing there — each hook's
    *  `strictParam` is what keeps it off the wire — but the control states what the reader set,
    *  which is what a toggle that is always on screen owes them. */
-  it("draws it pressed when strict is on with no colour picked", async () => {
+  it("draws it pressed when strict is on with no colour picked", () => {
     render(<FilterBar search={search({ colors: [], colorsStrict: true })} />);
-    await openTray();
 
     expect(exact()).toHaveAttribute("aria-pressed", "true");
   });
 
-  /** Under a `Colour` caption, so the cell says what it is the reading *of*. The one word on the
-   *  toggle cannot, and the chips it modifies are a disclosure away on the bar. */
-  it("stands under the Colour caption", async () => {
+  /** Never greyed, unlike its neighbours: `colorDisabled` asks subset semantics' question, and a
+   *  loose count cannot describe the strict press. */
+  it("is never greyed", () => {
     render(<FilterBar search={search({ colors: ["W"] })} />);
-    const tray = await openTray();
 
-    const cell = screen.getByText("Colour").parentElement!;
-    expect(within(cell).getByRole("button", { name: /^Exact\b/ })).toBeInTheDocument();
-    expect(tray).toBeInTheDocument();
+    expect(exact()).not.toHaveAttribute("aria-disabled");
+  });
+
+  /** The glyph is the reading: `squares-intersect` (AND) while exact, `squares-unite` (OR) while
+   *  loose. The ring already says *on*, so a glyph that stayed put would say nothing the ring
+   *  does not. */
+  it("draws intersect while exact and unite while loose", () => {
+    const { unmount } = render(<FilterBar search={search({ colorsStrict: false })} />);
+    expect(exact()!.querySelector("svg.lucide-squares-unite")).not.toBeNull();
+    expect(exact()!.querySelector("svg.lucide-squares-intersect")).toBeNull();
+    unmount();
+
+    render(<FilterBar search={search({ colorsStrict: true })} />);
+    expect(exact()!.querySelector("svg.lucide-squares-intersect")).not.toBeNull();
+    expect(exact()!.querySelector("svg.lucide-squares-unite")).toBeNull();
   });
 
   it("presses through to the surface's own toggle", async () => {
     const toggleColorsStrict = vi.fn();
     render(<FilterBar search={search({ colors: ["W"], toggleColorsStrict })} />);
-    await openTray();
 
     await userEvent.click(exact()!);
 
@@ -1755,21 +1767,18 @@ describe("FilterBar, its Exact cell", () => {
   });
 
   /**
-   * The two readings said in words, because the toggle is one word and the word does not say
-   * which of them is on. `ToggleChip`'s `title` *is* the accessible name, so the sentence is what
-   * a screen reader hears and what a pointer gets — and the visible label still leads it, which
-   * is what WCAG 2.5.3 asks.
+   * The two readings said in words, because the chip draws a glyph and the glyph does not say
+   * which of them is on. The sentence is the accessible name and the tooltip both, and it leads
+   * with `Exact` so the control can still be asked for by that word.
    */
-  it("says which reading is on, in words, at both ends of the press", async () => {
+  it("says which reading is on, in words, at both ends of the press", () => {
     const { unmount } = render(<FilterBar search={search({ colors: ["W", "U"] })} />);
-    await openTray();
     expect(exact()).toHaveAccessibleName(
       "Exact — cards whose colour identity fits within these colours",
     );
     unmount();
 
     render(<FilterBar search={search({ colors: ["W", "U"], colorsStrict: true })} />);
-    await openTray();
     const on = exact()!;
     expect(on).toHaveAttribute("aria-pressed", "true");
     expect(on).toHaveAccessibleName(
