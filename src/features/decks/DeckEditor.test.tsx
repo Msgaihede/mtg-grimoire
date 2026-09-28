@@ -378,6 +378,7 @@ const DECK: DeckRow = {
   // is where it drew before the pile could be moved at all.
   tokenRailIndex: -1,
   statsOpen: true,
+  curveCreatures: false,
   // Schema v43, and `0` is the column's own default: the Notes band is new, so no deck on any
   // disk has ever shown one and a shut default takes nothing from anybody.
   notesOpen: false,

@@ -82,6 +82,7 @@ const MADE: DeckRow = {
   // DEFAULT 1`, because every deck that exists today draws the Deck stats band and has
   // no control to hide it.
   statsOpen: true,
+  curveCreatures: false,
   defaultCategoryId: 0,
   bracket: 0,
   updatedAt: 1_800_000_000,

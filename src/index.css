@@ -373,6 +373,19 @@
   --color-theory-unplanned: #e2484f;
   --color-theory-unplanned-fg: var(--color-text);
 
+  /* The deck stats band's creature split (2026-09-28): the Mana curve's two-part bars, their
+     legend, and Card distribution's `Creatures vs noncreatures` band. One violet hue, a light
+     field for creatures and a deep one for everything else, so the split reads as one fact in
+     two parts rather than as two more colours.
+
+     **Violet because every other hue here already means something**: five are the colours of
+     Magic, gold is the accent, green is `--color-ok`, red is a rule break and blue is the theory
+     name tier. A creature is none of those. `-fg` is what is legible printed on the light field
+     (the counts inside the bar); on the deep field the text is `--color-text`. */
+  --color-creature: oklch(0.72 0.07 305);
+  --color-creature-fg: oklch(0.2 0.03 305);
+  --color-noncreature: oklch(0.5 0.08 305);
+
   /* Rarity, as a gem dot or tinted text. Nothing bigger — a rarity is a footnote. */
   --color-rarity-common: #9aa0a6;
   --color-rarity-uncommon: #b3c7ce;

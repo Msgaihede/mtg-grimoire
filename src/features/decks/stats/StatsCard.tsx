@@ -5,9 +5,14 @@
  * **These exist because the same rules were about to be written three times.** The band holds
  * three vertical bar charts — the mana curve, the six colour curves and the card distribution —
  * that differ in height, in fill and in type size and agree on everything else, including the one
- * rule that is genuinely easy to get wrong: **a number that will not fit inside its own fill is
- * printed above the bar instead**. Three copies of that arithmetic is three chances for one of
- * them to clip a count at some zoom nobody tested.
+ * rule that is genuinely easy to get wrong: **where a bar's number is printed**. The card
+ * distribution keeps the original rule — above the fill where the empty track leaves room, inside
+ * the fill's top where it does not. The two mana charts use `variant="mana"` (2026-09-28), where
+ * **every count sits above its own fill and never inside it**, in a clear strip over the track
+ * that the tallest bar's count lands in — and where the curve's creature split stacks two parts
+ * per bar, each printing its own count inside itself when it is tall enough. Three copies of any
+ * of that arithmetic is three chances for one of them to clip a count at some zoom nobody tested,
+ * which is why the stacked chart is a mode of this one rather than a sibling of it.
  *
  * **Nothing here is a control.** The design these are built from makes every bar a button that
  * narrows the deck list beneath it; that is a cross-component feature reaching into all four of
@@ -17,6 +22,7 @@
  */
 import type { JSX, ReactNode } from "react";
 import { useId } from "react";
+import { plural } from "@/lib/counts";
 import { cn } from "@/lib/utils";
 
 /**
@@ -80,6 +86,30 @@ export interface ChartBar {
    * rather than the two loose numbers the eye reads as a column.
    */
   said: string;
+  /**
+   * The bar split into stacked parts, **listed from the foot upward** — the curve's creatures
+   * then noncreatures. Honoured by `variant="mana"` only; the default variant draws `count` as
+   * one fill and ignores this.
+   *
+   * **The parts must sum to `count`**, which stays the bar's height and the number printed over
+   * it. The spoken sentence becomes the parts' own — *"5 creatures and 5 noncreatures at mana
+   * value 2"* — because a split the eye can see and the ear cannot is the drawing saying more
+   * than the words, which the band's rule forbids.
+   */
+  parts?: readonly ChartPart[];
+}
+
+/** One stacked part of a {@link ChartBar}. */
+export interface ChartPart {
+  key: string;
+  count: number;
+  /** The singular noun the sentence counts it in — `"creature"`, pluralised by `plural`. */
+  noun: string;
+  /** The part's fill, as a CSS colour — a custom property for the reason {@link BarChart}'s
+   *  `fill` is one. */
+  fill: string;
+  /** The colour its own count is printed in, on that fill. */
+  fg: string;
 }
 
 /**
@@ -100,8 +130,42 @@ export type ChartSize = "md" | "sm";
  * foreground colour at all. A number printed above a fill that has risen to meet it is a number
  * overlapping its own bar, and a number forced inside a two-pixel fill is invisible; the
  * threshold is where those two failures meet.
+ *
+ * **`variant="mana"` spends the same number differently**: as a clear strip drawn *above* the
+ * track, so the tallest bar still fills its track to the top and its count has somewhere to go
+ * that is not its own fill. One constant for both, because it is one measurement — the room a
+ * count needs over a fill — and two would drift.
  */
 const HEADROOM: Record<ChartSize, number> = { md: 24, sm: 19 };
+
+/**
+ * The shortest a nonzero fill (or stacked part) is drawn, in px.
+ *
+ * A count of one against a max of a hundred rounds to nothing, and an invisible bar under a label
+ * reads as a bug rather than as a small number.
+ */
+const MIN_FILL: Record<ChartSize, number> = { md: 3, sm: 2 };
+
+/**
+ * How tall a stacked part must be before it prints its own count inside itself — a 12px line,
+ * the 4px of air above it and a little under it. Below this the part is drawn silent and the
+ * sentence and the legend carry its number; a count squeezed into a sliver is a count nobody can
+ * read and one that overhangs the part below it reads as that part's.
+ */
+export const PART_COUNT_MIN_PX = 18;
+
+/**
+ * The axis glyph in `variant="mana"` — a mono numeral in a bordered circle.
+ *
+ * `min(100%, …)` because the curve draws ten columns in a card that can be 22rem wide, where a
+ * column is narrower than the circle wants to be; the circle shrinks with its column rather than
+ * pushing its neighbours apart. Two literal strings, never one assembled from the size, because
+ * Tailwind finds a class by reading the source for its whole name.
+ */
+const CIRCLE_LABEL: Record<ChartSize, string> = {
+  md: "flex aspect-square w-[min(100%,36px)] shrink-0 items-center justify-center rounded-full border border-border font-mono text-[1.25rem] font-bold leading-none tabular-nums text-text",
+  sm: "flex aspect-square w-[min(100%,22px)] shrink-0 items-center justify-center rounded-full border border-border font-mono text-[0.8125rem] font-bold leading-none tabular-nums text-text",
+};
 
 /** The count's own type, and the padding that separates it from the fill it sits above or in. */
 const COUNT_TYPE: Record<ChartSize, string> = {
@@ -136,6 +200,7 @@ export function BarChart({
   size = "md",
   labelWraps = false,
   labelMinHeight,
+  variant = "default",
 }: {
   bars: readonly ChartBar[];
   /** The count the tallest bar is drawn at full height for. Floored at 1 here, so a chart of
@@ -157,8 +222,32 @@ export function BarChart({
   /** A floor under the label boxes so that a one-line word and a two-line one leave their bars
    *  on the same baseline. Only worth setting where {@link labelWraps} is. */
   labelMinHeight?: number;
+  /**
+   * `"mana"` for the mana curve and the colour curves: circled numerals under the bars, and
+   * **every count above its own fill, never inside it** — see {@link ManaColumn}. It also honours
+   * {@link ChartBar.parts}. `"default"` is the card distribution's word boxes and its
+   * above-or-inside count; {@link labelWraps} and {@link labelMinHeight} are for that one and
+   * ignored here, because a circled numeral neither wraps nor needs a floor.
+   */
+  variant?: "default" | "mana";
 }): JSX.Element {
   const ceiling = Math.max(max, 1);
+  if (variant === "mana") {
+    return (
+      <ul className="flex items-end gap-2" style={{ gap: size === "sm" ? 3 : undefined }}>
+        {bars.map((bar) => (
+          <ManaColumn
+            key={bar.key}
+            bar={bar}
+            ceiling={ceiling}
+            height={height}
+            fill={fill}
+            size={size}
+          />
+        ))}
+      </ul>
+    );
+  }
   return (
     <ul className="flex items-end gap-2" style={{ gap: size === "sm" ? 3 : undefined }}>
       {bars.map((bar) => {
@@ -228,6 +317,133 @@ export function BarChart({
       })}
     </ul>
   );
+}
+
+/**
+ * One column of a `variant="mana"` {@link BarChart}: a track, a clear strip above it, the count
+ * riding on top of the fill, and a circled numeral under it all.
+ *
+ * **The count is positioned rather than flowed.** The track and the strip are one relative box
+ * `height + HEADROOM` tall with the track at its foot, and the count is an absolute box
+ * `HEADROOM` tall whose `bottom` is the fill's own height in px — so it sits directly on the fill
+ * whatever the fill's height, and on the tallest bar (whose fill is the whole track) it lands in
+ * the strip. The default variant's alternative, printing inside the fill when the track runs out
+ * of room, is what this mode exists to refuse: a column of numbers at one height above their bars
+ * and one inside the tallest reads as two kinds of number.
+ *
+ * **Every px here is computed, not a percentage**, because the count's `bottom` and the fill's
+ * height have to be the same number — a `%` fill with a `minHeight` floor under it is a fill
+ * whose drawn height the count cannot know.
+ *
+ * With {@link ChartBar.parts}, the fill is those parts stacked from the foot, a 1px
+ * `--color-bg` rule between two drawn parts, and each part tall enough
+ * ({@link PART_COUNT_MIN_PX}) prints its own count at its own top. The **total** still rides
+ * above the whole stack, so the split never costs the reader the number the unsplit chart gave
+ * them.
+ */
+function ManaColumn({
+  bar,
+  ceiling,
+  height,
+  fill,
+  size,
+}: {
+  bar: ChartBar;
+  ceiling: number;
+  height: number;
+  fill: string;
+  size: ChartSize;
+}): JSX.Element {
+  const px = (count: number) =>
+    count > 0 ? Math.max((count / ceiling) * height, MIN_FILL[size]) : 0;
+  const parts = bar.parts?.filter((part) => part.count > 0);
+  // The stack's drawn height is the sum of its parts' drawn heights, floors included, so the
+  // total lands on the top part rather than a hair inside it. Clamped to the track: two floored
+  // slivers on the tallest bar can sum past it, and the track clips the overhang anyway.
+  const drawn = Math.min(
+    height,
+    parts === undefined ? px(bar.count) : parts.reduce((sum, part) => sum + px(part.count), 0),
+  );
+  return (
+    <li className="flex min-w-0 flex-1 flex-col items-center gap-1">
+      <span className="sr-only">{spokenBar(bar)}</span>
+      <span
+        aria-hidden="true"
+        className="relative block w-full"
+        style={{ height: height + HEADROOM[size] }}
+      >
+        <span
+          className="absolute inset-x-0 bottom-0 flex flex-col justify-end overflow-hidden rounded-sm bg-surface"
+          style={{ height }}
+        >
+          {parts === undefined ? (
+            bar.count > 0 && (
+              <span
+                className="block w-full rounded-sm"
+                style={{ height: drawn, background: fill }}
+              />
+            )
+          ) : (
+            // Foot-first in the data, so reversed in the flow: the first part is the bottom one.
+            <span className="flex w-full flex-col-reverse overflow-hidden rounded-sm">
+              {parts.map((part, index) => {
+                const partPx = px(part.count);
+                return (
+                  <span
+                    key={part.key}
+                    className={cn(
+                      "flex w-full shrink-0 items-start justify-center pt-1",
+                      "font-mono text-xs font-semibold leading-none tabular-nums",
+                    )}
+                    style={{
+                      height: partPx,
+                      background: part.fill,
+                      color: part.fg,
+                      // The rule sits on the upper part's foot, so it is drawn exactly where
+                      // two parts meet and never under the foot-most one.
+                      borderBottom: index > 0 ? "1px solid var(--color-bg)" : undefined,
+                    }}
+                  >
+                    {partPx >= PART_COUNT_MIN_PX ? part.count : ""}
+                  </span>
+                );
+              })}
+            </span>
+          )}
+        </span>
+        {bar.count > 0 && (
+          <span
+            className={cn(
+              "absolute inset-x-0 flex items-end justify-center text-text",
+              COUNT_TYPE[size],
+              size === "sm" ? "pb-1.5" : "pb-2",
+            )}
+            style={{ bottom: drawn, height: HEADROOM[size] }}
+          >
+            {bar.count}
+          </span>
+        )}
+      </span>
+      <span aria-hidden="true" className={CIRCLE_LABEL[size]}>
+        {bar.label}
+      </span>
+    </li>
+  );
+}
+
+/**
+ * The sentence a `variant="mana"` bar is spoken as — `"8 cards at mana value 1"`, or with parts
+ * `"5 creatures and 5 noncreatures at mana value 2"`. Every part is named, a zero included: a
+ * sentence that dropped the empty half would leave the reader to infer it from a missing word.
+ */
+export function spokenBar(bar: ChartBar): string {
+  if (bar.parts === undefined) {
+    return `${plural(bar.count, "card")} ${bar.said}`;
+  }
+  const said = bar.parts.map((part) => plural(part.count, part.noun));
+  const listed =
+    said.length > 1 ? `${said.slice(0, -1).join(", ")} and ${said[said.length - 1]}` : said[0];
+  return `${listed} ${bar.said}`;
 }
 
 /**

@@ -644,6 +644,9 @@ mod tests {
             // for `bracket`'s reason three comments up: the layout reads five fields and not
             // this one, and `DeckRow` has no `Default`.
             stats_open: true,
+            // User schema v56's Mana curve split, `false` as a fresh deck carries it — here for
+            // `bracket`'s reason: the layout reads five fields and not this one.
+            curve_creatures: false,
             // User schema v52's mode (v47's `token_stack` before it), `managed` as a fresh deck
             // carries it — here for `bracket`'s reason: the layout reads five fields and not this
             // one.

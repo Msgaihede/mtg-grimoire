@@ -53,6 +53,7 @@ const ATRAXA: DeckRow = {
   tokenMode: "managed",
   tokenRailIndex: -1,
   statsOpen: true,
+  curveCreatures: false,
   defaultCategoryId: 0,
   bracket: 0,
 };

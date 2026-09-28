@@ -17,13 +17,23 @@ import {
   type PipCounts,
 } from "@/lib/mana";
 import { popup, PRESS, statusLine } from "@/lib/motion";
+import { useElementWidth } from "@/lib/useElementWidth";
 import { cn } from "@/lib/utils";
-import { cardManaValue, CURVE_BUCKETS, curveBucket, isLand, isMdfcLand } from "./deckBuckets";
+import {
+  cardManaValue,
+  CURVE_BUCKETS,
+  curveBucket,
+  isCreature,
+  isLand,
+  isMdfcLand,
+  type DistributionBy,
+} from "./deckBuckets";
 import { CardDistribution } from "./stats/CardDistribution";
 import { CurveByColor } from "./stats/CurveByColor";
 import { DeckFigures } from "./stats/DeckFigures";
 import { ManaCurveChart } from "./stats/ManaCurveChart";
 import { ManaPips } from "./stats/ManaPips";
+import { DEFAULT_ODDS, type OddsQuestion } from "./stats/OpeningHandOdds";
 import { StatsCard } from "./stats/StatsCard";
 import { SIZE_KINDS } from "./validation/engine";
 
@@ -39,6 +49,35 @@ export const STATS_HEADING = "Deck stats";
 /** The one card in the band that holds controls rather than figures. Named here beside the band
  *  so a test can address it without spelling the word a second time. */
 export const COLLECTION_HEADING = "Collection";
+
+/**
+ * The band body's own width, in px, at and above which the seven readouts are laid out in three
+ * columns rather than two (issue #620).
+ *
+ * **Measured on the band and never on the window**, because the band is what the columns divide:
+ * the sidebar and the page's padding come off the window first, so a 1920px window's band is
+ * ~1657px and a 1440px window's ~1184. 1400 is between the two on purpose — a 1920 window gets
+ * three, and a 1440 window, like the app's own 1280, keeps the two it has always had. Three
+ * columns of `22rem` would fit from ~1080, and fitting is not the question: below this a third
+ * column is three cramped readouts where two roomy ones read better.
+ */
+export const THREE_COLUMN_MIN_PX = 1400;
+
+/** How many columns the band lays its readouts out in. */
+export type StatsColumns = 2 | 3;
+
+/**
+ * The arrangement for a band body `width` px wide — three columns at {@link THREE_COLUMN_MIN_PX}
+ * and above, two below it.
+ *
+ * **`0` is two**, and that is the half of this worth a test: `0` is *unmeasured* (jsdom, and the
+ * first paint before the observer answers — see `useElementWidth`), and the two-column arrangement
+ * is both what every existing test and story is written against and the one that is safe at any
+ * width, because it wraps.
+ */
+export function statsColumns(width: number): StatsColumns {
+  return width >= THREE_COLUMN_MIN_PX ? 3 : 2;
+}
 
 /**
  * One category's copies.
@@ -174,6 +213,28 @@ export interface DeckStatsSummary {
    * it is drawn in.
    */
   variableCost: number | null;
+  /**
+   * Creature copies per curve bucket — a subset of `curve`: same length, same rules.
+   *
+   * **Counted in the same pass and under the same inclusion rules as {@link curve}**, so
+   * `curveCreatures[b] <= curve[b]` for every bucket by construction rather than by agreement: a
+   * card lands in a bucket of this array only in the iteration that lands it in the same bucket of
+   * that one. What makes a card a creature is `deckBuckets.isCreature` — the front face's first
+   * printed type, which is `typeBucket`'s own answer, so this count and the `by Types` Creature bar
+   * are one number. Lands never reach it: the curve is over nonlands, so Dryad Arbor is in neither.
+   *
+   * The Mana curve's `Creatures` toggle splits each bar at this number; `curve[b] −
+   * curveCreatures[b]` is the noncreature part, and there is no third field for it to drift from.
+   */
+  curveCreatures: readonly number[];
+  /**
+   * Creature copies among {@link variableCost}; `null` exactly when `variableCost` is `null`.
+   *
+   * The X bar splits like the other nine, so it needs its own count — and it is `null` rather than
+   * `0` for `variableCost`'s own reason: `0` is an X bar with no creatures in it, `null` is no X
+   * bar.
+   */
+  variableCostCreatures: number | null;
   /**
    * **Pips**, counted the way a card prints them: `{1}{B}{B}` is two black pips on one card, and
    * four copies of it are eight. All six keys, colourless included.
@@ -371,6 +432,8 @@ export function deckStats(cards: readonly DeckCard[], separateXGroup = false): D
   const sizes = (category: Tallied) => category.active && SIZE_KINDS.includes(category.kind);
 
   const curve = Array<number>(CURVE_BUCKETS).fill(0);
+  /** The creature half of each bucket — filled beside `curve`, never after it. */
+  const curveCreatures = Array<number>(CURVE_BUCKETS).fill(0);
   /**
    * Nine buckets per colour, and the `C` arm is the one that is a partition rather than a
    * membership — see {@link DeckStatsSummary.curveByColor}. Built up front so the one pass over
@@ -383,6 +446,7 @@ export function deckStats(cards: readonly DeckCard[], separateXGroup = false): D
   let manaValueTotal = 0;
   let unknownManaValue = 0;
   let variableCost = 0;
+  let variableCostCreatures = 0;
   for (const card of nonlands) {
     const mv = cardManaValue(card);
     if (mv === null) {
@@ -412,11 +476,19 @@ export function deckStats(cards: readonly DeckCard[], separateXGroup = false): D
     // One home, never two, so the bars still sum to the nonland count. An unknown mana value
     // cannot reach here: `manaValue` answers `null` only when the row has neither a `cmc` nor a
     // printed cost, and a cost that is not there cannot name `{X}`.
+    //
+    // The creature half rides the same two lines, so a card is counted as a creature in exactly
+    // the bucket it is counted in at all — the subset property is the shape of this code rather
+    // than a second rule that happens to agree with it.
+    const creature = isCreature(card.typeLine);
     if (separateXGroup && hasVariableCost(card.manaCost)) {
       variableCost += card.quantity;
+      if (creature) variableCostCreatures += card.quantity;
       continue;
     }
-    curve[Math.min(CURVE_BUCKETS - 1, Math.max(0, Math.floor(mv)))] += card.quantity;
+    const bucket = curveBucket(mv);
+    curve[bucket] += card.quantity;
+    if (creature) curveCreatures[bucket] += card.quantity;
   }
 
   // What the deck **asks for**, and what it can **make**. The two are set against each other by
@@ -494,6 +566,8 @@ export function deckStats(cards: readonly DeckCard[], separateXGroup = false): D
     unknownManaValue,
     curve,
     variableCost: separateXGroup ? variableCost : null,
+    curveCreatures,
+    variableCostCreatures: separateXGroup ? variableCostCreatures : null,
     pips,
     pipCards,
     sources,
@@ -570,23 +644,39 @@ export interface MissingWrite {
  *
  * The band was a pips row and four charts laid across the page under the deck
  * ([issue #389](https://github.com/Msgaihede/mtg-grimoire/issues/389)). It is **seven bordered
- * readouts in two wrapping columns, behind a disclosure**:
+ * readouts in two wrapping columns, behind a disclosure** — three columns on the widest bands
+ * since 2026-09-28, below:
  *
  * | Readout | Answers |
  * | --- | --- |
  * | Mana pips | what the deck's costs **ask for**, set against what its lands and rocks can **make** |
  * | Card distribution | copies per bucket, cut four ways by one control |
  * | Opening hand odds | the hypergeometric chance of meeting a bucket in an opening hand |
- * | Mana curve | the nine buckets and the average |
+ * | Mana curve | the nine buckets and the average, split into creatures and noncreatures on request |
  * | Curve by color | the same nine, six times, one per colour |
  * | Figures | Cards, Price, Owned, Matches theory |
  * | Collection | the three presses that act on a shortfall |
  *
- * **The two pies are gone.** `Colors` and `Lands` answered *what is this deck made of* with two
- * circles whose legends were the only readable part; the six colour curves answer the same
- * question with the mana **value** attached, and the distribution's `by Types` bars carry the
- * land count in a bar a reader can compare against the others. Nothing was lost that a bar did
- * not say better, and `Slice`, `wedge` and `Pie` went with them.
+ * **The two pies went, and one came back** (2026-09-28). `Colors` and `Lands` answered *what is
+ * this deck made of* with two circles whose legends were the only readable part; the six colour
+ * curves answer the colour half with the mana **value** attached, and that pie stays gone. The
+ * land pie is back under Card distribution — and it is not the one that left: it partitions the
+ * lands by their **basic land types**, so a dual is one slice and the slices sum to the land
+ * count, which is a question no bar on the band answers. Its legend is still the accessible
+ * story; the pie is `aria-hidden`.
+ *
+ * **Three columns at a band of {@link THREE_COLUMN_MIN_PX} and wider** (2026-09-28,
+ * [issue #620](https://github.com/Msgaihede/mtg-grimoire/issues/620)): `[Mana curve, Curve by
+ * color] [Mana pips, Figures] [Card distribution, Collection]`, balanced by height. Below it, the
+ * two columns are exactly what they were. The width is observed on the band body from script
+ * (`useElementWidth`), never a container query — the Collection card's reason, at the columns'
+ * own comment — and a readout that changes column is remounted, which is why every readout's own
+ * state is held in this component rather than in the readout.
+ *
+ * **The Mana curve's creature split is the deck's** (`decks.curve_creatures`, the
+ * `creatureSplit` prop), counted by {@link deckStats} as `curveCreatures` beside the curve
+ * it splits, and read again by Card distribution's `Creatures vs noncreatures` band — so the two
+ * say one number.
  *
  * **A disclosure, which reverses "there is no control that hides them"** (2026-08-14 → now).
  * That rule was written when the band was four charts on one line; seven readouts is two screens,
@@ -638,6 +728,8 @@ export function DeckStats({
   theory,
   open,
   onToggle,
+  creatureSplit,
+  onCreatureSplitChange,
   separateXGroup = false,
 }: {
   cards: readonly DeckCard[];
@@ -684,6 +776,20 @@ export function DeckStats({
    */
   open: boolean;
   onToggle: (next: boolean) => void;
+  /**
+   * `decks.curve_creatures` — whether the Mana curve splits each bar into creatures and
+   * noncreatures (2026-09-28).
+   *
+   * **The deck's, not this band's**, which is the one piece of a readout's state that is not held
+   * in the band below: a reader who splits the curve of their creature-heavy aggro list is saying
+   * something about *that deck*, and it rides `deck_update` exactly as `open` does. The rest
+   * — the pips' hide-colorless, the distribution's cut, the odds — is where the reader is looking
+   * right now, and is held here for the session.
+   *
+   * Handed straight to `ManaCurveChart`; nothing in the band reads it.
+   */
+  creatureSplit: boolean;
+  onCreatureSplitChange: (next: boolean) => void;
   /**
    * The wishlist write, narrowed — see {@link MissingWrite}.
    *
@@ -774,6 +880,30 @@ export function DeckStats({
 }) {
   const stats = useMemo(() => deckStats(cards, separateXGroup), [cards, separateXGroup]);
   const bodyId = useId();
+  /**
+   * The band body's width, and the arrangement it picks — see {@link statsColumns}.
+   *
+   * On the body `<div>` rather than on the columns' own box because the body is **always in the
+   * tree**, open or shut, so the width is already known on the frame the reader opens the band
+   * and the first paint is the right arrangement rather than two columns for a frame.
+   */
+  const [bodyRef, bodyWidth] = useElementWidth<HTMLDivElement>();
+  const columns = statsColumns(bodyWidth);
+  /**
+   * Every readout's own state, **held here rather than in the readout**, and the reason is the
+   * arrangement above: moving a card from one column's box to another is a different parent to
+   * React, so the card is unmounted and mounted fresh — and a reader who widened the window past
+   * {@link THREE_COLUMN_MIN_PX} would find the pips showing colourless again, the distribution
+   * back on `Types` and the odds back at *at least one in seven*. Held here, a resize across the
+   * threshold loses nothing.
+   *
+   * **For the session, not per deck** — `DeckEditor` is keyed on the deck id, so opening another
+   * deck starts these over, which is what each of them did while it lived in its readout. The one
+   * that is stored is the curve's creature split, and it is a prop, `creatureSplit`.
+   */
+  const [hideColorless, setHideColorless] = useState(false);
+  const [by, setBy] = useState<DistributionBy>("types");
+  const [odds, setOdds] = useState<OddsQuestion>(DEFAULT_ODDS);
   const sendRef = useRef<HTMLButtonElement>(null);
   const wasPending = useRef(false);
   /**
@@ -864,6 +994,80 @@ export function DeckStats({
   const added = spent && send.isSuccess ? (send.data ?? 0) : null;
   const failure = send.isError ? ipcError(send.error) : null;
 
+  // The seven readouts, built once and placed by the arrangement below. **Placed, never
+  // re-derived**: the two arrangements are the same seven elements in different boxes, so a prop
+  // added to one card here reaches it in both, and the lifted state above is what lets a card
+  // survive the remount a change of box costs it.
+  const pips = (
+    <ManaPips
+      key="pips"
+      stats={stats}
+      hideColorless={hideColorless}
+      onHideColorlessChange={setHideColorless}
+    />
+  );
+  const spread = (
+    <CardDistribution
+      key="spread"
+      cards={cards}
+      separateXGroup={separateXGroup}
+      stats={stats}
+      by={by}
+      onByChange={setBy}
+      odds={odds}
+      onOddsChange={setOdds}
+    />
+  );
+  const curve = (
+    <ManaCurveChart
+      key="curve"
+      stats={stats}
+      split={creatureSplit}
+      onSplitChange={onCreatureSplitChange}
+    />
+  );
+  const byColor = <CurveByColor key="byColor" stats={stats} />;
+  const figures = (
+    <DeckFigures
+      key="figures"
+      stats={stats}
+      marketplace={marketplace}
+      tracksCollection={tracksCollection}
+      theory={theory}
+    />
+  );
+  // **The whole shortfall half, or none of it** — the three presses, the destination picker and
+  // the two answer lines are one component precisely so that a deck with no binder behind it can
+  // be given none of them in one place. A virtual deck's rows are live rows with
+  // `ownedQuantity: 0`, so every one of those sentences would be true of the arithmetic and false
+  // about the reader.
+  //
+  // **And nothing to be short of is nothing to draw**: every control in here is already gated on
+  // `missing > 0`, so without this test the card would be a heading over an empty box on every
+  // finished deck. What a reader gets instead is the Figures card's `every copy` note — the same
+  // fact, said once, by the readout whose job is facts. (Directly above it in two columns; in the
+  // column beside it in three, which is the arrangement's price and a small one.)
+  const collection = tracksCollection && stats.missing > 0 && (
+    <StatsCard key="collection" title={COLLECTION_HEADING}>
+      <Missing
+        stats={stats}
+        pending={send.isPending}
+        spent={spent}
+        folderId={folderId}
+        onFolderChange={setFolderId}
+        onSend={() => {
+          setSentFor({ missing: stats.missing, folderId });
+          send.mutate(folderId);
+        }}
+        onPull={onPull}
+        onAddMissing={onAddMissing}
+        sendRef={sendRef}
+        added={added}
+        failure={failure}
+      />
+    </StatsCard>
+  );
+
   return (
     <section
       aria-label={STATS_HEADING}
@@ -894,68 +1098,41 @@ export function DeckStats({
 
       {/* **Always in the tree, empty while shut**, so `aria-controls` always resolves — the
           tokens band's own arrangement, and the reason a reader's screen reader is never told
-          about a region that is not there. */}
-      <div id={bodyId}>
+          about a region that is not there. It is also what the width is measured on, for the
+          same reason: a box that is always here is a box that is always measured. */}
+      <div id={bodyId} ref={bodyRef}>
         {open &&
           (stats.copies === 0 ? (
             <p className="text-sm text-dim">
               Nothing to measure yet — add a card and the charts fill in.
             </p>
           ) : (
-            // **Two columns that wrap rather than a container query**, which is a deliberate
+            // **Columns that wrap rather than a container query**, which is a deliberate
             // refusal: `container-type: inline-size` makes its box the containing block for
             // every `fixed` descendant, and the Collection card below holds controls that open
-            // anchored layers. A wrap costs nothing and cannot reparent a scrim.
+            // anchored layers. A wrap costs nothing and cannot reparent a scrim — and the one
+            // width question this band does ask (two columns or three) is answered by observing
+            // the body from script, which contains nothing.
             //
             // The columns wrap rather than truncate for the reason the old band's clusters did:
             // at 1024px with the card pane docked beside the editor this is a few hundred pixels
             // wide, and a chart whose numbers are cut off is a chart that has stopped being one.
             <div className="flex flex-wrap items-start gap-3">
-              <div className="flex min-w-[22rem] flex-1 flex-col gap-3">
-                <ManaPips stats={stats} />
-                <CardDistribution cards={cards} separateXGroup={separateXGroup} />
-              </div>
-              <div className="flex min-w-[22rem] flex-1 flex-col gap-3">
-                <ManaCurveChart stats={stats} />
-                <CurveByColor stats={stats} />
-                <DeckFigures
-                  stats={stats}
-                  marketplace={marketplace}
-                  tracksCollection={tracksCollection}
-                  theory={theory}
-                />
-                {/* **The whole shortfall half, or none of it** — the three presses, the
-                    destination picker and the two answer lines are one component precisely so
-                    that a deck with no binder behind it can be given none of them in one place.
-                    A virtual deck's rows are live rows with `ownedQuantity: 0`, so every one of
-                    those sentences would be true of the arithmetic and false about the reader.
-
-                    **And nothing to be short of is nothing to draw**: every control in here is
-                    already gated on `missing > 0`, so without this test the card would be a
-                    heading over an empty box on every finished deck. What a reader gets instead
-                    is the Figures card's `every copy` note directly above — the same fact, said
-                    once, by the readout whose job is facts. */}
-                {tracksCollection && stats.missing > 0 && (
-                  <StatsCard title={COLLECTION_HEADING}>
-                    <Missing
-                      stats={stats}
-                      pending={send.isPending}
-                      spent={spent}
-                      folderId={folderId}
-                      onFolderChange={setFolderId}
-                      onSend={() => {
-                        setSentFor({ missing: stats.missing, folderId });
-                        send.mutate(folderId);
-                      }}
-                      onPull={onPull}
-                      onAddMissing={onAddMissing}
-                      sendRef={sendRef}
-                      added={added}
-                      failure={failure}
-                    />
-                  </StatsCard>
-                )}
-              </div>
+              {(columns === 3
+                ? [
+                    [curve, byColor],
+                    [pips, figures],
+                    [spread, collection],
+                  ]
+                : [
+                    [pips, spread],
+                    [curve, byColor, figures, collection],
+                  ]
+              ).map((column, at) => (
+                <div key={at} className="flex min-w-[22rem] flex-1 flex-col gap-3">
+                  {column}
+                </div>
+              ))}
             </div>
           ))}
       </div>
