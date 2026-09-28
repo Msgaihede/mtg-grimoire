@@ -30,6 +30,63 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.34.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.33.0...v0.34.0) (2026-09-28)
+
+
+### Features
+
+* **decks:** dock the undocked toolbar and word its buttons on wide windows ([f092e1e](https://github.com/Msgaihede/mtg-grimoire/commit/f092e1ef70623fd6c8dc7c421411b4e2c951de98))
+* **decks:** dock the undocked toolbar and word its buttons on wide windows ([9eec133](https://github.com/Msgaihede/mtg-grimoire/commit/9eec1335b9663f3c1a7b1a0ca4bfb290a0e32974)), closes [#646](https://github.com/Msgaihede/mtg-grimoire/issues/646)
+* **decks:** show ten quick-add suggestions and count the rest ([eac9cf1](https://github.com/Msgaihede/mtg-grimoire/commit/eac9cf1c04aefa9afbe5f7c1fd43ca0aab44b5f3))
+* **decks:** show ten quick-add suggestions and count the rest ([436448e](https://github.com/Msgaihede/mtg-grimoire/commit/436448eedd1999fd22d615fb115c3ae3182e438b)), closes [#648](https://github.com/Msgaihede/mtg-grimoire/issues/648)
+* **relay:** serve /keys?epoch=, accept a removal's two-epoch step, tell the log its roster ([50db28f](https://github.com/Msgaihede/mtg-grimoire/commit/50db28fab7b7e95a545f2c2a02f366cfb987aeb8)), closes [#546](https://github.com/Msgaihede/mtg-grimoire/issues/546)
+* **update:** compile in the production signing key ([4175c91](https://github.com/Msgaihede/mtg-grimoire/commit/4175c91aa949ec109fac005d9cc3b6894bc7d204))
+* **update:** verify a minisign signature before staging an update ([ac226e5](https://github.com/Msgaihede/mtg-grimoire/commit/ac226e516609895da41639d7149588c9a32bcd21))
+
+
+### Bug Fixes
+
+* **capabilities:** open every file dialog from Rust, and narrow the opener ([2ca9bdf](https://github.com/Msgaihede/mtg-grimoire/commit/2ca9bdfdf7d7d956d59599b1befcab9addc089f0))
+* close the remaining desktop security gaps ([#545](https://github.com/Msgaihede/mtg-grimoire/issues/545)) ([191c31f](https://github.com/Msgaihede/mtg-grimoire/commit/191c31f9a51d2d0a6df53bec93734e0206c2400c))
+* **decks:** back the search column's Add button like the card steppers ([#645](https://github.com/Msgaihede/mtg-grimoire/issues/645)) ([aea7156](https://github.com/Msgaihede/mtg-grimoire/commit/aea7156596ff41af675e056c8d9e9bc25a0f3afb))
+* **decks:** back the search column's Add button like the card steppers ([#645](https://github.com/Msgaihede/mtg-grimoire/issues/645)) ([a0fd781](https://github.com/Msgaihede/mtg-grimoire/commit/a0fd7811b62e4c79d9c476da6540f173ce16ce24))
+* **decks:** keep a card's label when its printing changes ([efeb420](https://github.com/Msgaihede/mtg-grimoire/commit/efeb4201bbadbedbf26c0866a72106a621bd1835))
+* **decks:** keep a card's label when its printing changes ([d136b6b](https://github.com/Msgaihede/mtg-grimoire/commit/d136b6b0546bcfcac5c09b11737b26d7eed38d3b)), closes [#643](https://github.com/Msgaihede/mtg-grimoire/issues/643)
+* **decks:** keep a label when a moved card folds onto its printing ([ca4077e](https://github.com/Msgaihede/mtg-grimoire/commit/ca4077e0598c5f71fcc2c698e952cdc06b231d62))
+* **decks:** keep a label when a moved card folds onto its printing ([918824c](https://github.com/Msgaihede/mtg-grimoire/commit/918824c74eb0d628f4d6c52d858d1f45058fe5e0))
+* **decks:** rewrite UI copy per the audit ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([c7be1e1](https://github.com/Msgaihede/mtg-grimoire/commit/c7be1e1ad16ae7a578d1e75b90d738568e090abb))
+* **decks:** rewrite UI copy per the audit ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([82db793](https://github.com/Msgaihede/mtg-grimoire/commit/82db793389666c79a25cb84ba11e5182f1722ea5))
+* **decks:** update App.test deck-gone assertions to the new copy ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([7323ddb](https://github.com/Msgaihede/mtg-grimoire/commit/7323ddb22eb1a0f6236c19097654e8ac3ac1511f))
+* forget the relay cursor and ack when a device changes group ([#665](https://github.com/Msgaihede/mtg-grimoire/issues/665)) ([563032a](https://github.com/Msgaihede/mtg-grimoire/commit/563032a3bf1265d8accd69e8a2048153233c8820))
+* **home:** rewrite UI copy per the audit ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([0e4d945](https://github.com/Msgaihede/mtg-grimoire/commit/0e4d94535161e351a773ef829afab3686878fee3))
+* **home:** rewrite UI copy per the audit ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([e36a8d0](https://github.com/Msgaihede/mtg-grimoire/commit/e36a8d06e2b0850b2a757be40dbd6a44cd61ab77))
+* **home:** shorten the missing-printing sentence in price history ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([4dbee25](https://github.com/Msgaihede/mtg-grimoire/commit/4dbee25f510f8f69a54a7de5295262e3fd9a9f6a))
+* **images:** bound the image cache and let the old grid files age out ([040bd92](https://github.com/Msgaihede/mtg-grimoire/commit/040bd92019d2f66f4e196a075f8ce58f94b55126))
+* network, feed and ingest edge cases ([#551](https://github.com/Msgaihede/mtg-grimoire/issues/551)) ([98d38af](https://github.com/Msgaihede/mtg-grimoire/commit/98d38afb6519af4a1a340bc84442a69c5513d00a))
+* network, feed and ingest edge cases ([#551](https://github.com/Msgaihede/mtg-grimoire/issues/551)) ([d37ff5b](https://github.com/Msgaihede/mtg-grimoire/commit/d37ff5b91aa11f3aff78a327f0c85369660f80cb))
+* **reconcile:** fold a merged deck card into the row of its own finish ([#662](https://github.com/Msgaihede/mtg-grimoire/issues/662)) ([93e151f](https://github.com/Msgaihede/mtg-grimoire/commit/93e151f5f47dc6c8b6e6f9209b0b5591320d9c33))
+* **relay:** compact before a quota refusal; admit pushes against the key rows ([5c271a6](https://github.com/Msgaihede/mtg-grimoire/commit/5c271a69d17437262e1eff6cec6d7abdb1eed583)), closes [#546](https://github.com/Msgaihede/mtg-grimoire/issues/546)
+* **relay:** let departed devices go, cap pushes, reconcile on a budget ([1933ad7](https://github.com/Msgaihede/mtg-grimoire/commit/1933ad78f908916bce6cc06846f412f2ae8ec7d5)), closes [#546](https://github.com/Msgaihede/mtg-grimoire/issues/546)
+* **search:** back the walls' quick-add like the card steppers ([9120453](https://github.com/Msgaihede/mtg-grimoire/commit/912045335a845906342569d72f41bcad6019b972))
+* **search:** back the walls' quick-add like the card steppers ([3680729](https://github.com/Msgaihede/mtg-grimoire/commit/3680729701a4808b838195eaa94b5c69424ffb8b))
+* **search:** match the sort-direction names to the Decks page ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([f38449b](https://github.com/Msgaihede/mtg-grimoire/commit/f38449b883c3e599b5871cbdcc39cd79b6ab7007))
+* **settings:** rewrite UI copy per the audit ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([9a03583](https://github.com/Msgaihede/mtg-grimoire/commit/9a03583736cc76b4c2f470c27eef64a15385bf67))
+* **settings:** rewrite UI copy per the audit ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([a49bd51](https://github.com/Msgaihede/mtg-grimoire/commit/a49bd518dc9ee394800d33a42418eb885c438c8b))
+* **share:** bound share_open and take it off the write connection ([37adcf4](https://github.com/Msgaihede/mtg-grimoire/commit/37adcf422c5f0970648e25a37a186338c629a1c2))
+* **share:** the fake's share_open answers through a sync, and a share link is https alone ([69bbdb4](https://github.com/Msgaihede/mtg-grimoire/commit/69bbdb41aef05ad6decaf00167303c0fd750acb4))
+* **sync:** close the sync and relay robustness gaps ([#546](https://github.com/Msgaihede/mtg-grimoire/issues/546)) ([cbfa69f](https://github.com/Msgaihede/mtg-grimoire/commit/cbfa69f6dcfc5e382ff495b1b312cad879a6e5fe))
+* **sync:** defer a refused push, rebase a corrected clock, keep the walk's roster ([937a614](https://github.com/Msgaihede/mtg-grimoire/commit/937a61451b5cb51196a59975c0d55b9f5a74085a)), closes [#546](https://github.com/Msgaihede/mtg-grimoire/issues/546)
+* **sync:** hold only what can resolve, push by bytes, catch up epoch by epoch ([924524f](https://github.com/Msgaihede/mtg-grimoire/commit/924524f1c6a62c75a7e94cc6b73e958d2912eddf)), closes [#546](https://github.com/Msgaihede/mtg-grimoire/issues/546)
+* **sync:** refresh every synced table's queries after a pull ([eda81a1](https://github.com/Msgaihede/mtg-grimoire/commit/eda81a182a3ce7738de670a56109b2ec84f7b760)), closes [#546](https://github.com/Msgaihede/mtg-grimoire/issues/546)
+* **transfer:** rewrite import/export UI copy per the audit ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([4e2e093](https://github.com/Msgaihede/mtg-grimoire/commit/4e2e093ba90822ab04704888aad0d691dc488166))
+* **transfer:** rewrite import/export UI copy per the audit ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([989c6ec](https://github.com/Msgaihede/mtg-grimoire/commit/989c6ec7c209ce5ea57fa3f690ea365297d3a139))
+* **ui:** rewrite UI copy per the audit — remaining areas ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([d078e1e](https://github.com/Msgaihede/mtg-grimoire/commit/d078e1e8478e46afbcec442e4f4efde6fea81bb7))
+* **ui:** rewrite UI copy per the audit ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([505229e](https://github.com/Msgaihede/mtg-grimoire/commit/505229eed412ffab5b914f22fed76d0b50afc834))
+* **wishlist:** rewrite UI copy per the audit ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([aef14a4](https://github.com/Msgaihede/mtg-grimoire/commit/aef14a428afece2cc4d2dd3161fbc70c21d1bc72))
+* **wishlist:** rewrite UI copy per the audit ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([549624b](https://github.com/Msgaihede/mtg-grimoire/commit/549624ba10284597ae3fdd4b7a1cf609d7f472a5))
+* **wishlist:** say theory list, not plan, in managed-folder empty text ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([83b4cb1](https://github.com/Msgaihede/mtg-grimoire/commit/83b4cb1ba3a27b73081e0abfe0abdac977803dc9))
+* **wishlist:** update App test to the new wishlist empty text ([#657](https://github.com/Msgaihede/mtg-grimoire/issues/657)) ([bd3e5ad](https://github.com/Msgaihede/mtg-grimoire/commit/bd3e5ade509d8008f327fa6cd9f1317b14d04c83))
+
 ## [0.33.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.32.1...v0.33.0) (2026-09-28)
 
 
