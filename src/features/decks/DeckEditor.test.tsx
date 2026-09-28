@@ -93,6 +93,10 @@ const listSets = vi.hoisted(() => vi.fn());
 // as it is on a fresh install — which is what `openSearchPanel` below is idempotent about.
 const searchOpen = vi.hoisted(() => vi.fn());
 const setSearchOpen = vi.hoisted(() => vi.fn());
+// The Stacks view's hidden stacks (issue #618) — the read every open makes, and the write a
+// heading's `Hide` / `Unhide` and a hidden stack's eye make. Hoisted for the cases that press them.
+const hiddenStacks = vi.hoisted(() => vi.fn());
+const setStackHidden = vi.hoisted(() => vi.fn());
 // The five consulted overlays' own reads — categories, labels, history, the theory difference and
 // deck settings. Each is unmounted while closed, so these answer only for the tests that open
 // one — but the whole `ipc` object is replaced here, so a command left out is a `TypeError`
@@ -137,6 +141,8 @@ const deckTheoryMissingToWishlist = vi.hoisted(() => vi.fn());
 // Two columns of one indexed scan, and the only read the editor makes of the list the
 // reader is *not* looking at.
 const deckTheorySlots = vi.hoisted(() => vi.fn());
+// The filter box's typed terms (issue #621) — answered by Rust as the printings that match.
+const deckQueryCards = vi.hoisted(() => vi.fn());
 const deckFolderList = vi.hoisted(() => vi.fn());
 // The import dialog's three commands, and the sync it reads to tell "your list is wrong" from
 // "the card database is not filled in yet".
@@ -236,6 +242,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     searchCards,
     searchOpen,
     setSearchOpen,
+    hiddenStacks,
+    setStackHidden,
     // The docked search panel's filter row asks for facet counts beside the page. Answered
     // **cold** — `ready: false`, every map empty — so nothing greys and every control keeps
     // its name.
@@ -269,6 +277,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTheoryDiff,
     deckTheoryMissingToWishlist,
     deckTheorySlots,
+    deckQueryCards,
     deckFolderList,
     importResolve,
     deckImportCommit,
@@ -359,6 +368,7 @@ const DECK: DeckRow = {
   // does not name wears the X. Every real row carries it, so the fixture does too.
   theoryMarkUnplanned: true,
   managedWishlist: "off",
+  managedWishlistTokens: false,
   // How the editor was last read. The defaults, so a test that says nothing about them opens on
   // Live, grouped by category, sorted alphabetically — and a test about the memory overrides the
   // one field it is about through `detail()`.
@@ -958,6 +968,8 @@ beforeEach(() => {
   listSets.mockReset().mockResolvedValue([]);
   searchOpen.mockReset().mockResolvedValue({ deck: true });
   setSearchOpen.mockReset().mockResolvedValue(undefined);
+  hiddenStacks.mockReset().mockResolvedValue([]);
+  setStackHidden.mockReset().mockResolvedValue(undefined);
   deckCategoryList.mockReset().mockResolvedValue(CATEGORIES);
   deckLabelList.mockReset().mockResolvedValue([]);
   deckLabelAll.mockReset().mockResolvedValue([]);
@@ -1007,6 +1019,7 @@ beforeEach(() => {
   // A plan that asks for nothing: the tick is drawn by the tests that are about it and by
   // no other, so a card name assertion elsewhere never has to know this mark exists.
   deckTheorySlots.mockReset().mockResolvedValue([]);
+  deckQueryCards.mockReset().mockResolvedValue([]);
   deckFolderList.mockReset().mockResolvedValue([]);
   // One printing, so a one-line paste has something to resolve to and the Import button is
   // live. What the plan makes of it is `plan.test.ts`'s and the dialog's own to prove.
@@ -1853,6 +1866,32 @@ describe("DeckEditor", () => {
     expect(within(main).getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
     expect(within(main).queryByRole("button", { name: /^Bear/ })).not.toBeInTheDocument();
     expect(within(main).getByText("4 cards")).toBeInTheDocument();
+  });
+
+  /**
+   * The box reads search syntax (issue #621): a typed term is asked of Rust and the deck narrows
+   * to the printings it answers, while the free text beside it is still the substring test —
+   * both must hold, and the heading still counts what is left.
+   */
+  it("filters the deck by a typed search term, ANDed with the free text", async () => {
+    deckQueryCards.mockResolvedValue(["c-Lightning Bolt"]);
+    await open();
+
+    await userEvent.type(screen.getByLabelText("Filter this deck"), "t:instant");
+
+    const main = group("Main deck");
+    await waitFor(() =>
+      expect(within(main).queryByRole("button", { name: /^Bear/ })).not.toBeInTheDocument(),
+    );
+    expect(within(main).getByRole("button", { name: /^Lightning Bolt/ })).toBeInTheDocument();
+    expect(within(main).getByText("4 cards")).toBeInTheDocument();
+    expect(deckQueryCards).toHaveBeenLastCalledWith(4, {
+      predicates: [{ field: "typeLine", op: "colon", value: "instant", negated: false }],
+    });
+
+    // Free text beside the term narrows further, in the webview and at once.
+    await userEvent.type(screen.getByLabelText("Filter this deck"), " zzz");
+    expect(within(main).queryByRole("button", { name: /^Lightning Bolt/ })).not.toBeInTheDocument();
   });
 
   /** The deck's own labels, as filters. **Nothing at all for a deck with none** — an empty group
@@ -7313,6 +7352,59 @@ describe("DeckEditor — a category's menu", () => {
     // greying itself is asserted below, where a pile with cards is seeded to sit beside it.
     expect(screen.getByRole("menuitem", { name: /Clear stack…/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Delete…" })).toBeInTheDocument();
+    // Hide is the Stacks view's row and nobody else's (issue #618): the other three draw every
+    // card of a hidden stack, so the row would change nothing there.
+    if (view === "stacks") {
+      expect(screen.getByRole("menuitem", { name: "Hide" })).toBeInTheDocument();
+    } else {
+      expect(screen.queryByRole("menuitem", { name: "Hide" })).toBeNull();
+    }
+  });
+
+  /**
+   * **Hide takes a stack's cards off the desk and leaves its heading; the eye puts them back**
+   * (issue #618). The write is `set_stack_hidden` with the deck and the pile, and the cards go at
+   * the press — the optimistic half — not when the write answers.
+   */
+  it("hides a stack from its menu and shows it again from the eye on its heading", async () => {
+    withCardsInMain();
+    await open();
+    const mainPile = () => document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${MAIN}"]`)!;
+    const cardsIn = () => mainPile().querySelectorAll(`[${DECK_CARD_ATTR}]`).length;
+    await waitFor(() => expect(cardsIn()).toBeGreaterThan(0));
+
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Hide" }));
+    expect(setStackHidden).toHaveBeenLastCalledWith(DECK.id, MAIN, true);
+    await waitFor(() => expect(cardsIn()).toBe(0));
+    expect(within(mainPile()).getByText("Main deck")).toBeInTheDocument();
+
+    // The menu now offers the way back too.
+    await rightClickGroup(MAIN);
+    expect(screen.getByRole("menuitem", { name: "Unhide" })).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+
+    await userEvent.click(within(mainPile()).getByRole("button", { name: "Show Main deck" }));
+    expect(setStackHidden).toHaveBeenLastCalledWith(DECK.id, MAIN, false);
+    await waitFor(() => expect(cardsIn()).toBeGreaterThan(0));
+    // The eye went with the press, and the caret went to the pile rather than to nothing.
+    expect(within(mainPile()).queryByRole("button", { name: "Show Main deck" })).toBeNull();
+    expect(mainPile()).toHaveFocus();
+  });
+
+  /** A stack stored as hidden opens hidden: the read is what the desk is drawn from. */
+  it("opens a deck with its stored hidden stacks already hidden", async () => {
+    withCardsInMain();
+    hiddenStacks.mockResolvedValue([MAIN]);
+    await open();
+    await waitFor(() =>
+      expect(
+        within(
+          document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${MAIN}"]`)!,
+        ).getByRole("button", { name: "Show Main deck" }),
+      ).toBeInTheDocument(),
+    );
+    expect(hiddenStacks).toHaveBeenCalledWith(DECK.id);
   });
 
   /**
@@ -8960,6 +9052,28 @@ describe("DeckEditor — the token pile (issue #507)", () => {
 
       await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
       expect(document.activeElement).toBe(art);
+    });
+
+    /**
+     * Issue #619: a press on a token in the pile opens the card details on that entry's printing,
+     * as a press on a deck card does — and names no deck row, since a token is not one, so the
+     * modal can offer no swap or finish write against a row that does not exist.
+     */
+    it("a press on a token in the pile opens its card details, never the picker", async () => {
+      deckTokens.mockResolvedValue(twoEntries());
+      deckWith({ tokensOpen: false });
+      const user = userEvent.setup();
+      await open();
+      await waitFor(() => expect(pile()).not.toBeNull());
+
+      await press(
+        user,
+        within(pile()!).getByRole("button", { name: /^Show details for Treasure.*TMH3 · 12, Foil$/ }),
+      );
+
+      expect(useAppStore.getState().selectedCardId).toBe("t-a");
+      expect(useAppStore.getState().paneDeckContext).toBeNull();
+      expect(screen.queryByRole("dialog", { name: /printing/i })).toBeNull();
     });
   });
 

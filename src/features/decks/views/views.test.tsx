@@ -55,6 +55,7 @@ import {
   COMMAND_ATTR,
   flowRowSpan,
   GRIP_ATTR,
+  HIDDEN_STACK_ATTR,
   StackView,
   STACK_ATTR,
   stackColumnWidth,
@@ -4711,7 +4712,7 @@ function tokenView(over: Partial<DeckTokenView> = {}): DeckTokenView {
 /** A pile of `tokens` at the rail's last slot, which is where every deck's pile starts — the
  *  column's `DEFAULT -1`. `over` names a slot, or a `moveTo`, where a case is about one. */
 function tokenPileOf(tokens: readonly DeckTokenView[], over: Partial<TokenPile> = {}): TokenPile {
-  return { tokens, setQuantity: vi.fn(), pickArt: vi.fn(), railIndex: -1, ...over };
+  return { tokens, setQuantity: vi.fn(), pickArt: vi.fn(), openCard: vi.fn(), railIndex: -1, ...over };
 }
 
 /**
@@ -4811,6 +4812,14 @@ describe.each(VIEWS)("$name token pile", ({ name, render: renderView }) => {
     );
     fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Change the art for", wurm) }));
     expect(pile!.pickArt).toHaveBeenCalledWith(wurm);
+  });
+
+  it("opens the card details when the token itself is pressed (issue #619)", () => {
+    const { pile } = setup(TOKENS);
+    const wurm = TOKENS[1];
+    fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Show details for", wurm) }));
+    expect(pile!.openCard).toHaveBeenCalledWith(wurm);
+    expect(pile!.pickArt).not.toHaveBeenCalled();
   });
 
   it("gives the two Wurms two different names", () => {
@@ -5167,6 +5176,86 @@ describe("the token pile's place in the rail", () => {
     for (const band of document.querySelectorAll(`[${DECK_GROUP_ATTR}]`)) {
       expect(band.compareDocumentPosition(root) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     }
+  });
+});
+
+/**
+ * **A hidden stack draws its heading and none of its cards** (issue #618) — the Stacks view's own
+ * affordance, so these drive `StackView` alone. `RAMP` is the one pile in `GROUPS` holding two
+ * cards, which is what makes the lift-room case below able to tell hidden from drawn.
+ */
+describe("StackView hidden stacks", () => {
+  const pile = (container: HTMLElement, categoryId: number) =>
+    container.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${categoryId}"]`)!;
+
+  it("keeps a hidden stack's heading and figures and draws none of its cards", () => {
+    const { container } = render(
+      <StackView
+        tracksCollection
+        groups={GROUPS}
+        marketplace={TCG}
+        hiddenStacks={new Set([RAMP.id])}
+        onShowStack={vi.fn()}
+      />,
+    );
+    const ramp = pile(container, RAMP.id);
+    expect(ramp).toHaveAttribute(HIDDEN_STACK_ATTR);
+    expect(within(ramp).getByText("Ramp")).toBeInTheDocument();
+    expect(within(ramp).getByText("3 cards")).toBeInTheDocument();
+    expect(ramp.querySelectorAll(`[${DECK_CARD_ATTR}]`)).toHaveLength(0);
+    // Not "Nothing here yet." either: the pile is not empty, it is hidden.
+    expect(within(ramp).queryByText("Nothing here yet.")).toBeNull();
+
+    // Every other stack is untouched.
+    const commander = pile(container, COMMANDER.id);
+    expect(commander).not.toHaveAttribute(HIDDEN_STACK_ATTR);
+    expect(commander.querySelectorAll(`[${DECK_CARD_ATTR}]`).length).toBeGreaterThan(0);
+  });
+
+  it("draws the eye on the heading's far end, and its press shows the stack", () => {
+    const onShowStack = vi.fn();
+    const { container } = render(
+      <StackView
+        tracksCollection
+        groups={GROUPS}
+        marketplace={TCG}
+        hiddenStacks={new Set([RAMP.id])}
+        onShowStack={onShowStack}
+      />,
+    );
+    const eye = within(pile(container, RAMP.id)).getByRole("button", { name: "Show Ramp" });
+    // After the price, in the figures block — the right side of the heading.
+    const price = within(pile(container, RAMP.id)).getByText("$4.97");
+    expect(eye.parentElement).toBe(price.parentElement);
+    fireEvent.click(eye);
+    expect(onShowStack).toHaveBeenCalledWith(RAMP.id);
+    // Only on the hidden stack.
+    expect(screen.getAllByRole("button", { name: /^Show / })).toHaveLength(1);
+  });
+
+  it("draws no eye where the host gives no way to show a stack", () => {
+    render(
+      <StackView
+        tracksCollection
+        groups={GROUPS}
+        marketplace={TCG}
+        hiddenStacks={new Set([RAMP.id])}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Show Ramp" })).toBeNull();
+  });
+
+  /** A hidden stack has no card to open, so it reserves no room for one to push into. */
+  it("reserves no lift room for a stack whose cards are hidden", () => {
+    const { container } = render(
+      <StackView
+        tracksCollection
+        groups={GROUPS}
+        marketplace={TCG}
+        hiddenStacks={new Set([RAMP.id])}
+      />,
+    );
+    expect((container.firstElementChild as HTMLElement).style.paddingBottom).toBe("8px");
   });
 });
 

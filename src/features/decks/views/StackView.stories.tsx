@@ -674,6 +674,33 @@ export const SwitchedOffPile: Story = {
   },
 };
 
+/** The first pile of the default deck that holds cards and is the reader's own — the one the
+ *  hidden-stack story hides. Found rather than named, so the story survives a fixture edit. */
+const HIDDEN_PILE = deckGroups().find(
+  (group) => group.kind === "main" && group.categoryId !== null && group.cards.length > 0,
+)!;
+
+/**
+ * **A hidden stack** (issue #618): the heading, its count and its price, and none of its cards —
+ * with an eye at the heading's far end that shows them again. Hidden from the pile's right-click
+ * (`Hide`, the Stacks view's own row) and remembered on this device.
+ *
+ * Also the story for the heading's new arrangement, on every pile: the count pill straight after
+ * the name, in the text colour, and the price alone on the right.
+ */
+export const HiddenStack: Story = {
+  args: { hiddenStacks: new Set([HIDDEN_PILE.categoryId!]), onShowStack: fn() },
+  play: async ({ canvasElement, args }) => {
+    const pile = canvasElement.querySelector<HTMLElement>(
+      `[data-deck-group="${HIDDEN_PILE.categoryId}"]`,
+    )!;
+    await expect(pile.querySelectorAll(`[${DECK_CARD_ATTR}]`)).toHaveLength(0);
+    const eye = within(pile).getByRole("button", { name: `Show ${HIDDEN_PILE.name}` });
+    await userEvent.click(eye);
+    await expect(args.onShowStack).toHaveBeenCalledWith(HIDDEN_PILE.categoryId);
+  },
+};
+
 /**
  * Grouped by mana value instead of by category.
  *

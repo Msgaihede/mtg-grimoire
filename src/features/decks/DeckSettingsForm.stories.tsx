@@ -10,6 +10,7 @@ import type { DeckCoverPickerProps } from "./DeckCoverPicker";
 import { DECK_KIND_HINT, deckKindPatch, type DeckKind } from "./deckKind";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
 import { DEFAULT_FORMAT } from "./FormatSelect";
+import { MANAGED_WISHLIST_HINT, MANAGED_WISHLIST_TOKENS_HINT } from "./managedWishlist";
 import { useDeck } from "./useDeck";
 import { useDeckFolders } from "./useDeckFolders";
 import { pickerFormats, useFormatSpecs } from "./useFormatSpecs";
@@ -131,6 +132,8 @@ function Body({
     theoryMarkName: row?.theoryMarkName ?? true,
     theoryMarkUnplanned: row?.theoryMarkUnplanned ?? true,
     managedWishlist: row?.managedWishlist ?? "off",
+    // The column's `DEFAULT 0` (user schema v57) for a deck that does not exist.
+    managedWishlistTokens: row?.managedWishlistTokens ?? false,
     folderId: row?.folderId ?? null,
     // `AUTO_CATEGORY` for a deck that does not exist — the column's own `DEFAULT 0`, and the
     // only answer a deck with no categories could honestly give.
@@ -472,11 +475,12 @@ export const KindTheoryAndActual: Story = {
 };
 
 /**
- * **The managed wishlist's `Tokens` mode** (managed tokens spec §3.8, user schema v55) — the
- * Compare dialog's fourth view, last in the group as it is last in the dialog.
+ * **The managed wishlist's `Tokens` toggle** (issue #617, user schema v57) — beside the group of
+ * four and outside it, in the same row, and drawn only once a view is picked. It was a fifth press
+ * *in* the group from v55, which could only be had instead of a card view; as a toggle it files
+ * the plan's missing token printings in a `Tokens` subfolder under whichever view is chosen.
  *
- * Its caption is the one that names the `Tokens` subfolder its wishes are filed in, inside the
- * deck's managed folder: the token printings the plan is short of, and nothing in the parent.
+ * The caption is the view's line, then the toggle's sentence naming the subfolder while it is on.
  *
  * **The token mode's `Managed | Hide` row, which stood lower on this panel, is gone** — from here
  * and from the band (§3.9) — because with every token at 0 until the reader counts it the pile
@@ -493,17 +497,20 @@ export const ManagedWishlistTokens: Story = {
     await expect(canvas.queryByRole("button", { name: "Hide" })).toBeNull();
 
     const group = canvas.getByRole("group", { name: "Managed wishlist" });
-    await userEvent.click(within(group).getByRole("button", { name: "Tokens" }));
+    // `Off`: no folder, so no toggle — and never a fifth press in the group.
+    await expect(canvas.queryByRole("button", { name: "Tokens" })).toBeNull();
+    await expect(within(group).getAllByRole("button")).toHaveLength(4);
 
-    await expect(args.onChange).toHaveBeenLastCalledWith({ managedWishlist: "tokens" });
-    await expect(within(group).getByRole("button", { name: "Tokens" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
+    await userEvent.click(within(group).getByRole("button", { name: "Missing" }));
+    const toggle = canvas.getByRole("button", { name: "Tokens" });
+    await expect(group).not.toContainElement(toggle);
+    await expect(toggle.parentElement).toBe(group.parentElement);
+
+    await userEvent.click(toggle);
+    await expect(args.onChange).toHaveBeenLastCalledWith({ managedWishlistTokens: true });
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
     await expect(
-      canvas.getByText(
-        "A wishlist folder named after this deck, with a Tokens subfolder that holds the token printings the plan is short of. It follows the deck and can't be edited by hand.",
-      ),
+      canvas.getByText(`${MANAGED_WISHLIST_HINT.missing} ${MANAGED_WISHLIST_TOKENS_HINT}`),
     ).toBeVisible();
     // A press settles in one act, so nothing commits beside it.
     await expect(args.onCommit).not.toHaveBeenCalled();

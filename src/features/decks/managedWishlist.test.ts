@@ -3,43 +3,55 @@ import {
   MANAGED_WISHLIST_HINT,
   MANAGED_WISHLIST_LABEL,
   MANAGED_WISHLIST_MODES,
+  MANAGED_WISHLIST_TOKENS_HINT,
+  MANAGED_WISHLIST_TOKENS_LABEL,
+  managedWishlistHistoryLabel,
   managedWishlistMode,
 } from "./managedWishlist";
 
 /**
- * The managed wishlist's words — the Deck settings group draws them and the history line names a
+ * The managed wishlist's words — the Deck settings row draws them and the history line names a
  * mode by them, so this module is their one home.
  */
 describe("the managed wishlist's modes", () => {
   /**
-   * **`tokens` since user schema v55** (managed tokens spec §3.8): the choices follow Compare's
-   * views, and Compare gained `Tokens` last — so the group paints it last, after the three views
-   * it already offered, in the dialog's own order.
+   * **Four words since user schema v57** (issue #617): the choices follow Compare's three card
+   * views in the dialog's own order, and `tokens` — the fifth word from v55 to v56 — left the
+   * group to become a switch beside it.
    */
-  it("offers the Tokens mode last, in the Compare dialog's order", () => {
-    expect(MANAGED_WISHLIST_MODES).toEqual(["off", "all", "missing", "other", "tokens"]);
-    expect(MANAGED_WISHLIST_LABEL.tokens).toBe("Tokens");
+  it("offers Off and the Compare dialog's three card views, and no Tokens mode", () => {
+    expect(MANAGED_WISHLIST_MODES).toEqual(["off", "all", "missing", "other"]);
+    expect(MANAGED_WISHLIST_LABEL).not.toHaveProperty("tokens");
+    expect(MANAGED_WISHLIST_TOKENS_LABEL).toBe("Tokens");
   });
 
-  /** Its caption is in the others' voice, and says the one thing that differs: the wishes are
-   *  in a `Tokens` subfolder, and they are the token printings the plan is short of. */
-  it("says the Tokens mode files the plan's missing token printings in a Tokens subfolder", () => {
-    expect(MANAGED_WISHLIST_HINT.tokens).toBe(
-      "A wishlist folder named after this deck, with a Tokens subfolder that holds the token printings the plan is short of. It follows the deck and can't be edited by hand.",
+  /** The switch reaches all three views alike, so no mode's caption may say anything about
+   *  tokens — a caption that did would be true under one setting of a switch it cannot see. */
+  it("keeps tokens out of every mode's caption", () => {
+    for (const mode of MANAGED_WISHLIST_MODES) {
+      expect(MANAGED_WISHLIST_HINT[mode]).not.toMatch(/token/i);
+    }
+  });
+
+  /** The switch's own sentence names the subfolder, which is where a reader will look. */
+  it("says the tokens switch files the plan's missing token printings in a Tokens subfolder", () => {
+    expect(MANAGED_WISHLIST_TOKENS_HINT).toBe(
+      "Its Tokens subfolder holds the token printings the plan is short of.",
     );
   });
 
-  /** All fills that subfolder too, so its caption says so rather than leaving a reader to find a
-   *  folder nothing on this screen mentioned. */
-  it("says All keeps its tokens in the Tokens subfolder", () => {
-    expect(MANAGED_WISHLIST_HINT.all).toMatch(/Tokens subfolder/);
-    expect(MANAGED_WISHLIST_HINT.missing).not.toMatch(/token/i);
-    expect(MANAGED_WISHLIST_HINT.other).not.toMatch(/token/i);
+  it("reads the stored word, and anything else — the retired tokens included — as off", () => {
+    expect(managedWishlistMode("other")).toBe("other");
+    expect(managedWishlistMode("tokens")).toBe("off");
+    expect(managedWishlistMode("stacked")).toBe("off");
   });
 
-  it("reads the stored word, tokens included, and anything else as off", () => {
-    expect(managedWishlistMode("tokens")).toBe("tokens");
-    expect(managedWishlistMode("other")).toBe("other");
-    expect(managedWishlistMode("stacked")).toBe("off");
+  /** History outlives the vocabulary: a v55 log row can say `tokens`, and it happened. */
+  it("names a recorded mode for history, keeping the retired Tokens word", () => {
+    expect(managedWishlistHistoryLabel("missing")).toBe("Missing");
+    expect(managedWishlistHistoryLabel("tokens")).toBe("Tokens");
+    expect(managedWishlistHistoryLabel("off")).toBeNull();
+    expect(managedWishlistHistoryLabel("stacked")).toBeNull();
+    expect(managedWishlistHistoryLabel(3)).toBeNull();
   });
 });

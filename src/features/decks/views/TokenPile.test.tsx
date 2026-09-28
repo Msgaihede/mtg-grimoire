@@ -24,6 +24,7 @@ import {
   entryRef,
   pileTokens,
   tokenArtName,
+  tokenCardName,
   tokenEntryName,
   type DeckTokenView,
 } from "../deckTokens";
@@ -109,7 +110,14 @@ const TWO_ENTRIES: DeckTokenView[] = [
 ];
 
 function pileOf(tokens: readonly DeckTokenView[]): TokenPile {
-  return { tokens, setQuantity: vi.fn(), pickArt: vi.fn(), remove: vi.fn(), railIndex: -1 };
+  return {
+    tokens,
+    setQuantity: vi.fn(),
+    pickArt: vi.fn(),
+    openCard: vi.fn(),
+    remove: vi.fn(),
+    railIndex: -1,
+  };
 }
 
 /**
@@ -150,8 +158,11 @@ function renderWith(node: ReactElement) {
 function headingOf(group: HTMLElement): HTMLElement {
   const name = within(group).getByText(TOKENS_HEADING);
   const pill = within(group).getByText(/^\d+ tokens? (?:or|and) emblems?$/);
+  // The pill sits beside the name since issue #618, so the box holding both is only the name's
+  // block — climb one more level, to the row that also carries the price on its far side.
   let heading = name.parentElement;
   while (heading !== null && !heading.contains(pill)) heading = heading.parentElement;
+  heading = heading?.parentElement ?? null;
   if (heading === null) throw new Error("no heading holds both the name and the pill");
   expect(heading).not.toContainElement(within(group).getByRole("list", { name: TOKENS_HEADING }));
   return heading;
@@ -325,6 +336,22 @@ describe.each(DRAWINGS)("the $name drawing", ({ draw }) => {
     );
     // The whole view, so the editor can hold its `entryKey` — never a frozen copy of it.
     expect(pile.pickArt).toHaveBeenCalledWith(WURMS[1]);
+    expect(pile.openCard).not.toHaveBeenCalled();
+  });
+
+  // Issue #619: a press on the token itself — the card, the line, the name — opens the card
+  // details, exactly as a press on a deck card does, and never the picker.
+  it("opens the card details on the entry whose card was pressed", () => {
+    const { pile } = setup();
+    fireEvent.click(screen.getByRole("button", { name: tokenCardName(WURMS[1]) }));
+    expect(pile.openCard).toHaveBeenCalledWith(WURMS[1]);
+    expect(pile.pickArt).not.toHaveBeenCalled();
+    // One details press per entry, and the two Wurms answer to two names.
+    const names = screen
+      .getAllByRole("button", { name: /^Show details for / })
+      .map((button) => button.getAttribute("aria-label"));
+    expect(names).toHaveLength(3);
+    expect(new Set(names).size).toBe(3);
   });
 
   it("steps an entry's copies, down to zero, addressed by the entry", () => {
@@ -487,12 +514,12 @@ describe("TokenStackPile", () => {
     expect(document.querySelector(`[${THEORY_MATCH_ATTR}]`)).not.toBeNull();
   });
 
-  it("says the plan's mark in the art press's own name, since the mark itself is aria-hidden", () => {
+  it("says the plan's mark in the card press's own name, since the mark itself is aria-hidden", () => {
     const mark = { tier: "exact", delta: 0, anyPrinting: false } as const;
     renderStack({ ...pileOf([token()]), theoryMark: () => mark });
-    const press = screen.getByRole("button", { name: /^Change the art for Treasure/ });
+    const press = screen.getByRole("button", { name: /^Show details for Treasure/ });
     expect(press).toHaveAccessibleName(
-      `${tokenEntryName("Change the art for", token())}, ${theoryMatchLabel(mark).toLowerCase()}`,
+      `${tokenCardName(token())}, ${theoryMatchLabel(mark).toLowerCase()}`,
     );
   });
 

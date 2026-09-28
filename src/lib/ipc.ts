@@ -3382,11 +3382,15 @@ export interface DeckInput {
  * schema v49), and `managed_wishlist::MODES` in the crate. `other` is the dialog's
  * `Different printing`. The words and their order are `features/decks/managedWishlist.ts`'s.
  *
- * **`tokens` since user schema v55** (managed tokens spec §3.8): All and Tokens fill a `Tokens`
- * subfolder inside the deck's folder with the plan's missing tokens, Tokens puts nothing in the
- * folder itself, and Missing and Different printing leave tokens out.
+ * **Four words, and tokens are not one of them since user schema v57** (issue #617). v55 made
+ * `tokens` a fifth mode and had All file the plan's tokens too, which tied two questions into one
+ * press: *which card copies does this folder want* and *does it want the tokens at all*. A reader
+ * who wanted Missing cards and the tokens had no word for it. The token half is its own switch
+ * now — {@link DeckRow.managedWishlistTokens} — and fills the `Tokens` subfolder under any of the
+ * three views; v57 turned every `tokens` deck into `missing` with that switch on, and every `all`
+ * deck kept its tokens by the same switch.
  */
-export type ManagedWishlistMode = "off" | "all" | "missing" | "other" | "tokens";
+export type ManagedWishlistMode = "off" | "all" | "missing" | "other";
 
 /**
  * How a deck keeps its tokens — `decks.token_mode`, user schema v52, `NOT NULL DEFAULT
@@ -3493,6 +3497,11 @@ export interface DeckPatch {
    *  {@link DeckRow.managedWishlist}; `decks.managed_wishlist_mode`, schema v49. A word outside the
    *  four is refused by name. */
   managedWishlist?: ManagedWishlistMode;
+  /** Whether this deck's managed wishlist also files the plan's **tokens**, in a `Tokens`
+   *  subfolder. See {@link DeckRow.managedWishlistTokens}; `decks.managed_wishlist_tokens`,
+   *  schema v57. Absent leaves it, as every field here does — and it is written whatever the mode,
+   *  so a deck whose mode is `off` can hold it on for the day a view is picked again. */
+  managedWishlistTokens?: boolean;
   /**
    * Gather this deck's `{X}` spells under a heading of their own instead of counting each at
    * the mana value Scryfall gives it. See {@link DeckRow.separateXGroup} — a **reading**
@@ -3981,6 +3990,22 @@ export interface DeckRow {
    * word it does not know as `off`.
    */
   managedWishlist: ManagedWishlistMode;
+  /**
+   * Whether this deck's managed wishlist files the plan's **tokens** as well as its cards —
+   * `decks.managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0`, user schema v57
+   * ([issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617)). On, every token row the
+   * Compare dialog's Tokens view lists is a wish in a **`Tokens` subfolder** inside the deck's
+   * folder, at its whole quantity, **whichever of the three views {@link managedWishlist}
+   * names**; off, the deck's folder holds card wishes and nothing else.
+   *
+   * **It is a switch beside the mode and not a fifth mode**, which is what it was from v55 to v56:
+   * the card view and the tokens are two answers a reader gives separately, and one word could only
+   * give both at once. **A mode of `off` makes no folder whatever this says**, and the column is
+   * kept rather than cleared, so picking a view again brings the tokens back as they were. v57
+   * set it on for every `all` deck (All used to carry tokens) and every `tokens` one (which
+   * became `missing`); a new deck starts with it off.
+   */
+  managedWishlistTokens: boolean;
   /**
    * How this deck keeps its tokens — `decks.token_mode TEXT NOT NULL DEFAULT 'managed'`, user
    * schema v52, closed by a `CHECK` on the three words of {@link TokenMode}. It replaced v47's
@@ -6997,23 +7022,37 @@ export interface NewPrintings {
 }
 
 /**
- * How much of one deck the reader owns — `deck_completion.rs`'s `DeckCompletion`, one row per deck
- * that is not virtual (archived ones included; which decks to draw is the widget's decision).
+ * Which comparison the Deck completion widget asks for — `deck_completion.rs`'s `Compare`, sent as
+ * the word. **Anything Rust does not recognise reads as `collection`**, `Marketplace`'s forgiving
+ * shape, so a word a newer build wrote measures the default rather than refusing.
+ *
+ * * `collection` — every deck that is not virtual, its **actual** (live) list against the copies
+ *   the collection files in that deck's own group: the editor's `Actual` tab, owned for owned.
+ * * `theory` — every deck that keeps a plan, virtual ones included, its **actual** list against
+ *   its **theory** list: how much of the plan is already sleeved, in the exact printing and finish.
+ *   `theory_diff`'s arithmetic, so the missing copies are the Compare dialog's own lines.
+ */
+export type DeckCompletionCompare = "collection" | "theory";
+
+/**
+ * How far one deck is along — `deck_completion.rs`'s `DeckCompletion`, one row per deck the
+ * {@link DeckCompletionCompare} asked about (archived ones included; which decks to draw is the
+ * widget's decision).
  *
  * **Counted exactly as the deck editor counts**, which is the whole point of the read: a widget
- * saying "4 missing" about a deck that opens saying "6 missing" is a bug report. So a deck with no
- * plan measures its live list against its own group, a deck with `theoryEnabled` measures its plan
- * against every copy it could use, every active pile counts — sideboard and companion included,
- * unlike {@link DeckValue}'s narrower pile — and ownership is exact printing and finish.
+ * saying "4 missing" about a deck that opens saying "6 missing" is a bug report. Every active pile
+ * counts — sideboard and companion included, unlike {@link DeckValue}'s narrower pile — and a copy
+ * matches on exact printing and finish.
  */
 export interface DeckCompletion {
   deckId: number;
-  /** Which list was measured — `live` against the deck's own group, or `theory` for a deck that
-   *  keeps a plan. The editor's `Actual`/`Theory` tab the numbers agree with. */
+  /** Which list the figure is a fraction *of* — `live` under `collection`, measured against the
+   *  deck's own group, and `theory` under `theory`, measured against the actual list. */
   list: "live" | "theory";
   /** Copies the measured list asks for, over every active pile. */
   wanted: number;
-  /** Of those, copies the pool covers. Never more than `wanted`. */
+  /** Of those, copies the pool covers — the group's copies, or the actual list's. Never more than
+   *  `wanted`. */
   owned: number;
   /** `wanted − owned`. Never negative. */
   missing: number;
@@ -8818,6 +8857,21 @@ export const ipc = {
    */
   deckTheorySlots: (deckId: number) => invoke<TheorySlot[]>("deck_theory_slots", { deckId }),
   /**
+   * The printings of one deck, in either list, that answer every typed term of the editor's
+   * `Filter this deck` box — `t:goblin`, `cmc>=3`, `-kw:flying`, a resolved `otag:` slug
+   * (issue #621). Sorted, deduplicated card ids; a deck that is not there answers `[]`.
+   *
+   * **The terms and nothing else**: the box's free text is matched in the webview as it always
+   * was, so there is deliberately no `text` here and Rust would ignore one. The filters are the
+   * search's own (`filters::push_card_filters`, `filters::fts_match`), which is the whole reason
+   * this is a round trip rather than a test over `DeckCard` — a deck row carries no keywords, no
+   * artist and no tags, and a second implementation of the thirteen fields would drift.
+   */
+  deckQueryCards: (
+    deckId: number,
+    filters: Pick<CardFilters, "predicates" | "oracleTags" | "artTags">,
+  ) => invoke<string[]>("deck_query_cards", { deckId, filters }),
+  /**
    * Everything the **plan** is short of, onto the wishlist. Answers how many wishes were
    * touched, like its live twin.
    *
@@ -9622,6 +9676,23 @@ export const ipc = {
   setShelfFolds: (page: ShelfFoldPage, changes: Record<string, boolean | null>) =>
     invoke<void>("set_shelf_folds", { page, changes }),
   /**
+   * The category ids of the stacks the reader hid in one deck's Stacks view, ascending (issue
+   * #618). {@link shelfFolds}' contract keyed by deck: **infallible by signature** — an
+   * unreadable row answers `[]`, which is every stack drawn. `app_meta` is not synced, so a stack
+   * hidden here is this device's alone, which was the reader's call.
+   *
+   * **A stale id is answered, not pruned**: a pile deleted since stays in the list until it is
+   * shown again, and the editor ignores an id no pile of the deck carries.
+   */
+  hiddenStacks: (deckId: number) => invoke<number[]>("hidden_stacks", { deckId }),
+  /**
+   * Hide or show one stack, leaving every other stack and deck alone. Refuses an id that is not
+   * positive; answers `collection::BUSY` under a running sync, which the caller swallows —
+   * {@link setShelfFolds}' trade: the stack stays as the reader left it for this session.
+   */
+  setStackHidden: (deckId: number, categoryId: number, hidden: boolean) =>
+    invoke<void>("set_stack_hidden", { deckId, categoryId, hidden }),
+  /**
    * How the decks page's folder tree was last left — how wide the reader dragged it, and whether
    * it is folded to its rail.
    *
@@ -9866,11 +9937,11 @@ export const ipc = {
   /** Move the *seen* cursor to `at`, in Unix seconds. **The clock is the caller's.** */
   markNewPrintingsSeen: (at: number) => invoke<void>("mark_new_printings_seen", { at }),
   /**
-   * How much of every deck the reader owns, priced at `marketplace` — see {@link DeckCompletion}.
-   * `deck_values`' shape: one argument, and the marketplace belongs in the caller's query key.
+   * How far every deck is along under `compare`, priced at `marketplace` — see
+   * {@link DeckCompletion} and {@link DeckCompletionCompare}. Both belong in the caller's query key.
    */
-  deckCompletion: (marketplace: MarketplaceId) =>
-    invoke<DeckCompletion[]>("deck_completion", { marketplace }),
+  deckCompletion: (marketplace: MarketplaceId, compare: DeckCompletionCompare) =>
+    invoke<DeckCompletion[]>("deck_completion", { marketplace, compare }),
   /**
    * How many `deck_cards` rows carry a `needs_review` sentence — rows, not copies, and only that
    * one table. Its own read rather than `sync_relay_status`' `reviewCount`, which sums six tables,

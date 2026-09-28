@@ -822,6 +822,23 @@ describe("auditSentence", () => {
       detail: null,
     });
     expect(deck({ field: "managed_wishlist_mode", to: "all" }).text).toBe("Changed the deck");
+    // **A log written between v55 and v56 can name the retired `tokens` mode** (issue #617), and
+    // the history keeps its old word rather than reading it as off — a row there is what
+    // happened, which the migration that moved the deck cannot move.
+    expect(deck({ field: "managedWishlist", from: "all", to: "tokens" }).text).toBe(
+      "Set the managed wishlist to Tokens",
+    );
+    // The tokens switch beside the mode (schema v57) — its own `camelCase` word and its own row,
+    // never a sentence that calls it a mode.
+    expect(deck({ field: "managedWishlistTokens", from: false, to: true })).toEqual({
+      text: "Started filing tokens in the managed wishlist",
+      detail: null,
+    });
+    expect(deck({ field: "managedWishlistTokens", from: true, to: false })).toEqual({
+      text: "Stopped filing tokens in the managed wishlist",
+      detail: null,
+    });
+    expect(deck({ field: "managed_wishlist_tokens", to: true }).text).toBe("Changed the deck");
     // The wrong-but-plausible spellings: one key for every switch, and the raw column names.
     expect(deck({ field: "theoryMark", to: true })).toEqual({
       text: "Changed the deck",

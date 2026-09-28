@@ -133,7 +133,7 @@ describe("GroupHeader markers", () => {
       </div>,
     );
     expect(screen.getByRole("cell")).toHaveAccessibleName(
-      `Sideboard ${RULE} ${OFF} 3 cards $4.97`,
+      `Sideboard 3 cards ${RULE} ${OFF} $4.97`,
     );
   });
 
@@ -218,8 +218,8 @@ describe("GroupHeader price", () => {
 });
 
 /**
- * The figures: a count pill and the price, on the name's own row in every layout (token stacks
- * spec §3.1).
+ * The figures: a count pill after the name and the price at the far end, on one row in every
+ * layout (token stacks spec §3.1; the pill moved beside the name for issue #618).
  *
  * **jsdom lays nothing out, so these assert the classes that make the row wrap rather than where
  * anything lands.** At 0.5× a stack column is ~117px and a switched-off Sideboard carries a grip,
@@ -244,12 +244,15 @@ describe("GroupHeader figures", () => {
     expect(price.parentElement).toHaveClass("shrink-0");
   });
 
-  /** One row in all three layouts, the pill before the price in one block that cannot shrink —
-   *  and no `·` between them, because the pill's own edge is the separator now. */
+  /**
+   * One row in all three layouts, **the pill straight after the name, in the name's block, and the
+   * price alone in the block that cannot shrink** (issue #618) — with no `·` anywhere, because the
+   * pill's own edge is the separator.
+   */
   it.each(["spread", "tight", "stacked"] as const)(
-    "draws the %s heading as one wrapping row with the pill before the price",
+    "draws the %s heading as one wrapping row with the pill after the name and the price apart",
     (layout) => {
-      const { container } = renderHeader({ layout, count: 3 });
+      const { container } = renderHeader({ layout, count: 3, kind: "side", isActive: false });
       const root = container.firstElementChild as HTMLElement;
       expect(root).toHaveClass("flex", "flex-wrap");
       expect(root).not.toHaveClass("flex-col");
@@ -258,11 +261,42 @@ describe("GroupHeader figures", () => {
       const figures = price.parentElement!;
       expect(figures).toHaveClass("shrink-0");
       expect(figures.parentElement).toBe(root);
-      const pill = within(figures).getByText("3 cards").parentElement!;
-      expect(pill.compareDocumentPosition(price)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+      expect(within(figures).queryByText("3 cards")).toBeNull();
+
+      const name = screen.getByText("Ramp");
+      const pill = screen.getByText("3 cards").parentElement!;
+      expect(pill.parentElement).toBe(name.parentElement);
+      // Name, then the pill, then the two marks — the count reads with the name it counts.
+      expect(name.nextElementSibling).toBe(pill);
+      expect(pill.compareDocumentPosition(chip(RULE))).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
       expect(screen.queryByText("·")).toBeNull();
     },
   );
+
+  /** The count is set in the text colour, not the dim one the price keeps (issue #618). */
+  it("sets the count in the text colour and leaves the price dim", () => {
+    renderHeader({ count: 3 });
+    const pill = screen.getByText("3 cards").parentElement!;
+    expect(pill).toHaveClass("text-text");
+    expect(pill).not.toHaveClass("text-dim");
+    expect(screen.getByText("$4.97").parentElement).toHaveClass("text-dim");
+  });
+
+  /** `trailing` — the Stacks view's eye on a hidden stack — lands after the price, at the far end. */
+  it("draws what it is handed as trailing after the price", () => {
+    render(
+      <GroupHeader
+        group={group({ totalPrice: 4.97 })}
+        marketplace={MARKETPLACES.tcgplayer}
+        layout="stacked"
+        trailing={<button type="button">Show Ramp</button>}
+      />,
+    );
+    const price = screen.getByText("$4.97");
+    const eye = screen.getByRole("button", { name: "Show Ramp" });
+    expect(eye.parentElement).toBe(price.parentElement);
+    expect(price.compareDocumentPosition(eye)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
+  });
 
   /**
    * **The stacked name block's floor is what decides whether the row wraps at all**, so it is
@@ -274,12 +308,15 @@ describe("GroupHeader figures", () => {
    * stays one line while that much name fits beside the figures and wraps them only below it.
    * `flex-auto` is pinned absent because it wraps on the *whole* name, which gives up the one row
    * at 1× for any long name. The name itself stays `min-w-0 truncate`, so it gives way first.
+   *
+   * **6rem since issue #618** moved the pill into this block: the floor has to hold the grip, the
+   * pill and both marks with no name at all, or they run over the price before the row wraps.
    */
-  it("floors the stacked name block at 4rem, so the row stays one line until it cannot", () => {
+  it("floors the stacked name block at 6rem, so the row stays one line until it cannot", () => {
     renderHeader({ layout: "stacked" });
     const name = screen.getByText("Ramp");
     const block = name.parentElement!;
-    expect(block).toHaveClass("min-w-16", "flex-1");
+    expect(block).toHaveClass("min-w-24", "flex-1");
     expect(block).not.toHaveClass("min-w-0");
     expect(block).not.toHaveClass("flex-auto");
     expect(name).toHaveClass("min-w-0", "truncate");
@@ -288,8 +325,8 @@ describe("GroupHeader figures", () => {
   /** `spread` keeps a bare `flex-1`: it never wraps, and its figures hold the far edge while the
    *  name truncates. `tight` grows neither way, so its figures sit right after the name. */
   it.each([
-    ["spread", ["min-w-0", "flex-1"], ["min-w-16"]],
-    ["tight", ["min-w-0"], ["min-w-16", "flex-1"]],
+    ["spread", ["min-w-0", "flex-1"], ["min-w-24"]],
+    ["tight", ["min-w-0"], ["min-w-24", "flex-1"]],
   ] as const)("leaves the %s name block unfloored", (layout, has, lacks) => {
     renderHeader({ layout });
     const block = screen.getByText("Ramp").parentElement!;
