@@ -398,8 +398,8 @@ export class Group implements DurableObject {
    * **Called only by the Worker, after `/rotate` has recorded the rotation in D1** — never by a
    * device, which is why, like `drop`, it is not on the router's public `ROUTE` regex. Without it
    * nothing ever told this object of a removal: `/rotate` is answered out of D1 ahead of the
-   * bearer gate and never reaches here, so a removed device's ack stayed the slowest reader the
-   * group had, for good.
+   * bearer gate and, before this post, never reached here, so a removed device's ack stayed the
+   * slowest reader the group had, for good.
    *
    * Each omitted device is marked departed and its ack deleted; each named one loses any mark it
    * had, which is how a device that left and was paired back in holds the floor again. Then a

@@ -33,6 +33,18 @@ adds a **second** migration file to step 2 (run as its own `--command`, never a 
 step says why) and **no new step at all**. It changes no existing route path either, so step 6
 still deploys the same list plus these two new routes.
 
+**A fifth half, issue #546's, is written and is not deployed.** The Worker admits a push
+before the Durable Object hop — `413 too_large`, `409 stale_epoch`, `422 epoch_ahead`,
+`422 clock_ahead`, and the object's own `507 quota` — `/keys` answers `?epoch=` and advertises
+`removalStep: 2`, `/rotate` accepts a removal's two-epoch step, an accepted rotation posts its
+roster to the object's internal `/roster` so a departed device's ack stops pinning compaction, the
+Patreon reconciliation runs **hourly** on a budget of twenty subjects queued by a new
+`entitlements.reconciled_at`, and the group door's lapse 401 carries `code: "membership_ended"`.
+It adds **one migration file** to step 2, run as two `--command`s, and no public route path —
+`/roster` is internal. The cron's move from `0 3 * * *` to `0 * * * *` is in `wrangler.jsonc`, so
+step 6 carries it with nothing else to do. **Its app and its relay ship in either order**; "The
+order" says why, and [relay/README.md](../../relay/README.md) holds the whole of what it changes.
+
 Designs: [2026-08-29-hosted-relay-and-patreon-design.md](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md),
 [2026-08-30-group-wide-membership-and-removal-design.md](../superpowers/specs/2026-08-30-group-wide-membership-and-removal-design.md),
 [2026-08-30-leave-group-and-device-caps-design.md](../superpowers/specs/2026-08-30-leave-group-and-device-caps-design.md)
@@ -51,13 +63,14 @@ run — it runs workerd locally, contacts nothing and needs no login. Everything
 | The **group-key routes** | **deployed, later the same day.** `/g/{group}/rotate` answers **401** to a POST and `/g/{group}/keys` **401** to a GET carrying a well-formed bearer, against a host where `/g/{group}/bogus` is still **404** — so these are refusals from the handlers, not a router shrug. ⚠️ **This row said "not deployed, both answer 404" and that is history.** |
 | The `group_keys` **table** | **applied.** The bearer-carrying `/keys` probe in step 2 is the test — **401 is the pass and 500 is a missing table** — and it answers 401. |
 | This branch's **device roll** | **not deployed, and no route path gives it away.** The tell is a body: `POST /token {group, auth}` **with no `device`** answers **401** from the entitlement lookup, where this tree's code answers **400 `that is not a device id`** before reading anything. So `group_devices`, the cap, `/claim`'s rebind and `keepOnly` are all still un-run. |
+| Issue #546's **half** | **not deployed, and no public route path gives it away either.** The tell is a query parameter: `/g/{group}/keys?device=…&epoch=x` with any well-formed bearer answers **400 `that is not an epoch`** from this tree — `handleKeys` checks the epoch's shape before the credential's value — and **401** from a Worker that ignores `epoch`. **Read off the code, not probed**: the sandbox it was written in could not reach the host on 2026-09-28 — its egress proxy refused the connection. From inside a group the same fact is a `/keys` 200 that carries `removalStep: 2`, which the live Worker's does not. |
 | The D1 database | **exists.** `wrangler.jsonc`'s `database_id` is a real uuid, and has been since before this branch. It holds live entitlement rows, so step 2's `ALTER TABLE`s run against real data. |
 | The Patreon OAuth app | **the client exists.** `PATREON_CLIENT_ID` is real in `entitlement.rs` since `a0eb0c6` (2026-08-30) and was verified live: `GET /oauth2/authorize` with it and `/oauth/patreon/callback` answered 302 to Patreon's login, preserving both parameters, which an unregistered id or an unregistered redirect does not do. **`wrangler.jsonc`'s `vars` carry the relay's own copy of it and `PATREON_CAMPAIGN_ID`**, both real, the client id byte for byte equal to the Rust constant. |
 
 A device pointed at that host today reaches a relay that speaks the whole membership flow, the
-whole log **and the key distribution**. **What is missing is one table and one deploy**, and
-neither is visible in a route list — which is the reason the last row's probe is a body rather
-than a path.
+whole log **and the key distribution**. **What is missing is a table, a column with its index, and
+the deploys that read them**, and none of it is visible in a route list — which is the reason the
+two "not deployed" rows' probes are a body and a query rather than a path.
 
 ⚠️ **The first two rows above were the opposite until 2026-08-30, in four files at once**, and no
 build could go red for any of it. The claim "the hosted Worker is not deployed" was written once
@@ -94,8 +107,25 @@ too — a `dead` row settles to 401 whatever auth reaches it, and a group claime
 other client-visible change, `/rotate` no longer taking the refresh secret, costs nothing: no
 build has ever sent one there.
 
+**Issue #546's half ships in either order, app or relay first, and neither waits for the other.**
+Every new client behaviour falls back against a relay without it: the app steps a removal or a
+departure by two only after a `/keys` answer has carried `removalStep: 2`, so against the live
+relay it goes on publishing `+1`, the only step that relay accepts; the live relay ignores
+`?epoch=` and answers the newest manifest, which the app detects by the answered epoch not being
+the one it asked for; and a relay that sends none of the new codes reaches none of the code paths
+that read them. The other way round, the updated relay still accepts the `+1` every older build
+publishes, and its new push refusals reach an older build as the ordinary push failure it already
+retries. Most are pushes the group should never have accepted — under a key the device was removed
+from, at an epoch no rotation reached, with a clock more than a day fast, one op too large to
+store. The one an honest older build can meet is a `stale_epoch` from a rotation that landed
+between its key check and its push, and the next trip's key check clears it, as it clears any
+catch-up — reasoned from the trip's order, `check_keys` before `push`, and not driven. **What
+either half alone does not buy is the lapse fix**: a device that only ever uses the group door
+learns its membership ended only once this relay sends `membership_ended` *and* its build reads it.
+Until both are out, that device goes on saying *Supporting since …*, as it always has.
+
 0. **Ask the host what is actually there, and branch on the answer rather than on this file.**
-   Three `curl`s settle it in ten seconds and cost nothing:
+   Four `curl`s settle it in ten seconds and cost nothing:
    ```
    curl -si https://mtg-grimoire-relay.denmark-east.workers.dev/token -d '{}'
    curl -s -o /dev/null -w "%{http_code}\n" \
@@ -103,10 +133,14 @@ build has ever sent one there.
      "https://mtg-grimoire-relay.denmark-east.workers.dev/g/abc/keys?device=deadbeef"
    curl -si https://mtg-grimoire-relay.denmark-east.workers.dev/token \
      -d '{"group":"aaaaaaaa","auth":"bbbbbbbb"}'
+   curl -si -H "authorization: Bearer $(printf 'ab%.0s' {1..32})" \
+     "https://mtg-grimoire-relay.denmark-east.workers.dev/g/abc/keys?device=deadbeef&epoch=x"
    ```
    **As of 2026-08-30 the expected answers are `400 malformed token request`, `401`, and
    `401 unauthorized`** — an upgraded Worker with `group_keys` applied and the device roll not yet
-   deployed. Read them in that order and branch:
+   deployed. The fourth probe was added on 2026-09-28 and has never been run: from a Worker without
+   issue #546's half it should answer `401`, the same as the second. Read them in that order and
+   branch:
    - **404 on the first** means the baseline Worker is still there and none of this has run: do
      every step below.
    - **500 on the second** means the router is deployed and `group_keys` is **missing** — the
@@ -118,6 +152,13 @@ build has ever sent one there.
    - **400 `that is not a device id` on the third** means this branch is already deployed and the
      device roll's migration must already have been applied; **401** means it is not, and step 2's
      `group_devices` block is still owed.
+   - **400 `that is not an epoch` on the fourth** means issue #546's half is deployed, and
+     `reconciled_at` must already be in D1 — check it with step 2's `SELECT`, because a Worker
+     without it looks healthy to every device. **401** means it is not deployed. The probe works
+     because `handleKeys` refuses a malformed epoch before it reads D1 for the credential, and a
+     Worker that ignores `epoch` never gets past the credential; it is read off the code, since the
+     sandbox it was written in could not reach the host that day. A device inside a group sees
+     the same fact as `removalStep: 2` on its own `/keys` answers.
 
    ⚠️ **The third probe is a body and not a path, and that is the lesson of the second deploy.**
    The device cap adds no route, so a route list cannot tell you whether it is live — and a route
@@ -158,10 +199,42 @@ build has ever sent one there.
      --command "CREATE TABLE IF NOT EXISTS pairing_rendezvous (rv TEXT NOT NULL, slot TEXT NOT NULL CHECK (slot IN ('offer', 'join')), blob TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY (rv, slot))"
    npx wrangler d1 execute mtg-grimoire-relay --remote \
      --command "ALTER TABLE entitlements ADD COLUMN refresh_device TEXT"
+   npx wrangler d1 execute mtg-grimoire-relay --remote \
+     --command "ALTER TABLE entitlements ADD COLUMN reconciled_at INTEGER"
+   npx wrangler d1 execute mtg-grimoire-relay --remote \
+     --command "CREATE INDEX IF NOT EXISTS entitlements_reconcile ON entitlements (reconciled_at, subject) WHERE status <> 'dead'"
    ```
    Both migration files are `IF NOT EXISTS` throughout and safe to run any number of times. Each
    `ALTER` is its own invocation so a `duplicate column name` — the correct answer on a database
    that already has it — costs nothing else.
+
+   ⚠️ **`reconciled_at` and its index (`relay/migrations/2026-09-28-reconciled-at.sql`) go in
+   BEFORE the deploy that ships the budgeted `reconcile`, as two `--command`s in that order** — the
+   index names the column — and never as `--file`, which on a database the `ALTER` has already
+   reached would roll the index back with the duplicate-column error. **A Worker without the column
+   fails quietly rather than loudly**: nothing a device calls reads it, so sync is untouched and
+   every probe above looks healthy, but every hourly `scheduled` throws on its `SELECT` — no subject
+   is reconciled, and the rendezvous sweep that runs after it never runs either. So check it landed,
+   against the host, before step 6:
+   ```
+   npx wrangler d1 execute mtg-grimoire-relay --remote \
+     --command "SELECT reconciled_at FROM entitlements LIMIT 0"
+   ```
+   An empty result is the pass; `no such column` means the `ALTER` did not run. A missing index
+   costs speed and nothing else. The column is additive: every existing row reads NULL, which the
+   pass reads as *never reconciled* and puts at the front of the queue — so the first hourly passes
+   after the deploy work through the whole live table twenty rows at a time, reaching subjects the
+   daily pass never got to, and settle into about one turn a subject a day once they have.
+
+   **The Durable Object's half of issue #546 needs no step here, and that is also why it is
+   untested.** Its new column (`acks.heard_at`) and tables (`departed`, `roster_epoch`, `log_size`)
+   are made by each object's own constructor on its first wake after the deploy: `CREATE TABLE IF
+   NOT EXISTS` for the tables, and `ALTER TABLE acks ADD COLUMN heard_at` when `PRAGMA
+   table_info(acks)` does not list it, backfilled with that moment so every existing device counts
+   as heard at the deploy. **Whether workerd accepts that `PRAGMA` has never been run** — every
+   constructor asks it, so if it does not, every request that reaches any group's object 500s while
+   `/token`, `/rotate` and `/keys` answer normally. **The first pull after the deploy is the check**;
+   see item 12 below.
 
    ⚠️ **`refresh_device` (`relay/migrations/2026-09-26-refresh-device.sql`) must be applied BEFORE
    the deploy that reads it**, and a Worker without it fails quietly rather than loudly:
@@ -282,16 +355,19 @@ build has ever sent one there.
    deliberately stand *ahead* of the gate, because a device that has just been rotated away from
    cannot mint a token and `/keys` exists to answer exactly that device; `/p/{rv}/{slot}` is the
    pairing rendezvous, unauthenticated by design because the joining device has no token yet either.
-   None of the five reaches a Durable Object, so the metered line is untouched — but "unauthenticated
-   at the edge" is what a rate-limit rule is about, and by that test they belong on this list rather
-   than on the other one.
+   None of the five reaches a Durable Object to refuse anything — `/rotate` reaches one only once D1
+   has accepted a rotation, to post its roster, and only a caller holding the group's current auth
+   gets that far — so the metered line is untouched by junk. But "unauthenticated at the edge" is
+   what a rate-limit rule is about, and by that test they belong on this list rather than on the
+   other one.
 
 ---
 
 ## What only the deploy can settle
 
-**Eleven things**, in the order they will bite. ⚠️ **Re-counted 2026-08-30** — it was ten until
-the device roll added item 11, and nine until the group key store added item 10.
+**Twelve things**, in the order they will bite. ⚠️ **Re-counted 2026-09-28** — it was eleven until
+issue #546's half added item 12, ten until the device roll added item 11, and nine until the group
+key store added item 10.
 
 ### 1. `include=memberships.campaign` — the highest-value check here
 
@@ -404,8 +480,9 @@ Added 2026-08-30. Four things, and the third is the one to be frightened of.
 - **The prune, and that it does not delete the row it just wrote.** `recordRotation` follows its
   insert with `DELETE … WHERE epoch <= ? - EPOCH_HISTORY` in the same batch. Correct by
   arithmetic for any `EPOCH_HISTORY` above zero; unverified against D1's batch semantics. After
-  nine rotations, confirm `group_keys` holds eight rows and that the oldest surviving auth is
-  still accepted by `/keys`.
+  nine joins, confirm `group_keys` holds eight rows and that the oldest surviving auth is still
+  accepted by `/keys` — **joins**, because the window is eight epochs and a removal steps over one,
+  so a run of removals keeps fewer rows by design.
 
 ### 11. The device roll, and the one refusal that must not read as a lapse
 
@@ -431,6 +508,46 @@ Added 2026-08-30, and **none of it has run**. Four things.
 - **`keepOnly` freeing a slot.** Fill a group to five, remove one device, and confirm a sixth can
   then pair — the manifest is the only thing that frees a slot inside ninety days, and the TTL is
   not something a deploy can wait out.
+
+### 12. Issue #546's half — the object's own migration, the hourly cron, and two ceilings nobody could read
+
+Added 2026-09-28, and **none of it has run**. Five things, and the first is the one that can take
+sync down.
+
+- ⚠️ **`PRAGMA table_info(acks)` inside a Durable Object's constructor.** Every object asks it on
+  every wake, a brand-new one included, to decide whether `acks.heard_at` still has to be added —
+  there is no migration step for a Durable Object, so its schema is whatever its constructor last
+  made it. Whether workerd's SQL API accepts that `PRAGMA` has never been executed; if it does not,
+  the constructor throws and **every push, pull, ack and socket on every group 500s**, while
+  `/token`, `/rotate` and `/keys` go on answering. **Sync one device straight after the deploy and
+  confirm it pulls.** A 500 on the pull beside a healthy `/keys` is this, and the answer is the
+  previous Worker. The backfill that follows it is the other half of the same statement: every
+  existing ack is stamped with the migration's own moment, not zero, so no live device drops off
+  the compaction floor at the deploy.
+- **The hourly cron firing, and the queue moving.** Confirm in the dashboard's cron events, or
+  `wrangler tail`, that `scheduled` now fires at minute `0` every hour rather than at `0 3`, and that
+  `SELECT count(*) FROM entitlements WHERE reconciled_at IS NOT NULL` climbs by up to twenty an hour
+  until every live row has been stamped once. A `no such column: reconciled_at` in the scheduled
+  invocation's log is step 2's missing `ALTER`, and it is the only place that failure shows.
+- ⚠️ **The free plan's per-invocation ceilings.** The budget of twenty is sized to **50 external
+  subrequests** (a row spends two Patreon fetches — 40) and **50 D1 queries** (one `SELECT`, one
+  stamp and at most two `UPDATE`s a row — 42, 43 with the rendezvous sweep) per invocation. Both
+  figures are search summaries of Cloudflare's pages, which could not be read from the sandbox that
+  sized the budget, and the ~25 subjects a day the old pass is said to have reached is derived from
+  them rather than measured. If either ceiling is lower, a full pass fails part way through, one
+  caught `reconcile <subject>` error at a time — so read the first full pass's log for a limit error
+  rather than a Patreon one.
+- **`/rotate`'s two-epoch step and `/keys?epoch=`, on real D1.** Both bounds are in one
+  `INSERT … SELECT … WHERE ? > max AND ? <= max + ?`, where item 10's statement had one. Remove a
+  device on a build that has seen `removalStep: 2`, and confirm the rotation lands two epochs on,
+  that `/keys?epoch=` for the epoch it stepped over answers **404 `no_such_epoch`**, and that a
+  device that stayed in the group but was dark across the removal catches up rather than leaving.
+  No `rotate roster` error in the Worker's log afterwards is the pass for the roster post; nothing
+  a device sees depends on it.
+- **`membership_ended`, on a device that never pressed Connect.** Item 9's cancelled pledge, read
+  on the *other* device: it must say **Membership ended** within one sync, where before this it
+  went on saying *Supporting since …* for as long as the group door kept answering a bare 401. It
+  needs this relay and a build that reads the code — see "The order".
 
 ---
 

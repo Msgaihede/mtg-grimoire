@@ -41,7 +41,8 @@
   // (spec 7.2) has no webhook of its own to close it.
   //
   // **Hourly, and it was daily at `0 3` until 2026-09-28.** One invocation may make fifty
-  // external subrequests on the free plan and a subject costs two, so `claim.ts`'s `reconcile`
+  // external subrequests on the free plan — reported, not verified; `claim.ts`'s
+  // `RECONCILE_BUDGET` says where from — and a subject costs two, so `claim.ts`'s `reconcile`
   // reaches at most `RECONCILE_BUDGET` (20) subjects a pass and each is due again only after
   // `RECONCILE_INTERVAL_MS` (20 h). The daily ceiling is therefore 20 × 24 = 480 subjects rather
   // than 20 — and on a relay smaller than that, most hourly invocations find nothing due and end

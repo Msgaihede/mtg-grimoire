@@ -33,6 +33,16 @@ lookup on the live Worker, where the code in this directory answers **400 `that 
 id`** before reading anything. Deploying this tree is `npx wrangler deploy` from here, and it is
 the last of the steps under **Deploying** below rather than the whole of them.
 
+**Nor is issue #546's half, and it adds no public route either** — the push admission,
+`/keys?epoch=` and `removalStep`, `/rotate`'s two-epoch step, the internal `/roster`, the hourly
+reconciliation and the group door's `membership_ended`. Its tell is a query parameter:
+`/g/{group}/keys?device=…&epoch=x` carrying any well-formed bearer answers **400 `that is not an
+epoch`** from this tree, which checks the epoch's shape before the credential's value, and **401**
+from a Worker that ignores the parameter. That is read off `handleKeys`, not probed — the host
+could not be reached from the sandbox this was written in, 2026-09-28. A device meets the same fact
+from inside: its own `/keys` 200 carries `removalStep: 2` from this tree and nothing from the live
+one.
+
 ## What it cannot do
 
 **It cannot read anything it stores.** The group key is minted during pairing and lives only on
@@ -93,10 +103,15 @@ entitlements(
   grace_until     INTEGER CHECK (grace_until IS NULL OR grace_until > 0),
   group_id        TEXT,               -- bound on first claim, trust-on-first-use
   refresh_secret  TEXT,               -- NULL once revoked; this is what revocation clears
-  patreon_refresh TEXT,               -- the reader's own token, for the daily reconciliation
+  patreon_refresh TEXT,               -- the reader's own token, for the reconciliation
   created_at      INTEGER NOT NULL,
-  checked_at      INTEGER NOT NULL
+  checked_at      INTEGER NOT NULL    -- stamped by every /token, which is why nothing queues by it
 )
+-- and, each an ALTER at the end of schema.sql:
+--   group_epoch, group_auth  -- the group's current epoch and auth           (2026-08-30)
+--   refresh_device           -- the device /claim handed refresh_secret to   (2026-09-26)
+--   reconciled_at            -- when the cron last TRIED this subject;
+--                               NULL is never, and the front of the queue    (2026-09-28)
 ```
 
 **Every `/claim` mints a fresh `refresh_secret` and records the claiming device in
@@ -138,7 +153,7 @@ beside them:
 
 | Table | Key | Answers |
 | --- | --- | --- |
-| `group_keys` | `(group_id, epoch)` | the key history `/keys` serves from, and the manifest whose key set **is** the roster. Pruned to `EPOCH_HISTORY` rows by the same statement that writes a new one. |
+| `group_keys` | `(group_id, epoch)` | the key history `/keys` serves from, and the manifest whose key set **is** the roster. Pruned to the last `EPOCH_HISTORY` (8) **epochs, not rows**, by the same batch that writes a new one — `epoch <= newest - 8` goes. A join steps the epoch by one and a removal by two, so a run of joins keeps eight rows and a run of removals four: a device dark across three removals still reaches `/keys` with the auth it holds, and across four is refused the 401. At one step per rotation it survived seven rotations of any kind. |
 | `group_devices` | `(group_id, device_id)` | the device roll, so `/token` and `/claim` can cap a membership at `MAX_GROUP_DEVICES`. `first_seen`, `last_seen`, and nothing else. |
 
 **One table answers both caps the reader asked for** — five per account and five per group —
@@ -238,7 +253,7 @@ two raw digests and is tested against RFC 2202's published vectors. **A webhook 
 verification is refused and logged, never processed**: an unverified `pledge:delete` deletes a
 reader's log, which is the one bug in this design that would destroy something.
 
-The daily cron reconciles rows that webhooks missed and closes expired grace windows. It refreshes
+The hourly cron reconciles rows that webhooks missed and closes expired grace windows. It refreshes
 **each subject's own stored Patreon token** rather than reading the campaign through a creator
 token, which is why there are three secrets below and not the spec's four. A row with no stored
 token still gets its window settled, and an identity document the code cannot parse **throws
@@ -248,17 +263,121 @@ mass revocation in a job nobody is watching.
 
 **Patreon API v1 retires 2026-10-07. This uses v2 exclusively.**
 
+**The group door names a lapse, and it is the only 401 on either door that carries a code.** When
+`/token {group, auth, device}` presents the group's **current** auth and the membership has settled
+`dead`, the answer is **401 `{"error": "unauthorized", "code": "membership_ended"}`** — the
+revocation and the Durable Object drop still run on the way. Until issue #546 that 401 was bare,
+which the app reads as a stale auth (`STALE_GROUP_AUTH`), because a rotation it has not caught up
+with is refused in the same words; so a device that never pressed Connect, whose only door this
+is, re-checked `/keys`, found itself still in the group, and went on saying *Supporting since …*
+over a pledge that had ended. **It is safe to say because only the current auth reaches it**, and
+only a device holding the group key can derive that. A stale or wrong auth, the refresh door and
+the unreachable no-row case stay a bare 401 — a removed device must learn nothing about the group
+it left. `sync_engine::entitlement` matches the code, never the sentence, and revokes on it.
+
+### The reconciliation: an hourly pass on a budget
+
+**A pass is a budget, not a walk of the table.** Each invocation (`0 * * * *`) selects at most
+`RECONCILE_BUDGET` — 20 — live rows that are due, least recently reconciled first:
+
+```sql
+WHERE status <> 'dead' AND (reconciled_at IS NULL OR reconciled_at < now - RECONCILE_INTERVAL_MS)
+ORDER BY reconciled_at, subject
+LIMIT 20
+```
+
+SQLite sorts NULL below every value, so a subject never asked goes first. **One `UPDATE` stamps
+every selected row before any is attempted**: a row whose attempt throws — a revoked Patreon grant
+throws every time — goes to the back of the queue instead of heading it for ever, and so does one
+whose attempt outlives the invocation. If the stamp itself fails nothing is attempted, because an
+attempt that could not write back would lose the refresh token Patreon had just rotated. A row
+with no Patreon token counts against the budget like any other. `RECONCILE_INTERVAL_MS` is twenty
+hours, so the hourly cron asks about a subject about once a day and not twenty-four times.
+
+⚠️ **The pass this replaced walked the table by `subject` from the beginning, daily at `0 3`,** so
+it reached the same first subjects every day — and by the arithmetic below every fetch after about
+the twenty-fifth row threw, each caught, logged and forgotten. A cancellation whose webhook was
+missed, behind those rows, synced for as long as the relay ran.
+
+**It queues by `reconciled_at` and never by `checked_at`**, which looks like the same fact and is
+not: `serveOrRevoke` stamps `checked_at` on every `/token`, so the subjects actually syncing — the
+only ones a missed cancellation costs anything — would be for ever the most recently checked and
+never come up. `reconciled_at` is written by this pass alone.
+
+**Capacity** is 20 × 24 = 480 attempts a day, which at one turn every ~21 hours (the twenty-hour
+rest plus the wait for the next hour) is about 420 live memberships. Past that the backstop slows
+rather than stops — each subject every `rows / 480` days — and the webhook stays the primary.
+
+⚠️ **The budget is the free plan's limits divided by what a row spends, and the limits are
+unverified.** They are search summaries of Cloudflare's pages, which could not be read from where
+this was written: **50 external subrequests per invocation**, against two per row that holds a
+token (the refresh and the identity read) — 40 at this budget; and **50 D1 queries per
+invocation**, against one `SELECT`, one stamp and at most two `UPDATE`s a row — 42, and 43 with the
+rendezvous sweep `scheduled` runs after it. The old pass's ~25 subjects a day is derived from the
+same reported figure, not measured against the host.
+
+**`entitlements_reconcile`** is the partial index the query reads, `(reconciled_at, subject) WHERE
+status <> 'dead'` — dead rows are the table's only growing half and the pass never selects one.
+Measured on SQLite 3.45.1 (Python's `sqlite3`, **not D1**) at 20 000 rows: without it, a full scan
+and a temp-B-tree sort, about 220 000 VM steps with a backlog; with it, an index walk that stops at
+the `LIMIT`. `/token`'s `SET checked_at` writes neither indexed column and pays nothing for it.
+
 ## The endpoints
 
-**Three of the `/g/…` family live on one Durable Object, addressed by `idFromName(group)`, and
-those three are the ones behind the bearer gate.**
+**The `/g/…` routes a Durable Object answers are the ones behind the bearer gate** — one object
+per group, addressed by `idFromName(group)`.
 
 | Request | Body | Answer |
 | --- | --- | --- |
-| `POST /g/{group}/push` | one `Envelope` | `200 {"cursor": <seq>}` — the stored row's seq |
-| `GET /g/{group}/pull?since={cursor}&device={id}` | — | `200 {"envelopes": [...], "cursor": <head>}` |
-| `POST /g/{group}/ack` | `{"device": id, "cursor": n}` | `204` — and compaction runs |
-| `GET /g/{group}/ws` | — | `501`. See "What is not built" |
+| `POST /g/{group}/push` | one `Envelope` | `200 {"cursor": <seq>}` — the stored row's seq; the refusals are below |
+| `GET /g/{group}/pull?since={cursor}&device={id}` | — | `200 {"envelopes": [...], "cursor": <head>}` — and the device counts as heard, at most once a day |
+| `POST /g/{group}/ack` | `{"device": id, "cursor": n}` | `204` — and compaction runs; a departed device's ack is answered and not stored |
+| `GET /g/{group}/ws?device={id}` | — | `101` — a hibernatable socket; see the last section |
+
+**A push is admitted in the Worker, after the gate and before the Durable Object hop**, because a
+request that reaches the object bills whether it is stored or refused, and none of these needs the
+object's state to be refused. In the order a push meets them, every refusal but the two 400s is
+`{error, code}` and clients match on `code`:
+
+| # | Refused when | Answer |
+| --- | --- | --- |
+| 1 | the declared `Content-Length` is over `MAX_PUSH_BODY_CHARS` (1 504 096 — the sealed cap plus 4 KiB) — **before a byte is read**; a missing or non-numeric header decides nothing | `413 too_large` |
+| 2 | the body's text is longer than that | `413 too_large` |
+| 3 | the body is not JSON, or not an envelope | `400 unreadable body` / `400 malformed envelope`, no code — the object's words, unchanged |
+| 4 | `sealed` is over `MAX_SEALED_CHARS` (1 500 000, `log.ts`) | `413 too_large` |
+| 5 | the envelope's epoch is below the group's `group_epoch` — one D1 point read on `entitlements_group` | `409 stale_epoch` |
+| 6 | … or above it | `422 epoch_ahead` |
+| 7 | `hlcMs` is more than `MAX_CLOCK_AHEAD_MS` (a day) past the relay's clock; exactly a day is admitted | `422 clock_ahead` |
+
+Then the object: an envelope naming another group is the `409 group mismatch` below, and a log that
+this push would take past `MAX_GROUP_LOG_CHARS` (128 MiB of `sealed`) is **`507 quota`** — exactly
+at the cap is stored. The quota is the one refusal on the far side of the hop, because the log's
+size is the object's to know.
+
+- **The sealed cap is the Durable Object's 2 MB row**, less headroom for the other six columns;
+  `sealed` is base64url, one byte a character. It refuses no batch the app builds: a 512 KiB
+  plaintext batch seals to 699 104 characters, about 47% of it, and the fattest batch ever measured
+  sealed to 186 188. What meets it is one op that is alone larger than a batch — a note pasted in
+  the megabytes — and `wire::oversized` asks the app the same question before it sends one.
+- **`stale_epoch` stops a removed device writing under the key it was removed from** for the day
+  its token outlives the rotation, and tells a device merely behind one to catch up. **`epoch_ahead`
+  is the one that froze whole groups**: anyone holding a token could push `{epoch: 1e12}`, and
+  every peer that pulled it held its cursor waiting for keys to an epoch that would never exist. A
+  `group_epoch` of NULL — a row claimed before the column, never seeded or rotated since — skips
+  both rather than refusing every push to the group.
+- **A day of clock is what an honest machine can be wrong by**: one that dual-boots Windows, which
+  keeps the hardware clock in local time, and Linux, which keeps it in UTC, is off by its time
+  zone's offset — up to fourteen hours. A clock a day fast wins every last-writer-wins comparison
+  and drags every peer's hybrid logical clock forward with it, for good.
+- **The quota is a fence against a runaway, not a budget for a reader.** Durable Object storage is
+  5 GB account-wide on the free plan, so without it one client pushing in a loop — buggy, or
+  hostile with a valid token — could spend it all; with it, that takes some forty groups at the
+  cap. A 50 000-row import is about 250 batches, ~22 MB at the measured ~90 KB average and ~46 MB at
+  the fattest op, and the thirty-day tail keeps even a fully acked one for a month. The refusal
+  clears on its own as compaction runs: it is *not now*, not *never*. The object keeps the size as
+  a running total in `log_size` rather than a `sum()` per push — Durable Object SQL bills rows read,
+  so the check would cost most exactly when the log is nearest the cap — and not `databaseSize`,
+  which is a high-water mark that compaction never lowers. Every compaction recomputes it exactly.
 
 **Two more `/g/…` routes stand *ahead* of the gate, and the placement is the point rather than an
 exemption.** ⚠️ **This section said "every one of them is behind the bearer gate" until
@@ -266,28 +385,58 @@ exemption.** ⚠️ **This section said "every one of them is behind the bearer 
 
 | Request | Body | Guarded by | Answer |
 | --- | --- | --- | --- |
-| `POST /g/{group}/rotate` | `{epoch, auth, keys}` | the group's current auth | `200 {epoch}`; `409` if the epoch does not advance; `422` if it skips past the next one |
-| `GET /g/{group}/keys?device={id}` | — | any auth the group has used in `EPOCH_HISTORY` epochs | `200 {epoch, blob, devices}` |
+| `POST /g/{group}/rotate` | `{epoch, auth, keys}` | the group's current auth | `200 {epoch}` for one past the group's newest (a join) or two past it (a removal or a departure); `409` behind or equal; `422` further ahead |
+| `GET /g/{group}/keys?device={id}[&epoch={n}]` | — | any auth the group has used within `EPOCH_HISTORY` epochs | `200 {epoch, blob, devices, removalStep: 2}` — the newest manifest, or with `epoch` the one stored at exactly `n`; `404 no_such_epoch` for none there |
 
 A device that has just been rotated away from **cannot mint a token** — the auth it would present
 to `/token`'s group door is stale by definition — so a `/keys` behind the gate would refuse
 exactly the caller it exists to serve, and a removed device would sit for ever in a group it is no
-longer in. Both are D1 reads and writes in the Worker and **neither reaches the Durable Object**,
-which is what makes standing outside affordable: the gate is in front of the DO because a request
-that reaches one bills a Durable Object request whether it is honoured or refused, and nothing
-these two can be made to spend is on that line. They belong on the rate-limiting list instead —
-runbook step 8.
+longer in. **Every refusal either route makes is decided in the Worker, out of D1, and none reaches
+the Durable Object** — which is what makes standing outside affordable: the gate is in front of
+the DO because a request that reaches one bills a Durable Object request whether it is honoured or
+refused. `/keys` never reaches it at all. `/rotate` reaches it **exactly once, after D1 has
+accepted the rotation**, to post the roster below — and a caller that gets that far holds the
+group's current auth, which mints a bearer token at `/token`'s group door and opens the gated
+routes anyway, so it can spend nothing here it could not already spend there. Both belong on the
+rate-limiting list — runbook step 8.
 
-**The epoch must be exactly one past the group's newest.** Every device plans its own epoch plus
-one, and the auth it presents is current only if that epoch is the relay's, so no shipped client
-sends anything else; "strictly higher" let a caller holding a credential move the group to `1e9`
-with a manifest of its choosing, which every device then reads its membership off. A behind
-epoch is still the `409` a device can lose a race to; a skipping one is a `422`, since no client
-produces it.
+**The epoch must be one or two past the group's newest, and nothing else.** A join plans its own
+epoch plus one and a removal or a departure plus two (`REMOVAL_STEP`), and the auth a device
+presents is current only if its own epoch is the relay's, so no shipped client sends anything
+further. **The step is the authenticated join/removal marker**: the rotator binds the epoch into
+every rewrapped blob's AAD, so a relay that relabelled a removal as a join would be handing out
+blobs that do not open, and a device adopting a `+2` forgets every superseded key whatever the
+manifest's `devices` say. Both bounds sit in one `INSERT … SELECT … WHERE ? > max AND ? <= max + 2`,
+because D1 has no interactive transaction. "Strictly higher" let a caller holding a credential move
+the group to `1e9` with a manifest of its choosing, which every device then reads its membership
+off. A behind or equal epoch is still the `409` a device can lose a race to; one further ahead is
+**`422 that rotation steps further ahead than any rotation may`**, since no client produces it.
+
+**The app steps a removal by two only after a `/keys` answer has carried `removalStep: 2`**, and
+latches that for good. A relay without this change answers a `+2` with the 422 it gives a skip, so
+a device that stepped by two unasked would have every removal it published refused; latched, it
+goes on sending `+1` to an old relay, which accepts it, and nothing breaks in either deploy order.
+`removalStep` is `REMOVAL_STEP` itself, the same constant `/rotate`'s bound is built from, so what
+the relay advertises and what it accepts cannot disagree.
+
+**`/keys?epoch=n` is for the device that skipped one.** Standing on *N* and answered *N+2*, it has
+never held *N+1*'s key — so it asks for that epoch by name, from rows `group_keys` was already
+keeping. The checks run in this order: the credential's shape (`401`), the device (`400 that is not
+a device id`), the epoch — digits only and a safe integer, so `""`, `-1`, `1.0`, `1e0`, `0x1`, `+1`,
+`" 1"` and `9007199254740993` are all **`400 that is not an epoch`**, where `Number` would have
+quietly read most of them as some other epoch — then the auth (`401`, and an unknown group is still
+a 401 rather than a 404), then the lookup. **A miss is `404 {"code": "no_such_epoch"}`, and it is
+an answer rather than a failure**: never written, stepped over by a removal, pruned, or not reached
+yet are one answer because a caller can act on none of them differently. ⚠️ **A `blob: null` in
+answer to `epoch` says "you held no key then" and is never the removal notice**, which is read off
+the newest manifest alone. A relay without this change ignores `epoch` and answers the newest
+manifest, which the app detects by the answered epoch not being the one it asked for.
 
 `/rotate`'s manifest is capped at `MAX_GROUP_DEVICES` (**64 until 2026-08-30**, which was a bound
-on what D1 would store rather than a policy) and 4 KB per blob, and it calls `keepOnly` after
-`recordRotation` succeeds so a rotation frees the `group_devices` rows its manifest omits.
+on what D1 would store rather than a policy) and 4 KB per blob. **After `recordRotation` succeeds,
+and never before it** — a refused rotation must free nothing — it retires the refresh secret if the
+manifest omits its holder, calls `keepOnly` so the rotation frees the `group_devices` rows its
+manifest omits, and then, last and best effort, tells the log its roster.
 
 `{group}` is constrained to `[A-Za-z0-9_-]{1,128}`, from **one** shared constant that `claim.ts`
 applies to the group id in a `/claim` body as well. Without the constraint, `%41` and `A` would
@@ -302,7 +451,7 @@ The entitlement layer's four routes are fixed paths, matched ahead of that patte
 | `GET /oauth/patreon/callback?code=…` | the authorization code | an HTML page carrying the claim code |
 | `POST /claim {code, group, epoch, auth, device}` | the one-time code, ten minutes | `{access, refresh, expires, status, since}`; `409` if **another subject** holds that group id |
 | `POST /token {refresh, device}` | the refresh secret | the same five fields, or `401` once revoked |
-| `POST /token {group, auth, device}` | `crypto::relay_auth` over the group key | four fields — **never a refresh secret** |
+| `POST /token {group, auth, device}` | `crypto::relay_auth` over the group key | four fields — **never a refresh secret**; `401` bare for an auth that is not current, `401 membership_ended` for one that is, over a membership that has ended |
 | `POST /webhook/patreon` | `X-Patreon-Signature` (HMAC-MD5) | `204`, or `401` unverified |
 
 **Four routes, and `/token` is one of them wearing two bodies.** The shape is decided on the
@@ -325,9 +474,6 @@ teardown-first ordering would destroy a working group on the way to refusing the
 for it. What the rebind costs is stated in the app before the press: the devices left in the old
 group lose their log and their manifest.
 
-There is a fifth internal path, `drop`, which empties a group's log for §7.1. **It is not on the
-router's public pattern** — the Worker builds that request itself, and no device can ask for it.
-
 **A push whose envelope names a different group is refused with 409.** A Durable Object is
 addressed by id, and the id is derived from the same path segment — so a body that disagrees has
 reached an object that is not its own. That is either a client bug worth seeing or an attempt to
@@ -338,10 +484,69 @@ slice has the puller's own rows filtered out of it, and a cursor taken from the 
 below them, so the device would re-ask for its own rows on every pull for as long as they survived
 compaction.
 
+### Who the log waits for
+
+**Compaction deletes a row only when every device has acked it and it is older than thirty days**,
+and "every device" is the one question in the relay where a wrong answer loses rows. It starts as
+every device the object has heard from in either direction — its `acks` and its log's senders — and
+**two kinds are taken off it**, both of which used to hold the floor for good:
+
+- **A device a rotation's manifest omitted.** `rotate.ts`'s `sendRoster` posts `{epoch, devices}` —
+  the adopted manifest's key set — to the internal `POST /g/{group}/roster`. Every device the object
+  knows that the list omits is marked in `departed` and its ack deleted; every device it names loses
+  any mark, which is how one that left and was paired back in holds the floor again; then a
+  compaction runs. **A roster is applied only if its epoch is strictly newer than the last one
+  applied** (`roster_epoch`, `log.isNewerRoster`): each is sent from inside the `/rotate` request that
+  recorded it, so two rotations accepted back to back post two rosters that nothing else orders.
+  The post is best effort — a failure is logged and the rotation's 200 stands, because a non-2xx
+  there would tell the rotator its rotation was refused. The next accepted rotation's roster still
+  omits the departed device; until one arrives, the TTL below is the backstop.
+- **A device not heard from for `ACK_TTL_MS`** — ninety days, `groupauth.ts`'s `DEVICE_TTL_MS` by
+  import, for the same reinstall: a wiped data folder mints a new id, so the old one is named by no
+  manifest and no roster ever departs it. "Heard" is the later of its ack's `heard_at` and its
+  newest row's `stored_at`, so a device that only pushes is as alive as one that only pulls; exactly
+  ninety days still counts. **Every ack sets `heard_at`, and a pull refreshes it at most once a day**
+  (`HEARD_REFRESH_MS`), because a device holding its cursor — a newer sender's op it cannot read
+  yet — pulls on every trip and never acks, and must not age out of the floor while it waits.
+
+When nobody is left, the floor is zero and everything is kept: the devices still in the group are
+then ones the object has never heard from, about to replay from zero. **An ack from a departed
+device answers `204` and is not stored** — a removed device's token outlives its removal by up to a
+day, and storing its ack would enrol it back on the floor with a cursor it will never advance. Only
+a roster naming it again un-departs it, and `drop`, which empties the log, the acks and the size,
+keeps `departed`: a membership ending un-pairs nobody.
+
+**Three gaps, stated rather than discovered:**
+
+- **A device away more than ninety days comes back to a log compacted past its cursor, and nothing
+  on the wire tells it.** The rows in between are gone. A fix would be the relay answering the
+  highest seq it has compacted, so the client knows to ask for a baseline; not built.
+- **A removed device the object never heard from before its removal is not marked departed** —
+  `departures` marks only devices the object knows, which is the direction that keeps rows. If it
+  then acks within its token's last day it is enrolled, and pins the floor until the TTL or the
+  next roster.
+- **A device already gone before this deploys keeps pinning** until the group's next rotation posts
+  a roster, or ninety days after the deploy — the constructor's backfill counts every existing
+  device as heard at the moment it ran.
+
+There are two internal paths, **`drop`**, which empties a group's log, its acks and its size for
+§7.1, and **`roster`**, above. **Neither is on the router's public pattern** — the Worker builds
+those requests itself, `claim.ts` when a membership ends and `rotate.ts` when a rotation is
+recorded, and a device asking for either is a 404 like any other path that is not a route.
+
 ## Where the logic is
 
-`src/log.ts` — `since`, `compact` and `TAIL_MS`, as pure functions over a row list, tested by the
-**root** vitest (`npm run test:run -- relay/src/log.test.ts`).
+`src/log.ts` — `since`, `compact`, `departures` and the roster's parse and ordering, as pure
+functions over a row list, tested by the **root** vitest
+(`npm run test:run -- relay/src/log.test.ts`); and the numbers they and a push are held to — `TAIL_MS`, `ACK_TTL_MS`, `HEARD_REFRESH_MS`,
+`MAX_SEALED_CHARS`, `MAX_GROUP_LOG_CHARS`, `MAX_CLOCK_AHEAD_MS`. **The sealed cap and the clock bound
+are spelled for a grep as much as for a compiler**: `sync_engine::wire` and `sync_engine::hlc` read
+this file with `include_str!` for the line that declares their number, so reformatting either turns
+a Rust test red.
+
+`src/admit.ts` — every refusal a push can meet, as pure functions in the order they are met: the
+Worker's checks ahead of the Durable Object hop (`admitBody`, `admit`), the object's quota
+(`admitToLog`), and the one envelope predicate both sides share (`isEnvelope`).
 
 `src/token.ts` — mint and verify. Pure, and tested the same way.
 
@@ -354,20 +559,23 @@ Node's and the Worker can supply `crypto.subtle`. Tested against RFC 2202.
 tested).
 
 `src/claim.ts` — the callback landing page, the code mint, `/claim`, `/token`, the webhook and the
-cron's reconciliation.
+cron's reconciliation, with its budget and interval.
 
 `src/groupauth.ts` — the group key store and the device roll: `seedGroup`, `recordRotation`,
-`authIsCurrent`/`authIsRecent`, and `liveDeviceCount`/`admitDevice`/`keepOnly`/`forgetGroup`, plus
-the three constants (`EPOCH_HISTORY`, `MAX_GROUP_DEVICES`, `DEVICE_TTL_MS`) that anything else
-capping or pruning must import rather than respell.
+`currentManifest`/`manifestAt`, `authIsCurrent`/`authIsRecent`, and
+`liveDeviceCount`/`admitDevice`/`keepOnly`/`forgetGroup`, plus the constants (`EPOCH_HISTORY`,
+`REMOVAL_STEP`, `MAX_GROUP_DEVICES`, `DEVICE_TTL_MS`) that anything else capping, stepping or
+pruning must import rather than respell.
 
 `src/rotate.ts` — `POST /g/{group}/rotate` and `GET /g/{group}/keys`, the two routes that stand
-ahead of the bearer gate.
+ahead of the bearer gate, and `sendRoster`, the one request either makes to a Durable Object.
 
-`src/group.ts` — the Durable Object: two `sql.exec` tables, the handlers, and a call into `log.ts`
-for every decision about which rows.
+`src/group.ts` — the Durable Object: its tables (`log`, `acks` with `heard_at`, `departed`,
+`roster_epoch`, `log_size`), the handlers — the internal `drop` and `roster` among them — and a
+call into `log.ts` for every decision about which rows and into `admit.ts` for the quota.
 
-`src/index.ts` — the router and the auth gate.
+`src/index.ts` — the router, the auth gate, and a push's admission ahead of the object hop: the one
+D1 point read for the group's epoch, then `admit.ts`'s decision.
 
 `src/fakeD1.ts` — the test double, and it **evaluates** SQL rather than matching shapes: it holds
 a `PRIMARY_KEY` map so that an upsert conflicts the way D1 would. Import it; never write a second.
@@ -376,16 +584,28 @@ not consume a second slot" passes trivially against a table that cannot hold a d
 
 **Why the split.** `@cloudflare/vitest-pool-workers` would run the real class in workerd, but it
 pulls wrangler and workerd into the tree and peers on `vitest ^4.1.0` (0.22.0, checked
-2026-09-27), which does not cover the vitest 5 this suite runs. Compaction, the pull window, the thirty-day tail, token minting, the status decision
+2026-09-27), which does not cover the vitest 5 this suite runs. Compaction, who the floor waits
+for, the pull window, the thirty-day tail, a push's admission, token minting, the status decision
 and the HMAC are all pure functions of their inputs, so they are testable without any of that, and
 what is left in the Durable Object and the handlers is SQL and routing — where a bug is a 500 in a
-log rather than a reader's data quietly disappearing.
+log rather than a reader's data quietly disappearing. `rotate.test.ts` and `admit.test.ts` drive
+`worker.fetch` itself, because where those routes and refusals stand relative to the gate is half
+of what they are; the object there is a recorder, never workerd.
 
-The one thing a deploy verifies that no test here can: `seq INTEGER PRIMARY KEY AUTOINCREMENT`.
-`AUTOINCREMENT` is not decoration — a plain rowid is reused after a delete, so a compaction pass
-that emptied the log would restart `seq` at 1 and every device holding a cursor of 5 would
-silently skip the next five rows. If workerd's SQL dialect refused it, `CREATE TABLE` would fail
-loudly on the first request rather than quietly.
+Two things a deploy verifies that no test here can, and both fail loudly on the first request to
+an object rather than quietly:
+
+- **`seq INTEGER PRIMARY KEY AUTOINCREMENT`.** `AUTOINCREMENT` is not decoration — a plain rowid is
+  reused after a delete, so a compaction pass that emptied the log would restart `seq` at 1 and
+  every device holding a cursor of 5 would silently skip the next five rows. If workerd's SQL
+  dialect refused it, `CREATE TABLE` would throw.
+- **The constructor's own migration.** A Durable Object has no migration step: an object created
+  before `acks.heard_at` existed adds it on its first wake after the deploy, when `PRAGMA
+  table_info(acks)` does not list it, and backfills it with that moment — every existing device
+  counts as heard at the deploy, so none drops off the floor. **Whether workerd accepts `PRAGMA
+  table_info` there is untested**, and every constructor asks it, a new object's included — so if
+  it does not, every request that reaches any group's object 500s. The first pull after the deploy
+  is the check.
 
 ## Deploying
 
@@ -410,12 +630,24 @@ runbook, with the probes that say which of them are already done, is
    npx wrangler d1 execute mtg-grimoire-relay --remote --file=./migrations/2026-08-30-group-devices.sql
    npx wrangler d1 execute mtg-grimoire-relay --remote --command "ALTER TABLE entitlements ADD COLUMN group_epoch INTEGER"
    npx wrangler d1 execute mtg-grimoire-relay --remote --command "ALTER TABLE entitlements ADD COLUMN group_auth TEXT"
+   npx wrangler d1 execute mtg-grimoire-relay --remote --command "CREATE TABLE IF NOT EXISTS pairing_rendezvous (rv TEXT NOT NULL, slot TEXT NOT NULL CHECK (slot IN ('offer', 'join')), blob TEXT NOT NULL, expires_at INTEGER NOT NULL, PRIMARY KEY (rv, slot))"
    npx wrangler d1 execute mtg-grimoire-relay --remote --command "ALTER TABLE entitlements ADD COLUMN refresh_device TEXT"
+   npx wrangler d1 execute mtg-grimoire-relay --remote --command "ALTER TABLE entitlements ADD COLUMN reconciled_at INTEGER"
+   npx wrangler d1 execute mtg-grimoire-relay --remote --command "CREATE INDEX IF NOT EXISTS entitlements_reconcile ON entitlements (reconciled_at, subject) WHERE status <> 'dead'"
    ```
+   The last two are `migrations/2026-09-28-reconciled-at.sql`, in that order — the index names the
+   column — and **before the deploy that ships the budgeted `reconcile`**. Check the column landed
+   with `--command "SELECT reconciled_at FROM entitlements LIMIT 0"`: empty is the pass, `no such
+   column` means the `ALTER` did not run. **A Worker without the column fails quietly**: nothing a
+   device calls reads it, so sync is untouched, but every hourly `scheduled` throws on its `SELECT`
+   — no subject is reconciled, and the rendezvous sweep that runs after it never runs either. The
+   Durable Object's own new column and tables need no step; see "Two things a deploy verifies"
+   above.
+
    ⚠️ **The migration files exist because `wrangler d1 execute --file` is atomic**, which is the
    whole of the reason and is worth reading before deciding to skip one. `schema.sql` ends with
-   two `ALTER TABLE ... ADD COLUMN`, D1 has no `ADD COLUMN IF NOT EXISTS`, and adding a column
-   that is already there is an error — so on a database those columns have reached, **the two
+   its `ALTER TABLE ... ADD COLUMN`s, D1 has no `ADD COLUMN IF NOT EXISTS`, and adding a column
+   that is already there is an error — so on a database those columns have reached, **the
    `ALTER`s fail and take every `CREATE` above them down with them**, including ones that come
    first in the file and would have succeeded alone. **That is measured, not theoretical**: it is
    what the 2026-08-30 deploy did to `CREATE TABLE group_keys`, and `/g/{group}/keys` answered a
@@ -465,9 +697,12 @@ break-glass and it is worth having written down.
 Limits verified live 2026-08-29. **Every relay request bills twice** — one Worker invocation and
 one Durable Object request — **except one the auth gate refuses, which bills only the Worker.**
 That exception is the whole reason the gate is where it is. ⚠️ **Two more routes joined that
-exception on 2026-08-30**: `/rotate` and `/keys` never reach a Durable Object either, so they bill
-one Worker invocation and D1 reads, which never bind. `/claim` and `/token` were always in that
-group.
+exception on 2026-08-30**: `/keys` never reaches a Durable Object, and `/rotate` reaches one only
+once D1 has accepted the rotation — one DO request per accepted rotation, a handful in a group's
+life — so every refusal either makes bills one Worker invocation and D1 reads, which never bind.
+`/claim` and `/token` were always in that group. **A push refused by its admission** — too large,
+the wrong epoch, the clock ahead — **bills the same way**, a Worker invocation and at most one D1
+point read, and never the object request it would have cost inside.
 
 | | Free | Paid ($5/mo) |
 | --- | --- | --- |
@@ -493,8 +728,12 @@ regardless of whether anybody is at the keyboard.
 | Busy group — 50 edits → ~20 debounced bursts, 3 devices | ~225 | ~440 |
 | Manual — the **Sync now** button, still there as a fallback | ~70 | ~1 400 |
 
-Storage never binds: 484 KB/group against 5 GB is ~10 000 groups. Duration never binds. D1 never
-binds — the hot path reads no storage at all.
+Storage never binds: 484 KB/group against 5 GB is ~10 000 groups — and the per-group quota is the
+fence on the other side of that figure, since at 128 MiB a group some forty groups at the cap would
+fill it. Duration never binds. D1 never binds: the gate reads no storage at all, and the one D1
+point read a push adds is paid only by a push that has passed the gate — at most one per Worker
+request, so the free plan's 100 000 requests a day bound it at 2% of D1's 5 M reads. That last
+bound is arithmetic, not a measurement.
 
 Two conclusions:
 

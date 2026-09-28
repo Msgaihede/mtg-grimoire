@@ -200,14 +200,16 @@ const SECRET_BYTES = 32;
  * How many entitlement rows one cron invocation reconciles, at most — the whole of a pass.
  *
  * **The number is the free plan's subrequest ceiling divided by what a row spends against it.** A
- * Worker on the free plan may make **50 external subrequests per invocation**, and a row holding a
- * Patreon token spends two — the token refresh and the identity read — so twenty rows is forty,
- * with ten to spare. ⚠️ **The pass this replaced read up to a thousand rows** (fifty a page, twenty
- * pages) and, by the same arithmetic, every `fetch` after the twenty-fifth row threw — each caught,
- * logged and forgotten. That figure is derived, not measured against the host.
+ * Worker on the free plan may make **50 external subrequests per invocation** (as search summaries
+ * of Cloudflare's limits page report it; the page itself could not be read from where this was
+ * written), and a row holding a Patreon token spends two — the token refresh and the identity
+ * read — so twenty rows is forty, with ten to spare. ⚠️ **The pass this replaced read up to a
+ * thousand rows** (fifty a page, twenty pages) and, by the same arithmetic, every `fetch` after
+ * the twenty-fifth row threw — each caught, logged and forgotten. That figure is derived, not
+ * measured against the host.
  *
- * **D1 is a second ceiling, and the pass stays under fifty there too, although that one is
- * unverified.** Cloudflare's 2026-02-11 changelog is reported to put calls to its own services —
+ * **D1 is a second ceiling, and the pass stays under fifty there too, on the same unverified
+ * footing.** Cloudflare's 2026-02-11 changelog is reported to put calls to its own services —
  * D1 and the Durable Object drop among them — on a separate allowance of 1 000 per invocation,
  * while D1's own limits page is reported to list 50 queries per invocation on the free plan;
  * neither page could be read from where this was written. So the pass is shaped to fit the
@@ -413,7 +415,7 @@ async function grantFor(
 }
 
 /**
- * Spec §7.1, in one place because it is reached from four: the webhook, the daily
+ * Spec §7.1, in one place because it is reached from four: the webhook, the hourly
  * reconciliation, `/token` when a grace window has closed, and the OAuth callback when a reader
  * who has already lapsed connects again.
  *
@@ -447,10 +449,10 @@ async function revoke(env: Env, subject: string, groupId: string | null): Promis
  * Empty a group's relay log.
  *
  * **The path is one the Worker builds and no device can reach.** `index.ts`'s `ROUTE` matches
- * `push|pull|ack|ws` and nothing else, so `/g/{group}/drop` is a 404 from the outside; the only
- * way to it is this function, which is called by the entitlement layer alone. That is the whole
- * of the authorisation — a `drop` behind the auth gate would still be a route a device holding
- * a valid token could aim at its own group.
+ * `push|pull|ack|ws|rotate|keys` and nothing else, so `/g/{group}/drop` is a 404 from the
+ * outside; the only way to it is this function, which is called by the entitlement layer alone.
+ * That is the whole of the authorisation — a `drop` behind the auth gate would still be a route a
+ * device holding a valid token could aim at its own group.
  */
 /**
  * The `device` field of a body, or `null` for "not a device id" — one reader for all three

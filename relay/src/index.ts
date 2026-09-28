@@ -15,7 +15,7 @@ import { handleKeys, handleRotate } from "./rotate";
 import { verify } from "./token";
 
 /**
- * The Worker entry: a router, an authentication gate, a push's admission, and the daily
+ * The Worker entry: a router, an authentication gate, a push's admission, and the hourly
  * reconciliation's trigger. Every decision about the log itself is in `group.ts`, every decision
  * about *which rows* is in `log.ts`, every refusal a push can meet is in `admit.ts`, and every
  * decision about who is entitled is in `claim.ts` and `entitlement.ts`.
@@ -30,10 +30,12 @@ import { verify } from "./token";
  * meters (spec §8).
  *
  * **Two of the `/g/…` routes stand ahead of that gate, and the same sentence is why.** `/rotate`
- * and `/keys` are D1 only and never reach the Durable Object, so nothing they can be made to
- * spend is on the metered line — and `/keys` in particular has to answer a device whose group
- * auth is one epoch stale, which is a device that by construction cannot mint a token. Behind
- * the gate it would refuse exactly the caller it exists to serve. See `rotate.ts`.
+ * and `/keys` decide every refusal out of D1, and the one Durable Object request either makes is an
+ * *accepted* rotation posting its roster — which only a caller holding the group's current auth
+ * can cause, and that auth mints a token at `/token`'s group door anyway — so nothing they can be
+ * made to spend is on the metered line. And `/keys` in particular has to answer a device whose
+ * group auth is stale, which is a device that by construction cannot mint a token. Behind the gate
+ * it would refuse exactly the caller it exists to serve. See `rotate.ts`.
  *
  * **A push is read here before it reaches its object, and the same bill is why.** The token only
  * says the caller is in the group; a batch too large to store, one sealed at an epoch the group
@@ -237,8 +239,9 @@ export default {
     // **Ahead of the bearer gate and never behind it, and that is the whole point of these two
     // routes.** A device that has just been rotated away from cannot mint a token — its auth is
     // stale — so a `/keys` behind the gate would refuse exactly the caller it exists to serve.
-    // They carry their own credential, they are D1 only, and they never reach the Durable
-    // Object, so nothing metered is exposed by their standing outside it.
+    // They carry their own credential and refuse out of D1; the one Durable Object request either
+    // makes is an accepted rotation's roster post, which only the group's current auth can cause,
+    // so nothing metered is exposed by their standing outside it.
     if (action === "rotate") return handleRotate(request, env, group);
     if (action === "keys") return handleKeys(request, url, env, group);
 
@@ -278,9 +281,11 @@ export default {
   },
 
   /**
-   * The daily reconciliation (spec §7.3). Awaited rather than handed to `ctx.waitUntil`, so a
-   * pass that throws is reported against the scheduled invocation that caused it rather than
-   * against nothing.
+   * The reconciliation (spec §7.3) — hourly, `wrangler.jsonc`'s `0 * * * *`, each pass reaching at
+   * most `claim.ts`'s `RECONCILE_BUDGET` subjects — and then the rendezvous sweep. Awaited rather
+   * than handed to `ctx.waitUntil`, so a pass that throws is reported against the scheduled
+   * invocation that caused it rather than against nothing — and a `reconcile` that throws skips
+   * the sweep, which is why a database missing `reconciled_at` stops both.
    */
   // `ctx` is deliberately not in the signature. `reconcile` is awaited rather than handed to
   // `ctx.waitUntil`, so there is nothing to keep alive past the return — and eslint's

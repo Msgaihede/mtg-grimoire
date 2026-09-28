@@ -2312,29 +2312,68 @@ wire and against that cap; base64 is four thirds and URL-safe.
 
 | | | | |
 | --- | --- | --- | --- |
-| `POST {relay}/g/{group}/push` | one `Envelope` | 200 with the stored cursor | **bearer** |
+| `POST {relay}/g/{group}/push` | one `Envelope` | 200 with the stored cursor; refused with a `code` — see below | **bearer** |
 | `GET {relay}/g/{group}/pull?since={cursor}&device={id}` | | 200 with `{ envelopes, cursor }` | **bearer** |
-| `POST {relay}/g/{group}/ack` | `{ device, cursor }` | 204 — what compaction reads | **bearer** |
-| `POST {relay}/g/{group}/rotate` | `{ epoch, auth, keys }` | 200 with the epoch; 409 if it does not advance; 422 if it skips past the next one | the group's current auth, and nothing else |
-| `GET {relay}/g/{group}/keys?device={id}` | | 200 with `{ epoch, blob, devices }` | any auth this group has used in eight epochs |
+| `POST {relay}/g/{group}/ack` | `{ device, cursor }` | 204 — what compaction reads; a departed device's is not stored | **bearer** |
+| `POST {relay}/g/{group}/rotate` | `{ epoch, auth, keys }` | 200 with the epoch, for one past the group's (a join) or two past it (a removal or a departure); 409 behind or equal; 422 further | the group's current auth, and nothing else |
+| `GET {relay}/g/{group}/keys?device={id}[&epoch={n}]` | | 200 with `{ epoch, blob, devices, removalStep }` — with `epoch`, that epoch's manifest, or 404 `no_such_epoch` | any auth this group has used within eight epochs |
+| `POST /g/{group}/roster` — **internal** | `{ epoch, devices }` | 204 | built by the Worker after an accepted rotation; not on the public pattern, a 404 from outside |
 
-**The last two are `/g/…` routes that stand *ahead* of the bearer gate, and the placement is the
-point rather than an exemption.** A device that has just been rotated away from cannot mint a
+**`/rotate` and `/keys` are `/g/…` routes that stand *ahead* of the bearer gate, and the placement
+is the point rather than an exemption.** A device that has just been rotated away from cannot mint a
 token — the auth it would present to `/token`'s group door is stale by definition — so a `/keys`
 behind the gate would refuse exactly the caller it exists to serve, and a removed device would sit
-for ever in a group it is no longer in. Both are D1 reads and writes in the Worker and **neither
-reaches the Durable Object**, which is what makes standing outside affordable: the gate is in
-front of the DO because a request that reaches one costs a Durable Object request whether it is
-honoured or refused, and nothing these two can be made to spend is on that line. The residual —
-a removed device spending `/keys` reads until its auth ages out of the eight-epoch window — is
-accepted for the same reason.
+for ever in a group it is no longer in. **Every refusal either makes is decided in the Worker, out
+of D1, and none reaches the Durable Object**, which is what makes standing outside affordable: the
+gate is in front of the DO because a request that reaches one costs a Durable Object request
+whether it is honoured or refused. `/keys` never reaches it. `/rotate` reaches it exactly once,
+**after D1 has accepted the rotation**, to post the roster — and a caller that gets that far holds
+the group's current auth, which mints a bearer token at the group door and opens the gated routes
+anyway, so it can spend nothing there it could not already spend. The residual — a removed device
+spending `/keys` reads until its auth ages out of the eight-epoch window — is accepted for the same
+reason.
 
-**`/rotate` takes exactly the next epoch, and the refresh secret dies with its device's place in
-the group.** Every device plans its own epoch plus one and presents the auth of the epoch it
-stands on, which is current only if that is the relay's — so no shipped client sends anything but
-the next epoch, and anything further is a **422**. Beside that, `/claim` mints a fresh secret on
-every press and records the claiming device in `entitlements.refresh_device`, and an accepted
-rotation whose manifest omits that device sets both to NULL. **They close one hole between them,
+**An accepted rotation tells the log who is left, because nothing else could.** Compaction keeps
+every row some device has not acked, and "some device" was every device the object had ever heard
+from — so a removed device's last ack held the floor for as long as the group lived, and a
+departure or a wiped reinstall did the same. The manifest lives in D1 and is written by `/rotate`,
+so that is the one place that knows the set changed: `sendRoster` posts `{ epoch, devices }` to the
+object's internal `/roster`, which marks every device it knows and the list omits as departed and
+forgets its ack, un-marks every device the list names, and compacts. A roster is applied only if
+its epoch is newer than the last one applied, since two rotations accepted back to back post two
+rosters nothing else orders; the post is best effort, and the rotation's 200 stands if it fails.
+**Beside it, a device unheard for ninety days leaves the floor too** — every ack stamps `heard_at`
+and a pull refreshes it at most daily, because a device holding its cursor pulls without acking —
+which is the reinstall no manifest will ever name. [relay/README.md](../../relay/README.md) has the
+object's side in full, and *What is still owed* the three gaps it leaves.
+
+**A push is admitted in the Worker, after the gate and before the object**, for the gate's own
+reason — none of these needs the object's state to refuse, so none should cost an object request.
+In order: a body past 1 504 096 characters, declared or read, is **413 `too_large`**; one that is
+not JSON or not an envelope is the object's old **400**, without a code; `sealed` past 1 500 000 is
+**413 `too_large`**; an epoch below the group's `group_epoch` — one D1 point read — is **409
+`stale_epoch`**, and above it **422 `epoch_ahead`**; an `hlcMs` more than a day past the relay's
+clock is **422 `clock_ahead`**. The object keeps one check of its own: a log that this push would
+take past 128 MiB of `sealed` is **507 `quota`**. `stale_epoch` is what stops a removed device
+writing under the key it was removed from for the day its token outlives the rotation;
+`epoch_ahead` is what stops one envelope at `{ epoch: 1e12 }` freezing every peer's cursor on keys
+to an epoch that will never exist. A `group_epoch` of NULL — claimed before the column and never
+seeded or rotated since — skips both. Clients match on `code`, never on the sentence.
+
+**`/rotate` takes one epoch or two, and the refresh secret dies with its device's place in the
+group.** A join plans its own epoch plus one and a removal or a departure plus two, and a device
+presents the auth of the epoch it stands on, which is current only if that is the relay's — so no
+shipped client sends anything further, and anything further is a **422**. **The step is the
+authenticated join/removal marker**: the rotator binds the epoch into every rewrapped blob, so a
+relay that passed a removal off as a join would be handing out blobs that do not open, and a device
+adopting a `+2` forgets every superseded key whatever the manifest's `devices` say. The app plans a
+`+2` only after `/keys` has answered `removalStep: 2`, and latches it; a relay without the step
+never says so, and goes on receiving the `+1` it accepts. **`/keys?epoch=n`** is the other half: a
+device that stood on *N* and was answered *N+2* asks for *N+1* by name, and a **404
+`no_such_epoch`** — the usual answer, since a removal steps over it rather than writing it — tells
+it there was nothing there to open. Beside the epoch rule, `/claim` mints a fresh secret on every
+press and records the claiming device in `entitlements.refresh_device`, and an accepted rotation
+whose manifest omits that device sets both to NULL. **They close one hole between them,
 with a third change**: a lost laptop that pressed Connect and was then removed keeps whatever its
 `user.db` holds, and `/rotate` used to accept the refresh secret — so whoever held that file could
 publish `{epoch: 1e9, keys: {}}`, every remaining device would read a higher epoch with no blob for
@@ -2349,12 +2388,20 @@ accepted rotation. `/claim` is held to the same epoch rule from the other side: 
 key rows is seeded only at its own epoch and only with the auth already registered there, so a
 claim can neither skip it ahead nor swap in an auth of its own.
 
-⚠️ **Not fixed here, and older than all of this: a device that only ever uses the group door never
-sees a lapse.** The relay answers a lapsed membership 401 on the group door, and so does a stale
-auth; `entitlement::STALE_GROUP_AUTH` reads both as the second, so a paired device whose
-membership ended goes on reading its last stored status — *Supporting since …* — until something
-else clears it. Only the device that pressed Connect is told, because its refresh door is refused
-first and `entitlement::refused_secret` then takes both refusals as the lapse they are.
+**A device that only ever uses the group door is now told of a lapse** — a gap older than all of
+this, fixed with issue #546. The relay answered a lapsed membership on the group door with the
+same bare 401 a stale auth gets; `entitlement::STALE_GROUP_AUTH` read both as the second, so a paired device
+whose membership ended went on reading its last stored status — *Supporting since …* — until
+something else cleared it, and only the device that pressed Connect was ever told, through its
+refresh door and `entitlement::refused_secret`. **Now the group door's 401 carries `code:
+"membership_ended"` when the auth presented is the group's current one and the membership has
+settled dead**, and `sync_engine::entitlement` revokes on the code, so the panel draws *Membership
+ended*. It is safe for the relay to say because only a device holding the group key can derive
+the current auth — the caller has already proved it is in the group. **A stale or wrong auth is
+still a bare 401 and still `STALE_GROUP_AUTH`**: the relay cannot tell a device behind a rotation
+from one that was removed, and a removed device must learn nothing about the group it left. It
+takes both halves — until this relay is deployed the live group door's 401 is bare, and a device
+there still reads it as stale.
 
 ### A second Worker binds the same D1 and the same secret
 
@@ -2413,14 +2460,22 @@ POST) and **400** to an empty POST body, `/g/{group}/pull` **401** from the bear
 well-formed bearer — which is the runbook's own pass criterion for `group_keys` existing, since a
 missing table answers 500 there. `/g/{group}/bogus` **404**, so a 404 on this host still means
 "no such route" and the 401s are not a router accident.
-`relay/src/index.ts` carries the auth gate, `claim.ts` and `patreon.ts` the OAuth hop and the
-webhook, `token.ts`, `entitlement.ts` and `md5.ts` the pure decisions the root vitest tests
-without workerd, `groupauth.ts` and `rotate.ts` the group-key store, its two routes and the device
-roll, and `wrangler.jsonc` a D1 binding and a daily cron.
+`relay/src/index.ts` carries the auth gate and a push's admission, `admit.ts` every refusal a push
+can meet, `claim.ts` and `patreon.ts` the OAuth hop, the webhook and the reconciliation,
+`token.ts`, `entitlement.ts` and `md5.ts` the pure decisions the root vitest tests without workerd,
+`groupauth.ts` and `rotate.ts` the group-key store, its two routes and the device roll, `group.ts`
+and `log.ts` the object and who its floor waits for, and `wrangler.jsonc` a D1 binding and an
+hourly cron — `0 * * * *` since issue #546, `0 3 * * *` before it.
 **What is *not* deployed is this change's half** — the device cap, `/claim`'s rebind and the
 `group_devices` table. Settled by the same kind of probe rather than by reading this file:
 `POST /token {group, auth}` **with no `device` field** answers 401 from the entitlement lookup,
 where the code in this tree answers **400 `that is not a device id`** before it reads anything.
+**Nor is issue #546's half** — the push admission, `/keys?epoch=` and `removalStep`, the two-epoch
+removal, `/roster`, the hourly reconciliation and `membership_ended`. Its tell is a query:
+`/g/{group}/keys?device=…&epoch=x` with any well-formed bearer answers **400 `that is not an
+epoch`** from this tree and **401** from a Worker that ignores the parameter — read off
+`handleKeys`, not probed, because the sandbox it was written in could not reach the host on
+2026-09-28.
 **The rest of this section describes the hosted design in the present tense**, which is how this
 repository writes a design that is agreed and not yet a deployment; where a sentence is about what
 has actually run, it says so. [hosted-relay-deploy.md](hosted-relay-deploy.md) is the runbook and
@@ -2547,8 +2602,11 @@ CREATE TABLE IF NOT EXISTS group_keys (
 **The history exists so that a device which is merely behind can still fetch the key that catches
 it up.** Its auth is one epoch stale by definition, so an endpoint that accepted only the current
 one would refuse exactly the devices it exists to serve. `/rotate` prunes anything older than
-`EPOCH_HISTORY` — **eight** epochs — in the same statement that writes the new row, so the history
-is bounded without a sweep. **A manifest is capped at `MAX_GROUP_DEVICES` and 4 KB per blob.**
+`EPOCH_HISTORY` — **eight** epochs — in the same batch that writes the new row, so the history
+is bounded without a sweep. **Epochs, not rows**: a removal steps over one, so a run of removals
+keeps four rows, and a device dark across three of them still reaches `/keys` where a fourth
+refuses it — at one step per rotation it survived seven of any kind. **A manifest is capped at
+`MAX_GROUP_DEVICES` and 4 KB per blob.**
 ⚠️ **That cap was 64 until 2026-08-30**, which was a bound on what the relay would store rather
 than a policy; it is `groupauth.ts`'s five now, imported by `rotate.ts` rather than spelled a
 second time — a cap written twice is a cap that eventually disagrees with itself, and the two
@@ -2709,7 +2767,9 @@ rows, so an unclaimed group gets a 401 there before `access_token` can answer
 Compaction, the 30-day tail and the pull ordering are pure functions in `relay/src/log.ts`,
 tested by the root vitest. **`since` orders by `(hlcMs, hlcCtr, device)` and not by arrival**, and
 **a device with no ack at all holds everything** — a group whose third device has never connected
-keeps its log rather than compacting away the state that device has not seen.
+keeps its log rather than compacting away the state that device has not seen. **Two kinds of
+device stop holding it**, since issue #546: one a rotation's roster omitted, and one unheard for
+ninety days — both used to be the slowest reader the group had, for good.
 
 **The baseline relay is deployed, and Markus deployed it.**
 [The baseline design](../superpowers/specs/2026-08-29-sync-baseline-design.md) §1 records a live
@@ -2736,7 +2796,9 @@ application's API base URL is public — nothing follows from reading it out of 
 **every route that reaches a Durable Object refuses a request without a token the relay minted**.
 ⚠️ That sentence read "**every** endpoint", **corrected 2026-08-29** to "every `/g/…` sync route",
 and **corrected again 2026-08-30** because two `/g/…` routes are now outside the gate: `/rotate`
-and `/keys` are D1 only, carry their own credential, and are covered in the routes table above.
+and `/keys` refuse out of D1, carry their own credential, and are covered in the routes table
+above — an accepted rotation reaches the object once, to post its roster, and only a caller holding
+the group's current auth can cause one.
 `relay/src/index.ts`'s `CLAIM_ROUTES` doc says the rest in the code: **none of the four
 entitlement routes is behind the bearer gate**, and none of them could be — three of the four
 exist precisely because the caller has no token yet. Each is guarded by something else instead:
@@ -3144,7 +3206,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   to be taken. There never was a poll for it to replace either — the record's own confusion about
   that is history now, folded into the section above rather than repeated here.
 - **`pull` has no page size, and the doorbell is what turns that from a latent hazard into a
-  routine path** (spec §8). `group.ts:172-197` returns every envelope past the cursor in one
+  routine path** (spec §8). `group.ts`'s `pull` returns every envelope past the cursor in one
   response and `client.rs:917`'s `response.text()` has no cap, so a peer offline through a
   50 000-row import pulls 250 envelopes in one body — **~46.6 MB**, held as row strings plus the
   `JSON.stringify` copy at **~95 MB inside a 128 MB isolate shared with every other group's**
@@ -3230,15 +3292,30 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   purpose. So a background trip that starts a newer hold and pushes nothing draws no *Update this
   device* on a panel already open, until something else refreshes it (parked at the same review;
   a press of **Sync now** refreshes it through its own mutation).
-- **A removed device's ack pins the relay's compaction floor.** `group.ts` keeps one `acks` row per
-  device and deletes them only when the whole group's log is dropped at a membership's end; a
-  removal, a departure and a rotation leave the row. `log.ts`'s `compact` takes its floor as the
-  lowest ack of every device it has heard from, so a device that has left stays the slowest reader
-  the group has, and nothing above its last ack is compacted again. Found while designing the
-  delivery holds, whose own cost is the same pin for the length of a hold, and left as a relay
-  change — the holds deployed nothing. Lifting it means the Durable Object learning of a removal,
-  and nothing tells it one: `/rotate` is answered out of D1 ahead of the bearer gate and never
-  reaches the object — the gap the rewrap's fan-out bullet below records from the other side.
+- ~~**A removed device's ack pins the relay's compaction floor.**~~ **Fixed with issue #546, and
+  not deployed.** `compact` took its floor as the lowest ack of every device the object had heard
+  from, and nothing but a membership's end ever deleted an ack — so a removed device, a departed
+  one and a wiped reinstall each stayed the slowest reader the group had, and nothing above its
+  last ack was compacted again. Now an accepted rotation posts its roster to the object's internal
+  `/roster`, which departs every device the manifest omits, and a device unheard for ninety days
+  (`ACK_TTL_MS`, `heard_at` stamped by every ack and refreshed by a pull at most daily) leaves the
+  floor too. [relay/README.md](../../relay/README.md)'s *Who the log waits for* has it in full. What
+  it leaves is the next three bullets.
+- **A device away more than ninety days comes back to a log compacted past its cursor, and nothing
+  on the wire tells it** (read off `log.ts`, unmeasured). The rows between its cursor and the floor
+  are gone, and it pulls on as if nothing were missing. The fix is the relay answering the highest
+  seq it has compacted, so the client can see its cursor fell below it and ask for a baseline; not
+  built. It is the same season `DEVICE_TTL_MS` gives a device's slot, chosen against the same
+  drawer.
+- **A removed device the object never heard from before its removal is not marked departed**
+  (read off `log.ts`, unmeasured). A roster departs only devices the object knows — the direction
+  that keeps rows — so a device removed before it ever pushed or acked is not in `departed`, and if
+  it acks within its token's last day it is enrolled and pins the floor until the ninety days or the
+  group's next roster.
+- **A device already gone before the relay deploy keeps pinning** until the group's next rotation
+  posts a roster, or ninety days after the deploy (read off `group.ts`'s constructor, unmeasured).
+  The migration backfills `heard_at` with its own moment rather than zero, so no live device drops
+  off the floor at the deploy — which also counts every long-gone one as heard that day.
 - **A third device's tombstone against a third device's edit.** (The tombstone here is a `del` op.)
   Add-wins reads this device's own history and the incoming batch; two *other* devices' ops only
   meet if they arrive together. This said a tombstone table would close it; **user schema v54
@@ -3267,14 +3344,16 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   runs at the top of every round trip, so a removal is now picked up by *whatever* wakes a device:
   a `head` frame, a local write, launch, a reconnect. ⚠️ **This bullet claimed "within a few
   seconds of the next `head` frame" for part of that day and it is false — there is no frame.**
-  A rotation never reaches the Durable Object at all: `index.ts` answers `/rotate` and `/keys`
-  ahead of the bearer gate, out of D1, precisely because a rotated-away device cannot mint a
-  token — and `notify()` is called from `push` and nowhere else, so nothing broadcasts. **A quiet
-  group therefore learns of a removal at its next trip for some other reason**, which on an idle
-  device is the next launch or the next reconnect. Still a large improvement on the manual press
-  it replaced, and still not a fan-out. Closing it properly means either a notify on the rotate
-  path — which would have to reach the object the rotate deliberately avoids — or the removing
-  device pushing something after it publishes.
+  `index.ts` answers `/rotate` and `/keys` ahead of the bearer gate, out of D1, precisely because a
+  rotated-away device cannot mint a token. **Since issue #546 an accepted rotation does reach the
+  Durable Object — once, and only to post its roster** (`/roster`), which departs devices and
+  compacts and sends no frame: `notify()` is still called from `push` and nowhere else, so nothing
+  broadcasts. **A quiet group therefore still learns of a removal at its next trip for some other
+  reason**, which on an idle device is the next launch or the next reconnect. Still a large
+  improvement on the manual press it replaced, and still not a fan-out. Closing it properly means
+  either a frame sent from the roster post — which no longer needs the rotate to reach an object it
+  avoids, only the handler it already reaches to send one, best effort like the post itself; not
+  built — or the removing device pushing something after it publishes.
 - **A round trip holds the write connection across the network, so a user edit can be told the
   database is busy.** `live::trip` and `commands::sync_now` both wrap the whole of
   `client::run_once` in `sync::with_write`, and that closure is `check_keys` → `push` → `pull` →

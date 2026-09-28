@@ -72,11 +72,12 @@ not behind that gate and cannot be, because three of them exist precisely so a c
 token can get one, so each is guarded by something else instead (an authorization code Patreon
 carries, a single-use ten-minute claim code, the refresh secret or the group auth being presented,
 the webhook's HMAC). **Two `/g/…` routes stand outside it too** — `/rotate` and `/keys`, which
-carry the group's own key material and are D1 only: a device that has just been rotated away from
-cannot mint a token, so a `/keys` behind the gate would refuse exactly the caller it exists to
-serve. Either way nothing follows from knowing where the relay lives. **The hosted Worker is
-deployed at that address**, which reverses what this file said until 2026-08-30. Probed that day,
-after the group-key deploy: `/claim` and `/token` answer **405** to a GET (the route is there and
+carry the group's own key material and refuse out of D1 alone (an accepted rotation then posts its
+roster to the group's object, once): a device that has just been rotated away from cannot mint a
+token, so a `/keys` behind the gate would refuse exactly the caller it exists to serve. Either way
+nothing follows from knowing where the relay lives. **The hosted Worker is deployed at that
+address**, which reverses what this file said until 2026-08-30. Probed that day, after the
+group-key deploy: `/claim` and `/token` answer **405** to a GET (the route is there and
 wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate,
 `/g/{group}/rotate` **401** to a POST, `/g/{group}/keys` **401** to a GET with a well-formed
 bearer, and `/g/{group}/bogus` **404** — so the gate, the callback, the membership flow and the

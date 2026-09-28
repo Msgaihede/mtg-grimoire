@@ -532,9 +532,10 @@ that a share was withdrawn or expired, not that they mistyped a link.
 > darkens a link and a membership that revives must light it again. A timestamp can only be set.**
 
 **Which pass moves it.** `share-worker/src/lapse.ts` is a daily cron on **this** Worker at
-`30 3 * * *` — `30` and not `0` because `relay/wrangler.jsonc` already owns `0 3`, and a trigger
-here rather than a second job inside the relay's `reconcile` because §5.1 keeps the relay's source
-and deploy untouched. It is the account's second cron trigger of the free plan's five.
+`30 3 * * *` — `30` and not `0` because `relay/wrangler.jsonc` owns minute `0` (`0 3` daily until
+2026-09-28, hourly since), and a trigger here rather than a second job inside the relay's
+`reconcile` because §5.1 keeps the relay's source and deploy untouched. It is the account's second
+cron trigger of the free plan's five.
 
 It reads `entitlements` — the relay's table in the shared database — and writes `shares.state`: a
 group whose subject is `dead` has its **live** shares darkened, and one that is `active` or in

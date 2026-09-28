@@ -20,8 +20,9 @@ import worker, { type Env } from "./index";
  * unchanged with the routes moved behind the gate, so the placement — the thing most likely to
  * be undone by a later edit to `index.ts` — would be untested.
  *
- * That makes this the one relay suite that drives a fetch handler, against `vite.config.ts`'s
- * note that the I/O here is left to a deploy. The exception is affordable for one reason: these
+ * That makes this one of the two relay suites that drive a fetch handler — `admit.test.ts` is the
+ * other, for the push admission's placement and the same reason — against `vite.config.ts`'s note
+ * that the I/O here is left to a deploy. The exception is affordable for one reason: these
  * two routes decide everything in D1, so `fakeD1`'s SQL evaluator is the whole of what they
  * need. The one thing either sends the Durable Object — an accepted rotation's roster — is a
  * request whose *path and body* are the question, not anything the object does with them, so
