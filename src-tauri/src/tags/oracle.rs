@@ -820,6 +820,16 @@ mod tests {
     /// batch has committed) and the ingest returning. Without that window an ingest that held
     /// the connection end to end would simply make the probe wait and then collect its locks
     /// from an idle mutex.
+    ///
+    /// **It used to flake, and [`crate::db::lock_background`] is why it no longer can**
+    /// (2026-09-28, Linux debug build). Before issue #551 the probe's `lock_for` polled every
+    /// 20 ms against this fixture's clock-regular ~10 ms batches, and at the wrong phase missed
+    /// every release in the run: 6 idle runs in 100 scored below 3, and a full parallel
+    /// `cargo test` went red on it. An ask that has waited once now holds off the next batch
+    /// until it is served, and the same probe left to run the whole ingest won at least 80
+    /// times in each of 100 runs — **and in each of 100 more with
+    /// [`crate::tags::YIELD_BETWEEN_BATCHES`] at zero**, so this count fences that deference
+    /// and not that pause.
     #[test]
     fn a_writer_gets_the_connection_between_batches() {
         use std::sync::atomic::AtomicUsize;
@@ -833,8 +843,9 @@ mod tests {
         crate::split::convert(&dir).unwrap();
         let db = Mutex::new(crate::db::open_write(&dir).unwrap());
 
-        // Ten batches of taggings and as many again of closure rows, so the run has plenty
-        // of release points left once counting opens.
+        // The one line holding every tagging commits as one batch, because a line is folded
+        // whole; the release points are the tags', the edges' and twenty batches of closure
+        // rows (two per card: the tag and its parent) — 22 once counting opens.
         let cards: Vec<String> = (0..BATCH * 10).map(|i| format!("oid-{i}")).collect();
         let refs: Vec<&str> = cards.iter().map(String::as_str).collect();
         let lines = [
@@ -1574,24 +1585,31 @@ mod tests {
             }));
         });
         let (state, dir) = test_state(server.base_url());
-        let now = crate::tags::unix_now();
         assert!(
-            crate::tags::due_at_launch(&ORACLE, &state, now),
+            crate::tags::due_at_launch(&ORACLE, &state, crate::tags::unix_now()),
             "a dataset never fetched is due"
         );
 
         refresh(&ORACLE, &state, false, &mut |_, _, _| {})
             .await
             .expect_err("a file with no tag in it is refused");
+        // **Asked at the stamp the refusal wrote, never at a clock read before the refresh.**
+        // The refresh stamps with its own `unix_now()`, and `backoff::resting` reads a stamp
+        // later than `now` as a clock that went backwards — so a refresh that crossed a second
+        // boundary failed the next assertion (2 runs in 100 on Linux debug, and
+        // `rust (windows-latest)` on PR #663). A real launch always asks later than the stamp.
+        let refused_at =
+            crate::feed::backoff::failed_at(&crate::db::lock_blocking(&state.db), BULK_NAME)
+                .expect("the refusal is written down");
         assert!(
-            !crate::tags::due_at_launch(&ORACLE, &state, now),
+            !crate::tags::due_at_launch(&ORACLE, &state, refused_at),
             "the next launch must not fetch the same broken file again"
         );
         assert!(
             crate::tags::due_at_launch(
                 &ORACLE,
                 &state,
-                now + crate::feed::backoff::FAILURE_BACKOFF_SECS
+                refused_at + crate::feed::backoff::FAILURE_BACKOFF_SECS
             ),
             "but a day later it tries again"
         );
