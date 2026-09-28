@@ -21,17 +21,27 @@ open.**
 `GET /g/{group}/keys`, the `group_keys` table and two columns on `entitlements`. **It is deployed
 too**, and its deploy is where step 2's atomicity trap was measured rather than reasoned.
 
-**A third half is in this branch and is not deployed**: `group_devices`, `MAX_GROUP_DEVICES`, a
-required `device` field on both `/token` doors and on `/claim`, `/claim` moving a binding instead
-of refusing it, and `/rotate` capping its manifest and freeing slots through `keepOnly`. It adds
-**one migration file** to step 2 and changes no route path, so step 6 deploys the same list it
-already did.
+**A third half is deployed**: `group_devices`, `MAX_GROUP_DEVICES`, a required `device` field on
+both `/token` doors and on `/claim`, `/claim` moving a binding instead of refusing it, and
+`/rotate` capping its manifest and freeing slots through `keepOnly`. It added **one migration
+file** to step 2 and changed no route path.
 
-**A fourth half, from a later branch, is also not deployed**: the pairing rendezvous —
-`POST`/`GET {relay}/p/{rv}/{slot}`, the `pairing_rendezvous` table, and `/pair`'s landing page. It
-adds a **second** migration file to step 2 (run as its own `--command`, never a `--file` — that
-step says why) and **no new step at all**. It changes no existing route path either, so step 6
-still deploys the same list plus these two new routes.
+**A fourth half is deployed too**: the pairing rendezvous — `POST`/`GET {relay}/p/{rv}/{slot}`,
+the `pairing_rendezvous` table, and `/pair`'s landing page. It added a **second** migration file
+to step 2 (run as its own `--command`, never a `--file` — that step says why) and two new routes.
+
+⚠️ **Both of those halves said "not deployed" here until 2026-09-28, and both were live.** Nobody
+wrote down the deploy that shipped them: `wrangler deployments list` shows three between
+2026-08-30 08:50 and 2026-08-31 05:37 UTC and none after, and step 0 found both answering on
+2026-09-28, before that day's deploy. The device roll's own recorded tell could never have caught
+it — step 0 says why.
+
+**A fifth half — the refresh-secret change (#541, `57a65ec`) — was deployed 2026-09-28**, from
+`main` at `1512ea68`, in the order the next section gives: v0.31.0 (2026-09-27) is the first
+release carrying `entitlement::refused_secret`, then the `refresh_device` column, then
+`wrangler deploy`. **It has no credential-free tell** — every check it changed runs behind an auth
+check or a live claim code — so it is known to be live from the tree that was deployed, not from a
+probe. Step 6 has the one read that can prove it from outside.
 
 Designs: [2026-08-29-hosted-relay-and-patreon-design.md](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md),
 [2026-08-30-group-wide-membership-and-removal-design.md](../superpowers/specs/2026-08-30-group-wide-membership-and-removal-design.md),
@@ -50,14 +60,17 @@ run — it runs workerd locally, contacts nothing and needs no login. Everything
 | `mtg-grimoire-relay.denmark-east.workers.dev` | **live, and running the entitlement Worker.** Probed 2026-08-30: `/claim` and `/token` answer **405** to a GET (the route is there and wants POST) and **400** to an empty POST body, `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate, `/g/{group}/push` and `/g/{group}/ack` **405**, and `/nonsense` **404** — so the gate, the callback and the membership flow are all deployed. |
 | The **group-key routes** | **deployed, later the same day.** `/g/{group}/rotate` answers **401** to a POST and `/g/{group}/keys` **401** to a GET carrying a well-formed bearer, against a host where `/g/{group}/bogus` is still **404** — so these are refusals from the handlers, not a router shrug. ⚠️ **This row said "not deployed, both answer 404" and that is history.** |
 | The `group_keys` **table** | **applied.** The bearer-carrying `/keys` probe in step 2 is the test — **401 is the pass and 500 is a missing table** — and it answers 401. |
-| This branch's **device roll** | **not deployed, and no route path gives it away.** The tell is a body: `POST /token {group, auth}` **with no `device`** answers **401** from the entitlement lookup, where this tree's code answers **400 `that is not a device id`** before reading anything. So `group_devices`, the cap, `/claim`'s rebind and `keepOnly` are all still un-run. |
-| The D1 database | **exists.** `wrangler.jsonc`'s `database_id` is a real uuid, and has been since before this branch. It holds live entitlement rows, so step 2's `ALTER TABLE`s run against real data. |
+| The **device roll** | **deployed, and no route path gives it away.** The tell is a body: `POST /token {"refresh":"x"}` **with no `device`** answers **400 `that is not a device id`** (probed 2026-09-28), and the same body with `"device":"deadbeef"` answers **401** — so the 400 is the device check and not an earlier one. ⚠️ **This row said "not deployed" until 2026-09-28**, on a probe that could not tell the two apart — step 0 says why. |
+| The **pairing rendezvous** | **deployed.** `GET /p/{32 hex}/offer` answers **404 with a JSON body, `{"error":"nothing there"}`** — the handler's answer after a D1 read — where the router's own 404 is plain-text `not found` and a missing `pairing_rendezvous` table would be a **500**. `GET /pair` answers **200**. |
+| The **refresh-secret change** | **deployed 2026-09-28**, from `main` at `1512ea68`, after `refresh_device` was added. No probe without a credential can see it; step 6 has the read that can. |
+| The D1 database | **exists.** `wrangler.jsonc`'s `database_id` is a real uuid, and has been since before this branch. It holds live entitlement rows, so step 2's `ALTER TABLE`s run against real data. `sqlite_master` listed `entitlements`, `claim_codes`, `group_keys`, `group_devices` and `pairing_rendezvous` on 2026-09-28, beside D1's own `_cf_KV`. |
 | The Patreon OAuth app | **the client exists.** `PATREON_CLIENT_ID` is real in `entitlement.rs` since `a0eb0c6` (2026-08-30) and was verified live: `GET /oauth2/authorize` with it and `/oauth/patreon/callback` answered 302 to Patreon's login, preserving both parameters, which an unregistered id or an unregistered redirect does not do. **`wrangler.jsonc`'s `vars` carry the relay's own copy of it and `PATREON_CAMPAIGN_ID`**, both real, the client id byte for byte equal to the Rust constant. |
 
 A device pointed at that host today reaches a relay that speaks the whole membership flow, the
-whole log **and the key distribution**. **What is missing is one table and one deploy**, and
-neither is visible in a route list — which is the reason the last row's probe is a body rather
-than a path.
+whole log, the key distribution, the device cap and the pairing rendezvous. **As of 2026-09-28
+nothing in `relay/` on `main` is undeployed** — and that is the sentence on this page most certain
+to rot, because the next branch that touches `relay/` makes it false without editing it. Step 0 is
+the authority, not it.
 
 ⚠️ **The first two rows above were the opposite until 2026-08-30, in four files at once**, and no
 build could go red for any of it. The claim "the hosted Worker is not deployed" was written once
@@ -92,21 +105,24 @@ refresh secret when a membership has ended or was never claimed, and then its gr
 too — a `dead` row settles to 401 whatever auth reaches it, and a group claimed before
 `group_keys` has no auth to match — so a new build revokes exactly where an old one does. The
 other client-visible change, `/rotate` no longer taking the refresh secret, costs nothing: no
-build has ever sent one there.
+build has ever sent one there. **All three moves are done**: v0.31.0 (2026-09-27) is the first
+release carrying `refused_secret`, and the column and the deploy both landed on 2026-09-28.
 
 0. **Ask the host what is actually there, and branch on the answer rather than on this file.**
-   Three `curl`s settle it in ten seconds and cost nothing:
+   Five `curl`s settle it in ten seconds and cost nothing:
    ```
-   curl -si https://mtg-grimoire-relay.denmark-east.workers.dev/token -d '{}'
+   H=https://mtg-grimoire-relay.denmark-east.workers.dev
+   curl -si "$H/token" -d '{}'
    curl -s -o /dev/null -w "%{http_code}\n" \
-     -H "authorization: Bearer $(printf 'ab%.0s' {1..32})" \
-     "https://mtg-grimoire-relay.denmark-east.workers.dev/g/abc/keys?device=deadbeef"
-   curl -si https://mtg-grimoire-relay.denmark-east.workers.dev/token \
-     -d '{"group":"aaaaaaaa","auth":"bbbbbbbb"}'
+     -H "authorization: Bearer $(printf 'ab%.0s' {1..32})" "$H/g/abc/keys?device=deadbeef"
+   curl -si "$H/token" -d '{"refresh":"x"}'
+   curl -si "$H/token" -d '{"refresh":"x","device":"deadbeef"}'
+   curl -si "$H/p/$(printf '0%.0s' {1..32})/offer"
    ```
-   **As of 2026-08-30 the expected answers are `400 malformed token request`, `401`, and
-   `401 unauthorized`** — an upgraded Worker with `group_keys` applied and the device roll not yet
-   deployed. Read them in that order and branch:
+   **As of 2026-09-28 the expected answers are `400 malformed token request`, `401`,
+   `400 that is not a device id`, `401 unauthorized`, and `404 {"error":"nothing there"}`** — a
+   Worker with every table applied and both the device roll and the rendezvous deployed. Read them
+   in that order and branch:
    - **404 on the first** means the baseline Worker is still there and none of this has run: do
      every step below.
    - **500 on the second** means the router is deployed and `group_keys` is **missing** — the
@@ -115,14 +131,31 @@ build has ever sent one there.
      `curl` with no header answers 401 either way, because `handleKeys` refuses a missing
      credential before it touches D1, which is what makes the header the whole point of this
      probe.
-   - **400 `that is not a device id` on the third** means this branch is already deployed and the
-     device roll's migration must already have been applied; **401** means it is not, and step 2's
-     `group_devices` block is still owed.
+   - **The third and fourth are one question asked twice.** `400 that is not a device id` on the
+     third with `401` on the fourth means the device roll is deployed and its `group_devices`
+     migration must already have been applied; **401 on both** means it is not, and step 2's
+     `group_devices` block is still owed. The fourth is the control: it differs from the third by
+     that one field, which is what proves the third's 400 came from the device check.
+   - **The fifth** answers **404 with a JSON body** when the rendezvous is deployed with its
+     table, **404 with plain-text `not found`** when the route is not deployed at all — the
+     router's own answer, the same one `/nonsense` gets — and **500** when the route is there and
+     `pairing_rendezvous` is not.
 
    ⚠️ **The third probe is a body and not a path, and that is the lesson of the second deploy.**
    The device cap adds no route, so a route list cannot tell you whether it is live — and a route
    list is exactly what everybody reached for the first time. Do not skip this step because the
    table above agrees with you; the table is prose and prose rots, and `curl` does not.
+
+   ⚠️ **And a body probe must pass every check that runs before the one it means to ask.** Until
+   2026-09-28 the third probe here was `{"group":"aaaaaaaa","auth":"bbbbbbbb"}`, and the group door
+   refuses an `auth` that is not 64 hex (`RELAY_AUTH`) as `400 malformed token request` before it
+   reads `device` — as it already did in `69a0d7f`, the tree that wrote the probe. So it answered
+   `malformed` against every build with a group door, device roll or none, and could never answer
+   the `that is not a device id` this step promised; the device roll was live for four weeks while
+   this page said otherwise. `{"refresh":"x"}` has nothing to fail but being a non-empty string,
+   and `device` is the next thing the refresh door reads. **Pair every body probe with a control
+   that differs by one field**, as the fourth does — a refusal read alone may come from an earlier
+   check than the one you meant.
 1. **`npx wrangler d1 create mtg-grimoire-relay`**, then put the real `database_id` into
    `relay/wrangler.jsonc`.
 2. **Apply the schema to an empty database**, and verify rather than trusting exit 0 —
@@ -172,7 +205,9 @@ build has ever sent one there.
    npx wrangler d1 execute mtg-grimoire-relay --remote \
      --command "SELECT refresh_device FROM entitlements LIMIT 0"
    ```
-   An empty result is the pass; `no such column` means the `ALTER` did not run. The column is
+   An empty result is the pass; `no such column` means the `ALTER` did not run. **Applied
+   2026-09-28**: the `ALTER` answered with no `duplicate column name`, so the column had never
+   been there, and this `SELECT` answered empty. The column is
    additive — every existing row reads NULL, which `/rotate` treats as *holder unknown*, so the
    group's next accepted rotation retires that row's secret. What that costs the paying device,
    if it is still in the group, is one 401 on `/token`'s refresh door, which a build carrying
@@ -230,9 +265,10 @@ build has ever sent one there.
    one that kept working. **That is the state Markus's own pair reached.** Fixed on this branch:
    both of `seedGroup`'s statements now refuse an epoch behind the group — and, since, one ahead of
    it or a foreign auth at its own epoch — the claim still succeeds and still mints a grant, and the key registration is left where
-   it already correctly pointed. ⚠️ **Until this branch is deployed the hazard is live on the
-   host**, so if this repair is needed before then, press Connect on a device that has just synced
-   successfully — not on the one that has been failing.
+   it already correctly pointed. **All of it is live since 2026-09-28** — the refusals of an epoch
+   ahead and of a foreign auth arrived with the refresh-secret change — so the press no longer has
+   to be aimed. Until then the advice here was to press Connect on a device that had just synced
+   successfully, not on the one that had been failing.
 
    **Measured 2026-08-30**, on the real pair and on the first press of the pass: a paid-up,
    paired device at epoch 2, `entitled: true`, `status: "active"` — and `sync_now` answering
@@ -256,11 +292,18 @@ build has ever sent one there.
    ```
 5. **Register the webhook** for `members:pledge:create`, `members:pledge:update`,
    `members:pledge:delete` and `members:update`, pointing at `/webhook/patreon`.
-6. **`npx wrangler deploy`.** Then, for the refresh-secret change:
+6. **`npx wrangler deploy`.** **Last run 2026-09-28, from `main` at `1512ea68`**, and both bullets
+   below are still open. Then, for the refresh-secret change:
    - **Press Connect Patreon once on the paying device.** Not required, but it records which
      device holds the secret, so the group's next rotation keeps it rather than retiring it as
      *holder unknown* — and it spares any device still on 0.30.1 or earlier the *Membership ended*
-     that build draws when its secret is refused.
+     that build draws when its secret is refused. **It is also the only proof from outside that
+     the refresh-secret change is live**, since nothing it changed answers without a credential:
+     after the press, this reads at least 1, and only the new `/claim` writes the column.
+     ```
+     npx wrangler d1 execute mtg-grimoire-relay --remote \
+       --command "SELECT count(*) FROM entitlements WHERE refresh_device IS NOT NULL"
+     ```
    - **Once new builds are widespread, retire every secret no device was recorded against**, once,
      by hand — it is not automated, because a holder still on an old build reads the refusal as a
      lapse:
@@ -409,7 +452,8 @@ Added 2026-08-30. Four things, and the third is the one to be frightened of.
 
 ### 11. The device roll, and the one refusal that must not read as a lapse
 
-Added 2026-08-30, and **none of it has run**. Four things.
+Added 2026-08-30. **The code is live** — step 0's third probe, 2026-09-28 — **and none of these
+four checks has been driven**, which is the state this section exists to name. Four things.
 
 - ⚠️ **`admitDevice`'s `INSERT … ON CONFLICT (group_id, device_id) DO UPDATE`, against real D1.**
   The whole cap rests on a returning device being free: without the upsert, one device refreshing

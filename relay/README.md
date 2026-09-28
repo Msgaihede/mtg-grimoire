@@ -26,12 +26,16 @@ asked; corrected, it then said `/rotate` and `/keys` were "this change's two rou
 missing, and survived a few hours past the deploy that shipped them. **Step 0 of the runbook is
 those `curl`s written down**, and it is the only sentence in any of these files that cannot rot.
 
-**What is *not* deployed is the device roll on this branch** — `group_devices`, the cap, `/claim`
-moving a binding, `keepOnly` — **and it adds no route, so no path probe can see it.** The tell is
-a body: `POST /token {"group":…,"auth":…}` with **no `device`** answers 401 from the entitlement
-lookup on the live Worker, where the code in this directory answers **400 `that is not a device
-id`** before reading anything. Deploying this tree is `npx wrangler deploy` from here, and it is
-the last of the steps under **Deploying** below rather than the whole of them.
+**The device roll is deployed as well** — `group_devices`, the cap, `/claim` moving a binding,
+`keepOnly` — **and it adds no route, so no path probe can see it.** The tell is a body:
+`POST /token {"refresh":"x"}` with **no `device`** answers **400 `that is not a device id`** on the
+live Worker (2026-09-28), and **401** once `"device":"deadbeef"` is added. ⚠️ **This paragraph said
+it was not deployed until that day**, on a `{"group":…,"auth":…}` probe the group door refuses as
+`malformed token request` — its `auth` was not 64 hex — before it reads `device` at all. **The
+pairing rendezvous is live too**: `GET /p/{32 hex}/offer` answers a JSON `nothing there`, not the
+router's plain-text `not found`. **The last deploy was 2026-09-28, from `main` at `1512ea68`**, and
+carried the refresh-secret change. Deploying this tree is `npx wrangler deploy` from here, and it
+is the last of the steps under **Deploying** below rather than the whole of them.
 
 ## What it cannot do
 

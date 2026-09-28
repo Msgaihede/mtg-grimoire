@@ -81,9 +81,11 @@ wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from t
 `/g/{group}/rotate` **401** to a POST, `/g/{group}/keys` **401** to a GET with a well-formed
 bearer, and `/g/{group}/bogus` **404** — so the gate, the callback, the membership flow and the
 key distribution are all live. This sentence briefly said `/rotate` and `/keys` were the two
-routes still missing; that was true for part of one day. **What is not deployed is the device
-roll**, and it changes no route — the tell is that the live `/token` still accepts a body with no
-`device` field. The next deploy is an **update** with a D1 that holds real entitlements, not a
+routes still missing; that was true for part of one day. **The device roll and the pairing
+rendezvous are deployed too**, which this file denied until 2026-09-28 on a probe that could not
+fail — [the runbook](docs/reference/hosted-relay-deploy.md)'s step 0 has one that can. **The last
+deploy was 2026-09-28, from `main` at `1512ea68`**, and carried the refresh-secret change (#541).
+The next deploy is an **update** with a D1 that holds real entitlements, not a
 first landing. **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
 real id now**, public on the same terms and verified live against Patreon's authorize endpoint.
 
