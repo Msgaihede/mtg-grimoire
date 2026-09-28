@@ -57,6 +57,7 @@ function PileHost({ drawing, deckId, planMarks = false }: PileHostProps): JSX.El
     setQuantity: tokens.setQuantity,
     remove: tokens.remove,
     pickArt: () => {},
+    openCard: () => {},
     // Last in the rail, every existing deck's position — where the pile is drawn is the view's.
     railIndex: -1,
     theoryMark: planMarks
