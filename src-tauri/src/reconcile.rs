@@ -562,11 +562,12 @@ fn fold_wish_into_existing(
 /// red and nothing in `error_log`. [`collision_target`] makes the same argument about the
 /// folder, and [`fold_wish_into_existing`] about the wishlist's.
 ///
-/// `label_id` does not move: the row that survives keeps its own label, `deck::move_card`'s fold
-/// rule and `deck_category_delete`'s. Nothing else moves either, because a deck card holds
-/// nothing else the user typed — no price, no acquisition story. The quantities add, exactly
-/// as `deck.rs`'s own `ON CONFLICT` adds them when the same printing is added to a category
-/// twice.
+/// `label_id` is the survivor's where it wears one and the folded row's where it wears none,
+/// `deck::move_card`'s fold rule and `deck_category_delete`'s — a label falls off when the reader
+/// removes it or the card, and an upstream id change is neither (issue #643). Nothing else moves,
+/// because a deck card holds nothing else the user typed — no price, no acquisition story. The
+/// quantities add, exactly as `deck.rs`'s own `ON CONFLICT` adds them when the same printing is
+/// added to a category twice.
 fn fold_deck_card_into_existing(
     tx: &rusqlite::Transaction<'_>,
     source: i64,
@@ -592,6 +593,7 @@ fn fold_deck_card_into_existing(
     tx.execute(
         "UPDATE deck_cards SET
             quantity = quantity + (SELECT quantity FROM deck_cards WHERE id = ?2),
+            label_id = coalesce(label_id, (SELECT label_id FROM deck_cards WHERE id = ?2)),
             updated_at = unixepoch()
           WHERE id = ?1",
         params![target, source],
@@ -1879,6 +1881,59 @@ mod tests {
                 (new_regular, None, 2 + 3),
             ],
             "each finish's copies joined that finish's row, and both folded rows are gone"
+        );
+    }
+
+    /// **A merge's fold keeps the label** — `deck::move_card`'s fold rule, and issue #643's: a
+    /// label falls off only when the reader removes it or the card, and an upstream id change is
+    /// neither. The survivor keeps its own label where it has one and takes the folded row's where
+    /// it has none.
+    #[test]
+    fn a_merge_fold_keeps_the_label_unless_the_surviving_row_has_its_own() {
+        let mut conn = seeded();
+        let burn = deck(&conn, "Burn");
+        let main = category(&conn, burn, "main", "Main deck");
+        let side = category(&conn, burn, "side", "Sideboard");
+        let flex = crate::deck_meta::create_label(&conn, None, "Flex", "amber").unwrap();
+        let keep = crate::deck_meta::create_label(&conn, None, "Keep", "slate").unwrap();
+        let wear = |row: i64, label: i64| {
+            conn.execute(
+                "UPDATE deck_cards SET label_id = ?2 WHERE id = ?1",
+                params![row, label],
+            )
+            .unwrap();
+        };
+        // Main deck: a labelled row folding onto a bare one. Sideboard: onto a labelled one.
+        let bare = deck_card(&conn, burn, "new-id", main, 2);
+        wear(deck_card(&conn, burn, "old-id", main, 3), flex.id);
+        let labelled = deck_card(&conn, burn, "new-id", side, 1);
+        wear(deck_card(&conn, burn, "old-id", side, 1), flex.id);
+        wear(labelled, keep.id);
+
+        let stats = apply(
+            &mut conn,
+            &[migration("m1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        assert_eq!(stats.folded, 2, "both rows folded");
+        let label_of = |row: i64| -> Option<i64> {
+            conn.query_row(
+                "SELECT label_id FROM deck_cards WHERE id = ?1",
+                [row],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            label_of(bare),
+            Some(flex.id),
+            "the unlabelled survivor took it"
+        );
+        assert_eq!(
+            label_of(labelled),
+            Some(keep.id),
+            "the surviving row's own label stands"
         );
     }
 

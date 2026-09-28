@@ -4399,8 +4399,22 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   one the panel offers first for the same text. A reader who cares which printing they get has the
   panel open beside them — one press on its rail, since it opens collapsed — so this field never
   grows a set column or a printing picker.
-  `MAX_SUGGESTIONS` is **five**, and the ceiling is the reader's rather than the backend's: a list
-  long enough to need a scrollbar has stopped being a shortcut and started being the wall again.
+  `MAX_SUGGESTIONS` is **ten** (five until issue #648, the owner's call), and the ceiling is the
+  reader's rather than the backend's: a list long enough to need a scrollbar has stopped being a
+  shortcut and started being the wall again. Ten rows and the count line are ~350px by arithmetic,
+  which fits under the field at the 1024×700 floor — not measured in the shipped window.
+- **What the ten leave out is counted under them and never offered** (2026-09-28,
+  [issue #648](https://github.com/Msgaihede/mtg-grimoire/issues/648)): `+23 more` for ten of
+  thirty-three, `moreMatches` in `QuickAdd.tsx`. **No press loads an eleventh row, and none may be
+  added** — the answer to "not in these ten" is a longer name or the docked panel, and a list
+  that grew on demand would be the wall again. **It costs no request**: `search_cards` counts its
+  matches on every call, so the number is read off the same answer the rows came from — `total`,
+  which collapsed counts cards and not printings. **A capped count keeps its `+`** (`+4,990+
+  more`), `SearchPage`'s `5,000+` rule: the backend stopped counting, so the remainder is a floor,
+  and it is the ordinary case on a first letter rather than an edge. The line is a `<p>` inside
+  the popup and **outside the listbox**, which may own only options, and it is the combobox's
+  `aria-describedby` while the list is up — the caret never enters the list, so the field is the
+  only place a screen reader hears it.
 - **Three routes reach one write, and the third is the one that looks removable.** Enter on the
   highlighted suggestion, a click on a row, and — inside the debounce window, before any
   suggestion exists — a one-shot `limit: 1` search. That third route is the field's **original**
@@ -4419,7 +4433,7 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
   `keepPreviousData` (there so the list does not blink empty between letters) is what makes the
   second clause necessary, and it is also why the rows are read off `text` rather than
   `debouncedText`: clearing the field changes the key to `""`, which the query is `enabled: false`
-  for, so the last five rows would hang under an empty box for the rest of the session.
+  for, so the last ten rows would hang under an empty box for the rest of the session.
 - **The Escape rung is `enabled: listOpen`, never `enabled: open`.** With the caret in a quick add
   whose list is closed, the press belongs to whatever layer is open over the desk — the card
   modal, and otherwise the editor's own `"navigation"` floor, which closes the deck (it was the
@@ -4480,7 +4494,7 @@ longer-form record of the two hand-rolled comboboxes and their shared panel is
 - **The query carries no `marketplace`, and that is a documented exception** to the app's rule that
   every price-bearing query carries it and has it in the key. A row draws a name, a mana cost and a
   set code and no price at all, so a currency switch has nothing to change about it, and putting
-  the marketplace in the key would refetch five names for nothing every time one happened. The
+  the marketplace in the key would refetch ten names for nothing every time one happened. The
   exception is valid only for as long as the rows stay priceless.
 - **The caret never leaves the field, and two small things are what make that true**:
   `aria-activedescendant` moves the highlight instead of the focus — which is why the dropdown is
