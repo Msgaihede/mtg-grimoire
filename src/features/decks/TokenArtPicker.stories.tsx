@@ -91,9 +91,11 @@ export const AddFromTheDeck: Story = {
 };
 
 /**
- * **All tokens on** — every token in the workbench's corpus, the one nothing in deck 1 makes
- * included (the double-faced `plst` token), grouped by token; the box narrows by set code; a pick
- * hands the host the printing and the finish, as from the deck's own tokens.
+ * **All tokens on** — every token in the workbench's corpus, grouped by token; the box narrows by
+ * set code; a pick hands the host the printing and the finish, as from the deck's own tokens.
+ * **The corpus's `Start Your Engines! // Max Speed` is not on it** since 2026-09-28: a
+ * `double_faced_token` whose faces are `Card // Card`, a helper rather than a token, which the
+ * listing leaves out with the deck ads and The Monarch.
  */
 export const AllTokens: Story = {
   play: async ({ canvasElement, args }) => {
@@ -102,19 +104,25 @@ export const AllTokens: Story = {
     await within(dialog).findAllByRole("button", { name: / — / });
     await userEvent.click(within(dialog).getByRole("button", { name: "All tokens" }));
 
-    await within(dialog).findByRole("list", { name: /^Start Your Engines! \/\/ Max Speed/ });
+    await within(dialog).findByRole("list", { name: "Wurm, Colorless 3/3 · Lifelink" });
     await expect(
-      within(dialog).getByRole("list", { name: "Wurm, Colorless 3/3 · Lifelink" }),
-    ).toBeInTheDocument();
+      within(dialog).queryByRole("list", { name: /^Start Your Engines! \/\/ Max Speed/ }),
+    ).toBeNull();
 
     await userEvent.type(
       within(dialog).getByRole("searchbox", { name: /find a printing/i }),
-      "plst",
+      "tmsc",
     );
     await waitFor(async () => {
-      await expect(within(dialog).getAllByRole("button", { name: / — / })).toHaveLength(1);
+      await expect(
+        within(dialog)
+          .getAllByRole("button", { name: / — / })
+          .every((tile) => / — TMSC · 14 /.test(tile.getAttribute("aria-label") ?? "")),
+      ).toBe(true);
     });
-    await userEvent.click(within(dialog).getByRole("button", { name: / — PLST · TDFT-14/ }));
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: /^Construct — TMSC · 14 · \d{4}, Nonfoil/ }),
+    );
     await expect(args.onPick).toHaveBeenCalledWith(
       expect.objectContaining({ finish: "nonfoil" }),
     );

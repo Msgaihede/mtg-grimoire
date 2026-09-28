@@ -1125,10 +1125,42 @@ pub fn is_token_printing(layout: &str, type_line: Option<&str>) -> bool {
     if !TWO_SIDED_LAYOUTS.contains(&layout) {
         return false;
     }
+    line_names_a_token(type_line)
+}
+
+/// Whether a type line — **or any ` // ` face of it** — begins `Token` or `Emblem`
+/// ([`TOKEN_LINE_WORDS`]): [`is_token_printing`]'s second half, and the whole of what
+/// [`is_listed_token`] adds to the layout.
+fn line_names_a_token(type_line: Option<&str>) -> bool {
     type_line.is_some_and(|line| {
         line.split(" // ")
             .any(|face| TOKEN_LINE_WORDS.iter().any(|word| face.starts_with(word)))
     })
+}
+
+/// **Whether All tokens lists a printing** — narrower than [`is_token_printing`], and on purpose:
+/// a layout [`is_token_printing`] trusts on its own ([`TOKEN_LAYOUTS`]) or a two-sided one
+/// ([`TWO_SIDED_LAYOUTS`]), **and** a type line naming a `Token` or `Emblem` face, whatever the
+/// layout.
+///
+/// **Why the layout alone is not enough for the list.** Scryfall files its helper cards under
+/// `token` and `double_faced_token` too: measured on the debug corpus (`node:sqlite` over a copy,
+/// 2026-09-28), 280 of the 3 303 paper printings the layout half admits name no `Token` or `Emblem`
+/// face — World Championships deck ads and set checklists (`Card`), The Monarch, City's Blessing,
+/// Energy Reserve, Radiation, Plot, Foretell and On an Adventure (`Card`), Day // Night and the
+/// minigames (`Card // Card`), Undercity // The Initiative (`Dungeon — Undercity // Card`), the
+/// face-down helpers Manifest, Morph and A Mysterious Creature (`Creature`), and the Horde and
+/// Hydra decks' creatures. Not one is a `component: "token"` of any card's `all_parts` (the 63 that
+/// some card names at all, it names as a `combo_piece`), so no deck derives one and no reader is
+/// missing a token by their absence. Every token and emblem the keep rule can derive has a
+/// `Token` or `Emblem` face, the six two-sided Role tokens and Mechtitan included.
+///
+/// **Not the routing question.** [`is_token_printing`] still decides where an add of one of these
+/// is filed — a picker listing only real tokens changes nothing about what `deck::add_card` does
+/// with a Monarch card someone searches for — so that predicate is left as it is.
+pub fn is_listed_token(layout: &str, type_line: Option<&str>) -> bool {
+    (is_token_layout(layout) || TWO_SIDED_LAYOUTS.contains(&layout))
+        && line_names_a_token(type_line)
 }
 
 /// [`is_token_printing`] over the row `card_id` names — the one read the two add paths make.
@@ -2785,18 +2817,23 @@ fn sql_words(words: &[&str]) -> String {
         .join(", ")
 }
 
-/// **Every paper printing [`is_token_printing`] answers yes for**, priced at `market` — the All
+/// **Every paper printing [`is_listed_token`] answers yes for**, priced at `market` — the All
 /// tokens toggle's list, grouped by token: ordered by name, then `oracle_id` (two tokens can share
 /// a name), then newest printing first by `list_printings`' own tail.
 ///
-/// **One statement with the predicate in SQL**, both halves of it: a token layout on its own, or
-/// a `flip` or `reversible_card` whose type line — or any ` // ` face of it — begins `Token` or
-/// `Emblem`. `token_printings_answers_every_token_and_nothing_else` holds the SQL to the Rust
-/// function over fixtures of every shape, so the two cannot come to disagree about what the
-/// picker offers. `LIKE` is ASCII-case-insensitive where `starts_with` is not, and on the debug
-/// corpus that changes nothing: the same predicate with a case-sensitive `GLOB` answers the same
-/// **3 303 rows over 1 096 oracle ids** (7 of them two-sided), measured with `node:sqlite` on
-/// 2026-09-27.
+/// **One statement with the predicate in SQL**: a token or two-sided layout, and a type line — or
+/// any ` // ` face of it — beginning `Token` or `Emblem`, whatever the layout.
+/// `token_printings_answers_every_token_and_nothing_else` holds the SQL to the Rust function over
+/// fixtures of every shape, so the two cannot come to disagree about what the picker offers.
+/// `LIKE` is ASCII-case-insensitive where `starts_with` is not, and on the debug corpus that
+/// changes nothing (checked with a case-sensitive `GLOB`, `node:sqlite`, 2026-09-27).
+///
+/// **The type line is asked of every layout since 2026-09-28**, where it was asked only of the two
+/// two-sided ones: the live pass found the wall opening on two World Championships deck ads, which
+/// Scryfall files under `token` with the type line `Card`. Measured over a copy of the debug corpus
+/// the same day, the list went from **3 303 printings over 1 096 oracle ids to 3 023 over 911** —
+/// the 280 dropped are the helper cards [`is_listed_token`]'s doc names, and none is a token any
+/// card's `all_parts` makes.
 ///
 /// **No index is added**, because this runs on a press and not per keystroke: the toggle asks
 /// once and the picker's search box narrows the answer in the page. **And `NOT INDEXED` keeps
@@ -2825,8 +2862,8 @@ pub fn list_token_printings(
                 {printing}
            FROM cards c NOT INDEXED
           WHERE c.is_paper = 1
-            AND (c.layout IN ({tokens})
-                 OR (c.layout IN ({two_sided}) AND ({lines})))
+            AND c.layout IN ({tokens}, {two_sided})
+            AND ({lines})
           ORDER BY c.name, c.oracle_id, c.released_at DESC, c.set_code, c.collector_number, c.id",
         printing = crate::card::printing_columns(market),
         tokens = sql_words(&TOKEN_LAYOUTS),
@@ -7303,7 +7340,7 @@ mod tests {
     // ── Every token printing ─────────────────────────────────────────────────────────
 
     /// **Every paper token and emblem printing, and nothing else — held to
-    /// [`is_token_printing`]**, so the SQL predicate and the Rust one cannot come to disagree
+    /// [`is_listed_token`]**, so the SQL predicate and the Rust one cannot come to disagree
     /// about which cards the All tokens picker offers. A token, an emblem, a double-faced token, a
     /// `flip` Role, the `reversible_card` Mechtitan, and two-sided printings whose token or emblem
     /// is on the back face only are in; a normal card, a Kamigawa-style `flip` card, a reversible
@@ -7412,7 +7449,7 @@ mod tests {
             let answered = got.iter().find(|p| p.printing.id == card.id);
             assert_eq!(
                 answered.is_some(),
-                card.id != digital.id && is_token_printing(card.layout, Some(card.type_line)),
+                card.id != digital.id && is_listed_token(card.layout, Some(card.type_line)),
                 "`{}` must be answered exactly when the predicate says it is a paper token",
                 card.name
             );
@@ -7426,6 +7463,93 @@ mod tests {
             Some(0.25),
             "priced the way the printings picker prices one"
         );
+    }
+
+    /// **A card Scryfall files under a token layout is not a token unless its type line says so**
+    /// (the live pass of 2026-09-28: the All tokens wall opened on two World Championships ad
+    /// cards). The corpus files 280 paper printings under `token` or `double_faced_token` whose type
+    /// line names no `Token` or `Emblem` face — deck ads and checklists (`Card`), The Monarch, City's
+    /// Blessing, Energy Reserve and Day // Night (`Card`, `Card // Card`), the face-down helpers
+    /// Manifest and Morph (`Creature`), Horde and minigame cards — and not one of them is a
+    /// `component: "token"` of any card's `all_parts`. So each shape below is out, while a real
+    /// token, emblem and double-faced token of the same layouts are in.
+    #[test]
+    fn token_printings_leaves_out_the_helper_cards_a_token_layout_carries() {
+        let conn = open();
+        let ad = Card {
+            id: "c-wc97-ad",
+            oracle_id: "o-wc97-ad",
+            name: "1997 World Championships Ad",
+            type_line: "Card",
+            layout: "token",
+            set_code: "wc97",
+            collector_number: "0",
+            ..Card::default()
+        };
+        let day_night = Card {
+            id: "c-day-night",
+            oracle_id: "o-day-night",
+            name: "Day // Night",
+            type_line: "Card // Card",
+            layout: "double_faced_token",
+            ..Card::default()
+        };
+        let manifest = Card {
+            id: "c-manifest",
+            oracle_id: "o-manifest",
+            name: "Manifest",
+            type_line: "Creature",
+            layout: "token",
+            ..Card::default()
+        };
+        let horde = Card {
+            id: "c-minotaur",
+            oracle_id: "o-minotaur",
+            name: "Minotaur Goreseeker",
+            type_line: "Creature — Minotaur",
+            layout: "token",
+            ..Card::default()
+        };
+        let dfc = Card {
+            id: "c-dfc-token",
+            oracle_id: "o-dfc-token",
+            name: "Human Soldier // Spirit",
+            type_line: "Token Creature — Human Soldier // Token Creature — Spirit",
+            layout: "double_faced_token",
+            ..Card::default()
+        };
+        for card in [
+            &ad,
+            &day_night,
+            &manifest,
+            &horde,
+            &dfc,
+            &treasure(),
+            &elspeth_emblem(),
+            &mechtitan(),
+        ] {
+            card.insert(&conn);
+        }
+
+        let got = list_token_printings(&conn, Marketplace::Tcgplayer).unwrap();
+        let names: Vec<&str> = got.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "Elspeth, Sun's Champion Emblem",
+                "Human Soldier // Spirit",
+                "Mechtitan // Mechtitan",
+                "Treasure",
+            ],
+            "the ad, the designation, the face-down helper and the Horde card are not tokens"
+        );
+        for helper in [&ad, &day_night, &manifest, &horde] {
+            assert!(
+                !is_listed_token(helper.layout, Some(helper.type_line)),
+                "{} under a token layout is still not listed",
+                helper.name
+            );
+        }
     }
 
     /// **A token printing on the wire is the picker's `Printing` with the token's own facts beside

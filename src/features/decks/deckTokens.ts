@@ -119,10 +119,35 @@ export function isTokenPrinting(
 ): boolean {
   if (isTokenLayout(layout)) return true;
   if (layout === null || layout === undefined || !TWO_SIDED_LAYOUTS.has(layout)) return false;
+  return lineNamesAToken(typeLine);
+}
+
+/** Whether a type line, or any ` // ` face of it, begins `Token` or `Emblem` —
+ *  `deck_tokens::line_names_a_token`. */
+function lineNamesAToken(typeLine: string | null | undefined): boolean {
   if (typeLine === null || typeLine === undefined) return false;
   return typeLine
     .split(" // ")
     .some((face) => face.startsWith("Token") || face.startsWith("Emblem"));
+}
+
+/**
+ * **Whether All tokens lists a printing** — the TypeScript twin of `deck_tokens::is_listed_token`,
+ * for the one reader that answers `token_printings` itself: the Storybook fake.
+ *
+ * Narrower than {@link isTokenPrinting} on purpose: a token or two-sided layout **and** a type line
+ * naming a `Token` or `Emblem` face. Scryfall files its helper cards under `token` and
+ * `double_faced_token` too — World Championships deck ads and checklists (`Card`), The Monarch and
+ * Day // Night, the face-down Manifest and Morph (`Creature`) — and none of them is a token any
+ * card makes; the crate's doc has the corpus count. {@link isTokenPrinting} stays the routing
+ * question.
+ */
+export function isListedToken(
+  layout: string | null | undefined,
+  typeLine: string | null | undefined,
+): boolean {
+  if (layout === null || layout === undefined) return false;
+  return (isTokenLayout(layout) || TWO_SIDED_LAYOUTS.has(layout)) && lineNamesAToken(typeLine);
 }
 
 /**

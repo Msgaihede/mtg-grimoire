@@ -306,6 +306,7 @@ import { hasVariableCost } from "@/lib/mana";
 // ports term for term (`deck_tokens::subtitle_of`).
 import {
   DEFAULT_TOKEN_QUANTITY,
+  isListedToken,
   isTokenPrinting,
   tokenSubtitle,
 } from "@/features/decks/deckTokens";
@@ -9702,10 +9703,11 @@ export function readHandlers(db: FakeDb) {
 
     /**
      * `deck_tokens::token_printings` — **every paper printing that is a token or an emblem**, the
-     * read behind Add printing's `All tokens` (managed tokens spec §3.6): {@link isTokenCard} over
-     * {@link FakeDb.cards} — the crate's one statement with `is_token_printing`'s predicate in SQL
-     * — so a `flip` Role token is in by its type line and an ordinary card is out whatever its line
-     * says.
+     * read behind Add printing's `All tokens` (managed tokens spec §3.6): `isListedToken` over
+     * {@link FakeDb.cards} — the crate's one statement with `is_listed_token`'s predicate in SQL —
+     * so a `flip` Role token is in by its type line, an ordinary card is out whatever its line
+     * says, and a helper card Scryfall files under a token layout (a deck ad, The Monarch) is out
+     * because its line names no `Token` or `Emblem` face.
      *
      * Each row is {@link toPrinting}'s, **the same row `card_printings` answers** — priced per
      * finish at the marketplace asked, `imageUris` omitted for this file's reason — with the
@@ -9721,7 +9723,7 @@ export function readHandlers(db: FakeDb) {
     token_printings: (args: { marketplace?: string }): TokenPrinting[] => {
       const mp = marketplaceOf(args.marketplace);
       return db.cards
-        .filter((c) => c.isPaper && isTokenCard(c))
+        .filter((c) => c.isPaper && isListedToken(c.layout, c.typeLine))
         .sort(
           (a, b) =>
             cmp(a.name, b.name) ||

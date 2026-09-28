@@ -408,17 +408,17 @@ export const AddToADeckThatMakesNothing: Story = {
     );
     await userEvent.type(
       within(dialog).getByRole("searchbox", { name: /find a printing/i }),
-      "plst",
+      "tmsc",
     );
     await userEvent.click(
       await within(dialog).findByRole("button", {
-        name: /^Start Your Engines! \/\/ Max Speed — PLST · TDFT-14/,
+        name: /^Construct — TMSC · 14 · \d{4}, Nonfoil/,
       }),
     );
 
     const region = await canvas.findByRole("region", { name: TOKENS_HEADING });
     const art = await within(region).findByRole("button", {
-      name: /^Change the art for Start Your Engines! \/\/ Max Speed.*, not made by deck$/,
+      name: /^Change the art for Construct, .*, not made by deck$/,
     });
     const tile = art.closest("li") as HTMLElement;
     await expect(within(tile).getByText("NOT MADE BY DECK")).toBeInTheDocument();
@@ -525,11 +525,14 @@ export const AddPrinting: Story = {
 
 /**
  * **Add printing → All tokens: a token the deck does not make, added by hand** (managed tokens
- * spec §3.6). The toggle swaps the deck's tokens for every token in the game — the corpus's double-
- * faced one here, which nothing in deck 1 makes — and a pick adds it at one copy as a hand-added
- * token, which the band then marks `NOT MADE BY DECK`.
+ * spec §3.6). The toggle swaps the deck's tokens for every token in the game — a Deathtouch Wurm
+ * here, which nothing in deck 2 makes — and a pick adds it at one copy as a hand-added token, which
+ * the band then marks `NOT MADE BY DECK`. **Deck 2 and not deck 1** since 2026-09-28: deck 1 makes
+ * every real token the workbench's corpus holds, and the one it did not — `Start Your Engines! //
+ * Max Speed` — is a `Card // Card` helper the listing leaves out now.
  */
 export const AllTokens: Story = {
+  args: { deckId: 2 },
   play: async ({ canvas, canvasElement }) => {
     const region = await canvas.findByRole("region", { name: TOKENS_HEADING });
     await within(region).findByRole("button", { name: `Change the art for ${ENTRY.treasure}` });
@@ -544,15 +547,15 @@ export const AllTokens: Story = {
 
     await userEvent.type(
       within(dialog).getByRole("searchbox", { name: /find a printing/i }),
-      "plst",
+      "t2xm",
     );
-    const dft = await within(dialog).findByRole("button", {
-      name: /^Start Your Engines! \/\/ Max Speed — PLST · TDFT-14/,
+    const wurm = await within(dialog).findByRole("button", {
+      name: /^Wurm — T2XM · 29 · \d{4}, Nonfoil/,
     });
-    await userEvent.click(dft);
+    await userEvent.click(wurm);
 
     const art = await within(region).findByRole("button", {
-      name: /^Change the art for Start Your Engines! \/\/ Max Speed.*, not made by deck$/,
+      name: /^Change the art for Wurm, Colorless 3\/3 · Deathtouch, T2XM · 29.*, not made by deck$/,
     });
     const tile = art.closest("li") as HTMLElement;
     await expect(within(tile).getByText("NOT MADE BY DECK")).toBeInTheDocument();

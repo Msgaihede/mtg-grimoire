@@ -32,7 +32,7 @@ import {
   settleManagedWishlist,
   writeHandlers,
 } from "./db";
-import { isTokenPrinting } from "@/features/decks/deckTokens";
+import { isListedToken } from "@/features/decks/deckTokens";
 import { listen } from "./event";
 import type {
   FakeActivity,
@@ -16238,7 +16238,7 @@ describe("deck tokens", () => {
 
 /**
  * **Every token in the game** — `token_printings`, the read behind Add printing's `All tokens`
- * (managed tokens spec §3.6): every paper printing `is_token_printing` says yes for, as the
+ * (managed tokens spec §3.6): every paper printing `is_listed_token` says yes for, as the
  * `Printing` the picker already renders plus the token's own facts, and nothing else.
  */
 describe("token_printings", () => {
@@ -16265,14 +16265,54 @@ describe("token_printings", () => {
     const answer = readHandlers(db).token_printings({ marketplace: "tcgplayer" });
     const ids = answer.map((p) => p.id);
     const expected = db.cards
-      .filter((c) => c.isPaper && isTokenPrinting(c.layout, c.typeLine))
+      .filter((c) => c.isPaper && isListedToken(c.layout, c.typeLine))
       .map((c) => c.id);
     expect([...ids].sort()).toEqual([...expected].sort());
     expect(ids).toContain(role.id);
     expect(ids).not.toContain(digital.id);
     expect(ids).not.toContain(BOLT.id);
-    // Seven token printings in the corpus, and the Role token beside them.
-    expect(ids).toHaveLength(8);
+    // Six token printings in the corpus, and the Role token beside them. (Seven until 2026-09-28:
+    // the corpus's `Start Your Engines! // Max Speed` is a `double_faced_token` whose faces are
+    // `Card // Card`, a helper rather than a token, and the listing leaves it out now.)
+    expect(ids).toHaveLength(7);
+  });
+
+  /**
+   * `token_printings_leaves_out_the_helper_cards_a_token_layout_carries` — a card Scryfall files
+   * under a token layout is listed only when its type line names a `Token` or `Emblem` face. The
+   * All tokens wall opened on two World Championships deck ads (layout `token`, type line `Card`)
+   * until 2026-09-28; the fake answered them the same way the crate did.
+   */
+  it("leaves out a helper card a token layout carries", () => {
+    const db = seed("starter");
+    const base = db.cards.find((c) => c.id === TOKEN_PRINTING.construct)!;
+    const ad: FakeCard = {
+      ...base,
+      id: "c-wc97-ad",
+      oracleId: "o-wc97-ad",
+      name: "1997 World Championships Ad",
+      typeLine: "Card",
+      layout: "token",
+    };
+    const dayNight: FakeCard = {
+      ...base,
+      id: "c-day-night",
+      oracleId: "o-day-night",
+      name: "Day // Night",
+      typeLine: "Card // Card",
+      layout: "double_faced_token",
+    };
+    db.cards = [...db.cards, ad, dayNight];
+
+    const ids = readHandlers(db)
+      .token_printings({ marketplace: "tcgplayer" })
+      .map((p) => p.id);
+    expect(ids).not.toContain(ad.id);
+    expect(ids).not.toContain(dayNight.id);
+    // Nor the corpus's own helper of the same shape, `Start Your Engines! // Max Speed`.
+    expect(ids).not.toContain("c287becf-fc36-4c58-9d53-7b5870174c7d");
+    // The corpus's six real tokens and emblems are all still answered.
+    expect(ids).toHaveLength(6);
   });
 
   /** Each printing carries the token's own facts, so the picker can group and subtitle it, and
