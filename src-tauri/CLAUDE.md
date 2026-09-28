@@ -1851,9 +1851,13 @@ record, with every measurement, is
   **and the key distribution** are all live. ⚠️ **This line then said `/rotate` and `/keys` were
   "the two routes not there yet", which was true for part of one day and was repeated into three
   other files after it stopped being true** — the same failure as the paragraph above it, inside
-  twenty-four hours. **What is not deployed is the device roll**, and no route list can show it:
-  the tell is that the live `/token` accepts a body with **no `device` field**, where this tree's
-  code answers 400. `wrangler.jsonc` carries a real `database_id`, so the D1 holds live entitlement
+  twenty-four hours. **The device roll is deployed too, and no route list can show it**: probed
+  2026-09-28, `POST /token {"refresh":"x"}` with **no `device` field** answers **400 `that is not
+  a device id`**, and **401** once a `device` is added. ⚠️ **This line said it was not deployed
+  until then**, on a `{group, auth}` probe whose 8-character `auth` the group door refuses as
+  `malformed` before it reads `device` — a probe that could not tell. The pairing rendezvous is live
+  as well, and the last deploy was 2026-09-28 from `main` at `1512ea68`, carrying the
+  refresh-secret change. `wrangler.jsonc` carries a real `database_id`, so the D1 holds live entitlement
   rows. That makes the next deploy an **update to a running service**, not a first landing, and the
   `ALTER TABLE`s in `schema.sql` run against real data.
   [hosted-relay-deploy.md](../docs/reference/hosted-relay-deploy.md)'s step 0 is those `curl`s
