@@ -760,6 +760,39 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   });
 
   /**
+   * Put **one copy** of a row's exact printing and finish into the deck's **other** list — the
+   * card menu's `Add to actual` on a theory row and `Add to theory` on an actual one (issue #592).
+   *
+   * The variables are the row's {@link Slot}, and `categoryId` is the pile it is in **now**:
+   * `deck_add_card_to_other_list` finds the pile in the other list that stands for it — a zone by
+   * its kind, any other pile by its name, made there as a copy when the other list lacks it — so
+   * that rule lives in Rust once and nothing here guesses a pile of a list it is not reading. The
+   * target is the opposite of this hook's `variant`, because the press is always about the list
+   * the reader is *not* looking at.
+   *
+   * **One copy per press and never the row's quantity**, the owner's call: every other Add in the
+   * app adds one, so a playset is four presses and a second press folds into a second copy.
+   *
+   * **{@link invalidate} on success and on refusal alike**, for {@link addCard}'s reason: the
+   * write touches `deck_cards` and never the collection, and a refusal may mean the deck is gone.
+   * The other list's cached read sits under the same `["decks"]` root, so it is marked stale with
+   * the rest and read fresh when the reader switches to it.
+   */
+  const addToOtherList = useMutation({
+    mutationFn: ({ cardId, categoryId, finish }: Slot) =>
+      ipc.deckAddCardToOtherList(
+        opened(id),
+        cardId,
+        categoryId,
+        variant === "theory" ? "live" : "theory",
+        finish,
+        1,
+      ),
+    onSuccess: invalidate,
+    onError: invalidate,
+  });
+
+  /**
    * An absolute quantity — **the stepper's write, and the one a stepper must use**.
    *
    * `deckAddCard` sums and this one replaces, which is the obvious difference and not the
@@ -1440,6 +1473,9 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
      *  mutation's own doc, and `DeckEditor`'s `newest([...])`, which this is not in. */
     rememberView,
     addCard,
+    /** One copy of a row into the deck's other list, filed in the pile there that stands for
+     *  the row's own — see the mutation's doc. */
+    addToOtherList,
     setQuantity,
     clearCategory,
     /** Empty a whole list of this deck. **Takes the variant as its argument** rather than using

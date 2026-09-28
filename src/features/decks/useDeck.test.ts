@@ -14,6 +14,7 @@ import type {
 
 const deckGet = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
+const deckAddCardToOtherList = vi.hoisted(() => vi.fn());
 const deckSetCardQuantity = vi.hoisted(() => vi.fn());
 const deckToCollection = vi.hoisted(() => vi.fn());
 const deckCategoryClear = vi.hoisted(() => vi.fn());
@@ -40,6 +41,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: {
     deckGet,
     deckAddCard,
+    deckAddCardToOtherList,
     deckSetCardQuantity,
     deckToCollection,
     deckCategoryClear,
@@ -222,6 +224,8 @@ beforeEach(() => {
   });
   deckGet.mockReset().mockResolvedValue(DETAIL);
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 4, removed: false });
+  // A copy that landed as a new row in the other list — the answer is that row, not the source.
+  deckAddCardToOtherList.mockReset().mockResolvedValue({ id: 31, quantity: 1, removed: false });
   deckSetCardQuantity.mockReset().mockResolvedValue({ id: 9, quantity: 3, removed: false });
   // A cut that really did give a copy back — the destination row, the deck it came out of
   // (never set by this direction), the deck row (never set by this direction either: the caller
@@ -608,6 +612,37 @@ describe("useDeck", () => {
 
     await result.current.moveCard.mutateAsync({ cardId: "p2", from: MAYBE.id, to: SIDE.id, finish: null });
     expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, SIDE.id, null, "live", null);
+  });
+
+  /**
+   * `Add to theory` on an actual row and `Add to actual` on a theory one (issue #592): the slot's
+   * pile is sent as the **source**, the target list is the one the hook is *not* reading, and the
+   * quantity is one whatever the row holds — every other Add's rule, so a playset is four presses.
+   * The finish is the row's, so a foil row adds a foil copy.
+   */
+  it("adds one copy of a row to the other list, from the pile it is in now", async () => {
+    const live = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(live.result.current.deck).toEqual(DECK));
+
+    await live.result.current.addToOtherList.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: "foil",
+    });
+    expect(deckAddCardToOtherList).toHaveBeenLastCalledWith(4, "p1", MAIN.id, "theory", "foil", 1);
+
+    const plan = renderHook(() => useDeck(4, "theory"), { wrapper });
+    await waitFor(() => expect(plan.result.current.deck).toEqual(DECK));
+
+    await plan.result.current.addToOtherList.mutateAsync({
+      cardId: "p1",
+      categoryId: SIDE.id,
+      finish: null,
+    });
+    expect(deckAddCardToOtherList).toHaveBeenLastCalledWith(4, "p1", SIDE.id, "live", null, 1);
+    // The ordinary add is not how this is spelled: it would file the copy into the pile it names,
+    // which is a pile of the list the reader is looking at.
+    expect(deckAddCard).not.toHaveBeenCalled();
   });
 
   /**
@@ -1781,6 +1816,31 @@ describe("useDeck invalidation", () => {
 
     await result.current.addCard.mutateAsync({ cardId: "p1", categoryId: MAIN.id, quantity: 2 });
 
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
+  });
+
+  /**
+   * **The copy to the other list takes the same two roots, and takes them on a refusal too** —
+   * `addCard`'s rule for its reason: a refusal here is a busy database, a deck that has gone, or a
+   * deck that stopped keeping a plan in another window, and the last two must not leave the editor
+   * painting a list that is not there. The collection is never touched: a plan holds no cardboard
+   * and an add to the live list moves none.
+   */
+  it("marks only the decks stale after a copy to the other list, refused or not", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const slot = { cardId: "p1", categoryId: MAIN.id, finish: null };
+
+    await result.current.addToOtherList.mutateAsync(slot);
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
+
+    seedOwned(client);
+    expect(staleRoots(client)).toEqual([]);
+    deckAddCardToOtherList.mockRejectedValueOnce(
+      "This deck keeps one list, so there is no other list to add to.",
+    );
+    await expect(result.current.addToOtherList.mutateAsync(slot)).rejects.toMatch(/one list/);
     await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
   });
 

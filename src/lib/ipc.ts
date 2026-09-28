@@ -8999,6 +8999,37 @@ export const ipc = {
       quantity,
     }),
   /**
+   * Put copies of one printing and finish into the deck's **other** list — the card menu's
+   * `Add to actual` / `Add to theory` (issue #592) — filed in the pile there that stands for the
+   * one the card is in now.
+   *
+   * **`variant` is the list the card goes _into_, and `fromCategoryId` is the pile it is in
+   * _now_**, in the other list: the caller names the source and Rust finds the target through
+   * `deck_meta::counterpart_in` — a zone by its kind, any other pile by its name, and a missing
+   * one made there as a copy of the source. So the matching rule is written once, and the page
+   * never guesses a pile of a list it is not drawing.
+   *
+   * Refuses in words where {@link ipc.deckAddCard} would, and three more: a deck that keeps no
+   * plan (there is no other list), a pile that is not this deck's, and a pile already in the
+   * list the card is going to. Otherwise it folds on the grain exactly as that command does.
+   */
+  deckAddCardToOtherList: (
+    deckId: number,
+    cardId: string,
+    fromCategoryId: number,
+    variant: DeckVariant,
+    finish: DeckFinish,
+    quantity: number,
+  ) =>
+    invoke<EntryChange>("deck_add_card_to_other_list", {
+      deckId,
+      cardId,
+      fromCategoryId,
+      variant,
+      finish,
+      quantity,
+    }),
+  /**
    * An absolute quantity — **the stepper's write**, and the one that works on a row whose
    * printing has left the card database.
    *
