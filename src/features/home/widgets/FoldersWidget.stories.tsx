@@ -60,7 +60,7 @@ const meta = {
   tags: ["autodocs"],
   args: {
     // The default layout's entry: four cells by two and no config — both cabinets, each falling
-    // back to the top-level drawers the reader made.
+    // back to its top level, the reader's own drawers first.
     widget: folders(4, 2),
   },
   parameters: {
@@ -75,9 +75,10 @@ const meta = {
           "**A folder the summary misses is a folder with nothing in it**, so the *list* is the " +
           "census and the summary is a lookup layered onto it. **`null` money is an em dash**, " +
           "all the way up the tree.\n\n" +
-          "**The app's own folders are offered and labelled rather than hidden** — a deck's group " +
-          "and `Recently removed` are worth pinning as shortcuts — but the fallback is `user` " +
-          "folders only. `Cabinets` narrows the card to one side; `Show which cabinet` is the " +
+          "**The app's own folders are folders like any other here** — a deck's group, " +
+          "`Recently removed` and a deck's managed wishlist are pinned, drawn and opened as a " +
+          "binder is, and the fallback is each cabinet's whole top level with the reader's own " +
+          "first. `Cabinets` narrows the card to one side; `Show which cabinet` is the " +
           "caption; and on a `Both` card the two cabinets share the rows the box holds.",
       },
     },
@@ -88,12 +89,13 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * Nothing pinned: the top-level drawers the reader made, both cabinets sharing the box.
+ * Nothing pinned: each cabinet's top level, both cabinets sharing the box.
  *
  * The seed's collection cabinet is `Binder` (with `Trade binder` filed under it), `Someday`, a
- * group per deck and `Recently removed`; the fallback takes the two `user` folders at the top
- * level. The wishlist's is `Ordered` (with `Backordered` under it) and `Someday`. The `play` reads
- * each row's **written** name, with `Binder`'s figure the roll-up.
+ * group per deck and `Recently removed`; the fallback takes the two `user` folders first and the
+ * app's own after them, as many as the box holds. The wishlist's is `Ordered` (with `Backordered`
+ * under it) and `Someday`. The `play` reads each row's **written** name, with `Binder`'s figure the
+ * roll-up.
  */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
@@ -106,10 +108,6 @@ export const Default: Story = {
     await expect(
       await card.findByRole("button", { name: /^Ordered, wishlist folder, \d+ wish/ }),
     ).toBeInTheDocument();
-    // A deck's group is a real folder and is pinnable, but the fallback is `user` folders only.
-    await expect(
-      card.queryByRole("button", { name: /^Modern Goodstuff, deck folder/ }),
-    ).not.toBeInTheDocument();
   },
 };
 
@@ -117,8 +115,8 @@ export const Default: Story = {
  * A pinned set that names the app's own folders — a deck's group — beside a wishlist drawer.
  *
  * Folder 4 is `Modern Goodstuff`'s own group — see `.storybook/fake/seeds.ts`'s
- * `starterCollectionFolders`, which mints one group per deck after the two binders. It draws with
- * the layered glyph in dim and says `Deck folder` in its caption, so it cannot read as a binder.
+ * `starterCollectionFolders`, which mints one group per deck after the two binders. It draws in the
+ * collection's own accent with the layered glyph, and says `Deck folder` in its caption.
  */
 export const PinnedIncludingTheAppsOwn: Story = {
   args: {

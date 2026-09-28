@@ -1883,6 +1883,13 @@ export interface FakeDb {
    */
   shelfFolds: ShelfFolds;
   /**
+   * `app_meta.hidden_stacks` — the stacks the reader hid in each deck's Stacks view (issue #618),
+   * as deck id (decimal) → category ids. **Empty to begin with**, which is every stack drawn: a
+   * seeded hide would be a story about a press nobody made. See {@link readHandlers.hidden_stacks}
+   * and {@link writeHandlers.set_stack_hidden}.
+   */
+  hiddenStacks: Record<string, number[]>;
+  /**
    * `app_meta.deck_sort` — how the deck gallery was last ordered, as `"<key>:<direction>"`.
    *
    * A **stored string** and `null` for the row not being there, which is
@@ -3293,6 +3300,8 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     searchOpen: {},
     // Every shelf at its default on both pages — `shelf_folds`' answer for a row never written.
     shelfFolds: { collection: {}, wishlist: {} },
+    // Every stack drawn in every deck — `hidden_stacks`' answer for a row never written.
+    hiddenStacks: {},
     // The gallery's order, and a `null` rather than a value again: `deck_sort` answers
     // `updated:desc` for a wall nobody has re-ordered, so every deck story that says nothing
     // about the picker is standing in the order the app ships — most recently touched first,
@@ -10940,6 +10949,61 @@ export function readHandlers(db: FakeDb) {
       return [...wanted].map(([key, { nameKey, quantity }]) => ({ key, nameKey, quantity }));
     },
 
+    /**
+     * `deck_query::query_cards` — the printings of one deck, in either list, that answer the
+     * editor filter box's typed terms (issue #621). Sorted and deduplicated, like the crate's.
+     *
+     * **A partial reading, and the one simplification is stated rather than hidden**: this fake
+     * answers `search_cards` without reading its predicates at all, so there is no second
+     * evaluator here to share. What it reads is enough for a story to watch the deck narrow —
+     * the three text fields as a case-folded substring and `cmc` as a number — and every other
+     * term, and every tag, passes. The crate's `filters` SQL is the one implementation; the
+     * answer here only has to be the right *shape*, and it never narrows away a card the real
+     * one would keep for a field it does not read.
+     */
+    deck_query_cards: (args: {
+      deckId: number;
+      filters: Pick<CardFilters, "predicates" | "oracleTags" | "artTags">;
+    }): string[] => {
+      const holds = (card: FakeCard | null, row: FakeDeckCard): boolean =>
+        (args.filters.predicates ?? []).every((p) => {
+          const text = (s: string | null | undefined) =>
+            (s ?? "").toLowerCase().includes(p.value.toLowerCase());
+          let hit: boolean;
+          switch (p.field) {
+            case "name":
+              hit = text(card?.name ?? row.name);
+              break;
+            case "typeLine":
+              hit = card !== null && text(card.typeLine);
+              break;
+            case "oracleText":
+              hit = card !== null && text(card.oracleText);
+              break;
+            case "cmc": {
+              const want = Number(p.value);
+              const have = card?.cmc ?? null;
+              if (have === null || Number.isNaN(want)) hit = false;
+              else if (p.op === "gt") hit = have > want;
+              else if (p.op === "gte") hit = have >= want;
+              else if (p.op === "lt") hit = have < want;
+              else if (p.op === "lte") hit = have <= want;
+              else if (p.op === "ne") hit = have !== want;
+              else hit = have === want;
+              break;
+            }
+            default:
+              return true;
+          }
+          return p.negated ? !hit : hit;
+        });
+      const ids = new Set<string>();
+      for (const dc of db.deckCards) {
+        if (dc.deckId === args.deckId && holds(cardById(db, dc.cardId), dc)) ids.add(dc.cardId);
+      }
+      return [...ids].sort();
+    },
+
     /** `deck_theory::theory_diff` — what the plan wants and the deck does not have. See
      *  {@link theoryDiff} for the direction, the grouping and the two exclusions. */
     deck_theory_diff: (args: { deckId: number; marketplace?: string }): TheoryDiffRow[] => {
@@ -11485,6 +11549,13 @@ export function readHandlers(db: FakeDb) {
     }),
 
     /**
+     * `stackhide::hidden_stacks` — the category ids hidden in one deck, ascending. A copy, so a
+     * caller mutating the answer cannot reach the store. A read, so it answers through a sync.
+     */
+    hidden_stacks: (args: { deckId: number }): number[] =>
+      [...(db.hiddenStacks[String(args.deckId)] ?? [])].sort((a, b) => a - b),
+
+    /**
      * `decksort::deck_sort` — how the deck gallery was last ordered, or the default.
      *
      * **The narrowest fallback of any setting on this side of the file, and the narrowness is
@@ -11677,22 +11748,39 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_completion::deck_completion` — owned against wanted for every deck, **counted the way
-     * {@link readHandlers.deck_get} counts it** and then summed the way the editor's `deckStats`
-     * sums it.
+     * `deck_completion::deck_completion` — how far every deck is along under `compare`, **counted
+     * the way the screen that answers the same question counts it**. Two comparisons, and the
+     * word picks one; anything else, or none, is `collection` — `Marketplace`'s forgiving shape, so
+     * a word a newer build wrote measures the default rather than refusing.
      *
-     * **The measured list is the deck's kind's**: `theory` for a deck that keeps a plan, attributed
-     * from {@link theoryPool}, and `live` otherwise, attributed from {@link ownedByPrinting} — the
-     * same two pools `deck_get` picks between, handed to the same {@link attributeOwned} in the
-     * same {@link deckReadOrder}, so one `(card_id, finish)` in two piles shares one pool — and
-     * the finish is {@link entryFinish}'s, so an unsaid row and a `foil` row of one foil-only
-     * printing are that one key rather than a regular want nothing can fill. **Every
-     * active pile counts**, sideboard and companion included — `deckStats`' `counted`, and
-     * deliberately wider than {@link readHandlers.deck_values}' size pile.
+     * **`collection`** — every deck that is not virtual, its **live** list against
+     * {@link ownedByPrinting}, the copies filed in the deck's own group: the editor's `Actual` tab,
+     * owned for owned, which {@link readHandlers.deck_get} counts from the same pool handed to the
+     * same {@link attributeOwned} in the same {@link deckReadOrder}. **A deck that keeps a plan is
+     * measured on its live list too** (issue #600), where it used to be measured by the plan
+     * against {@link theoryPool}: *how much of this deck do I own* is a question about the
+     * cardboard the deck is, and a plan holds none. So `list` is always `live` here. **A virtual
+     * deck answers no row** — it holds nothing by definition, and 0 % of every deck is not a
+     * finding. Archived and empty decks answer one, ordered by id; which to draw is the widget's
+     * decision.
      *
-     * **A virtual deck answers no row**: it holds nothing by definition, and 0 % of every deck is
-     * not a finding. Archived and empty decks answer one, ordered by id; which to draw is the
-     * widget's decision.
+     * **`theory`** — every deck with a plan, **virtual ones included**, its **theory** list against
+     * its **live** one: how much of the plan is already sleeved. The pool is the live list's
+     * active piles summed per `(card_id, finish)`, and the theory rows draw on it in the read's
+     * order, so the answer is {@link theoryDiff}'s arithmetic — a copy counts only in the exact
+     * printing and finish, and `missing` is the Compare dialog's non-token lines summed, which
+     * `db.test.ts` fences deck by deck. The collection is not consulted at all, and that is why a
+     * virtual deck is not filtered out: its live list is a list whatever the cardboard is. (No
+     * patch reaches `theoryEnabled` and `virtualOnly` together — {@link deckKind} clears one as it
+     * sets the other — but `deck_create` writes what it is handed, and a read that dropped the pair
+     * would be a second, silent resolution of a tie the write side already owns.) The plan's
+     * tokens are not counted — a token is not a copy of anything a pile can be short of.
+     *
+     * **Either way every active pile counts**, sideboard and companion included — `deckStats`'
+     * `counted`, and deliberately wider than {@link readHandlers.deck_values}' size pile — and a
+     * switched-off pile on either side counts toward nothing. The key's finish is
+     * {@link entryFinish}'s, so an unsaid row and a `foil` row of one foil-only printing are one
+     * key rather than a regular want nothing can fill.
      *
      * `missingCost` is `deckStats`' `missingPrice` exactly — `null` while nothing counted is priced
      * at this marketplace, else the priced rows' `unit × short` summed (so a complete, priced deck
@@ -11700,21 +11788,35 @@ export function readHandlers(db: FakeDb) {
      * missing **copies** with no price. The unit is {@link deckPriceAt}, which is what this fake's
      * deck rows quote — so a story's widget and the editor it opens can never disagree.
      */
-    deck_completion: (args: { marketplace?: MarketplaceId | null }): DeckCompletion[] => {
+    deck_completion: (args: {
+      marketplace?: MarketplaceId | null;
+      compare?: string | null;
+    }): DeckCompletion[] => {
       const mp = marketplaceOf(args.marketplace);
+      const theory = args.compare === "theory";
+      const active = (dc: FakeDeckCard) => categoryById(db, dc.categoryId)?.isActive === true;
       return [...db.decks]
-        .filter((d) => !d.virtualOnly)
+        .filter((d) => (theory ? d.theoryEnabled : !d.virtualOnly))
         .sort((a, b) => a.id - b.id)
         .map((d): DeckCompletion => {
-          const list: DeckCompletion["list"] = d.theoryEnabled ? "theory" : "live";
+          const list: DeckCompletion["list"] = theory ? "theory" : "live";
           const rows = db.deckCards
             .filter((dc) => dc.deckId === d.id && dc.variant === list)
             .sort(deckReadOrder(db));
-          const owned = attributeOwned(
-            db,
-            rows,
-            list === "live" ? ownedByPrinting(db, d.id) : theoryPool(db, d.id),
-          );
+          let pool: Map<string, number>;
+          if (theory) {
+            // The live list as a pool of copies — its active piles only, for the reason a
+            // switched-off pile wants nothing: a card parked in the Maybeboard is not played.
+            pool = new Map();
+            for (const dc of db.deckCards) {
+              if (dc.deckId !== d.id || dc.variant !== LIVE || !active(dc)) continue;
+              const key = entryKey(db, dc.cardId, dc.finish);
+              pool.set(key, (pool.get(key) ?? 0) + dc.quantity);
+            }
+          } else {
+            pool = ownedByPrinting(db, d.id);
+          }
+          const owned = attributeOwned(db, rows, pool);
           const row: DeckCompletion = {
             deckId: d.id,
             list,
@@ -11727,7 +11829,7 @@ export function readHandlers(db: FakeDb) {
           for (const dc of rows) {
             // A switched-off pile counts toward nothing — `attributeOwned` already handed it no
             // copies, and it is not part of what the deck wants either.
-            if (categoryById(db, dc.categoryId)?.isActive !== true) continue;
+            if (!active(dc)) continue;
             const have = Math.min(owned.get(dc.id) ?? 0, dc.quantity);
             const short = dc.quantity - have;
             row.wanted += dc.quantity;
@@ -20933,6 +21035,25 @@ export function writeHandlers(db: FakeDb) {
         ),
       );
       db.shelfFolds = { ...db.shelfFolds, [page]: next };
+    },
+
+    /**
+     * `stackhide::set_stack_hidden` — hide or show one stack of one deck. The lock first, like
+     * every write here; then the refusal of an id that is not positive, `stackhide::NOT_AN_ID`
+     * verbatim. Showing a deck's last hidden stack takes the deck's entry out, as the crate does.
+     */
+    set_stack_hidden: (args: { deckId: number; categoryId: number; hidden: boolean }): void => {
+      refuseIfBusy(db);
+      if (!(args.deckId > 0) || !(args.categoryId > 0)) {
+        throw refuse("A hidden stack is named by a deck id and a category id.");
+      }
+      const key = String(args.deckId);
+      const ids = (db.hiddenStacks[key] ?? []).filter((id) => id !== args.categoryId);
+      if (args.hidden) ids.push(args.categoryId);
+      const next = { ...db.hiddenStacks };
+      if (ids.length === 0) delete next[key];
+      else next[key] = ids;
+      db.hiddenStacks = next;
     },
 
     /**

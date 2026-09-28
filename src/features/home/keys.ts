@@ -91,7 +91,12 @@ import type { QueryKey } from "@tanstack/react-query";
 import { optimizePlanKey } from "@/features/wishlist/useWishlistOptimize";
 import { wholeWishlistQuery } from "@/features/wishlist/wholeWishlistQuery";
 import type { Finish } from "@/lib/finish";
-import type { PriceMoverDirection, PriceMoverWindow, ValueSplit } from "@/lib/ipc";
+import type {
+  DeckCompletionCompare,
+  PriceMoverDirection,
+  PriceMoverWindow,
+  ValueSplit,
+} from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 
 import type { BreakdownDimension } from "./widgets";
@@ -292,22 +297,26 @@ export const newPrintingsKey = (
   limit,
 ];
 
+/** Every {@link deckCompletionKey} at once — what the widget's collection bridge invalidates, so a
+ *  binder write refreshes every marketplace and both comparisons rather than the one on screen. */
+export const deckCompletionRoot = ["decks", "completion"] as const;
+
 /**
- * How much of each deck the reader owns — `ipc.deckCompletion`, the Deck completion widget's read.
+ * How far each deck is along — `ipc.deckCompletion`, the Deck completion widget's read.
  *
  * Under `["decks"]` because a deck write changes what a deck *wants* — but **owned copies are
  * collection rows**, so an add to the binder, a move into a deck's group or a cut into Recently
  * removed changes the answer with no deck write at all. The widget bridges that itself, exactly as
  * `ActivityWidget` bridges {@link activityKey}: a marker query under `["collection"]` so the signal
- * exists, and a cache subscription that turns an invalidation there into one of this key. **Both
- * halves are load-bearing** — `invalidateQueries` dispatches nothing when it matches no cached
- * query. The marketplace is in the key because `missingCost` is priced at it.
+ * exists, and a cache subscription that turns an invalidation there into one of
+ * {@link deckCompletionRoot}. **Both halves are load-bearing** — `invalidateQueries` dispatches
+ * nothing when it matches no cached query. The marketplace is in the key because `missingCost` is
+ * priced at it, and the comparison because it is the question.
  */
-export const deckCompletionKey = (marketplace: MarketplaceId): QueryKey => [
-  "decks",
-  "completion",
-  marketplace,
-];
+export const deckCompletionKey = (
+  marketplace: MarketplaceId,
+  compare: DeckCompletionCompare,
+): QueryKey => [...deckCompletionRoot, marketplace, compare];
 
 /**
  * The sets still to come within `days` — `ipc.upcomingSets`, Coming soon's read.

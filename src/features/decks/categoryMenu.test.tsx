@@ -113,6 +113,30 @@ describe("buildCategoryMenu", () => {
     expect(rows.indexOf("Clear stack…")).toBeLessThan(rows.indexOf("Delete…"));
   });
 
+  /**
+   * **Hide and Unhide are the Stacks view's rows** (issue #618): offered only when the editor hands
+   * `stackVisibility`, beside Rename and above the rule — they change how the pile reads on the
+   * desk and nothing the deck counts. The row says where the stack is going and the write takes
+   * that state, `setActive`'s rule.
+   */
+  it("offers Hide on a drawn stack and Unhide on a hidden one, only where the view asks", () => {
+    expect(labels(buildCategoryMenu(REMOVAL, deps()))).not.toContain("Hide");
+
+    const setHidden = vi.fn();
+    const shown = buildCategoryMenu(REMOVAL, deps({ stackVisibility: { hidden: false, setHidden } }));
+    expect(shape(shown).slice(0, 3)).toEqual(["rename", "hidden", "import"]);
+    (find(shown, "Hide") as MenuAction).onSelect();
+    expect(setHidden).toHaveBeenLastCalledWith(REMOVAL, true);
+
+    const hidden = buildCategoryMenu(
+      COMMANDER_ZONE,
+      deps({ stackVisibility: { hidden: true, setHidden } }),
+    );
+    expect(labels(hidden)[0]).toBe("Unhide");
+    (find(hidden, "Unhide") as MenuAction).onSelect();
+    expect(setHidden).toHaveBeenLastCalledWith(COMMANDER_ZONE, false);
+  });
+
   it("says Activate for a switched-off pile", () => {
     expect(labels(buildCategoryMenu({ ...REMOVAL, isActive: false }, deps()))).toContain(
       "Activate",
