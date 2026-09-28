@@ -317,6 +317,12 @@ deliberately**: no screenshots are stored.
   (`a_refused_filing_by_name_leaves_no_pile_behind`), and a fake with no transaction has to undo
   the write by hand or it shows an empty column standing after a press that failed: a state the
   backend cannot produce, which is the class of defect this feature has already shipped once.
+- **The bulk-undo tickets live in a `WeakMap` keyed by the world, not in a table** (issue #555),
+  because the crate holds them in memory rather than in `user.db` — so each story has its own and
+  a story's Undo can never reach into another story's rows. `db.ts` follows `bulk_undo.rs` rule for
+  rule (ten tickets, ids only grow, `updatedAt`/`needsReview` neither compared nor restored, both
+  refusal sentences verbatim). The page-side offer is `@/lib/bulkUndo`'s module store, which
+  `installWorld` resets beside `useAppStore` and under the same gate.
 - **A world belongs to a story, not to the module** — a docs page mounts every story on it at
   once, which the canvas hides. `.storybook/fake/scope.ts` owns the four ways the global pointer
   is kept right; adding an entry point to the fake means asking which of the four covers it.

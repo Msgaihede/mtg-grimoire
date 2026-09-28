@@ -912,7 +912,8 @@ Every one of these has its measurement and its story in
   somewhere rather than dropped on `<body>`, and a reader can neither Tab nor arrow onto one, so
   they carry no focus class in any modality — `Dialog`'s panel, the editor root, `AnchoredPopup`,
   `DeckBracket`, `ValidationPanel`, `MoveToFolder`, `PickCopies`, the three delete
-  confirmations, and the collection's `ClearRemovedConfirm` (issue #506). It was eleven on the day the rule landed; the eleventh was `CardDetailPane`,
+  confirmations, and the collection's `ClearRemovedConfirm` (issue #506) and `RemoveCopiesConfirm`
+  (issue #555). It was eleven on the day the rule landed; the eleventh was `CardDetailPane`,
   deleted the same day for the card modal, which is drawn by `Dialog` and so is already the first
   name on the list. **Do not "restore" one by resemblance to a sibling that has one.** The line
   is "can the caret move *from* here", not `tabIndex`: a deck pile's section and a printing row are

@@ -2298,7 +2298,39 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
 - **`import.rs`: `MATCH_ORDER` is owned → English → newest → id**, and the position of the
   language key is the decision: a copy you own in any language is still a copy you own, while
   "newest" is exactly the key that put 5 of the reference list's 105 lines on a `ja`/`dw`/`ph`
-  printing. `fold_match` repeats the same keys in Rust and may never disagree.
+  printing. `fold_match` repeats the same keys in Rust and may never disagree. **A line that names
+  a language puts that language ahead of all four** (issue #555, `ResolveLine.lang`): a CSV's
+  `Language` column is describing a copy in that language, which outranks a printing the reader
+  owns in another. It is a preference and never a filter — Scryfall's default bulk data holds a
+  non-English printing only where there is no English one, so most such lines still land on the
+  English printing and the collection preview lists them. The code is validated to 2–3 ASCII
+  letters and then **inlined** into the `ORDER BY`, and the six arms are prepared once per distinct
+  language per call; `match_order(None)` is `MATCH_ORDER` byte for byte, and a test pins that.
+- **`import.rs`: a set hint that names no set code is tried as a set _name_** (issue #555,
+  `SetHints`) — Deckbox's `Edition` and Dragon Shield's set column say `Commander Legends`. A code
+  always wins (one `EXISTS` probe on `idx_cards_set_cn`); otherwise `sets.name` (falling back to
+  `cards.set_name` on a database with no `sets` rows) is compared through `fold_name`, and exactly
+  one matching code is used. Zero or several is today's missed hint.
+- **`bulk_undo.rs` is a session undo for the collection's and the wishlist's bulk writes, held in
+  memory and never in a table** (issue #555). A collection or wishlist import, `collection_remove_many`
+  and `collection_set_folder_many` capture the **before and after images of the rows they
+  changed** inside their own transaction and file a ticket only once it commits; `bulk_undo`
+  refuses (`UNDO_STALE`) when any after-image no longer matches the database and retires the
+  ticket on either refusal. It is `deck_undo`'s "restore rows, never run a command backwards"
+  without the journal: ten tickets, newest wins, gone at restart — because an undo of a
+  5 000-row import that survived a restart would be a second, unsynced history of rows every other
+  device has moved past. **A re-inserted row takes a fresh `sync_uid`** from the capture trigger:
+  a put under the deleted row's uid reads as a resurrection on the other devices. There is no
+  ticket for the scanner tray's commit or for an import into a deck's group, whose deck list was
+  written by a separate command the undo could not take back with it.
+- **`collection_import_preview` is the commit's own walk with the statements skipped, never a
+  rolled-back write.** `rollback_hook` clears only the cross-file fence, so a rolled-back write on
+  the write connection still dirties the mirror's mask and tells every other window the
+  collection changed. `walk_import` is one pass both call, and a debug build's commit re-counts the
+  table and asserts it agrees. **A root `set` counts the copies of the line's grain filed in any
+  folder** — deck groups and `Recently removed` included — and writes the root row
+  `max(0, file − elsewhere)`, reporting the rest as `left_in_folders`; it used to write the file's
+  number into a second root row beside them.
 - **`import.rs`: `ImportItem.inactive` switches off _only a pile this import creates_.**
   Archidekt's `{noDeck}` says a pile counts toward nothing, which is exactly `is_active = 0` here;
   without it a reference deck's 17 maybeboard cards land in a counted pile and a 100-card commander
