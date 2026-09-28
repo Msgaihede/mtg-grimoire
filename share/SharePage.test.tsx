@@ -128,7 +128,7 @@ describe("SharePage", () => {
     mount(edited((s) => s.cards.forEach((c) => delete c.p)));
     expect(screen.queryByText(/\$0\.00/)).not.toBeInTheDocument();
     expect(screen.queryByText(/^Worth /)).not.toBeInTheDocument();
-    expect(screen.getByText(/no tcgplayer price is quoted for anything here/i)).toBeInTheDocument();
+    expect(screen.getByText(/no tcgplayer prices for these cards/i)).toBeInTheDocument();
   });
 
   /**

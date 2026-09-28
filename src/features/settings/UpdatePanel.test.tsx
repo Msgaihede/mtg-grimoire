@@ -94,7 +94,7 @@ describe("UpdatePanel", () => {
     expect(primary(/^Restart to finish$/)).toBeEnabled();
     expect(screen.queryByRole("button", { name: /^Download/ })).not.toBeInTheDocument();
     // What a restart costs, said before it is pressed rather than after.
-    expect(screen.getByText(/close and reopen/i)).toBeInTheDocument();
+    expect(screen.getByText(/will restart/i)).toBeInTheDocument();
   });
 
   it("runs the download and the install through the hook", async () => {
@@ -146,8 +146,8 @@ describe("UpdatePanel", () => {
 
     expect(screen.getByText(/is available/)).toHaveTextContent("0.3.0 is available");
     expect(screen.queryByRole("button", { name: /^Download/ })).not.toBeInTheDocument();
-    expect(screen.getByText(/can.t update on its own/i)).toBeInTheDocument();
-    expect(screen.getByText(/collection stays where it is/i)).toBeInTheDocument();
+    expect(screen.getByText(/can.t update itself/i)).toBeInTheDocument();
+    expect(screen.getByText(/your data stays put/i)).toBeInTheDocument();
 
     await userEvent.click(primary(/^Open the release page$/));
     expect(openReleasePage).toHaveBeenCalledOnce();
@@ -345,7 +345,7 @@ describe("UpdatePanel", () => {
           history(),
         ),
       );
-      expect(screen.getByText(/No releases have been read yet/)).toBeInTheDocument();
+      expect(screen.getByText(/No release history yet/)).toBeInTheDocument();
       expect(screen.queryByRole("list")).not.toBeInTheDocument();
     });
 
@@ -359,7 +359,7 @@ describe("UpdatePanel", () => {
     it("says so when a release published no notes", async () => {
       render(panel(update(), history({ releases: [note("0.1.0", "")] })));
       await userEvent.click(screen.getByRole("button", { name: /0\.1\.0/ }));
-      expect(await screen.findByText("This release published no notes.")).toBeInTheDocument();
+      expect(await screen.findByText("No release notes.")).toBeInTheDocument();
     });
   });
 

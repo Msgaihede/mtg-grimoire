@@ -234,7 +234,7 @@ describe("TrayPanel", () => {
     const onFolder = vi.fn();
     wrap(<TrayPanel {...props({ onFolder })} />);
     await user.click(screen.getByRole("button", { name: "Folder: Collection" }));
-    const list = await screen.findByRole("group", { name: "File the scanned cards in a folder" });
+    const list = await screen.findByRole("group", { name: "Folder for scanned cards" });
     expect(await within(list).findByRole("button", { name: "Rares" })).toBeInTheDocument();
     expect(within(list).queryByRole("button", { name: "Burn" })).not.toBeInTheDocument();
     await user.click(within(list).getByRole("button", { name: "Rares" }));

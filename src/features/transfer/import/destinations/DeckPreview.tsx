@@ -297,7 +297,7 @@ export function DeckPreview({
           // The **write's** refusal. The read's own failure has a place on the first step, where
           // the button that asked for it is, and repeating it here would be one fault announced
           // as two.
-          commit.error === null ? "" : `Could not import the list — ${ipcError(commit.error)}`
+          commit.error === null ? "" : `Couldn't import the list — ${ipcError(commit.error)}`
         }
         failed={commit.error !== null}
         onBack={onBack}
@@ -399,7 +399,7 @@ export function reportOf(
       ? `${plural(outcome.added, "card")} imported, ${plural(outcome.labelsCreated, "new label")}.`
       : `${plural(outcome.added, "card")} imported.`;
   if (ownRefusal !== null) {
-    return `${imported} The copies could not be added to your collection — ${ownRefusal}`;
+    return `${imported} The copies couldn't be added to your collection — ${ownRefusal}`;
   }
   if (owned === null) return imported;
   // Rows, which is what the command counts: `added` is entries created and `updated` is entries
@@ -424,7 +424,7 @@ export function reportOf(
  * than a reservation — and it is not something a checkbox label implies.
  */
 export const OWN_COPIES_HINT =
-  "They are filed into this deck’s own folder, so no other deck can use them.";
+  "They go into this deck’s folder, so other decks can’t use them.";
 
 /**
  * "I have physically built this deck."
@@ -464,8 +464,8 @@ export function OwnCopies({
         Add cards to collection
       </label>
       <p id={`${id}-hint`} className="text-[0.6875rem] text-dim">
-        Tick this if you already own these cards — {plural(copies, "copy", "copies")} are added to
-        what you have. {OWN_COPIES_HINT}
+        Check this if you already own these cards. {plural(copies, "copy", "copies")} will be
+        added to your collection. {OWN_COPIES_HINT}
       </p>
     </div>
   );
@@ -600,13 +600,13 @@ export function Commander({
       </h3>
       {candidates.length === 0 ? (
         <p className="text-sm text-dim">
-          Nothing in this list can be this format’s commander. The deck imports without one.
+          No card in this list can be the commander. The deck will import without one.
         </p>
       ) : (
         <>
           <p className="text-[0.6875rem] text-dim">
-            {plural(candidates.length, "card")} here could be the commander. Pick one — or two, for
-            a partner pair — or leave it for later.
+            {plural(candidates.length, "card")} could be the commander. Pick one (or two partners),
+            or skip for now.
           </p>
           {/* Scrolled rather than wrapped: the reference list offers dozens of legendary
               creatures, and a cloud of chips at that count is a wall no name can be found in. */}
@@ -695,8 +695,7 @@ export function Problems({ plan, blameSync }: { plan: ImportPlan; blameSync: boo
       // A plain paragraph and not a live region: it is drawn together with the step it belongs
       // to, and a live region mounted with its own text inside it announces nothing anyway.
       <p className="text-sm text-dim">
-        Card data is still syncing, so nothing in this list can be matched yet. Wait for the sync to
-        finish and preview again.
+        Card data is still syncing. Try again when it&apos;s finished.
       </p>
     );
   }
@@ -709,13 +708,13 @@ export function Problems({ plan, blameSync }: { plan: ImportPlan; blameSync: boo
     <div className="space-y-3">
       {plan.unmatched.length > 0 && (
         <ProblemList
-          caption={`${plural(plan.unmatched.length, "line")} named a card this app has not got`}
+          caption={`${plural(plan.unmatched.length, "line")} didn't match any card`}
           lines={plan.unmatched.map((line) => `line ${line.lineNumber} · "${line.raw.trim()}"`)}
         />
       )}
       {plan.hintMisses.length > 0 && (
         <ProblemList
-          caption={`${plural(plan.hintMisses.length, "printing")} could not be found, so another was used`}
+          caption={`${plural(plan.hintMisses.length, "printing")} not found, so another printing was used`}
           lines={plan.hintMisses.map(
             (miss) => `line ${miss.lineNumber} · ${miss.name} — used ${miss.used} instead`,
           )}
@@ -723,7 +722,7 @@ export function Problems({ plan, blameSync }: { plan: ImportPlan; blameSync: boo
       )}
       {plan.parseIssues.length > 0 && (
         <ProblemList
-          caption={`${plural(plan.parseIssues.length, "line")} could not be read`}
+          caption={`${plural(plan.parseIssues.length, "line")} couldn't be read`}
           lines={plan.parseIssues.map(
             (issue) => `line ${issue.lineNumber} · "${issue.raw.trim()}" — ${issue.reason}`,
           )}
@@ -790,7 +789,7 @@ function Mode({
   const where = virtual ? "the deck" : variantName(variant);
   return (
     <fieldset className="space-y-1.5">
-      <legend className="mb-1 text-xs text-dim">What this does to {where}</legend>
+      <legend className="mb-1 text-xs text-dim">How to import into {where}</legend>
       <label className="flex items-baseline gap-2 text-sm">
         <input
           type="radio"
@@ -800,7 +799,7 @@ function Mode({
           onChange={() => onChange("merge")}
           className="accent-accent"
         />
-        Merge — adds these cards to what is already there
+        Merge — add to existing cards
       </label>
       <label className="flex items-baseline gap-2 text-sm">
         <input
@@ -812,8 +811,8 @@ function Mode({
           className="accent-accent"
         />
         {cardsInVariant === 0
-          ? `Replace — there is nothing in ${where} to remove`
-          : `Replace — removes the ${plural(cardsInVariant, "card")} in ${where} first`}
+          ? `Replace — ${where} is empty`
+          : `Replace — remove the ${plural(cardsInVariant, "card")} in ${where} first`}
       </label>
       {/* Where the cardboard goes, which is not "nowhere" — `ClearDeck`'s own heading, and the
           same sentence word for word, because since issue #336 this press makes the same

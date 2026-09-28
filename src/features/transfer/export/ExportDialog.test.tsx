@@ -184,12 +184,12 @@ describe("ExportDialog", () => {
     );
     // Copies, not rows: six basic lands on one row are six cards missing from the file.
     await user.click(await screen.findByRole("radio", { name: "Arena" }));
-    expect(screen.getByText(/6 cards in switched-off piles are not written/)).toBeInTheDocument();
+    expect(screen.getByText(/can't include inactive categories, so 6 cards/)).toBeInTheDocument();
 
     // Moxfield has a maybeboard, so it writes that pile and leaves nothing out. The sentence is
     // about the format on screen, so it has to go with it.
     await user.click(screen.getByRole("radio", { name: "Moxfield" }));
-    expect(screen.queryByText(/not written in this format/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/can't include inactive categories/)).not.toBeInTheDocument();
 
     // **The tick is what keeps this test's original claim the claim it is making** (issue #390).
     // "Moxfield leaves nothing out" is still true of the *format* — it has a maybeboard and drops
@@ -202,10 +202,10 @@ describe("ExportDialog", () => {
     // `describe` below's subject in full; what is asserted here is that ticking the box is what
     // empties both of them.
     expect(
-      screen.getByText("6 cards in inactive categories are not written."),
+      screen.getByText("6 cards in inactive categories are left out."),
     ).toBeInTheDocument();
     await user.click(screen.getByRole("checkbox", { name: "Include inactive categories" }));
-    expect(screen.queryByText(/not written/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/left out/)).not.toBeInTheDocument();
   });
 
   it("says it in the singular for one card", async () => {
@@ -223,7 +223,7 @@ describe("ExportDialog", () => {
     );
     await user.click(await screen.findByRole("radio", { name: "MTGO" }));
     expect(
-      screen.getByText("1 card in a switched-off pile is not written in this format."),
+      screen.getByText("This format can't include inactive categories, so 1 card is left out."),
     ).toBeInTheDocument();
   });
 
@@ -251,7 +251,7 @@ describe("ExportDialog", () => {
       await user.click(await screen.findByRole("radio", { name: "Archidekt" }));
       expect(labelBox()).toBeChecked();
       // The colour rides inside `^Keeper,#4aab08^`, so a box for it here would change nothing.
-      expect(screen.queryByRole("checkbox", { name: "Label colour" })).not.toBeInTheDocument();
+      expect(screen.queryByRole("checkbox", { name: "Label color" })).not.toBeInTheDocument();
     });
 
     it("writes the label into the Archidekt preview, and stops when it is unticked", async () => {
@@ -271,7 +271,7 @@ describe("ExportDialog", () => {
       render(<ExportDialog {...props} cards={[KEEPER]} />);
       await user.click(await screen.findByRole("radio", { name: "CSV" }));
 
-      const colourBox = screen.getByRole("checkbox", { name: "Label colour" });
+      const colourBox = screen.getByRole("checkbox", { name: "Label color" });
       // CSV's defaults are a deliberate core; the label and its colour are both opt-in there.
       expect(labelBox()).not.toBeChecked();
       expect(colourBox).not.toBeChecked();
@@ -373,11 +373,11 @@ describe("ExportDialog", () => {
         />,
       );
       await user.click(await screen.findByRole("radio", { name: "Arena" }));
-      expect(screen.queryByText(/not in MTG Arena/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/on MTG Arena/)).not.toBeInTheDocument();
 
       await user.click(arenaBox());
       expect(
-        screen.getByText("6 cards are not in MTG Arena and are not written."),
+        screen.getByText("6 cards aren't on MTG Arena and are left out."),
       ).toBeInTheDocument();
     });
 
@@ -395,7 +395,7 @@ describe("ExportDialog", () => {
       await user.click(await screen.findByRole("radio", { name: "Arena" }));
       await user.click(arenaBox());
       expect(
-        screen.getByText("1 card is not in MTG Arena and is not written."),
+        screen.getByText("1 card isn't on MTG Arena and is left out."),
       ).toBeInTheDocument();
     });
 
@@ -424,13 +424,13 @@ describe("ExportDialog", () => {
       );
       await user.click(await screen.findByRole("radio", { name: "Arena" }));
       // Before the tick, the pile is the only thing holding it back.
-      expect(screen.getByText(/3 cards in switched-off piles are not written/)).toBeInTheDocument();
+      expect(screen.getByText(/can't include inactive categories, so 3 cards/)).toBeInTheDocument();
 
       await user.click(arenaBox());
       expect(
-        screen.getByText("3 cards are not in MTG Arena and are not written."),
+        screen.getByText("3 cards aren't on MTG Arena and are left out."),
       ).toBeInTheDocument();
-      expect(screen.queryByText(/not written in this format/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/can't include inactive categories/)).not.toBeInTheDocument();
     });
 
     /** A field set chosen for CSV means nothing to Arena and is re-derived; "leave out what
@@ -623,14 +623,14 @@ describe("ExportDialog", () => {
       const user = userEvent.setup();
       render(<ExportDialog {...props} cards={CUTS} />);
       expect(
-        await screen.findByText("6 cards in inactive categories are not written."),
+        await screen.findByText("6 cards in inactive categories are left out."),
       ).toBeInTheDocument();
 
-      // `/not written/` rather than `/inactive categor/`: the checkbox's own label carries those
+      // `/left out/` rather than `/inactive categor/`: the checkbox's own label carries those
       // two words too, so the looser pattern would match the control that is still on screen and
       // this assertion could never fail.
       await user.click(inactiveBox());
-      expect(screen.queryByText(/not written/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/left out/)).not.toBeInTheDocument();
     });
 
     it("says it in the singular for one card", async () => {
@@ -644,7 +644,7 @@ describe("ExportDialog", () => {
         />,
       );
       expect(
-        await screen.findByText("1 card in an inactive category is not written."),
+        await screen.findByText("1 card in an inactive category is left out."),
       ).toBeInTheDocument();
     });
 
@@ -666,15 +666,15 @@ describe("ExportDialog", () => {
       render(<ExportDialog {...props} cards={CUTS} />);
       await user.click(await screen.findByRole("radio", { name: "Arena" }));
       expect(
-        screen.getByText("6 cards in switched-off piles are not written in this format."),
+        screen.getByText("This format can't include inactive categories, so 6 cards are left out."),
       ).toBeInTheDocument();
-      expect(screen.queryByText(/inactive categories are not written/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/inactive categories are left out/)).not.toBeInTheDocument();
 
       await user.click(screen.getByRole("radio", { name: "Moxfield" }));
       expect(
-        screen.getByText("6 cards in inactive categories are not written."),
+        screen.getByText("6 cards in inactive categories are left out."),
       ).toBeInTheDocument();
-      expect(screen.queryByText(/not written in this format/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/can't include inactive categories/)).not.toBeInTheDocument();
     });
 
     /**
@@ -761,7 +761,7 @@ describe("ExportDialog", () => {
         "Show decklist (0 lines)",
       );
       expect(
-        screen.getByText("7 cards in inactive categories are not written."),
+        screen.getByText("7 cards in inactive categories are left out."),
       ).toBeInTheDocument();
 
       await user.click(inactiveBox());
@@ -982,7 +982,7 @@ describe("the scope line", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not read the cards to export — database is locked",
+      "Couldn't load the cards to export — database is locked",
     );
     // The count is a number the failed sweep never finished reading, so it is not drawn at all —
     // "3,000 cards" beside "0 lines" was the reported contradiction.

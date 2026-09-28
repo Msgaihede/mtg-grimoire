@@ -930,7 +930,7 @@ function Body({
              * lookup — a category is a row the user named, so there is no table to translate an
              * id through and this modal has no category list of its own.
              */
-            setReport(`Folded into one row of ${result.quantity} in ${from.categoryName}.`);
+            setReport(`Merged into one row of ${result.quantity} in ${from.categoryName}.`);
           },
         },
       );
@@ -1033,7 +1033,7 @@ function Body({
       {query.isPending && <p className="shrink-0 text-xs text-dim">Loading printings…</p>}
       {query.isError && (
         <p className="shrink-0 text-xs text-destructive">
-          Could not read the printings — {ipcError(query.error)}
+          Couldn't read the printings — {ipcError(query.error)}
         </p>
       )}
 
@@ -1069,7 +1069,7 @@ function Body({
           the tile looks exactly as it did. */}
       {swap.isError && (
         <p role="alert" className="shrink-0 text-xs text-destructive">
-          Could not use that printing — {ipcError(swap.error)}
+          Couldn't use that printing — {ipcError(swap.error)}
         </p>
       )}
       {/* And a refused **repoint**, in the same place and for the same reason. Its own sentence
@@ -1080,13 +1080,13 @@ function Body({
           target. */}
       {repoint.isError && (
         <p role="alert" className="shrink-0 text-xs text-destructive">
-          Could not repoint that wish — {ipcError(repoint.error)}
+          Couldn't change the wishlist printing — {ipcError(repoint.error)}
         </p>
       )}
       {/* And a copy that could not move — refused here before writing, or by the backend. */}
       {(copyRefusal !== null || moveCopy.isError) && (
         <p role="alert" className="shrink-0 text-xs text-destructive">
-          {copyRefusal ?? `Could not change this copy's printing — ${ipcError(moveCopy.error)}`}
+          {copyRefusal ?? `Couldn't change this copy's printing — ${ipcError(moveCopy.error)}`}
         </p>
       )}
       {/* And a refused **menu** write, which is a different thing: an add the reader made from a

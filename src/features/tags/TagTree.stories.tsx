@@ -307,7 +307,7 @@ export const NoMatches: Story = {
     // Not a `role="status"`: none of these is news, it is what is in front of the reader.
     // The wait covers `useTagSearch`'s debounce — see {@link Matches}.
     await expect(
-      await canvas.findByText("No tags match that.", {}, { timeout: 5000 }),
+      await canvas.findByText("No matching tags.", {}, { timeout: 5000 }),
     ).toBeInTheDocument();
   },
 };

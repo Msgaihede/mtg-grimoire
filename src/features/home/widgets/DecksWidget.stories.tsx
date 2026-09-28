@@ -124,7 +124,7 @@ export const ArchivedTooOnABand: Story = {
     await expect(
       await card.findByRole("button", { name: /^Old School 93\/94 · .* · Archived · / }),
     ).toBeInTheDocument();
-    await expect(await card.findByText(/prices as of/)).toBeInTheDocument();
+    await expect(await card.findByText(/prices, last updated with/)).toBeInTheDocument();
   },
 };
 

@@ -200,7 +200,7 @@ export const Default: Story = {
     // What is still genuinely missing, at the foot of the rail rather than as a seventh entry:
     // a heading in a rail is a destination, and a destination with no panels behind it is a
     // place a reader can be sent to that draws nothing.
-    await expect(rail.getByText("Import. Coming in a later plan.")).toBeInTheDocument();
+    await expect(rail.getByText("Import (coming soon)")).toBeInTheDocument();
   },
 };
 
@@ -378,7 +378,7 @@ export const ClearingTheCollection: Story = {
     const confirm = within(dialog).getByRole("button", { name: "Clear collection" });
 
     // The gate: open, warned, and still not pressable.
-    await expect(dialog).toHaveTextContent("This cannot be undone.");
+    await expect(dialog).toHaveTextContent("This can’t be undone.");
     await expect(confirm).toBeDisabled();
 
     await userEvent.type(within(dialog).getByRole("textbox"), CONFIRM_WORD);

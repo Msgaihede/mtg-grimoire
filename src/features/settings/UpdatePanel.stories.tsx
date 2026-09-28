@@ -227,7 +227,7 @@ export const NeverChecked: Story = {
     await expect(canvas.getByText("Checking for updates…")).toBeInTheDocument();
     await expect(canvas.queryByText(/latest version/)).toBeNull();
     await expect(canvas.getByText("Not checked yet")).toBeInTheDocument();
-    await expect(canvas.getByText(/No releases have been read yet/)).toBeInTheDocument();
+    await expect(canvas.getByText(/No release history yet/)).toBeInTheDocument();
   },
 };
 

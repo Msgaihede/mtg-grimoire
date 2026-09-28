@@ -46,7 +46,7 @@ import { FINISH_LABEL, isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type EntryPatch } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
-import { formatPrice, parsePurchasePrice, priceText, unreadablePriceNote } from "@/lib/prices";
+import { parsePurchasePrice, priceText, unreadablePriceNote } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 
 /**
@@ -416,8 +416,7 @@ function EditCopyForm({
       ? unreadablePriceNote(priceDraft)
       : target.purchasePrice === null
         ? null
-        : `Emptying this box leaves ${formatPrice(target.purchasePrice, paidIn)} recorded. ` +
-          "A price can be corrected here, never removed.";
+        : "Purchase prices can be edited but not cleared.";
 
   return (
     <div className="space-y-4 p-1">
@@ -515,7 +514,7 @@ function EditCopyForm({
         // the reader can try again, and `GONE` — the row deleted in another window — is the one
         // they need to read before the surface goes away.
         <p role="alert" className="text-xs text-destructive">
-          Could not save this copy — {ipcError(save.error)}
+          Couldn't save this copy — {ipcError(save.error)}
         </p>
       )}
     </div>

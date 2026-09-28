@@ -153,7 +153,7 @@ describe("parseDecklist", () => {
     expect(out.lines).toHaveLength(3); // "???" is a nameable card as far as this parser knows
     const junk = parseDecklist("1 Sol Ring\n0 Shock");
     expect(junk.issues).toEqual([
-      { lineNumber: 2, raw: "0 Shock", reason: "A count of zero is not an import." },
+      { lineNumber: 2, raw: "0 Shock", reason: "Quantity can't be zero." },
     ]);
     expect(junk.lines).toHaveLength(1);
   });
@@ -990,8 +990,8 @@ describe("a CSV's quantity column", () => {
     expect(list.issues.map((i) => [i.lineNumber, i.reason])).toEqual([
       [2, "`1.5` is not a whole number of copies"],
       [3, "`3 copies` is not a whole number of copies"],
-      [4, "A count of zero is not an import."],
-      [5, "`12345` is more than the 9999 copies one row can hold"],
+      [4, "Quantity can't be zero."],
+      [5, "`12345` exceeds the maximum of 9999 copies per row"],
       [6, "`-1` is not a whole number of copies"],
       [7, "`+3` is not a whole number of copies"],
     ]);
@@ -1023,7 +1023,7 @@ describe("a CSV, read as a file", () => {
     ]);
     expect(list.lines[0].extra.notes).toBe("first\nsecond\nthird");
     expect(list.issues).toEqual([
-      { lineNumber: 5, raw: "0,Shock,", reason: "A count of zero is not an import." },
+      { lineNumber: 5, raw: "0,Shock,", reason: "Quantity can't be zero." },
     ]);
   });
 

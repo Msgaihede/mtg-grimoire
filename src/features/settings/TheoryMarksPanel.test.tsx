@@ -112,7 +112,7 @@ describe("TheoryMarksPanel", () => {
       screen.getByRole("button", { name: /change the matching-printing mark/i }),
     );
 
-    const hex = screen.getByRole("textbox", { name: "Matching printing colour hex" });
+    const hex = screen.getByRole("textbox", { name: "Matching printing color hex" });
     expect(hex).toHaveValue(MARK_COLOR_DEFAULTS.theoryExact.slice(1).toUpperCase());
 
     await userEvent.clear(hex);
@@ -140,7 +140,7 @@ describe("TheoryMarksPanel", () => {
     await userEvent.click(
       screen.getByRole("button", { name: /change the matching-printing mark/i }),
     );
-    const hex = () => screen.getByRole("textbox", { name: "Matching printing colour hex" });
+    const hex = () => screen.getByRole("textbox", { name: "Matching printing color hex" });
     await userEvent.clear(hex());
     await userEvent.type(hex(), "ff0000");
 
@@ -197,7 +197,7 @@ describe("TheoryMarksPanel", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /change the unplanned-card mark/i }));
 
-    const hex = screen.getByRole("textbox", { name: "Not in the theory list colour hex" });
+    const hex = screen.getByRole("textbox", { name: "Not in the theory list color hex" });
     expect(hex).toHaveValue(MARK_COLOR_DEFAULTS.theoryUnplanned.slice(1).toUpperCase());
     await userEvent.clear(hex);
     await userEvent.type(hex, "00733e");
@@ -261,7 +261,7 @@ describe("TheoryMarksPanel", () => {
     draw();
     await waitFor(() => expect(markColors).toHaveBeenCalled());
 
-    expect(screen.getByText(/only on this device/i)).toBeInTheDocument();
+    expect(screen.getByText(/on this device only/i)).toBeInTheDocument();
   });
 
   /**
@@ -289,7 +289,7 @@ describe("TheoryMarksPanel", () => {
         name: new RegExp(`change the ${noun} mark`, "i"),
       });
       await userEvent.click(open);
-      const group = screen.getByRole("group", { name: /colour$/ });
+      const group = screen.getByRole("group", { name: /color$/ });
       const name = group.getAttribute("aria-label") ?? "";
       names.push(name);
       // The hex field belongs to the same thing the group around it does, which is what
@@ -300,9 +300,9 @@ describe("TheoryMarksPanel", () => {
     }
 
     expect(names).toEqual([
-      "Matching printing colour",
-      "Any printing colour",
-      "Not in the theory list colour",
+      "Matching printing color",
+      "Any printing color",
+      "Not in the theory list color",
     ]);
     expect(new Set(names).size).toBe(3);
     for (const name of names) expect(name.toLowerCase()).not.toContain("label");

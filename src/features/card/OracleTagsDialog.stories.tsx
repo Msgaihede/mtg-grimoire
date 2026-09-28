@@ -126,7 +126,7 @@ export const Tagged: Story = {
     await expect(await canvas.findByText("Lightning Bolt")).toBeInTheDocument();
     // The empty state's sentence is about the reader's *database*, and it must not appear over a
     // wall of pills.
-    await expect(canvas.queryByText(/has not been downloaded/i)).toBeNull();
+    await expect(canvas.queryByText(/still downloading/i)).toBeNull();
   },
 };
 
@@ -143,7 +143,7 @@ export const NeverFetched: Story = {
   parameters: { fake: { fault: "oracleTagsMissing" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/has not been downloaded/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/still downloading/i)).toBeInTheDocument();
     await expect(canvas.queryByText("removal")).toBeNull();
   },
 };

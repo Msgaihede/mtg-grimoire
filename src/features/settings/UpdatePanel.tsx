@@ -179,14 +179,13 @@ export function UpdatePanel({
 
           {action === "install" && (
             <p className="text-xs text-dim">
-              The app will close and reopen. Nothing in your collection is touched.
+              The app will restart. Your data isn&rsquo;t affected.
             </p>
           )}
           {action === "unavailable" && (
             <p className="text-xs text-dim">
-              This copy was installed in a way the app can&rsquo;t update on its own.
-              Download {release.version} from the release page and install it over this one
-              — your collection stays where it is.
+              This install can&rsquo;t update itself. Download {release.version} from the
+              release page and install it over this one. Your data stays put.
             </p>
           )}
         </div>

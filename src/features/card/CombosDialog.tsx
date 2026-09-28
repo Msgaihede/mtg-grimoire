@@ -83,11 +83,11 @@ const PAGE_SIZE = 50;
  * for it anywhere in the app, so the honest instruction is that nothing needs a press.
  */
 const NEVER_FETCHED =
-  "No combos yet. Commander Spellbook data has not been downloaded yet; it will sync automatically in the background.";
+  "Combo data is still downloading. Check back shortly.";
 
 /** An empty answer from a feed that *is* here: Spellbook lists no combo naming this card. The
  *  other half of {@link NEVER_FETCHED}'s split, and the claim that needs the status row. */
-const NO_COMBOS = "No combos. Commander Spellbook has none on record naming this card.";
+const NO_COMBOS = "No known combos for this card.";
 
 /**
  * A printing with no oracle card behind it.
@@ -97,7 +97,7 @@ const NO_COMBOS = "No combos. Commander Spellbook has none on record naming this
  * question to put: `combos_for_card` matches on oracle id, so a null id has nothing to look up and
  * a call would only be this component asking the backend to confirm that zero is zero.
  */
-const NO_ORACLE_CARD = "No combos. This printing is not linked to an Oracle card.";
+const NO_ORACLE_CARD = "Combos aren't available for this printing.";
 
 /**
  * The **fourth** empty, and it must never borrow one of the three above.
@@ -126,7 +126,7 @@ const NO_MATCH = "No combo matches that filter.";
  * root `CLAUDE.md` asks in bold not to do, and a caption that names the wrong clock is worse than
  * one that names none.
  */
-const AS_OF = "Combos come from Commander Spellbook, as of the last combo refresh.";
+const AS_OF = "Data from Commander Spellbook.";
 
 /** Where one combo lives on the web — Spellbook's own permalink, keyed on the variant id the feed
  *  publishes. Built here rather than in `lib/externalLinks.ts` because this dialog is its only
@@ -521,7 +521,7 @@ function Body({
   const content =
     loading ? (
       <Filler>
-        <Note>Reading the card…</Note>
+        <Note>Loading card…</Note>
       </Filler>
     ) : // `card_detail` answers `null` for an id `cards` has no row for, which is a real state
     // rather than a failure: a collection or a deck can hold a printing the corpus has dropped.
@@ -536,7 +536,7 @@ function Body({
     ) : combos.isError ? (
       <Filler>
         <p className="text-sm text-destructive">
-          Could not read the combos — {ipcError(combos.error)}.
+          Couldn't read the combos — {ipcError(combos.error)}.
         </p>
       </Filler>
     ) : // Both reads, not just the combo one: the sentence an empty answer gets is *decided* by
@@ -545,7 +545,7 @@ function Body({
     // their card.
     combos.isPending || status.isPending ? (
       <Filler>
-        <Note>Reading the combos…</Note>
+        <Note>Loading combos…</Note>
       </Filler>
     ) : total === 0 ? (
       // An unanswered status reads as never-fetched rather than as "no combos", and that is the
@@ -991,8 +991,8 @@ function Pane({ combo }: { combo: CardCombo }) {
           surface over. */}
       {combo.templateCount > 0 && (
         <p className="mt-4 text-xs leading-snug text-dim">
-          Also requires {plural(combo.templateCount, "piece")} no card list can name (e.g. a creature with
-          flying or sacrifice outlet).
+          Also needs {plural(combo.templateCount, "piece")} that can't be matched to a specific card
+          (e.g. a creature with flying or a sacrifice outlet).
         </p>
       )}
 

@@ -95,7 +95,7 @@ export const Shopping: Story = {
     await expect(canvas.getByText(/aren't in the actual list yet/)).toBeVisible();
     await expect(canvas.getByText(/Different finishes count as different printings/)).toBeVisible();
     await expect(
-      canvas.getByText("TCGplayer prices as of the last card-data sync."),
+      canvas.getByText("TCGplayer prices, last updated with card data."),
     ).toBeVisible();
   },
 };

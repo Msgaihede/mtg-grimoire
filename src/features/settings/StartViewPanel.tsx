@@ -96,10 +96,8 @@ export function StartViewPanel(): JSX.Element {
   const { view, setView } = useStartView();
 
   return (
-    <SettingsSection id="start-view" title="Opening view">
-      <p className="text-sm text-dim">
-        Choose the default view displayed when launching the app.
-      </p>
+    <SettingsSection id="start-view" title="Start page">
+      <p className="text-sm text-dim">The page shown when the app starts.</p>
 
       {/* No visible `<label>`: the section's heading is already the only name this control could
           be given, and a second copy of it directly above the trigger would be the same two words
@@ -111,7 +109,7 @@ export function StartViewPanel(): JSX.Element {
           rather than as a picker with ten short words in it. */}
       <Dropdown
         id={PICKER_ID}
-        label="Opening view"
+        label="Start page"
         value={view}
         // `ViewId` and `StartView` are the same union since Task 24 landed `"home"` in the
         // former, so this is a narrowing rather than a claim: every value that can reach the

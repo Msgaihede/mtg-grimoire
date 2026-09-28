@@ -2425,7 +2425,7 @@ describe("CollectionPage", () => {
       );
       expect(
         screen.getByText(
-          "In Mono-Red Aggro. Cut the card from the deck to change how many you hold.",
+          "In Mono-Red Aggro. Remove it from the deck to change the quantity.",
         ),
       ).toBeInTheDocument();
 
@@ -2528,7 +2528,7 @@ describe("CollectionPage", () => {
     // no equivalent of, and an `add`/`set` mode radio rather than `merge`/`replace`.
     expect(await screen.findByText(/will be added to your collection/)).toBeInTheDocument();
     expect(
-      within(dialog).getByRole("button", { name: "Condition when the file doesn't say" }),
+      within(dialog).getByRole("button", { name: "Default condition" }),
     ).toHaveTextContent("Not set");
 
     // Scoped to the dialog: the page's own trigger is still on screen behind it and shares the
@@ -2674,7 +2674,7 @@ describe("CollectionPage", () => {
     await user.click(await screen.findByRole("button", { name: "Export collection" }));
     const dialog = await screen.findByRole("dialog");
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Could not read the cards to export — The database is busy.",
+      "Couldn't load the cards to export — The database is busy.",
     );
 
     refuse = false;
@@ -2916,7 +2916,7 @@ describe("the card menu", () => {
     await user.click(await screen.findByRole("menuitem", { name: "Collection" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not add to your collection — that card is not in the database",
+      "Couldn't add to your collection — that card is not in the database",
     );
 
     // A *wishlist* add, so what follows cannot be the same sentence written again.
@@ -2932,7 +2932,7 @@ describe("the card menu", () => {
     // And when this one is refused in its turn, its own sentence takes the place.
     await act(async () => refuseWish("the wishlist is locked"));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not add to your wishlist — the wishlist is locked",
+      "Couldn't add to your wishlist — the wishlist is locked",
     );
   });
 
@@ -3256,7 +3256,7 @@ describe("the card menu", () => {
       await user.click(within(question).getByRole("button", { name: "Remove 2 cards" }));
 
       expect(await screen.findByRole("alert")).toHaveTextContent(
-        "Could not change your collection — That collection entry is not there any more.",
+        "Couldn't change your collection — That collection entry is not there any more.",
       );
       expect(screen.getByRole("group", { name: /^Remove 2 cards/ })).toBeInTheDocument();
       expect(useBulkUndo.getState().offers.collection).toBeNull();
@@ -3407,7 +3407,7 @@ describe("clearing Recently removed", () => {
     await user.click(within(question).getByRole("button", { name: "Clear Recently removed" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not change your collection — There is no Recently removed folder.",
+      "Couldn't change your collection — There is no Recently removed folder.",
     );
     expect(screen.getByRole("group", { name: "Clear Recently removed" })).toBeInTheDocument();
   });
@@ -4009,7 +4009,7 @@ describe("the collection's shelves", () => {
     const stuck = screen.getByRole("checkbox", { name: /Mono-Red Aggro/ });
     expect(stuck).toBeDisabled();
     expect(stuck).not.toBeChecked();
-    expect(stuck).toHaveAccessibleName(/Cut the card from the deck/);
+    expect(stuck).toHaveAccessibleName(/Remove it from the deck/);
     await user.click(screen.getByRole("button", { name: "Move 2 copies to Trade binder" }));
     await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
     expect(collectionSetFolder).not.toHaveBeenCalledWith(8, 3);
@@ -4109,7 +4109,7 @@ describe("the collection's shelves", () => {
 
   /**
    * **An empty folder is its dashed box, and the status line stays quiet over it** — the box says
-   * what to do (spec §3.8), so "Nothing filed here yet." would be the same sentence twice.
+   * what to do (spec §3.8), so "This folder is empty." would be the same sentence twice.
    */
   it("draws the empty box, and no sentence, inside a folder with nothing in it", async () => {
     useAppStore.setState({ collectionView: "grid" });
@@ -4122,7 +4122,7 @@ describe("the collection's shelves", () => {
     await waitFor(() => expect(standingIn()).toBe(3));
 
     await waitFor(() => expect(container.querySelector(`[${EMPTY_SHELF_ATTR}]`)).not.toBeNull());
-    expect(screen.queryByText("Nothing filed here yet.")).toBeNull();
+    expect(screen.queryByText("This folder is empty.")).toBeNull();
     expect(screen.queryByText(/Nothing here yet/)).toBeNull();
   });
 
@@ -6015,7 +6015,7 @@ describe("locking a folder", () => {
       const question = await screen.findByRole("group", {
         name: "Move Lightning Bolt into Trade binder",
       });
-      await user.click(within(question).getByRole("button", { name: "Leave it there" }));
+      await user.click(within(question).getByRole("button", { name: "Cancel" }));
 
       await waitFor(() =>
         expect(

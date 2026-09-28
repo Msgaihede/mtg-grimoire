@@ -50,11 +50,11 @@ export function statusLine(
   lastResolution: ScannerResolution | null,
 ): string {
   if (!hasBundle) {
-    return "The scanner has no card hashes loaded, so it can find a card but not name it.";
+    return "Card hashes aren't loaded, so cards can be detected but not identified.";
   }
   if (verdict === null || verdict.quad === null) return "Point the camera at a card";
   if (lastResolution?.outcome === "not_found") {
-    return "No match — try better light, or clear the filters";
+    return "No match. Try better lighting or clear the filters.";
   }
   const committed = verdict.tracked?.committed === true;
   if (lastResolution?.outcome === "ambiguous" && committed) return "Pick a printing below";
@@ -71,7 +71,7 @@ export function statusLine(
     return printing === "" ? `${verb} ${lastAdded.name}` : `${verb} ${lastAdded.name} — ${printing}`;
   }
   if (mode === "exact" && verdict.lock?.phase === "locked" && !committed) {
-    return "Hold steady — reading the card…";
+    return "Hold steady — reading…";
   }
   return "Hold steady";
 }

@@ -462,7 +462,7 @@ function FolderPicker({
     >
       {(close) => (
         <MoveToFolder
-          label="File the scanned cards in a folder"
+          label="Folder for scanned cards"
           nodes={nodes}
           currentId={folderId}
           rootLabel={ROOT_LABEL}

@@ -96,7 +96,7 @@ function row(name: string): HTMLElement {
 async function drawn() {
   draw();
   const region = await screen.findByRole("region", { name: "Labels" });
-  await waitForElementToBeRemoved(() => screen.queryByText("Reading your labels…"));
+  await waitForElementToBeRemoved(() => screen.queryByText("Loading labels…"));
   return region;
 }
 
@@ -193,7 +193,7 @@ describe("LabelsPanel", () => {
     await userEvent.click(within(row("Cut candidate")).getByRole("button", { name: "Delete" }));
 
     const question = screen.getByRole("group", { name: "Delete Cut candidate" });
-    expect(within(question).getByText(/cannot be undone/i)).toBeInTheDocument();
+    expect(within(question).getByText(/can.t be undone/i)).toBeInTheDocument();
     expect(within(question).getByText(/Ctrl\+Z/)).toBeInTheDocument();
   });
 
@@ -228,7 +228,7 @@ describe("LabelsPanel", () => {
 
     const cut = row("Cut candidate");
     await userEvent.click(
-      within(cut).getByRole("button", { name: "Change colour of Cut candidate" }),
+      within(cut).getByRole("button", { name: "Change color of Cut candidate" }),
     );
     await userEvent.click(within(cut).getByRole("button", { name: "Azure" }));
     await userEvent.click(within(cut).getByRole("button", { name: "Done" }));
@@ -271,7 +271,7 @@ describe("LabelsPanel", () => {
     deckLabelAll.mockResolvedValue([]);
     await drawn();
 
-    expect(await screen.findByText(/labels are yours/i)).toBeInTheDocument();
+    expect(await screen.findByText(/create labels like/i)).toBeInTheDocument();
     // The way to make one is above the sentence, not behind it.
     expect(screen.getByRole("textbox", { name: /new label/i })).toBeInTheDocument();
   });

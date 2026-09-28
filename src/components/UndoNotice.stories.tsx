@@ -70,7 +70,7 @@ export const AfterABulkRemove: Story = {
     await expect(canvas.getByRole("button", { name: "Undo" })).not.toHaveAttribute(
       "aria-disabled",
     );
-    await expect(canvas.getByRole("button", { name: "Dismiss the undo offer" })).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Dismiss" })).toBeVisible();
   },
 };
 

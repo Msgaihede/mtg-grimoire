@@ -377,7 +377,7 @@ export const ImagesNotCached: Story = {
     await userEvent.hover(line);
     const panel = await canvas.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
     await expect(panel).toHaveTextContent(
-      "D:\\MTG Grimoire\\data\n12 card images could not be saved to the cache — the data folder may be read-only or full.",
+      "D:\\MTG Grimoire\\data\n12 card images couldn't be saved to the cache — the data folder may be read-only or full.",
       { normalizeWhitespace: false },
     );
     await expect(line).toHaveAttribute("aria-describedby", panel.id);

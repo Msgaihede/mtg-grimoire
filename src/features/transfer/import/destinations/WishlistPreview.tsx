@@ -21,8 +21,8 @@ import { ImportProblems } from "../shared/Problems";
 import { planWishlistImport, toWishlistImportItems } from "./wishlist";
 
 export const WISHLIST_MODES: readonly ImportModeOption[] = [
-  { key: "add", label: "Add these wishes", hint: "Quantities add to what you already want." },
-  { key: "set", label: "Set these quantities", hint: "The file's number replaces yours." },
+  { key: "add", label: "Add to wishlist quantities", hint: "Quantities add to what you already want." },
+  { key: "set", label: "Set these quantities", hint: "Replaces your quantities with the file's." },
 ];
 
 export function WishlistPreview({
@@ -92,7 +92,7 @@ export function WishlistPreview({
             only what the file is — which is true whatever the rows already hold. */}
         <p className="text-sm">
           {mode === "set"
-            ? `Sets how many you want of ${cards(plan.items.length)}.`
+            ? `Updates wishlist quantities for ${cards(plan.items.length)}.`
             : `${cards(plan.totalCards)} will be added to your wishlist.`}
         </p>
 
@@ -106,7 +106,7 @@ export function WishlistPreview({
                 to an association a later refactor could break, and `htmlFor` keeps a click on the
                 words opening the dropdown. */}
             <label id="wishlist-import-finish-label" htmlFor="wishlist-import-finish">
-              Finish when the file doesn&apos;t say
+              Default finish
             </label>
             <Dropdown
               id="wishlist-import-finish"
@@ -142,7 +142,7 @@ export function WishlistPreview({
         pending={commit.isPending}
         disabled={plan.items.length === 0}
         message={
-          commit.error === null ? "" : `Could not import the list — ${ipcError(commit.error)}`
+          commit.error === null ? "" : `Couldn't import the list — ${ipcError(commit.error)}`
         }
         failed={commit.error !== null}
         onBack={onBack}

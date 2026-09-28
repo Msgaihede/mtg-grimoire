@@ -58,7 +58,7 @@ function cardNotesKey(oracleId: string) {
  * to write one from here — this surface is a reader and the deck's own band is the writer.
  */
 const NO_NOTES =
-  "No notes. None recorded for this card in any of your decks — open a deck that holds it to write one.";
+  "No notes yet. Add one from a deck that uses this card.";
 
 /**
  * A printing with no oracle card behind it.
@@ -68,7 +68,7 @@ const NO_NOTES =
  * question to put: `card_notes` matches on oracle id, so a null id has nothing to look up and a
  * call would only be this component asking the backend to confirm that zero is zero.
  */
-const NO_ORACLE_CARD = "No notes. This printing is not linked to an Oracle card.";
+const NO_ORACLE_CARD = "Notes aren't available for this printing.";
 
 /**
  * What has been written about this card, anywhere — over the card detail modal.
@@ -204,7 +204,7 @@ function Body({
   return (
     <div className="min-h-0 flex-1 overflow-y-auto p-4">
       {loading ? (
-        <Note>Reading the card…</Note>
+        <Note>Loading card…</Note>
       ) : // `card_detail` answers `null` for an id `cards` has no row for, which is a real state
       // rather than a failure: a collection or a deck can hold a printing the corpus has dropped.
       card === null ? (
@@ -217,10 +217,10 @@ function Body({
         // `AllPrintingsDialog` gives at its own site: the press that produced it — a row on a
         // rail, in another dialog — has already been forgotten by the eye.
         <p role="alert" className="text-sm leading-relaxed text-destructive">
-          Could not read the notes — {ipcError(notes.error)}.
+          Couldn't read the notes — {ipcError(notes.error)}.
         </p>
       ) : notes.isPending ? (
-        <Note>Reading the notes…</Note>
+        <Note>Loading notes…</Note>
       ) : rows.length === 0 ? (
         <Note>{NO_NOTES}</Note>
       ) : (

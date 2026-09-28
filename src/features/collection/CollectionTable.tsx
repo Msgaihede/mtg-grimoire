@@ -654,9 +654,9 @@ export function CollectionTable({
    * **A sentence rather than a boolean, because a row that refuses has to say what to do
    * instead.** The words are the caller's — this table prints them and decides nothing about
    * them — and the page passes two shapes. For a deck's group:
-   * `` `In ${row.folderName ?? "a deck"}. Cut the card from the deck to change how many you hold.` ``
+   * `` `In ${row.folderName ?? "a deck"}. Remove it from the deck to change the quantity.` ``
    * And for a folder kind the page has not been taught about:
-   * `` `In ${row.folderName}. Move it into one of your own folders to change how many you hold.` ``
+   * `` `In ${row.folderName}. Move it into one of your folders to change the quantity.` ``
    * **`Recently removed` is not fenced at all since issue #506** — its copies belong to no deck, so
    * its rows draw the stepper like any row the reader filed, and the sentence it used to get
    * (*Move it back to your collection…*) is gone with the fence.

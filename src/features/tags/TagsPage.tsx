@@ -244,7 +244,7 @@ export function TagsPage() {
       try {
         await ipc.tagMute(hit.namespace, hit.id, hit.slug);
       } catch (e) {
-        setMuteFailure(`Could not hide ${hit.label} — ${ipcError(e)}`);
+        setMuteFailure(`Couldn't hide ${hit.label} — ${ipcError(e)}`);
         throw e;
       }
       // Only past the write: a refusal leaves all three lists exactly as they were, so re-reading
@@ -414,12 +414,8 @@ function TaxonomyGaps() {
       {missing.map((namespace) => (
         <p
           key={namespace}
-        >{`${TAG_NAMESPACE_LABEL[namespace]} tags have not been downloaded yet.`}</p>
+        >{`${TAG_NAMESPACE_LABEL[namespace]} tags are still downloading.`}</p>
       ))}
-      {/* Direction rather than mood, and it is the whole of what a reader can do: there is no
-          button for this anywhere in the app. The backend asks Scryfall for both files on every
-          launch that is due one, so the honest instruction is to leave it running or come back. */}
-      <p className="mt-1">The app fetches them in the background automatically.</p>
     </div>
   );
 }

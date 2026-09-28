@@ -235,7 +235,7 @@ describe("the data folder gets a home on the page", () => {
 
     expect(
       await screen.findByText(
-        "12 card images could not be saved there this session — the folder may be read-only or full.",
+        "Couldn't save 12 card images there this session. The folder may be read-only or full.",
       ),
     ).toBeInTheDocument();
   });
@@ -248,7 +248,7 @@ describe("the data folder gets a home on the page", () => {
 
     expect(
       await screen.findByText(
-        "1 card image could not be saved there this session — the folder may be read-only or full.",
+        "Couldn't save 1 card image there this session. The folder may be read-only or full.",
       ),
     ).toBeInTheDocument();
   });
@@ -267,7 +267,7 @@ describe("the data folder gets a home on the page", () => {
     await pickGroup("Storage and data");
 
     expect(
-      await screen.findByText("No card images have failed to save this session."),
+      await screen.findByText("No image errors this session."),
     ).toBeInTheDocument();
   });
 
@@ -370,7 +370,7 @@ describe("the rail decides what the pane draws", () => {
 
     await userEvent.type(searchBox(), "xyzzy");
 
-    expect(screen.getByText("Nothing in Settings matches that.")).toBeInTheDocument();
+    expect(screen.getByText("No matching settings.")).toBeInTheDocument();
     expect(screen.queryByText("panel:update")).not.toBeInTheDocument();
     expect(screen.queryByText("panel:backup")).not.toBeInTheDocument();
   });

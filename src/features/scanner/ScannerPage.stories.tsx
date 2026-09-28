@@ -113,7 +113,7 @@ export const AssetsMissing: Story = {
     await expect(await canvas.findByText(/No reference bundle\. Put/)).toBeInTheDocument();
     await expect(
       await canvas.findByRole("status", { name: "Scanner status" }),
-    ).toHaveTextContent("The scanner has no card hashes loaded");
+    ).toHaveTextContent("Card hashes aren't loaded");
   },
 };
 

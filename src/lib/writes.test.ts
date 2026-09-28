@@ -21,7 +21,7 @@ describe("batchWrite", () => {
   it("counts a refusal in the middle of a batch that ended well", () => {
     const write = batchWrite([ok(), no("The database is busy."), ok(), ok()], 10, 20);
     expect(write.isError).toBe(true);
-    expect(write.error).toBe("1 of 4 cards was not changed — The database is busy.");
+    expect(write.error).toBe("1 of 4 cards wasn't changed — The database is busy.");
   });
 
   /** Stamped when it settled, so it outranks its own members — whose `submittedAt` TanStack
@@ -32,7 +32,7 @@ describe("batchWrite", () => {
 
   it("says one sentence once however many cards it refused", () => {
     expect(batchWrite([no("Gone."), no("Gone."), ok()], 1, 2).error).toBe(
-      "2 of 3 cards were not changed — Gone.",
+      "2 of 3 cards weren't changed — Gone.",
     );
     expect(batchWrite([no("Gone."), no("Busy.")], 1, 2).error).toBe("Gone. Busy.");
   });

@@ -23,11 +23,11 @@ export function CsvNotes({ list }: { list: ParsedList }): JSX.Element | null {
   return (
     <div className="space-y-1 text-sm text-dim">
       <p>
-        Read as a spreadsheet.
-        {ignored.length > 0 && ` Not read: ${ignored.join(", ")}.`}
+        Read as CSV.
+        {ignored.length > 0 && ` Ignored columns: ${ignored.join(", ")}.`}
       </p>
       {!csv.hasQuantity && (
-        <p>This spreadsheet has no quantity column, so every row is read as one copy.</p>
+        <p>No quantity column found, so each row counts as one copy.</p>
       )}
     </div>
   );

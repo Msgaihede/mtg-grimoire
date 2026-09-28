@@ -88,7 +88,7 @@ export function decksOutcome(r: DecksCleared): string {
   const parts: string[] = [];
   if (r.decks > 0) parts.push(counted(r.decks, "deck"));
   if (r.folders > 0) parts.push(counted(r.folders, "folder"));
-  if (parts.length === 0) return "There were no decks or folders to clear.";
+  if (parts.length === 0) return "There were no decks to clear.";
   return `Cleared ${list(parts)}.`;
 }
 
@@ -110,7 +110,7 @@ export function cacheOutcome(r: CacheCleared): string {
       : `Freed ${fileSize(r.bytes)} across ${counted(r.files, "file")}.`;
   return r.failed === 0
     ? swept
-    : `${swept} ${counted(r.failed, "file")} ${r.failed === 1 ? "was" : "were"} in use and stayed.`;
+    : `${swept} ${counted(r.failed, "file")} ${r.failed === 1 ? "was" : "were"} in use and couldn't be deleted.`;
 }
 
 /**
@@ -133,13 +133,11 @@ export function cacheOutcome(r: CacheCleared): string {
 export function combosOutcome(r: ComboStatus): string {
   if (r.combos === 0) {
     return (
-      "The combos were cleared and the download brought none back, so the table is empty. " +
-      "Errors, further down this page, has the reason."
+      "Combos were cleared, but the download failed. See Errors below for details."
     );
   }
   return (
-    `Cleared and downloaded again: ${counted(r.combos, "combo")}, ` +
-    `naming ${counted(r.cards, "card")} between them.`
+    `Downloaded ${counted(r.combos, "combo")} covering ${counted(r.cards, "card")}.`
   );
 }
 

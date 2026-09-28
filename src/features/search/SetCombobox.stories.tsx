@@ -325,7 +325,7 @@ export const NoMatch: Story = {
     await userEvent.type(canvas.getByRole("combobox", { name: "Search sets" }), "zzzz");
 
     const list = canvas.getByRole("listbox");
-    await expect(within(list).getByText("No sets match that.")).toBeInTheDocument();
+    await expect(within(list).getByText("No matching sets.")).toBeInTheDocument();
     await expect(within(list).queryAllByRole("option")).toHaveLength(0);
   },
 };
@@ -349,7 +349,7 @@ export const EmptyDatabase: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Set" }));
 
     const list = canvas.getByRole("listbox");
-    await expect(within(list).getByText("No sets match that.")).toBeInTheDocument();
+    await expect(within(list).getByText("No matching sets.")).toBeInTheDocument();
   },
 };
 

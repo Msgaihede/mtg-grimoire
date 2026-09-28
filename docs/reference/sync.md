@@ -473,7 +473,8 @@ than an inference from a refusal.** It is why `/keys` accepts an auth up to eigh
 (`groupauth::EPOCH_HISTORY`): "behind a rotation" and "removed" otherwise produce an identical
 stale-auth 401, and a device that guessed wrong would either leave a group it is still in or sit
 for ever in one it is not. A removed device leaves fully — `identity::leave_group` clears
-`sync_group`, `sync_devices` and the superseded keys, and the caller clears the grant beside it — and the panel returns
+`sync_group`, `sync_devices`, the superseded keys and its place in the relay's log (*A cursor is a
+place in one group's log*, below), and the caller clears the grant beside it — and the panel returns
 to *not paired with anything yet*. Its own collection is untouched, which is what the dialog
 already promises.
 
@@ -629,6 +630,57 @@ departure means something locally whether or not it publishes.
 
 **The one thing leaving costs that removal does not is the payer's binding**, and that is why
 `/claim` had to learn to rebind — "A re-claim moves the binding" below.
+
+### A cursor is a place in one group's log, and it goes with the group
+
+**Fixed 2026-09-28.** The adversarial review of issue #546's branch spotted it, and no test had
+covered it. The relay's `seq` is an `AUTOINCREMENT` per Durable Object, and there is one Durable
+Object per group, so `pull_cursor` and `last_acked` are positions in **one** group's log and mean
+nothing in the next. Until that date `identity::leave_group` deleted the roster, the group, the
+superseded keys and `pull_hold`, but it left both of those standing, and nothing on the join path
+reset them either. A device that left group A at cursor 500 and paired into group B:
+
+- **asked B for `since=500`**, and `relay/src/group.ts` seeds the head it answers with the cursor
+  it was asked. So a B whose log was shorter than that answered no envelopes and handed `500`
+  back. The device never received B's rows below 500, and the baseline a new peer is handed carries
+  current state, never a delete;
+- **acked 500 to B** once B's log passed that number. B's compaction floor is the lowest ack, so B
+  could compact rows this device had never read;
+- **skipped its ack entirely** when B's head happened to land on the stale `last_acked`, because
+  `client::ack` sends nothing for a cursor equal to its watermark. B's relay then never heard from
+  this device at all;
+- **heard no doorbell** for any of it. `live::pull_cursor` reads the same key on every frame, and
+  `Scheduler::wake` schedules nothing for a `head` at or below it. `live.rs` keeps no copy of its
+  own, so the fix below reaches it with no change there.
+
+**Two halves, and the second is not redundant:**
+
+1. **`leave_group` forgets the three keys that are a place in the log**: `pull_cursor`,
+   `last_acked` and `pull_hold`, through `identity::forget_log_position`. It is the one place a
+   device stops being in a group, and it has two callers: a *Leave group* press
+   (`sync_group_leave` → `pairing::leave_group_now`) and `client::check_keys` reading a removal
+   notice.
+2. **`found_group` and `join_group` forget them too, whenever the group id moves**, and this half
+   exists for devices that already left. Every device that left or was removed under an earlier
+   build still holds its old group's cursor today, while in no group, and its next pairing is the
+   first moment anything can tell. **`join_group` keys this on the group id alone**, not on the id,
+   epoch and key that decide whether the superseded keys survive. `pairing::confirm` re-writes the
+   initiator's own group on every pairing, and a re-pair after a removal carries the same id at a
+   newer epoch. Both are the same Durable Object and so the same log, and forgetting the cursor
+   there would re-download that whole log on every pairing.
+
+Tests in `identity`: `leaving_forgets_its_place_in_the_relays_log`,
+`joining_or_founding_another_group_starts_from_the_first_row_of_its_log` and
+`re_writing_the_group_it_is_in_keeps_its_place_in_the_log`. Tests in `client`, end to end against a
+mock relay that answers a stale cursor the way `group.ts` does:
+`a_device_that_changes_group_pulls_the_new_log_from_the_start` and
+`a_device_that_changes_group_acks_the_new_log_at_the_old_logs_number`.
+
+⚠️ **What this does not repair: a device that already made the move under an older build.** It is
+in B now with a cursor that started from A's number, so it never passes through a join again, and
+nothing on either side can tell a cursor carried in from A from one earned in B. The rows it
+stepped over stay stepped over. Pressing *Leave group* and pairing again starts it from B's first
+row.
 
 ---
 
@@ -2086,7 +2138,8 @@ envelopes this hold's pulls have already written to `error_log`, by device and s
 handed back on every trip records each once (below); it is left out while empty. `since` is SQL's
 `unixepoch()`. It is a `sync_state` key and no schema rung, it survives a restart,
 `identity::leave_group` deletes it with the group (`leaving_clears_a_held_pull` — a count left behind would carry into the next
-group's first wait), and a newer hold is never released by pull count or time
+group's first wait), as a join into a different group does, along with the cursor and the ack
+(*A cursor is a place in one group's log*, above), and a newer hold is never released by pull count or time
 (`a_newer_hold_is_never_released_by_the_waiting_bound`). `sync_relay_status` reads its kind into
 `RelayStatus.pullHeld` — `"newer" | "waiting" | null`, and **`null` whenever the device is in no
 group**, whatever the key says: a departure made by a build before `leave_group` deleted it left it
@@ -3086,7 +3139,7 @@ of the two ways it happens:
 | `needs_review TEXT` on `deck_folders`, `wishlist_folders`, `collection_folders` | §7.4's second surfaced outcome had nowhere to go |
 | `sync_ops` | the op log: `tbl`, `uid`, `kind`, `fields`, `counters`, `parents`, the stamp, `pushed_at` |
 | `sync_clock` | one row: the hybrid logical clock, **seeded** |
-| `sync_state` | key/value: `pull_cursor`, `last_sync_at`, the `applying` guard, the entitlement tokens the hosted relay design §10 adds, the superseded group keys (`group_key@<epoch>`) and the last manifest's ids that `identity::supersede` keeps, and `relay_url` — which is **a test/dev override with no UI**, not something a reader types |
+| `sync_state` | key/value: `pull_cursor`, `last_acked` and `pull_hold` — a place in one group's log, forgotten whenever the group changes — `last_sync_at`, the `applying` guard, the entitlement tokens the hosted relay design §10 adds, the superseded group keys (`group_key@<epoch>`) and the last manifest's ids that `identity::supersede` keeps, and `relay_url` — which is **a test/dev override with no UI**, not something a reader types |
 | `sync_peers` | per-device watermarks — what makes a counter idempotent |
 | `sync_gone` (v54) | tombstones as rows saying a parent went — not the `del` ops in `sync_ops` that are also called tombstones — `(tbl, uid)` and `WITHOUT ROWID`, **not synced**: one row per deleted row of a table other rows are filed under, written by the `sync_gone_{table}` trigger and, for a row `apply` never held, by `apply::tombstone`, and read by `apply`'s `gone` (*Held while it can resolve, skipped when it cannot*) |
 | `error_log` rebuilt | `source` gains `'relay'`, which is a table rebuild because the vocabulary is inside a `CHECK` |

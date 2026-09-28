@@ -28,7 +28,7 @@ import type { ParsedList } from "./parse";
  */
 export interface ImportDestination {
   key: "deck" | "newDeck" | "collection" | "wishlist";
-  /** The destination radio's word: `Import into <label>`. */
+  /** The destination radio's word, under the `Import into` legend. */
   label: string;
   /**
    * The line under the dialog's heading while **this** destination is the chosen one.

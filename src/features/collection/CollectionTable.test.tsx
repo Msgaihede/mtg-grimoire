@@ -85,7 +85,7 @@ const IN_A_DECK: CollectionRow = {
  * that read back the string the implementation prints would only prove one variable reached
  * itself. Its grammar is `PickCopies`' `blockedReason`: where you are, then what to do instead.
  */
-const IN_A_DECK_REASON = `In ${IN_A_DECK.folderName}. Cut the card from the deck to change how many you hold.`;
+const IN_A_DECK_REASON = `In ${IN_A_DECK.folderName}. Remove it from the deck to change the quantity.`;
 
 /** Blocked exactly where the page blocks — a copy filed in a deck's group, and nowhere else. */
 const blockDeckGroup = (row: CollectionRow) =>

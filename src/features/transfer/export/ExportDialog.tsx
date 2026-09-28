@@ -225,7 +225,7 @@ export function ExportDialog({
     <Dialog
       open={open}
       title={`Export "${subject}"`}
-      closeLabel="Close export"
+      closeLabel="Close"
       size="w-[40rem]"
       onDismiss={onDismiss}
       onClose={onClose}
@@ -417,7 +417,7 @@ function Body({
       // A real rejection path, not a hypothetical: the clipboard goes through a Tauri plugin
       // command, so an ACL or platform failure surfaces as a rejected promise — reported the
       // same way a refused save is, rather than swallowed.
-      (e: unknown) => setError(`Could not copy that export — ${ipcError(e)}`),
+      (e: unknown) => setError(`Couldn't copy that export — ${ipcError(e)}`),
     );
   }, [text]);
 
@@ -432,7 +432,7 @@ function Body({
     } catch (e) {
       // Reported, not fatal to the dialog: the reader's text is still on screen and still
       // copyable, so a refused write must not throw either away.
-      setError(`Could not save that export — ${ipcError(e)}`);
+      setError(`Couldn't save that export — ${ipcError(e)}`);
     } finally {
       setSaving(false);
     }
@@ -455,7 +455,7 @@ function Body({
           ) : (
             <>
               <p role="alert" className="text-destructive">
-                Could not read the cards to export — {scopeError}
+                Couldn&apos;t load the cards to export — {scopeError}
               </p>
               {scope.onRetry !== undefined && (
                 <button
@@ -581,9 +581,9 @@ function Body({
       {notInArena > 0 && (
         <p className="text-sm text-dim">
           {notInArena === 1
-            ? "1 card is not in MTG Arena and is"
-            : `${notInArena} cards are not in MTG Arena and are`}{" "}
-          not written.
+            ? "1 card isn't on MTG Arena and is"
+            : `${notInArena} cards aren't on MTG Arena and are`}{" "}
+          left out.
         </p>
       )}
 
@@ -591,15 +591,14 @@ function Body({
           `role="alert"` because nothing failed, on screen before Copy is pressed, and counted in
           **copies** — six Forests on one cut row are six cards missing from the file. It says
           `inactive categories` because that is the box the reader just pressed, where the line
-          below says `switched-off piles` because there is no box under those two formats and the
-          pile is the only thing to name. The two can never be on screen together: `omitted` is
+          below blames the format because there is no box under those two formats. The two can never be on screen together: `omitted` is
           non-zero only where `dropsInactive` is true and this only where it is false. */}
       {heldBackInactive > 0 && (
         <p className="text-sm text-dim">
           {heldBackInactive === 1
             ? "1 card in an inactive category is"
             : `${heldBackInactive} cards in inactive categories are`}{" "}
-          not written.
+          left out.
         </p>
       )}
 
@@ -608,10 +607,8 @@ function Body({
           maybeboard silently missing from an Arena export is the failure this line prevents. */}
       {omitted > 0 && (
         <p className="text-sm text-dim">
-          {omitted === 1
-            ? "1 card in a switched-off pile is"
-            : `${omitted} cards in switched-off piles are`}{" "}
-          not written in this format.
+          This format can&apos;t include inactive categories, so{" "}
+          {omitted === 1 ? "1 card is" : `${omitted} cards are`} left out.
         </p>
       )}
 

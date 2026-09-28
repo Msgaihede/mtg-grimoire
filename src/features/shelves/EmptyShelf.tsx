@@ -4,7 +4,7 @@ import { DROP_EDGE, DROP_OVER } from "@/lib/dropMarks";
 import { cn } from "@/lib/utils";
 
 /** Spec §3.8's words, exported so a page test can find the box by them. */
-export const EMPTY_SHELF_COPY = "Empty — drag cards here, or pick cards and choose Move to folder…";
+export const EMPTY_SHELF_COPY = "Empty. Drag cards here or use Move to folder…";
 
 /** How a test or a live probe finds the box. */
 export const EMPTY_SHELF_ATTR = "data-shelf-empty";

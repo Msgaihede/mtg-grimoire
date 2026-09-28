@@ -296,7 +296,7 @@ describe("SyncPanel", () => {
   it("offers to pair when this device is in no group", async () => {
     render(<SyncPanel />, { wrapper: unpaired });
     expect(await screen.findByRole("button", { name: /pair a device/i })).toBeInTheDocument();
-    expect(screen.getByText(/not paired with anything yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/not paired yet/i)).toBeInTheDocument();
   });
 
   it("lists the group's devices", async () => {
@@ -437,12 +437,12 @@ describe("SyncPanel", () => {
     render(<SyncPanel />, { wrapper: unpaired });
 
     await user.click(await screen.findByRole("button", { name: /enter a code/i }));
-    await user.type(await screen.findByLabelText(/code the other device is showing/i), "CODE");
+    await user.type(await screen.findByLabelText(/code shown on the other device/i), "CODE");
     await user.click(screen.getByRole("button", { name: /read the code/i }));
 
     expect(await screen.findByTestId("pairing-sas")).toHaveTextContent("042913");
     expect(screen.queryByRole("button", { name: /codes match/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/press codes match there/i)).toBeInTheDocument();
+    expect(screen.getByText(/click codes match on the other device/i)).toBeInTheDocument();
   });
 
   /**
@@ -468,7 +468,7 @@ describe("SyncPanel", () => {
     await waitFor(
       () =>
         expect(
-          screen.getByText(/paired\. the other device is now part of this group/i),
+          screen.getByText(/paired\. the other device is now in this group/i),
         ).toBeInTheDocument(),
       { timeout: 3000 },
     );
@@ -507,7 +507,7 @@ describe("SyncPanel", () => {
     await waitFor(
       () =>
         expect(
-          screen.getByText(/paired\. the other device is now part of this group/i),
+          screen.getByText(/paired\. the other device is now in this group/i),
         ).toBeInTheDocument(),
       { timeout: 3000 },
     );
@@ -516,7 +516,7 @@ describe("SyncPanel", () => {
     expect(await screen.findByTestId("pairing-qr")).toBeInTheDocument();
     // And the success line from the *first* attempt does not linger over the second offer.
     expect(
-      screen.queryByText(/paired\. the other device is now part of this group/i),
+      screen.queryByText(/paired\. the other device is now in this group/i),
     ).not.toBeInTheDocument();
   });
 
@@ -553,12 +553,12 @@ describe("SyncPanel", () => {
     // `refetchInterval` is 1500ms and the expiry is the *second* answer, so the default
     // one-second wait is not enough — the sibling test two above takes the same 3000.
     expect(await screen.findByRole("alert", undefined, { timeout: 3000 })).toHaveTextContent(
-      /timed out/i,
+      /pairing code expired/i,
     );
     expect(await screen.findByRole("button", { name: /pair a device/i })).toBeInTheDocument();
     expect(screen.queryByTestId("pairing-qr")).not.toBeInTheDocument();
     // And the `"idle"` polls that follow do not wipe the sentence the reader was given.
-    expect(screen.getByRole("alert")).toHaveTextContent(/timed out/i);
+    expect(screen.getByRole("alert")).toHaveTextContent(/pairing code expired/i);
   });
 
   /**
@@ -578,7 +578,7 @@ describe("SyncPanel", () => {
     await user.click(screen.getByRole("button", { name: /^cancel$/i }));
 
     expect(await screen.findByRole("button", { name: /pair a device/i })).toBeInTheDocument();
-    expect(screen.queryByText(/timed out/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/pairing code expired/i)).not.toBeInTheDocument();
   });
 
   /**
@@ -600,7 +600,7 @@ describe("SyncPanel", () => {
     await user.click(screen.getByRole("button", { name: /use this code/i }));
 
     expect(
-      await screen.findByLabelText(/the code the other device is showing/i),
+      await screen.findByLabelText(/code shown on the other device/i),
     ).toBeInTheDocument();
     expect(screen.getByRole("alert")).toHaveTextContent(/already been used/i);
   });
@@ -615,14 +615,14 @@ describe("SyncPanel", () => {
 
     await user.click(await screen.findByRole("button", { name: /remove phone/i }));
     expect(
-      await screen.findByText(/keeps? (whatever|what) it (has )?already/i),
+      await screen.findByText(/keeps anything it already synced/i),
     ).toBeInTheDocument();
-    expect(screen.getByText(/cannot/i)).toBeInTheDocument();
+    expect(screen.getByText(/can't be wiped remotely/i)).toBeInTheDocument();
     // And the three things §7.6 says the removal *is*, so a rewrite that kept the shape and
     // lost the meaning goes red: the key changes, this app cannot take back what was synced,
     // and no server holds a copy to delete.
-    expect(REMOVAL_WARNING).toMatch(/changes the key/i);
-    expect(REMOVAL_WARNING).toMatch(/no server has a copy/i);
+    expect(REMOVAL_WARNING).toMatch(/changes your sync key/i);
+    expect(REMOVAL_WARNING).toMatch(/can't be wiped remotely/i);
   });
 
   it("removes a device only after the dialog is confirmed", async () => {
@@ -727,14 +727,14 @@ describe("leaving the group", () => {
 
     const body = await screen.findByText(/your collection stays on this device/i);
     // 1. Nothing local is deleted.
-    expect(body).toHaveTextContent(/nothing here is deleted/i);
+    expect(body).toHaveTextContent(/your collection stays on this device/i);
     // 2. The others may go on listing this device, because the relay may not have heard.
-    expect(body).toHaveTextContent(/relay cannot be reached/i);
-    expect(body).toHaveTextContent(/go on listing this one until somebody removes it there/i);
+    expect(body).toHaveTextContent(/relay can't be reached/i);
+    expect(body).toHaveTextContent(/may still list this one until they remove it/i);
     // The two claims again against the exported string, so a rewrite that kept the shape and
     // lost a meaning names which meaning it lost — `REMOVAL_WARNING`'s pair, one act over.
     expect(LEAVE_WARNING).toMatch(/collection stays on this device/i);
-    expect(LEAVE_WARNING).toMatch(/will not hear/i);
+    expect(LEAVE_WARNING).toMatch(/may still list this one/i);
 
     await user.click(screen.getByRole("button", { name: "Leave the group" }));
     await waitFor(() => expect(syncGroupLeave).toHaveBeenCalled());
@@ -765,7 +765,7 @@ describe("leaving the group", () => {
     await user.click(screen.getByRole("button", { name: "Leave the group" }));
 
     await waitFor(() => expect(syncPairingStatus).toHaveBeenCalled());
-    expect(await screen.findByText(/not paired with anything yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/not paired yet/i)).toBeInTheDocument();
     expect(screen.queryByText("Phone")).not.toBeInTheDocument();
     // ...and the press that opened the dialog goes with the group it was about.
     expect(screen.queryByRole("button", { name: "Leave group" })).not.toBeInTheDocument();
@@ -816,7 +816,7 @@ describe("the relay half", () => {
     syncSupporterStatus.mockResolvedValue(SUPPORTING);
     render(<SyncPanel />, { wrapper: unpaired });
 
-    expect(await screen.findByText(/4 changes waiting to go/i)).toBeInTheDocument();
+    expect(await screen.findByText(/4 changes pending/i)).toBeInTheDocument();
   });
 
   /**
@@ -833,7 +833,7 @@ describe("the relay half", () => {
     expect(await screen.findByText(/not connected to the relay/i)).toBeInTheDocument();
     // The changes are not gone — this is the one sentence in the file that has to say so, since
     // `relayState`'s own ladder has nothing to say about a socket that dropped after a success.
-    expect(screen.getByText(/still being kept/i)).toBeInTheDocument();
+    expect(screen.getByText(/changes will sync when it's back/i)).toBeInTheDocument();
   });
 
   it("says nothing extra about the socket while it is doing its job", async () => {
@@ -844,7 +844,7 @@ describe("the relay half", () => {
 
     // The waiting line is the anchor: it proves the relay half has finished reading before the
     // absence below is asserted, rather than the socket note simply not having painted yet.
-    await screen.findByText(/4 changes waiting to go/i);
+    await screen.findByText(/4 changes pending/i);
     expect(screen.queryByText(/not connected to the relay/i)).not.toBeInTheDocument();
   });
 
@@ -862,7 +862,7 @@ describe("the relay half", () => {
     syncSupporterStatus.mockResolvedValue(SUPPORTING);
     render(<SyncPanel />, { wrapper: unpaired });
 
-    await screen.findByText(/4 changes waiting to go/i);
+    await screen.findByText(/4 changes pending/i);
     // Both halves of the line that used to be here — the heading it was found by and the
     // sentence that explained why it outlived a success — so a partial revert cannot pass.
     expect(screen.queryByText(/last relay failure/i)).not.toBeInTheDocument();
@@ -883,8 +883,8 @@ describe("the relay half", () => {
 
     await user.click(await screen.findByRole("button", { name: /sync now/i }));
 
-    expect(await screen.findByText(/there was nothing to sync/i)).toBeInTheDocument();
-    expect(screen.queryByText(/did not finish/i)).not.toBeInTheDocument();
+    expect(await screen.findByText(/nothing to sync\. connect a membership/i)).toBeInTheDocument();
+    expect(screen.queryByText(/sync didn't finish/i)).not.toBeInTheDocument();
   });
 
   it("reports what a round trip did, and points its two outcomes at the queue", async () => {
@@ -897,9 +897,9 @@ describe("the relay half", () => {
     await user.click(await screen.findByRole("button", { name: /sync now/i }));
 
     const line = await screen.findByText(/sent 4 changes and received 9 changes/i);
-    expect(line).toHaveTextContent(/kept 1 row another device had deleted/i);
+    expect(line).toHaveTextContent(/restored 1 row deleted on another device/i);
     expect(line).toHaveTextContent(/moved 2 folders to the top level/i);
-    expect(line).toHaveTextContent(/needs review, just below/i);
+    expect(line).toHaveTextContent(/see needs review below/i);
   });
 
   it("says a refused sync lost nothing", async () => {
@@ -911,7 +911,7 @@ describe("the relay half", () => {
 
     await user.click(await screen.findByRole("button", { name: /sync now/i }));
 
-    expect(await screen.findByText(/did not finish/i)).toBeInTheDocument();
+    expect(await screen.findByText(/sync didn't finish/i)).toBeInTheDocument();
     expect(screen.getByText(/busy/i)).toBeInTheDocument();
   });
 });
@@ -960,7 +960,7 @@ describe("delivery holds", () => {
     syncSupporterStatus.mockResolvedValue(SUPPORTING);
     render(<SyncPanel />, { wrapper: unpaired });
 
-    await screen.findByText(/4 changes waiting to go/i);
+    await screen.findByText(/4 changes pending/i);
     expect(screen.queryByText(/runs a newer version/i)).not.toBeInTheDocument();
   });
 
@@ -969,40 +969,40 @@ describe("delivery holds", () => {
     syncSupporterStatus.mockResolvedValue(SUPPORTING);
     render(<SyncPanel />, { wrapper: unpaired });
 
-    await screen.findByText(/4 changes waiting to go/i);
+    await screen.findByText(/4 changes pending/i);
     expect(screen.queryByText(/runs a newer version/i)).not.toBeInTheDocument();
   });
 
   it("names a held-newer count, singular and plural", () => {
     expect(outcomeText({ ...OUTCOME, heldNewer: 2 })).toBe(
-      "Sent 4 changes and received 9 changes. 2 changes from a newer version wait until you " +
-        "update.",
+      "Sent 4 changes and received 9 changes. 2 changes from a newer version will apply after " +
+        "you update.",
     );
     expect(outcomeText({ ...OUTCOME, heldNewer: 1 })).toBe(
-      "Sent 4 changes and received 9 changes. 1 change from a newer version waits until you " +
-        "update.",
+      "Sent 4 changes and received 9 changes. 1 change from a newer version will apply after " +
+        "you update.",
     );
   });
 
   it("names a waiting count that is deferred minus the held-newer share, singular and plural", () => {
     expect(outcomeText({ ...OUTCOME, deferred: 3, heldNewer: 0 })).toBe(
-      "Sent 4 changes and received 9 changes. 3 changes are waiting for a change they build on.",
+      "Sent 4 changes and received 9 changes. 3 changes are waiting on earlier changes.",
     );
     expect(outcomeText({ ...OUTCOME, deferred: 1, heldNewer: 0 })).toBe(
-      "Sent 4 changes and received 9 changes. 1 change is waiting for a change it builds on.",
+      "Sent 4 changes and received 9 changes. 1 change is waiting on earlier changes.",
     );
     // The held-newer share is not counted twice — a group entirely newer-held reads 0 waiting.
-    expect(outcomeText({ ...OUTCOME, deferred: 2, heldNewer: 2 })).not.toMatch(/waiting for a/);
+    expect(outcomeText({ ...OUTCOME, deferred: 2, heldNewer: 2 })).not.toMatch(/waiting on/);
   });
 
   it("names a dropped count, singular and plural", () => {
     expect(outcomeText({ ...OUTCOME, dropped: 2 })).toBe(
-      "Sent 4 changes and received 9 changes. 2 changes could not be applied and were skipped. " +
-        "The error log has the details.",
+      "Sent 4 changes and received 9 changes. 2 changes couldn't be applied and were skipped. " +
+        "See Errors for details.",
     );
     expect(outcomeText({ ...OUTCOME, dropped: 1 })).toBe(
-      "Sent 4 changes and received 9 changes. 1 change could not be applied and was skipped. " +
-        "The error log has the details.",
+      "Sent 4 changes and received 9 changes. 1 change couldn't be applied and was skipped. " +
+        "See Errors for details.",
     );
   });
 
@@ -1015,7 +1015,7 @@ describe("delivery holds", () => {
 
     await user.click(await screen.findByRole("button", { name: /sync now/i }));
 
-    await screen.findByText(/3 changes are waiting for a change they build on/i);
+    await screen.findByText(/3 changes are waiting on earlier changes/i);
     expect(screen.queryByText(/land on a later sync/i)).not.toBeInTheDocument();
   });
 });
@@ -1095,7 +1095,7 @@ describe("the supporter half", () => {
     });
     render(<SyncPanel />, { wrapper: unpaired });
 
-    expect(await screen.findByText(/pair this one to them first/i)).toBeInTheDocument();
+    expect(await screen.findByText(/pair this one with them first/i)).toBeInTheDocument();
   });
 
   /**
@@ -1115,7 +1115,7 @@ describe("the supporter half", () => {
     syncSupporterStatus.mockResolvedValue(NOT_CONNECTED);
     render(<SyncPanel />, { wrapper: unpaired });
 
-    expect(await screen.findByText(/a membership on any of them covers all of them/i))
+    expect(await screen.findByText(/one membership covers the whole group/i))
       .toBeInTheDocument();
     // ...and the advice it replaced is gone, or the panel is telling a reader that the order
     // matters in the same breath as telling them it does not.
@@ -1130,7 +1130,7 @@ describe("the supporter half", () => {
     });
     render(<SyncPanel />, { wrapper: unpaired });
 
-    expect(await screen.findByText(/pair this one to them first/i)).toBeInTheDocument();
+    expect(await screen.findByText(/pair this one with them first/i)).toBeInTheDocument();
   });
 
   it("stops saying it once a membership is connected", async () => {
@@ -1142,7 +1142,7 @@ describe("the supporter half", () => {
     render(<SyncPanel />, { wrapper: unpaired });
 
     await screen.findByText(/supporting since/i);
-    expect(screen.queryByText(/pair this one to them first/i)).toBeNull();
+    expect(screen.queryByText(/pair this one with them first/i)).toBeNull();
   });
 
   /**
@@ -1169,10 +1169,10 @@ describe("the supporter half", () => {
     const line = await screen.findByText(/one membership covers one group/i);
     // The reversal itself, and what it costs the group that is left — both, because "it moves"
     // with no consequence attached is a sentence a reader skips.
-    expect(line).toHaveTextContent(/claiming it here moves it/i);
-    expect(line).toHaveTextContent(/stop syncing with each other/i);
+    expect(line).toHaveTextContent(/claiming it here stops sync/i);
+    expect(line).toHaveTextContent(/your previous group/i);
     // ...and what it does *not* cost, which is the half that stops this reading as data loss.
-    expect(line).toHaveTextContent(/own collections are untouched/i);
+    expect(line).toHaveTextContent(/their data isn't affected/i);
 
     expect(line.nextElementSibling?.contains(screen.getByLabelText(/claim code/i))).toBe(true);
   });
@@ -1443,7 +1443,7 @@ describe("outcomeText", () => {
     // The two things it needs, and neither of them is an address any more: a reader who is told
     // to type one has been sent after a field this build does not have.
     expect(outcomeText(null)).toMatch(/membership/i);
-    expect(outcomeText(null)).toMatch(/paired device/i);
+    expect(outcomeText(null)).toMatch(/pair a device/i);
     expect(outcomeText(null)).not.toMatch(/relay address/i);
   });
 
@@ -1453,12 +1453,12 @@ describe("outcomeText", () => {
 
   it("points the two surfaced outcomes at the panel that lists them", () => {
     const text = outcomeText({ ...OUTCOME, resurrected: 1, cyclesBroken: 1, deferred: 3 });
-    expect(text).toMatch(/Kept 1 row another device had deleted\./);
+    expect(text).toMatch(/Restored 1 row deleted on another device\./);
     expect(text).toMatch(/Moved 1 folder to the top level/);
-    expect(text).toMatch(/Needs review, just below, says which\./);
+    expect(text).toMatch(/See Needs review below\./);
     // The wording changed with the delivery holds (2026-09-27) — see the "delivery holds"
     // describe below for the three sentences this one clause split into.
-    expect(text).toMatch(/3 changes are waiting for a change they build on/);
+    expect(text).toMatch(/3 changes are waiting on earlier changes/);
   });
 
   /**
@@ -1467,17 +1467,17 @@ describe("outcomeText", () => {
    * for the four clauses that count changes in a sync and wrong here — a baseline is the one
    * figure in this sentence that reaches four digits, so it goes through `count`.
    */
-  it("says a first exchange is a first exchange, and names the history separately", () => {
+  it("says a first exchange is a first exchange, and leaves the history share out", () => {
     const text = outcomeText({ ...OUTCOME, baselineOps: 1069, baselineHistory: 240 });
-    expect(text).toMatch(/first exchange/i);
+    expect(text).toMatch(/first sync with a new device/i);
     expect(text).toMatch(/1,069/);
-    expect(text).toMatch(/240 .*(history|deck)/i);
+    expect(text).not.toMatch(/240/);
   });
 
   /** Zero is the state of every sync but one, so the clause has to be absent rather than
    *  drawn empty — "0 rows went across" on a routine trip is the whole of what §13 is against. */
   it("says nothing about a baseline on an ordinary sync", () => {
-    expect(outcomeText(OUTCOME)).not.toMatch(/first exchange/i);
+    expect(outcomeText(OUTCOME)).not.toMatch(/first sync with a new device/i);
   });
 });
 
@@ -1508,13 +1508,13 @@ describe("a freshly paired device can reach the sync that entitles it", () => {
     render(<SyncPanel />, { wrapper: unpaired });
 
     await user.click(await screen.findByRole("button", { name: /enter a code from another/i }));
-    await user.type(await screen.findByLabelText(/code the other device is showing/i), "CODE");
+    await user.type(await screen.findByLabelText(/code shown on the other device/i), "CODE");
     await user.click(screen.getByRole("button", { name: /read the code/i }));
 
     // The assertion the whole block exists for. Nothing else in the app calls this.
     await waitFor(() => expect(syncNow).toHaveBeenCalled());
     expect(
-      await screen.findByText(/paired\. the other device is now part of this group/i),
+      await screen.findByText(/paired\. the other device is now in this group/i),
     ).toBeInTheDocument();
   });
 
@@ -1535,7 +1535,7 @@ describe("a freshly paired device can reach the sync that entitles it", () => {
     syncRelayStatus.mockResolvedValue({ ...RELAY_OFF, paired: false });
     render(<SyncPanel />, { wrapper: unpaired });
 
-    await screen.findByText(/not paired with anything yet/i);
+    await screen.findByText(/not paired yet/i);
     expect(screen.queryByRole("button", { name: /sync now/i })).not.toBeInTheDocument();
   });
 });

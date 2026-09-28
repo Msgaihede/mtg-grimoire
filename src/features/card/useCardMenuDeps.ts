@@ -185,7 +185,7 @@ export function useCardMenuDeps(): CardMenuWiring {
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
       void refreshCardSearches(queryClient);
     },
-    onError: (error) => setRefusal(`Could not add to your collection — ${ipcError(error)}`),
+    onError: (error) => setRefusal(`Couldn't add to your collection — ${ipcError(error)}`),
   });
 
   /**
@@ -215,7 +215,7 @@ export function useCardMenuDeps(): CardMenuWiring {
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       void refreshCardSearches(queryClient);
     },
-    onError: (error) => setRefusal(`Could not add to your wishlist — ${ipcError(error)}`),
+    onError: (error) => setRefusal(`Couldn't add to your wishlist — ${ipcError(error)}`),
   });
 
   /**
@@ -237,7 +237,7 @@ export function useCardMenuDeps(): CardMenuWiring {
   const setFolder = useSetCollectionFolder({
     // Superseded on the next write, exactly as the two adds are, and clearing the same sentence.
     onMutate: () => setRefusal(null),
-    onError: (error) => setRefusal(`Could not move that card — ${ipcError(error)}`),
+    onError: (error) => setRefusal(`Couldn't move that card — ${ipcError(error)}`),
   });
 
   /**
@@ -247,7 +247,7 @@ export function useCardMenuDeps(): CardMenuWiring {
    */
   const setFolderMany = useSetCollectionFolderMany({
     onMutate: () => setRefusal(null),
-    onError: (error) => setRefusal(`Could not move those cards — ${ipcError(error)}`),
+    onError: (error) => setRefusal(`Couldn't move those cards — ${ipcError(error)}`),
   });
 
   // `mutate` is stable for the life of the observer, which is what lets the callbacks below — and

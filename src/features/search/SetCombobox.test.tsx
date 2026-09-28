@@ -330,7 +330,7 @@ describe("SetCombobox", () => {
     await userEvent.click(picked);
     expect(onToggle).toHaveBeenCalledWith("lea");
 
-    expect(screen.getByText(/64 sets is the most/i)).toBeInTheDocument();
+    expect(screen.getByText(/You can search up to 64 sets/i)).toBeInTheDocument();
   });
 
   /**
@@ -688,7 +688,7 @@ describe("SetCombobox", () => {
     const tooltip = await screen.findByRole("tooltip", undefined, {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
-    expect(tooltip).toHaveTextContent("Limited Edition Alpha — nothing in this search");
+    expect(tooltip).toHaveTextContent("Limited Edition Alpha (no results)");
     await userEvent.unhover(alpha);
     expect(screen.getByRole("option", { name: /Kamigawa/ })).not.toHaveAttribute("aria-disabled");
 
@@ -803,7 +803,7 @@ describe("SetCombobox", () => {
       await userEvent.click(screen.getByRole("button", { name: "Set" }));
       await userEvent.type(screen.getByRole("combobox", { name: /search sets/i }), "zzz");
 
-      expect(await screen.findByText("No sets match that.")).toBeInTheDocument();
+      expect(await screen.findByText("No matching sets.")).toBeInTheDocument();
       expect(screen.queryByText(/Loading sets/)).toBeNull();
     });
 
@@ -921,7 +921,7 @@ describe("SetCombobox", () => {
       await userEvent.click(spare);
       expect(onToggle).toHaveBeenCalledWith("s64");
 
-      expect(screen.queryByText(/is the most one search can name/i)).toBeNull();
+      expect(screen.queryByText(/You can search up to/i)).toBeNull();
     });
   });
 });

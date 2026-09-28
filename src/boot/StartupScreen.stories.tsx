@@ -82,7 +82,7 @@ export const Failed: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      canvas.getByRole("heading", { name: "The data folder would not open" }),
+      canvas.getByRole("heading", { name: "Couldn't open the data folder" }),
     ).toBeInTheDocument();
     await expect(canvas.getByRole("alert").textContent).toContain("\nThe file may be from");
     // Nothing is starting, so nothing claims to be.

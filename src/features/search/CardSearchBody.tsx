@@ -207,7 +207,7 @@ export function CardSearchBody({
               role="alert"
               className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
             >
-              Could not add that card — {addFailure}
+              Couldn't add that card — {addFailure}
             </p>
           </motion.div>
         )}
@@ -240,8 +240,8 @@ export function CardSearchBody({
             >
               <span className="min-w-0">
                 {query.isFetchNextPageError
-                  ? "Could not load more cards"
-                  : "Could not refresh these"}{" "}
+                  ? "Couldn't load more cards"
+                  : "Couldn't refresh these"}{" "}
                 — {failure}
               </span>
               {query.isFetchNextPageError && (
@@ -314,7 +314,7 @@ export function CardSearchBody({
           height — and it costs less than it looks like it will.** Measured headless over the built
           stylesheet with the real webfont, at the 193px content box `MIN_PANEL_WIDTH_PX` (206)
           leaves: **two lines, 33.59px**, and the same two lines for all five marketplaces —
-          including the longest, `"Card Kingdom prices as of the last price-feed refresh."` At the
+          including the longest, `"Card Kingdom prices, last updated with the price feed."` At the
           panel's 384px opening width it is **one line, 16.8px**. So the worst case is one extra
           line of 11.2px type at a width the reader has to drag to.
 

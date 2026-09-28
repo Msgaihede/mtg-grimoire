@@ -32,7 +32,7 @@ describe("HiddenTagsPanel", () => {
   it("says how a tag gets hidden even when nothing is", () => {
     render(<HiddenTagsPanel hidden={state({ tags: [] })} />);
 
-    expect(panel()).toHaveTextContent("You have not hidden any tags.");
+    expect(panel()).toHaveTextContent("You haven't hidden any tags.");
     expect(panel()).toHaveTextContent("Right-click a tag on the Tags page");
     expect(within(panel()).queryByRole("button")).not.toBeInTheDocument();
   });
@@ -42,7 +42,7 @@ describe("HiddenTagsPanel", () => {
   it("claims nothing while the read is still in flight", () => {
     render(<HiddenTagsPanel hidden={state({ tags: null })} />);
 
-    expect(panel()).not.toHaveTextContent("You have not hidden any tags.");
+    expect(panel()).not.toHaveTextContent("You haven't hidden any tags.");
     expect(panel()).not.toHaveTextContent("These tags are not offered");
     expect(within(panel()).queryByRole("listitem")).not.toBeInTheDocument();
   });
@@ -57,7 +57,7 @@ describe("HiddenTagsPanel", () => {
   it("says a failed read happened rather than looking like an empty list", () => {
     render(<HiddenTagsPanel hidden={state({ tags: null, error: "the database is locked" })} />);
 
-    expect(panel()).not.toHaveTextContent("You have not hidden any tags.");
+    expect(panel()).not.toHaveTextContent("You haven't hidden any tags.");
     expect(panel()).not.toHaveTextContent("These tags are not offered");
     expect(within(panel()).getByRole("alert")).toHaveTextContent("the database is locked");
   });

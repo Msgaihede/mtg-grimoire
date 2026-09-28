@@ -239,7 +239,7 @@ export const PriceAsOf: Story = {
     const tip = await canvas.findByRole("tooltip", undefined, {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
-    await expect(tip).toHaveTextContent(/prices as of/i);
+    await expect(tip).toHaveTextContent(/prices, last updated with/i);
     await expect(tip).toHaveTextContent("3 unpriced");
   },
 };

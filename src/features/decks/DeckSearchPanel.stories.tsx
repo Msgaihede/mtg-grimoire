@@ -558,7 +558,7 @@ export const NoRoom: Story = {
     await waitFor(
       async () =>
         expect(await canvas.findByRole("tooltip")).toHaveTextContent(
-          "Not enough room — close the card details or widen the window",
+          "Not enough room. Close the card details or widen the window.",
         ),
       { timeout: TOOLTIP_OPEN_MS + 1000 },
     );
@@ -589,7 +589,7 @@ export const Empty: Story = {
     await showAllCards(panel);
     await expect(
       await within(panel).findByText(
-        "Card database is empty — waiting for the first sync to finish.",
+        "Card database is empty. Waiting for the first sync.",
       ),
     ).toBeInTheDocument();
     await expect(within(panel).queryByRole("group", { name: "Search results" })).toBeNull();
@@ -658,7 +658,7 @@ export const Busy: Story = {
 
     const alert = await within(panel).findByRole("alert");
     await expect(alert).toHaveTextContent(
-      "Could not add that card — The card database is busy finishing a sync. " +
+      "Couldn't add that card — The card database is busy finishing a sync. " +
         "Try that again in a moment.",
     );
     await expect(within(panel).getByText("37 cards")).toBeInTheDocument();

@@ -66,7 +66,7 @@ export const Default: Story = {
 
     // Named by the control rather than by the word it happens to be showing: the trigger's own
     // content is the value, so `Dropdown` states the field's name outright.
-    const picker = canvas.getByRole("button", { name: "Opening view" });
+    const picker = canvas.getByRole("button", { name: "Start page" });
     await waitFor(async () => {
       await expect(picker).toHaveTextContent("Home");
     });

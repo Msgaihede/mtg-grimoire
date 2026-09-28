@@ -280,9 +280,9 @@ export function ManaChip({
  * press would *broaden*, which is subset semantics' question, and a count answered by the loose
  * facets would describe a different search from the one this press makes.
  *
- * The accessible name is the sentence rather than the glyph, and it leads with the word `Exact`
- * so the control can still be asked for by name — there is no visible word to match (WCAG 2.5.3
- * binds visible text), but every caller and test that knew it as `Exact` still finds it.
+ * The accessible name is the sentence rather than the glyph, and it leads with the reading that
+ * is on — `Exact` pressed, `Within` unpressed — so the tooltip, which is the name, never offers
+ * the subset reading under the word `Exact` (issue #657).
  */
 export function ColorExactChip({
   pressed,
@@ -293,8 +293,8 @@ export function ColorExactChip({
 }) {
   const tip = useTooltip();
   const name = pressed
-    ? "Exact — cards whose colour identity is exactly these colours"
-    : "Exact — cards whose colour identity fits within these colours";
+    ? "Exact — cards whose color identity is exactly these colors"
+    : "Within — cards whose color identity fits within these colors";
   // The glyph follows the press, where the colour chips' glyph never does: the ring already says
   // *on*, and what this chip has to say besides is *which reading* — AND or OR — which a fixed
   // glyph cannot.

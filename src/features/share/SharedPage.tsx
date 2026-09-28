@@ -115,13 +115,13 @@ type Match = "all" | "wanted" | "unowned";
 const MATCHES: readonly { id: Match; label: string }[] = [
   { id: "all", label: "Everything" },
   { id: "wanted", label: "On your wishlist" },
-  { id: "unowned", label: "You do not own it" },
+  { id: "unowned", label: "Not owned" },
 ];
 
 type Sort = "name" | "set" | "quantity" | "price";
 
 /** What a reader is told when this view threw where nothing else could catch it. */
-export const SHARED_UNDRAWABLE = "This shared collection could not be drawn.";
+export const SHARED_UNDRAWABLE = "Couldn't display this shared collection.";
 
 /**
  * **The floor under every field this view reads, and the only error boundary in this app.**
@@ -156,8 +156,7 @@ export class SharedBoundary extends Component<{ children: ReactNode }, { failed:
         <div className="max-w-[46ch] py-14">
           <p className="font-heading text-[1.375rem] leading-snug">{SHARED_UNDRAWABLE}</p>
           <p className="mt-3 text-sm text-dim">
-            Could not load collection data from this link. Try reopening the collection or
-            requesting an updated link.
+            Couldn't load this collection. Try again or ask for a new link.
           </p>
         </div>
       </Frame>
@@ -225,7 +224,7 @@ function SharedView() {
         onPaste={() => setPasting(true)}
       />
       {share.isPending ? (
-        <p className="mt-8 text-sm text-dim">Fetching the collection…</p>
+        <p className="mt-8 text-sm text-dim">Loading the collection…</p>
       ) : share.isError ? (
         <Refused
           sentence={ipcError(share.error)}
@@ -294,11 +293,10 @@ function Empty({ onPaste }: { onPaste: () => void }) {
     <div className="max-w-[46ch] py-16">
       <Handshake className="size-7 text-dim" aria-hidden />
       <h2 className="mt-4 font-heading text-[1.375rem] leading-snug">
-        Open a collection somebody shared with you
+        Open a shared collection
       </h2>
       <p className="mt-3 text-sm text-dim">
-        Paste a shared collection link to view published cards cross-referenced against your
-        collection and wishlist.
+        Paste a link to see which of the shared cards you own or want.
       </p>
       <button
         type="button"
@@ -599,7 +597,7 @@ function Binder({
         <p className="mt-4 font-mono text-[0.8125rem] text-dim">
           {COUNT.format(copies)} {copies === 1 ? "card" : "cards"}
           {tree.length > 0 &&
-            ` in ${COUNT.format(tree.length)} ${tree.length === 1 ? "drawer" : "drawers"}`}
+            ` in ${COUNT.format(tree.length)} ${tree.length === 1 ? "folder" : "folders"}`}
           {stamp !== null && `, as of ${stamp}`}
         </p>
         {showValue && (
@@ -608,9 +606,8 @@ function Binder({
           </p>
         )}
         <p className="mt-4 max-w-[54ch] text-sm text-dim">
-          This is a read-only snapshot. It shows these cards until{" "}
-          {owner === "" ? "its owner" : owner} publishes their collection again, and nothing you do
-          here changes it.
+          Read-only snapshot. It won't change until {owner === "" ? "its owner" : owner} shares
+          it again.
         </p>
       </header>
 
@@ -633,11 +630,11 @@ function Binder({
         {tree.length > 0 && (
           <Picker
             id="shared-drawer"
-            label="Drawer"
+            label="Folder"
             value={drawer ?? ""}
             onPick={(v) => setDrawer(v === "" ? null : v)}
             options={[
-              { value: "", label: `All drawers (${COUNT.format(copies)})` },
+              { value: "", label: `All folders (${COUNT.format(copies)})` },
               ...tree.map((d) => ({
                 // The depth is drawn with figure spaces rather than an indent class, because a
                 // native `<option>` renders no markup at all — this is the one place in the app
@@ -689,7 +686,7 @@ function Binder({
         // Said out loud rather than folded into zeroes: the two are indistinguishable on screen
         // and only one of them is safe to trade on.
         <p role="status" className="pt-3 text-sm text-destructive">
-          Your collection and wishlist could not be read; comparison figures are unavailable.
+          Couldn't load your collection and wishlist, so comparisons aren't available.
         </p>
       ) : (
         !figuresReady && (

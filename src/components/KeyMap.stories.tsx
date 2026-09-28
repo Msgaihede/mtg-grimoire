@@ -104,7 +104,7 @@ export const InTheDeckEditor: Story = {
     await expect(await canvas.findByRole("heading", { name: "Deck editor" })).toBeInTheDocument();
     await expect(canvas.queryByRole("heading", { name: "Decks" })).toBeNull();
     // Both spellings of redo, because both are muscle memory somewhere.
-    await expect(canvas.getByText("Redo the change you undid")).toBeInTheDocument();
+    await expect(canvas.getByText("Redo")).toBeInTheDocument();
   },
 };
 

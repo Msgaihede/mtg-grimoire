@@ -111,7 +111,7 @@ describe("UndoNotice", () => {
     await user.click(screen.getByRole("button", { name: "Undo" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not undo — Some of those cards have changed since, so this can no longer be undone.",
+      "Couldn't undo — Some of those cards have changed since, so this can no longer be undone.",
     );
     await waitFor(() => expect(useBulkUndo.getState().offers.collection).toBeNull());
     expect(screen.queryByRole("button", { name: "Undo" })).toBeNull();

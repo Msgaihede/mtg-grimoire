@@ -40,9 +40,9 @@ const files = (n: number): string => `${count(n)} ${n === 1 ? "file" : "files"}`
  */
 export function passSummary(report: PassReport): string {
   const parts = [`${files(report.written)} written`, `${count(report.unchanged)} unchanged`];
-  if (report.skipped > 0) parts.push(`${count(report.skipped)} left alone (yours)`);
+  if (report.skipped > 0) parts.push(`${count(report.skipped)} skipped (not created by the app)`);
   if (report.pruned > 0) parts.push(`${count(report.pruned)} removed`);
-  if (report.failed > 0) parts.push(`${count(report.failed)} could not be written`);
+  if (report.failed > 0) parts.push(`${count(report.failed)} couldn't be written`);
   return parts.join(", ");
 }
 
@@ -84,11 +84,11 @@ function passRanAt(status: MirrorStatus): number | null {
  */
 export function lastPassLine(status: MirrorStatus, nowMs: number = Date.now()): string {
   const at = passRanAt(status);
-  if (at === null) return "Not run yet — press Rebuild now to write one.";
+  if (at === null) return "Not run yet. Click Rebuild now to create one.";
   const when = ago(at, nowMs);
   return status.lastReport === null
-    ? `Last written ${when}.`
-    : `Last written ${when} — ${passSummary(status.lastReport)}.`;
+    ? `Last backup ${when}.`
+    : `Last backup ${when} — ${passSummary(status.lastReport)}.`;
 }
 
 /** The panel's one line of news, and how loudly it says it. */
@@ -198,13 +198,13 @@ export function BackupPanel(): JSX.Element {
   return (
     <SettingsSection id="backup" title="Backup">
       <p className="text-sm text-dim">
-        Exports decks, collection, and wishlist as plain text files for external backup.
-        The database remains the primary record; the app does not import these files back.
+        Saves your decks, collection and wishlist as text files. These are for backup only and
+        can&rsquo;t be imported back.
       </p>
 
       {status === null ? (
         <p className="text-sm text-dim">
-          {read.isError ? "The backup setting could not be read." : "Reading the backup setting…"}
+          {read.isError ? "Couldn't load backup settings." : "Loading…"}
         </p>
       ) : (
         <>
@@ -214,8 +214,8 @@ export function BackupPanel(): JSX.Element {
                 Back up my cards as text files
               </p>
               <p className="mt-0.5 text-xs leading-snug text-dim">
-                Kept up to date in the background, a couple of seconds after each change. Turning
-                it off leaves the files that are already there.
+                Updates automatically a few seconds after each change. Turning this off keeps
+                existing files.
               </p>
             </div>
             {/* Named by the heading beside it *and* by its own word, in that order — an
@@ -255,8 +255,7 @@ export function BackupPanel(): JSX.Element {
             </button>
           </div>
           <p className="text-xs text-dim">
-            Changing the folder copies backups to the new location without deleting the original folder
-            or overwriting existing external files.
+            Backups are copied to the new folder. The old folder isn&rsquo;t changed.
           </p>
 
           <div className="flex flex-wrap items-center justify-between gap-3">
@@ -345,7 +344,7 @@ function noteFor(
 ): Note {
   if (refusal !== null) return { tone: "problem", text: refusal };
   if (status?.lastError && errorOutranks(status, rebuilt)) {
-    return { tone: "problem", text: `The last backup could not be written. ${status.lastError}` };
+    return { tone: "problem", text: `Couldn't write the last backup. ${status.lastError}` };
   }
   if (rebuilt) {
     return {

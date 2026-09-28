@@ -4,8 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { ModeRadios } from "./ModeRadios";
 
 const MODES = [
-  { key: "add", label: "Add these wishes", hint: "Quantities add to what you already want." },
-  { key: "set", label: "Set these quantities", hint: "The file's number replaces yours." },
+  { key: "add", label: "Add to wishlist quantities", hint: "Quantities add to what you already want." },
+  { key: "set", label: "Set these quantities", hint: "Replaces your quantities with the file's." },
 ] as const;
 
 describe("ModeRadios", () => {
@@ -16,7 +16,7 @@ describe("ModeRadios", () => {
 
     const set = screen.getByRole("radio", { name: "Set these quantities" });
     expect(set).toHaveAccessibleName("Set these quantities");
-    expect(set).toHaveAccessibleDescription("The file's number replaces yours.");
+    expect(set).toHaveAccessibleDescription("Replaces your quantities with the file's.");
   });
 
   /** The hint is still inside the `<label>`, so pressing the sentence picks the mode. */
@@ -24,7 +24,7 @@ describe("ModeRadios", () => {
     const onChange = vi.fn();
     render(<ModeRadios modes={MODES} value="add" onChange={onChange} label="Mode" />);
 
-    await userEvent.setup().click(screen.getByText("The file's number replaces yours."));
+    await userEvent.setup().click(screen.getByText("Replaces your quantities with the file's."));
 
     expect(onChange).toHaveBeenCalledWith("set");
   });

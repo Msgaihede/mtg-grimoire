@@ -24,8 +24,8 @@ import { useImport } from "./useImport";
  * readings were told rather than guessed and are right by construction.
  */
 export const LEGACY_ENCODING_NOTICE =
-  "This file was not saved as UTF-8, so it was read as Windows-1252 (Western European). If " +
-  "accented names look wrong, save it as UTF-8 and pick it again.";
+  "This file isn't UTF-8, so it was read as Windows-1252 (Western European). If accented " +
+  "names look wrong, save it as UTF-8 and try again.";
 
 export interface ImportDialogProps {
   /**
@@ -251,7 +251,7 @@ function ImportBody({
    *  "that file is over 1 MB" behind a broken picker or the reverse, which is what the two calls
    *  were for. */
   const fileFailure = readFile.isError
-    ? `Could not read a decklist from a file — ${ipcError(readFile.error)}`
+    ? `Couldn't read a decklist from a file — ${ipcError(readFile.error)}`
     : null;
 
   const resolved = resolve.data ?? null;
@@ -382,7 +382,7 @@ function ImportBody({
             both deck entry points byte-for-byte what they were. */}
         {destinations.length > 1 && (
           <fieldset className="space-y-1.5">
-            <legend className="mb-1 text-xs text-dim">Where these cards go</legend>
+            <legend className="mb-1 text-xs text-dim">Import into</legend>
             {destinations.map((option, index) => (
               <label key={option.key} className="flex items-baseline gap-2 text-sm">
                 <input
@@ -393,7 +393,7 @@ function ImportBody({
                   onChange={() => onChoose(index)}
                   className="accent-accent"
                 />
-                Import into {option.label}
+                {option.label}
               </label>
             ))}
           </fieldset>
@@ -406,7 +406,7 @@ function ImportBody({
               role="alert"
               className="overflow-hidden text-xs text-destructive"
             >
-              Could not look those cards up — {ipcError(resolve.error)}
+              Couldn&apos;t find those cards — {ipcError(resolve.error)}
             </motion.p>
           )}
         </AnimatePresence>

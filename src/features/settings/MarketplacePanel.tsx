@@ -44,8 +44,7 @@ const CURRENCY_LABEL: Record<Currency, string> = { usd: "USD", eur: "EUR" };
  */
 function noFeedNote(marketplace: Marketplace): string {
   return (
-    `No price feed yet — ${marketplace.label}'s API needs a personal access token and ` +
-    `publishes no bulk price list, so there is nothing for this app to download.`
+    `No price feed. ${marketplace.label} doesn't publish a public price list.`
   );
 }
 
@@ -82,13 +81,13 @@ export function feedNote(feed: FeedInfo, now: number): string {
     case "fetching":
       return "Downloading the price list…";
     case "never":
-      return "No prices downloaded yet. Choosing this marketplace fetches them.";
+      return "No prices yet. Selecting this marketplace downloads them.";
     case "failed":
       return when === null
-        ? "The last download failed, so there are no prices yet."
-        : `The last download failed. Showing the prices from ${when}.`;
+        ? "Download failed. No prices yet."
+        : `Download failed. Showing prices from ${when}.`;
     case "stale":
-      return `Prices from ${when}. A refresh is due.`;
+      return `Prices from ${when}. Update due.`;
     default:
       return `Prices from ${when}.`;
   }
@@ -104,7 +103,7 @@ export function feedNote(feed: FeedInfo, now: number): string {
  */
 function builtNote(feed: FeedInfo): string | null {
   const built = feed.status?.feedBuiltAt ?? null;
-  return built === null ? null : `${feed.marketplace.label} built this list ${built}.`;
+  return built === null ? null : `Published by ${feed.marketplace.label} on ${built}.`;
 }
 
 /** The one state worth colouring, and it is the only one: a failure in the app's destructive
@@ -271,8 +270,8 @@ export function MarketplacePanel({ marketplace }: { marketplace: MarketplaceStat
   return (
     <SettingsSection id="prices" title="Prices">
       <p className="text-sm text-dim">
-        Prices across search, collection, decks, and wishlist are quoted from your selected marketplace
-        in its native currency. Unlisted cards display &ldquo;&mdash;&rdquo;.
+        All prices come from your selected marketplace, in its currency. Cards without a price
+        show &ldquo;&mdash;&rdquo;.
       </p>
 
       {/* `aria-busy` on the list rather than `disabled` on the rows: the write is one row

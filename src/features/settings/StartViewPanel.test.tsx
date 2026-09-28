@@ -57,7 +57,7 @@ function wrap(node: ReactNode) {
 }
 
 /** The trigger, by the name `Dropdown` is given rather than by the word it happens to show. */
-const picker = () => screen.getByRole("button", { name: "Opening view" });
+const picker = () => screen.getByRole("button", { name: "Start page" });
 
 /** Draw the panel over a database whose `start_view` row holds `stored`, and wait for the read. */
 async function open(stored: string, shows: string) {
@@ -89,7 +89,7 @@ describe("StartViewPanel", () => {
    */
   it("draws a named region", async () => {
     await open("home", "Home");
-    expect(screen.getByRole("region", { name: "Opening view" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Start page" })).toBeInTheDocument();
   });
 
   /**
@@ -104,7 +104,7 @@ describe("StartViewPanel", () => {
     const user = userEvent.setup();
     await open("home", "Home");
 
-    await openDropdown(user, "Opening view");
+    await openDropdown(user, "Start page");
 
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
       "Collection",
@@ -131,7 +131,7 @@ describe("StartViewPanel", () => {
     const user = userEvent.setup();
     await open("home", "Home");
 
-    await openDropdown(user, "Opening view");
+    await openDropdown(user, "Start page");
 
     expect(screen.queryByRole("option", { name: "Shared" })).not.toBeInTheDocument();
   });
@@ -153,7 +153,7 @@ describe("StartViewPanel", () => {
     const user = userEvent.setup();
     await open("home", "Home");
 
-    await pickOption(user, "Opening view", "Search");
+    await pickOption(user, "Start page", "Search");
 
     expect(sent).toEqual(["search"]);
     expect(picker()).toHaveTextContent("Search");

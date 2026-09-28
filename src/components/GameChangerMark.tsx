@@ -4,10 +4,10 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { cn } from "@/lib/utils";
 
 /** The fact, in as few words as a screen reader can be asked to hear it. */
-export const GAME_CHANGER_LABEL = "Game changer";
+export const GAME_CHANGER_LABEL = "Game Changer";
 
 /** The same fact with room to explain itself, for a pointer that has stopped over the glyph. */
-export const GAME_CHANGER_HINT = "Game changer — one of the cards the Commander bracket counts";
+export const GAME_CHANGER_HINT = "Game Changer: counts toward the Commander bracket";
 
 /**
  * A game changer, as a crown standing on its own.

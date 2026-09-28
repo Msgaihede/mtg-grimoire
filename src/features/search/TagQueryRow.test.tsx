@@ -164,7 +164,7 @@ describe("TagQueryRow", () => {
     );
 
     expect(
-      screen.getByRole("button", { name: "cmc>=3, search term, included. Press to exclude." }),
+      screen.getByRole("button", { name: "cmc>=3, included. Click to exclude." }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove cmc>=3, search term" })).toBeInTheDocument();
     expect(screen.queryByRole("group", { name: "Tags from the search box" })).toBeNull();
@@ -184,7 +184,7 @@ describe("TagQueryRow", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "not a:rebecca, search term, excluded. Press to include.",
+        name: "not a:rebecca, excluded. Click to include.",
       }),
     ).toBeInTheDocument();
   });
@@ -207,7 +207,7 @@ describe("TagQueryRow", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Remove cmc>=3, search term" }));
     await userEvent.click(
-      screen.getByRole("button", { name: "cmc>=3, search term, included. Press to exclude." }),
+      screen.getByRole("button", { name: "cmc>=3, included. Click to exclude." }),
     );
 
     expect(removePredicateChip).toHaveBeenCalledWith("cmc|gte|3");

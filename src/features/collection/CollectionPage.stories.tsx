@@ -579,7 +579,7 @@ export const DeckCopiesAreNotStepped: Story = {
  *
  * **At the root, which is what a fresh install actually opens on**, so the sentence above is the
  * first thing that database says to anybody. With no folders and nowhere to have drilled into,
- * `statusOf`'s folder-shaped answer ("Nothing filed here yet.") is off, and only this story stands
+ * `statusOf`'s folder-shaped answer ("This folder is empty.") is off, and only this story stands
  * where a reader first stands. {@link EmptyCabinet} is the same database seen from the path row,
  * where Add folder — the way to make a first folder — is the content.
  */
@@ -721,7 +721,7 @@ export const NeedsReview: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const banner = await canvas.findByRole("status", { name: "Needs review" }, SETTLED);
-    // Singular, because one row is flagged: "entries name" under a count of 1 is the kind of
+    // Singular, because one row is flagged: "entries" under a count of 1 is the kind of
     // wrongness a reader notices and a test does not.
     //
     // Written without a space after the colon, which is what the DOM really holds: the gap the
@@ -733,7 +733,7 @@ export const NeedsReview: Story = {
     // answered, so a read the moment it is found can see it empty.
     await waitFor(async () => {
       await expect(banner).toHaveTextContent(
-        "Needs review:1 entry names a printing that changed or left the card database.",
+        "Needs review:1 entry with a printing that changed or was removed.",
       );
     }, SETTLED);
     // The unflagged rows are still on screen with it — a flag lists, it does not filter. Read
@@ -810,7 +810,7 @@ export const Busy: Story = {
 
     const alert = await canvas.findByRole("alert", undefined, SETTLED);
     await expect(alert).toHaveTextContent(
-      "Could not change your collection — The card database is busy finishing a sync. " +
+      "Couldn't change your collection — The card database is busy finishing a sync. " +
         "Try that again in a moment.",
     );
     // Rolled back, not left showing the 3 the press guessed at.

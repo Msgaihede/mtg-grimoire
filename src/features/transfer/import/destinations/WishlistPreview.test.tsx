@@ -83,7 +83,7 @@ describe("WishlistPreview", () => {
 
     await user.click(screen.getByRole("radio", { name: "Set these quantities" }));
 
-    expect(screen.getByText("Sets how many you want of 1 card.")).toBeInTheDocument();
+    expect(screen.getByText("Updates wishlist quantities for 1 card.")).toBeInTheDocument();
     expect(screen.queryByText(/will be added/)).toBeNull();
 
     await user.click(screen.getByRole("button", { name: "Import" }));

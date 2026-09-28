@@ -1424,7 +1424,7 @@ it("says a refused swap rather than swallowing it", async () => {
 
   await pickBeta();
 
-  expect(await screen.findByRole("alert")).toHaveTextContent(/could not use that printing/i);
+  expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't use that printing/i);
 });
 
 /**

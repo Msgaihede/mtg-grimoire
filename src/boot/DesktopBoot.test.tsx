@@ -98,7 +98,7 @@ describe("the desktop boot", () => {
     await advance(0);
 
     expect(
-      screen.getByRole("heading", { name: "The data folder would not open" }),
+      screen.getByRole("heading", { name: "Couldn't open the data folder" }),
     ).toBeInTheDocument();
     // `textContent`, not `toHaveTextContent`, which collapses whitespace and would pass over a
     // message whose line breaks had been flattened on the way through.

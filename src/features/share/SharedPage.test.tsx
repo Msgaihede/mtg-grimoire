@@ -192,7 +192,7 @@ describe("a shared collection, opened in the app", () => {
     mount();
 
     await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
-    await userEvent.click(screen.getByRole("button", { name: "You do not own it" }));
+    await userEvent.click(screen.getByRole("button", { name: "Not owned" }));
 
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
     expect(screen.getByRole("listitem", { name: /^Lightning Bolt/ })).toBeInTheDocument();
@@ -232,7 +232,7 @@ describe("a shared collection, opened in the app", () => {
     mount();
 
     await waitFor(() => expect(screen.getAllByRole("listitem")).toHaveLength(2));
-    await userEvent.selectOptions(screen.getByLabelText("Drawer"), "duals");
+    await userEvent.selectOptions(screen.getByLabelText("Folder"), "duals");
 
     expect(screen.getAllByRole("listitem")).toHaveLength(1);
     expect(screen.getByRole("listitem", { name: /^Tundra/ })).toBeInTheDocument();
@@ -296,7 +296,7 @@ describe("a shared collection, opened in the app", () => {
     collectionList.mockRejectedValue("the database is locked");
     mount();
 
-    expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
+    expect(await screen.findByText(/couldn't load your collection and wishlist/i)).toBeInTheDocument();
     expect(screen.queryByText("You own 0")).not.toBeInTheDocument();
   });
 });
@@ -342,7 +342,7 @@ describe("building a want list out of somebody else's binder", () => {
     wishlistList.mockRejectedValue("the database is locked");
     mount();
 
-    expect(await screen.findByText(/could not be read/i)).toBeInTheDocument();
+    expect(await screen.findByText(/couldn't load your collection and wishlist/i)).toBeInTheDocument();
     expect(screen.queryByRole("checkbox")).toBeNull();
   });
 
@@ -397,7 +397,7 @@ describe("building a want list out of somebody else's binder", () => {
     await waitFor(() => expect(tick("Lightning Bolt")).toBeInTheDocument());
     await user.click(tick("Lightning Bolt"));
     // *You do not own it* drops the very card that was ticked.
-    await user.click(screen.getByRole("button", { name: "You do not own it" }));
+    await user.click(screen.getByRole("button", { name: "Not owned" }));
 
     expect(screen.queryByRole("listitem", { name: /^Lightning Bolt/ })).toBeNull();
     expect(screen.getByText("1 picked")).toBeInTheDocument();
@@ -490,8 +490,8 @@ describe("a snapshot missing everything the parser does not promise", () => {
     // No owner, no `as of` — an absent stamp drops the clause rather than dating the binder to
     // `Invalid Date`.
     expect(screen.queryByText(/as of/)).toBeNull();
-    expect(screen.getByText(/read-only snapshot/)).toHaveTextContent(
-      /until its owner publishes their collection again/,
+    expect(screen.getByText(/Read-only snapshot/)).toHaveTextContent(
+      /until its owner shares it again/,
     );
     // `fields` absent means the publisher answered no optional question, so no money slot and no
     // Price sort — the same reading a snapshot with `fields: []` gets.
@@ -529,7 +529,7 @@ describe("the boundary around the shared view", () => {
 
     expect(await screen.findByText(SHARED_UNDRAWABLE)).toBeInTheDocument();
     // The chrome is the view's, so a reader can tell a broken document from a broken app.
-    expect(screen.getByText(/Could not load collection data from this link/)).toBeInTheDocument();
+    expect(screen.getByText(/Couldn't load this collection\. Try again/)).toBeInTheDocument();
     expect(noise).toHaveBeenCalled();
     noise.mockRestore();
   });

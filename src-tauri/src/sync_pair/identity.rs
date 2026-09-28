@@ -314,8 +314,12 @@ pub fn create_group(conn: &Connection, me: &Identity) -> rusqlite::Result<Group>
 /// [`supersede`] reads is seeded: `[itself]`, the only holder of a key minted a moment ago.
 /// Without a view, the group's first rotation would forget epoch 0's key and step over whatever a
 /// joiner wrote under it.
+///
+/// **A group minted a moment ago has a log nobody has written to**, so any place in a log this
+/// device still holds belongs to a group it has left — [`join_group`] says how one survives.
 pub fn found_group(conn: &Connection, g: &Group, me: &Identity) -> rusqlite::Result<()> {
     forget_superseded(conn)?;
+    forget_log_position(conn)?;
     write_group(conn, g)?;
     add_device(conn, &me.device_id, &me.keypair.public, &me.name)?;
     conn.execute(
@@ -335,6 +339,14 @@ pub fn found_group(conn: &Connection, g: &Group, me: &Identity) -> rusqlite::Res
 /// group id, the epoch and the key and names nobody but the initiator, while the group may already
 /// hold devices the joiner has never met — so [`supersede`] forgets across its first rotation and
 /// learns the roster from that rotation's manifest.
+///
+/// **A different group id starts from the first row of that group's log** ([`forget_log_position`]),
+/// and that is not redundant beside [`leave_group`] doing the same: every device that left or was
+/// removed under a build before 2026-09-28 is holding its old group's cursor today, in no group at
+/// all, and this is the first moment anything can tell. **Keyed on the id alone, never on the epoch
+/// or the key** that decide the superseded keys above: `pairing::confirm` re-writes the initiator's
+/// own group on every pairing, and a re-pair after a removal carries the same id at a newer epoch —
+/// the same Durable Object, so the same log, and forgetting there would re-download all of it.
 pub fn join_group(
     conn: &Connection,
     group_id: &str,
@@ -342,10 +354,15 @@ pub fn join_group(
     key: &[u8; 32],
     me: &Identity,
 ) -> rusqlite::Result<()> {
-    let unchanged = group(conn)?
+    let held = group(conn)?;
+    let unchanged = held
+        .as_ref()
         .is_some_and(|g| g.group_id == group_id && g.epoch == epoch && g.group_key == *key);
     if !unchanged {
         forget_superseded(conn)?;
+    }
+    if held.is_none_or(|g| g.group_id != group_id) {
+        forget_log_position(conn)?;
     }
     write_group(
         conn,
@@ -1316,10 +1333,8 @@ fn adopt(
 /// throwing that secret away would cost them the membership rather than the pairing.
 /// `client::check_keys` is where the two facts sit side by side.
 ///
-/// **A held pull goes with the group** (`sync_engine::client::PULL_HOLD`, the delivery holds'
-/// final review): it counts a wait by pulls and time against blocks in this group's page, and
-/// left behind, the next group this device joins would start with a count about a page it will
-/// never be handed — which is exactly what releases a new wait early.
+/// **This device's place in the group's relay log goes with the group** — [`forget_log_position`]
+/// says why each of its three keys has to.
 pub fn leave_group(conn: &Connection) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM sync_devices", [])
@@ -1327,12 +1342,39 @@ pub fn leave_group(conn: &Connection) -> Result<(), String> {
     tx.execute("DELETE FROM sync_group", [])
         .map_err(|e| e.to_string())?;
     forget_superseded(&tx).map_err(|e| e.to_string())?;
-    tx.execute(
-        "DELETE FROM sync_state WHERE key = ?1",
-        [crate::sync_engine::client::PULL_HOLD],
-    )
-    .map_err(|e| e.to_string())?;
+    forget_log_position(&tx).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
+}
+
+/// Forget where this device stands in its group's relay log: the cursor, the ack and the hold
+/// (`sync_engine::client`'s `PULL_CURSOR`, `LAST_ACKED` and `PULL_HOLD`).
+///
+/// **All three are positions in ONE group's log.** The relay's `seq` is an `AUTOINCREMENT` per
+/// Durable Object, which is one per group, so none of them means anything in the next group this
+/// device joins:
+///
+/// * **The cursor**, carried across, asks the new group's log `since` a row number it may never
+///   have reached — and `relay/src/group.ts` seeds the head it answers with the cursor it was
+///   asked, so every row below it is never delivered. A baseline carries current state and never
+///   a delete. `live::pull_cursor` reads the same key, so the doorbell goes quiet for those rows
+///   too.
+/// * **The ack**, carried across, silences the new group's first ack whenever its head lands on
+///   the old number, because `client::ack` sends nothing for a cursor equal to its watermark.
+///   Beside a stale cursor, it tells the new group's relay this device has read rows it never saw,
+///   which is what lets that relay compact them.
+/// * **The hold** counts a wait by pulls and time against blocks in this group's page (the
+///   delivery holds' final review), and the next group would inherit a count about a page it
+///   will never be handed — which is exactly what releases a new wait early.
+///
+/// [`leave_group`] calls it, and so do [`found_group`] and [`join_group`] whenever the group id
+/// moves — see the latter for why that second half is not redundant.
+fn forget_log_position(conn: &Connection) -> rusqlite::Result<()> {
+    use crate::sync_engine::client::{LAST_ACKED, PULL_CURSOR, PULL_HOLD};
+    conn.execute(
+        "DELETE FROM sync_state WHERE key IN (?1, ?2, ?3)",
+        params![PULL_CURSOR, LAST_ACKED, PULL_HOLD],
+    )?;
+    Ok(())
 }
 
 fn hex(bytes: &[u8]) -> String {
@@ -2820,6 +2862,85 @@ mod tests {
             None,
             "a held pull outlived the group it was held in"
         );
+    }
+
+    /// The three `sync_state` keys that are a place in one group's relay log: the cursor, the ack
+    /// and the hold, in that order.
+    fn log_position(conn: &Connection) -> [Option<String>; 3] {
+        use crate::sync_engine::client::{get_state, LAST_ACKED, PULL_CURSOR, PULL_HOLD};
+        [PULL_CURSOR, LAST_ACKED, PULL_HOLD].map(|key| get_state(conn, key))
+    }
+
+    /// A device in a group it has pulled and acked through row 500 of.
+    fn deep_in_a_group() -> (Connection, Identity, Group) {
+        use crate::sync_engine::client::{set_state, LAST_ACKED, PULL_CURSOR};
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        let g = create_group(&conn, &me).unwrap();
+        set_state(&conn, PULL_CURSOR, "500").unwrap();
+        set_state(&conn, LAST_ACKED, "500").unwrap();
+        (conn, me, g)
+    }
+
+    /// **Leaving forgets where this device stood in the group's relay log.** The relay's `seq` is
+    /// one `AUTOINCREMENT` per Durable Object, which is one per group, so a cursor carried into the
+    /// next group asks that group's log from a row number it never reached — and every row below it
+    /// is never delivered — while the ack beside it tells that group's relay this device has read
+    /// them, which is what lets it compact them.
+    ///
+    /// **What makes it red**: `leave_group` deleting the hold and not the cursor and the ack.
+    #[test]
+    fn leaving_forgets_its_place_in_the_relays_log() {
+        let (conn, _, _) = deep_in_a_group();
+
+        leave_group(&conn).unwrap();
+
+        assert_eq!(log_position(&conn), [None, None, None]);
+    }
+
+    /// **Joining another group, or founding one, starts from the first row of its log — and not
+    /// only because leaving now forgets.** Every device that left or was removed under a build
+    /// before [`leave_group`] forgot is holding the old group's cursor today, out of any group,
+    /// and the next pairing is the first moment anything can tell. The fixture is exactly that
+    /// device: out of its group by the old `leave_group`'s two deletes, with the cursor still
+    /// standing.
+    ///
+    /// **What makes it red**: `join_group` or `found_group` not forgetting when the group id
+    /// moves.
+    #[test]
+    fn joining_or_founding_another_group_starts_from_the_first_row_of_its_log() {
+        let left_under_an_older_build = || {
+            let (conn, me, _) = deep_in_a_group();
+            conn.execute("DELETE FROM sync_devices", []).unwrap();
+            conn.execute("DELETE FROM sync_group", []).unwrap();
+            (conn, me)
+        };
+
+        let (joiner, me) = left_under_an_older_build();
+        join_group(&joiner, "fedcba9876543210", 0, &[9u8; 32], &me).unwrap();
+        assert_eq!(log_position(&joiner), [None, None, None], "joined");
+
+        let (founder, me) = left_under_an_older_build();
+        create_group(&founder, &me).unwrap();
+        assert_eq!(log_position(&founder), [None, None, None], "founded");
+    }
+
+    /// **Re-writing the group this device is already in keeps its place in that group's log.**
+    /// `pairing::confirm` re-writes the initiator's own group on every pairing, and a re-pair
+    /// after a removal carries the same group id at a newer epoch — the same Durable Object and so
+    /// the same log, and forgetting there would re-download the whole of it on every pairing.
+    ///
+    /// **What makes it red**: `join_group` forgetting on a moved epoch or key rather than a moved
+    /// group id.
+    #[test]
+    fn re_writing_the_group_it_is_in_keeps_its_place_in_the_log() {
+        let (conn, me, g) = deep_in_a_group();
+
+        join_group(&conn, &g.group_id, g.epoch, &g.group_key, &me).unwrap();
+        join_group(&conn, &g.group_id, g.epoch + 4, &[9u8; 32], &me).unwrap();
+
+        let at_500 = Some("500".to_owned());
+        assert_eq!(log_position(&conn), [at_500.clone(), at_500, None]);
     }
 
     // -------------------------------------------------------------------------------------

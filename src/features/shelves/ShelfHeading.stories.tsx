@@ -217,7 +217,7 @@ export const DeckGroup: Story = {
 export const ManagedFolder: Story = {
   args: {
     shelf: shelfOf({ id: 50, name: "Rhystic Testbed", kind: "managed", group: "managed" }),
-    stat: "5 wishes · $220.09",
+    stat: "5 cards · $220.09",
   },
   play: async ({ canvasElement }) => {
     await expect(within(canvasElement).getByText("Managed")).toBeInTheDocument();

@@ -133,7 +133,7 @@ export const Rebuilt: Story = {
 
     const alert = await canvas.findByRole("alert");
     await expect(alert).toHaveTextContent(/^Rebuilt — \d+ files written, 0 unchanged\.$/);
-    await expect(await canvas.findByText(/Last written just now/)).toBeInTheDocument();
+    await expect(await canvas.findByText(/Last backup just now/)).toBeInTheDocument();
 
     // Again, over a mirror that is now correct: nothing to write, everything unchanged.
     await userEvent.click(canvas.getByRole("button", { name: /Rebuild now/ }));
@@ -167,7 +167,7 @@ export const RootUnwritable: Story = {
     const canvas = within(canvasElement);
 
     await expect(await canvas.findByRole("alert")).toHaveTextContent(
-      /The last backup could not be written\..*is not there/,
+      /Couldn't write the last backup\..*is not there/,
     );
     // The folder is named, because "somewhere could not be written" helps nobody.
     await expect(canvas.getByText("E:\\Backups\\MTG")).toBeInTheDocument();

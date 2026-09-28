@@ -771,13 +771,13 @@ describe("hiding a tag", () => {
     await user.click(screen.getByRole("menuitem", { name: /^Hide this tag/ }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      /Could not hide Landscape — the tag database is busy/,
+      /Couldn't hide Landscape — the tag database is busy/,
     );
     // **And the rail does not claim the tag went anywhere.** The handler rethrows after saying
     // why, which is the whole reason it rethrows: `TagTree` awaits the write before printing
     // "hidden tags come back from Settings", and a handler that swallowed would have that
     // sentence appear over a tag still sitting in the list beside it.
-    expect(screen.queryByText(/come back from Settings/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Unhide tags in Settings/i)).not.toBeInTheDocument();
     expect(await railRow("Landscape")).toBeInTheDocument();
     // Neither list is re-read for a write that changed nothing.
     expect(tagChildren.mock.calls).toHaveLength(1);
@@ -1293,7 +1293,7 @@ describe("what the summary says", () => {
     wrap(<TagsPage />);
 
     expect(
-      await screen.findByText(/Card database is empty — waiting for the first sync/),
+      await screen.findByText(/Card database is empty\. Waiting for the first sync/),
     ).toBeInTheDocument();
   });
 
@@ -1331,11 +1331,11 @@ describe("a taxonomy this machine has never downloaded", () => {
     tagChildren.mockResolvedValue([REMOVAL]);
     wrap(<TagsPage />);
 
-    expect(await screen.findByText(/art tags have not been downloaded/i)).toBeInTheDocument();
+    expect(await screen.findByText(/art tags are still downloading/i)).toBeInTheDocument();
     // The oracle half still works, which is what makes the sentence about *art* rather than
     // about tags.
     expect(await railRow("Removal")).toBeInTheDocument();
-    expect(screen.queryByText(/oracle tags have not been downloaded/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/oracle tags are still downloading/i)).not.toBeInTheDocument();
   });
 
   it("names each missing taxonomy on its own, and both when both are missing", async () => {
@@ -1344,10 +1344,8 @@ describe("a taxonomy this machine has never downloaded", () => {
     tagChildren.mockResolvedValue([]);
     wrap(<TagsPage />);
 
-    expect(await screen.findByText(/art tags have not been downloaded/i)).toBeInTheDocument();
-    expect(await screen.findByText(/oracle tags have not been downloaded/i)).toBeInTheDocument();
-    // Direction rather than mood: there is no button for this anywhere in the app.
-    expect(screen.getByText(/fetches them in the background/i)).toBeInTheDocument();
+    expect(await screen.findByText(/art tags are still downloading/i)).toBeInTheDocument();
+    expect(await screen.findByText(/oracle tags are still downloading/i)).toBeInTheDocument();
   });
 
   /**
@@ -1362,7 +1360,7 @@ describe("a taxonomy this machine has never downloaded", () => {
     artTagsStatus.mockResolvedValue(NEVER);
     tagChildren.mockResolvedValue([REMOVAL]);
     wrap(<TagsPage />);
-    await screen.findByText(/art tags have not been downloaded/i);
+    await screen.findByText(/art tags are still downloading/i);
 
     // The ingest lands. The page hears it on `art-tags:progress` — the channel `lib.rs`'s
     // startup refresh emits on — and re-reads a taxonomy that is now there.
@@ -1371,7 +1369,7 @@ describe("a taxonomy this machine has never downloaded", () => {
     act(() => artProgress?.({ phase: "done", done: 1, total: 1 }));
 
     await waitFor(() =>
-      expect(screen.queryByText(/art tags have not been downloaded/i)).not.toBeInTheDocument(),
+      expect(screen.queryByText(/art tags are still downloading/i)).not.toBeInTheDocument(),
     );
     // And the rail with it: healing the sentence while leaving the rail empty for the client's
     // whole 30 s `staleTime` would be the more visible half left undone.
@@ -1385,21 +1383,21 @@ describe("a taxonomy this machine has never downloaded", () => {
     artTagsStatus.mockResolvedValue(NEVER);
     tagChildren.mockResolvedValue([REMOVAL]);
     wrap(<TagsPage />);
-    await screen.findByText(/art tags have not been downloaded/i);
+    await screen.findByText(/art tags are still downloading/i);
     const readsBefore = artTagsStatus.mock.calls.length;
 
     act(() => artProgress?.({ phase: "error", done: 0, total: 0 }));
 
     await waitFor(() => expect(artTagsStatus.mock.calls.length).toBeGreaterThan(readsBefore));
     // The taxonomy really is still absent, so the sentence stays. It is the *read* that was owed.
-    expect(screen.getByText(/art tags have not been downloaded/i)).toBeInTheDocument();
+    expect(screen.getByText(/art tags are still downloading/i)).toBeInTheDocument();
   });
 
   it("says nothing at all when both taxonomies are in", async () => {
     wrap(<TagsPage />);
     await railRow("Landscape");
 
-    expect(screen.queryByText(/have not been downloaded/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/are still downloading/i)).not.toBeInTheDocument();
   });
 
   /** A read that has not landed says nothing rather than flashing the notice onto a page that
@@ -1409,7 +1407,7 @@ describe("a taxonomy this machine has never downloaded", () => {
     oracleTagsStatus.mockReturnValue(new Promise(() => {}));
     wrap(<TagsPage />);
 
-    expect(screen.queryByText(/have not been downloaded/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/are still downloading/i)).not.toBeInTheDocument();
   });
 });
 

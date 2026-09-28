@@ -2405,9 +2405,9 @@ export function CollectionPage() {
     (row: CollectionRow): string | null => {
       if (countEditable(row.folderId)) return null;
       if (row.folderId !== null && deckGroupIds.has(row.folderId)) {
-        return `In ${row.folderName ?? "a deck"}. Cut the card from the deck to change how many you hold.`;
+        return `In ${row.folderName ?? "a deck"}. Remove it from the deck to change the quantity.`;
       }
-      return `In ${row.folderName ?? "a folder you did not make"}. Move it into one of your own folders to change how many you hold.`;
+      return `In ${row.folderName ?? "a folder you did not make"}. Move it into one of your folders to change the quantity.`;
     },
     [countEditable, deckGroupIds],
   );
@@ -2728,7 +2728,7 @@ export function CollectionPage() {
     (row: CollectionRow, to: number | null): string | null => {
       if (row.folderId === to) return `Already in ${folderNameOf(to) ?? ROOT_LABEL}.`;
       if (row.folderId !== null && deckGroupIds.has(row.folderId)) {
-        return `In ${row.folderName ?? "a deck"}. Cut the card from the deck to get it back.`;
+        return `In ${row.folderName ?? "a deck"}. Remove it from the deck to get it back.`;
       }
       return null;
     },
@@ -3331,8 +3331,8 @@ export function CollectionPage() {
             <span className="min-w-0">
               <span className="mr-1 font-medium text-destructive">Needs review:</span>
               <span className="font-mono tabular-nums">{figures?.needsReview}</span>{" "}
-              {figures?.needsReview === 1 ? "entry names" : "entries name"} a printing that
-              changed or left the card database.
+              {figures?.needsReview === 1 ? "entry" : "entries"} with a printing that changed or
+              was removed.
             </span>
             <button
               type="button"
@@ -3621,7 +3621,7 @@ export function CollectionPage() {
                   role="alert"
                   className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
                 >
-                  Could not change your collection — {bannerFailure}
+                  Couldn't change your collection — {bannerFailure}
                 </p>
               </motion.div>
             )}
@@ -4095,10 +4095,10 @@ function LockedMoveConfirm({
     >
       <p className="text-xs leading-relaxed text-destructive">
         {out !== null && into !== null
-          ? `“${out}” and “${into}” are both locked. Moving “${card}” takes it out of one drawer you have set aside and into another.`
+          ? `“${out}” and “${into}” are both locked. Move “${card}” anyway?`
           : out !== null
-            ? `“${out}” is locked. Moving “${card}” out puts that copy back among the ones this app offers you.`
-            : `“${into}” is locked. Filing “${card}” there sets that copy aside.`}
+            ? `“${out}” is locked. Moving “${card}” out makes it available to your decks again.`
+            : `“${into}” is locked. Cards filed there aren't used by your decks.`}
       </p>
 
       <div className="mt-2 flex flex-wrap gap-2">
@@ -4106,7 +4106,7 @@ function LockedMoveConfirm({
           Move it
         </button>
         <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
-          Leave it there
+          Cancel
         </button>
       </div>
     </div>
@@ -4382,7 +4382,7 @@ function RemoveCopiesConfirm({
     >
       <p>Remove {cards} from your collection?</p>
       <p className="mt-1 leading-relaxed text-dim">
-        {held === null ? "" : `${held} `}You can undo this straight after.
+        {held === null ? "" : `${held} `}You can undo this.
       </p>
       <div className="mt-2 flex gap-2">
         <button
@@ -4433,11 +4433,11 @@ function statusOf(
 
   if (rows.length === 0) {
     if (failure) return failure;
-    if (query.isPending || counts === null) return "Reading your collection…";
+    if (query.isPending || counts === null) return "Loading your collection…";
     if (drawn) return "";
     if (activeCount > 0) return "No cards in your collection match these filters.";
     return inFolder
-      ? "Nothing filed here yet."
+      ? "This folder is empty."
       : "Nothing here yet. Add cards from search, or import a collection file.";
   }
 

@@ -189,7 +189,7 @@ export const RightAligned: Story = {
     await userEvent.hover(button);
     const panel = await canvas.findByRole("tooltip", undefined, { timeout: TOOLTIP_OPEN_MS + 1000 });
     await expect(panel).toHaveTextContent(
-      `${PRICES_AS_OF}\nSort by Value — Shift-click to add to the sort`,
+      `${PRICES_AS_OF}\nSort by Value (Shift-click to add a secondary sort)`,
       { normalizeWhitespace: false },
     );
     await expect(button).toHaveAttribute("aria-describedby", panel.id);

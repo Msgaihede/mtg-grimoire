@@ -353,7 +353,7 @@ describe("TagTree", () => {
 
   it("says a search found nothing rather than drawing an empty rail", async () => {
     draw({ hits: [] });
-    expect(await screen.findByText(/no tags match/i)).toBeInTheDocument();
+    expect(await screen.findByText(/no matching tags/i)).toBeInTheDocument();
   });
 
   it("says a search is still running", async () => {
@@ -479,6 +479,6 @@ describe("TagTree", () => {
   it("reports a refused level instead of looking empty", async () => {
     tagChildren.mockReset().mockRejectedValue(new Error("no such table: art_tags"));
     draw();
-    expect(await screen.findByRole("alert")).toHaveTextContent(/could not load/i);
+    expect(await screen.findByRole("alert")).toHaveTextContent(/couldn't load/i);
   });
 });

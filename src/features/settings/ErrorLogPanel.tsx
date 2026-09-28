@@ -107,8 +107,8 @@ export function ErrorLogPanel({ log }: { log: ErrorLog }) {
     <SettingsSection id="errors" title="Errors">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <p className="min-w-0 text-sm text-dim">
-          Anything the app could not do — a card update, an image, a check for a new version.
-          Repeats are counted, not repeated.
+          Things that failed, like card updates, image downloads or update checks. Repeats are
+          grouped.
         </p>
         <button
           type="button"
@@ -128,13 +128,13 @@ export function ErrorLogPanel({ log }: { log: ErrorLog }) {
       <PanelAlert tone="plain">{error}</PanelAlert>
 
       {loading ? (
-        <p className="text-sm text-dim">Reading the log…</p>
+        <p className="text-sm text-dim">Loading errors…</p>
       ) : entries.length === 0 ? (
         // An empty screen states the good news and what would fill it. Not "No errors
         // found", which reads as a search that came back empty.
         <p className="flex items-center gap-2 text-sm text-dim">
           <CircleCheck className="size-4 text-accent" aria-hidden="true" />
-          Nothing has failed.
+          No errors.
         </p>
       ) : (
         // Capped and scrolled: fifty faults is more than a panel can hold, and a settings

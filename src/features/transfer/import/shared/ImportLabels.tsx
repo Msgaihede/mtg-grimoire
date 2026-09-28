@@ -116,8 +116,8 @@ export function ImportLabels({
         {/* The sentence says what the ticks currently mean rather than what they could mean: a
             reader who has unticked two is owed the number that is coming, and a reader who has
             touched nothing reads the same clause with every label in it. */}
-        This list carries {plural(labels.length, "label")}. {sentenceFor(labels.length, kept)} A
-        label you already have is used as it is — its colour here is yours, not the file’s.
+        This list includes {plural(labels.length, "label")}. {sentenceFor(labels.length, kept)}{" "}
+        Existing labels keep their current color.
       </p>
       <ul className="divide-y divide-border rounded-md border border-border">
         {labels.map((label) => {
@@ -159,7 +159,7 @@ export function ImportLabels({
 /** What the ticks add up to, in the one clause that is true of them. Exported for its test: three
  *  arms over two numbers is exactly the shape that goes wrong at the edges. */
 export function sentenceFor(total: number, kept: number): string {
-  if (kept === 0) return "None of them will be brought across.";
-  if (kept === total) return `${total === 1 ? "It" : "They"} will be brought across.`;
-  return `${kept} of them will be brought across.`;
+  if (kept === 0) return "None will be imported.";
+  if (kept === total) return total === 1 ? "It will be imported." : "All will be imported.";
+  return `${kept} will be imported.`;
 }

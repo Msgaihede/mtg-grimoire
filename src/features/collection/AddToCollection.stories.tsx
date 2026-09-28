@@ -547,7 +547,7 @@ export const Busy: Story = {
 
     const alert = await within(popup).findByRole("alert");
     await expect(alert).toHaveTextContent(
-      "Could not add to your collection — The card database is busy finishing a sync. " +
+      "Couldn't add to your collection — The card database is busy finishing a sync. " +
         "Try that again in a moment.",
     );
     // Nothing claimed to have been added, and the two copies the reader asked for are still

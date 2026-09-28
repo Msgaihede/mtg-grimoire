@@ -326,7 +326,7 @@ export const ColoursExact: Story = {
   parameters: { controls: { disable: true } },
   render: () => <ColourRow initial={["W", "U"]} strict />,
   play: async ({ canvasElement }) => {
-    const exact = within(canvasElement).getByRole("button", { name: /^Exact\b/ });
+    const exact = within(canvasElement).getByRole("button", { name: /^(Exact|Within)\b/ });
     await expect(exact).toHaveAttribute("aria-pressed", "true");
     // The glyph is the reading, so it has to move with the press — AND on, OR off.
     await expect(exact.querySelector("svg.lucide-squares-intersect")).not.toBeNull();
@@ -335,7 +335,7 @@ export const ColoursExact: Story = {
     await expect(exact.querySelector("svg.lucide-squares-unite")).not.toBeNull();
     await expect(exact.querySelector("svg.lucide-squares-intersect")).toBeNull();
     await expect(exact).toHaveAccessibleName(
-      "Exact — cards whose colour identity fits within these colours",
+      "Within — cards whose color identity fits within these colors",
     );
   },
 };

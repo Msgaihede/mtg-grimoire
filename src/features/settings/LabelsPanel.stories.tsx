@@ -79,11 +79,11 @@ export const Populated: Story = {
       await expect(canvas.getAllByRole("listitem").length).toBeGreaterThan(1);
     });
     // The list is read, so there is no sentence claiming the reader has nothing.
-    await expect(canvas.queryByText(/Labels are yours to invent/)).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/Create labels like/)).not.toBeInTheDocument();
 
     // One label worn by cards, and the rest worn by none. The reach is a shape rather than a
     // figure — `N in M deck(s)` — for the reason in this story's note.
-    const worn = canvas.getByRole("button", { name: "Change colour of Cut candidate" });
+    const worn = canvas.getByRole("button", { name: "Change color of Cut candidate" });
     const row = worn.closest("li");
     await expect(row).not.toBeNull();
     await expect(within(row as HTMLElement).getByText(/^\d+ in \d+ decks?$/)).toBeInTheDocument();
@@ -96,7 +96,7 @@ export const Populated: Story = {
     const question = await canvas.findByRole("group", { name: "Delete Cut candidate" });
     await expect(within(question).getByText(/stay where they are and lose the label/))
       .toBeInTheDocument();
-    await expect(within(question).getByText(/cannot be undone/)).toHaveTextContent(/Ctrl\+Z/);
+    await expect(within(question).getByText(/can’t be undone/)).toHaveTextContent(/Ctrl\+Z/);
 
     // Cancelling destroys nothing and puts the list back as it was — the row is still there,
     // still wearing its label, and the question is gone.
@@ -104,7 +104,7 @@ export const Populated: Story = {
     await waitFor(async () => {
       await expect(canvas.queryByRole("group", { name: "Delete Cut candidate" })).not.toBeInTheDocument();
     });
-    await expect(canvas.getByRole("button", { name: "Change colour of Cut candidate" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Change color of Cut candidate" })).toBeInTheDocument();
   },
 };
 
@@ -127,14 +127,14 @@ export const NoLabelsYet: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await expect(await canvas.findByText(/Labels are yours to invent/)).toHaveTextContent(
+    await expect(await canvas.findByText(/Create labels like/)).toHaveTextContent(
       /right-click a card in any deck/,
     );
     await expect(canvas.queryAllByRole("listitem")).toHaveLength(0);
     // Not the failed read and not the read in flight, which is the whole of why that sentence is
     // fenced on `isSuccess`.
     await expect(canvas.queryByRole("alert")).not.toBeInTheDocument();
-    await expect(canvas.queryByText(/Reading your labels/)).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/Loading labels/)).not.toBeInTheDocument();
 
     // The way out is on screen and above the space where the list is not — a reader with nothing
     // must not have to scroll past an empty list to find the control that fills it.

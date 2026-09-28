@@ -233,7 +233,7 @@ export function TagTree({
             it grows the gap above it by a phantom row. */}
         <p role="status" className={hidSomething ? "px-1 text-[0.6875rem] text-dim" : "sr-only"}>
           {hidSomething
-            ? "Hidden tags, and anything filed under them, come back from Settings."
+            ? "Unhide tags in Settings."
             : ""}
         </p>
       </div>
@@ -270,7 +270,7 @@ const HIT_LIST_PATH = "hits";
  */
 function TagHitList({ hits, pending }: { hits: readonly TagHit[]; pending: boolean }) {
   if (hits.length === 0) {
-    return <Aside>{pending ? "Searching…" : "No tags match that."}</Aside>;
+    return <Aside>{pending ? "Searching…" : "No matching tags."}</Aside>;
   }
   return (
     <ul aria-label="Matching tags" className="flex flex-col">
@@ -319,7 +319,7 @@ function TagLevel({
   if (query.isError) {
     return (
       <p role="alert" className="px-1 py-2 text-sm text-dim">
-        Could not load tags — {ipcError(query.error)}
+        Couldn't load tags — {ipcError(query.error)}
       </p>
     );
   }
