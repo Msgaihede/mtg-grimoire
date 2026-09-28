@@ -62,6 +62,9 @@ describe("the link a reader pastes", () => {
     expect(shareLinkFrom("https://share.example/pair/abc")).toBeNull();
     // A scheme with no host behind it: `javascript:` and `file:` reach the same refusal.
     expect(shareLinkFrom("javascript:alert(1)")).toBeNull();
+    // Plain HTTP is refused here because the crate refuses it too (issue #545) — a right-shaped
+    // link over it would only earn the same sentence one round trip later.
+    expect(shareLinkFrom("http://share.example/s/testshareid00000")).toBeNull();
   });
 
   it("refuses a pasted link that is not a share URL, by sentence", async () => {

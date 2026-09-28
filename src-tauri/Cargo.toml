@@ -45,10 +45,20 @@ thiserror = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
 
-# HKDF-SHA256's hash, and the updater's integrity check: every GitHub release asset carries a
-# `digest` (`sha256:…`, measured live 2026-08-09 on all five), which is what stands in for the
-# minisign signature a hand-written updater gives up.
+# HKDF-SHA256's hash, and the updater's transport check: every GitHub release asset carries a
+# `digest` (`sha256:…`, measured live 2026-08-09 on all five), which says a download arrived as
+# it was uploaded. **It says nothing about who uploaded it** — anyone who can put a file on a
+# release gets a valid digest computed for them — and this comment used to call it the stand-in
+# for a minisign signature. The signature is `minisign-verify`, below.
 sha2 = "0.10"
+# Who published an update: the updater verifies a minisign signature over the portable zip and
+# the NSIS setup before it unpacks or stages either (`update::verify_signature`), against a
+# public key compiled into the binary. The release workflow's `sign` job makes the signatures
+# with `scripts/update-signing.mjs`. **Zero dependencies** and verify-only — nothing here signs.
+# `0.3` rather than the `0.2` line: `lib.rs` is byte-identical between 0.2.5 and 0.3.0, and the
+# one file that changed swapped raw-pointer copies for safe slice copies, so 0.3.0 carries no
+# `unsafe` at all.
+minisign-verify = "0.3"
 # Pairing (spec §7.5) and the sync envelope (§7.7). Five crates, and the version choices are
 # one decision rather than five. `sync_engine::wire` seals every batch with `sync_pair::crypto`.
 #
@@ -121,16 +131,18 @@ same-file = "1.0.6"
 # readers.
 card-scanner = { path = "../crates/card-scanner", features = ["corpus", "ocr"] }
 tauri = { version = "2", features = [] }
+# Opening a link in the reader's browser, and nothing else: `capabilities/desktop.json` grants
+# `opener:allow-open-url` and its scope `opener:allow-default-urls`, never `opener:default`, whose
+# third entry reveals an unscoped list of paths in the file manager and has no caller here.
 tauri-plugin-opener = "2"
-# The system file picker. The webview cannot name a file on disk on its own, and the commands
-# behind it — `import_read_file`, `export_write_file`, and the mirror's "Change folder…" — take
-# a path the backend reads or writes rather than bytes, so this plugin is what stands between a
-# button and a command that already exists. (`deck_set_cover_image` was a fourth until custom
-# deck covers were removed on 2026-08-31.)
-# `capabilities/desktop.json` grants `dialog:allow-open` **and `dialog:allow-save`** — the
-# second since the export dialog shipped, which this comment went on denying for a whole plan.
-# The other three verbs (message, ask, confirm) are not permitted; the app's own questions are
-# drawn in the page. Never `dialog:default`.
+# The system file dialogs — choosing a decklist (`import_pick_file`), saving an export
+# (`export_save_file`) and moving the mirror (`mirror_pick_root`) — **used from Rust only,
+# through `DialogExt`** (`src/file_dialog.rs`, issue #545). Each command opens its own dialog
+# and reads or writes the path it answered, so no path crosses IPC in either direction. Until
+# 2026-09-28 the page opened the dialog and handed the path to a command, and the
+# `dialog:allow-open`/`allow-save` grants that made that possible fenced nothing: an app's own
+# command takes whatever the page sends. `capabilities/desktop.json` now grants **no `dialog:`
+# permission at all**, and a future file command follows the same shape — never a path argument.
 tauri-plugin-dialog = "2"
 # The one write it is here for: putting a decklist export on the clipboard. Grants
 # `clipboard-manager:allow-write-text` and nothing else — not `:default`, which also grants
@@ -159,7 +171,9 @@ tauri-plugin-snap-layout = "1"
 # it dials a WebSocket this plugin opens inside the running app, so without the plugin nothing
 # listens and `driver_session` answers `connected: false` forever. Registered under
 # `#[cfg(debug_assertions)]` in `desktop.rs` — a release build compiles the crate and never
-# opens the port. It stays a plain dependency rather than an optional one on purpose:
+# opens the port — and, since 2026-09-28, only when `MTG_GRIMOIRE_MCP_BRIDGE=1` is set, because
+# the socket authenticates nothing and a page in the developer's own browser can reach the
+# loopback (`docs/reference/tauri-mcp-bridge.md`). It stays a plain dependency rather than an optional one on purpose:
 # `tauri-build` discovers a plugin's ACL permissions through the dependency graph, so dropping it
 # from the release profile would leave `capabilities/desktop.json`'s `mcp-bridge:` entries
 # unresolvable and fail the build that needs them least.

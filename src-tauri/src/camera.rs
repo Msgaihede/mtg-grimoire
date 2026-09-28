@@ -29,9 +29,20 @@
 //! refused — so nothing is ever granted to a page that never asks, and a reader who is not on
 //! the scanner never had a live camera in the first place.
 //!
+//! **And camera is granted only to this app's own pages** (2026-09-28, issue #545). Until then
+//! [`decide`] read the permission kind and nothing else, so any page that reached the window —
+//! a dropped link was the reasoned route, see [`crate::app_origin`] — was handed a live camera
+//! with no prompt at all, because this handler *is* the prompt. It reads the request's `Uri`
+//! now and grants only when [`crate::app_origin::AppOrigins`] holds it: the embedded frontend,
+//! or Vite in a dev build. The navigation guard beside it should keep a foreign page out of the
+//! window in the first place; this is the fence that still stands if something gets one in.
+//!
 //! Windows only for now.
 
 /// Installs the camera-permission handler on `window`'s underlying platform webview.
+///
+/// The app's origins are read here, once per window, and moved into the handler — the config
+/// they come from is compiled in, so nothing they depend on can change under a running window.
 ///
 /// Best-effort throughout, never silent: a window whose webview cannot be reached, whose
 /// `ICoreWebView2` cannot be retrieved, or whose WebView2 runtime has no `PermissionRequested`
@@ -55,13 +66,15 @@ fn install_windows(window: &tauri::WebviewWindow) {
     use webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PERMISSION_KIND;
     use webview2_com::PermissionRequestedEventHandler;
 
+    let origins = crate::app_origin::AppOrigins::of(window);
+
     // `with_webview` hands us the platform webview on the WebView2 thread; everything past
     // this point is COM interop and every step is allowed to fail into a no-op rather than
     // an app that will not open. Each failure still names itself with `eprintln!`, the class
     // of non-fatal background failure `desktop.rs` already logs the same way (the initial
     // sync, the update check) — a camera denial with nothing in any log pointing at this file
     // is indistinguishable from the fix never having shipped at all.
-    if let Err(e) = window.with_webview(|webview| {
+    if let Err(e) = window.with_webview(move |webview| {
         let controller = webview.controller();
         // SAFETY: `CoreWebView2` is a plain COM getter — no lifetime or aliasing requirement
         // beyond `controller` outliving the call, which it does as a local binding.
@@ -73,17 +86,25 @@ fn install_windows(window: &tauri::WebviewWindow) {
             }
         };
         let mut token: i64 = 0;
-        let handler = PermissionRequestedEventHandler::create(Box::new(|_sender, args| {
-            // SAFETY: `PermissionKind` and `SetState` are plain COM getter/setter calls on
-            // `args`, valid for the lifetime of this callback — WebView2 owns `args` and
-            // guarantees it outlives the `Invoke` call these closures answer.
+        let handler = PermissionRequestedEventHandler::create(Box::new(move |_sender, args| {
+            // SAFETY: `PermissionKind`, `Uri` and `SetState` are plain COM getter/setter calls
+            // on `args`, valid for the lifetime of this callback — WebView2 owns `args` and
+            // guarantees it outlives the `Invoke` call these closures answer. `Uri` hands back
+            // a `CoTaskMemAlloc`'d string, and `take_pwstr` copies it and frees it.
             unsafe {
                 let Some(args) = args else {
                     return Ok(());
                 };
                 let mut kind = COREWEBVIEW2_PERMISSION_KIND::default();
                 args.PermissionKind(&mut kind)?;
-                args.SetState(decide(kind))
+                // A URI that cannot be read is an empty one, which no origin holds — so the
+                // failure refuses rather than falling back to the kind alone.
+                let mut uri = Default::default();
+                let uri = match args.Uri(&mut uri) {
+                    Ok(()) => webview2_com::take_pwstr(uri),
+                    Err(_) => String::new(),
+                };
+                args.SetState(decide(kind, &uri, &origins))
             }
         }));
         // SAFETY: `add_PermissionRequested` is a plain COM event registration; `handler` is
@@ -99,21 +120,25 @@ fn install_windows(window: &tauri::WebviewWindow) {
     }
 }
 
-/// The one decision this module makes: which permission kind gets `ALLOW`.
+/// The one decision this module makes: which request gets `ALLOW` — the camera, asked for by
+/// one of this app's own pages, and nothing else.
 ///
 /// Pulled out of the closure above so it is a plain value-in, value-out function a test can
-/// call directly — no live `ICoreWebView2` needed to prove camera is the only kind granted and
-/// that microphone, which failed identically in the live probe above, stays refused.
+/// call directly — no live `ICoreWebView2` needed to prove camera is the only kind granted, that
+/// microphone, which failed identically in the live probe above, stays refused, and that a page
+/// from anywhere else is refused the camera too.
 #[cfg(windows)]
 fn decide(
     kind: webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PERMISSION_KIND,
+    uri: &str,
+    origins: &crate::app_origin::AppOrigins,
 ) -> webview2_com::Microsoft::Web::WebView2::Win32::COREWEBVIEW2_PERMISSION_STATE {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         COREWEBVIEW2_PERMISSION_KIND_CAMERA, COREWEBVIEW2_PERMISSION_STATE_ALLOW,
         COREWEBVIEW2_PERMISSION_STATE_DENY,
     };
 
-    if kind == COREWEBVIEW2_PERMISSION_KIND_CAMERA {
+    if kind == COREWEBVIEW2_PERMISSION_KIND_CAMERA && origins.holds_str(uri) {
         COREWEBVIEW2_PERMISSION_STATE_ALLOW
     } else {
         COREWEBVIEW2_PERMISSION_STATE_DENY
@@ -123,16 +148,26 @@ fn decide(
 #[cfg(all(test, windows))]
 mod tests {
     use super::decide;
+    use crate::app_origin::AppOrigins;
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         COREWEBVIEW2_PERMISSION_KIND_AUTOPLAY, COREWEBVIEW2_PERMISSION_KIND_CAMERA,
         COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION, COREWEBVIEW2_PERMISSION_KIND_MICROPHONE,
         COREWEBVIEW2_PERMISSION_STATE_ALLOW, COREWEBVIEW2_PERMISSION_STATE_DENY,
     };
 
+    /// The release build's page — the one a reader's scanner actually asks from.
+    const APP: &str = "http://tauri.localhost/index.html";
+
+    fn release() -> AppOrigins {
+        let config: tauri::Config =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        AppOrigins::new(&config, false)
+    }
+
     #[test]
     fn camera_is_the_one_kind_granted() {
         assert_eq!(
-            decide(COREWEBVIEW2_PERMISSION_KIND_CAMERA),
+            decide(COREWEBVIEW2_PERMISSION_KIND_CAMERA, APP, &release()),
             COREWEBVIEW2_PERMISSION_STATE_ALLOW
         );
     }
@@ -142,7 +177,7 @@ mod tests {
     #[test]
     fn microphone_is_refused_even_though_the_probe_failed_it_identically() {
         assert_eq!(
-            decide(COREWEBVIEW2_PERMISSION_KIND_MICROPHONE),
+            decide(COREWEBVIEW2_PERMISSION_KIND_MICROPHONE, APP, &release()),
             COREWEBVIEW2_PERMISSION_STATE_DENY
         );
     }
@@ -150,12 +185,32 @@ mod tests {
     #[test]
     fn everything_else_is_refused_too() {
         assert_eq!(
-            decide(COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION),
+            decide(COREWEBVIEW2_PERMISSION_KIND_GEOLOCATION, APP, &release()),
             COREWEBVIEW2_PERMISSION_STATE_DENY
         );
         assert_eq!(
-            decide(COREWEBVIEW2_PERMISSION_KIND_AUTOPLAY),
+            decide(COREWEBVIEW2_PERMISSION_KIND_AUTOPLAY, APP, &release()),
             COREWEBVIEW2_PERMISSION_STATE_DENY
         );
+    }
+
+    /// Issue #545: the kind alone used to decide, so a remote page that reached the window was
+    /// handed a camera with no prompt. The URI decides now, and an unreadable one — the empty
+    /// string the handler substitutes — refuses.
+    #[test]
+    fn a_page_that_is_not_the_app_is_refused_the_camera() {
+        for uri in [
+            "https://evil.example/",
+            "http://tauri.localhost.evil.example/",
+            "http://localhost:1420/",
+            "about:blank",
+            "",
+        ] {
+            assert_eq!(
+                decide(COREWEBVIEW2_PERMISSION_KIND_CAMERA, uri, &release()),
+                COREWEBVIEW2_PERMISSION_STATE_DENY,
+                "{uri}"
+            );
+        }
     }
 }

@@ -5,6 +5,12 @@
 # `dtolnay/rust-toolchain` does not read `rust-toolchain.toml` itself, and `@stable` beside the
 # file would install one toolchain and then have rustup silently fetch a second — without the
 # targets and components the job asked for — the first time `cargo` runs under the repo root.
+#
+# **Pinned by commit SHA** (2026-09-28), where it read `@master`: a branch is the most mutable
+# reference there is, and this action runs in every job that builds, the release included. The
+# SHA is `master`'s head on that day, which the repository's one tag, `v1`, also names — hence the
+# comment, which is what Dependabot reads when it moves the pin (`.github/dependabot.yml` lists
+# this directory). The toolchain itself is still `rust-toolchain.toml`'s, passed in below.
 name: Pinned Rust toolchain
 description: Installs the toolchain rust-toolchain.toml names, with rustfmt, clippy and any extra targets.
 inputs:
@@ -25,7 +31,7 @@ runs:
         [ -n "$channel" ] || { echo "rust-toolchain.toml names no channel" >&2; exit 1; }
         echo "channel=$channel" >> "$GITHUB_OUTPUT"
 
-    - uses: dtolnay/rust-toolchain@master
+    - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
       with:
         toolchain: ${{ steps.read.outputs.channel }}
         targets: ${{ inputs.targets }}

@@ -7,20 +7,14 @@ import type { MirrorStatus } from "@/lib/ipc";
 
 const mirrorStatus = vi.hoisted(() => vi.fn());
 const mirrorSetEnabled = vi.hoisted(() => vi.fn());
-const mirrorSetRoot = vi.hoisted(() => vi.fn());
+/** Change folder…, which is the folder picker **and** the save in one command — the picker is a
+ *  native window Rust opens (issue #545), and nothing in jsdom can press it. */
+const mirrorPickRoot = vi.hoisted(() => vi.fn());
 const mirrorRebuild = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { mirrorStatus, mirrorSetEnabled, mirrorSetRoot, mirrorRebuild },
+  ipc: { mirrorStatus, mirrorSetEnabled, mirrorPickRoot, mirrorRebuild },
 }));
-
-/** The one control here the operating system owns. `open()` reaches Tauri's `invoke`, which
- *  jsdom has nothing behind — so the module is mocked, the way every suite that touches a
- *  picker does it. (The list that used to sit here named three deck suites that no longer mock
- *  the plugin at all and omitted three that do; `grep -rln 'vi.mock("@tauri-apps/plugin-dialog"'
- *  src/` is the reliable form of the question.) */
-const pickFolder = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFolder }));
 
 import { BackupPanel, MIRROR_KEY, lastPassLine, passSummary } from "./BackupPanel";
 
@@ -109,7 +103,7 @@ const panel = () => screen.getByRole("region", { name: "Backup" });
 beforeEach(() => {
   mirrorStatus.mockReset().mockResolvedValue(RAN);
   mirrorSetEnabled.mockReset().mockResolvedValue(undefined);
-  mirrorSetRoot.mockReset().mockResolvedValue(undefined);
+  mirrorPickRoot.mockReset().mockResolvedValue(false);
   mirrorRebuild.mockReset().mockResolvedValue({
     written: 350,
     unchanged: 0,
@@ -117,7 +111,6 @@ beforeEach(() => {
     pruned: 2,
     failed: 0,
   });
-  pickFolder.mockReset().mockResolvedValue(null);
 });
 
 describe("BackupPanel", () => {
@@ -325,70 +318,68 @@ describe("BackupPanel", () => {
     );
   });
 
-  it("moves the mirror to the folder the picker answered", async () => {
-    const user = userEvent.setup();
-    pickFolder.mockResolvedValue("F:\\Cards");
-    render(<BackupPanel />, { wrapper });
-
-    await user.click(await screen.findByRole("button", { name: /change folder/i }));
-
-    await waitFor(() => expect(mirrorSetRoot).toHaveBeenCalledWith("F:\\Cards"));
-    // Where it opened is half the control: a reader moving a backup is nearly always moving it
-    // to somewhere beside where it already is.
-    expect(pickFolder).toHaveBeenCalledWith(
-      expect.objectContaining({ directory: true, defaultPath: ROOT }),
-    );
-  });
-
   /**
-   * **A cancelled picker is not a failure.** `open` answers `null` when the reader closed it
-   * without choosing, which is the most ordinary way to use a file dialog after changing your
-   * mind — so nothing is written and nothing is said.
+   * **The page asks for the gesture and never names the folder** (issue #545): the backend opens
+   * the picker, at the folder the mirror already uses, and saves what it answered. A moved mirror
+   * is re-read, so the panel shows the new folder.
    */
-  it("writes nothing when the picker is cancelled", async () => {
+  it("asks the backend to move the mirror, and shows the folder it moved to", async () => {
     const user = userEvent.setup();
-    pickFolder.mockResolvedValue(null);
-    render(<BackupPanel />, { wrapper });
+    mirrorStatus.mockResolvedValue(RAN);
+    mirrorPickRoot.mockImplementation(() => {
+      mirrorStatus.mockResolvedValue({ ...RAN, root: "F:\\Cards" });
+      return Promise.resolve(true);
+    });
+    render(<BackupPanel />, { wrapper: LiveWorld });
 
     await user.click(await screen.findByRole("button", { name: /change folder/i }));
 
-    await waitFor(() => expect(pickFolder).toHaveBeenCalled());
-    expect(mirrorSetRoot).not.toHaveBeenCalled();
+    expect(mirrorPickRoot).toHaveBeenCalledWith();
+    expect(await screen.findByText("F:\\Cards")).toBeInTheDocument();
     expect(within(panel()).queryByRole("alert")).not.toBeInTheDocument();
   });
 
   /**
-   * The picker itself is the operating system's, and it can refuse to open at all.
-   *
-   * The sentence is **framed** rather than passed through: what a dialog that would not open
-   * hands back is plumbing, and the half that says *which* control failed is the panel's to
-   * write. `DeckCoverPicker` does the same one picker over.
+   * **A cancelled picker is not a failure.** The backend answers `false` when the reader closed
+   * it without choosing, which is the most ordinary way to use a file dialog after changing your
+   * mind — so nothing is said and nothing is re-read.
    */
-  it("says so when the folder picker cannot be opened", async () => {
+  it("says nothing when the picker is cancelled", async () => {
     const user = userEvent.setup();
-    pickFolder.mockRejectedValue("window.__TAURI_INTERNALS__ is undefined");
+    mirrorPickRoot.mockResolvedValue(false);
     render(<BackupPanel />, { wrapper });
 
     await user.click(await screen.findByRole("button", { name: /change folder/i }));
 
-    expect(await within(panel()).findByRole("alert")).toHaveTextContent(
-      "Could not open the folder picker — window.__TAURI_INTERNALS__ is undefined",
+    await waitFor(() => expect(mirrorPickRoot).toHaveBeenCalled());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: /change folder/i })).toBeEnabled(),
     );
-    expect(mirrorSetRoot).not.toHaveBeenCalled();
+    // The seeded world never asks on its own, so any read here would be this press's.
+    expect(mirrorStatus).not.toHaveBeenCalled();
+    expect(within(panel()).queryByRole("alert")).not.toBeInTheDocument();
   });
 
-  /** A relative path is the one refusal `mirror_set_root` makes about the string itself, and
-   *  it has to reach the reader — a root that silently read back as `data/export` would leave
-   *  them watching a folder nothing is ever written to. */
-  it("reports a refused folder", async () => {
+  /**
+   * **Two refusals, and the backend's sentence says which.** A picker that would not open and a
+   * folder the crate would not store both arrive as `mirror_pick_root` refusing, and the panel
+   * draws the sentence as it draws every other write's — the words name the control, so the
+   * panel no longer has to.
+   */
+  it.each([
+    ["the picker", "The folder picker could not be opened — task 7 panicked"],
+    ["a sync", "The card database is busy finishing a sync. Try that again in a moment."],
+  ])("reports %s refusing, in the backend's words", async (_, refusal) => {
     const user = userEvent.setup();
-    pickFolder.mockResolvedValue("export");
-    mirrorSetRoot.mockRejectedValue('"export" is not an absolute path.');
+    mirrorPickRoot.mockRejectedValue(refusal);
     render(<BackupPanel />, { wrapper });
 
     await user.click(await screen.findByRole("button", { name: /change folder/i }));
 
-    expect(await within(panel()).findByRole("alert")).toHaveTextContent(/not an absolute path/);
+    expect(await within(panel()).findByRole("alert")).toHaveTextContent(refusal);
+    // The setting is untouched, which is the property that matters: a refused move must not
+    // look like one that landed.
+    expect(screen.getByText(ROOT)).toBeInTheDocument();
   });
 
   /** A read that would not answer leaves no controls to press, so the panel says that instead

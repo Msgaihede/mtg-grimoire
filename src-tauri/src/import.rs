@@ -1430,13 +1430,12 @@ pub async fn deck_import_commit(
 
 /// A decklist file the reader picked, as text.
 ///
-/// **It takes a path, not bytes** — the page asks the OS for a name and Rust opens the file,
-/// which is the same contract [`crate::export::export_write_file`] uses in the other direction
-/// and the whole reason `dialog:allow-open` is sufficient and **no `fs:` permission is granted
-/// anywhere**. (`deck_set_cover_image` was the third command on this contract and the one that
-/// established it; custom deck covers went on 2026-08-31 and took it with them.) A
-/// webview that could read a file itself would need one; a webview that can only name a file
-/// needs none.
+/// **The path is the one [`import_pick_file`]'s dialog answered, and it never came from the
+/// page.** Rust opening the file is why **no `fs:` permission is granted anywhere** — a webview
+/// that read a file itself would need one — and since 2026-09-28 Rust opening the *dialog* is
+/// why the page cannot name one either (issue #545): this used to be reachable as
+/// `import_read_file(path)` with any path a script cared to send, which made it a read of any
+/// text file up to 1 MB on the machine, handed straight back to the page.
 ///
 /// Two decisions, and each is a thing that would be wrong the other way:
 ///
@@ -1452,9 +1451,9 @@ pub async fn deck_import_commit(
 ///   European Windows, and it carries **every** accented name in that code page — `Jötun Grunt`,
 ///   `Séance`, `Lim-Dûl's Vault` each turned into `U+FFFD` and each quoted back as unmatched,
 ///   while the byte that said which character it was sat one table lookup away.
-fn read_import_file(path: &str) -> Result<ImportFile, String> {
+fn read_import_file(path: &std::path::Path) -> Result<ImportFile, String> {
     std::fs::File::open(path)
-        .map_err(|e| open_failed(format!("could not open {path}: {e}")))
+        .map_err(|e| open_failed(format!("could not open {}: {e}", path.display())))
         .and_then(read_bounded)
 }
 
@@ -1597,7 +1596,27 @@ fn decode(bytes: &[u8]) -> ImportFile {
     ImportFile { text, encoding }
 }
 
-/// Read a decklist file the reader picked, and hand the text to the parser.
+/// The extensions the open dialog offers under "Decklist".
+///
+/// A decklist is text; the other three are what the desktop clients have always written one as
+/// (`.dec` MTGO, `.dek` Arena, `.csv` a spreadsheet export). **A filter and not a fence** — the
+/// dialog lets the reader switch it off, and [`read_import_file`] reads whatever they chose, so
+/// a list saved as `.md` is still a list. It lived in `src/features/transfer/files.ts` until the
+/// dialog moved here.
+pub const DECKLIST_EXTENSIONS: [&str; 4] = ["txt", "dec", "dek", "csv"];
+
+/// Ask the reader for a decklist file — the OS open dialog, modal to the window that asked — and
+/// hand its text to the parser. `None` is Cancel, which is not a failure.
+///
+/// **It takes no path, and that is the command's whole contract** (issue #545): the dialog is
+/// opened here ([`crate::file_dialog`]) and what it answered goes to [`read_import_file`] without
+/// crossing IPC, so the page can ask for *a* decklist and never for a particular file.
+///
+/// **Two failures, two sentences.** A dialog that could not be shown is
+/// [`crate::file_dialog::did_not_open`]'s — "The file picker could not be opened — …" — and a
+/// file that would not read is [`read_import_file`]'s: missing, refused, over the cap. The page
+/// draws either under one frame that is true of both, and the sentence says which it was, so
+/// "that file is over 1 MB" is never worded as a broken picker or the other way round.
 ///
 /// **The one command in this module that takes no state**: it touches no database, so it needs
 /// neither connection and cannot be refused as [`crate::db::BUSY`]. What comes back is
@@ -1605,16 +1624,28 @@ fn decode(bytes: &[u8]) -> ImportFile {
 /// exactly as it is for a paste. That is the whole reason this is a *read* and not an import:
 /// a file and a paste become the same string here and travel the same path afterwards.
 ///
-/// On the blocking pool like its two siblings, because a file on a network share or a slow
-/// stick is a disk wait, and the async runtime is not where a disk wait belongs.
+/// The read is on the blocking pool like its two siblings, because a file on a network share or a
+/// slow stick is a disk wait, and the async runtime is not where a disk wait belongs.
 ///
 /// It answers the reading beside the text ([`ImportFile::encoding`]) so the dialog can say when
-/// a file was not UTF-8 — which a bare string could never tell it.
+/// a file was not UTF-8 — which a bare string could never tell it. It answers **no file name**,
+/// because nothing on the page draws one.
 #[tauri::command]
-pub async fn import_read_file(path: String) -> Result<ImportFile, String> {
+pub async fn import_pick_file(window: tauri::WebviewWindow) -> Result<Option<ImportFile>, String> {
+    let dialog = move || {
+        crate::file_dialog::modal_to(&window)
+            .set_title("Choose a decklist")
+            .add_filter("Decklist", &DECKLIST_EXTENSIONS)
+            .blocking_pick_file()
+    };
+    let Some(path) = crate::file_dialog::show(crate::file_dialog::FILE_PICKER, dialog).await?
+    else {
+        return Ok(None);
+    };
     tauri::async_runtime::spawn_blocking(move || read_import_file(&path))
         .await
         .map_err(|e| format!("the decklist file could not be read: {e}"))?
+        .map(Some)
 }
 
 #[cfg(test)]
@@ -3460,9 +3491,10 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    /// [`read_import_file`] over a `Path`.
+    /// [`read_import_file`], which is everything [`import_pick_file`] does after the dialog —
+    /// the dialog itself is a native window no test can press (see [`crate::file_dialog`]).
     fn read_file(path: &std::path::Path) -> Result<ImportFile, String> {
-        read_import_file(path.to_str().unwrap())
+        read_import_file(path)
     }
 
     /// The cap is a **fence**, and the half worth pinning is that it costs a megabyte rather

@@ -35,9 +35,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **and `storybook`**, plus **`scripts/` because `eslint .` lints it** (its ignore list does
   not name it) → `frontend` alone;
   **`rust-toolchain.toml` and `.github/actions/rust-toolchain/`** → `frontend` and `rust`;
-  **`release.yml` and `scanner-bundle.yml` → `frontend`**, because
-  `scripts/toolchain.test.mjs` reads every workflow (below); `.nvmrc` → every job that installs
-  Node;
+  **`release.yml`, `scanner-bundle.yml` and `.github/dependabot.yml` → `frontend`**, because
+  `scripts/toolchain.test.mjs` and `scripts/actions-pinned.test.mjs` read them (below); `.nvmrc`
+  → every job that installs Node;
   **`src/features/transfer/__golden__/**` and `src/lib/userTables.json` → `frontend` and
   `rust`**;
   `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` and the router itself → **every job**;
@@ -115,13 +115,42 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   new stable's lints could turn every PR red with no code change, and a release binary was built
   by whatever stable was current. The file pins **1.98.1** (the current stable on the day) with
   `rustfmt` and `clippy`; `.github/actions/rust-toolchain` reads the channel with `sed` and hands
-  it to `dtolnay/rust-toolchain@master`, which does not read the file itself.
+  it to `dtolnay/rust-toolchain` — `@master` until 2026-09-28 and pinned by SHA since (next
+  bullet) — which does not read the file itself.
   **`scripts/toolchain.test.mjs` is the fence**:
   it globs every workflow and fails on a direct `dtolnay/rust-toolchain` use, a `rustup`
   install, or a `node-version:` that is not `node-version-file: .nvmrc`, and on a channel that is
   not an exact `x.y.z`. **Node is pinned the same way**: `.nvmrc` (24, the version the app is
   developed on — CI ran 22 until this change) feeds every `setup-node`, and `package.json`'s
   `engines` floor is `>=22.18`, the newest any script here needs (`scripts/golden.mjs`).
+- **Every third-party action is pinned by commit SHA, every checkout drops its token, and no
+  workflow grants a write permission to all its jobs** (2026-09-28, issue #545). All three
+  workflows and the composite action used mutable references — `actions/checkout@v7`,
+  `tauri-apps/tauri-action@v1`, `Swatinem/rust-cache@v2`,
+  `googleapis/release-please-action@v5`, `dtolnay/rust-toolchain@master` — and `release.yml`
+  granted `contents`, `issues` and `pull-requests: write` at the workflow level, so whoever could
+  repoint one of those tags ran code beside a write token and a release in progress. Now:
+  - **`uses: owner/repo@<40-hex SHA> # vX.Y.Z`**, the SHA the tag named on the day (the peeled
+    commit for an annotated tag), so behaviour did not change. `dtolnay/rust-toolchain` has no
+    release tags, only `v1`, which named `master`'s head that day — hence `# v1`.
+  - **`.github/dependabot.yml`**, `github-actions` weekly over `directories: ["/",
+    "/.github/actions/*"]` — the second entry because Dependabot reads only the directories it is
+    given, and the composite action is where the one action every build job runs lives. Updates
+    come as one grouped PR a week, `ci:`-prefixed so release-please cuts nothing for them.
+  - **`persist-credentials: false` on every `actions/checkout`**. Checked job by job
+    first: nothing after a checkout runs `git` against the remote — `changes` diffs history the
+    checkout already fetched, and every upload is `gh` or tauri-action, each handed its token.
+  - **Workflow-level `permissions: {}`** in `release.yml` and `scanner-bundle.yml`, with each job
+    naming its own (`ci.yml` stays `contents: read`, which grants nothing to write).
+    `release-please` keeps `contents`/`issues`/`pull-requests: write`; `build`, `sign` and
+    `publish` get `contents: write` alone.
+  - **`scripts/actions-pinned.test.mjs` is the fence**: it globs every workflow and composite
+    action and fails on a `uses:` that is neither local nor a SHA with a version comment, a
+    checkout without `persist-credentials: false`, a write grant above `jobs:`, a Dependabot
+    config that stops watching either directory — and on the signing secret appearing anywhere but
+    one step of `release.yml`'s `sign` job, that job gaining a `uses:` other than checkout and
+    setup-node or an `npm` install, or `publish` no longer needing it. Comments are stripped
+    before any of it is read, since these files explain themselves in prose that names both.
 - **A push to `main` gets a concurrency group of its own; PR runs still cancel each other.**
   Routing on a push diffs from `github.event.before`, so a cancelled `main` run's commits were
   never routed by the next one — and turning `cancel-in-progress` off alone would not have
@@ -134,8 +163,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `frontend` skipped entirely: the frontend it needs is one file it writes itself.
 - **`.github/workflows/release.yml` is one workflow on purpose.** A release created with
   `GITHUB_TOKEN` does not trigger `on: release` in another workflow — GitHub's recursion
-  guard — so release-please, the build matrix and the publish step are three jobs in one
-  file, chained on `release_created`.
+  guard — so release-please, the build matrix, the signing step and the publish step
+  are jobs in one file, chained on `release_created`.
 - **Versions are never typed by hand.** release-please reads the `feat:`/`fix:`/`!` prefixes
   and keeps a `chore(main): release X.Y.Z` PR open that bumps all five version files —
   `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`,
@@ -155,6 +184,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   release-please's next run cannot find the previous release and replays the whole history
   into the changelog. `gh release upload`/`edit` **do** resolve a draft by tag even though no
   tag exists yet (measured 2026-08-09 — the draft's own URL is `untagged-<sha>`).
+- **`release.yml`'s `sign` job signs the two files the in-app updater installs**, and is why
+  a release needs the **`UPDATE_SIGNING_KEY`** repository secret (2026-09-28). It runs after
+  every build leg, downloads the portable zip and the NSIS setup from the draft by their
+  uploaded — dotted — names, runs `node scripts/update-signing.mjs sign` on each with the trusted
+  comment `mtg-grimoire <version> <kind>`, and uploads the two `.minisig` files; `publish` needs
+  it. **It is a job of its own because a build leg runs other people's code** — tauri-action,
+  rust-cache, every npm install script, every cargo build script — and any of it could read a
+  secret in the same job; a leaked signing key signs updates for every install, from anywhere,
+  for good. So the `sign` job holds a pinned checkout, a pinned setup-node and a dependency-free
+  script, no `npm ci`, and the secret on one step. **An unset secret fails it, and the draft is
+  never published** — a release without signatures cannot go public. What the updater checks,
+  what the signature does and does not prove, the one-time setup and the key rotation are
+  [in-app-updates.md](in-app-updates.md). ⚠️ **Not run on GitHub yet** — written 2026-09-28; the
+  first release after it lands is its proof, and the `gh release download` of a draft by tag is
+  the step to watch (the `upload`/`edit` pair is measured to resolve a draft; `download` is not).
 - **release-please needs "Allow GitHub Actions to create and approve pull requests"**
   (`can_approve_pull_request_reviews: true`). It is one toggle covering both verbs, and with
   it off the run fails at the very last step — after parsing every commit, resolving the
@@ -217,4 +261,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   measured on Windows. Nobody has run a Linux build.
 - Not done, deliberately: no code signing (no certificate, so SmartScreen warns on the
   installers) and **not** GitHub Packages — none of its registry types hosts a desktop
-  installer, which is why the compiled app goes to Releases instead.
+  installer, which is why the compiled app goes to Releases instead. **"Code signing" there means
+  Authenticode, and it is still not done.** The minisign signatures the `sign` job writes are a
+  different thing with a different reader: they are checked by the app's own updater and by
+  nothing in Windows, so SmartScreen warns exactly as before, and a first install from the
+  release page is verified by nothing at all.
