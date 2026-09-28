@@ -6,6 +6,7 @@ import { MANA_KEYS, type ManaKey } from "@/lib/mana";
 import type { SearchView } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import {
+  ColorExactChip,
   FILTER_FIELD,
   FILTER_FOCUS,
   FILTER_LABEL,
@@ -49,8 +50,15 @@ function StatefulToggle({ pressed: seed, onClick, ...rest }: ComponentProps<type
  * here verbatim from `FilterBar`, which is the one row every card view draws, because
  * a story of six loose chips would be a row this app never draws.
  */
-function ColourRow({ initial }: { initial: readonly ManaKey[] }) {
+function ColourRow({
+  initial,
+  strict: strictSeed = false,
+}: {
+  initial: readonly ManaKey[];
+  strict?: boolean;
+}) {
   const [on, setOn] = useState<readonly ManaKey[]>(initial);
+  const [strict, setStrict] = useState(strictSeed);
   return (
     <div role="group" aria-label="Color identity" className="flex gap-1.5">
       {MANA_KEYS.map((key) => (
@@ -63,6 +71,7 @@ function ColourRow({ initial }: { initial: readonly ManaKey[] }) {
           }
         />
       ))}
+      <ColorExactChip pressed={strict} onClick={() => setStrict((s) => !s)} />
     </div>
   );
 }
@@ -283,7 +292,8 @@ export const ThreeStatesInOneChip: Story = {
 };
 
 /**
- * The colour row at rest: `MANA_KEYS` is WUBRG **plus colourless**, six chips.
+ * The colour row at rest: `MANA_KEYS` is WUBRG **plus colourless**, six chips — and the round
+ * `Exact` chip closing the group, which is the reading the six get rather than a seventh colour.
  *
  * Unpressed is the same chip dimmed to 60% rather than a different chip, so the row reads as
  * one control with some of it switched on — and a colourblind reader still has the symbol's
@@ -303,6 +313,31 @@ export const ColoursSelected: Story = {
   args: { label: "Owned", pressed: false },
   parameters: { controls: { disable: true } },
   render: () => <ColourRow initial={["W", "U"]} />,
+};
+
+/**
+ * `ColorExactChip` pressed, closing the row: the colour chips' circle, press and gold ring on the
+ * app's own surface, with lucide's `squares-intersect` (AND) that turns to `squares-unite` (OR)
+ * when it is pressed off. Not a pastel fill, because in this row
+ * a filled circle *is* a colour, and a pale one reads as White or Colourless.
+ */
+export const ColoursExact: Story = {
+  args: { label: "Owned", pressed: false },
+  parameters: { controls: { disable: true } },
+  render: () => <ColourRow initial={["W", "U"]} strict />,
+  play: async ({ canvasElement }) => {
+    const exact = within(canvasElement).getByRole("button", { name: /^Exact\b/ });
+    await expect(exact).toHaveAttribute("aria-pressed", "true");
+    // The glyph is the reading, so it has to move with the press — AND on, OR off.
+    await expect(exact.querySelector("svg.lucide-squares-intersect")).not.toBeNull();
+    await userEvent.click(exact);
+    await expect(exact).toHaveAttribute("aria-pressed", "false");
+    await expect(exact.querySelector("svg.lucide-squares-unite")).not.toBeNull();
+    await expect(exact.querySelector("svg.lucide-squares-intersect")).toBeNull();
+    await expect(exact).toHaveAccessibleName(
+      "Exact — cards whose colour identity fits within these colours",
+    );
+  },
 };
 
 /**

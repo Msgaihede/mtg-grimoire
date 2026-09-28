@@ -727,18 +727,17 @@ export const TagBesideFreeText: Story = {
 };
 
 /**
- * **`Exact` — the reading the five colour chips on the bar get, in the tray's first cell.**
+ * **`Exact` — the reading the colour chips get, as a round chip closing their group.**
  *
  * Loose is the default and the deckbuilder's question: two colours picked answer mono-R, mono-W,
  * RW *and* the colourless cards that fit in any deck. Pressed, the row reads "exactly these
  * colours" and answers the two-colour cards alone.
  *
- * **It was a sixth chip in the colour group until 2026-09-23, drawn only once a colour was
- * picked.** Which meant a reader had to press a colour to discover the control that says what
- * pressing a colour means, and the group reflowed under their hand when they did. The tray has a
- * caption to hang it under and room it does not have to win from five colour chips at the docked
- * panel's 206px floor — so every story on this page has five chips in that group now, this one
- * included, and the sixth is a cell behind the disclosure.
+ * **It was a tray cell from 2026-09-23 to 2026-09-28**, and before that a chip drawn only once a
+ * colour was picked. It is on the bar again and always drawn — the colour chips' circle, press and
+ * gold ring on the app's own surface, with a glyph that says the reading — `squares-intersect`
+ * (AND) pressed, `squares-unite` (OR) not — so it reads as the same control without
+ * reading as a seventh colour.
  *
  * **The badge still reads 1.** Strict modifies the colour filter rather than being one, so
  * `activeFilterCount` does not count it; what says it is on is the word inside the chip under the
@@ -755,19 +754,13 @@ export const StrictColours: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // The colour group is five chips again — the assertion the move is actually about, and the
-    // one a query for the toggle by name cannot make.
-    await expect(
-      within(canvas.getByRole("group", { name: "Color identity" })).queryByRole("button", {
-        name: /^Exact\b/,
-      }),
-    ).toBeNull();
-
-    await openTray(canvas);
     // `findBy`, because the preset lands in an effect — and on the *pressed* toggle's own
     // sentence, so this resolves against the strict row rather than the loose one it passes
-    // through.
-    const toggle = await canvas.findByRole("button", {
+    // through. Scoped to the colour group with the tray shut, which is the assertion the move
+    // is actually about and the one a query over the whole document cannot make.
+    const toggle = await within(
+      canvas.getByRole("group", { name: "Color identity" }),
+    ).findByRole("button", {
       name: "Exact — cards whose colour identity is exactly these colours",
     });
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
