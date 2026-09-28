@@ -646,7 +646,7 @@ it("swaps the main pane when a sidebar entry is picked", async () => {
   // The ribbon's `h1` is the only place the view is named — the placeholder used to
   // repeat it as an `h2`, which was a second heading saying the same word.
   expect(screen.getByRole("heading", { name: "Settings", level: 1 })).toBeInTheDocument();
-  expect(screen.getByText(/coming in a later plan/i)).toBeInTheDocument();
+  expect(screen.getByText(/import \(coming soon\)/i)).toBeInTheDocument();
   expect(screen.queryByRole("heading", { name: "Card search" })).not.toBeInTheDocument();
 });
 
@@ -658,7 +658,7 @@ it("opens the deck gallery on the decks entry", async () => {
 
   expect(await screen.findByRole("button", { name: "New deck" })).toBeInTheDocument();
   expect(screen.getByText("No decks")).toBeInTheDocument();
-  expect(screen.queryByText(/coming in a later plan/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/import \(coming soon\)/i)).not.toBeInTheDocument();
 });
 
 /**
@@ -765,7 +765,7 @@ it("opens the collection on the collection entry", async () => {
 
   expect(await screen.findByText("$801.00")).toBeInTheDocument();
   expect(screen.getByText(/nothing here yet/i)).toBeInTheDocument();
-  expect(screen.queryByText(/coming in a later plan/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/import \(coming soon\)/i)).not.toBeInTheDocument();
 });
 
 /** The third live view, and the last one Plan 3 lights up. */
@@ -775,7 +775,7 @@ it("opens the wishlist on the wishlist entry", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
 
   expect(await screen.findByText(/your wishlist is empty/i)).toBeInTheDocument();
-  expect(screen.queryByText(/coming in a later plan/i)).not.toBeInTheDocument();
+  expect(screen.queryByText(/import \(coming soon\)/i)).not.toBeInTheDocument();
 });
 
 /**

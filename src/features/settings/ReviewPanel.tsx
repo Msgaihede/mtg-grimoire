@@ -29,9 +29,9 @@ import { PanelAlert, SettingsSection } from "./panelChrome";
  * so the one literal carries both facts and they cannot come apart.
  */
 const TABLE_LABEL: Record<ReviewTable, string> = {
-  collection_entries: "The collection",
+  collection_entries: "Collection",
   deck_cards: "Decks",
-  wishlist_entries: "The wishlist",
+  wishlist_entries: "Wishlist",
   collection_folders: "Collection folders",
   deck_folders: "Deck folders",
   wishlist_folders: "Wishlist folders",
@@ -213,16 +213,14 @@ export function ReviewPanel(): JSX.Element {
   return (
     <SettingsSection id="review" title="Needs review">
       <p className="text-sm text-dim">
-        When two of your devices change the same thing, the app works out what you meant and
-        says nothing. Where it cannot &mdash; a row one device deleted while another was still
-        editing it, a folder move that would have put a folder inside itself &mdash; it keeps
-        your data and writes down what it did. Those notes are here, in its own words, until you
-        say they look fine.
+        When two devices change the same thing and it can&rsquo;t be merged automatically, your
+        data is kept and the conflict is listed here. Mark each one as fine once you&rsquo;ve
+        checked it.
       </p>
 
       {rows === null ? (
         <p className="text-sm text-dim">
-          {read.isError ? "The review queue could not be read." : "Reading the review queue…"}
+          {read.isError ? "Couldn't load the review list." : "Loading…"}
         </p>
       ) : rows.length === 0 ? (
         // `ErrorLogPanel`'s empty state, and for its reason: this is good news rather than a
@@ -230,7 +228,7 @@ export function ReviewPanel(): JSX.Element {
         // other "the number worth looking at" in this window is drawn in.
         <p className="flex items-center gap-2 text-sm text-dim">
           <CircleCheck aria-hidden="true" className="size-4 text-accent" />
-          Nothing needs a look.
+          Nothing to review.
         </p>
       ) : (
         // Capped and scrolled at the same height the error log is, for the same reason: a

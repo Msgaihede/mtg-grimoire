@@ -189,8 +189,7 @@ export function LabelsPanel(): JSX.Element {
           a label belongs to no deck, so the word and the colour a reader sets here are the word
           and the colour it has everywhere. The deck dialog says the same thing in its subtitle. */}
       <p className="text-sm text-dim">
-        Labels are shared across all decks, and each card carries at most one.
-        Renaming or recoloring a label updates it across all decks.
+        Labels are shared across decks, and each card can have one. Changes apply everywhere.
       </p>
 
       {/* Making one comes first, and this panel opens on it — `LabelsDialog`'s own rule, kept for
@@ -236,8 +235,7 @@ export function LabelsPanel(): JSX.Element {
 
       {clash !== undefined && (
         <p className="text-xs text-dim" role="status">
-          “{clash.name}” already exists — every deck shares one list, so there is only ever one of
-          a name.
+          “{clash.name}” already exists.
         </p>
       )}
 
@@ -247,14 +245,13 @@ export function LabelsPanel(): JSX.Element {
           both leave an empty array behind, and neither is a reader with no labels — the sentence
           below is a claim about a table, so it is drawn only when something actually answered.
           The failure itself is the alert at the foot. */}
-      {labelsQuery.isPending && <p className="text-sm text-dim">Reading your labels…</p>}
+      {labelsQuery.isPending && <p className="text-sm text-dim">Loading labels…</p>}
 
       {labelsQuery.isSuccess && labels.length === 0 && (
         <p className="text-sm text-dim">
-          Labels are yours to invent — a colour and a word you put on a card in a deck, like{" "}
-          <span className="text-text">Cut candidate</span> or{" "}
-          <span className="text-text">Borrowed</span>. Name one above, then right-click a card in
-          any deck to put it on.
+          Create labels like <span className="text-text">Cut candidate</span> or{" "}
+          <span className="text-text">Borrowed</span>, then right-click a card in any deck to
+          apply one.
         </p>
       )}
 
@@ -346,7 +343,7 @@ function LabelRow({
           type="button"
           onClick={onPick}
           aria-expanded={picking}
-          aria-label={`Change colour of ${label.name}`}
+          aria-label={`Change color of ${label.name}`}
           {...tip(`#${labelColorHex(shown)}`)}
           className={cn(
             "grid size-[1.125rem] shrink-0 place-items-center rounded border border-border",
@@ -485,8 +482,7 @@ function DeleteLabel({
         list for good.
       </p>
       <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">
-        A label deleted from Settings cannot be undone — the change is written to no deck’s
-        history, so Ctrl+Z in a deck will not bring it back.
+        Deleting a label here can’t be undone, even with Ctrl+Z in a deck.
       </p>
       <div className="mt-2 flex gap-2">
         <button

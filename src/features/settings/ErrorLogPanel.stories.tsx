@@ -89,7 +89,7 @@ type Story = StoryObj<typeof meta>;
 export const NothingHasFailed: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByText("Nothing has failed.")).toBeInTheDocument();
+    await expect(canvas.getByText("No errors.")).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: "Clear" })).toBeDisabled();
   },
 };

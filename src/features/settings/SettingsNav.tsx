@@ -293,7 +293,7 @@ export function SettingsNav({
         it"); a rail entry promises more than a frame does. One dim line under six real
         destinations says the same thing and promises nothing.
       */}
-      <p className="mt-3 text-xs text-dim">Import. Coming in a later plan.</p>
+      <p className="mt-3 text-xs text-dim">Import (coming soon)</p>
     </nav>
   );
 }

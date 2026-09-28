@@ -51,12 +51,12 @@ const PAIRING_POLL_KEY: QueryKey = ["sync", "pairing", "poll"];
  * wiped, which is the opposite of what happens.
  */
 export const REMOVAL_WARNING =
-  "Removing a device changes the key your devices share. It keeps whatever it already synced — " +
-  "this app cannot reach into it, and no server has a copy to delete.";
+  "Removing a device changes your sync key. The removed device keeps anything it already " +
+  "synced, and it can't be wiped remotely.";
 
 export const LEAVE_WARNING =
-  "Your collection stays on this device; nothing here is deleted. If the relay cannot be reached " +
-  "right now, other devices will not hear and go on listing this one until somebody removes it there.";
+  "Your collection stays on this device. If the relay can't be reached, other devices may " +
+  "still list this one until they remove it.";
 
 /**
  * What the panel says when a pairing attempt ran out of time.
@@ -73,8 +73,8 @@ export const LEAVE_WARNING =
  * are.
  */
 export const EXPIRED_NOTE =
-  "That pairing code timed out — codes are good for ten minutes. Start a new one, or read a " +
-  "fresh code from the other device.";
+  "Pairing code expired (codes last 10 minutes). Start again or get a new code from the other " +
+  "device.";
 
 /**
  * A pairing in flight on this screen, and which half of it this device is playing.
@@ -375,18 +375,15 @@ export function relayNote(
       return null;
     case "off":
       return (
-        "Sync is off. Nothing about your collection leaves this device until a membership is " +
-        "connected above."
+        "Sync is off. Nothing leaves this device until you connect a membership."
       );
     case "failed":
       return (
-        "That sync did not finish. Nothing was lost — the changes are still here and go with " +
-        "the next one."
+        "Sync didn't finish. Your changes are safe and will sync next time."
       );
     case "unpaired":
       return (
-        "There is nowhere to sync to yet. Pair a second device above, and the relay starts " +
-        "carrying changes between them."
+        "No other devices yet. Pair a device above to start syncing."
       );
     case "never":
       return "Nothing has synced yet.";
@@ -416,8 +413,7 @@ export function liveNote(state: LiveState): string | null {
   switch (state) {
     case "offline":
       return (
-        "Not connected to the relay. Changes are still being kept and go across as soon as " +
-        "it comes back."
+        "Not connected to the relay. Changes will sync when it's back."
       );
     case "off":
     case "connecting":
@@ -465,55 +461,45 @@ export function liveNote(state: LiveState): string | null {
 export function outcomeText(outcome: RelayOutcome | null): string {
   if (outcome === null) {
     return (
-      "There was nothing to sync. This device needs a connected membership and a paired " +
-      "device before anything can be sent."
+      "Nothing to sync. Connect a membership and pair a device first."
     );
   }
   const parts = [
     `Sent ${plural(outcome.pushed, "change")} and received ${plural(outcome.pulled, "change")}.`,
   ];
   if (outcome.resurrected > 0) {
-    parts.push(`Kept ${plural(outcome.resurrected, "row")} another device had deleted.`);
+    parts.push(`Restored ${plural(outcome.resurrected, "row")} deleted on another device.`);
   }
   if (outcome.cyclesBroken > 0) {
     parts.push(
-      `Moved ${plural(outcome.cyclesBroken, "folder")} to the top level to undo a loop.`,
+      `Moved ${plural(outcome.cyclesBroken, "folder")} to the top level to fix a folder loop.`,
     );
   }
   if (outcome.resurrected > 0 || outcome.cyclesBroken > 0) {
-    parts.push("Needs review, just below, says which.");
+    parts.push("See Needs review below.");
   }
   if (outcome.baselineOps > 0) {
-    parts.push(
-      `This was the first exchange with a new device — ${count(outcome.baselineOps)} rows synced.`,
-    );
-    if (outcome.baselineHistory > 0) {
-      parts.push(
-        `${count(outcome.baselineHistory)} of those are deck history.`,
-      );
-    }
+    parts.push(`First sync with a new device: ${count(outcome.baselineOps)} rows synced.`);
   }
   if (outcome.heldNewer > 0) {
     parts.push(
-      `${plural(outcome.heldNewer, "change")} from a newer version ` +
-        `${verb(outcome.heldNewer, "waits", "wait")} until you update.`,
+      `${plural(outcome.heldNewer, "change")} from a newer version will apply after you update.`,
     );
   }
   const waiting = outcome.deferred - outcome.heldNewer;
   if (waiting > 0) {
     parts.push(
-      `${plural(waiting, "change")} ${verb(waiting, "is", "are")} waiting for a change ` +
-        `${verb(waiting, "it builds", "they build")} on.`,
+      `${plural(waiting, "change")} ${verb(waiting, "is", "are")} waiting on earlier changes.`,
     );
   }
   if (outcome.dropped > 0) {
     parts.push(
-      `${plural(outcome.dropped, "change")} could not be applied and ` +
-        `${verb(outcome.dropped, "was", "were")} skipped. The error log has the details.`,
+      `${plural(outcome.dropped, "change")} couldn't be applied and ` +
+        `${verb(outcome.dropped, "was", "were")} skipped. See Errors for details.`,
     );
   }
   if (outcome.unreadable > 0) {
-    parts.push(`${plural(outcome.unreadable, "change")} could not be read on this device.`);
+    parts.push(`${plural(outcome.unreadable, "change")} couldn't be read on this device.`);
   }
   return parts.join(" ");
 }
@@ -560,7 +546,7 @@ export function supporterNote(
         ? "Supporting. Thank you."
         : `Supporting since ${SINCE_FORMAT.format(status.since * 1000)}.`;
     case "grace":
-      return "Payment problem — Patreon is retrying, and sync keeps working for now.";
+      return "Payment problem. Patreon is retrying, and sync keeps working for now.";
     case "ended":
       return "Membership ended.";
     default:
@@ -581,8 +567,8 @@ export function supporterNote(
  * teaches them there is something to worry about.
  */
 const LAPSE_REASSURANCE =
-  "Your collection stays on this device. Nothing has been deleted, and connecting again picks " +
-  "up where you left off — your devices stay paired.";
+  "Your collection stays on this device, and your devices stay paired. Reconnect anytime to " +
+  "continue.";
 
 /**
  * The one dead end this press can still walk a reader into, and the reassurance beside it.
@@ -612,15 +598,15 @@ const LAPSE_REASSURANCE =
  * level out of the `offering` block leaves the rest of the file green.
  */
 const CONNECT_ORDER =
-  "Each device can only belong to one group. If other devices already sync, " +
-  "pair this one to them first — then a membership on any of them covers all of them.";
+  "A device can only be in one group. If your other devices already sync, pair this one with " +
+  "them first. One membership covers the whole group.";
 
 /**
  * The cost of a *re-claim*, said beside the field that makes one.
  */
 const RECLAIM_WARNING =
-  "One membership covers one group. Claiming it here moves it — devices in the previous group " +
-  "stop syncing with each other. Their own collections are untouched.";
+  "One membership covers one group. Claiming it here stops sync for your previous group. " +
+  "Their data isn't affected.";
 
 /**
  * The one line drawn from `RelayStatus.pullHeld === "newer"`, and the reason it is a paragraph
@@ -816,8 +802,8 @@ function SupporterSection({ live }: { live: LiveState }): JSX.Element {
       {supporter === null ? (
         <p className="text-sm text-dim">
           {supporterRead.isError
-            ? "Your membership could not be read."
-            : "Reading your membership…"}
+            ? "Couldn't load your membership."
+            : "Loading membership…"}
         </p>
       ) : (
         <div className="space-y-3">
@@ -903,11 +889,11 @@ function SupporterSection({ live }: { live: LiveState }): JSX.Element {
         <p className="text-sm text-dim">
           {status === null
             ? read.isError
-              ? "What is waiting to go could not be read."
-              : "Reading the relay…"
+              ? "Couldn't load pending changes."
+              : "Checking…"
             : status.pending === 0
-              ? "Nothing is waiting to go."
-              : `${plural(status.pending, "change")} waiting to go.`}
+              ? "No pending changes."
+              : `${plural(status.pending, "change")} pending.`}
         </p>
       )}
 
@@ -1190,7 +1176,7 @@ export function SyncPanel(): JSX.Element {
    */
   if (polling && poll.data?.stage === "complete") {
     setFlow({ kind: "idle" });
-    setPairedNote("Paired. The other device is now part of this group.");
+    setPairedNote("Paired. The other device is now in this group.");
   }
 
   /**
@@ -1299,7 +1285,7 @@ export function SyncPanel(): JSX.Element {
 
       {status === null ? (
         <p className="text-sm text-dim">
-          {read.isError ? "The pairing state could not be read." : "Reading this device…"}
+          {read.isError ? "Couldn't load pairing status." : "Loading…"}
         </p>
       ) : (
         <>
@@ -1310,8 +1296,8 @@ export function SyncPanel(): JSX.Element {
           <div className="space-y-1">
             <p className="text-sm">
               {paired
-                ? `${status.deviceName} — in a group of ${status.devices.length}, at key version ${status.epoch}.`
-                : `${status.deviceName} — not paired with anything yet.`}
+                ? `${status.deviceName} — in a group of ${plural(status.devices.length, "device")}.`
+                : `${status.deviceName} — not paired yet.`}
             </p>
             <p className="font-mono text-xs break-all text-dim tabular-nums">{status.deviceId}</p>
           </div>
@@ -1391,7 +1377,7 @@ export function SyncPanel(): JSX.Element {
           {flow.kind === "reading" && (
             <div className="space-y-3 rounded-md border border-border p-3">
               <Paste
-                label="The code the other device is showing"
+                label="Code shown on the other device"
                 action="Read the code"
                 pending={accept.isPending}
                 onSubmit={(code) => accept.mutate(code)}
@@ -1438,8 +1424,7 @@ export function SyncPanel(): JSX.Element {
               ) : (
                 <div className="space-y-2">
                   <p className="text-sm">
-                    Both devices should now be showing these six digits. Check them against the
-                    other screen before you go on.
+                    Check that both devices show these six digits.
                   </p>
                   <Digits sas={flow.sas} />
                 </div>
@@ -1472,7 +1457,7 @@ export function SyncPanel(): JSX.Element {
                 </button>
                 {flow.sas === null && (
                   <span className="text-xs text-dim">
-                    Nothing to compare yet &mdash; still waiting for the other device.
+                    Available once the other device joins.
                   </span>
                 )}
                 <Cancel onCancel={() => cancel.mutate()} />
@@ -1488,12 +1473,11 @@ export function SyncPanel(): JSX.Element {
           {flow.kind === "join" && (
             <div className="space-y-3 rounded-md border border-border p-3">
               <p className="text-sm">
-                The other device should now be showing these six digits too. Check them against
-                that screen.
+                Check that the other device shows the same six digits.
               </p>
               <Digits sas={flow.sas} />
               <p className="text-sm text-dim">
-                Compare these with the other device, then press Codes match there.
+                Compare these codes, then click Codes match on the other device.
               </p>
               <Cancel onCancel={() => cancel.mutate()} />
             </div>

@@ -57,7 +57,7 @@ export const NothingToLookAt: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await expect(await canvas.findByText(/nothing needs a look/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/nothing to review/i)).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: /looks fine/i })).not.toBeInTheDocument();
   },
 };
@@ -76,10 +76,10 @@ export const FourSentences: Story = {
     const canvas = within(canvasElement);
 
     await expect(
-      await canvas.findByRole("heading", { name: "The collection" }),
+      await canvas.findByRole("heading", { name: "Collection" }),
     ).toBeInTheDocument();
     await expect(canvas.getByRole("heading", { name: "Decks" })).toBeInTheDocument();
-    await expect(canvas.getByRole("heading", { name: "The wishlist" })).toBeInTheDocument();
+    await expect(canvas.getByRole("heading", { name: "Wishlist" })).toBeInTheDocument();
     await expect(canvas.getByRole("heading", { name: "Deck folders" })).toBeInTheDocument();
 
     // The collection orphan has no card left to name it, so the row falls back to what is
@@ -128,7 +128,7 @@ export const ClearingARow: Story = {
     );
 
     await expect(
-      await canvas.findByRole("heading", { name: "The collection" }),
+      await canvas.findByRole("heading", { name: "Collection" }),
     ).toBeInTheDocument();
     await expect(canvas.queryByRole("heading", { name: "Deck folders" })).not.toBeInTheDocument();
     await expect(canvas.getAllByRole("button", { name: /looks fine/i })).toHaveLength(3);
@@ -146,7 +146,7 @@ export const CouldNotBeRead: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await expect(await canvas.findByText(/could not be read/i)).toBeInTheDocument();
-    await expect(canvas.queryByText(/nothing needs a look/i)).not.toBeInTheDocument();
+    await expect(await canvas.findByText(/couldn't load the review list/i)).toBeInTheDocument();
+    await expect(canvas.queryByText(/nothing to review/i)).not.toBeInTheDocument();
   },
 };

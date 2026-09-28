@@ -36,12 +36,12 @@ export function VersionHistory({
       {error ? (
         <p className="text-xs text-dim">{error}</p>
       ) : loading ? (
-        <p className="text-xs text-dim">Reading the version history…</p>
+        <p className="text-xs text-dim">Loading version history…</p>
       ) : releases.length === 0 ? (
         // Not an error, and not an app with no past: an install that has never reached GitHub
         // has nothing cached to list, and the way out is the button at the top of the panel.
         <p className="text-xs text-dim">
-          No releases have been read yet. Check for updates to fetch them.
+          No release history yet. Check for updates to load it.
         </p>
       ) : (
         // **It grows; it does not scroll.** A capped `overflow-y-auto` here was drawn in the

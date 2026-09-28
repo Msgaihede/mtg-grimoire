@@ -118,7 +118,7 @@ export const TCGplayerToday: Story = {
     const trader = canvas.getByRole("button", { name: "Card trader EUR" });
     await expect(trader).toHaveAttribute("aria-disabled", "true");
     await expect(trader).not.toBeDisabled();
-    await expect(trader).toHaveAccessibleDescription(/No price feed yet/);
+    await expect(trader).toHaveAccessibleDescription(/No price feed\./);
     await userEvent.click(trader);
     await expect(args.marketplace.select).not.toHaveBeenCalled();
 
@@ -147,7 +147,7 @@ export const CardKingdomChosen: Story = {
     await expect(row).toHaveAttribute("aria-pressed", "true");
     // Two dates, answering two questions: when this app asked, and when the feed was built.
     await expect(row).toHaveAccessibleDescription(/Prices from 2 hours ago/);
-    await expect(row).toHaveAccessibleDescription(/built this list 2026-08-11 21:07:02/);
+    await expect(row).toHaveAccessibleDescription(/Published by Card Kingdom on 2026-08-11 21:07:02/);
   },
 };
 
@@ -179,7 +179,7 @@ export const NeverFetched: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("button", { name: "Card Kingdom USD" })).toHaveAccessibleDescription(
-      /No prices downloaded yet\. Choosing this marketplace fetches them\./,
+      /No prices yet\. Selecting this marketplace downloads them\./,
     );
   },
 };
@@ -213,7 +213,7 @@ export const Stale: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("button", { name: "Card Kingdom USD" })).toHaveAccessibleDescription(
-      /A refresh is due\./,
+      /Update due\./,
     );
   },
 };
@@ -240,7 +240,7 @@ export const Failed: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("button", { name: "Card Kingdom USD" })).toHaveAccessibleDescription(
-      /The last download failed\. Showing the prices from 2 hours ago\./,
+      /Download failed\. Showing prices from 2 hours ago\./,
     );
     await expect(canvas.getByRole("alert")).toHaveTextContent(/timed out/);
   },

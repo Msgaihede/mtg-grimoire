@@ -41,7 +41,7 @@ describe("ErrorLogPanel", () => {
   it("says nothing has failed when the log is empty, and offers nothing to clear", () => {
     render(<ErrorLogPanel log={log({ entries: [] })} />);
 
-    expect(screen.getByText("Nothing has failed.")).toBeInTheDocument();
+    expect(screen.getByText("No errors.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Clear" })).toBeDisabled();
   });
 

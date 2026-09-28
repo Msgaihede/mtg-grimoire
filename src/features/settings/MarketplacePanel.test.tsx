@@ -128,7 +128,7 @@ describe("MarketplacePanel", () => {
   it("has the unreachable row explain itself, by name", () => {
     render(<MarketplacePanel marketplace={state()} />);
 
-    expect(row("Card trader EUR")).toHaveAccessibleDescription(/Card trader.s API needs a personal/);
+    expect(row("Card trader EUR")).toHaveAccessibleDescription(/No price feed\. Card trader doesn.t publish/);
     // A marketplace whose prices arrive with the card data describes nothing: there is nothing
     // to excuse and no feed to date.
     expect(row("TCGplayer USD")).not.toHaveAccessibleDescription();
@@ -158,8 +158,8 @@ describe("MarketplacePanel", () => {
   it("shows the feed's own build stamp where it publishes one, and nothing where it does not", () => {
     render(<MarketplacePanel marketplace={state()} />);
 
-    expect(row("Card Kingdom USD")).toHaveAccessibleDescription(/built this list 2026-08-11/);
-    expect(row("Mana Pool USD")).not.toHaveAccessibleDescription(/built this list/);
+    expect(row("Card Kingdom USD")).toHaveAccessibleDescription(/Published by Card Kingdom on 2026-08-11/);
+    expect(row("Mana Pool USD")).not.toHaveAccessibleDescription(/Published by/);
   });
 
   /** Never fetched is the state a first selection acts on, and it says what will happen. */
@@ -170,7 +170,7 @@ describe("MarketplacePanel", () => {
       />,
     );
 
-    expect(row("Card Kingdom USD")).toHaveAccessibleDescription(/No prices downloaded yet/);
+    expect(row("Card Kingdom USD")).toHaveAccessibleDescription(/No prices yet/);
   });
 
   it("says a feed is downloading while it is", () => {
@@ -198,7 +198,7 @@ describe("MarketplacePanel", () => {
       />,
     );
 
-    expect(row("Card Kingdom USD")).toHaveAccessibleDescription(/A refresh is due\./);
+    expect(row("Card Kingdom USD")).toHaveAccessibleDescription(/Update due\./);
   });
 
   /**
@@ -219,7 +219,7 @@ describe("MarketplacePanel", () => {
     );
 
     expect(row("Card Kingdom USD")).toHaveAccessibleDescription(
-      /The last download failed\. Showing the prices from 2 hours ago\./,
+      /Download failed\. Showing prices from 2 hours ago\./,
     );
     expect(screen.getByRole("alert")).toHaveTextContent("timed out");
   });

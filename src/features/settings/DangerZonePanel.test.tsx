@@ -37,7 +37,7 @@ describe("DangerZonePanel", () => {
     const rows = within(panel()).getAllByRole("listitem");
     expect(rows).toHaveLength(3);
     expect(rows[0]).toHaveTextContent("Every card you own");
-    expect(rows[1]).toHaveTextContent("Every card you are looking for");
+    expect(rows[1]).toHaveTextContent("Every card and folder on your wishlist");
     expect(rows[2]).toHaveTextContent("Every deck and folder");
   });
 
@@ -53,7 +53,7 @@ describe("DangerZonePanel", () => {
 
     await user.click(within(panel()).getByRole("button", { name: "Clear collection" }));
 
-    expect(dialog()).toHaveTextContent("This cannot be undone.");
+    expect(dialog()).toHaveTextContent("This can’t be undone.");
     expect(state.collection.run).not.toHaveBeenCalled();
   });
 
@@ -68,7 +68,7 @@ describe("DangerZonePanel", () => {
     await user.click(within(panel()).getByRole("button", { name: "Clear collection" }));
 
     expect(dialog()).toHaveTextContent("Your decks are kept");
-    expect(dialog()).toHaveTextContent("stops being marked as owned");
+    expect(dialog()).toHaveTextContent("no longer marked as owned");
   });
 
   /** The other one a reader guesses wrong: the folders go with the decks, not without them. */
@@ -78,7 +78,7 @@ describe("DangerZonePanel", () => {
 
     await user.click(within(panel()).getByRole("button", { name: "Clear decks" }));
 
-    expect(dialog()).toHaveTextContent("every deck and every folder");
+    expect(dialog()).toHaveTextContent("every deck and folder");
     expect(dialog()).toHaveTextContent("Your collection and wishlist are kept");
   });
 

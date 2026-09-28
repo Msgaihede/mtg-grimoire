@@ -225,7 +225,7 @@ function describeError(err: unknown): { name: string; message: string } {
     case "NotAllowedError":
       return { name, message: "MTG Grimoire needs camera access to scan a code." };
     case "NotFoundError":
-      return { name, message: "No camera on this device — type the code instead." };
+      return { name, message: "No camera found. Type the code instead." };
     default:
       return { name, message: `Camera error: ${name}. Type the code instead.` };
   }

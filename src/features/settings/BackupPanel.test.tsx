@@ -141,7 +141,7 @@ describe("BackupPanel", () => {
     render(<BackupPanel />, { wrapper: wrapperWithMirrorError });
 
     expect(await within(panel()).findByRole("alert")).toHaveTextContent(
-      'The last backup could not be written. The folder "E:\\Backups\\MTG" is not there.',
+      'Couldn\'t write the last backup. The folder "E:\\Backups\\MTG" is not there.',
     );
   });
 
@@ -152,7 +152,7 @@ describe("BackupPanel", () => {
     render(<BackupPanel />, { wrapper: harness({ ...UNWRITABLE, lastError: null }) });
 
     // The failures are still reported — in the status line, where they belong.
-    expect(await screen.findByText(/350 could not be written/)).toBeInTheDocument();
+    expect(await screen.findByText(/350 couldn't be written/)).toBeInTheDocument();
     expect(within(panel()).queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -179,7 +179,7 @@ describe("BackupPanel", () => {
 
     await waitFor(() =>
       expect(within(panel()).getByRole("alert")).toHaveTextContent(
-        'The last backup could not be written. The folder "E:\\Backups\\MTG" is not there.',
+        'Couldn\'t write the last backup. The folder "E:\\Backups\\MTG" is not there.',
       ),
     );
   });
@@ -405,7 +405,7 @@ describe("passSummary", () => {
    *  reader to stop reading the line on the day it matters. */
   it("says skipped, pruned and failed only when there are any", () => {
     expect(passSummary({ written: 1, unchanged: 0, skipped: 0, pruned: 3, failed: 2 })).toBe(
-      "1 file written, 0 unchanged, 3 removed, 2 could not be written",
+      "1 file written, 0 unchanged, 3 removed, 2 couldn't be written",
     );
   });
 
@@ -413,7 +413,7 @@ describe("passSummary", () => {
    *  because a bare number could not distinguish it from a file that failed. */
   it("names a file it left alone as theirs", () => {
     expect(passSummary({ written: 349, unchanged: 0, skipped: 1, pruned: 0, failed: 0 })).toBe(
-      "349 files written, 0 unchanged, 1 left alone (yours)",
+      "349 files written, 0 unchanged, 1 skipped (not created by the app)",
     );
   });
 
@@ -430,7 +430,7 @@ describe("lastPassLine", () => {
 
   it("dates the last pass and summarises it", () => {
     expect(lastPassLine(RAN, NOW_MS)).toBe(
-      "Last written 2 hours ago — 142 files written, 208 unchanged.",
+      "Last backup 2 hours ago — 142 files written, 208 unchanged.",
     );
   });
 
@@ -438,7 +438,7 @@ describe("lastPassLine", () => {
    *  the face of it, from a mirror that is already complete. */
   it("says a pass has not run rather than reporting an empty one", () => {
     expect(lastPassLine(NO_PASS_YET, NOW_MS)).toBe(
-      "Not run yet — press Rebuild now to write one.",
+      "Not run yet. Click Rebuild now to create one.",
     );
     expect(lastPassLine(NO_PASS_YET, NOW_MS)).not.toMatch(/0 files/);
   });
@@ -457,6 +457,6 @@ describe("lastPassLine", () => {
   /** A pass with no report is a state the crate can be in — the two fields are separate — and
    *  the date on its own is still worth saying. */
   it("dates a pass that kept no report", () => {
-    expect(lastPassLine({ ...RAN, lastReport: null }, NOW_MS)).toBe("Last written 2 hours ago.");
+    expect(lastPassLine({ ...RAN, lastReport: null }, NOW_MS)).toBe("Last backup 2 hours ago.");
   });
 });
