@@ -86,7 +86,7 @@ export const MANAGED_EMPTY: Record<Exclude<ManagedWishlistMode, "off">, string> 
  * page cannot find (another window deleted it between the two reads). It claims nothing about any
  * view, only what every managed folder is.
  */
-export const MANAGED_EMPTY_UNKNOWN = "Nothing here. This folder updates automatically with its deck.";
+export const MANAGED_EMPTY_UNKNOWN = "Empty. This folder updates automatically with its deck.";
 
 /**
  * What an empty **Tokens child** says (user schema v55) — one sentence whichever view its parent
@@ -94,8 +94,7 @@ export const MANAGED_EMPTY_UNKNOWN = "Nothing here. This folder updates automati
  * the token printings the plan asks for and the deck does not count. Its parent's sentence would
  * be wrong here — each of those is about cards, and this folder holds none.
  */
-export const MANAGED_TOKENS_EMPTY =
-  "No tokens missing — this deck counts every token its plan asks for.";
+export const MANAGED_TOKENS_EMPTY = "No tokens missing.";
 
 /**
  * {@link MANAGED_EMPTY} for a mode, or {@link MANAGED_EMPTY_UNKNOWN} where there is none to read —

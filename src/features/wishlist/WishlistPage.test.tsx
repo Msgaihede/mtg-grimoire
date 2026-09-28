@@ -1191,21 +1191,21 @@ describe("WishlistPage", () => {
     wishlistList.mockResolvedValue(page([]));
     wrap(<WishlistPage />);
 
-    expect(await screen.findByText(/nothing on your wishlist yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/your wishlist is empty/i)).toBeInTheDocument();
     expect(screen.queryByText(/match these filters/i)).not.toBeInTheDocument();
   });
 
   it("blames the filters when a filtered wishlist comes back empty", async () => {
     wishlistList.mockResolvedValue(page([]));
     wrap(<WishlistPage />);
-    await screen.findByText(/nothing on your wishlist yet/i);
+    await screen.findByText(/your wishlist is empty/i);
 
     // Any filter will do; this used to press `Still missing`, which was the wishlist's own and
     // went with the rest of its comparisons against the collection.
     await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Needs review" }));
 
-    expect(await screen.findByText(/no wishes match these filters/i)).toBeVisible();
+    expect(await screen.findByText(/no cards match these filters/i)).toBeVisible();
   });
 
   /**
@@ -1500,7 +1500,7 @@ describe("WishlistPage", () => {
    * page's CSV case.
    */
   it("exports every wish the filter matches, not the page that happens to be loaded", async () => {
-    // 150 wishes, a 100-row list page, a 500-row sweep page: one sweep call for the lot.
+    // 150 cards, a 100-row list page, a 500-row sweep page: one sweep call for the lot.
     const wishes150 = Array.from({ length: 150 }, (_, i) => ({
       ...BOLT,
       id: i + 1,
@@ -1590,7 +1590,7 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
-    await user.click(screen.getByRole("button", { name: "Import wishes" }));
+    await user.click(screen.getByRole("button", { name: "Import to wishlist" }));
     const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
     await user.click(within(dialog).getByLabelText("Decklist"));
     await user.paste("1 Sol Ring");
@@ -2127,7 +2127,7 @@ describe("the shelves", () => {
     wishlistList.mockImplementation(listByShelves(filed));
     wrap(<WishlistPage />);
 
-    await waitFor(() => expect(figure("Wishes")).toHaveTextContent("25"));
+    await waitFor(() => expect(figure("Cards")).toHaveTextContent("25"));
     expect(within(await total()).getByText("$50.00")).toBeInTheDocument();
     expect(await screen.findByText("Filed 1")).toBeInTheDocument();
     expect(screen.getByText("Filed 4")).toBeInTheDocument();
@@ -2136,7 +2136,7 @@ describe("the shelves", () => {
     // Nothing is loose, and Not sorted is still drawn as the way back out (issue #597) — with no
     // empty-page sentence over the wall.
     expect(heading(0)).toBeInTheDocument();
-    expect(screen.queryByText(/Nothing on your wishlist yet/)).toBeNull();
+    expect(screen.queryByText(/Your wishlist is empty/)).toBeNull();
     expect(lastQuery().shelves).toEqual([0, ORDERED.id, BACKORDERED.id, SOMEDAY.id]);
   });
 
@@ -2151,7 +2151,7 @@ describe("the shelves", () => {
     wrap(<WishlistPage />);
 
     await screen.findByText("Lightning Bolt");
-    await waitFor(() => expect(figure("Wishes")).toHaveTextContent("2"));
+    await waitFor(() => expect(figure("Cards")).toHaveTextContent("2"));
     const cost = await total();
     expect(within(cost).getByText("$1,614.00")).toBeInTheDocument();
     expect(within(cost).getByText("1 unpriced")).toBeInTheDocument();
@@ -2203,7 +2203,7 @@ describe("the shelves", () => {
     wishlistShelfCounts.mockResolvedValue([]);
     wrap(<WishlistPage />);
 
-    expect(await screen.findByText(/Nothing on your wishlist yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/Your wishlist is empty/)).toBeInTheDocument();
     expect(queryHeading(0)).toBeNull();
     expect(emptyBoxes()).toEqual([]);
   });
@@ -2264,7 +2264,7 @@ describe("the shelves", () => {
     wrap(<WishlistPage />);
 
     await screen.findByAltText("Scalding Tarn");
-    await waitFor(() => expect(heading(MANA.id)).toHaveTextContent("3 wishes · $55.00"));
+    await waitFor(() => expect(heading(MANA.id)).toHaveTextContent("3 cards · $55.00"));
     // One dashed box on this wall, and it is Not sorted's — nothing is loose, and an empty Not
     // sorted is drawn as a drop target (issue #597). None under Mana base: it holds folders, and
     // both of those hold cards.
@@ -2296,7 +2296,7 @@ describe("the shelves", () => {
     expect(chevronOf(ORDERED.id, "Ordered")).toHaveAttribute("aria-expanded", "false");
     await waitFor(() => expect(lastQuery().shelves).toEqual([0, SOMEDAY.id]));
     // Still counted: the shut heading and the header both read the counts, which cover it.
-    expect(figure("Wishes")).toHaveTextContent("3");
+    expect(figure("Cards")).toHaveTextContent("3");
 
     await user.click(screen.getByRole("button", { name: "Expand all" }));
 
@@ -2351,8 +2351,8 @@ describe("the shelves", () => {
 
     expect(await screen.findByText("Mystic Remora")).toBeInTheDocument();
     expect(chevronOf(ORDERED.id, "Ordered")).toHaveAttribute("aria-expanded", "true");
-    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("1 of 3 wishes"));
-    expect(heading(BACKORDERED.id)).toHaveTextContent("1 of 2 wishes");
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("1 of 3 cards"));
+    expect(heading(BACKORDERED.id)).toHaveTextContent("1 of 2 cards");
     expect(queryHeading(0)).toBeNull();
     expect(queryHeading(SOMEDAY.id)).toBeNull();
 
@@ -3054,7 +3054,7 @@ describe("the shelves", () => {
     });
 
     /** The same edge, for a caret request (ledger 223): a Move whose heading lands after Someday's
-     *  150 wishes is past the loaded edge, and paging is what brings its band — and its `⋯`, which
+     *  150 cards is past the loaded edge, and paging is what brings its band — and its `⋯`, which
      *  takes the caret back — onto the table. */
     it("pages until a moved heading's band is drawn, and hands its ⋯ the caret, in the table", async () => {
       useAppStore.setState({ wishlistView: "table" });
@@ -3310,18 +3310,18 @@ describe("the folders", () => {
    * **A folder's heading reads the recursive total, and the summary row it is drawn from is not.**
    * `Ordered` holds one wish itself and a sub-folder holding two, so a heading reading its own row
    * raw would say `1 wish` over a drawer holding three — and `Someday`, which has no row at all
-   * because the read groups the wishes, would draw nothing rather than the `0 wishes` that is the
+   * because the read groups the wishes, would draw nothing rather than the `0 cards` that is the
    * whole point of seeding an empty folder.
    */
   it("adds a folder's sub-folders into the figures on its heading", async () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
 
-    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $30.00"));
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 cards · $30.00"));
     // `Someday` has no summary row at all — the read groups the wishes — and still says so.
-    expect(heading(SOMEDAY.id)).toHaveTextContent("0 wishes");
+    expect(heading(SOMEDAY.id)).toHaveTextContent("0 cards");
     // Every level below is on the wall now, not behind a door one drawer down.
-    expect(heading(BACKORDERED.id)).toHaveTextContent("2 wishes · $20.00");
+    expect(heading(BACKORDERED.id)).toHaveTextContent("2 cards · $20.00");
     expect(follows(heading(ORDERED.id), heading(BACKORDERED.id))).toBe(true);
     expect(follows(heading(BACKORDERED.id), heading(SOMEDAY.id))).toBe(true);
   });
@@ -3345,7 +3345,7 @@ describe("the folders", () => {
     // The opened folder's own cards have no heading of their own — the path row names them
     // (spec §3.1) — and its sub-folder is the top shelf now.
     expect(queryHeading(ORDERED.id)).toBeNull();
-    expect(await findHeading(BACKORDERED.id)).toHaveTextContent("2 wishes · $20.00");
+    expect(await findHeading(BACKORDERED.id)).toHaveTextContent("2 cards · $20.00");
   });
 
   /**
@@ -3372,14 +3372,14 @@ describe("the folders", () => {
     });
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await waitFor(() => expect(figure("Wishes")).toHaveTextContent("3"));
+    await waitFor(() => expect(figure("Cards")).toHaveTextContent("3"));
 
     await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
 
     const theRootWhole = () => {
       expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
-      expect(figure("Wishes")).toHaveTextContent("3");
+      expect(figure("Cards")).toHaveTextContent("3");
       expect(heading(ORDERED.id)).toBeInTheDocument();
       expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
     };
@@ -3392,7 +3392,7 @@ describe("the folders", () => {
     await waitFor(() =>
       expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page"),
     );
-    expect(figure("Wishes")).toHaveTextContent("1");
+    expect(figure("Cards")).toHaveTextContent("1");
     expect(screen.getByText("Rhystic Study")).toBeInTheDocument();
     expect(screen.queryByText("Lightning Bolt")).toBeNull();
     expect(queryHeading(ORDERED.id)).toBeNull();
@@ -3511,11 +3511,11 @@ describe("the folders", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
     // BOLT and ANY loose, and FILED under Ordered — the wish the drill-down used to hide.
-    await waitFor(() => expect(figure("Wishes")).toHaveTextContent("3"));
+    await waitFor(() => expect(figure("Cards")).toHaveTextContent("3"));
 
     await userEvent.click(openOf(ORDERED.id, "Ordered"));
 
-    await waitFor(() => expect(figure("Wishes")).toHaveTextContent("1"));
+    await waitFor(() => expect(figure("Cards")).toHaveTextContent("1"));
   });
 
   /** Replaces "opens on the tree rather than flattened…": there is no flattened list to open on,
@@ -3699,7 +3699,7 @@ describe("the folders", () => {
     await waitFor(() =>
       expect(follows(heading(ORDERED.id), screen.getByText("Lightning Bolt"))).toBe(true),
     );
-    expect(figure("Wishes")).toHaveTextContent("3");
+    expect(figure("Cards")).toHaveTextContent("3");
   });
 
   /**
@@ -3735,7 +3735,7 @@ describe("the folders", () => {
     await waitFor(() =>
       expect(follows(heading(ORDERED.id), screen.getByText("Lightning Bolt"))).toBe(true),
     );
-    expect(figure("Wishes")).toHaveTextContent("3");
+    expect(figure("Cards")).toHaveTextContent("3");
   });
 
   /**
@@ -3783,8 +3783,7 @@ describe("the folders", () => {
     await userEvent.click(within(menu).getByRole("menuitem", { name: /^Delete…/ }));
 
     const question = await screen.findByText(
-      "Its wishes can move back to your wishlist or be deleted with it; " +
-        "folders inside it are deleted either way.",
+      "Its cards can go back to your wishlist or be deleted. Subfolders are always deleted.",
     );
     expect(drawnAboveTheWall(question)).toBe(true);
     await userEvent.click(screen.getByRole("button", { name: "Delete folder" }));
@@ -3809,7 +3808,7 @@ describe("the folders", () => {
     );
     const question = await screen.findByRole("group", { name: "Delete Ordered" });
     await userEvent.click(
-      within(question).getByRole("button", { name: "Delete folder and wishes" }),
+      within(question).getByRole("button", { name: "Delete folder and cards" }),
     );
 
     expect(wishlistFolderDeleteWithWishes).toHaveBeenCalledWith(ORDERED.id);
@@ -3822,7 +3821,7 @@ describe("the folders", () => {
 
   /**
    * **`Clear…` empties a drawer and keeps it, and its question states the number** — the one
-   * figure the heading cannot show. `Ordered`'s heading reads `3 wishes`, its own recursive total,
+   * figure the heading cannot show. `Ordered`'s heading reads `3 cards`, its own recursive total,
    * while a clear takes only the one filed directly in it; `Backordered`'s two are what the second
    * sentence promises are left alone.
    */
@@ -3830,7 +3829,7 @@ describe("the folders", () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
     // The summary has answered, so the count in the question is a count and not a guess.
-    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $30.00"));
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 cards · $30.00"));
 
     await userEvent.click(menuOf(ORDERED.id));
     const row = within(await screen.findByRole("menu")).getByRole("menuitem", { name: "Clear…" });
@@ -3842,8 +3841,7 @@ describe("the folders", () => {
     expect(within(question).getByText("Clear “Ordered”?")).toBeInTheDocument();
     expect(
       within(question).getByText(
-        "Its 1 wish filed directly in it is removed from your wishlist. " +
-          "Folders inside it keep theirs.",
+        "Its 1 card will be removed from your wishlist. Subfolders aren't affected.",
       ),
     ).toBeInTheDocument();
     await userEvent.click(within(question).getByRole("button", { name: "Clear folder" }));
@@ -3867,9 +3865,9 @@ describe("the folders", () => {
 
     const question = await screen.findByRole("group", { name: "Clear Backordered" });
     expect(
-      within(question).getByText("Its 2 wishes filed directly in it are removed from your wishlist."),
+      within(question).getByText("Its 2 cards will be removed from your wishlist."),
     ).toBeInTheDocument();
-    expect(question).not.toHaveTextContent("Folders inside it keep theirs.");
+    expect(question).not.toHaveTextContent("Subfolders aren't affected.");
   });
 
   /**
@@ -3883,12 +3881,12 @@ describe("the folders", () => {
     wrap(<WishlistPage />);
     await findHeading(SOMEDAY.id);
     // The summary has answered once the heading reads a count rather than a dash.
-    await waitFor(() => expect(heading(SOMEDAY.id)).toHaveTextContent("0 wishes"));
+    await waitFor(() => expect(heading(SOMEDAY.id)).toHaveTextContent("0 cards"));
 
     await user.click(menuOf(SOMEDAY.id));
     const row = within(await screen.findByRole("menu")).getByRole("menuitem", { name: /^Clear…/ });
     expect(row).toHaveAttribute("aria-disabled", "true");
-    expect(row).toHaveAccessibleName(/Nothing filed directly here/);
+    expect(row).toHaveAccessibleName(/No cards directly in this folder/);
 
     await user.click(row);
     expect(screen.queryByRole("group", { name: "Clear Someday" })).not.toBeInTheDocument();
@@ -3912,7 +3910,7 @@ describe("the folders", () => {
 
     const question = await screen.findByRole("group", { name: "Clear Someday" });
     expect(
-      within(question).getByText("The wishes filed directly in it are removed from your wishlist."),
+      within(question).getByText("Cards in this folder are removed from your wishlist."),
     ).toBeInTheDocument();
     await userEvent.click(within(question).getByRole("button", { name: "Clear folder" }));
     expect(wishlistFolderClear).toHaveBeenCalledWith(SOMEDAY.id);
@@ -3946,13 +3944,13 @@ describe("the folders", () => {
    */
   it("renames on the heading itself, keeps its figures, and leaves every other heading alone", async () => {
     wrap(<WishlistPage />);
-    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $30.00"));
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 cards · $30.00"));
 
     await userEvent.click(renameOf(ORDERED.id));
 
     const field = await within(heading(ORDERED.id)).findByRole("textbox");
     // The figures stay beside the field, so the reader can see which drawer this is.
-    expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $30.00");
+    expect(heading(ORDERED.id)).toHaveTextContent("3 cards · $30.00");
     // The title that opens the folder is out of the tree while its name is being typed.
     expect(within(heading(ORDERED.id)).queryByRole("button", { name: "Ordered" })).toBeNull();
     // One field on the whole wall.
@@ -4162,7 +4160,7 @@ describe("the folders", () => {
       });
       expect(box).toHaveTextContent(EMPTY_SHELF_COPY);
       expect(wallOf().contains(box)).toBe(true);
-      expect(screen.queryByText("Nothing filed here yet.")).toBeNull();
+      expect(screen.queryByText("No cards in this folder yet.")).toBeNull();
       expect(
         screen.queryByText(/Add cards from search with the \+ on any row or tile/),
       ).not.toBeInTheDocument();
@@ -4205,7 +4203,7 @@ describe("the folders", () => {
       return { id, quantity: 0, removed: true };
     });
     wrap(<WishlistPage />, { staleTime: 30_000 });
-    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $30.00"));
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 cards · $30.00"));
     await screen.findByText("Rhystic Study");
 
     await userEvent.click(
@@ -4213,7 +4211,7 @@ describe("the folders", () => {
     );
 
     expect(wishlistRemove).toHaveBeenCalledWith(FILED.id);
-    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("2 wishes · $20.00"));
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("2 cards · $20.00"));
   });
 
   /**
@@ -4237,7 +4235,7 @@ describe("the folders", () => {
       return { id, quantity: next, removed: false };
     });
     wrap(<WishlistPage />, { staleTime: 30_000 });
-    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $30.00"));
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 cards · $30.00"));
     await screen.findByText("Rhystic Study");
 
     await userEvent.click(
@@ -4245,7 +4243,7 @@ describe("the folders", () => {
     );
 
     expect(wishlistSetQuantity).toHaveBeenCalledWith(FILED.id, 2);
-    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 wishes · $40.00"));
+    await waitFor(() => expect(heading(ORDERED.id)).toHaveTextContent("3 cards · $40.00"));
   });
 
   /** The root's sweep is every shelf now, so there is no filing left for the checkbox to set aside
@@ -4280,8 +4278,8 @@ describe("the folders", () => {
     wrap(<WishlistPage />);
 
     await findHeading(ORDERED.id);
-    expect(screen.queryByText(/Nothing on your wishlist yet/)).not.toBeInTheDocument();
-    expect(screen.queryByText("Nothing filed here yet.")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Your wishlist is empty/)).not.toBeInTheDocument();
+    expect(screen.queryByText("No cards in this folder yet.")).not.toBeInTheDocument();
   });
 
   /**
@@ -4757,7 +4755,7 @@ describe("the price sweep", () => {
 
   const openSweep = async () => {
     await screen.findByText("Lightning Bolt");
-    await userEvent.click(screen.getByRole("button", { name: "Optimise wishlist prices" }));
+    await userEvent.click(screen.getByRole("button", { name: "Optimize wishlist prices" }));
     return screen.findByRole("dialog");
   };
 
@@ -4806,7 +4804,7 @@ describe("the price sweep", () => {
     expect(within(dialog).getByText("2X2 · 117 · EN")).toBeInTheDocument();
 
     await userEvent.click(second);
-    await userEvent.click(within(dialog).getByRole("button", { name: "Switch 1 wish" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Switch 1 card" }));
 
     await waitFor(() =>
       expect(wishlistOptimizeApply).toHaveBeenCalledWith([
@@ -4827,7 +4825,7 @@ describe("the price sweep", () => {
     const invalidate = vi.spyOn(client, "invalidateQueries");
     const dialog = await openSweep();
 
-    await userEvent.click(await within(dialog).findByRole("button", { name: "Switch 1 wish" }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Switch 1 card" }));
 
     // A repointed wish changes its printing, its price and the folder subtotal above it — none of
     // it arithmetic this page could redo — and it moves the heart on every search tile of the
@@ -4847,7 +4845,7 @@ describe("the price sweep", () => {
     wrap(<WishlistPage />);
     const dialog = await openSweep();
 
-    await userEvent.click(await within(dialog).findByRole("button", { name: "Switch 1 wish" }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Switch 1 card" }));
 
     // The page underneath has no place for a transient sentence, and the reader has just asked a
     // question they are owed an answer to. One way out, and the preview's own button gone.
@@ -4858,10 +4856,10 @@ describe("the price sweep", () => {
     // live region, which is the only arrangement that announces anything.
     const body = dialog.querySelector("footer")?.previousElementSibling as HTMLElement;
     expect(
-      within(body).getByText("Switched 1 wish to the cheapest printing, saving $6.00."),
+      within(body).getByText("Switched 1 card to the cheapest printing, saving $6.00."),
     ).toBeInTheDocument();
     expect(
-      within(body).getByText(/folded into a wish you already had in the same folder/),
+      within(body).getByText(/merged with an existing entry in the same folder/),
     ).toBeInTheDocument();
   });
 
@@ -4881,16 +4879,16 @@ describe("the price sweep", () => {
     wrap(<WishlistPage />);
     const dialog = await openSweep();
 
-    await userEvent.click(await within(dialog).findByRole("button", { name: "Switch 1 wish" }));
+    await userEvent.click(await within(dialog).findByRole("button", { name: "Switch 1 card" }));
     await within(dialog).findByRole("button", { name: "Done" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
 
     // Straight to the button rather than through `openSweep`: a closing panel is still in the
     // tree for the length of its fade, so a text query would match the row twice.
-    await userEvent.click(screen.getByRole("button", { name: "Optimise wishlist prices" }));
+    await userEvent.click(screen.getByRole("button", { name: "Optimize wishlist prices" }));
     const reopened = await screen.findByRole("dialog");
     expect(
-      await within(reopened).findByRole("button", { name: "Switch 1 wish" }),
+      await within(reopened).findByRole("button", { name: "Switch 1 card" }),
     ).toBeInTheDocument();
     expect(within(reopened).queryByRole("button", { name: "Done" })).not.toBeInTheDocument();
   });
@@ -5129,7 +5127,7 @@ describe("a deck's managed wishlist", () => {
     wrap(<WishlistPage />);
     await openManaged();
 
-    expect(screen.getByText(/Follows the deck “Rhystic Testbed”/)).toBeInTheDocument();
+    expect(screen.getByText(/Managed by the deck “Rhystic Testbed”/)).toBeInTheDocument();
     // Nothing can be made inside it — the path row's Add folder is absent, not greyed.
     expect(screen.queryByRole("button", { name: /^Add folder/ })).toBeNull();
     expect(screen.queryByRole("spinbutton", { name: /Copies wanted of Smuggler/ })).toBeNull();
@@ -5241,8 +5239,8 @@ describe("a deck's managed wishlist", () => {
     await waitFor(() => expect(levelAsked()).toBe(TOKENS.id));
     await screen.findByText("Treasure");
 
-    expect(screen.getByText(/Follows the deck “Rhystic Testbed”/)).toBeInTheDocument();
-    expect(screen.queryByText(/Follows the deck “Tokens”/)).toBeNull();
+    expect(screen.getByText(/Managed by the deck “Rhystic Testbed”/)).toBeInTheDocument();
+    expect(screen.queryByText(/Managed by the deck “Tokens”/)).toBeNull();
     await userEvent.click(screen.getByRole("button", { name: "Open deck" }));
     expect(useAppStore.getState().openDeckId).toBe(4);
   });
@@ -5552,10 +5550,10 @@ describe("a price sweep another page asked for", () => {
     await screen.findByRole("dialog");
     await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBeNull());
 
-    await user.click(screen.getByRole("button", { name: "Close the price check" }));
+    await user.click(screen.getByRole("button", { name: "Close" }));
     wishlistOptimizePlan.mockClear();
     // Straight to the button: a closing panel is still in the tree for the length of its fade.
-    await user.click(screen.getByRole("button", { name: "Optimise wishlist prices" }));
+    await user.click(screen.getByRole("button", { name: "Optimize wishlist prices" }));
 
     await waitFor(() => expect(wishlistOptimizePlan).toHaveBeenCalled());
     const asked = wishlistOptimizePlan.mock.calls[0][0] as WishlistQuery;
@@ -5800,7 +5798,7 @@ describe("the caret after the path row's Add folder, Move to folder… and Delet
     await findHeading(ORDERED.id);
 
     await fromMenu(user, ORDERED.id, /^Delete…/);
-    await user.click(await screen.findByRole("button", { name: "Delete folder and wishes" }));
+    await user.click(await screen.findByRole("button", { name: "Delete folder and cards" }));
 
     await waitFor(() => expect(wishlistFolderDeleteWithWishes).toHaveBeenCalledWith(ORDERED.id));
     await waitFor(() => expect(pathAddFolder()).toHaveFocus());

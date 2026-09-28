@@ -28,8 +28,7 @@ export function ManagedFolderNote({
     <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-dim">
       <Layers className="size-3.5 flex-none" aria-hidden="true" />
       <span>
-        Follows the deck “{deckName}” and updates itself when the deck changes — its wishes can’t be
-        edited here.
+        Managed by the deck “{deckName}”. Updates automatically and can’t be edited here.
       </span>
       <button
         type="button"

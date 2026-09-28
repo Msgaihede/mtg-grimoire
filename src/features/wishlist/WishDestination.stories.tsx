@@ -12,7 +12,7 @@ import { useWishDestinationName, WishDestination } from "./WishDestination";
  *
  * The line below it is {@link useWishDestinationName}'s whole job, written exactly as a call site
  * writes it. It is here because the hook is the half of this module that has no picture: `null` at
- * the root and the folder's *name* — never its path — otherwise, so `Sent. 4 wishes updated in
+ * the root and the folder's *name* — never its path — otherwise, so `Sent. 4 cards updated in
  * Backordered.` reads as a sentence and not as a file path.
  */
 function Destination({ start, label }: { start: number | null; label: string }) {
@@ -25,7 +25,7 @@ function Destination({ start, label }: { start: number | null; label: string }) 
         <WishDestination folderId={folderId} onChange={setFolderId} label={label} />
       </div>
       <p className="text-xs text-dim">
-        {name === null ? "Sent. 4 wishes updated." : `Sent. 4 wishes updated in ${name}.`}
+        {name === null ? "Sent. 4 cards updated." : `Sent. 4 cards updated in ${name}.`}
       </p>
     </div>
   );
@@ -83,7 +83,7 @@ export const Nested: Story = {
     await userEvent.click(canvas.getByRole("option", { name: "Ordered / Backordered" }));
     // And the sentence names the drawer, not the path.
     await waitFor(() =>
-      expect(canvas.getByText("Sent. 4 wishes updated in Backordered.")).toBeInTheDocument(),
+      expect(canvas.getByText("Sent. 4 cards updated in Backordered.")).toBeInTheDocument(),
     );
   },
 };
@@ -151,7 +151,7 @@ export const CreateRefused: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Create folder" }));
 
     await waitFor(() =>
-      expect(canvas.getByRole("alert")).toHaveTextContent("Could not make the folder"),
+      expect(canvas.getByRole("alert")).toHaveTextContent("Couldn't create the folder"),
     );
     expect(canvas.getByRole("textbox", { name: "Name" })).toHaveValue("Draft night");
     expect(canvas.getByRole("button", { name: "Wishlist folder to send to" })).toHaveTextContent(

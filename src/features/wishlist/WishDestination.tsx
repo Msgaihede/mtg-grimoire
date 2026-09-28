@@ -592,7 +592,7 @@ function NewFolderPanel({
 
       {refusal !== null && (
         <p role="alert" className="text-[0.7rem] leading-relaxed text-destructive">
-          Could not make the folder — {refusal}
+          Couldn't create the folder — {refusal}
         </p>
       )}
 

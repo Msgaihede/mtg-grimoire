@@ -45,7 +45,7 @@ import { useEffect, useId, useMemo, useRef, useState, type JSX } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { Dialog } from "@/components/Dialog";
 import { FinishMark } from "@/components/FinishMark";
-import { count, plural } from "@/lib/counts";
+import { count, plural, verb } from "@/lib/counts";
 import { FINISH_LABEL } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -93,12 +93,12 @@ const CHECKING = "Looking for cheaper printings…";
  */
 const NOTHING_IN_SCOPE = {
   headline: "Nothing to check.",
-  why: "No wishes match the current folder or active filters.",
+  why: "No wishlist items match this folder or filters.",
 } as const;
 
 const ALREADY_CHEAPEST = {
   headline: "Nothing to change.",
-  why: "Every wish is already on the cheapest available printing for this marketplace. Wishes for “any printing” already use the lowest price.",
+  why: "Everything is already on the cheapest printing for this marketplace.",
 } as const;
 
 /**
@@ -106,7 +106,7 @@ const ALREADY_CHEAPEST = {
  * printing — the folder follows the deck and is rewritten after every change to it — so the
  * saving is real and the place to take it is the deck.
  */
-const MANAGED_ROW = "In a deck's managed wishlist — change the printing in the deck.";
+const MANAGED_ROW = "Managed by a deck. Change the printing in the deck.";
 
 /**
  * What a passed-over wish means, for the counts line.
@@ -211,11 +211,9 @@ export function OptimizeWishlistDialog({
   return (
     <Dialog
       open={open}
-      // British in prose, as everything a reader sees in this app is — the code identifiers stay
-      // `optimize`, which is why the wire and the ipc mirror read `wishlistOptimizePlan`.
-      title="Optimise prices"
+      title="Optimize prices"
       subtitle={optimizeScope(scope)}
-      closeLabel="Close the price check"
+      closeLabel="Close"
       // Wider than the import dialog's `w-[42rem]` and narrower than the pull's `w-[52rem]`: a row
       // here carries a name, two printings and two prices, but no sentence naming a folder, a
       // condition and four traits. Still inside the app's 1024px window floor once the scrim's
@@ -423,7 +421,7 @@ function OptimizeBody({
               role="alert"
               className="min-w-0 shrink overflow-hidden text-right text-[0.7rem] text-destructive"
             >
-              Could not switch those wishes — {failure}
+              Couldn't update those items — {failure}
             </motion.p>
           )}
         </AnimatePresence>
@@ -439,7 +437,7 @@ function OptimizeBody({
               {formatPrice(selection.saved, currency)}
               {selection.unpriced > 0 && (
                 <span className="ml-2 text-[0.7rem]">
-                  + {plural(selection.unpriced, "unpriced wish", "unpriced wishes")}
+                  + {plural(selection.unpriced, "unpriced item")}
                 </span>
               )}
             </p>
@@ -470,10 +468,10 @@ function OptimizeBody({
               className={CONFIRM}
             >
               {/* The verb keeps its name through the flow — this button says *Switch* and the
-                  outcome says *Switched*. `Switch 0 wishes` at nothing ticked rather than a bare
+                  outcome says *Switched*. `Switch 0 cards` at nothing ticked rather than a bare
                   `Switch`: the count is what explains the greying, which is the difference
                   between a control that is out of reach and one that looks broken. */}
-              {pending ? "Switching…" : `Switch ${plural(selection.count, "wish", "wishes")}`}
+              {pending ? "Switching…" : `Switch ${plural(selection.count, "card")}`}
             </button>
           </>
         ) : (
@@ -630,7 +628,7 @@ function Row({
             // **A statement, not a warning.** `text-dim` and no live-region role: an unpriced
             // current printing is an ordinary hole in a bulk feed, not a fault, and it is the
             // whole reason this row opens unticked.
-            <span className="text-[0.7rem] leading-snug text-dim">No saving to count</span>
+            <span className="text-[0.7rem] leading-snug text-dim">No savings</span>
           ) : (
             <span className="text-[0.7rem] text-dim">
               Save{" "}
@@ -704,15 +702,14 @@ function Outcome({
               because they are now the same wish. The saving still stands. */}
           {outcome.merged > 0 && (
             <li>
-              {count(outcome.merged)} of them folded into a wish you already had in the same folder
-              at the same finish — the copies were added together.
+              {count(outcome.merged)} merged with an existing entry in the same folder and finish.
+              Their copies were added together.
             </li>
           )}
           {outcome.unpriced > 0 && (
             <li>
-              {plural(outcome.unpriced, "wish", "wishes")} moved from a printing this marketplace
-              does not price, so {outcome.unpriced === 1 ? "it counts" : "they count"} nothing
-              toward that figure.
+              {plural(outcome.unpriced, "item")} moved from an unpriced printing and{" "}
+              {verb(outcome.unpriced, "isn't", "aren't")} included in the savings.
             </li>
           )}
         </ul>
@@ -721,8 +718,7 @@ function Outcome({
       {outcome.skipped.length > 0 && (
         <div className="mt-4 rounded-md border border-border px-3 py-2">
           <p className="text-xs">
-            {plural(outcome.skipped.length, "wish was", "wishes were")} left exactly as
-            {outcome.skipped.length === 1 ? " it was" : " they were"}.
+            {plural(outcome.skipped.length, "item")} unchanged.
           </p>
           <ul className="mt-1.5 space-y-1 text-[0.7rem] leading-snug text-dim">
             {outcome.skipped.map((skip) => (
@@ -738,14 +734,14 @@ function Outcome({
 /**
  * The one sentence the outcome leads with — and the one the live region announces.
  *
- * **Zero moved is its own sentence rather than "Switched 0 wishes"**: every row came back `stale`
+ * **Zero moved is its own sentence rather than "Switched 0 cards"**: every row came back `stale`
  * or `missing`, which is a reason rather than a number, and the panel underneath names them.
  */
 function headlineOf(outcome: OptimizeOutcome, currency: Marketplace["currency"]): string {
   const moved = outcome.changed + outcome.merged;
-  if (moved === 0) return "Nothing moved — every wish had already changed since the preview.";
+  if (moved === 0) return "Nothing changed. All items were modified since the preview.";
   return (
-    `Switched ${plural(moved, "wish", "wishes")} to the cheapest printing, ` +
+    `Switched ${plural(moved, "card")} to the cheapest printing, ` +
     `saving ${formatPrice(outcome.saved, currency)}.`
   );
 }
@@ -753,10 +749,10 @@ function headlineOf(outcome: OptimizeOutcome, currency: Marketplace["currency"])
 /** One skipped wish, named and explained — the two statuses are two different things to do about
  *  it, so they are two different sentences rather than one word in a column. */
 function skippedLine(skip: OptimizeSkip): string {
-  const name = skip.name ?? `Wish ${skip.wishId}`;
+  const name = skip.name ?? `Item ${skip.wishId}`;
   return skip.status === "stale"
-    ? `${name} — its printing had already changed, so nothing was written.`
-    : `${name} — it is not on your wishlist any more.`;
+    ? `${name} — printing already changed, skipped.`
+    : `${name} — no longer on your wishlist.`;
 }
 
 /**
@@ -769,7 +765,7 @@ function skippedLine(skip: OptimizeSkip): string {
  */
 function passedOver(plan: WishlistOptimizePlan): string {
   return (
-    `Checked ${plural(plan.considered, "wish", "wishes")} · ` +
+    `Checked ${plural(plan.considered, "card")} · ` +
     `${count(plan.alreadyCheapest)} already cheapest · ${count(plan.skipped)} skipped.`
   );
 }
