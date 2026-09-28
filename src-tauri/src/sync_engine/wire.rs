@@ -1,4 +1,4 @@
-//! The encrypted envelope, batched at 200 ops per stored row.
+//! The encrypted envelope, batched at 200 ops or 512 KiB per stored row, whichever comes first.
 //!
 //! **200 is derived from the write limit and checked against the row cap, not the other way
 //! round.** The free tier allows 100 000 Durable Object rows written per day. A 50 000-row bulk
@@ -7,6 +7,15 @@
 //! the cap is not the binding constraint, and spec §7.7 says there is no separate snapshot
 //! artifact for it to bind on. [`tests::a_full_batch_is_far_below_the_two_megabyte_row_cap`]
 //! measures a real one rather than quoting that arithmetic.
+//!
+//! **Bytes bind too, because ~453 is an average and not a size any op promises.** It is a
+//! collection entry's. A deck note or a sticky note carries the reader's prose, whose body has no
+//! length cap, so two hundred of them — or one — can come to anything. Cut by count alone, a batch
+//! whose sealed text is over the relay's cap ([`MAX_SEALED_CHARS`], a 413 at the push) is refused
+//! on every attempt, and a push stops at the first chunk that fails, so everything queued behind
+//! it would never reach the relay either. So [`batches`] cuts at [`BATCH`] ops or [`BATCH_BYTES`]
+//! of plaintext, whichever comes first — on ordinary ops the count still does, so the arithmetic
+//! above is untouched — and [`oversized`] names the op no cut can save: one over the cap alone.
 
 use crate::sync_engine::merge::Op;
 use crate::sync_pair::crypto;
@@ -17,6 +26,74 @@ use serde::{Deserialize, Serialize};
 
 /// Ops per stored relay row. See the module doc — it is arithmetic, not tidiness.
 pub const BATCH: usize = 200;
+
+/// The longest `sealed` the relay stores, in characters of base64url. A longer one is a **413**
+/// `code: "too_large"` at the push, before the Durable Object — whose rows cap at 2 MB — is
+/// reached.
+///
+/// **It must equal `MAX_SEALED_CHARS` in `relay/src/log.ts`**, and
+/// [`tests::the_sealed_cap_is_the_relays`] reads that file to hold the two together: moved on one
+/// side only, it is a push refused by a relay this side believed would take it, or an op given up
+/// on that the relay would have stored.
+pub const MAX_SEALED_CHARS: usize = 1_500_000;
+
+/// The plaintext budget of one batch: bytes of the JSON list [`seal_batch`] seals, its brackets,
+/// commas and every op's `schema` stamp included.
+///
+/// **Under half the cap and not all of it, and the gap is what it buys.** A full budget seals to
+/// [`sealed_chars`]`(BATCH_BYTES)` = 699 104 characters against [`MAX_SEALED_CHARS`]'s 1 500 000,
+/// so no batch of several ops is ever what the relay refuses. An op over the budget on its own
+/// still goes — alone — and is accepted up to the cap itself, 1 124 958 bytes of JSON (~1.07 MiB),
+/// so only an op past *that* is lost to a push, and [`oversized`] is how a caller knows which. The
+/// gap also takes whatever a caller adds after the cut: a baseline's horizon rides each slice's
+/// first op, a few hundred bytes. It costs an ordinary import nothing — 200 ops at the measured
+/// ~453 B is ~90 KB — so the count binds first and the write-limit arithmetic stands.
+///
+/// The envelope's five clear fields are not in it: the relay caps `sealed` alone, and allows the
+/// request body a margin over that for them.
+pub const BATCH_BYTES: usize = 512 * 1024;
+
+/// What [`crypto::seal`] frames a plaintext with: the 24-byte XChaCha20 nonce it prefixes and the
+/// 16-byte Poly1305 tag the AEAD appends. `crypto` keeps its own constant private, so this one is
+/// held to what `seal` actually produces by
+/// [`tests::the_sealed_length_is_computed_exactly`] rather than by a shared name.
+const AEAD_OVERHEAD: usize = 24 + 16;
+
+/// Characters of `sealed` that `plaintext` bytes become: the AEAD's framing, then base64url with
+/// no padding, which is `⌈4n/3⌉`.
+const fn sealed_chars(plaintext: usize) -> usize {
+    plaintext
+        .saturating_add(AEAD_OVERHEAD)
+        .saturating_mul(4)
+        .div_ceil(3)
+}
+
+// A budget raised past the cap would make `batches` cut slices the relay refuses — the failure
+// this whole arrangement exists to remove — so it is a build that fails rather than a push.
+const _: () = assert!(sealed_chars(BATCH_BYTES) < MAX_SEALED_CHARS);
+
+/// `op` as [`seal_batch`] seals it: stamped with this build's user schema. **One function for
+/// both**, so the size [`batches`] and [`oversized`] measure is the size that is sealed.
+fn stamp(op: &Op) -> Op {
+    let mut op = op.clone();
+    op.schema = Some(crate::schema::USER_SCHEMA_VERSION);
+    op
+}
+
+/// Bytes of one stamped op's JSON. **An op that will not serialize measures as unbounded**: it can
+/// never be sealed either, so it is cut into a slice of its own and [`oversized`] names it, where
+/// counting it as nothing would fail every batch it landed in.
+fn op_bytes(op: &Op) -> usize {
+    serde_json::to_vec(&stamp(op)).map_or(usize::MAX, |json| json.len())
+}
+
+/// Bytes of the JSON list [`seal_batch`] seals for `ops`: the brackets, each stamped op, and a
+/// comma between each two.
+fn list_bytes(ops: &[Op]) -> usize {
+    ops.iter().fold(2 + ops.len().saturating_sub(1), |sum, op| {
+        sum.saturating_add(op_bytes(op))
+    })
+}
 
 /// One stored row's worth of ops, as it crosses the network.
 ///
@@ -106,14 +183,7 @@ pub fn seal_batch(group: &Group, device: &str, ops: &[Op]) -> Result<Envelope, W
     if ops.len() > BATCH {
         return Err(WireError::TooBig(ops.len()));
     }
-    let stamped: Vec<Op> = ops
-        .iter()
-        .cloned()
-        .map(|mut op| {
-            op.schema = Some(crate::schema::USER_SCHEMA_VERSION);
-            op
-        })
-        .collect();
+    let stamped: Vec<Op> = ops.iter().map(stamp).collect();
     let plaintext =
         serde_json::to_vec(&stamped).map_err(|e| WireError::Malformed(e.to_string()))?;
     // The last op's stamp, which is this batch's ordering key. `ops` is non-empty.
@@ -215,9 +285,53 @@ fn sealed_by_a_newer_build(plaintext: &[u8]) -> bool {
     })
 }
 
-/// Split a device's outbox into stored rows.
-pub fn batches(ops: &[Op]) -> impl Iterator<Item = &[Op]> {
-    ops.chunks(BATCH)
+/// Split a device's outbox into stored rows: contiguous slices, in order, covering every op once,
+/// each at most [`BATCH`] ops and [`BATCH_BYTES`] of the JSON [`seal_batch`] will seal.
+///
+/// **Greedy, and an op over the budget on its own is a slice of its own** rather than refused
+/// here: it may still be under the relay's cap (see [`BATCH_BYTES`]), and whether it is is
+/// [`oversized`]'s question, asked of the slice. Never an empty slice; no ops is no slices.
+///
+/// ⚠️ **Slice `i` no longer starts at `i * BATCH`** — a byte cut ends a slice early — so a caller
+/// that maps a slice back onto its outbox rows counts the lengths of the slices before it.
+pub fn batches(ops: &[Op]) -> Vec<&[Op]> {
+    let mut out = Vec::new();
+    let mut start = 0;
+    // The open slice's list as it would be sealed: brackets, ops, a comma between each two.
+    let mut bytes = 0usize;
+    for (i, op) in ops.iter().enumerate() {
+        let size = op_bytes(op);
+        // An open slice always takes its first op, so one over the budget opens a slice alone
+        // and the next op closes it.
+        if i > start
+            && (i - start == BATCH || bytes.saturating_add(1).saturating_add(size) > BATCH_BYTES)
+        {
+            out.push(&ops[start..i]);
+            start = i;
+        }
+        bytes = if i == start {
+            size.saturating_add(2)
+        } else {
+            bytes.saturating_add(1).saturating_add(size)
+        };
+    }
+    if start < ops.len() {
+        out.push(&ops[start..]);
+    }
+    out
+}
+
+/// Whether sealing exactly `ops` would produce a `sealed` longer than [`MAX_SEALED_CHARS`] — a
+/// batch the relay refuses with a 413 on every attempt, so no retry will ever send it.
+///
+/// **Computed, not sealed**: the stamped JSON's length, framed as [`crypto::seal`] frames it and
+/// base64url'd ([`sealed_chars`]). Sealing to find out would encrypt a megabyte to learn what the
+/// length already says, and [`tests::the_sealed_length_is_computed_exactly`] holds the arithmetic
+/// to real envelopes. Of a slice [`batches`] cut, only a one-op slice can answer `true` — any
+/// longer one is inside [`BATCH_BYTES`] — so `true` names one op too large ever to send, which is
+/// what lets a push tell it from a batch that failed for a reason a retry fixes.
+pub fn oversized(ops: &[Op]) -> bool {
+    sealed_chars(list_bytes(ops)) > MAX_SEALED_CHARS
 }
 
 #[cfg(test)]
@@ -299,6 +413,66 @@ mod tests {
 
     fn ops(n: usize) -> Vec<Op> {
         (0..n).map(realistic).collect()
+    }
+
+    /// A deck note whose body is `body` bytes of prose — the op with no size of its own. ASCII, so
+    /// one byte of body is one byte of JSON and a test can pad a list to an exact length.
+    fn note(i: usize, body: usize) -> Op {
+        let mut fields: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+        fields.insert("title".to_owned(), serde_json::json!("Primer"));
+        fields.insert("body".to_owned(), serde_json::json!("x".repeat(body)));
+        fields.insert("sort_order".to_owned(), serde_json::json!(0));
+        let mut parents = BTreeMap::new();
+        parents.insert(
+            "deck".to_owned(),
+            Some("aabbccddeeff00112233445566778899".to_owned()),
+        );
+        Op {
+            table: "deck_notes".into(),
+            uid: format!("{i:032x}"),
+            kind: Kind::Put,
+            fields,
+            counters: BTreeMap::new(),
+            parents,
+            at: Hlc {
+                ms: 1_787_000_000_000 + i as i64,
+                ctr: 0,
+                device: "0123456789abcdef".into(),
+            },
+            baseline: false,
+            horizon: None,
+            schema: None,
+        }
+    }
+
+    /// Bytes of the JSON [`seal_batch`] seals for `slice`, stamped the way it stamps — spelled out
+    /// here rather than through [`stamp`], so the measure under test is checked against something
+    /// it does not share.
+    fn plaintext(slice: &[Op]) -> usize {
+        let stamped: Vec<Op> = slice
+            .iter()
+            .cloned()
+            .map(|mut op| {
+                op.schema = Some(crate::schema::USER_SCHEMA_VERSION);
+                op
+            })
+            .collect();
+        serde_json::to_vec(&stamped).unwrap().len()
+    }
+
+    /// `cut` partitions `ops`: no empty slice, each one starting where the last ended — the same
+    /// memory, not an equal copy — and every op covered once, in order.
+    fn assert_partition(ops: &[Op], cut: &[&[Op]]) {
+        let mut at = 0;
+        for slice in cut {
+            assert!(!slice.is_empty(), "an empty slice at op {at}");
+            assert!(
+                std::ptr::eq(slice.as_ptr(), ops[at..].as_ptr()),
+                "a slice that does not start at op {at}"
+            );
+            at += slice.len();
+        }
+        assert_eq!(at, ops.len(), "every op, once");
     }
 
     /// Everything but the schema stamp comes back as it went, and the stamp is the one
@@ -483,20 +657,153 @@ mod tests {
     }
 
     /// `batches` splits an outbox into stored rows, and 50 000 ops is 250 of them — the
-    /// arithmetic spec §7.7 derives the batch size from, asserted rather than quoted.
+    /// arithmetic spec §7.7 derives the batch size from, asserted rather than quoted. On ops the
+    /// measured size the count cuts every slice and the byte budget none. (Cutting all 50 000
+    /// measured 2.9 s in a debug build on Linux, and proves nothing these 401 do not — every one
+    /// of them is the same size.)
     #[test]
     fn fifty_thousand_ops_are_two_hundred_and_fifty_stored_rows() {
-        let all = ops(1);
-        assert_eq!(batches(&all).count(), 1);
         assert_eq!(50_000_usize.div_ceil(BATCH), 250);
-        let n = ops(BATCH + 1);
-        let sizes: Vec<usize> = batches(&n).map(<[Op]>::len).collect();
-        assert_eq!(sizes, vec![BATCH, 1]);
+        let n = ops(2 * BATCH + 1);
+        let cut = batches(&n);
+        assert_partition(&n, &cut);
+        let sizes: Vec<usize> = cut.iter().map(|slice| slice.len()).collect();
+        assert_eq!(sizes, vec![BATCH, BATCH, 1]);
+        assert!(
+            batches(&[]).is_empty(),
+            "no ops is no rows, not one empty one"
+        );
+    }
+
+    /// **Bytes cut a batch the count would have let through.** Twelve deck notes of 100 KiB are
+    /// far under 200 ops and far over one budget: five fit and a sixth would not. Every slice is
+    /// inside [`BATCH_BYTES`] as sealed, and every slice but the last is as full as it can be —
+    /// the next op would have broken the budget — so the cut spends no more rows than it must.
+    #[test]
+    fn bytes_cut_a_batch_before_the_count_does() {
+        let notes: Vec<Op> = (0..12).map(|i| note(i, 100 * 1024)).collect();
+        let cut = batches(&notes);
+        assert_partition(&notes, &cut);
+        let sizes: Vec<usize> = cut.iter().map(|slice| slice.len()).collect();
+        assert_eq!(sizes, [5, 5, 2]);
+
+        let mut end = 0;
+        for slice in &cut {
+            let start = end;
+            end += slice.len();
+            let bytes = plaintext(slice);
+            assert_eq!(list_bytes(slice), bytes, "the measure is what is sealed");
+            assert!(
+                bytes <= BATCH_BYTES,
+                "{bytes} B against a {BATCH_BYTES} B budget"
+            );
+            if end < notes.len() {
+                assert!(
+                    plaintext(&notes[start..=end]) > BATCH_BYTES,
+                    "a slice closed before it was full"
+                );
+            }
+            assert!(!oversized(slice));
+        }
+    }
+
+    /// **An op over the budget goes alone, and only one over the cap is `oversized`.** A 700 KiB
+    /// note is past the budget and inside the cap: alone, it seals short of [`MAX_SEALED_CHARS`]
+    /// and the relay takes it. A 2 MiB note is past both, and no cut can save it. Neither pulls a
+    /// neighbour into its slice, and the ordinary ops around them still batch together.
+    #[test]
+    fn an_op_over_the_budget_goes_alone_and_only_one_over_the_cap_is_oversized() {
+        let g = group(0);
+        let outbox = [
+            note(0, 10),
+            note(1, 10),
+            note(2, 700 * 1024),
+            note(3, 10),
+            note(4, 2 * 1024 * 1024),
+            note(5, 10),
+            note(6, 10),
+        ];
+        let cut = batches(&outbox);
+        assert_partition(&outbox, &cut);
+        let sizes: Vec<usize> = cut.iter().map(|slice| slice.len()).collect();
+        assert_eq!(sizes, [2, 1, 1, 1, 2]);
+
+        let past_the_budget = cut[1];
+        assert!(!oversized(past_the_budget));
+        let sealed = seal_batch(&g, "dev-a", past_the_budget).unwrap().sealed;
+        assert!(sealed.len() <= MAX_SEALED_CHARS, "{} chars", sealed.len());
+
+        // Not sealed to prove it: `oversized_turns_at_exactly_the_relays_cap` holds the
+        // arithmetic to a real envelope at the cap itself.
+        assert!(oversized(cut[3]));
+
+        for ordinary in [cut[0], cut[2], cut[4]] {
+            assert!(!oversized(ordinary));
+        }
+    }
+
+    /// **`oversized` is arithmetic, and this holds it to real envelopes** — the stamped JSON's
+    /// length, [`crypto::seal`]'s nonce and tag, base64url without padding — to the character,
+    /// across all three ways base64 rounds (a sealed length of 3k, 3k+1 and 3k+2 bytes), and for
+    /// an op that already carries a stamp, which sealing replaces rather than adds to.
+    #[test]
+    fn the_sealed_length_is_computed_exactly() {
+        let g = group(0);
+        let mut remainders = std::collections::BTreeSet::new();
+        for pad in 0..3 {
+            let mut restamped = note(2, pad);
+            restamped.schema = Some(1);
+            for batch in [
+                vec![note(0, pad)],
+                vec![realistic(0), note(1, 40 + pad)],
+                vec![restamped],
+            ] {
+                let envelope = seal_batch(&g, "0123456789abcdef", &batch).unwrap();
+                assert_eq!(list_bytes(&batch), plaintext(&batch));
+                assert_eq!(sealed_chars(list_bytes(&batch)), envelope.sealed.len());
+                remainders.insert((list_bytes(&batch) + AEAD_OVERHEAD) % 3);
+            }
+        }
+        assert_eq!(remainders.len(), 3, "every base64 remainder, measured");
+    }
+
+    /// **`oversized` turns at the relay's cap to the byte.** A note padded until its list is the
+    /// largest plaintext that seals inside [`MAX_SEALED_CHARS`] — ⌊1 500 000 × 3/4⌋ less the
+    /// nonce and tag — seals to exactly the cap and is not oversized; one byte more is. The two
+    /// figures [`BATCH_BYTES`]'s doc quotes are asserted beside it.
+    #[test]
+    fn oversized_turns_at_exactly_the_relays_cap() {
+        let largest = MAX_SEALED_CHARS * 3 / 4 - AEAD_OVERHEAD;
+        assert_eq!(largest, 1_124_960);
+        let pad = largest - list_bytes(&[note(0, 0)]);
+
+        let fits = [note(0, pad)];
+        assert_eq!(list_bytes(&fits), largest);
+        assert!(!oversized(&fits));
+        let envelope = seal_batch(&group(0), "dev-a", &fits).unwrap();
+        assert_eq!(envelope.sealed.len(), MAX_SEALED_CHARS);
+
+        assert!(oversized(&[note(0, pad + 1)]));
+        assert_eq!(sealed_chars(BATCH_BYTES), 699_104);
+    }
+
+    /// **The cap is the relay's, read out of the relay's own source**, so moving it on one side is
+    /// red on the other rather than a push that fails in the field or an op given up on for
+    /// nothing.
+    #[test]
+    fn the_sealed_cap_is_the_relays() {
+        let relay = include_str!("../../../relay/src/log.ts");
+        assert_eq!(MAX_SEALED_CHARS, 1_500_000);
+        assert!(
+            relay.contains("export const MAX_SEALED_CHARS = 1_500_000;"),
+            "relay/src/log.ts no longer exports the cap `batches` and `oversized` cut against"
+        );
     }
 
     /// **A full batch measured, not estimated.** Two hundred realistic collection ops, sealed:
     /// the number printed here is what a stored relay row actually costs, and the assertion is
-    /// against the Durable Object's 2 MB per-row cap.
+    /// against the Durable Object's 2 MB per-row cap — and against the relay's own, which is
+    /// tighter, and the byte budget, which on ops like these never binds.
     #[test]
     fn a_full_batch_is_far_below_the_two_megabyte_row_cap() {
         let g = group(0);
@@ -514,6 +821,9 @@ mod tests {
             row < 2 * 1024 * 1024,
             "a stored row is {row} B against a 2 MB cap"
         );
+        assert!(!oversized(&batch));
+        assert!(envelope.sealed.len() < MAX_SEALED_CHARS);
+        assert_eq!(batches(&batch).len(), 1, "the count binds, not the bytes");
     }
 
     /// **The relay is told six things and no seventh.** The op count is deliberately not one of

@@ -214,18 +214,18 @@ describe("the words", () => {
   it("says what the cut rows save, in the singular and the plural", () => {
     expect(cutFooter([BOLT], "usd")).toEqual({
       line: "1 more saves $18.40",
-      said: "1 more wish saves $18.40",
+      said: "1 more card saves $18.40",
     });
     expect(cutFooter([BOLT, RING], "eur")).toEqual({
       line: "2 more save €24.92",
-      said: "2 more wishes save €24.92",
+      said: "2 more cards save €24.92",
     });
   });
 
   /** The number and the sum are both over what is priced, and a cut with nothing priced in it
    *  says nothing rather than `$0.00`. */
   it("never counts or sums an unpriced move in the cut line", () => {
-    expect(cutFooter([BOLT, FROG], "usd")?.said).toBe("1 more wish saves $18.40");
+    expect(cutFooter([BOLT, FROG], "usd")?.said).toBe("1 more card saves $18.40");
     expect(cutFooter([FROG], "usd")).toBeNull();
   });
 
@@ -240,26 +240,26 @@ describe("the words", () => {
   it("says the wishes the plan could not compare, naming the marketplace", () => {
     expect(skippedFooter(1, MARKETPLACES.tcgplayer)).toEqual({
       line: "1 more: no TCGplayer price",
-      said: "1 more has no price at TCGplayer to compare against",
+      said: "1 more has no TCGplayer price",
     });
     expect(skippedFooter(2, MARKETPLACES.cardkingdom)).toEqual({
       line: "2 more: no Card Kingdom price",
-      said: "2 more have no price at Card Kingdom to compare against",
+      said: "2 more have no Card Kingdom price",
     });
     expect(skippedOnly(1, MARKETPLACES.tcgplayer)).toBe(
-      "1 pinned wish has no price at TCGplayer to compare against — so there is no saving to count.",
+      "1 pinned card has no TCGplayer price, so savings can't be calculated.",
     );
     expect(skippedOnly(3, MARKETPLACES.manapool)).toBe(
-      "3 pinned wishes have no price at Mana Pool to compare against — so there is no saving to count.",
+      "3 pinned cards have no Mana Pool price, so savings can't be calculated.",
     );
   });
 
   it("says why there is no saving when no move is priced", () => {
     expect(unpricedOnly(1, MARKETPLACES.tcgplayer)).toBe(
-      "1 pinned wish could move to a cheaper printing, but its current printing has no price at TCGplayer — so there is no saving to count.",
+      "1 pinned card has a cheaper printing, but its current printing has no TCGplayer price, so savings can't be calculated.",
     );
     expect(unpricedOnly(3, MARKETPLACES.cardmarket)).toMatch(
-      /^3 pinned wishes could move .* their current printings have no price at Cardmarket/,
+      /^3 pinned cards have a cheaper printing, .* their current printings have no Cardmarket price/,
     );
   });
 });
@@ -272,7 +272,7 @@ describe("WishlistSavingsWidget", () => {
       draw();
 
       expect(
-        screen.getByRole("button", { name: "Could save $24.92 on 2 wishes · Optimise prices" }),
+        screen.getByRole("button", { name: "Could save $24.92 on 2 cards · Optimize prices" }),
       ).toBeInTheDocument();
       expect(screen.getByText("$24.92")).toBeInTheDocument();
       const rows = screen.getAllByRole("listitem");
@@ -309,7 +309,7 @@ describe("WishlistSavingsWidget", () => {
       expect(fit.rowsFit(51, 74)).toBeGreaterThan(shown);
       expect(screen.getAllByRole("listitem")).toHaveLength(shown);
       expect(
-        screen.getByText(`${8 - shown} more wishes save ${formatPrice(8 - shown, "usd")}`),
+        screen.getByText(`${8 - shown} more cards save ${formatPrice(8 - shown, "usd")}`),
       ).toBeInTheDocument();
       expect(
         screen.getByText(`${8 - shown} more save ${formatPrice(8 - shown, "usd")}`),
@@ -330,7 +330,7 @@ describe("WishlistSavingsWidget", () => {
       expect(fit.rowsFit(51, 74 + 24)).toBeGreaterThan(shown);
       expect(screen.getAllByRole("listitem")).toHaveLength(shown);
       expect(
-        screen.getByText(`${8 - shown} more wishes save ${formatPrice(8 - shown, "usd")}`),
+        screen.getByText(`${8 - shown} more cards save ${formatPrice(8 - shown, "usd")}`),
       ).toBeInTheDocument();
       expect(screen.getByText("1 more has no current price")).toBeInTheDocument();
     });
@@ -370,7 +370,7 @@ describe("WishlistSavingsWidget", () => {
       draw({ fit });
 
       expect(
-        screen.getByRole("button", { name: "Could save $8.00 on 8 wishes · Optimise prices" }),
+        screen.getByRole("button", { name: "Could save $8.00 on 8 cards · Optimize prices" }),
       ).toBeInTheDocument();
       const shown = fit.rowsFit(51, 74 + 24 + 24);
       expect(fit.rowsFit(51, 74 + 24)).toBeGreaterThan(shown);
@@ -380,7 +380,7 @@ describe("WishlistSavingsWidget", () => {
       const drawn = screen.getByText("1 more: no TCGplayer price");
       expect(drawn).toHaveAttribute("aria-hidden", "true");
       expect(drawn.closest("p")?.classList.contains("truncate")).toBe(true);
-      expect(screen.getByText("1 more has no price at TCGplayer to compare against")).toHaveClass(
+      expect(screen.getByText("1 more has no TCGplayer price")).toHaveClass(
         "sr-only",
       );
       expect(screen.queryByText(ALL_CHEAPEST)).toBeNull();
@@ -452,7 +452,7 @@ describe("WishlistSavingsWidget", () => {
           expect(screen.queryByRole("list")).toBeNull();
           // The figure still counts every wish, so a cut line would only say it again.
           expect(
-            screen.getByRole("button", { name: "Could save $8.00 on 8 wishes · Optimise prices" }),
+            screen.getByRole("button", { name: "Could save $8.00 on 8 cards · Optimize prices" }),
           ).toBeInTheDocument();
           expect(screen.queryByText(/more (wishes )?save/)).toBeNull();
           const lineTexts = [UNPRICED, SKIPPED].filter((t) => screen.queryByText(t) !== null);
@@ -475,7 +475,7 @@ describe("WishlistSavingsWidget", () => {
         draw({ fit });
 
         expect(screen.getAllByRole("listitem")).toHaveLength(shown);
-        expect(screen.getByText(`${8 - shown} more wishes save $${8 - shown}.00`)).toHaveClass(
+        expect(screen.getByText(`${8 - shown} more cards save $${8 - shown}.00`)).toHaveClass(
           "sr-only",
         );
       });
@@ -510,10 +510,10 @@ describe("WishlistSavingsWidget", () => {
 
       draw();
 
-      expect(screen.getByText("Pricing your pinned wishes…")).toBeInTheDocument();
+      expect(screen.getByText("Checking prices…")).toBeInTheDocument();
       expect(screen.queryByText("$18.40")).toBeNull();
       expect(
-        await screen.findByRole("button", { name: "Could save €12.00 on 1 wish · Optimise prices" }),
+        await screen.findByRole("button", { name: "Could save €12.00 on 1 card · Optimize prices" }),
       ).toBeInTheDocument();
       expect(wishlistOptimizePlan).toHaveBeenCalledWith(payloadAt("cardmarket"));
     });
@@ -525,7 +525,7 @@ describe("WishlistSavingsWidget", () => {
 
       draw();
 
-      expect(screen.getByText("Pricing your pinned wishes…")).toBeInTheDocument();
+      expect(screen.getByText("Checking prices…")).toBeInTheDocument();
     });
 
     it("says a refusal in the backend's words", async () => {
@@ -534,7 +534,7 @@ describe("WishlistSavingsWidget", () => {
       draw();
 
       expect(
-        await screen.findByText("Could not price your wishlist — The database is busy."),
+        await screen.findByText("Couldn't load wishlist prices — The database is busy."),
       ).toBeInTheDocument();
     });
 
@@ -586,7 +586,7 @@ describe("WishlistSavingsWidget", () => {
 
       expect(screen.getByText(unpricedOnly(1, MARKETPLACES.tcgplayer))).toBeInTheDocument();
       expect(
-        screen.getByText("2 more have no price at TCGplayer to compare against"),
+        screen.getByText("2 more have no TCGplayer price"),
       ).toBeInTheDocument();
     });
   });
@@ -755,7 +755,7 @@ describe("which wishes it counts", () => {
       expect(screen.queryByRole("button", { name: "Wishlists to count" })).toBeNull();
       expect(
         screen.getByText(
-          "Choose Chosen under Which wishlists to pick the wishlists this card counts.",
+          "Choose Chosen under Which wishlists to pick the wishlists this widget counts.",
         ),
       ).toBeInTheDocument();
     });

@@ -233,10 +233,10 @@ export function WidgetCard({
               {(close) => (
                 <div className="flex flex-col gap-2.5">
                   <p className="m-0 text-sm leading-[1.35]">
-                    Take <span className="font-medium">{title}</span> off the page?
+                    Remove <span className="font-medium">{title}</span>?
                   </p>
                   <p className="m-0 text-xs leading-[1.35] text-dim">
-                    Its settings go with it. You can add it again from the catalogue.
+                    Its settings are removed too. You can add it back from the catalogue.
                   </p>
                   <div className="flex gap-1.5">
                     <button
@@ -263,7 +263,7 @@ export function WidgetCard({
                         FOCUS,
                       )}
                     >
-                      Keep
+                      Cancel
                     </button>
                   </div>
                 </div>

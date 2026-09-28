@@ -60,7 +60,7 @@ mod tests {
 
     #[test]
     fn prefers_exe_dir_when_writable() {
-        let tmp = std::env::temp_dir().join("mtgtest-paths");
+        let tmp = crate::scratch::path("paths");
         let _ = std::fs::remove_dir_all(&tmp);
         let exe = tmp.join("exe");
         let app = tmp.join("app");
@@ -78,7 +78,7 @@ mod tests {
     /// one careless condition away from removing.
     #[test]
     fn a_writable_directory_survives_the_probe_with_its_contents() {
-        let tmp = std::env::temp_dir().join("mtgtest-paths-probe");
+        let tmp = crate::scratch::path("paths-probe");
         let _ = std::fs::remove_dir_all(&tmp);
         let data = tmp.join("data");
         std::fs::create_dir_all(&data).unwrap();
@@ -101,7 +101,7 @@ mod tests {
     /// had.
     #[test]
     fn no_executable_path_is_the_per_user_directory() {
-        let tmp = std::env::temp_dir().join("mtgtest-paths-noexe");
+        let tmp = crate::scratch::path("paths-noexe");
         let _ = std::fs::remove_dir_all(&tmp);
         let app = tmp.join("app");
 
@@ -115,7 +115,7 @@ mod tests {
 
     #[test]
     fn falls_back_to_appdata_when_exe_dir_unusable() {
-        let tmp = std::env::temp_dir().join("mtgtest-paths-fallback");
+        let tmp = crate::scratch::path("paths-fallback");
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         // A regular file cannot host a child directory, so `<exe>/data` is uncreatable.

@@ -136,7 +136,7 @@ const RANGE_IDS = RANGES.map((range) => range.id);
  * after install has no yesterday to compare with, and that heals by itself.
  */
 export const NO_HISTORY_SENTENCE =
-  "No price history for this copy yet. Prices are recorded on each sync, and a trend will show here once more data is collected.";
+  "No price history yet. Prices are recorded on each sync.";
 
 /**
  * What this copy is called: the treatment's word where the printing has one (`Surge Foil`), the
@@ -273,7 +273,7 @@ function Body({
     <div className="flex min-h-0 flex-auto flex-col">
       {error !== null && (
         <p role="alert" className="mx-5 mt-3 text-sm text-destructive">
-          Could not read this card — {error}
+          Couldn't load this card — {error}
         </p>
       )}
       {!pending && error === null && card === null && (
@@ -577,12 +577,12 @@ function HistoryFigures({
   if (error !== null) {
     return (
       <p role="alert" className="text-sm text-destructive">
-        Could not read price history — {error}
+        Couldn't load price history — {error}
       </p>
     );
   }
   if (pending || history === null || series === null || stats === null) {
-    return <p className="text-sm text-dim">Reading price history…</p>;
+    return <p className="text-sm text-dim">Loading price history…</p>;
   }
 
   const money = (value: number) => formatPrice(value, currency);
@@ -632,7 +632,7 @@ function HistoryFigures({
         />
       ) : (
         <p className="text-sm text-dim">
-          Not enough price history yet. At least two days of prices are required to draw a chart.
+          Not enough data yet. A chart needs at least two days of prices.
         </p>
       )}
 
@@ -767,7 +767,7 @@ function RangeBar({
   return (
     <dd>
       <span className="sr-only">
-        Today&rsquo;s {now} is {pct}% of the way from the low of {low} to the high of {high} over{" "}
+        Today&rsquo;s {now} is {pct}% of the way from the low ({low}) to the high ({high}) over{" "}
         {rangePhrase(range)}.
       </span>
       <span aria-hidden="true" className="mt-1 flex items-center gap-2.5">

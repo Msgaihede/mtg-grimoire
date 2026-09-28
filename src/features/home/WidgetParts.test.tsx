@@ -16,7 +16,7 @@ import { WidgetFooterLine } from "./WidgetParts";
  */
 describe("WidgetFooterLine", () => {
   const LINE = "1 more: no Cardmarket price";
-  const SAID = "1 more has no price at Cardmarket to compare against";
+  const SAID = "1 more has no Cardmarket price";
 
   it("draws the short line on one line and speaks the whole sentence", () => {
     render(<WidgetFooterLine line={LINE} said={SAID} />);

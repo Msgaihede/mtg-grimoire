@@ -152,7 +152,7 @@ function rowPx(caption: boolean): number {
 const BRIDGE_MARKER = "homeDeckCompletion";
 
 /** The word a figure measured on the theory list leads with. See the module doc. */
-const PLAN = "Plan";
+const PLAN = "Theory";
 
 /** The `Complete decks` switch's label, read off the registry so the sentence below cannot point
  *  at a renamed row. */
@@ -173,19 +173,19 @@ function pickWords(key: string, optionId: string): { row: string; option: string
   };
 }
 
-const PENDING = "Measuring your decks…";
+const PENDING = "Loading decks…";
 /** `All decks` under `Collection` with nothing to measure. **Never drawn under `Chosen…`**, where
  *  an archived choice is kept and the reader has decks by definition: that is
  *  {@link CHOSEN_UNMEASURABLE}. */
 export const NO_DECKS =
-  "No decks to measure. Build a deck on the Decks page to track completion.";
+  "No decks yet. Build a deck on the Decks page to track completion.";
 /** `All decks` under `Theory` with nothing to compare — which is every reader who has never set a
  *  deck's kind to `Theory + Actual`, so it names the setting that makes one. */
 export const NO_PLANS =
-  "No theory lists to compare. Set a deck's kind to Theory + Actual to track it here.";
+  "No decks with a theory list. Set a deck's kind to Theory + Actual to track it here.";
 export const NOTHING_CHOSEN = "No decks chosen. Choose decks in this widget's settings.";
 export const CHOSEN_UNMEASURABLE =
-  "The chosen decks cannot be measured this way. Choose other decks in this widget's settings.";
+  "These decks can't be compared this way. Choose different decks in this widget's settings.";
 export const ALL_COMPLETE = `All decks are complete. Enable ${completeWord()} in settings to view them.`;
 
 /** What `All decks` says when nothing is in scope, by comparison. */
@@ -402,14 +402,14 @@ function tileCaption(row: DeckCompletion, price: string): string {
 export function rowHint(row: DeckCompletion, marketplace: Marketplace): string | undefined {
   const parts: string[] = [];
   if (row.list === "theory") {
-    parts.push("This deck's actual list, measured against its theory list.");
+    parts.push("This deck's actual list, compared to its theory list.");
   }
   if (row.missing > 0 && row.missingCost === null) {
     parts.push(`Nothing on this deck's list has a price at ${marketplace.label}.`);
   } else if (row.unpricedMissing > 0) {
     const n = row.unpricedMissing;
     parts.push(
-      `${plural(n, "missing copy", "missing copies")} with no price at ${marketplace.label} ${n === 1 ? "is" : "are"} not in this figure.`,
+      `${plural(n, "missing copy", "missing copies")} without a ${marketplace.label} price ${n === 1 ? "isn't" : "aren't"} included.`,
     );
   }
   return parts.length === 0 ? undefined : parts.join(" ");
@@ -488,7 +488,7 @@ export function DeckCompletionWidget({ widget, fit, still }: WidgetBodyProps): R
   if (failure !== null) {
     return (
       <WidgetMessage tone="destructive">
-        Could not measure your decks — {ipcError(failure)}
+        Couldn't load deck progress — {ipcError(failure)}
       </WidgetMessage>
     );
   }
@@ -617,7 +617,7 @@ export function DeckCompletionWidgetSettings({
   if (completionScope(widget) !== "chosen") {
     return (
       <p className="m-0 text-xs text-dim">
-        Choose {words.option} under {words.row} to pick the decks this card measures.
+        Choose {words.option} under {words.row} to pick the decks this widget tracks.
       </p>
     );
   }
@@ -651,7 +651,7 @@ export function DeckCompletionWidgetSettings({
       <MultiDropdown
         fill
         size="sm"
-        label="Decks to measure"
+        label="Decks to track"
         searchable={options.length > 8}
         searchLabel="Search decks"
         options={options}
@@ -664,7 +664,7 @@ export function DeckCompletionWidgetSettings({
       )}
       {decksQuery.isError && (
         <p className="m-0 text-xs text-destructive">
-          Could not read your decks — {ipcError(decksQuery.error)}
+          Couldn't load your decks — {ipcError(decksQuery.error)}
         </p>
       )}
     </div>

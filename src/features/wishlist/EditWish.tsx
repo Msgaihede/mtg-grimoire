@@ -349,7 +349,7 @@ function EditWishPanel({
             <button
               type="button"
               onClick={() => onAnyPrinting(row)}
-              aria-label={`Any printing of ${row.name}, instead of this one`}
+              aria-label={`Any printing of ${row.name}`}
               className={cn(PANEL_BUTTON, "w-full", NEUTRAL_HOVER)}
             >
               Any printing
@@ -362,7 +362,7 @@ function EditWishPanel({
           // control, because a reason a reader has to hover for is a reason half of them never
           // read — `MoveToFolder`'s `forbiddenReason` makes the same call about its own list.
           <p id={reasonId} className="text-[0.7rem] leading-relaxed text-dim">
-            No other printings to list — this one has left the card database.
+            No other printings. This one is no longer in the card database.
           </p>
         )}
       </div>

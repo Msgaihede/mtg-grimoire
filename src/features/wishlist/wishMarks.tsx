@@ -53,7 +53,7 @@ export function ElsewhereMark({ count }: { count: number }) {
   // Not a guard the caller has to remember: nearly every row is `0`, and a mark that drew an
   // empty box on all of them would put a gap in every caption in the list.
   if (count <= 0) return null;
-  const sentence = `Also on your wishlist as ${count} other ${count === 1 ? "wish" : "wishes"}`;
+  const sentence = `Also on your wishlist ${count} more ${count === 1 ? "time" : "times"}`;
   return (
     <Copy
       role="img"

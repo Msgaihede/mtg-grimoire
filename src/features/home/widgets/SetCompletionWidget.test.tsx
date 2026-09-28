@@ -142,7 +142,7 @@ describe("SetCompletionWidget", () => {
   it("says it is counting while the read is out", () => {
     setCompletion.mockImplementation(() => new Promise(() => {}));
     draw();
-    expect(screen.getByText("Counting your sets…")).toBeInTheDocument();
+    expect(screen.getByText("Loading sets…")).toBeInTheDocument();
   });
 
   it("says where sets come from when there are none", async () => {
@@ -154,7 +154,7 @@ describe("SetCompletionWidget", () => {
     setCompletion.mockRejectedValue("no such table");
     draw();
     expect(
-      await screen.findByText("Could not count your sets — no such table"),
+      await screen.findByText("Couldn't load sets — no such table"),
     ).toBeInTheDocument();
   });
 

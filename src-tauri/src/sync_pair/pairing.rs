@@ -950,8 +950,10 @@ pub async fn sync_device_rename(
 ///    emits no baseline** — [`client::run_once`] would hand thousands of ops to the very device
 ///    this is about to remove. It also pays any unpublished join, and **a debt it could not pay
 ///    refuses the removal** ([`JOIN_NOT_PUBLISHED`]).
-/// 3. **Plan the rotation, which writes nothing** ([`identity::plan_rotation`]), and publish it
-///    ([`client::post_rotation`]).
+/// 3. **Plan the rotation, which writes nothing** ([`identity::plan_rotation_by`]), and publish it
+///    ([`client::post_rotation`]). It steps the epoch by [`client::removal_step`] — two once the
+///    relay has advertised it, which is the authenticated removal marker every adopting device
+///    reads (`identity::REMOVAL_STEP`), and one against a relay that has not.
 /// 4. **Commit only on a 2xx** ([`identity::commit_rotation`]).
 ///
 /// **`identity::revoke_device` is gone and steps 3 and 4 are what replaced it.** It rotated
@@ -973,7 +975,11 @@ async fn remove_device(conn: &Connection, device_id: &str) -> Result<(), String>
     if identity::roster_is_dirty(conn)? {
         return Err(JOIN_NOT_PUBLISHED.to_owned());
     }
-    let plan = identity::plan_rotation(conn, device_id)?;
+    // **Two epochs ahead once the relay has said it takes that** — the join/removal marker
+    // (`identity::REMOVAL_STEP`). The round trip above has just read `/keys`, so the answer is
+    // as fresh as it can be; a relay that has never advertised `removalStep` is still sent the
+    // `+1` its `/rotate` accepts, and once it has, it cannot talk this device back down.
+    let plan = identity::plan_rotation_by(conn, device_id, client::removal_step(conn))?;
     client::post_rotation(conn, &plan).await?;
     identity::commit_rotation(conn, device_id, &plan)
 }
@@ -984,6 +990,11 @@ async fn remove_device(conn: &Connection, device_id: &str) -> Result<(), String>
 /// reason: the write connection is behind a `Mutex`, a guard on it cannot cross an `await` on a
 /// multi-threaded runtime, and `spawn_blocking` moves the whole trip to a thread where a
 /// `block_on` is legal and the guard never has to be `Send`.
+///
+/// **Bounded by [`sync::with_write`], where [`sync_group_leave`] waits — on purpose.** A removal
+/// means nothing until the relay accepts it and opens with a round trip of its own, so waiting out
+/// a sync trip only to start another buys nothing a second press would not; *busy* after five
+/// seconds is the kinder answer. `sync::with_write_waiting`'s doc has the whole argument.
 #[tauri::command]
 pub async fn sync_device_revoke(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1006,7 +1017,8 @@ pub async fn sync_device_revoke(
 /// Leave the group this device is in. **Three steps, and the third runs whatever the second
 /// said** — spec §2.1.
 ///
-/// 1. [`identity::plan_departure`], which writes nothing and names everyone *but* this device.
+/// 1. [`identity::plan_departure_by`], which writes nothing, names everyone *but* this device, and
+///    steps the epoch as a removal does ([`client::removal_step`]).
 /// 2. [`client::post_rotation`], **best effort**. A 500, a timeout, a plane — none of them is a
 ///    reason a reader cannot leave.
 /// 3. [`identity::leave_group`] **and** [`entitlement::clear`], unconditionally.
@@ -1050,7 +1062,12 @@ async fn leave_group_now(conn: &Connection) -> Result<(), String> {
     // close behind this device, so the others go on listing it until somebody removes it by hand.
     // The panel's copy says so, because a reader who leaves over a dead relay has to know that
     // their other devices have not heard.
-    if let Ok(plan) = identity::plan_departure(conn) {
+    //
+    // **The step is a removal's** (`identity::REMOVAL_STEP` once the relay has advertised it):
+    // to every device that stays, this device leaving is this device removed, and it holds every
+    // key they must now forget. With no round trip in front of it, the step is whatever the last
+    // sync's `/keys` answer latched — which is `+1`, and still accepted, until one has.
+    if let Ok(plan) = identity::plan_departure_by(conn, client::removal_step(conn)) {
         let _ = client::post_rotation(conn, &plan).await;
     }
 
@@ -1064,6 +1081,12 @@ async fn leave_group_now(conn: &Connection) -> Result<(), String> {
 /// write connection is behind a `Mutex`, a guard on it cannot cross an `await` on a
 /// multi-threaded runtime, and `spawn_blocking` moves the whole trip to a thread where a
 /// `block_on` is legal.
+///
+/// **[`sync::with_write_waiting`] and never [`sync::with_write`]** (issue #546, item 7). A sync trip
+/// holds the write connection across its whole round trip, so under the bounded wait a Leave
+/// pressed during a slow trip answered *the database is busy* — and "always possible" had a
+/// condition. This press waits the trip out instead, which is bounded because every request in a
+/// trip is; that helper's doc says why a departure is the one press that earns it.
 #[tauri::command]
 pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     let state = state.inner().clone();
@@ -1073,7 +1096,7 @@ pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<
             .enable_all()
             .build()
             .map_err(|e| e.to_string())?;
-        sync::with_write(&state, |conn| runtime.block_on(leave_group_now(conn)))
+        sync::with_write_waiting(&state, |conn| runtime.block_on(leave_group_now(conn)))
     })
     .await;
     // **Three marks, because the update hook hears none of what a departure writes.**
@@ -2001,12 +2024,35 @@ mod tests {
     /// The three requests the round trip in front of a removal makes, all answering "nothing to
     /// do". There is no `/push` mock because the outbox is empty — `memory_pair` installs no
     /// capture triggers — so a push that happened would 404 loudly rather than pass silently.
+    ///
+    /// **Its `/keys` carries no `removalStep`**, so it is also a relay that predates the
+    /// join/removal marker: a removal after it steps by one, which is what such a relay's
+    /// `/rotate` accepts. [`updated_round_trip`] is the same trip from a relay that advertises it.
     fn quiet_round_trip(server: &httpmock::MockServer, group: &str) {
+        round_trip_answering(
+            server,
+            group,
+            serde_json::json!({ "epoch": 0, "blob": serde_json::Value::Null, "devices": [] }),
+        );
+    }
+
+    /// [`quiet_round_trip`] from a relay whose `/keys` advertises `removalStep: 2` — the answer
+    /// `client::removal_step` latches, after which a removal or a departure steps by two.
+    fn updated_round_trip(server: &httpmock::MockServer, group: &str) {
+        round_trip_answering(
+            server,
+            group,
+            serde_json::json!({
+                "epoch": 0, "blob": serde_json::Value::Null, "devices": [], "removalStep": 2,
+            }),
+        );
+    }
+
+    /// The round trip's three mocks, `/keys` answering `keys`.
+    fn round_trip_answering(server: &httpmock::MockServer, group: &str, keys: serde_json::Value) {
         server.mock(|when, then| {
             when.method(GET).path(format!("/g/{group}/keys"));
-            then.status(200).json_body(serde_json::json!({
-                "epoch": 0, "blob": serde_json::Value::Null, "devices": [],
-            }));
+            then.status(200).json_body(keys);
         });
         server.mock(|when, then| {
             when.method(GET).path(format!("/g/{group}/pull"));
@@ -2131,6 +2177,8 @@ mod tests {
         remove_device(&conn, "deadbeef").await.expect("removed");
 
         let after = identity::group(&conn).unwrap().unwrap();
+        // One and not two: `quiet_round_trip`'s relay never advertised `removalStep`, so a relay
+        // that predates the marker is sent the `+1` its `/rotate` accepts.
         assert_eq!(after.epoch, before.epoch + 1);
         assert_ne!(after.group_key, before.group_key, "the key did not change");
         assert_eq!(
@@ -2160,6 +2208,53 @@ mod tests {
             !keys.contains_key("deadbeef"),
             "the manifest names the device being removed, which puts it straight back"
         );
+    }
+
+    /// **Once the relay advertises `removalStep`, a removal advances the epoch by two** — the
+    /// join/removal marker (issue #546, item 9c), which every adopting device reads as *somebody
+    /// was removed* without believing the relay's `devices` list.
+    ///
+    /// The test above is the other half: [`quiet_round_trip`]'s relay never advertises it, and the
+    /// removal steps by one, which is all such a relay's `/rotate` accepts — so nothing breaks
+    /// before the relay deploy. **What makes this red**: `remove_device` planning with a fixed
+    /// step, or asking for the step before the round trip that reads `/keys`.
+    #[tokio::test]
+    async fn a_removal_steps_two_epochs_once_the_relay_says_it_may() {
+        let server = MockServer::start_async().await;
+        let (conn, me, group) = removable(&server, true);
+        updated_round_trip(&server, &group);
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let recorder = seen.clone();
+        server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/g/{group}/rotate"))
+                .is_true(move |req: &httpmock::prelude::HttpMockRequest| {
+                    recorder.lock().unwrap().push(req.body_string());
+                    true
+                });
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 2 }));
+        });
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        remove_device(&conn, "deadbeef").await.expect("removed");
+
+        let after = identity::group(&conn).unwrap().unwrap();
+        assert_eq!(after.epoch, before.epoch + identity::REMOVAL_STEP);
+        let body: serde_json::Value =
+            serde_json::from_str(&seen.lock().unwrap()[0]).expect("a JSON body");
+        assert_eq!(
+            body["epoch"],
+            serde_json::json!(after.epoch),
+            "the epoch published is not the epoch committed"
+        );
+        assert_eq!(
+            body["auth"].as_str().unwrap(),
+            crypto::relay_auth(&after.group_key, &after.group_id, after.epoch)
+        );
+        let keys = body["keys"].as_object().expect("a manifest object");
+        assert!(keys.contains_key(&me.device_id));
+        assert!(!keys.contains_key("deadbeef"));
     }
 
     /// **A group with no membership is refused before anything moves** — spec §2.4's fourth
@@ -2327,6 +2422,50 @@ mod tests {
         );
         assert!(identity::group(&conn).unwrap().is_none());
         assert_eq!(identity::roster(&conn).unwrap().len(), 0);
+    }
+
+    /// **A departure steps like a removal once the relay has advertised it** — to every device
+    /// that stays, this device leaving is this device removed, and it holds every key they must
+    /// now forget, which only a `+2` makes them do whatever the relay says about `devices`.
+    ///
+    /// There is no round trip in front of a departure, so the step is what an ordinary sync
+    /// latched — which is what this test's first call is. **What makes it red**:
+    /// `leave_group_now` planning with a fixed step.
+    #[tokio::test]
+    async fn a_departure_steps_two_epochs_once_the_relay_has_said_it_may() {
+        let server = MockServer::start_async().await;
+        let (conn, me, group) = removable(&server, true);
+        updated_round_trip(&server, &group);
+        client::run_once_without_baselines(&conn)
+            .await
+            .expect("the sync that hears the relay advertise the step");
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let recorder = seen.clone();
+        let rotate = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/g/{group}/rotate"))
+                .is_true(move |req: &httpmock::prelude::HttpMockRequest| {
+                    recorder.lock().unwrap().push(req.body_string());
+                    true
+                });
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 2 }));
+        });
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        leave_group_now(&conn).await.expect("left");
+
+        rotate.assert();
+        let body: serde_json::Value =
+            serde_json::from_str(&seen.lock().unwrap()[0]).expect("a JSON body");
+        assert_eq!(
+            body["epoch"],
+            serde_json::json!(before.epoch + identity::REMOVAL_STEP)
+        );
+        let keys = body["keys"].as_object().expect("a manifest object");
+        assert!(keys.contains_key("deadbeef"));
+        assert!(!keys.contains_key(&me.device_id));
+        assert!(identity::group(&conn).unwrap().is_none());
     }
 
     /// **Leaving clears the grant — `clear`, never `revoke`** — spec §2.3.

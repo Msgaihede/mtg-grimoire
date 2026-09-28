@@ -20,8 +20,9 @@ import type { Env } from "./index";
  * compares against — one row, one lookup, no history. `group_keys` is the history, and it exists
  * because a device that is merely behind a rotation holds an auth that is stale **by
  * definition**: an endpoint that accepted only the current auth would refuse exactly the devices
- * `/keys` exists to serve. The window is [`EPOCH_HISTORY`] rows wide and is pruned by the same
- * call that writes a new row, so it is bounded without a sweep.
+ * `/keys` exists to serve. The window is [`EPOCH_HISTORY`] epochs wide — epochs, not rows, since
+ * a removal steps over one — and is pruned by the same call that writes a new row, so it is
+ * bounded without a sweep.
  *
  * **Nothing here validates the shape of an `auth`.** The route handlers do, against the same
  * character class `GROUP_SEGMENT` gives the group id, before anything reaches this file — the
@@ -30,8 +31,10 @@ import type { Env } from "./index";
  */
 
 /**
- * How many epochs of key history `/keys` will answer from, counted in **rows kept**: the current
- * epoch and the seven before it.
+ * How many epochs of key history `/keys` will answer from: the current epoch and the seven before
+ * it, **counted in epochs and not in rows**. The prune is epoch arithmetic — `recordRotation`
+ * deletes every row at `epoch <= newest - EPOCH_HISTORY` — so what survives is whichever rows
+ * those eight epochs happen to hold.
  *
  * The number is a judgement about a device that is dark across several removals, and the failure
  * modes on either side are not symmetric. Too small and a device that missed two rotations over a
@@ -39,8 +42,39 @@ import type { Env } from "./index";
  * eight rotations ago is still spending reads against this table. Eight is where those meet:
  * nine removals with one device dark is not a case worth carrying state for, and spec §4 says so
  * — the refusal is the answer, and it is a loud one rather than a silence.
+ *
+ * ⚠️ **That paragraph was written when every rotation advanced the epoch by one, and a removal
+ * now advances it by [`REMOVAL_STEP`].** Eight epochs were eight rotations; they are now eight
+ * joins, or as few as **four removals**. A device dark across four removals finds the auth it
+ * holds pruned, and is answered the 401 rather than its catch-up key or its removal notice —
+ * three removals are the most it survives, where it used to survive seven rotations of any kind.
+ * The cost falls on exactly the device the number was chosen for, and it is stated rather than
+ * fixed: `identity::KEY_HISTORY` is this number on the device, pruned by the same arithmetic, so
+ * the two move together or not at all, and a wider window also keeps a removed device spending
+ * reads here for longer. Four removals while one device stays dark is still a case the loud
+ * refusal covers; the day it is not, the change is both constants in one commit.
  */
 export const EPOCH_HISTORY = 8;
+
+/**
+ * How far one rotation may advance the group's epoch: a removal's step, which is the longer of
+ * the two.
+ *
+ * **The step is the join/removal marker, and it is the rotator's to choose rather than the
+ * relay's to report.** A join advances the epoch by one; a removal or a departure advances it by
+ * two. The rotator binds the epoch into every rewrapped blob's AAD, so a relay that rewrote a
+ * removal into a join would be handing out blobs that do not open. What that buys is a removal
+ * that no longer leans on the relay reporting `devices` honestly: a device that adopts a `+2`
+ * forgets every superseded key whatever the roster says (`identity::supersede` keeps them only
+ * across exactly `+1`), so a relay colluding with a removed device can no longer pad `devices`
+ * with it, pass the removal off as a join, and get that device's writes under the pre-removal
+ * epoch applied.
+ *
+ * `/keys` advertises it as `removalStep` on every answer, and a device steps by two only after it
+ * has seen that: a relay without this change answers `+2` with the 422 it gives a skip, so a
+ * device that stepped by two without asking would have every removal it published refused.
+ */
+export const REMOVAL_STEP = 2;
 
 /**
  * How many devices one group — which is to say one Patreon account — may hold at once.
@@ -224,8 +258,8 @@ export async function seedGroup(
 
 /**
  * Record a rotation: a new epoch, the auth derived from the new group key, and the key sealed for
- * every device that stays. `false` when `epoch` is not **exactly one past** the group's newest,
- * and nothing is written in that case.
+ * every device that stays. `false` when `epoch` is not **one or [`REMOVAL_STEP`] past** the
+ * group's newest, and nothing is written in that case.
  *
  * **The monotonic check is one statement, and that is the whole guard.** D1 has no interactive
  * transaction — `handleClaim`'s `DELETE … RETURNING` says so for the claim code and the reasoning
@@ -234,17 +268,24 @@ export async function seedGroup(
  * What is on the other side of that window is not a tidiness problem: a device that was removed
  * still knows its old auth, and re-registering it at the epoch it remembers is exactly how it
  * would get back into a group that evicted it. `INSERT … SELECT … WHERE` is atomic by
- * construction, and the `WHERE` is the sentence "the next epoch this group has not had".
+ * construction, and the `WHERE` is the sentence "past the newest epoch this group has had, by no
+ * more than a removal steps". **Both bounds sit in that one `WHERE`**, and splitting them — the
+ * upper one checked from a `groupEpoch` read first, say — would reopen the window for exactly the
+ * half that was moved out.
  *
- * **Next, and not merely higher.** Every device plans `epoch + 1` from the epoch it stands on
- * (`identity::plan_excluding`), and the group auth it presents is current only if that is the
- * relay's epoch — so no shipped client sends anything else. "Strictly higher" let a caller holding
- * a credential put the group on `1e9` with a manifest of its choosing, which every device reads
- * its membership off: `{}` there is a removal notice to all of them at once.
+ * **One step or two, and not merely higher.** A join plans `epoch + 1` from the epoch the device
+ * stands on and a removal or a departure `epoch + 2` (see [`REMOVAL_STEP`] for why the two
+ * differ), and the group auth it presents is current only if that is the relay's epoch — so no
+ * shipped client sends anything further. "Strictly higher" let a caller holding a credential put
+ * the group on `1e9` with a manifest of its choosing, which every device reads its membership
+ * off: `{}` there is a removal notice to all of them at once. The step is a parameter rather than
+ * a literal in the SQL, so the step the relay accepts and the `removalStep` `/keys` advertises
+ * are one constant and cannot disagree.
  *
  * `coalesce(…, -1)` is what makes a rotation to epoch 0 possible on a group with no rows at
- * all. Reaching this function on an unknown group is not itself a hole: `/rotate` authenticates
- * first, and an unknown group has no auth to match.
+ * all — and, since the bound is two, one to epoch 1 as well, which nothing can reach: a group
+ * with no rows has no auth for `/rotate` to match, which is also why reaching this function on an
+ * unknown group is not itself a hole.
  */
 export async function recordRotation(
   env: Env,
@@ -256,9 +297,21 @@ export async function recordRotation(
   const written = await env.DB.prepare(
     `INSERT INTO group_keys (group_id, epoch, auth, keys, created_at)
      SELECT ?, ?, ?, ?, ?
-      WHERE ? = coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1) + 1`,
+      WHERE ? > coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1)
+        AND ? <= coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1) + ?`,
   )
-    .bind(group, epoch, auth, JSON.stringify(keys), Date.now(), epoch, group)
+    .bind(
+      group,
+      epoch,
+      auth,
+      JSON.stringify(keys),
+      Date.now(),
+      epoch,
+      group,
+      epoch,
+      group,
+      REMOVAL_STEP,
+    )
     .run();
   if (written.meta.changes === 0) return false;
 
@@ -268,6 +321,10 @@ export async function recordRotation(
   // the caller has already named. **The mirror is what makes `/token`'s group door a single
   // lookup**: without it that door would have to find the group's newest epoch before it could
   // compare anything, on the hottest route this table has.
+  //
+  // ⚠️ **The prune is epoch arithmetic, so a removal's step of two spends two epochs of the
+  // window.** A run of removals leaves four rows in it rather than eight; [`EPOCH_HISTORY`]'s doc
+  // carries what that costs a device that is dark across them.
   await env.DB.batch([
     env.DB.prepare(`DELETE FROM group_keys WHERE group_id = ? AND epoch <= ? - ?`).bind(
       group,
@@ -310,6 +367,35 @@ export async function currentManifest(env: Env, group: string): Promise<Manifest
     `SELECT epoch, keys FROM group_keys WHERE group_id = ? ORDER BY epoch DESC LIMIT 1`,
   )
     .bind(group)
+    .first<{ epoch: number; keys: string }>();
+  if (row === null) return null;
+  return { epoch: row.epoch, keys: parseManifest(row.keys, group) };
+}
+
+/**
+ * The manifest stored at exactly `epoch`, or `null` when the group has no row there.
+ *
+ * **What `/keys?epoch=` answers from, and the reason it exists is a device that skipped one.** A
+ * device standing on *N* that next hears of *N+2* has never been handed *N+1*'s key, and
+ * [`currentManifest`] can only give it *N+2*'s — so without this, everything the group wrote
+ * under *N+1* was sealed to a key that device would never hold, and it stepped over the lot.
+ * The row was here all along; `group_keys` keeps [`EPOCH_HISTORY`] epochs of them.
+ *
+ * **`null` has three causes and they are one answer**: the epoch was never written, a removal
+ * stepped over it, or the prune has taken it. A caller cannot act differently on any of them —
+ * there is no key to fetch — which is also why a missing row is not read as a missing group: a
+ * caller reaches this through `authIsRecent`, which has already found the group's rows.
+ *
+ * **An unreadable manifest throws here for [`currentManifest`]'s reason**, and an old epoch does
+ * not soften it: `{}` would be `blob: null` to every device that asked, and a device with no key
+ * for an epoch steps over what was sealed under it — which no later fix to the row brings back.
+ * A 500 is a `/keys` call that fails and is made again.
+ */
+export async function manifestAt(env: Env, group: string, epoch: number): Promise<Manifest | null> {
+  const row = await env.DB.prepare(
+    `SELECT epoch, keys FROM group_keys WHERE group_id = ? AND epoch = ?`,
+  )
+    .bind(group, epoch)
     .first<{ epoch: number; keys: string }>();
   if (row === null) return null;
   return { epoch: row.epoch, keys: parseManifest(row.keys, group) };

@@ -111,7 +111,7 @@ export async function handleRendezvousGet(
   return json({ blob: row.blob });
 }
 
-/** Swept by the daily cron beside `reconcile`. */
+/** Swept by the hourly cron, after `reconcile` — so a `reconcile` that throws skips it. */
 export async function sweepRendezvous(env: Env, now: number): Promise<void> {
   await env.DB.prepare(`DELETE FROM pairing_rendezvous WHERE expires_at <= ?`).bind(now).run();
 }

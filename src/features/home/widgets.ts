@@ -138,7 +138,7 @@ export interface WidgetMeta {
  *  spelling and this app's: every other colour word on screen is British. */
 const DIMENSION_OPTIONS: readonly PickOption[] = [
   { id: "rarity", label: "Rarity" },
-  { id: "color", label: "Colour" },
+  { id: "color", label: "Color" },
   { id: "set", label: "Set" },
   { id: "finish", label: "Finish" },
 ];
@@ -176,7 +176,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   collectionValue: {
     label: "Collection value",
-    description: "Collection value broken down by rarity, colour, set, or finish.",
+    description: "Collection value broken down by rarity, color, set, or finish.",
     def: [2, 3],
     min: [2, 2],
     max: [4, 6],
@@ -201,7 +201,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   valueHistory: {
     label: "Collection value graph",
     description:
-      "Collection value over time, in total or broken down by card type, colour, or set.",
+      "Collection value over time, in total or broken down by card type, color, or set.",
     def: [6, 3],
     min: [2, 2],
     max: [8, 6],
@@ -213,7 +213,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
         options: [
           { id: "total", label: "Total" },
           { id: "type", label: "Card type" },
-          { id: "color", label: "Colour" },
+          { id: "color", label: "Color" },
           { id: "set", label: "Set" },
         ],
       },
@@ -246,7 +246,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   wishlistValue: {
     label: "Wishlist value",
-    description: "Estimated wishlist cost, broken down by rarity, colour, set, or finish.",
+    description: "Estimated wishlist cost, broken down by rarity, color, set, or finish.",
     def: [2, 3],
     min: [2, 2],
     max: [4, 6],
@@ -276,14 +276,14 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   folders: {
     label: "Folders",
-    description: "Collection and wishlist folder totals and values.",
+    description: "Totals and values for your collection and wishlist folders.",
     def: [4, 2],
     min: [2, 2],
     max: [8, 4],
     picks: [
       {
         key: "cabinets",
-        label: "Cabinets",
+        label: "Show folders from",
         options: [
           { id: "both", label: "Both" },
           { id: "collection", label: "Collection" },
@@ -291,7 +291,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
         ],
       },
     ],
-    toggles: [{ key: "captions", label: "Show which cabinet" }],
+    toggles: [{ key: "captions", label: "Show details" }],
     chip: "cabinets",
   },
   activity: {
@@ -323,7 +323,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
     picks: [
       {
         key: "window",
-        label: "Window",
+        label: "Period",
         options: [
           { id: "7d", label: "7 days" },
           { id: "30d", label: "30 days" },
@@ -418,7 +418,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
     ],
     toggles: [
       { key: "dates", label: "Show edited date" },
-      { key: "strip", label: "Show colour strip" },
+      { key: "strip", label: "Show color strip" },
       { key: "pinned", label: "Pinned note first" },
     ],
     chip: "layout",
@@ -442,7 +442,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
       },
       {
         key: "window",
-        label: "Window",
+        label: "Period",
         dflt: 90,
         options: [
           { id: 30, label: "30 days" },
@@ -502,7 +502,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   deckCompletion: {
     label: "Deck completion",
-    description: "How far your decks are from your collection or from their theory lists.",
+    description: "How close your decks are to complete, against your collection or their theory lists.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 6],
@@ -527,7 +527,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
         key: "order",
         label: "Order",
         options: [
-          { id: "done", label: "Nearest done" },
+          { id: "done", label: "Closest to done" },
           { id: "cheapest", label: "Cheapest to finish" },
           { id: "name", label: "Name" },
         ],
@@ -566,7 +566,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   wishlistSavings: {
     label: "Wishlist savings",
-    description: "Potential savings by switching wishlist items to cheapest printings.",
+    description: "Savings from switching wishlist items to their cheapest printings.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 6],
@@ -595,7 +595,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
     picks: [
       {
         key: "window",
-        label: "Window",
+        label: "Period",
         dflt: 90,
         options: [
           { id: 30, label: "30 days" },

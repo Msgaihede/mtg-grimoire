@@ -299,7 +299,7 @@ export const FromANewerBuild: Story = {
       await canvas.findByRole("region", { name: "Unknown widget (priceHistory)" }),
     );
     await expect(
-      unknown.getByText(/This widget came from a newer version of MTG Grimoire\./),
+      unknown.getByText(/This widget needs a newer version of MTG Grimoire\./),
     ).toBeInTheDocument();
 
     // The widgets this build does know are drawn beside it, and nothing the seed holds that this

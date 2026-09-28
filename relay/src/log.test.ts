@@ -1,5 +1,19 @@
 import { describe, expect, it } from "vitest";
-import { compact, since, TAIL_MS, type Row, deviceTag, headFrame, notifyTargets } from "./log";
+import { MAX_GROUP_DEVICES } from "./groupauth";
+import {
+  ACK_TTL_MS,
+  compact,
+  departures,
+  deviceTag,
+  headFrame,
+  notifyTargets,
+  isNewerRoster,
+  parseRoster,
+  since,
+  TAIL_MS,
+  type Ack,
+  type Row,
+} from "./log";
 
 /**
  * A row with sensible defaults. `hlcMs` follows `seq` unless a test says otherwise, so a test
@@ -68,44 +82,53 @@ describe("since", () => {
   });
 });
 
+/** An ack at `cursor`, heard at `heardAt`. */
+function acked(cursor: number, heardAt: number): Ack {
+  return { cursor, heardAt };
+}
+
+/** An ack map from `[device, cursor]` pairs, every device heard at `heardAt`. */
+function acksAt(heardAt: number, ...entries: [string, number][]): Map<string, Ack> {
+  return new Map(entries.map(([device, cursor]) => [device, acked(cursor, heardAt)]));
+}
+
+const nobody = new Set<string>();
+
+/** The seqs a compaction keeps, which is what nearly every assertion below is about. */
+function kept(compaction: { keep: Row[] }): number[] {
+  return compaction.keep.map((r) => r.seq);
+}
+
 describe("compact", () => {
   it("keeps a row two devices acked but a third did not", () => {
     const rows = [row({ seq: 1, storedAt: 0 }), row({ seq: 2, storedAt: 0 })];
-    const acks = new Map([
-      ["alpha", 2],
-      ["beta", 2],
-      ["gamma", 1],
-    ]);
+    const now = 60 * DAY;
+    const acks = acksAt(now, ["alpha", 2], ["beta", 2], ["gamma", 1]);
 
-    // Ancient — the tail cannot be what saves row 2 here.
-    const kept = compact(rows, acks, 90 * DAY);
-
-    expect(kept.map((r) => r.seq)).toEqual([2]);
+    // Older than the tail — the tail cannot be what saves row 2 here.
+    expect(kept(compact(rows, acks, nobody, now))).toEqual([2]);
   });
 
   it("keeps a fully acked row at 29 days and drops it at 31", () => {
     const rows = [row({ seq: 1, storedAt: 0 })];
-    const acks = new Map([
-      ["alpha", 1],
-      ["beta", 1],
-    ]);
+    const acks = acksAt(0, ["alpha", 1], ["beta", 1]);
 
-    expect(compact(rows, acks, 29 * DAY).map((r) => r.seq)).toEqual([1]);
-    expect(compact(rows, acks, 31 * DAY)).toEqual([]);
+    expect(kept(compact(rows, acks, nobody, 29 * DAY))).toEqual([1]);
+    expect(kept(compact(rows, acks, nobody, 31 * DAY))).toEqual([]);
     // The boundary itself is inclusive: exactly thirty days old is still inside the tail.
-    expect(compact(rows, acks, TAIL_MS).map((r) => r.seq)).toEqual([1]);
+    expect(kept(compact(rows, acks, nobody, TAIL_MS))).toEqual([1]);
   });
 
-  it("drops nothing when the ack map is empty, however old the log is", () => {
+  it("drops nothing when the ack map is empty, however far past the tail the log is", () => {
     // The case worth asserting directly, because it is the one where being wrong loses data:
     // a group whose third device has never connected. Nobody has acked anything, so nobody
-    // has consumed anything, so a log four months old is still every device's inbox.
+    // has consumed anything, so a log two months old is still every device's inbox.
     const rows = [
       row({ seq: 1, device: "alpha", storedAt: 0 }),
       row({ seq: 2, device: "beta", storedAt: 0 }),
     ];
 
-    expect(compact(rows, new Map(), 120 * DAY).map((r) => r.seq)).toEqual([1, 2]);
+    expect(kept(compact(rows, new Map(), nobody, 60 * DAY))).toEqual([1, 2]);
   });
 
   it("keeps the whole log for a device that has pushed but never acked", () => {
@@ -115,12 +138,10 @@ describe("compact", () => {
       row({ seq: 1, device: "alpha", storedAt: 0 }),
       row({ seq: 2, device: "gamma", storedAt: 0 }),
     ];
-    const acks = new Map([
-      ["alpha", 2],
-      ["beta", 2],
-    ]);
+    const now = 60 * DAY;
+    const acks = acksAt(now, ["alpha", 2], ["beta", 2]);
 
-    expect(compact(rows, acks, 120 * DAY).map((r) => r.seq)).toEqual([1, 2]);
+    expect(kept(compact(rows, acks, nobody, now))).toEqual([1, 2]);
   });
 
   it("drops an old row every device on the roster has acked", () => {
@@ -129,20 +150,168 @@ describe("compact", () => {
       row({ seq: 2, device: "beta", storedAt: 0 }),
       row({ seq: 3, device: "alpha", storedAt: 60 * DAY }),
     ];
-    const acks = new Map([
-      ["alpha", 2],
-      ["beta", 2],
-    ]);
+    const now = 90 * DAY;
+    const acks = acksAt(now, ["alpha", 2], ["beta", 2]);
 
-    expect(compact(rows, acks, 90 * DAY).map((r) => r.seq)).toEqual([3]);
+    expect(kept(compact(rows, acks, nobody, now))).toEqual([3]);
   });
 
   it("does not mutate the array it was handed", () => {
     const rows = [row({ seq: 1, storedAt: 0 })];
 
-    compact(rows, new Map([["alpha", 1]]), 90 * DAY);
+    compact(rows, acksAt(0, ["alpha", 1]), nobody, 90 * DAY);
 
     expect(rows).toHaveLength(1);
+  });
+});
+
+/**
+ * The two ways a device stops holding the floor, each asserted against the same log with and
+ * without it — so every test shows the pin it lifts as well as the lifting, and a `compact` that
+ * ignored the new argument would fail the second half rather than pass both.
+ */
+describe("compact — the devices that no longer hold the floor", () => {
+  // Past the tail and inside the window, so the floor is the only thing deciding either row.
+  const now = 200 * DAY;
+  const old = now - 60 * DAY;
+
+  it("lets go of a departed device's ack, and says to forget it", () => {
+    const rows = [row({ seq: 1, storedAt: old }), row({ seq: 2, storedAt: old })];
+    const acks = acksAt(now, ["alpha", 2], ["beta", 2], ["gamma", 0]);
+
+    expect(kept(compact(rows, acks, nobody, now))).toEqual([1, 2]);
+
+    const lifted = compact(rows, acks, new Set(["gamma"]), now);
+    expect(kept(lifted)).toEqual([]);
+    expect(lifted.forget).toEqual(["gamma"]);
+  });
+
+  it("lets go of a departed device's rows too, which held the floor at zero with no ack at all", () => {
+    const rows = [
+      row({ seq: 1, device: "gamma", storedAt: old }),
+      row({ seq: 2, device: "alpha", storedAt: old }),
+    ];
+    const acks = acksAt(now, ["alpha", 2], ["beta", 2]);
+
+    expect(kept(compact(rows, acks, nobody, now))).toEqual([1, 2]);
+
+    const lifted = compact(rows, acks, new Set(["gamma"]), now);
+    expect(kept(lifted)).toEqual([]);
+    // Nothing to forget: gamma never acked, and its rows are compaction's to delete.
+    expect(lifted.forget).toEqual([]);
+  });
+
+  it("lets go of a device unheard for longer than ACK_TTL_MS, and says to forget it", () => {
+    // The reinstall: no manifest will ever name gamma's old id, so nothing departs it.
+    const rows = [row({ seq: 1, storedAt: old }), row({ seq: 2, storedAt: old })];
+    const acks = acksAt(now, ["alpha", 2], ["beta", 2]);
+    acks.set("gamma", acked(0, now - ACK_TTL_MS - 1));
+
+    const lifted = compact(rows, acks, nobody, now);
+    expect(kept(lifted)).toEqual([]);
+    expect(lifted.forget).toEqual(["gamma"]);
+  });
+
+  it("still counts a device heard exactly ACK_TTL_MS ago", () => {
+    // The window is a duration, as the device roll reads its own: ninety days ago is inside it.
+    const rows = [row({ seq: 1, storedAt: old }), row({ seq: 2, storedAt: old })];
+    const acks = acksAt(now, ["alpha", 2], ["beta", 2]);
+    acks.set("gamma", acked(0, now - ACK_TTL_MS));
+
+    const held = compact(rows, acks, nobody, now);
+    expect(kept(held)).toEqual([1, 2]);
+    expect(held.forget).toEqual([]);
+  });
+
+  it("counts a device's newest row as hearing from it, however old its ack", () => {
+    // Gamma last acked long ago but pushed forty days back: it is alive, and its ack holds.
+    const rows = [
+      row({ seq: 1, device: "alpha", storedAt: old }),
+      row({ seq: 2, device: "gamma", storedAt: now - 40 * DAY }),
+    ];
+    const acks = acksAt(now, ["alpha", 2]);
+    acks.set("gamma", acked(0, now - 2 * ACK_TTL_MS));
+
+    const held = compact(rows, acks, nobody, now);
+    expect(kept(held)).toEqual([1, 2]);
+    expect(held.forget).toEqual([]);
+  });
+
+  it("keeps everything when every device it knows of has left", () => {
+    // Whoever is still in the group is someone the relay has never heard from — a device paired
+    // after the others left, about to replay from zero. "Nobody is behind" would compact its
+    // inbox before it arrived for it.
+    const rows = [
+      row({ seq: 1, device: "alpha", storedAt: old }),
+      row({ seq: 2, device: "beta", storedAt: old }),
+    ];
+    const acks = acksAt(now, ["alpha", 2], ["beta", 2]);
+
+    const emptied = compact(rows, acks, new Set(["alpha", "beta"]), now);
+    expect(kept(emptied)).toEqual([1, 2]);
+    expect(emptied.forget.sort()).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("departures", () => {
+  it("departs every device it knows of that the roster omits, once each", () => {
+    // `known` is acks UNION log senders in the object, but a caller passing duplicates must not
+    // produce two marks for one device.
+    expect(departures(["alpha", "beta", "alpha", "gamma"], ["alpha"])).toEqual(["beta", "gamma"]);
+  });
+
+  it("never departs a device it has not heard from, named or not", () => {
+    expect(departures(["alpha"], ["zeta"])).toEqual(["alpha"]);
+    expect(departures([], ["alpha"])).toEqual([]);
+  });
+
+  it("departs everyone it knows of for an empty roster — the last device leaving", () => {
+    expect(departures(["alpha", "beta"], [])).toEqual(["alpha", "beta"]);
+  });
+});
+
+describe("parseRoster", () => {
+  const ids = (n: number) => Array.from({ length: n }, (_, i) => `d${i}`);
+
+  it("takes an empty roster and one as long as a manifest can be, with its epoch", () => {
+    expect(parseRoster({ epoch: 0, devices: [] })).toEqual({ epoch: 0, devices: [] });
+    expect(parseRoster({ epoch: 3, devices: ids(MAX_GROUP_DEVICES) })).toEqual({
+      epoch: 3,
+      devices: ids(MAX_GROUP_DEVICES),
+    });
+  });
+
+  it("refuses a roster longer than any manifest /rotate accepts", () => {
+    expect(parseRoster({ epoch: 1, devices: ids(MAX_GROUP_DEVICES + 1) })).toBeNull();
+  });
+
+  it("refuses anything that is not a list of strings under `devices`", () => {
+    for (const body of [null, "alpha", [], {}, { devices: "alpha" }, { devices: [1] }]) {
+      expect(parseRoster(body)).toBeNull();
+    }
+    expect(parseRoster({ epoch: 1, devices: ["alpha", null] })).toBeNull();
+  });
+
+  it("refuses a roster with no epoch, or one no rotation could have recorded", () => {
+    // Without the epoch two crossed posts could not be ordered, so a body missing one is not a
+    // roster this object can place.
+    for (const epoch of [undefined, -1, 1.5, "2", Number.MAX_SAFE_INTEGER + 1]) {
+      expect(parseRoster({ epoch, devices: ["alpha"] })).toBeNull();
+    }
+  });
+});
+
+describe("isNewerRoster", () => {
+  it("applies the first roster and every strictly newer one", () => {
+    expect(isNewerRoster(null, 0)).toBe(true);
+    expect(isNewerRoster(3, 4)).toBe(true);
+    expect(isNewerRoster(3, 5)).toBe(true);
+  });
+
+  it("ignores the same rotation's roster twice and an older one that lost the race", () => {
+    // An older roster arriving second would put back a device the newer rotation removed.
+    expect(isNewerRoster(4, 4)).toBe(false);
+    expect(isNewerRoster(5, 3)).toBe(false);
   });
 });
 

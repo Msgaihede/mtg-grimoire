@@ -2074,7 +2074,7 @@ mod tests {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
         use std::time::{Duration, Instant};
 
-        let dir = std::env::temp_dir().join("mtgtest-tags-two-ingests-at-once");
+        let dir = crate::scratch::path("tags-two-ingests-at-once");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();

@@ -104,7 +104,7 @@ describe("RecentCardsWidget", () => {
   it("says it is reading while the read is out", () => {
     recentCards.mockImplementation(() => new Promise(() => {}));
     draw();
-    expect(screen.getByText("Reading the cards you opened…")).toBeInTheDocument();
+    expect(screen.getByText("Loading recent cards…")).toBeInTheDocument();
   });
 
   it("says what opening a card will do when nothing has been opened", async () => {
@@ -116,7 +116,7 @@ describe("RecentCardsWidget", () => {
     recentCards.mockRejectedValue("the database is locked");
     draw();
     expect(
-      await screen.findByText("Could not read the cards you opened — the database is locked"),
+      await screen.findByText("Couldn't load recent cards — the database is locked"),
     ).toBeInTheDocument();
   });
 

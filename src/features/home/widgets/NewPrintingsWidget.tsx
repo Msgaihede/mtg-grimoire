@@ -153,7 +153,7 @@ const CLOSING_FROM_H = 8;
  */
 const WINDOW_FALLBACK = 90;
 
-const PENDING = "Reading recent printings…";
+const PENDING = "Loading new printings…";
 /**
  * The first of the three sentences, and the one a count of zero printings would get wrong.
  *
@@ -162,7 +162,7 @@ const PENDING = "Reading recent printings…";
  * `DecksWidget.NOTHING_PINNED` says the same thing the same way for the same reason.
  */
 export const NO_DECKS =
-  "No decks are being watched. Select decks to watch in this widget's settings.";
+  "No decks selected. Choose decks in this widget's settings.";
 
 /** An explicit locale and an explicit UTC time zone, `printings.ts`' rule and its reason:
  *  `releasedAt` is a calendar date, so a formatter left on the local zone prints the day before
@@ -620,7 +620,7 @@ export function NewPrintingsWidget({ widget, fit, still }: WidgetBodyProps): Rea
     if (query.isError) {
       return (
         <WidgetMessage tone="destructive">
-          Could not read recent printings — {ipcError(query.error)}
+          Couldn't load new printings — {ipcError(query.error)}
         </WidgetMessage>
       );
     }
@@ -665,7 +665,7 @@ export function NewPrintingsWidget({ widget, fit, still }: WidgetBodyProps): Rea
             // Chromium has mistreated in the accessibility tree before (`src/CLAUDE.md`).
             <Fragment key={day.key}>
               {marks.months.includes(index) && <Rule label={day.month} heading />}
-              {marks.seenAt === index && <Rule label="Seen already" />}
+              {marks.seenAt === index && <Rule label="Already seen" />}
               <Section
                 day={day}
                 fit={fit}
@@ -682,8 +682,8 @@ export function NewPrintingsWidget({ widget, fit, still }: WidgetBodyProps): Rea
             has not run out of window, it has run out of card. */}
         {closing && drawn === answer.printings.length && answer.oldest !== null && (
           <p className="m-0 shrink-0 pt-1.5 text-center text-xs text-dim">
-            Nothing older than {DAY_IN_WORDS.format(new Date(`${answer.oldest}T00:00:00Z`))} in this
-            window.
+            Nothing before {DAY_IN_WORDS.format(new Date(`${answer.oldest}T00:00:00Z`))} in this
+            period.
           </p>
         )}
         <WidgetFooter>
@@ -718,7 +718,7 @@ export function footerLine(
 ): string {
   if (tier === 0) return `${plural(decksWatched, "deck")} · ${days}d`;
   const parts = [
-    `${plural(decksWatched, "deck")} watched`,
+    `${plural(decksWatched, "deck")} tracked`,
     plural(days, "day"),
     languagePhrase(langs),
     // Stated whichever way round it is: basics are excluded by default, so a reader who never
@@ -1006,7 +1006,7 @@ function DeckPicker({ widget, onConfig }: WidgetSettingsProps): ReactElement {
   if (scopeOf(widget) !== "chosen") {
     return (
       <p className="m-0 text-xs text-dim">
-        Choose {words.option} under {words.row} to pick the decks this card watches.
+        Choose {words.option} under {words.row} to pick the decks this widget tracks.
       </p>
     );
   }
@@ -1040,7 +1040,7 @@ function DeckPicker({ widget, onConfig }: WidgetSettingsProps): ReactElement {
       <MultiDropdown
         fill
         size="sm"
-        label="Decks to watch"
+        label="Decks to track"
         // Searchable only where scrolling would be the alternative — `DecksWidgetSettings`'
         // judgement, and this panel shows about the same eight rows.
         searchable={options.length > 8}
@@ -1052,7 +1052,7 @@ function DeckPicker({ widget, onConfig }: WidgetSettingsProps): ReactElement {
       />
       {decksQuery.isError && (
         <p className="m-0 text-xs text-destructive">
-          Could not read your decks — {ipcError(decksQuery.error)}
+          Couldn't load your decks — {ipcError(decksQuery.error)}
         </p>
       )}
     </div>

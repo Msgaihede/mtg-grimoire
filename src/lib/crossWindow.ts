@@ -13,9 +13,14 @@
  * *writing* window's own invalidations carry no predicate: deck sort sat at `["decks", "sort"]`,
  * and every deck write a window made re-read whichever order another window had pressed last. It
  * is `["deckSort"]` now. The predicate below is the second fence, for this refresh alone.
+ *
+ * **The same map answers a write from another _device_**, which is {@link DEVICE_SYNC_INVALIDATED}:
+ * a pull is a write to the synced tables that no window here made, so the question is this one
+ * with a different writer, and a second answer kept beside it would drift from the first.
  */
 import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
 import { OWNED_WRITE_KEYS, RELAY_KEY, REVIEW_KEY, SYNC_KEY } from "./query";
+import SYNCED_TABLE_NAMES from "./syncedTables.json";
 
 /**
  * The `app_meta`-backed queries every window follows: Settings choices, and the home layout — a
@@ -236,6 +241,59 @@ export function keysForTables(tables: readonly string[]): QueryKey[] {
     for (const key of BY_TABLE.get(table) ?? []) seen.set(JSON.stringify(key), key);
   }
   return [...seen.values()];
+}
+
+/**
+ * The tables a pairing group keeps in step — `schema::SYNCED_TABLES`, read out of
+ * `syncedTables.json`, which is `userTables.json`'s arrangement for a second list: `changes.rs`'
+ * tests hold the file to the Rust constant and `crossWindow.test.ts` holds {@link TABLE_KEYS} to
+ * the file, so a table added to the constant alone is red in `cargo test`, and one added to the
+ * file with no entry in the map is red here.
+ */
+export const SYNCED_TABLES: readonly string[] = SYNCED_TABLE_NAMES;
+
+/**
+ * What a device sync that pulled something can have changed on screen — every root a synced
+ * table's write reaches, and `SYNC_KEY`.
+ *
+ * **Read off the table map rather than listed, because the list was wrong.** It was
+ * `[...OWNED_WRITE_KEYS, SYNC_KEY]`, which is what a write to `collection_entries` owes — one
+ * synced table's worth, of every one `schema::SYNCED_TABLES` names. A pull that brought another device's sticky note refreshed no
+ * `["stickyNotes"]`, a mute refreshed none of the four tag roots, and a copy, a wish or a deck
+ * card refreshed no `["card"]` — which this comment used to call corpus data no relay op can
+ * touch, while `CardDetailModal`'s holdings and every printing's `wishlisted` are filed under it.
+ * Nothing rescued any of them: `db:changed` is emitted only while two windows are open
+ * (`changes.rs`), and WebView2 never fires `visibilitychange`, so a refetch on focus never comes
+ * either. The sticky note is where it stopped being a stale screen and became a lost edit —
+ * `StickyNoteDialog` saves a whole body built from the text it was showing, which put the old
+ * words back over the other device's.
+ *
+ * **The outermost roots only** — a key under another root in the list is dropped, so
+ * `["cards", "search"]` goes under `["cards"]` and `["card", "holdings"]` under `["card"]`. Two
+ * invalidations reaching one live query start its fetch twice, the second cancelling the first,
+ * and **a cancelled TanStack fetch does not abort a Tauri invoke**: a search scrolled deep into
+ * would read every page it holds twice (`DeckCompletionWidget`'s bridge has the measurement).
+ *
+ * **No predicate, where {@link refreshForTables} carries one**: `app_meta` is not a synced table,
+ * so no single-writer key is under any of these roots, and no per-window key is either —
+ * `crossWindow.test.ts` fences both. `["sets"]` is still absent, and for the old reason: a pull
+ * writes the reader's own rows and never the corpus.
+ */
+export const DEVICE_SYNC_INVALIDATED: readonly QueryKey[] = outermost([
+  ...keysForTables(SYNCED_TABLES),
+  // Already there through `device_names`, and spelled anyway: the relay's own figures move on
+  // every round trip whatever it applied, which no table map says.
+  SYNC_KEY,
+]);
+
+/** `keys` without any key that sits under a shorter one among them, and each key once. */
+function outermost(keys: readonly QueryKey[]): QueryKey[] {
+  const kept = new Map<string, QueryKey>();
+  for (const key of keys) {
+    if (keys.some((root) => root.length < key.length && under([root], key))) continue;
+    kept.set(JSON.stringify(key), key);
+  }
+  return [...kept.values()];
 }
 
 /**

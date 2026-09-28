@@ -213,15 +213,15 @@ export function ActivityWidget({ widget, fit, still }: WidgetBodyProps): ReactEl
   // reader with nine thousand cards that their history is gone.
   if (query.isError) {
     return (
-      <Notice title="Recent activity could not be read." tone="destructive">
-        {ipcError(query.error)} The next change you make asks again.
+      <Notice title="Couldn't load recent activity." tone="destructive">
+        {ipcError(query.error)} It will retry after your next change.
       </Notice>
     );
   }
-  if (query.isPending) return <Notice title="Reading recent activity…" />;
+  if (query.isPending) return <Notice title="Loading activity…" />;
   return (
-    <Notice title="Nothing has happened yet.">
-      Recent collection and deck changes will appear here. Collection and wishlist activity is recorded on this device.
+    <Notice title="No activity yet.">
+      Your collection and deck changes will show up here. Collection and wishlist activity is recorded on this device.
     </Notice>
   );
 }

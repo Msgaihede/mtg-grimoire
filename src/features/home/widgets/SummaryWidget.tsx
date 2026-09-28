@@ -197,7 +197,7 @@ export function SummaryWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
   if (failure !== null) {
     return (
       <WidgetMessage tone="destructive">
-        Your totals could not be read. {ipcError(failure)}
+        Couldn't load totals. {ipcError(failure)}
       </WidgetMessage>
     );
   }
@@ -207,7 +207,7 @@ export function SummaryWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
     deckValues.data === undefined ||
     wishlist.data === undefined
   ) {
-    return <WidgetMessage>Adding up your collection, decks and wishlist…</WidgetMessage>;
+    return <WidgetMessage>Loading totals…</WidgetMessage>;
   }
 
   // The empty state is *all three* being empty. One empty list among three is not an empty
@@ -216,7 +216,7 @@ export function SummaryWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
   if (collection.data.totalCards === 0 && decks.data.length === 0 && wishlist.data.copies === 0) {
     return (
       <WidgetMessage>
-        Nothing to add up yet. Collection cards, decks, and wishlist cards are counted here.
+        Nothing to count yet. Add cards to your collection, decks, or wishlist.
       </WidgetMessage>
     );
   }
@@ -239,7 +239,7 @@ export function SummaryWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
     // that failed, and the reader who emptied it is owed the way back.
     return (
       <WidgetMessage>
-        Every figure is hidden. Enable figures in this widget's settings.
+        All figures are hidden. Show some in this widget's settings.
       </WidgetMessage>
     );
   }

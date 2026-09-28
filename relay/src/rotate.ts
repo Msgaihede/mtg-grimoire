@@ -1,11 +1,13 @@
-import { GROUP_SEGMENT } from "./claim";
+import { GROUP_ID, GROUP_SEGMENT } from "./claim";
 import {
   MAX_GROUP_DEVICES,
+  REMOVAL_STEP,
   authIsCurrent,
   authIsRecent,
   currentManifest,
   groupEpoch,
   keepOnly,
+  manifestAt,
   recordRotation,
 } from "./groupauth";
 // **`import type` and never a value import**, for `groupauth.ts`'s reason: `index.ts` imports
@@ -24,11 +26,20 @@ import type { Env } from "./index";
  * would refuse exactly the caller it exists to serve, and a removed device would sit for ever in
  * a group it is no longer in. These two carry their own credential instead.
  *
- * **Neither reaches the Durable Object, and that is what makes standing outside the gate
- * affordable.** The gate is in front of the DO because a request that reaches one costs a
- * Durable Object request whether it is honoured or refused (spec §8). These are D1 reads and
- * writes in the Worker, so the residual cost spec §4 accepts — a removed device spending `/keys`
- * reads until its auth ages out of the eight-epoch window — never touches the metered path.
+ * **No request either route refuses reaches the Durable Object, and that is what makes standing
+ * outside the gate affordable.** The gate is in front of the DO because a request that reaches
+ * one costs a Durable Object request whether it is honoured or refused (spec §8). `/keys` is D1
+ * reads in the Worker and nothing else, so the residual cost spec §4 accepts — a removed device
+ * spending `/keys` reads until its auth ages out of the eight-epoch window — never touches the
+ * metered path.
+ *
+ * ⚠️ **This said "neither reaches the Durable Object" until `/rotate` began telling the log who is
+ * left** ([`sendRoster`]). A rotation the relay has *accepted* now makes exactly one DO request;
+ * a refused one still makes none, because everything that can refuse — the credential's shape,
+ * the body, the credential's value, the epoch — is decided in the Worker first. So junk still
+ * costs a Worker invocation and no more. And the caller that gets as far as an accepted rotation
+ * holds the group's current auth, which mints a bearer token at `/token`'s group door and opens
+ * the gated routes anyway: it can spend nothing here that it could not already spend there.
  *
  * **The manifest `/keys` answers is the roster** (spec §2.3): a blob means catch up, no blob
  * means you are out. That is positive evidence rather than an inference from a refusal, and it
@@ -69,6 +80,18 @@ const DEVICE_ID = new RegExp(`^${GROUP_SEGMENT}$`);
  * that value is stored and compared for ever after, so a malformed one is a 400.
  */
 const CREDENTIAL = /^[0-9a-f]{64}$/;
+
+/**
+ * What `/keys`'s `epoch` query parameter has to look like: decimal digits and nothing else.
+ *
+ * **Digits only, so every shape `Number` would quietly accept is refused instead.** `Number("")`
+ * is `0`, `Number(" 1")` is `1`, `Number("1e3")` is `1000` and `Number("0x10")` is `16` — each
+ * would answer a manifest at an epoch the caller did not write, and the empty string would answer
+ * epoch 0's to a request that named none. A sign or a decimal point fails here too, which is the
+ * "non-negative integer" half. The other half — a run of digits past `Number.MAX_SAFE_INTEGER`
+ * rounds to a neighbouring epoch — is `isEpoch`'s second test, since no pattern can say it.
+ */
+const EPOCH = /^[0-9]+$/;
 
 /**
  * The largest one blob may be.
@@ -114,6 +137,11 @@ function presentedCredential(request: Request): string | null {
   if (header === null || !header.startsWith("Bearer ")) return null;
   const presented = header.slice("Bearer ".length);
   return CREDENTIAL.test(presented) ? presented : null;
+}
+
+/** Is this text an epoch `/keys` can look up exactly? See [`EPOCH`] for both halves. */
+function isEpoch(text: string): boolean {
+  return EPOCH.test(text) && Number.isSafeInteger(Number(text));
 }
 
 /**
@@ -169,6 +197,53 @@ async function retireOrphanedSecret(
 }
 
 /**
+ * Tell the group's Durable Object which devices the manifest just adopted names, so it stops
+ * waiting for the ones it does not.
+ *
+ * **Why the log has to hear it at all.** Compaction keeps every row some device has not acked
+ * (`log.ts`'s `compact`), and "some device" is every device the object has ever heard from. A
+ * removed device never acks again, so its last ack held the floor for as long as the group
+ * lived — the log could shed nothing newer than it, however old — and a departure did the same.
+ * The object has no roster of its own and cannot derive one: the manifest lives in D1 and is
+ * written here, so this is the one place that knows the set changed, at the moment it did. The
+ * object forgets the ack of every device `devices` omits and stops letting one hold the floor
+ * (`POST /g/{group}/roster`, internal like `claim.ts`'s `/drop`, and never on `index.ts`'s public
+ * pattern).
+ *
+ * **Best effort, and never an error to the rotator.** The rotation is already recorded, so a
+ * non-2xx here would tell the device that published it that it was refused — and it acts on that
+ * by not committing the epoch every other device is about to adopt. What a failure costs instead
+ * is one rotation's worth of compaction: the next accepted rotation posts a roster that still
+ * omits the departed device, and the object forgets it then.
+ *
+ * **The body carries the rotation's epoch**, because two rotations accepted back to back post two
+ * rosters nothing else orders: the object applies one only if it is newer than the last it applied
+ * (`log.isNewerRoster`), so the older one arriving second cannot undo the newer.
+ */
+async function sendRoster(
+  env: Env,
+  group: string,
+  epoch: number,
+  devices: string[],
+): Promise<void> {
+  // `claim.ts`'s `dropGroup` fence, for its reason: the router has already matched this id, and
+  // interpolating it into a URL is still the one place a stray character could address something
+  // else, so the value is checked again where it is spliced rather than trusted from upstream.
+  if (!GROUP_ID.test(group)) return;
+  try {
+    const stub = env.GROUP.get(env.GROUP.idFromName(group));
+    const response = await stub.fetch(`https://relay.internal/g/${group}/roster`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ epoch, devices }),
+    });
+    if (!response.ok) throw new Error(`the group object answered ${response.status} to roster`);
+  } catch (error) {
+    console.error("rotate roster", error);
+  }
+}
+
+/**
  * What is wrong with this manifest, as the sentence to answer with, or `null` for one the relay
  * will store.
  *
@@ -200,27 +275,37 @@ function manifestProblem(keys: unknown): string | null {
  * device that stays.
  *
  * **A 409 is the answer that carries the whole guard.** `recordRotation` refuses an epoch that
- * is not the group's next, in one statement, so a removed device that still knows the auth for
+ * does not advance the group, in one statement, so a removed device that still knows the auth for
  * the epoch it remembers cannot re-register it and walk back into the group that evicted it — and
  * cannot compute the next epoch's auth either, because it no longer has the key. Everything else
  * here is shape.
  *
- * **An epoch past the next one is a 422, not the 409, and the split is diagnostic.** A 409 is a
- * device that is *behind* — it lost a race to another rotation, and its next `/keys` check adopts
- * what won. An epoch that skips ahead is one no shipped client can produce: every plan is the
- * device's own epoch plus one, and the auth it presents is current only if that epoch is the
- * relay's. So it is a bug or a forgery, and a status of its own keeps it separable in the Worker's
- * logs from the race that is ordinary. Not a 400: every 400 here is decided from the body alone,
- * before D1 is read, and this one depends on what the group is standing on. The app treats every
- * non-2xx from this route alike, so the choice changes no client behaviour.
+ * **An epoch of one past the group's or two past it are both accepted, and the relay neither
+ * knows nor needs to know which it was given.** One is a join and two is a removal or a
+ * departure — the join/removal marker, `groupauth.ts`'s [`REMOVAL_STEP`]. The rotator bound the
+ * epoch into every blob it sealed, so the step it chose is what each device reads when it
+ * adopts, and a relay that rewrote it would be handing out blobs that do not open. The relay's
+ * part is only to accept both steps and nothing past them.
  *
- * **The order is: every check that costs nothing, then the ones that cost a D1 read.** The
- * credential's shape and the body's are decided in the Worker's own memory; the credential's
- * *value* and the epoch's are two round trips to D1. A caller who gets the body wrong pays for
- * neither.
+ * **An epoch further ahead than that is a 422, not the 409, and the split is diagnostic.** A 409
+ * is a device that is *behind* — it lost a race to another rotation, and its next `/keys` check
+ * adopts what won. An epoch that skips further is one no shipped client can produce: every plan
+ * is the device's own epoch plus one or plus two, and the auth it presents is current only if
+ * that epoch is the relay's. So it is a bug or a forgery, and a status of its own keeps it
+ * separable in the Worker's logs from the race that is ordinary. Not a 400: every 400 here is
+ * decided from the body alone, before D1 is read, and this one depends on what the group is
+ * standing on. The app treats every non-2xx from this route alike, so the choice changes no
+ * client behaviour.
  *
- * **And the manifest is the roster, so publishing one settles who holds a device slot** — the
- * `keepOnly` below the 409, which is spec §4.4's whole implementation.
+ * **The order is: every check that costs nothing, then the ones that cost a D1 read, then the one
+ * that costs a Durable Object request.** The credential's shape and the body's are decided in the
+ * Worker's own memory; the credential's *value* and the epoch's are two round trips to D1; the
+ * roster reaches the DO only once the rotation has been recorded. A caller who gets the body
+ * wrong pays for none of it, and no refusal of any kind reaches the metered line.
+ *
+ * **And the manifest is the roster, so publishing one settles who holds a device slot and whom the
+ * log waits for** — the `keepOnly` and the [`sendRoster`] below the 409. The first is spec §4.4's
+ * whole implementation; the second is what stops a departed device's last ack pinning the log.
  */
 export async function handleRotate(request: Request, env: Env, group: string): Promise<Response> {
   const presented = presentedCredential(request);
@@ -255,8 +340,8 @@ export async function handleRotate(request: Request, env: Env, group: string): P
   if (!(await recordRotation(env, group, epoch, auth, keys))) {
     // Read after the refusal and only to word it — the decision was the statement above.
     const current = (await groupEpoch(env, group)) ?? -1;
-    if (epoch > current + 1) {
-      return json({ error: "that rotation skips an epoch the group has not reached" }, 422);
+    if (epoch > current + REMOVAL_STEP) {
+      return json({ error: "that rotation steps further ahead than any rotation may" }, 422);
     }
     return json({ error: "that rotation does not advance the group's key" }, 409);
   }
@@ -277,22 +362,44 @@ export async function handleRotate(request: Request, env: Env, group: string): P
   await retireOrphanedSecret(env, group, keys);
   await keepOnly(env, group, Object.keys(keys));
 
+  // **Then the log, last and best effort** — `claim.ts`'s `releaseGroup` order, for its reason:
+  // this is the only step that leaves D1, and a Durable Object that cannot be reached must not
+  // cost the retirement or the slot above it. It swallows its own failure; see `sendRoster`.
+  await sendRoster(env, group, epoch, Object.keys(keys));
+
   // The caller reads the status and nothing else, but naming the epoch the relay is now standing
   // on is what makes a log line from a failed removal say something.
   return json({ epoch });
 }
 
 // ---------------------------------------------------------------------------------------
-// GET /g/{group}/keys?device={id}
+// GET /g/{group}/keys?device={id}[&epoch={n}]
 // ---------------------------------------------------------------------------------------
 
 /**
- * The newest manifest: this device's rewrapped key if it has one, and the roster either way.
+ * The newest manifest — or, with `epoch`, the one stored at exactly that epoch: this device's
+ * rewrapped key if it has one, and the roster either way.
  *
  * **`blob: null` at an epoch higher than the caller's is the removal notice**, and it is the
  * only one there is. There is no second table that could arrive late, arrive out of order, or
  * arrive at a device that cannot decrypt it — which is precisely the state a rotation puts every
  * peer in (spec §2.3).
+ *
+ * **`epoch` is for the device that skipped one.** Standing on *N* and answered *N+2*, it has never
+ * held *N+1*'s key, which is all it lacks to open what the group sealed under *N+1* — so it asks
+ * for that epoch by name, from the rows `group_keys` was already keeping ([`manifestAt`]).
+ * **A miss is a 404 carrying `code: "no_such_epoch"`**, and it is an answer rather than a failure:
+ * the most common reason is that *N+2* was a removal, which steps over *N+1* rather than writing
+ * it, and a device told so knows there is nothing there to open. It is the same answer for an
+ * epoch the prune has taken or one the group has not reached. ⚠️ **A `blob: null` in answer to
+ * `epoch` says "you held no key then" and is never the removal notice**, which is read off the
+ * newest manifest alone: the question here is how to open an old backlog, not who is in the group.
+ *
+ * **Every 200 carries `removalStep`**, the step a removal advances the epoch by on this relay. It
+ * is how a device learns that this relay accepts a rotation of `+2`; one that has not seen it
+ * steps a removal by one, the only step an older relay accepts. An older relay also ignores
+ * `epoch` and answers the newest manifest, which the device detects by the answered epoch not
+ * being the one it asked for.
  *
  * **An unreadable manifest is left to throw, deliberately.** `currentManifest` raises rather than
  * answering `{}`, and catching that into a default here would turn one corrupt row into every
@@ -318,16 +425,32 @@ export async function handleKeys(
   if (device === null || !DEVICE_ID.test(device)) {
     return json({ error: "that is not a device id" }, 400);
   }
+  // Decided from the query alone, so ahead of the D1 read below with the other shape checks.
+  const asked = url.searchParams.get("epoch");
+  if (asked !== null && !isEpoch(asked)) return json({ error: "that is not an epoch" }, 400);
 
   // `authIsRecent` and not `authIsCurrent`, and the difference is the route's reason for
   // existing: a device that is behind a rotation and a device that was removed present the same
-  // stale auth, and only the manifest can tell them apart.
+  // stale auth, and only the manifest can tell them apart. **One question for both forms** — an
+  // old epoch's manifest is no more secret than the newest one, and every blob in it is sealed to
+  // the device it names.
   if (!(await authIsRecent(env, group, presented))) {
     return json({ error: "unauthorized" }, 401);
   }
 
-  const manifest = await currentManifest(env, group);
-  if (manifest === null) return json({ error: "no such sync group" }, 404);
+  const manifest =
+    asked === null
+      ? await currentManifest(env, group)
+      : await manifestAt(env, group, Number(asked));
+  if (manifest === null) {
+    // **Two different 404s, and only the second carries a code.** No manifest at all is a group
+    // the relay holds no rows for, which the auth check above has already refused; a miss at a
+    // named epoch is a group whose rows were found and do not include that one — an answer a
+    // device acts on, so it is matched on `code` and never on the sentence.
+    return asked === null
+      ? json({ error: "no such sync group" }, 404)
+      : json({ error: "the group holds no key at that epoch", code: "no_such_epoch" }, 404);
+  }
 
   // **`Object.hasOwn` and never `keys[device] ?? null`.** The manifest is JSON a caller chose the
   // key set of, and `constructor`, `toString` and `valueOf` are all device ids as far as
@@ -347,5 +470,10 @@ export async function handleKeys(
   // the field present, and that attribute is what makes its absence loud. Neither is a backstop
   // for the other, because only one of them existed for the window in which this was wrong.
   const blob = Object.hasOwn(manifest.keys, device) ? manifest.keys[device] : null;
-  return json({ epoch: manifest.epoch, blob, devices: Object.keys(manifest.keys) });
+  return json({
+    epoch: manifest.epoch,
+    blob,
+    devices: Object.keys(manifest.keys),
+    removalStep: REMOVAL_STEP,
+  });
 }
