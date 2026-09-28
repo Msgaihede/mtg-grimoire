@@ -509,7 +509,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   different one. Grep the *calls* rather than the `K_*` constants: `maintenance.rs` names two of
   those and both are `sync_meta` keys. What is worth knowing without grepping is the split: most
   of these rows are a reader's *choice* (`marketplace`, `printing_group_by`, `nav_collapsed`,
-  `card_zoom`, `list_view`, `search_open`, `shelf_folds`), one is a *memory* of what they last
+  `card_zoom`, `list_view`, `search_open`, `shelf_folds`, `hidden_stacks`), one is a *memory* of what they last
   did (`last_deck_format`), and the rest are the app's own bookkeeping (the update check's three,
   `scryfall_penalty_until`). **None of them belongs in `sync_meta`** — a row in that one the sync
   did not write makes every later timing claim a fiction.
@@ -1275,13 +1275,31 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `duplicate_deck`**, so a copy takes the default. **`DEFAULT 0` is v43's `notes_open` answer
   rather than v42's**: the split is new, so off is exactly the chart every deck already drew and
   the upgrade changes nothing on screen. One `ADD COLUMN`, no index, so neither figure at the top
-  of this page moves. It owes **`UNDO_V56`**, for `UNDO_V13`'s loud reason, at the head of every
-  chain — and ⚠️ **that rewind drops the three `decks` capture triggers before the column**, v43's
+  of this page moves. It owes **`UNDO_V56`**, for `UNDO_V13`'s loud reason, in every chain
+  — and ⚠️ **that rewind drops the three `decks` capture triggers before the column**, v43's
   move in the rewind direction: on a fixture that ran `capture::install` (the v54 rung's test,
   which rewinds to 53), `sync_ins_decks` and `sync_upd_decks` read `NEW.curve_creatures` and SQLite
   refuses the `DROP COLUMN` with `error in trigger sync_ins_decks after drop column`. `IF EXISTS`,
   so a chain over a fixture that never installed them is unchanged, and `capture::install` rebuilds
-  all three whenever a launch runs it.
+  all three whenever a launch runs it. `UNDO_V56` was the head of every chain until v57's
+  `UNDO_V57` landed above it.
+  **v57 adds `decks.managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0`** (2026-09-28,
+  [issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617)) — whether a theory deck's
+  managed wishlist files the token printings its plan is short of in the **Tokens** subfolder, a
+  switch beside `managed_wishlist_mode` where until now tokens were a fact about the mode (`all`
+  counted them, `missing` and `other` did not, and v55's fifth word `tokens` meant them alone).
+  **The first rung since v52 that rewrites synced rows, and it converts them uncaptured**: it drops
+  the three `decks` capture triggers before its `ADD COLUMN` and its two `UPDATE`s, because every
+  device converts its own copy of the synced mode the same way, and a captured conversion would
+  carry `missing` to a v56 peer that converted nothing. `all` becomes `all` with the switch on,
+  `tokens` becomes `missing` with the switch on — the reader's answer on 2026-09-28, since of the
+  three modes that can carry the switch it adds the fewest wishes nobody asked for — and `missing`,
+  `other` and `off` keep `0`. `capture::install` puts the triggers back right after `migrate_user`,
+  and `the_v57_conversion_is_not_captured` pins both halves. On the `decks` capture spec, with a
+  history row, a place on `deck_undo::DECK_FIELDS` and a seat in `duplicate_deck` — the mode's
+  rules. One `ADD COLUMN`, no index. It owes **`UNDO_V57`**, at the head of every chain, which drops
+  the capture triggers before the column for `UNDO_V56`'s reason and does not convert the mode
+  back.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

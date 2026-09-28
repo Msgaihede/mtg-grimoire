@@ -53,6 +53,7 @@ function deck(name: string, over: Partial<DeckRow> = {}): DeckRow {
     theoryMarkName: true,
     theoryMarkUnplanned: true,
     managedWishlist: "off",
+    managedWishlistTokens: false,
     lastVariant: "live",
     lastGroupBy: "category",
     lastSortBy: "alphabetical",

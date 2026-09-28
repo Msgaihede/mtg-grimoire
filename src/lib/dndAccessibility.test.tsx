@@ -459,11 +459,13 @@ describe("what a drag is to a keyboard", () => {
    * **The finding the 3c plan's table does not have, and the reason this file exists at all.**
    *
    * That table says the four surfaces above are the whole list and that the grip is the *only*
-   * tab-reachable draggable in the app. It is not. `VirtualTable` gives its rows
-   * `tabIndex: onActivate ? 0 : undefined` so that Enter and Space open the card, and the deck
-   * editor's table view registers `useDeckCardDrag` on **that same row element** — one `<div>`
-   * carrying `role="row"`, `tabindex="0"`, a `Draggable` and a `Droppable`. Every row of a deck's
-   * table view is therefore a drag source a reader can put the caret on.
+   * tab-reachable draggable in the app. It is not. `VirtualTable` makes its rows focusable so that
+   * Enter and Space open the card, and the deck editor's table view registers `useDeckCardDrag`
+   * on **that same row element** — one `<div>` carrying `role="row"`, a `tabindex`, a `Draggable`
+   * and a `Droppable`. Every row of a deck's table view is therefore a drag source a reader can
+   * put the caret on. Since issue #558 the rows are one **roving** stop — exactly one row is
+   * `tabindex="0"` and the arrows walk the rest at `-1` — so Tab reaches one of them and the
+   * arrows reach them all, which is the same finding with a shorter Tab walk.
    *
    * Nothing is broken by it today, because there is no `KeyboardSensor` for the caret to meet.
    * It is written down because it is exactly the shape of thing that would acquire a
@@ -474,8 +476,10 @@ describe("what a drag is to a keyboard", () => {
     await renderDeckView("table");
     const rows = activators().filter((a) => a.role === "row");
     expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((a) => a.tag === "div" && a.tabindex === "0")).toBe(true);
-    expect(rows.every(tabReachable)).toBe(true);
+    expect(rows.every((a) => a.tag === "div" && (a.tabindex === "0" || a.tabindex === "-1"))).toBe(
+      true,
+    );
+    expect(rows.filter(tabReachable)).toHaveLength(1);
   });
 
   /** The same shape again on the collection's table, by the same route: `onActivate` opens the

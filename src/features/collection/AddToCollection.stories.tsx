@@ -144,9 +144,10 @@ const meta = {
           "only spelling of “say nothing” a `coalesce(?, column)` understands — a `0` would be a " +
           "claim that the copy was free. {@link PurchasePrice} is both halves.\n\n" +
           "Invisible until its row or tile is hovered or holds the caret — a wall of art is not " +
-          "a wall of plus signs — and **always in the tab order**, because “visible on hover” is " +
-          "not a state a keyboard has. That is the *caller's* half: `REVEAL_ON_HOVER` is a class " +
-          "the surface passes in, so every story below draws the trigger plainly.\n\n" +
+          "a wall of plus signs — and **always reachable by keyboard**, because “visible on hover” " +
+          "is not a state a keyboard has; on an arrow-walked wall it is in the tab order on the " +
+          "one roving stop tile (issue #558). That is the *caller's* half: `REVEAL_ON_HOVER` is a " +
+          "class the surface passes in, so every story below draws the trigger plainly.\n\n" +
           "**The trigger is named for the card, the printing and the destination** — `Add " +
           "Lightning Bolt (2X2 117) to Collection` — never “Add”. Forty of these in a printings " +
           "list are forty different cards, and the destination is whatever the popup was last " +

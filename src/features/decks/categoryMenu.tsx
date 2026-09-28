@@ -6,6 +6,10 @@
  * and every one of them arrives as a callback, so this file is testable with no provider, no
  * query client and no window.
  *
+ * **Hide / Unhide is a sixth row, and only the Stacks view offers it** (issue #618) — see
+ * {@link CategoryMenuDeps.stackVisibility}. It is a view preference rather than a write to the deck,
+ * so it sits with Rename above the rule rather than below it.
+ *
  * Two of the five rows are things the Categories dialog already does — rename, and the switch —
  * and the menu is where they stop being a round trip through a panel listing every pile in the
  * deck to change one. The other three are new or newly aimed:
@@ -39,7 +43,17 @@
  * `set_category_active` takes every kind, the command zone included, and switching the
  * Maybeboard back on is the single most likely thing anybody wants from its menu.
  */
-import { Eraser, FileInput, FileOutput, Pencil, Power, PowerOff, Trash2 } from "lucide-react";
+import {
+  Eraser,
+  Eye,
+  EyeOff,
+  FileInput,
+  FileOutput,
+  Pencil,
+  Power,
+  PowerOff,
+  Trash2,
+} from "lucide-react";
 import type { MenuItem } from "@/components/menu/types";
 import { fromDeckCard, type TransferCard } from "@/features/transfer/TransferCard";
 import type { DeckCard, DeckCategory } from "@/lib/ipc";
@@ -92,6 +106,18 @@ export interface CategoryMenuDeps {
   askClear: (category: DeckCategory) => void;
   /** The confirmation a delete owes — never `meta.deleteCategory`. See this file's doc. */
   askDelete: (category: DeckCategory) => void;
+  /**
+   * **Hide** / **Unhide** (issue #618) — the Stacks view's own rows, so the editor hands them only
+   * while that view is drawn: the other three draw every card of a hidden stack, and a row that
+   * changed nothing on screen would read as broken. Absent, neither row is offered.
+   *
+   * `hidden` is where the stack is now and `setHidden` takes the state being moved **to**, for
+   * `setActive`'s reason: the row that says "Unhide" and the write it makes must be one statement.
+   */
+  stackVisibility?: {
+    hidden: boolean;
+    setHidden: (category: DeckCategory, hidden: boolean) => void;
+  };
 }
 
 /** What `Clear stack…` says on a pile that has nothing to clear. Not a refusal — nothing is
@@ -123,6 +149,20 @@ export function buildCategoryMenu(category: DeckCategory, deps: CategoryMenuDeps
       label: "Rename…",
       Icon: Pencil,
       onSelect: () => deps.startRename(category),
+    });
+  }
+
+  // **Hide / Unhide sits above the transfers**, beside Rename: all three change how the pile reads
+  // on the desk and none changes what the deck counts, which is what the rule further down marks.
+  // Drawn on every kind — hiding the Sideboard while building the main deck is the obvious use.
+  const visibility = deps.stackVisibility;
+  if (visibility !== undefined) {
+    items.push({
+      kind: "action",
+      id: "hidden",
+      label: visibility.hidden ? "Unhide" : "Hide",
+      Icon: visibility.hidden ? Eye : EyeOff,
+      onSelect: () => visibility.setHidden(category, !visibility.hidden),
     });
   }
 

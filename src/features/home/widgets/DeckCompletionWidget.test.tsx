@@ -4,7 +4,7 @@ import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DeckCompletion, DeckRow, HomeWidget } from "@/lib/ipc";
+import type { DeckCompletion, DeckCompletionCompare, DeckRow, HomeWidget } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 
 /**
@@ -20,7 +20,9 @@ import type { MarketplaceId } from "@/lib/marketplace";
  */
 const deckList = vi.hoisted(() => vi.fn<() => Promise<DeckRow[]>>());
 const deckCompletion = vi.hoisted(() =>
-  vi.fn<(marketplace: MarketplaceId) => Promise<DeckCompletion[]>>(),
+  vi.fn<
+    (marketplace: MarketplaceId, compare: DeckCompletionCompare) => Promise<DeckCompletion[]>
+  >(),
 );
 vi.mock("@/lib/ipc", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ipc")>();
@@ -35,13 +37,17 @@ import { deckCompletionKey, deckListKey } from "../keys";
 import type { Density } from "../widgetSettings";
 import {
   ALL_COMPLETE,
+  CHOSEN_UNMEASURABLE,
+  completionCompare,
   completionFooter,
   completionRows,
+  completionScope,
   countCaption,
   DeckCompletionWidget,
+  DeckCompletionWidgetSettings,
   NO_DECKS,
-  NOTHING_PINNED,
-  PINS_UNMEASURABLE,
+  NO_PLANS,
+  NOTHING_CHOSEN,
   rowHint,
   sortCompletions,
   type CompletionRow,
@@ -68,6 +74,7 @@ function deck(over: Partial<DeckRow> & { id: number; name: string }): DeckRow {
     theoryMarkName: true,
     theoryMarkUnplanned: true,
     managedWishlist: "off",
+    managedWishlistTokens: false,
     lastVariant: "live",
     lastGroupBy: "category",
     lastSortBy: "alphabetical",
@@ -125,7 +132,10 @@ const SHELF_AT = completion({ deckId: 4, owned: 10, missing: 50, missingCost: 5 
 const SHELL = deck({ id: 9, name: "Empty Shell", cardCount: 0 });
 const SHELL_AT = completion({ deckId: 9, wanted: 0, owned: 0, missing: 0, missingCost: null });
 
-/** A deck that keeps a plan, measured by it — the list the editor's Theory tab counts. */
+/**
+ * A deck that keeps a plan, and its answer under `Theory`: its plan's hundred against the actual
+ * list, of which 81 are already sleeved.
+ */
 const PLAN = deck({ id: 8, name: "Esper Control", theoryEnabled: true, lastVariant: "theory" });
 const PLAN_AT = completion({
   deckId: 8,
@@ -157,10 +167,17 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-function seed(decks: readonly DeckRow[], answers: readonly DeckCompletion[]) {
+function seed(
+  decks: readonly DeckRow[],
+  answers: readonly DeckCompletion[],
+  compare: DeckCompletionCompare = "collection",
+) {
   qc.setQueryData(deckListKey, decks);
-  qc.setQueryData(deckCompletionKey(DEFAULT_MARKETPLACE), answers);
+  qc.setQueryData(deckCompletionKey(DEFAULT_MARKETPLACE, compare), answers);
 }
+
+/** `Compare against → Theory`, with whatever else the case sets. */
+const THEORY = { compare: "theory" } as const;
 
 function draw(
   config: unknown = null,
@@ -394,27 +411,61 @@ describe("rowHint", () => {
     ).toBe("Nothing on this deck's list has a price at TCGplayer.");
   });
 
-  it("says a theory deck is measured against its plan", () => {
-    expect(rowHint(completion({ deckId: 1, list: "theory" }), tcg)).toMatch(
-      /^Measured against this deck's theory list/,
+  it("says a theory row is the actual list measured against the plan", () => {
+    expect(rowHint(completion({ deckId: 1, list: "theory" }), tcg)).toBe(
+      "This deck's actual list, measured against its theory list.",
     );
+  });
+});
+
+describe("completionCompare and completionScope", () => {
+  it("reads Collection unless Theory is stored", () => {
+    expect(completionCompare(widget())).toBe("collection");
+    expect(completionCompare(widget({ compare: "theory" }))).toBe("theory");
+    expect(completionCompare(widget({ compare: "bogus" }))).toBe("collection");
+  });
+
+  /** The pick was `Most recent` / `Pinned` until issue #600, and a card stored then keeps its
+   *  checklist: `pinned` reads as `chosen`, where `pickOf` would call it the default. */
+  it("reads a stored Pinned as Chosen, and everything else as All decks", () => {
+    expect(completionScope(widget())).toBe("all");
+    expect(completionScope(widget({ scope: "recent" }))).toBe("all");
+    expect(completionScope(widget({ scope: "chosen" }))).toBe("chosen");
+    expect(completionScope(widget({ scope: "pinned" }))).toBe("chosen");
   });
 });
 
 describe("completionRows", () => {
   it("keeps deck_list's order, leaves archived and virtual decks out, and drops an unanswered deck", () => {
     const answers = [SHELF_AT, MONO_AT, BURN_AT];
-    expect(completionRows(DECKS, answers, "recent", []).map((r) => r.name)).toEqual([
-      "Burn",
-      "Mono Red",
-    ]);
+    expect(
+      completionRows(DECKS, answers, "all", [], "collection").map((r) => r.name),
+    ).toEqual(["Burn", "Mono Red"]);
   });
 
-  it("keeps a pinned archived deck, and drops a pin to a virtual deck", () => {
-    expect(completionRows(DECKS, ANSWERS, "pinned", [4, 5, 2]).map((r) => r.name)).toEqual([
-      "Old Shelf",
-      "Atraxa",
+  it("keeps a chosen archived deck, and drops a choice of a virtual deck", () => {
+    expect(
+      completionRows(DECKS, ANSWERS, "chosen", [4, 5, 2], "collection").map((r) => r.name),
+    ).toEqual(["Old Shelf", "Atraxa"]);
+  });
+
+  /**
+   * **Theory measures only decks that keep a plan — a virtual one included**, and drops every
+   * other deck in either scope, even one the reader chose under `Collection`: the choice is kept
+   * in the config and simply not drawn where it cannot be measured.
+   */
+  it("keeps only the decks that keep a plan under Theory, a virtual one included", () => {
+    const virtualPlan = deck({ id: 10, name: "Arena Plan", theoryEnabled: true, virtualOnly: true });
+    const decks = [BURN, PLAN, virtualPlan, PROXIES];
+    const answers = [PLAN_AT, completion({ deckId: 10, list: "theory", owned: 30, missing: 30 })];
+
+    expect(completionRows(decks, answers, "all", [], "theory").map((r) => r.name)).toEqual([
+      "Esper Control",
+      "Arena Plan",
     ]);
+    expect(
+      completionRows(decks, answers, "chosen", [1, 10, 5], "theory").map((r) => r.name),
+    ).toEqual(["Arena Plan"]);
   });
 
   /**
@@ -426,12 +477,14 @@ describe("completionRows", () => {
   it("leaves out a deck whose measured list asks for nothing, in either scope", () => {
     const decks = [SHELL, ...DECKS];
     const answers = [SHELL_AT, ...ANSWERS];
-    expect(completionRows(decks, answers, "recent", []).map((r) => r.name)).toEqual([
+    expect(completionRows(decks, answers, "all", [], "collection").map((r) => r.name)).toEqual([
       "Burn",
       "Atraxa",
       "Mono Red",
     ]);
-    expect(completionRows(decks, answers, "pinned", [9, 1]).map((r) => r.name)).toEqual(["Burn"]);
+    expect(
+      completionRows(decks, answers, "chosen", [9, 1], "collection").map((r) => r.name),
+    ).toEqual(["Burn"]);
   });
 });
 
@@ -442,8 +495,8 @@ describe("DeckCompletionWidget", () => {
 
       draw();
 
-      // Most recent, complete decks off: the archived shelf, the virtual pile and the complete
-      // deck are all out.
+      // All decks, complete decks off: the archived shelf, the virtual pile and the complete deck
+      // are all out.
       expect(deckNames()).toEqual(["Burn", "Atraxa"]);
       const burn = screen.getByRole("button", { name: /^Burn/ });
       expect(burn).toHaveAccessibleName("Burn · 56 of 60 · 4 missing · $12.50");
@@ -523,13 +576,36 @@ describe("DeckCompletionWidget", () => {
       expect(deckNames()).toEqual(["Atraxa", "Burn", "Mono Red"]);
     });
 
-    it("draws the pinned decks, an archived pin included", () => {
+    it("draws the chosen decks, an archived choice included", () => {
+      seed(DECKS, ANSWERS);
+
+      draw({ scope: "chosen", deckIds: [4, 2] });
+
+      // Nearest done: Atraxa has 40 of 100, the shelf 10 of 60.
+      expect(deckNames()).toEqual(["Atraxa", "Old Shelf"]);
+    });
+
+    it("draws a card stored under the old Pinned word as its chosen decks", () => {
       seed(DECKS, ANSWERS);
 
       draw({ scope: "pinned", deckIds: [4, 2] });
 
-      // Nearest done: Atraxa has 40 of 100, the shelf 10 of 60.
       expect(deckNames()).toEqual(["Atraxa", "Old Shelf"]);
+    });
+
+    /**
+     * **Theory asks a different question of the same decks**, so it is a different read: the
+     * comparison is sent to Rust and is in the key, and the card draws the plan-keeping decks it
+     * answers — a deck with no plan is not on it, whatever the collection answer said about it.
+     */
+    it("asks for the Theory comparison and draws only the decks that keep a plan", () => {
+      seed([BURN, PLAN], [BURN_AT], "collection");
+      seed([BURN, PLAN], [PLAN_AT], "theory");
+
+      draw(THEORY);
+
+      expect(deckNames()).toEqual(["Esper Control"]);
+      expect(deckCompletion).not.toHaveBeenCalled();
     });
 
     /** `null` is *nothing priced*, and the only case that draws an em dash. */
@@ -581,9 +657,9 @@ describe("DeckCompletionWidget", () => {
 
     /** The caption says the figure is the plan's, and so does the name a reader drives by. */
     it("says Plan on a row measured on the theory list", () => {
-      seed([PLAN], [PLAN_AT]);
+      seed([PLAN], [PLAN_AT], "theory");
 
-      draw();
+      draw(THEORY);
 
       const plan = screen.getByRole("button", { name: /^Esper Control/ });
       expect(plan).toHaveAccessibleName("Esper Control · Plan · 81 of 100 · 19 missing · $50.00");
@@ -603,9 +679,9 @@ describe("DeckCompletionWidget", () => {
     });
 
     it("keeps Plan in the shortfall a tile moves under the name", () => {
-      seed([PLAN], [PLAN_AT]);
+      seed([PLAN], [PLAN_AT], "theory");
 
-      draw(null, { fit: fitFor(2, 3) });
+      draw(THEORY, { fit: fitFor(2, 3) });
 
       expect(screen.getByRole("button", { name: /^Esper Control/ })).toHaveTextContent(
         "Esper ControlPlan · 19 missing · $50.00",
@@ -625,21 +701,25 @@ describe("DeckCompletionWidget", () => {
 
     /**
      * **A compact panel draws no count, and a plan's figures still need saying** (fix round 1): the
-     * price and the track beside `Esper Control` are the plan's, so the word alone is its caption.
-     * A live row beside it stays bare.
+     * price and the track beside `Esper Control` are the plan's, so the word alone is its caption —
+     * and a live row, under `Collection`, stays bare.
      */
     it("keeps the word Plan as the caption of a theory row on a compact card", () => {
-      seed([PLAN, BURN], [PLAN_AT, BURN_AT]);
+      seed([PLAN], [PLAN_AT], "theory");
 
-      draw(null, { fit: fitFor(3, 3, "compact") });
+      const { unmount } = draw(THEORY, { fit: fitFor(3, 3, "compact") });
 
       const plan = screen.getByRole("button", { name: /^Esper Control/ });
       expect(plan).toHaveTextContent(/^Esper ControlPlan\$50\.00$/);
       expect(within(plan).getByText("Plan")).toBeInTheDocument();
       expect(within(plan).queryByText(/81 of 100/)).toBeNull();
-      expect(screen.getByRole("button", { name: /^Burn/ })).toHaveTextContent(/^Burn\$12\.50$/);
       // The name a reader drives by still carries the whole caption.
       expect(plan).toHaveAccessibleName("Esper Control · Plan · 81 of 100 · 19 missing · $50.00");
+      unmount();
+
+      seed([BURN], [BURN_AT]);
+      draw(null, { fit: fitFor(3, 3, "compact") });
+      expect(screen.getByRole("button", { name: /^Burn/ })).toHaveTextContent(/^Burn\$12\.50$/);
     });
 
     it("cuts the list to the rows the box holds", () => {
@@ -684,9 +764,9 @@ describe("DeckCompletionWidget", () => {
 
     /**
      * **One row height for the whole list, and it has to be the tallest row drawn.** A compact
-     * panel of live decks is bare rows (42px with the track); one theory row among them carries the
-     * `Plan` line, so every row is counted at the captioned 57px — counting at 42 would cut the list
-     * to more rows than the box holds. The fixture is chosen so the two counts differ (5 against 4).
+     * panel of live decks is bare rows (42px with the track); a theory row carries the `Plan` line,
+     * so under `Theory` every row is counted at the captioned 57px — counting at 42 would cut the
+     * list to more rows than the box holds. The fixture is chosen so the two counts differ.
      */
     it("counts rows at the captioned height on a compact card once a theory row is listed", () => {
       const fit = fitFor(3, 3, "compact");
@@ -703,9 +783,10 @@ describe("DeckCompletionWidget", () => {
       expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(42, 21));
       unmount();
 
-      // The same decks with one of them measured on its plan.
-      seed(many, [...answers.slice(0, 11), { ...answers[11], list: "theory" }]);
-      draw(null, { fit });
+      // The same decks, each keeping a plan, under Theory — where every row is a plan's.
+      const plans = many.map((d) => ({ ...d, theoryEnabled: true }));
+      seed(plans, answers.map((a) => ({ ...a, list: "theory" as const })), "theory");
+      draw(THEORY, { fit });
 
       expect(screen.getAllByRole("listitem")).toHaveLength(fit.rowsFit(57, 21));
     });
@@ -768,29 +849,48 @@ describe("DeckCompletionWidget", () => {
       expect(rowNames()).toEqual([]);
     });
 
-    it("points at the settings when Pinned has nothing pinned", () => {
+    it("points at the settings when Chosen has nothing chosen", () => {
       seed(DECKS, ANSWERS);
 
-      draw({ scope: "pinned" });
+      draw({ scope: "chosen" });
 
-      expect(screen.getByText(NOTHING_PINNED)).toBeInTheDocument();
+      expect(screen.getByText(NOTHING_CHOSEN)).toBeInTheDocument();
       expect(rowNames()).toEqual([]);
     });
 
     /**
-     * **Pins that answer to nothing measurable are the pins' problem, not the collection's**
+     * **Choices that answer to nothing measurable are the choices' problem, not the collection's**
      * (fix round 1). `NO_DECKS` would tell a reader who has decks to build one, and say archived
-     * decks are left out — false under `Pinned`, where an archived pin is drawn. Here the pins are
-     * a virtual deck, an empty one and an id no deck has any more, while four real decks exist.
+     * decks are left out — false under `Chosen…`, where an archived choice is drawn. Here the
+     * choices are a virtual deck, an empty one and an id no deck has any more, while four real
+     * decks exist.
      */
-    it("says the pins cannot be measured when every pin is gone, virtual or empty", () => {
+    it("says the choices cannot be measured when every one is gone, virtual or empty", () => {
       seed([SHELL, ...DECKS], [SHELL_AT, ...ANSWERS]);
 
-      draw({ scope: "pinned", deckIds: [5, 9, 404] });
+      draw({ scope: "chosen", deckIds: [5, 9, 404] });
 
-      expect(screen.getByText(PINS_UNMEASURABLE)).toBeInTheDocument();
+      expect(screen.getByText(CHOSEN_UNMEASURABLE)).toBeInTheDocument();
       expect(screen.queryByText(NO_DECKS)).toBeNull();
       expect(rowNames()).toEqual([]);
+    });
+
+    /** Under `Theory` a reader with decks but no plan is told what makes one, not to build a deck. */
+    it("says there is no plan to compare when no deck keeps one", () => {
+      seed(DECKS, [], "theory");
+
+      draw(THEORY);
+
+      expect(screen.getByText(NO_PLANS)).toBeInTheDocument();
+      expect(screen.queryByText(NO_DECKS)).toBeNull();
+    });
+
+    it("says the choices cannot be measured under Theory when none of them keeps a plan", () => {
+      seed([...DECKS, PLAN], [PLAN_AT], "theory");
+
+      draw({ ...THEORY, scope: "chosen", deckIds: [1, 2] });
+
+      expect(screen.getByText(CHOSEN_UNMEASURABLE)).toBeInTheDocument();
     });
 
     it("says every deck is complete when the switch is off and nothing is short", () => {
@@ -823,8 +923,8 @@ describe("DeckCompletionWidget", () => {
     it("opens a deck measured on its plan exactly as it opens any other", async () => {
       const user = userEvent.setup();
       const writes = recordWrites();
-      seed([PLAN], [PLAN_AT]);
-      draw();
+      seed([PLAN], [PLAN_AT], "theory");
+      draw(THEORY);
 
       await user.click(screen.getByRole("button", { name: /^Esper Control/ }));
 
@@ -860,7 +960,7 @@ describe("DeckCompletionWidget", () => {
     expect(
       await screen.findByRole("button", { name: "Burn · 56 of 60 · 4 missing · €9.50" }),
     ).toBeInTheDocument();
-    expect(deckCompletion).toHaveBeenCalledWith("cardmarket");
+    expect(deckCompletion).toHaveBeenCalledWith("cardmarket", "collection");
   });
 
   /**
@@ -936,5 +1036,75 @@ describe("DeckCompletionWidget", () => {
 
       expect(deckCompletion).not.toHaveBeenCalled();
     });
+  });
+});
+
+/**
+ * The `Chosen…` checklist — its own since issue #600, because it offers **only the decks the
+ * card's comparison can measure**, which the Decks widget's checklist of every deck cannot.
+ */
+describe("DeckCompletionWidgetSettings", () => {
+  const virtualPlan = deck({ id: 10, name: "Arena Plan", theoryEnabled: true, virtualOnly: true });
+  const ALL = [BURN, ATRAXA, SHELF, PROXIES, PLAN, virtualPlan];
+
+  function settings(config: unknown) {
+    const onConfig = vi.fn();
+    qc.setQueryData(deckListKey, ALL);
+    render(<DeckCompletionWidgetSettings widget={widget(config)} onConfig={onConfig} />, {
+      wrapper,
+    });
+    return onConfig;
+  }
+
+  async function offered(user: ReturnType<typeof userEvent.setup>): Promise<string[]> {
+    await user.click(screen.getByRole("button", { name: "Decks to measure" }));
+    return screen.getAllByRole("option").map((el) => el.textContent ?? "");
+  }
+
+  it("points at the scope row instead of drawing a picker that would do nothing", () => {
+    settings(null);
+
+    expect(screen.queryByRole("button", { name: "Decks to measure" })).toBeNull();
+    expect(
+      screen.getByText("Choose Chosen… under Which decks to pick the decks this card measures."),
+    ).toBeInTheDocument();
+  });
+
+  it("offers every deck but a virtual one under Collection, alphabetically", async () => {
+    const user = userEvent.setup();
+    settings({ scope: "chosen" });
+
+    expect(await offered(user)).toEqual([
+      expect.stringContaining("Atraxa"),
+      expect.stringContaining("Burn"),
+      expect.stringContaining("Esper Control"),
+      expect.stringContaining("Old Shelf (archived)"),
+    ]);
+  });
+
+  it("offers only the decks that keep a plan under Theory, a virtual one included", async () => {
+    const user = userEvent.setup();
+    settings({ scope: "chosen", compare: "theory" });
+
+    expect(await offered(user)).toEqual([
+      expect.stringContaining("Arena Plan"),
+      expect.stringContaining("Esper Control"),
+    ]);
+  });
+
+  /**
+   * **A choice the current comparison cannot measure is carried through, not dropped** — Burn,
+   * chosen under Collection, is not offered under Theory and comes back ticked when the reader
+   * switches back. The patch also writes `chosen`, which is what retires a stored `pinned`.
+   */
+  it("keeps a choice it does not offer, and writes the scope beside the ids", async () => {
+    const user = userEvent.setup();
+    const onConfig = settings({ scope: "pinned", compare: "theory", deckIds: [1, 8] });
+
+    expect(screen.getByRole("button", { name: "Decks to measure" })).toHaveTextContent("1 deck");
+    await user.click(screen.getByRole("button", { name: "Decks to measure" }));
+    await user.click(screen.getByRole("option", { name: /Arena Plan/ }));
+
+    expect(onConfig).toHaveBeenCalledWith({ deckIds: [1, 8, 10], scope: "chosen" });
   });
 });

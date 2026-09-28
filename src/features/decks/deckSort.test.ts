@@ -44,6 +44,7 @@ function deck(over: Partial<DeckRow> & { name: string }): DeckRow {
     theoryMarkName: true,
     theoryMarkUnplanned: true,
     managedWishlist: "off",
+    managedWishlistTokens: false,
     lastVariant: "live",
     lastGroupBy: "category",
     lastSortBy: "alphabetical",

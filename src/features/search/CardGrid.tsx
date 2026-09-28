@@ -259,6 +259,19 @@ const FIELD_SELECTOR = "input, textarea, select, [contenteditable=''], [contente
 const FIRST_CONTROL = "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
 
 /**
+ * What Tab can currently land on inside a tile — the controls a caller hangs in its slots, which
+ * a tile that is not the wall's stop takes out of the Tab order (see `tabStop` on {@link Tile}).
+ * `FIRST_CONTROL`'s list, narrowed to what is not already `-1`.
+ */
+const TABBABLE = ":is(button, [href], input, select, textarea, [tabindex]):not([tabindex='-1'])";
+
+/**
+ * Set on a caller's control while its tile is not the stop, holding the `tabindex` it had before
+ * (`""` for none) so the stop's return can put back exactly that.
+ */
+const HELD_TAB_ATTR = "data-roving-held";
+
+/**
  * How many tiles of `tileWidth` fit across `width`, counting the gap between them.
  *
  * At least one, always: a container measured at 0 (jsdom, or the frame before layout
@@ -799,6 +812,12 @@ export function CardGrid<T extends GridCard>({
    * Off by default, so the two walls that want it say so and nobody inherits it by omission —
    * the same argument {@link zoomSection} makes from the other end, where the risk was a default
    * rather than an absence.
+   *
+   * **It also makes the wall one Tab stop rather than one per tile** — a roving tabindex, issue
+   * #558. Every tile's art is a button, so without this a keyboard reader Tabs through the whole
+   * result set to reach whatever follows it. On an armed wall one tile is the stop and every
+   * other is `-1`; the arrows are how the reader moves between them. **A wall without the arrows
+   * keeps every tile a stop**, because there a `-1` tile would be reachable by nothing at all.
    */
   arrowNav?: boolean;
   /**
@@ -895,6 +914,20 @@ export function CardGrid<T extends GridCard>({
    * back from wherever the reader had since put it.
    */
   const [pendingIndex, setPendingIndex] = useState<number | null>(null);
+
+  /**
+   * **The tile that is this wall's one Tab stop, by its tile key** — the roving tabindex an
+   * {@link arrowNav} wall keeps (issue #558). Written when focus lands anywhere in a tile and when
+   * an arrow moves the walk; `null` until then and after a new list.
+   *
+   * **A key rather than a `data-grid-index`**, for `caretChase`'s reason: an index is a position,
+   * and a column change on a sectioned wall, a page landing or a new search hands that position to
+   * a different card — a stop remembered by index would jump to a tile the reader never visited.
+   *
+   * What is remembered is not always what is drawn — see `tabStopIndex`, which is the stop the
+   * render actually uses.
+   */
+  const [rovingKey, setRovingKey] = useState<string | null>(null);
 
   // The column count is a function of the container, and a window resize changes it
   // without any scroll or render this component would otherwise hear about.
@@ -1527,15 +1560,58 @@ export function CardGrid<T extends GridCard>({
   /** The last row drawn, as a *row* — the sectioned wall's paging reads rows, not tiles. */
   const lastRenderedRow = virtualRows.length ? virtualRows[virtualRows.length - 1].index : -1;
 
+  /**
+   * **The stop this render draws** — the `data-grid-index` whose art is `tabIndex={0}` on an
+   * {@link arrowNav} wall; `-1`, and unread, on a wall that keeps every tile a stop.
+   *
+   * {@link rovingKey} where that tile is drawn, and otherwise the first tile of the first row
+   * actually on screen (the first drawn one if none is). **The fallback is the virtualiser's
+   * doing**: the remembered tile scrolls out of the window and unmounts, and a wall whose only stop
+   * is not in the DOM is a wall Tab walks straight past. On screen rather than merely drawn, so
+   * Tabbing in does not scroll the page up to a tile in the overscan above the fold.
+   *
+   * An index rather than the key, so a list carrying one printing twice (two pages either side of a
+   * sync, which the flat wall's slot keys exist for) still has exactly one stop.
+   */
+  let tabStopIndex = -1;
+  if (arrowNav) {
+    const onScreenFrom = virtualizer.range?.startIndex ?? 0;
+    let firstDrawn = -1;
+    let firstOnScreen = -1;
+    scan: for (const v of virtualRows) {
+      let from = v.index * columns;
+      let to = Math.min(from + columns, rows.length);
+      if (shelved) {
+        const row = shelved.layout.rows[v.index];
+        if (row?.kind !== "tiles") continue;
+        ({ start: from, end: to } = row);
+      }
+      for (let at = from; at < to; at++) {
+        const card = shelved ? shelved.slots[at] : rows[at];
+        if (!card) continue;
+        if (rovingKey !== null && tileKey(card) === rovingKey) {
+          tabStopIndex = at;
+          break scan;
+        }
+        if (firstDrawn < 0) firstDrawn = at;
+        if (firstOnScreen < 0 && v.index >= onScreenFrom) firstOnScreen = at;
+      }
+    }
+    if (tabStopIndex < 0) tabStopIndex = firstOnScreen >= 0 ? firstOnScreen : firstDrawn;
+  }
+
   // A new list reuses this scroll container, and a browser clamps the old offset into
   // the new content rather than resetting it.
   //
   // A caret waiting on a tile goes with the old list. The index is a position in `rows`, and a
   // new search's row 40 is a different card — chasing it would scroll a reader who has just
   // retyped their query down to whatever landed there.
+  //
+  // The Tab stop goes with it for the same reason: a new list starts its stop at its top.
   useEffect(() => {
     virtualizer.scrollToOffset(0);
     setPendingIndex(null);
+    setRovingKey(null);
   }, [listKey, virtualizer]);
 
   useEffect(() => {
@@ -1693,12 +1769,20 @@ export function CardGrid<T extends GridCard>({
     // React types a focus event's `target` as the listening element; it is whatever took focus.
     const target: Element = e.target;
     const tileEl = target.closest<HTMLElement>(TILE_SELECTOR);
+    const inTile = tileEl !== null && e.currentTarget.contains(tileEl);
+    const card = inTile
+      ? cardAtRef.current(Number(tileEl.getAttribute(GRID_INDEX_ATTR)))
+      : undefined;
+    // **Anywhere in a tile moves the Tab stop there** — a stepper or a quick-add popup included,
+    // unlike the caret below: the reader is in that tile, so Shift+Tab out and Tab back in should
+    // return to it, and its own controls (held out of the Tab order while it was not the stop)
+    // are put back for the Tab that walks into them.
+    if (arrowNav && card) setRovingKey(tileKey(card));
     const art = tileEl?.querySelector(CARET_SELECTOR) ?? null;
-    if (!tileEl || !e.currentTarget.contains(tileEl) || (target !== tileEl && target !== art)) {
+    if (!inTile || (target !== tileEl && target !== art)) {
       caretTile.current = null;
       return;
     }
-    const card = cardAtRef.current(Number(tileEl.getAttribute(GRID_INDEX_ATTR)));
     caretTile.current = card ? { key: tileKey(card), onArt: target === art } : null;
   };
   const onWallBlur = (e: ReactFocusEvent<HTMLDivElement>) => {
@@ -1900,7 +1984,10 @@ export function CardGrid<T extends GridCard>({
       // what asks for the page; the next press then has a card to land on.
       if (card) select(card, e);
       virtualizer.scrollToIndex(rowOfTile(shelved.layout, next));
-      if (card) setPendingIndex(next);
+      if (card) {
+        setPendingIndex(next);
+        setRovingKey(tileKey(card));
+      }
       return;
     }
     const next = nextGridIndex(at, e.key, columns, rows.length);
@@ -1920,6 +2007,9 @@ export function CardGrid<T extends GridCard>({
     // offset outright.
     virtualizer.scrollToIndex(Math.floor(next / columns));
     setPendingIndex(next);
+    // The stop moves with the walk in the same render, rather than waiting for the focus the
+    // effect above delivers — which may be a render or two behind a tile still being drawn.
+    setRovingKey(tileKey(rows[next]));
   };
 
   /**
@@ -1995,6 +2085,8 @@ export function CardGrid<T extends GridCard>({
       // `GRID_INDEX_ATTR` for why the absolute number is the one that survives the reflow an arrow
       // press causes, and what the number is on a sectioned wall.
       gridIndex={gridIndex}
+      // Every tile on a wall with no arrows; one on a wall with them — see `tabStopIndex`.
+      tabStop={!arrowNav || gridIndex === tabStopIndex}
       width={tileWidth}
       zoom={cardZoom}
       onSelect={select}
@@ -2038,8 +2130,9 @@ export function CardGrid<T extends GridCard>({
       role="group"
       aria-label={label}
       // No `tabIndex`: every tile is a button, so the wall is reachable and
-      // scrollable from the keyboard through its own contents. A tab stop on the box
-      // around them would be one more press between the reader and the cards.
+      // scrollable from the keyboard through its own contents — one of them, on a wall that
+      // takes the arrows (`arrowNav`). A tab stop on the box around them would be one more press
+      // between the reader and the cards.
       //
       // Which is also why the arrow keys are listened for **here** rather than on the tiles: this
       // box holds no caret of its own, it holds every tile, and one listener is one closure
@@ -2224,6 +2317,7 @@ export function CardGrid<T extends GridCard>({
 function Tile<T extends GridCard>({
   card,
   gridIndex,
+  tabStop,
   width,
   zoom,
   onSelect,
@@ -2255,6 +2349,19 @@ function Tile<T extends GridCard>({
    * {@link GRID_INDEX_ATTR}, which is where the reasoning for the attribute lives.
    */
   gridIndex: number;
+  /**
+   * **Whether Tab stops on this tile at all** — `false` on every tile of an `arrowNav` wall but
+   * its one stop (issue #558; `tabStopIndex` in {@link CardGrid}).
+   *
+   * **The whole tile leaves the Tab order, not only its art**: the controls a caller hangs in its
+   * slots — the search's quick-add, the collection's stepper (two buttons and a field), the
+   * wishlist's pencil and stepper — are Tab stops of their own, and a wall that roved only the art
+   * would still cost up to four presses a tile. None of them is lost to a keyboard: the arrows
+   * make a tile the stop, and Tab from its art walks into its own controls, which is what a
+   * roving *tile* means. A pointer is untouched — a `-1` control still takes a click and the
+   * focus that comes with it, and that focus makes its tile the stop.
+   */
+  tabStop: boolean;
   width: number;
   /**
    * How large the reader is drawing cards on this wall — **not** used to size anything here, only
@@ -2328,6 +2435,47 @@ function Tile<T extends GridCard>({
    * both corner marks), so a wall cannot end up half-live.
    */
   const open = card.id ? (event: ReactMouseEvent) => onSelect(card, event) : undefined;
+
+  /**
+   * **The caller's controls leave the Tab order with the art** — see {@link tabStop}.
+   *
+   * By hand rather than by prop, because they are the caller's elements: this file cannot hand
+   * `QuantityStepper`'s buttons a `tabIndex`, and a slot signature that took one would make every
+   * caller thread it through. So each tabbable descendant is set to `-1` with what it had kept
+   * beside it ({@link HELD_TAB_ATTR}), and put back when the tile becomes the stop.
+   *
+   * **After every commit, not on `tabStop` alone**: a slot re-renders with the tile and may mount a
+   * control that was not there last time (a stepper appearing with the first copy), and a caller
+   * that re-sets its own `tabIndex` is picked up again, because only what is currently tabbable is
+   * matched. `holding` keeps a wall of stops — every wall without the arrows — from querying at
+   * all. Neither the art (the prop below) nor anything already `-1` is touched.
+   */
+  const artRef = useRef<HTMLButtonElement>(null);
+  const holding = useRef(false);
+  useLayoutEffect(() => {
+    if (tabStop && !holding.current) return;
+    const tile = artRef.current?.closest<HTMLElement>(TILE_SELECTOR);
+    if (!tile) return;
+    if (tabStop) {
+      holding.current = false;
+      for (const el of tile.querySelectorAll<HTMLElement>(`[${HELD_TAB_ATTR}]`)) {
+        const was = el.getAttribute(HELD_TAB_ATTR) ?? "";
+        el.removeAttribute(HELD_TAB_ATTR);
+        // Only a `-1` that is still ours is put back; a caller that has since set its own value
+        // keeps it.
+        if (el.getAttribute("tabindex") !== "-1") continue;
+        if (was === "") el.removeAttribute("tabindex");
+        else el.setAttribute("tabindex", was);
+      }
+      return;
+    }
+    for (const el of tile.querySelectorAll<HTMLElement>(TABBABLE)) {
+      if (el === artRef.current) continue;
+      el.setAttribute(HELD_TAB_ATTR, el.getAttribute("tabindex") ?? "");
+      el.setAttribute("tabindex", "-1");
+      holding.current = true;
+    }
+  });
 
   // Held still, because React detaches and re-runs a callback ref whose identity changed —
   // so an inline arrow here would tear the caller's registration down and build it again on
@@ -2499,8 +2647,12 @@ function Tile<T extends GridCard>({
           buttons called "Lightning Bolt 3 in your collection". */}
       <div className="relative">
         <button
+          ref={artRef}
           type="button"
           onClick={open}
+          // `-1` on every tile of an arrow-walked wall but its stop — see {@link tabStop}. Left
+          // unset rather than `0` on a stop, so a wall without the arrows draws what it always did.
+          tabIndex={tabStop ? undefined : -1}
           // Said rather than merely dead, on the one row that has no card to open. `aria-disabled`
           // and never `disabled`, like every other out-of-reach control in this app: the button
           // keeps its place in the tab order, and it is still what the arrow walk hands the caret
@@ -2658,7 +2810,9 @@ function Tile<T extends GridCard>({
           // and this box is the same width the caption was.
           //
           // Revealed on hover **and on focus-within**, and never removed from the tab order:
-          // "visible on hover" is not a state a keyboard has.
+          // "visible on hover" is not a state a keyboard has. (On an arrow-walked wall it leaves
+          // with its whole tile when that tile is not the stop — see `tabStop` — and is back the
+          // moment the walk reaches it.)
           //
           // **`pointer-events-none` on the strip, `auto` on what it holds** — `FoilOverlay`'s
           // arrangement, and here it is what keeps the card openable. The strip is the tile's full

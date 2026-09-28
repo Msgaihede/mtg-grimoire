@@ -3,17 +3,16 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { expect, fn, within } from "storybook/test";
 import { ipc, type HomeWidget } from "@/lib/ipc";
-import { printing } from "../../../../.storybook/fake/fixtures";
 import { makeFit, spanPx } from "../fit";
 import { WidgetCard } from "../WidgetCard";
 import { widgetDensity } from "../widgetSettings";
 import {
   ALL_COMPLETE,
   DeckCompletionWidget,
+  DeckCompletionWidgetSettings,
   NO_DECKS,
-  NOTHING_PINNED,
+  NOTHING_CHOSEN,
 } from "./DeckCompletionWidget";
-import { DecksWidgetSettings } from "./DecksWidget";
 
 /** The grid's target cell. Not exported, for CSF — every non-default export is a story. */
 const CELL = 104;
@@ -24,7 +23,7 @@ function completion(w: number, h: number, config: unknown = null): HomeWidget {
 }
 
 /**
- * The body inside the real card, at the footprint's size on the target cell — with the pin
+ * The body inside the real card, at the footprint's size on the target cell — with the `Chosen…`
  * checklist the page hands this kind as its `extraSettings`, so the settings popover is the shipped
  * one.
  */
@@ -49,7 +48,7 @@ function Framed({ widget, still = false }: { widget: HomeWidget; still?: boolean
           still={still}
           onConfig={onConfig}
           onRemove={fn()}
-          extraSettings={<DecksWidgetSettings widget={widget} onConfig={onConfig} />}
+          extraSettings={<DeckCompletionWidgetSettings widget={widget} onConfig={onConfig} />}
         >
           <DeckCompletionWidget
             widget={widget}
@@ -81,61 +80,34 @@ function OneEmptyDeck({ children }: { children: ReactNode }) {
   return staged.isSuccess ? <>{children}</> : null;
 }
 
-/**
- * `starter` plus one deck that is **complete** — no seed holds one, and a deck that asks for
- * nothing is not complete but absent.
- *
- * The cheapest honest one is a **plan**: a theory deck is measured against every copy the reader
- * could use, the root included, so one planned Counterspell and one more copy at the root is a
- * deck of one card, held — three commands and no move. A *live* deck would need its copy filed
- * into its own group, and `collection_to_deck` adds to the list as it files, so the list would
- * always stay one ahead of the copies. Staged the way {@link OneEmptyDeck} is, and it hands the
- * card the new deck's id so the story can pin it rather than guess what the fake will number it.
- */
-function OneFinishedPlan({ children }: { children: (deckId: number) => ReactNode }) {
-  const staged = useQuery({
-    queryKey: ["story", "finished-plan"],
-    queryFn: async () => {
-      const cardId = printing("mh2", "267").id;
-      const deck = await ipc.deckCreate({
-        name: "Finished Plan",
-        formatKey: "modern",
-        theoryEnabled: true,
-      });
-      await ipc.deckAddCard(deck.id, cardId, null, "Spells", "theory", null, 1);
-      await ipc.collectionAdd({ cardId, finish: "nonfoil", quantity: 1 });
-      return deck.id;
-    },
-    staleTime: Infinity,
-  });
-  return staged.isSuccess ? <>{children(staged.data)}</> : null;
-}
-
 const meta = {
   title: "Home/DeckCompletionWidget",
   component: Framed,
   tags: ["autodocs"],
   args: {
-    // The kind's default footprint and no config: `Most recent`, `Nearest done`, complete decks
-    // hidden — the face a reader who adds one from the catalogue meets first.
+    // The kind's default footprint and no config: `Collection`, `All decks`, `Nearest done`,
+    // complete decks hidden — the face a reader who adds one from the catalogue meets first.
     widget: completion(3, 3),
   },
   parameters: {
     docs: {
       description: {
         component:
-          "How much of each deck the reader owns, and what the rest would cost. **Owned is the " +
-          "deck editor's word**: `deck_completion` measures a live deck against its own group and " +
-          "a theory deck's plan against every copy it can use, over every active pile, exact " +
-          "printing and exact finish — so the card and the deck it opens can never disagree. A " +
-          "row measured on the plan says **`Plan`** before its count.\n\n" +
+          "How far each deck is along, and what the rest would cost. **`Compare against` is the " +
+          "question**: `Collection` measures every deck that is not virtual, its actual list " +
+          "against the copies filed in its own group — the deck editor's `Actual` tab, owned for " +
+          "owned; `Theory` measures every deck that keeps a plan, virtual ones included, its " +
+          "actual list against its theory list. Either way every active pile counts, on exact " +
+          "printing and exact finish. A row measured on the plan says **`Plan`** before its " +
+          "count.\n\n" +
           "**Complete is `missing === 0`**, never a price. A deck missing nothing leaves the list " +
           "unless `Complete decks` is on, and the footer counts it either way — over every deck " +
           "in scope, not over the rows that fit. `missingCost` is an em dash only when nothing on " +
           "the list is priced. **A deck whose list asks for nothing is not on the card at all** — " +
           "neither complete nor in progress.\n\n" +
-          "`Most recent` is `deck_list`'s order with archived and virtual decks taken out; " +
-          "`Pinned` is the checklist `DecksWidget` draws, reused. The order is this body's.",
+          "`All decks` is `deck_list`'s order with archived decks and every deck the comparison " +
+          "cannot measure taken out; `Chosen…` is a checklist offering only the decks it can. " +
+          "The order is this body's.",
       },
     },
   },
@@ -145,8 +117,8 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * The default panel over `starter`: the live decks, nearest done first, with a track each — and
- * `Rhystic Testbed`, the deck with a plan, saying its count is the plan's.
+ * The default panel over `starter`: every deck's actual list against the collection, nearest done
+ * first, with a track each — and no row saying `Plan`, since `Collection` measures none.
  */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
@@ -155,11 +127,25 @@ export const Default: Story = {
     await expect(
       await card.findByRole("button", { name: /^Modern Goodstuff · \d+ of \d+ · \d+ missing/ }),
     ).toBeInTheDocument();
+    await expect(card.queryByRole("button", { name: / · Plan · / })).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * `Compare against → Theory`: each deck that keeps a plan, its actual list against that plan —
+ * `Rhystic Testbed`, whose plan is ahead of what is sleeved. A deck with no plan is not on it.
+ */
+export const Theory: Story = {
+  args: { widget: completion(3, 3, { compare: "theory" }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = within(await canvas.findByRole("region", { name: "Deck completion" }));
     await expect(
       await card.findByRole("button", {
         name: /^Rhystic Testbed · Plan · \d+ of \d+ · \d+ missing/,
       }),
     ).toBeInTheDocument();
+    await expect(card.queryByRole("button", { name: /^Modern Goodstuff/ })).not.toBeInTheDocument();
   },
 };
 
@@ -188,12 +174,12 @@ export const Tile: Story = {
   },
 };
 
-/** `Pinned` with nothing pinned points at the checklist rather than drawing the recent decks. */
-export const NothingPinned: Story = {
-  args: { widget: completion(3, 3, { scope: "pinned" }) },
+/** `Chosen…` with nothing chosen points at the checklist rather than drawing every deck. */
+export const NothingChosen: Story = {
+  args: { widget: completion(3, 3, { scope: "chosen" }) },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(NOTHING_PINNED)).toBeInTheDocument();
+    await expect(await canvas.findByText(NOTHING_CHOSEN)).toBeInTheDocument();
   },
 };
 
@@ -227,16 +213,11 @@ export const OnlyAnEmptyDeck: Story = {
 
 /**
  * Every deck in scope is complete and the switch is off: the sentence names the switch. The scope
- * is the one finished deck, pinned — `starter`'s own four are all short.
+ * is `starter`'s archived deck 3 under `Theory`, chosen — its plan is its actual list card for
+ * card, so the actual list holds the whole plan.
  */
 export const EveryDeckComplete: Story = {
-  render: (args) => (
-    <OneFinishedPlan>
-      {(deckId) => (
-        <Framed {...args} widget={completion(3, 3, { scope: "pinned", deckIds: [deckId] })} />
-      )}
-    </OneFinishedPlan>
-  ),
+  args: { widget: completion(3, 3, { compare: "theory", scope: "chosen", deckIds: [3] }) },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText(ALL_COMPLETE)).toBeInTheDocument();

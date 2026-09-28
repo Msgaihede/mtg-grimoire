@@ -252,17 +252,52 @@ describe("FoldersWidget", () => {
 
   /**
    * A `folders` widget is in the default layout with `config: null`, so this is what every
-   * reader sees before they have pinned anything. The fallback is the drawers **they made**, at
-   * the top level: offering twenty deck groups would bury the two binders they care about.
+   * reader sees before they have pinned anything. The fallback is the cabinet's whole top level,
+   * the app's own folders included (issue #601) — after the reader's, which is how the page's
+   * shelves draw them too, so a box too small for all of it cuts the deck groups first.
    */
-  it("falls back to the top-level folders the reader made when nothing is pinned", () => {
-    draw();
+  it("falls back to the whole top level, the app's own folders after the reader's", () => {
+    draw(null, { seed: { wishlist: [...WISHES, ...TWO_DECKS] } });
 
     expect(rows()).toEqual([
       "Binder, collection folder, 12 cards, $30.00",
       "Trades, collection folder, 0 cards",
+      "Blue Tempo, deck folder, 2 cards, not priced",
+      "Recently removed, removed cards, 0 cards",
       "Buy soon, wishlist folder, 3 wishes, $12.50, 1 unpriced",
       "Later, wishlist folder, 0 wishes",
+      // A deck's `Tokens` child sits inside its deck's folder, so it is not top level.
+      "Burn, managed wishlist, 0 wishes",
+      "Elves, managed wishlist, 0 wishes",
+    ]);
+  });
+
+  /**
+   * The app's own are sorted by name, as the page's shelves sort them — nobody arranged them, so
+   * the backend's `sort_order, id` is only the order the decks were made in — and a deck group
+   * still comes before `Recently removed` whatever either is called.
+   */
+  it("orders the app's own folders by name, deck groups before Recently removed", () => {
+    draw(
+      { cabinets: "collection" },
+      {
+        seed: {
+          collection: [
+            REMOVED,
+            DECK_GROUP,
+            folder({ id: 7, name: "Azorius Control", kind: "deck", deckId: 8 }),
+            TRADES,
+          ],
+          collectionRows: [],
+        },
+      },
+    );
+
+    expect(rows()).toEqual([
+      "Trades, collection folder, 0 cards",
+      "Azorius Control, deck folder, 0 cards",
+      "Blue Tempo, deck folder, 0 cards",
+      "Recently removed, removed cards, 0 cards",
     ]);
   });
 
@@ -314,6 +349,8 @@ describe("FoldersWidget", () => {
       expect(rows()).toEqual([
         "Binder, collection folder, 12 cards, $30.00",
         "Trades, collection folder, 0 cards",
+        "Blue Tempo, deck folder, 2 cards, not priced",
+        "Recently removed, removed cards, 0 cards",
       ]);
     });
 

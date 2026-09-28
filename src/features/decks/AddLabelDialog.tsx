@@ -46,7 +46,7 @@ import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
 import { type GlobalLabel } from "@/lib/ipc";
-import { META_FIELD, META_SUBMIT } from "./metaRows";
+import { META_FIELD, META_SUBMIT_TYPED } from "./metaRows";
 import { LabelColorPanel, LabelSwatch } from "./LabelColorPicker";
 import { DEFAULT_LABEL_COLOR } from "./labelColors";
 import { findLabelByName, labelNameKey } from "./labelNames";
@@ -156,7 +156,7 @@ function AddLabelBody({
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        if (!canCreate) return;
+        if (pending || !canCreate) return;
         onCreate(trimmed, color);
       }}
       className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-5 pb-6 pt-4"
@@ -227,7 +227,11 @@ function AddLabelBody({
       )}
 
       <div className="flex justify-end">
-        <button type="submit" disabled={pending || !canCreate} className={META_SUBMIT}>
+        <button
+          type="submit"
+          aria-disabled={pending || !canCreate}
+          className={META_SUBMIT_TYPED}
+        >
           {trimmed === "" ? "Create label" : `Create “${trimmed}”`}
         </button>
       </div>

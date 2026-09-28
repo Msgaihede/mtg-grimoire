@@ -9,6 +9,7 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import type { TagNamespace } from "@/lib/ipc";
 import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
+import { radioKeys } from "@/lib/radioGroup";
 import { TAG_NAMESPACE_HINT, TAG_NAMESPACE_LABEL } from "./namespaces";
 
 /**
@@ -48,6 +49,9 @@ const CHOICES: readonly NamespaceChoice[] = [
   { value: "art", label: TAG_NAMESPACE_LABEL.art, hint: TAG_NAMESPACE_HINT.art },
   { value: "oracle", label: TAG_NAMESPACE_LABEL.oracle, hint: TAG_NAMESPACE_HINT.oracle },
 ];
+
+/** {@link CHOICES}' values in their order, for `radioKeys`. */
+const CHOICE_VALUES = CHOICES.map((choice) => choice.value);
 
 export interface TagSearchBoxProps {
   value: string;
@@ -98,12 +102,12 @@ export function TagSearchBox({ value, onChange, namespace, onNamespaceChange }: 
       {/* Named for the question rather than for the answers: `role="radiogroup"` takes no name
           from its contents, so without this a screen reader hears three loose words.
 
-          **Each radio is its own tab stop rather than a roving caret**, which is
-          `ExportDialog`'s shape for the app's other radio group. Deliberate: two radio groups in
-          one app that answered the arrow keys differently would be worse than one that answers
-          them nowhere, and three chips are a shorter walk than the arrow model saves. */}
+          **One Tab stop, and the arrow keys choose** — `radioKeys`, which every radio group in the
+          app goes through. This said the opposite until issue #558: each radio its own stop, so
+          that no two groups answered the arrows differently. The consistency was right and the
+          direction was not; `lib/radioGroup.ts` has the reversal. */}
       <div role="radiogroup" aria-label="Which tags to search" className="flex gap-1">
-        {CHOICES.map((choice) => {
+        {CHOICES.map((choice, i) => {
           const on = namespace === choice.value;
           return (
             <button
@@ -112,6 +116,7 @@ export function TagSearchBox({ value, onChange, namespace, onNamespaceChange }: 
               role="radio"
               aria-checked={on}
               onClick={() => onNamespaceChange(choice.value)}
+              {...radioKeys(CHOICE_VALUES, namespace, onNamespaceChange, i)}
               // The hint is a **description** and never the name: the visible word is the whole
               // of what this radio is called, and folding the sentence into `aria-label` would
               // have a screen reader announce the explanation on every pass through the row.

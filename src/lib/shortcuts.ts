@@ -222,10 +222,13 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
   ],
 };
 
+/** A chord key that is one of the digit row's, matched on `e.code` too — see {@link matchesChord}. */
+const DIGIT = /^[0-9]$/;
+
 /**
  * Whether a keypress *is* this chord.
  *
- * Three rules, each with a failure behind it:
+ * Four rules, each with a failure behind it:
  *
  * * **`ctrl: true` matches `ctrlKey` or `metaKey`.** Not hedging about macOS — it is the rule
  *   `multiSelect.ts:61` already states and tests, and this app's whole component suite runs in
@@ -239,6 +242,13 @@ export const SHORTCUTS: Record<ShortcutScope, readonly Shortcut[]> = {
  *   held, so a case-sensitive test would make every shifted letter chord dead. Longer names
  *   (`F1`, `Delete`, `ArrowLeft`) are compared verbatim, because they are already canonical and
  *   folding them would let `"delete"` through as a chord nobody wrote.
+ * * **A digit also matches on its physical key, `e.code`** (issue #558). `e.key` is what the
+ *   layout *prints*, and on AZERTY the unshifted digit row prints `&`, `é`, `"`… — the digits need
+ *   Shift, which the exactness rule above refuses. So `Ctrl+1` was unreachable there by either
+ *   spelling. `Digit1` is the same key on every layout, and it is the key the panel's cap draws.
+ *   `e.key` still matches too, which is what keeps the numeric keypad (`Numpad1` prints `1`)
+ *   working on every layout. Only digits: a letter chord follows the letter a reader sees, which
+ *   is why `Ctrl+Z` is undo on AZERTY where the key sits top-left.
  *
  * **A pointer chord returns `false` and there is nothing to configure about that** — it carries
  * no `key`, so the answer falls out of the shape rather than out of a guard. See the module doc.
@@ -254,6 +264,7 @@ export function matchesChord(chord: Chord, e: KeyboardEvent): boolean {
   if ((e.ctrlKey || e.metaKey) !== (chord.ctrl === true)) return false;
   if (e.shiftKey !== (chord.shift === true)) return false;
   if (e.altKey !== (chord.alt === true)) return false;
+  if (DIGIT.test(chord.key) && e.code === `Digit${chord.key}`) return true;
   return chord.key.length === 1
     ? chord.key.toLowerCase() === e.key.toLowerCase()
     : chord.key === e.key;

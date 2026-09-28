@@ -57,6 +57,23 @@ export const META_SUBMIT = cn(
 );
 
 /**
+ * {@link META_SUBMIT} for a submit that greys **as the reader types** — an empty name, a name
+ * that is already taken. That greying is `aria-disabled` and never the attribute (`src/CLAUDE.md`):
+ * a `disabled` button leaves the tab order, so a reader Tabbing from the field to the button
+ * skipped it until the name was valid and landed on whatever came next (issue #558). The button
+ * then stays pressable, so **the form's own submit handler is the fence** and must refuse the
+ * same states the button draws — every caller's does.
+ *
+ * A variant rather than a change to the recipe, because what a control does out of reach is the
+ * site's fact: `META_SUBMIT`'s other callers grey on the attribute for a state the reader did not
+ * type into being.
+ */
+export const META_SUBMIT_TYPED = cn(
+  META_SUBMIT,
+  "aria-disabled:opacity-50 aria-disabled:hover:bg-transparent aria-disabled:hover:text-accent",
+);
+
+/**
  * The box a destructive question is asked inside: ruled off from the row it opened under, and
  * focusable, because the caret comes into the **question** rather than onto a button in it — the
  * reader has not decided yet and a stray Enter must not decide for them.

@@ -10,6 +10,8 @@ import {
   MANAGED_WISHLIST_HINT,
   MANAGED_WISHLIST_LABEL,
   MANAGED_WISHLIST_MODES,
+  MANAGED_WISHLIST_TOKENS_HINT,
+  MANAGED_WISHLIST_TOKENS_LABEL,
 } from "./managedWishlist";
 import { DeckCoverPicker, type DeckCoverPickerProps } from "./DeckCoverPicker";
 // The three kinds, their words and the patch that writes them — `deckKind.ts` is the one
@@ -96,6 +98,14 @@ export interface DeckSettingsValue {
    * marks' reason — the create draft holds `off`, the column's default, and sends nothing.
    */
   managedWishlist: ManagedWishlistMode;
+  /**
+   * Whether the managed wishlist files the plan's **tokens** too, in a `Tokens` subfolder
+   * (issue #617, user schema v57) — a switch beside {@link managedWishlist} and no longer a fifth
+   * word of it. Held whatever the mode, because the column is: the control is not drawn under
+   * `off`, and the answer waits there for the day a view is picked again. Required for the
+   * marks' reason; the create draft holds `false`, the column's default, and sends nothing.
+   */
+  managedWishlistTokens: boolean;
   folderId: number | null;
   /**
    * Which pile an add that names none lands in — `AUTO_CATEGORY` (`0`) for "by what the card
@@ -346,6 +356,10 @@ export function DeckSettingsForm({
               onUnplanned={(theoryMarkUnplanned) => onChange({ theoryMarkUnplanned })}
               managedWishlist={value.managedWishlist}
               onManagedWishlist={(managedWishlist) => onChange({ managedWishlist })}
+              managedWishlistTokens={value.managedWishlistTokens}
+              onManagedWishlistTokens={(managedWishlistTokens) =>
+                onChange({ managedWishlistTokens })
+              }
               id={idPrefix}
             />
           )}
@@ -738,6 +752,8 @@ function TheoryMarkSwitches({
   onUnplanned,
   managedWishlist,
   onManagedWishlist,
+  managedWishlistTokens,
+  onManagedWishlistTokens,
   id,
 }: {
   exact: boolean;
@@ -748,6 +764,8 @@ function TheoryMarkSwitches({
   onUnplanned: (on: boolean) => void;
   managedWishlist: ManagedWishlistMode;
   onManagedWishlist: (mode: ManagedWishlistMode) => void;
+  managedWishlistTokens: boolean;
+  onManagedWishlistTokens: (on: boolean) => void;
   id: string;
 }) {
   return (
@@ -792,59 +810,121 @@ function TheoryMarkSwitches({
       />
       {/* Not a mark — but the same subject: the folder holds one view of the difference
           between the two lists these marks are read across, so it shares their gate and indent. */}
-      <ManagedWishlistGroup mode={managedWishlist} onPick={onManagedWishlist} id={id} />
+      <ManagedWishlistGroup
+        mode={managedWishlist}
+        onPick={onManagedWishlist}
+        tokens={managedWishlistTokens}
+        onTokens={onManagedWishlistTokens}
+        id={id}
+      />
     </div>
   );
 }
 
 /**
- * Which Compare view the deck's managed wishlist follows — `Off`, `All`, `Missing`,
- * `Different Printing` or `Tokens`, one control, five exclusive presses.
+ * Which Compare view the deck's managed wishlist follows — `Off`, `All`, `Missing` or
+ * `Different Printing`, one control, four exclusive presses — and, beside it, whether the folder
+ * files the plan's tokens too.
  *
- * {@link DeckKindGroup}'s grammar exactly — `role="group"` over `aria-pressed` buttons, the joined
- * box, the selected choice's caption underneath — because it is the same kind of question: one
- * choice out of a closed set, where a switch could only say *whether*. The four view words are
- * the Compare dialog's own tabs, so a reader who picks `Missing` here meets the same list there.
- * `Tokens` joined them with user schema v55 (managed tokens spec §3.8), and its caption is the one
- * that names the `Tokens` subfolder its wishes are filed in — `managedWishlist.ts` has the words.
+ * {@link DeckKindGroup}'s grammar exactly for the four — `role="group"` over `aria-pressed`
+ * buttons, the joined box, the caption underneath — because it is the same kind of question: one
+ * choice out of a closed set, where a switch could only say *whether*. The three view words are
+ * the Compare dialog's own card tabs, so a reader who picks `Missing` here meets the same list
+ * there.
+ *
+ * **`Tokens` was a fifth press in that box from user schema v55 until v57, and is a toggle
+ * beside it since** ([issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617)). As a
+ * mode it could only be had *instead of* a card view — All carried tokens, Missing and Different
+ * printing could not — so a reader who wanted their missing cards and their Treasures had no
+ * press for it. Tokens answer *whether*, so they are a toggle; the mode answers *which*, so it
+ * stays a group; and the two share a row because they are one folder's two settings.
+ *
+ * **The toggle is outside the `role="group"` element**, so the group still announces four
+ * exclusive presses and nothing in it can be read as a fifth view. It is a standalone
+ * `aria-pressed` button whose face is its word, drawn in {@link SwitchButton}'s standalone box —
+ * border, `text-accent` when on — rather than in the group's filled segment, so that when both
+ * are lit the reader sees one selected view and one switched-on extra, not two selected views.
+ * Not a `role="switch"` {@link SwitchButton} itself: that one speaks `Enabled`/`Disabled` and is
+ * named by a heading in a row of its own, and this row's heading is the group's.
+ *
+ * **Not drawn at all under `Off`, rather than drawn greyed.** It is the rule the mark rows'
+ * gate states at the call site — a control that cannot take effect is worse than no control —
+ * and under `Off` there is no folder for tokens to be filed in. The stored answer is not
+ * touched: picking a view again brings the toggle back as the reader left it, which is what the
+ * crate does with the column too.
  */
 function ManagedWishlistGroup({
   mode,
   onPick,
+  tokens,
+  onTokens,
   id,
 }: {
   mode: ManagedWishlistMode;
   onPick: (mode: ManagedWishlistMode) => void;
+  tokens: boolean;
+  onTokens: (on: boolean) => void;
   id: string;
 }) {
+  const filing = mode !== "off";
   return (
     <div>
       <p id={`${id}-managed-wishlist`} className="text-sm">
         Managed wishlist
       </p>
-      <div
-        role="group"
-        aria-labelledby={`${id}-managed-wishlist`}
-        className="mt-1.5 flex w-fit overflow-hidden rounded-md border border-border"
-      >
-        {MANAGED_WISHLIST_MODES.map((m) => (
+      {/* `flex-wrap` so a panel narrower than the four words and the toggle drops the toggle to
+          a second line rather than pushing the row out of the column. */}
+      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+        <div
+          role="group"
+          aria-labelledby={`${id}-managed-wishlist`}
+          // `shrink-0` where {@link DeckKindGroup} carries `w-fit`: this box is an item of a flex
+          // row, which is the case that group's comment names as the one where it applies.
+          className="flex shrink-0 overflow-hidden rounded-md border border-border"
+        >
+          {MANAGED_WISHLIST_MODES.map((m) => (
+            <button
+              key={m}
+              type="button"
+              aria-pressed={m === mode}
+              onClick={() => onPick(m)}
+              className={cn(
+                "h-8 px-2.5 text-xs",
+                "transition-colors duration-150 motion-reduce:transition-none",
+                m === mode ? "bg-accent font-medium text-accent-fg" : "text-dim hover:text-text",
+                FOCUS,
+              )}
+            >
+              {MANAGED_WISHLIST_LABEL[m]}
+            </button>
+          ))}
+        </div>
+        {filing && (
           <button
-            key={m}
             type="button"
-            aria-pressed={m === mode}
-            onClick={() => onPick(m)}
+            aria-pressed={tokens}
+            onClick={() => onTokens(!tokens)}
             className={cn(
-              "h-8 px-2.5 text-xs",
+              "h-8 shrink-0 rounded-md border px-2.5 text-xs",
               "transition-colors duration-150 motion-reduce:transition-none",
-              m === mode ? "bg-accent font-medium text-accent-fg" : "text-dim hover:text-text",
+              tokens
+                ? "border-accent font-medium text-accent"
+                : "border-border text-dim hover:border-accent hover:text-accent",
               FOCUS,
             )}
           >
-            {MANAGED_WISHLIST_LABEL[m]}
+            {MANAGED_WISHLIST_TOKENS_LABEL}
           </button>
-        ))}
+        )}
       </div>
-      <p className="mt-1 text-[0.6875rem] leading-snug text-dim">{MANAGED_WISHLIST_HINT[mode]}</p>
+      {/* The selected view's line, then the tokens' sentence while they are on — one caption for
+          the row's two settings, because they describe one folder. Under `Off` the tokens'
+          sentence is left out whatever is stored, since there is no folder for it to be about. */}
+      <p className="mt-1 text-[0.6875rem] leading-snug text-dim">
+        {filing && tokens
+          ? `${MANAGED_WISHLIST_HINT[mode]} ${MANAGED_WISHLIST_TOKENS_HINT}`
+          : MANAGED_WISHLIST_HINT[mode]}
+      </p>
     </div>
   );
 }

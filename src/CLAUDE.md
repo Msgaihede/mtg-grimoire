@@ -731,6 +731,20 @@ Every one of these has its measurement and its story in
   the suite.
 - **`aria-disabled`, never the `disabled` attribute**, on anything that greys as the reader
   types — a `disabled` button leaves the tab order. The one exception is a native `<option>`.
+  The button stays pressable, so the form's own submit handler must refuse the same states it
+  draws; `metaRows.tsx`'s `META_SUBMIT_TYPED` is the recipe's greying for it (issue #558).
+- **A `role="radiogroup"` is one Tab stop and the arrow keys choose** — spread
+  `lib/radioGroup.ts`' `radioKeys` onto every `role="radio"`, never a hand-rolled `onKeyDown`.
+  Until issue #558 each radio was its own stop and the arrows did nothing, argued as consistency;
+  one group already walked on its arrows, so it was not even that. A three-way toggle that is not
+  a choice of one value (`DeckKindGroup`) stays a `role="group"` of `aria-pressed` buttons.
+- **A list of results is one Tab stop, and the arrows walk it** (issue #558). `VirtualTable`'s
+  rows rove whenever `onActivate` (or `rove`, for a caller that activates per row) is passed, and
+  `CardGrid`'s tiles rove on an `arrowNav` wall — the tile's own controls leave the tab order with
+  it and come back when the arrows make it the stop. A row renderer spreads the `tabIndex` it is
+  handed and never writes `tabIndex={0}` of its own, or every row is a stop again. Both keep the
+  stop on a drawn, on-screen row when the remembered one scrolls out and unmounts. A wall
+  without `arrowNav` keeps every tile a stop, because nothing else reaches them there.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one** — the virtualiser
   has already made the request count small, so the browser's gate only delays the pictures about
   to be looked at.
@@ -979,7 +993,11 @@ Every one of these has its measurement and its story in
   tags with whatever chips its caller passed. Five surfaces share that hook — the search page, the
   deck editor's *All cards* tab, the collection's and the wishlist's docked columns, and the Tags
   page — and `useCollection`, `useCollectionSearch` and `useWishlist` parse the same string into
-  the same two fields. Four rules that are not obvious, each with its failure written at its own
+  the same two fields. **The deck editor's `Filter this deck` box joined on 2026-09-28** (issue
+  #621) through `features/decks/useDeckCardQuery.ts`: its free text stays the substring test it
+  always was, in the webview, and its typed terms and resolved tags go to `deck_query_cards` —
+  the same `filters` SQL over the deck's own rows — rather than to a client-side evaluator that
+  could not answer `kw:`, `a:` or a tag at all. Four rules that are not obvious, each with its failure written at its own
   site and all of it in [search-syntax.md](../docs/reference/search-syntax.md): **`a:` is the
   artist and `o:` is the rules text**, Scryfall's meanings, since 2026-09-22 — they were the two
   taxonomies until then and `atag:`/`otag:` are what a tag is spelt with now; **`:` does not mean

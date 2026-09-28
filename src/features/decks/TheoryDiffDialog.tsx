@@ -11,6 +11,7 @@ import type { Currency, Marketplace, MarketplaceId } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { radioKeys } from "@/lib/radioGroup";
 import { refreshCardSearches } from "@/lib/searchMarks";
 import { Dialog } from "@/components/Dialog";
 import {
@@ -1152,12 +1153,13 @@ function ListControls({
           cannot see which one is gold. `ExportDialog`'s format row, at this dialog's own control
           size. */}
       <div role="radiogroup" aria-label="Which rows to show" className="flex flex-wrap gap-2">
-        {VIEWS.map((rung) => (
+        {VIEWS.map((rung, i) => (
           <button
             key={rung}
             type="button"
             role="radio"
             aria-checked={view === rung}
+            {...radioKeys(VIEWS, view, onView, i)}
             // **Named outright, because the visible name does not survive being computed.**
             // The label and the count are two elements separated by a `gap`, which is CSS and
             // not a text node — so the accessible name concatenates to `Different printing2`,
