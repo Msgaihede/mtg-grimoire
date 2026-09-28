@@ -554,7 +554,7 @@ describe("POST /rotate — the group's log hears who is left", () => {
 
     expect(response.status).toBe(200);
     expect(env.reached).toEqual([
-      { path: "/g/g1/roster", method: "POST", body: { devices: ["desk", "phone"] } },
+      { path: "/g/g1/roster", method: "POST", body: { epoch: 2, devices: ["desk", "phone"] } },
     ]);
   });
 

@@ -216,12 +216,16 @@ async function retireOrphanedSecret(
  * is one rotation's worth of compaction: the next accepted rotation posts a roster that still
  * omits the departed device, and the object forgets it then.
  *
- * ⚠️ **Two rotations accepted back to back post two rosters that are not ordered against each
- * other**, and the body carries no epoch to order them by. The window is the first handler's last
- * few D1 statements against the second rotator's whole round trip — a `/keys`, an unwrap and a
- * `/rotate` of its own — so it is narrow rather than closed.
+ * **The body carries the rotation's epoch**, because two rotations accepted back to back post two
+ * rosters nothing else orders: the object applies one only if it is newer than the last it applied
+ * (`log.isNewerRoster`), so the older one arriving second cannot undo the newer.
  */
-async function sendRoster(env: Env, group: string, devices: string[]): Promise<void> {
+async function sendRoster(
+  env: Env,
+  group: string,
+  epoch: number,
+  devices: string[],
+): Promise<void> {
   // `claim.ts`'s `dropGroup` fence, for its reason: the router has already matched this id, and
   // interpolating it into a URL is still the one place a stray character could address something
   // else, so the value is checked again where it is spliced rather than trusted from upstream.
@@ -231,7 +235,7 @@ async function sendRoster(env: Env, group: string, devices: string[]): Promise<v
     const response = await stub.fetch(`https://relay.internal/g/${group}/roster`, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ devices }),
+      body: JSON.stringify({ epoch, devices }),
     });
     if (!response.ok) throw new Error(`the group object answered ${response.status} to roster`);
   } catch (error) {
@@ -361,7 +365,7 @@ export async function handleRotate(request: Request, env: Env, group: string): P
   // **Then the log, last and best effort** — `claim.ts`'s `releaseGroup` order, for its reason:
   // this is the only step that leaves D1, and a Durable Object that cannot be reached must not
   // cost the retirement or the slot above it. It swallows its own failure; see `sendRoster`.
-  await sendRoster(env, group, Object.keys(keys));
+  await sendRoster(env, group, epoch, Object.keys(keys));
 
   // The caller reads the status and nothing else, but naming the epoch the relay is now standing
   // on is what makes a log line from a failed removal say something.

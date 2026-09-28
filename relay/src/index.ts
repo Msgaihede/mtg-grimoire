@@ -1,3 +1,4 @@
+import { admit, admitBody, isEnvelope, type Refusal } from "./admit";
 import { Group } from "./group";
 import {
   GROUP_SEGMENT,
@@ -14,9 +15,10 @@ import { handleKeys, handleRotate } from "./rotate";
 import { verify } from "./token";
 
 /**
- * The Worker entry: a router, an authentication gate, and the daily reconciliation's trigger.
- * Every decision about the log itself is in `group.ts`, every decision about *which rows* is in
- * `log.ts`, and every decision about who is entitled is in `claim.ts` and `entitlement.ts`.
+ * The Worker entry: a router, an authentication gate, a push's admission, and the daily
+ * reconciliation's trigger. Every decision about the log itself is in `group.ts`, every decision
+ * about *which rows* is in `log.ts`, every refusal a push can meet is in `admit.ts`, and every
+ * decision about who is entitled is in `claim.ts` and `entitlement.ts`.
  *
  * **The `/g/…` routes are behind a bearer token now, and this file's own doc used to say the
  * opposite.** It said there was no authentication and that the design did not need any, on the
@@ -32,6 +34,13 @@ import { verify } from "./token";
  * spend is on the metered line — and `/keys` in particular has to answer a device whose group
  * auth is one epoch stale, which is a device that by construction cannot mint a token. Behind
  * the gate it would refuse exactly the caller it exists to serve. See `rotate.ts`.
+ *
+ * **A push is read here before it reaches its object, and the same bill is why.** The token only
+ * says the caller is in the group; a batch too large to store, one sealed at an epoch the group
+ * has left or not reached, or one stamped a week ahead is refused here for the price of a Worker
+ * invocation and one D1 point read, where inside the object it would cost the Durable Object
+ * request the gate exists to protect. The object keeps only the check it alone can make — whether
+ * the group's log has room. `admitPush` below is the order.
  */
 
 export interface Env {
@@ -70,6 +79,11 @@ export interface Env {
  * Built from `claim.ts`'s `GROUP_SEGMENT` rather than spelled out, because that file has to
  * apply the same rule to the group id in a `/claim` body — see its doc for why the shared
  * string lives on that side.
+ *
+ * **`drop` and `roster` are absent on purpose**, and adding either would hand a device a lever
+ * over the whole group's log. They are the object's internal paths: only this Worker builds them
+ * — `claim.ts` when a membership ends, `rotate.ts` when a rotation is recorded — and a request
+ * for one from outside is a 404 here like any other path that is not a route.
  */
 const ROUTE = new RegExp(`^/g/(${GROUP_SEGMENT})/(push|pull|ack|ws|rotate|keys)$`);
 
@@ -121,6 +135,77 @@ const CLAIM_ROUTES = new Map<
 
 function methodNotAllowed(expected: string): Response {
   return new Response("method not allowed", { status: 405, headers: { allow: expected } });
+}
+
+function json(body: unknown, status: number): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+function refuse(refusal: Refusal): Response {
+  return json({ error: refusal.error, code: refusal.code }, refusal.status);
+}
+
+/**
+ * The epoch the group stands on, for `admit`: `entitlements.group_epoch`, one point read on the
+ * `entitlements_group` unique index. It is the mirror `/token`'s group door already reads, moved
+ * by `/rotate` and a claim's seed to the group's newest key row — and moved **before** `/rotate`
+ * answers, so the rotating device cannot push at its new epoch ahead of this read seeing it.
+ *
+ * `null` for no row — a token outlives the binding it was minted for by up to a day — and for a
+ * NULL column, a row claimed before the column existed that has never been seeded since. `admit`
+ * skips the epoch check for both: there is nothing to compare against.
+ */
+async function currentEpoch(env: Env, group: string): Promise<number | null> {
+  const row = await env.DB.prepare(`SELECT group_epoch FROM entitlements WHERE group_id = ?`)
+    .bind(group)
+    .first<{ group_epoch: number | null }>();
+  return row?.group_epoch ?? null;
+}
+
+/**
+ * A push, admitted or refused, after the bearer gate and before its object: the `Request` to
+ * forward, or the `Response` that refuses it. Checked in this order, and a push is answered by the
+ * first it fails:
+ *
+ * 1. a declared `Content-Length` past the cap → 413 `too_large`, **before a byte is read**, so an
+ *    honest client that built something enormous is not parsed at all;
+ * 2. the body's text past the cap → 413 `too_large`, for a body that declared no length;
+ * 3. not JSON → 400, and not an envelope → 400, in the words the object has always used;
+ * 4. `admit`'s four: `sealed` too large (413), the epoch behind (409) or ahead (422), the clock
+ *    ahead (422).
+ *
+ * **The forwarded request is built from the text rather than passed through**, because reading
+ * the body consumed the original's stream, and it carries only a content type: the object reads no
+ * header of a push, and copying the original's `Content-Length` onto a re-encoded body is a length
+ * the runtime could find disagreeing with the bytes it is sent.
+ */
+async function admitPush(request: Request, env: Env, group: string): Promise<Request | Response> {
+  const declared = admitBody(Number(request.headers.get("content-length")));
+  if (declared) return refuse(declared);
+
+  const text = await request.text();
+  const oversized = admitBody(text.length);
+  if (oversized) return refuse(oversized);
+
+  let envelope: unknown;
+  try {
+    envelope = JSON.parse(text);
+  } catch {
+    return json({ error: "unreadable body" }, 400);
+  }
+  if (!isEnvelope(envelope)) return json({ error: "malformed envelope" }, 400);
+
+  const refusal = admit(envelope, await currentEpoch(env, group), Date.now());
+  if (refusal) return refuse(refusal);
+
+  return new Request(request.url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: text,
+  });
 }
 
 export default {
@@ -178,11 +263,18 @@ export default {
       return new Response("unauthorized", { status: 401 });
     }
 
+    let forward = request;
+    if (action === "push") {
+      const admitted = await admitPush(request, env, group);
+      if (admitted instanceof Response) return admitted;
+      forward = admitted;
+    }
+
     // `idFromName` and not `newUniqueId`: the group id *is* the address, so every device in a
     // pairing group reaches the same object from anywhere in the world without the relay
     // holding a directory of any kind.
     const stub = env.GROUP.get(env.GROUP.idFromName(group));
-    return stub.fetch(request);
+    return stub.fetch(forward);
   },
 
   /**

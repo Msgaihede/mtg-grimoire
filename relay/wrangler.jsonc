@@ -39,7 +39,18 @@
   // The webhook is primary and this is the backstop: a webhook Patreon failed to deliver would
   // otherwise leave a cancelled membership syncing for ever, and an expired grace window
   // (spec 7.2) has no webhook of its own to close it.
-  "triggers": { "crons": ["0 3 * * *"] },
+  //
+  // **Hourly, and it was daily at `0 3` until 2026-09-28.** One invocation may make fifty
+  // external subrequests on the free plan and a subject costs two, so `claim.ts`'s `reconcile`
+  // reaches at most `RECONCILE_BUDGET` (20) subjects a pass and each is due again only after
+  // `RECONCILE_INTERVAL_MS` (20 h). The daily ceiling is therefore 20 × 24 = 480 subjects rather
+  // than 20 — and on a relay smaller than that, most hourly invocations find nothing due and end
+  // after one read. `index.ts`'s `scheduled` sweeps the pairing rendezvous after it, D1 only,
+  // which is as happy hourly as daily.
+  //
+  // Still one trigger of the free plan's five, and still minute `0`: the share Worker's lapse pass
+  // fires at `30 3` so the two never contend on this D1, and an hourly `0` keeps that true.
+  "triggers": { "crons": ["0 * * * *"] },
   // Public values, committed on purpose — spec 9 puts both on this side of the line, and each
   // is on the wire of every request that uses it.
   //
