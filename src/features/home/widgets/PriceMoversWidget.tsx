@@ -86,7 +86,7 @@ const MINUS = "−";
 
 const PENDING = "Reading price history…";
 export const NO_HISTORY =
-  "No price history yet. Prices are remembered from each refresh from now on, and the biggest moves will show here once there is a day to compare against.";
+  "No price history yet. Price changes will appear here as price data is collected over time.";
 
 function windowOf(value: string | number | undefined): PriceMoverWindow {
   return value === "30d" || value === "all" ? value : "7d";

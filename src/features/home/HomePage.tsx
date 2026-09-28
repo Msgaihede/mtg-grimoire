@@ -153,7 +153,7 @@ export const HOME_CANVAS_ATTR = "data-home-canvas";
 
 /** The sentence under the header while Customize is on — the design's, word for word. */
 export const CUSTOMIZE_HINT =
-  "Drag a widget anywhere on it, pull the corner to resize, or add one from the catalogue.";
+  "Drag a widget to move it, pull a corner to resize, or add widgets from the catalogue.";
 
 /**
  * The page's own header controls — Add widget, Reset and Customize share one box so the row reads
@@ -202,8 +202,7 @@ const GHOST_REFUSED = "border-destructive bg-destructive/12";
 function UnknownWidgetBody(): ReactElement {
   return (
     <p className="text-sm text-dim">
-      This widget came from a newer version of MTG Grimoire. Update to draw it here, or remove it —
-      either way, this build leaves its settings exactly as it found them.
+      This widget came from a newer version of MTG Grimoire. Update to display it here, or remove it.
     </p>
   );
 }
@@ -685,8 +684,7 @@ export function HomePage(): ReactElement {
       */}
       {ready && empty && (
         <p className="text-sm text-dim">
-          Your home page is empty. Add a widget to put something back on it, or reset to the ones
-          this app starts with.
+          Your home page is empty. Add a widget or reset to default widgets.
         </p>
       )}
 

@@ -306,7 +306,7 @@ describe("SummaryWidget", () => {
     });
 
     expect(
-      screen.getByText(/Nothing to add up yet\. Cards you collect, decks you build/),
+      screen.getByText(/Nothing to add up yet\. Collection cards, decks/),
     ).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Collection:/ })).toBeNull();
   });

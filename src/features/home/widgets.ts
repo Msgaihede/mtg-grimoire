@@ -176,7 +176,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   collectionValue: {
     label: "Collection value",
-    description: "What your collection is worth, split by rarity, colour, set or finish.",
+    description: "Collection value broken down by rarity, colour, set, or finish.",
     def: [2, 3],
     min: [2, 2],
     max: [4, 6],
@@ -201,7 +201,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   valueHistory: {
     label: "Collection value graph",
     description:
-      "What your collection has been worth over time — in total, or split by card type, colour or set.",
+      "Collection value over time, in total or broken down by card type, colour, or set.",
     def: [6, 3],
     min: [2, 2],
     max: [8, 6],
@@ -246,7 +246,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   wishlistValue: {
     label: "Wishlist value",
-    description: "What your wishlist would cost, split the same four ways.",
+    description: "Estimated wishlist cost, broken down by rarity, colour, set, or finish.",
     def: [2, 3],
     min: [2, 2],
     max: [4, 6],
@@ -256,7 +256,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   decks: {
     label: "Decks",
-    description: "Shortcuts to the decks you pin, or the ones you changed most recently.",
+    description: "Pinned and recently modified decks.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 6],
@@ -276,7 +276,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   folders: {
     label: "Folders",
-    description: "Collection and wishlist folders, with their counts and value.",
+    description: "Collection and wishlist folder totals and values.",
     def: [4, 2],
     min: [2, 2],
     max: [8, 4],
@@ -296,7 +296,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   activity: {
     label: "Activity",
-    description: "What you have added, moved and removed, grouped by day.",
+    description: "Recent collection changes grouped by day.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 8],
@@ -316,7 +316,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   priceMovers: {
     label: "Price movers",
-    description: "The biggest gainers and losers in your collection over a week, a month or ever.",
+    description: "Largest collection price increases and decreases.",
     def: [2, 3],
     min: [2, 2],
     max: [4, 6],
@@ -345,7 +345,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   setCompletion: {
     label: "Set completion",
-    description: "How close each set you collect is to being complete.",
+    description: "Collection progress across sets.",
     def: [2, 3],
     min: [2, 2],
     max: [4, 6],
@@ -365,7 +365,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   recentCards: {
     label: "Recently viewed",
-    description: "The last cards you opened, as art you can press.",
+    description: "Recently viewed cards.",
     def: [4, 2],
     min: [2, 2],
     max: [8, 3],
@@ -402,7 +402,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   stickyNotes: {
     label: "Notes",
-    description: "Sticky notes you write yourself, in the editor deck notes already use.",
+    description: "Custom notes on your dashboard.",
     def: [4, 3],
     min: [3, 2],
     max: [8, 6],
@@ -425,7 +425,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   newPrintings: {
     label: "New printings",
-    description: "Reprints of cards your decks already hold, newest first.",
+    description: "Recent reprints of cards in your decks.",
     def: [3, 3],
     min: [2, 2],
     max: [8, 12],
@@ -494,7 +494,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   deckCompletion: {
     label: "Deck completion",
-    description: "How much of each deck you own, and what the rest would cost.",
+    description: "Ownership progress and remaining card costs across decks.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 6],
@@ -527,7 +527,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   toReview: {
     label: "To review",
-    description: "Scanned cards, flagged rows and recently removed copies waiting for you.",
+    description: "Pending scanned cards, flagged entries, and recently removed copies.",
     def: [2, 3],
     min: [2, 2],
     max: [4, 4],
@@ -538,7 +538,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    *  the question is fixed, which is what lets its press open the same sweep. */
   wishlistSavings: {
     label: "Wishlist savings",
-    description: "What your pinned wishes would save on the cheapest printing of each card.",
+    description: "Potential savings by switching wishlist items to cheapest printings.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 6],
@@ -551,7 +551,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    */
   comingSoon: {
     label: "Coming soon",
-    description: "Unreleased sets, how much of each is previewed, and reprints of your deck cards.",
+    description: "Upcoming set releases, preview progress, and relevant reprints.",
     def: [4, 2],
     min: [2, 2],
     max: [8, 4],

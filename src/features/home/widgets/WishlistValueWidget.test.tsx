@@ -170,7 +170,7 @@ describe("WishlistValueWidget", () => {
     });
 
     expect(figure("Cost (USD)")).toHaveTextContent("$128.50");
-    expect(figure("Cost (USD)")).toHaveTextContent("4 copies nobody quotes a price for");
+    expect(figure("Cost (USD)")).toHaveTextContent("4 copies unpriced");
     expect(figure("Copies")).toHaveTextContent("63");
   });
 
@@ -359,7 +359,7 @@ describe("WishlistValueWidget", () => {
     });
 
     expect(
-      screen.getByText("You want nothing yet — wish for a card and its cost lands here."),
+      screen.getByText("Your wishlist is empty. Add cards to your wishlist to see costs here."),
     ).toBeInTheDocument();
     // Never a total over an empty list: `$0.00` is a price nobody quoted.
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();

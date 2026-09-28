@@ -194,7 +194,7 @@ export const EMPTY_TITLE = "No notes yet";
 /** The one dim sentence under it — the artboard's, and it says what a note is *for* rather than
  *  what the reader should press, because the press is right underneath it. */
 export const EMPTY_BLURB =
-  "Somewhere to keep a trade, a rules call, or the list you meant to bring.";
+  "Keep notes for trades, deck ideas, or reminders.";
 
 /* ----------------------------------------------------------------- the fixed rows ------ */
 

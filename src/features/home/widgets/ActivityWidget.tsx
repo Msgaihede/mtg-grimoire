@@ -221,9 +221,7 @@ export function ActivityWidget({ widget, fit, still }: WidgetBodyProps): ReactEl
   if (query.isPending) return <Notice title="Reading recent activity…" />;
   return (
     <Notice title="Nothing has happened yet.">
-      Add a card, file one into a folder or edit a deck, and the first line lands here. The
-      collection and wishlist lines are this device&rsquo;s own; deck changes arrive from every
-      device paired with it.
+      Recent collection and deck changes will appear here. Collection and wishlist activity is recorded on this device.
     </Notice>
   );
 }

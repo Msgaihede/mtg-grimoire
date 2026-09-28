@@ -132,7 +132,7 @@ const RANGES: readonly { id: PriceMoverWindow; label: string }[] = (() => {
  * after install has no yesterday to compare with, and that heals by itself.
  */
 export const NO_HISTORY_SENTENCE =
-  "No price history for this copy yet. Prices are remembered from each refresh, and a trend will show here once there are a few days to draw.";
+  "No price history for this copy yet. Prices are recorded on each sync, and a trend will show here once more data is collected.";
 
 /**
  * What this copy is called: the treatment's word where the printing has one (`Surge Foil`), the
@@ -643,7 +643,7 @@ function HistoryFigures({
         />
       ) : (
         <p className="text-sm text-dim">
-          Not enough history to draw a line yet — it needs two days of prices.
+          Not enough price history yet. At least two days of prices are required to draw a chart.
         </p>
       )}
 

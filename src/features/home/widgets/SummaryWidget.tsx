@@ -216,8 +216,7 @@ export function SummaryWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
   if (collection.data.totalCards === 0 && decks.data.length === 0 && wishlist.data.copies === 0) {
     return (
       <WidgetMessage>
-        Nothing to add up yet. Cards you collect, decks you build and cards you wish for are counted
-        here.
+        Nothing to add up yet. Collection cards, decks, and wishlist cards are counted here.
       </WidgetMessage>
     );
   }
@@ -240,7 +239,7 @@ export function SummaryWidget({ widget, fit, still }: WidgetBodyProps): ReactEle
     // that failed, and the reader who emptied it is owed the way back.
     return (
       <WidgetMessage>
-        Every figure is hidden. Turn one back on in this card&rsquo;s settings.
+        Every figure is hidden. Enable figures in this widget's settings.
       </WidgetMessage>
     );
   }

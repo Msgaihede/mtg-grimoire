@@ -102,9 +102,9 @@ const FIGURES_COMPACT_PX = 62;
 
 const PENDING = "Pricing your pinned wishes…";
 export const NO_WISHES =
-  "Nothing on your wishlist yet — pin a wish to a printing and this card looks for a cheaper one.";
+  "No wishlist items found. Pin a wishlist card to track cheaper printings.";
 export const ALL_CHEAPEST =
-  "Every pinned wish is already on its cheapest printing, and a wish for any printing always is.";
+  "All pinned wishes are already on their cheapest printings.";
 
 /**
  * The moves split by whether they can be priced: the priced ones **biggest saving first** (ties by
