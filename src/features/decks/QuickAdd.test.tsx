@@ -1,5 +1,5 @@
 import type { ComponentProps } from "react";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { flushSync } from "react-dom";
@@ -15,7 +15,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: { searchCards },
 }));
-import { QuickAdd } from "./QuickAdd";
+import { QuickAdd, moreMatches } from "./QuickAdd";
 
 /**
  * **Real timers, everywhere in this file.**
@@ -105,15 +105,15 @@ beforeEach(() => {
 
 describe("QuickAdd", () => {
   /**
-   * The suggestions are the docked panel's own search, cut to five and collapsed to the newest
+   * The suggestions are the docked panel's own search, cut to ten and collapsed to the newest
    * printing of each match — the same printing the wall offers first for the same query, because
    * this is a shortcut over that wall and not a second way of choosing a printing.
    *
-   * Five is the ceiling and it is asserted as a number rather than through `MAX_SUGGESTIONS`:
-   * it is a promise to the reader about how long the list gets, so a test that imports the
-   * constant would follow it wherever it went and pin nothing.
+   * Ten is the ceiling (five until issue #648) and it is asserted as a number rather than
+   * through `MAX_SUGGESTIONS`: it is a promise to the reader about how long the list gets, so a
+   * test that imports the constant would follow it wherever it went and pin nothing.
    */
-  it("asks for five collapsed suggestions once the typing settles, and draws them", async () => {
+  it("asks for ten collapsed suggestions once the typing settles, and draws them", async () => {
     searchCards.mockResolvedValue(page("Goblin Guide", "Goblin Bushwhacker", "Goblin King"));
     const { field } = mount();
 
@@ -122,7 +122,7 @@ describe("QuickAdd", () => {
     expect(searchCards).toHaveBeenCalledWith({
       text: "goblin",
       collapse: true,
-      limit: 5,
+      limit: 10,
       offset: 0,
     });
     expect(rows.map((r) => r.textContent)).toEqual([
@@ -174,7 +174,7 @@ describe("QuickAdd", () => {
    * **The point of the dropdown**: the caret stays in the field and the highlight moves instead,
    * so a reader who meant the third Goblin never has to Tab into the answers to take it.
    *
-   * Both ends clamp rather than wrap. A list of five that jumps from the last row back to the
+   * Both ends clamp rather than wrap. A list of ten that jumps from the last row back to the
    * first is a list whose end the reader cannot feel, and this one is glanced at rather than
    * read — the stop *is* the feedback.
    */
@@ -552,6 +552,79 @@ describe("QuickAdd", () => {
     expect(await screen.findByText("No card found for “Blakc Lotus”.", {}, SETTLE)).toBeVisible();
     expect(onAdd).not.toHaveBeenCalled();
     expect(field).toHaveValue("Blakc Lotus");
+  });
+});
+
+/**
+ * The matches the ten rows leave out (issue #648): `+23 more` under the list, read off the
+ * count the same search already answered.
+ */
+describe("QuickAdd, counting what the ten leave out", () => {
+  /** Ten goblins shown out of thirty-three matched — the issue's own thirty-three, at ten rows. */
+  const many = (): SearchResponse => ({
+    ...page(...Array.from({ length: 10 }, (_, i) => `Goblin ${i + 1}`)),
+    total: 33,
+  });
+
+  it("words the remainder, and says nothing when the rows are every match", () => {
+    expect(moreMatches(33, false, 10)).toBe("+23 more");
+    expect(moreMatches(1_200, false, 10)).toBe("+1,190 more");
+    expect(moreMatches(10, false, 10)).toBeNull();
+    expect(moreMatches(3, false, 3)).toBeNull();
+  });
+
+  /** A capped count is a floor, so the remainder is one too — never a figure nobody counted. */
+  it("keeps the backend's + on a count that stopped at its ceiling", () => {
+    expect(moreMatches(5_000, true, 10)).toBe("+4,990+ more");
+  });
+
+  /**
+   * The line is inside the popup and outside the listbox, and the combobox is what it describes
+   * — the caret never enters the list, so a description anywhere else is never heard.
+   *
+   * **No second request**, which is the issue's performance clause: the one ten-row search the
+   * field already made carries the count, so asking for it again would be a round trip per
+   * keystroke for a number in hand.
+   */
+  it("draws +23 more under ten of thirty-three, from the one search it already made", async () => {
+    searchCards.mockResolvedValue(many());
+    const { field } = mount();
+
+    const rows = await suggest(field, "goblin");
+
+    expect(rows).toHaveLength(10);
+    const more = screen.getByText("+23 more");
+    expect(more).toBeVisible();
+    expect(screen.getByRole("listbox")).not.toContainElement(more);
+    expect(field).toHaveAccessibleDescription("+23 more");
+    expect(searchCards).toHaveBeenCalledTimes(1);
+    // Nothing loads an eleventh row: the line is text, and the popup holds no press but the rows.
+    const panel = more.parentElement!;
+    expect(panel).toContainElement(screen.getByRole("listbox"));
+    expect(within(panel).queryByRole("button")).toBeNull();
+  });
+
+  it("draws no line and no description when the rows are every match", async () => {
+    searchCards.mockResolvedValue(page("Goblin Guide", "Goblin Bushwhacker"));
+    const { field } = mount();
+
+    await suggest(field, "goblin");
+
+    expect(screen.queryByText(/more$/)).not.toBeInTheDocument();
+    expect(field).not.toHaveAttribute("aria-describedby");
+  });
+
+  /** The description goes with the list, so a field with no list is not described by a line
+   *  that is no longer on screen. */
+  it("stops describing the field once the list is put away", async () => {
+    searchCards.mockResolvedValue(many());
+    const { field } = mount();
+
+    await suggest(field, "goblin");
+    await userEvent.keyboard("{Escape}");
+
+    expect(field).toHaveAttribute("aria-expanded", "false");
+    expect(field).not.toHaveAttribute("aria-describedby");
   });
 });
 
