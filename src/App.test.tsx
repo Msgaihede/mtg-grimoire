@@ -1273,7 +1273,7 @@ it("says a refused swap in the printings modal, and the deck behind it goes with
   expect(within(printings).getByRole("button", { name: "Close printings" })).toBeInTheDocument();
 
   expect(
-    await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
+    await screen.findByText(/this deck no longer exists\. it may have been deleted/i),
   ).toBeInTheDocument();
 });
 
@@ -1303,7 +1303,7 @@ it("stops offering swaps into a deck the read says is gone", async () => {
   await userEvent.clear(name);
   await userEvent.type(name, "Sunday burn{Enter}");
   expect(
-    await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
+    await screen.findByText(/this deck no longer exists\. it may have been deleted/i),
   ).toBeInTheDocument();
 
   const printings = await openPrintings();
