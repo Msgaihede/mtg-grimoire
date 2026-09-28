@@ -77,12 +77,18 @@ fn unfinished(e: tauri::Error) -> String {
     format!("the share list could not be written: {e}")
 }
 
-/// A blocking worker with a runtime of its own, for the four commands that reach the network.
+/// A blocking worker with a runtime of its own, for the commands whose network trip ends in a
+/// write to `collection_shares` — the list's reconcile, a publish's cached row, a withdrawal's
+/// state.
 ///
 /// **This is [`crate::sync_engine::commands::sync_now`]'s shape and it is not ceremony.** The
 /// write connection is behind a `Mutex`, so a guard on it cannot cross an `await` on a
 /// multi-threaded runtime; `spawn_blocking` moves the whole trip to a thread where a `block_on`
 /// is legal and the guard never has to be `Send`.
+///
+/// ⚠️ **It holds the writer for the whole trip, which is only tolerable because the far end is
+/// the reader's own Worker.** [`share_open`] talks to whatever host a stranger's link names, and
+/// ran in here until 2026-09-28 — see its doc for what that cost and why it no longer does.
 async fn on_the_write_connection<T: Send + 'static>(
     state: Arc<AppState>,
     work: impl FnOnce(&rusqlite::Connection, &tokio::runtime::Runtime) -> Result<T, String>
@@ -164,16 +170,42 @@ pub async fn share_revoke(
 /// Open somebody else's shared collection from its link.
 ///
 /// **Needs no membership and sends no token** (spec §9): viewing is open to everyone, and the
-/// link is the whole of the capability. It still takes the write connection, because
-/// [`super::publish::open`] records a failure in `error_log` like every other network path here.
+/// link is the whole of the capability.
+///
+/// ⚠️ **It holds no connection while it fetches, and until 2026-09-28 it held the write one**
+/// (issue #545). It ran inside [`on_the_write_connection`] so that [`super::publish::open`] could
+/// record a failure in `error_log` — which handed a stranger's host the length of time the app's
+/// only writer was held. One byte a minute kept the per-chunk read timeout from ever firing, and
+/// every other press in the app answered [`crate::db::BUSY`] for as long as the host liked. So the
+/// open now runs here on the async runtime with nothing held, and a failure comes back carrying
+/// the row it owes, which is written **afterwards**.
+///
+/// **The row is best effort and detached, and both halves are deliberate.** `errors::record` can
+/// never fail the thing it describes, and nor may the lock it needs: a note that meets a sync
+/// holding the writer waits out [`crate::db::WRITE_LOCK_WAIT`], answers `BUSY` to nobody and costs
+/// the log one row — the mirror's own trade for its `error_log` row. Awaiting it would hold the
+/// reader's sentence behind a lock the open itself no longer needs.
 #[tauri::command]
 pub async fn share_open(
     state: tauri::State<'_, Arc<AppState>>,
     url: String,
 ) -> Result<serde_json::Value, String> {
-    let state = state.inner().clone();
-    on_the_write_connection(state, move |conn, runtime| {
-        runtime.block_on(super::publish::open(conn, &url))
-    })
-    .await
+    match super::publish::open(&url).await {
+        Ok(snapshot) => Ok(snapshot),
+        Err(refused) => {
+            if let Some(note) = refused.note {
+                let state = state.inner().clone();
+                // The handle is dropped on purpose: the reader's answer goes back now, and the
+                // row lands whenever the writer is free.
+                tauri::async_runtime::spawn_blocking(move || {
+                    // `BUSY` here is a row the log goes without, never a failed open.
+                    let _ = sync::with_write(&state, |conn| {
+                        note.record(conn);
+                        Ok(())
+                    });
+                });
+            }
+            Err(refused.sentence)
+        }
+    }
 }

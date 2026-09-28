@@ -358,10 +358,15 @@ Three of the five are worth a sentence each:
 * **`share_open` needs no membership and sends no token.** Viewing is open to everyone and the
   link is the whole of the capability.
 
-All five run on the **write** connection through one `spawn_blocking` helper, so each can record
-its failure in `error_log` — and because a guard on a `Mutex`-held connection cannot cross an
-`await` on a multi-threaded runtime. That is `sync_engine::commands::sync_now`'s shape exactly,
-precedent rather than a new sin.
+Four of the five run on the **write** connection through one `spawn_blocking` helper, so each can
+record its failure in `error_log` and write its answer to `collection_shares` — and because a
+guard on a `Mutex`-held connection cannot cross an `await` on a multi-threaded runtime. That is
+`sync_engine::commands::sync_now`'s shape exactly, precedent rather than a new sin, and it is
+tolerable only because the far end is the reader's own Worker.
+
+⚠️ **All five did until 2026-09-28, and `share_open` was the sin** — it talks to whatever host a
+stranger's link names, and held the app's only writer while it did. It holds nothing now; see
+[what the in-app open refuses](#what-the-in-app-open-refuses-and-what-it-may-spend).
 
 **The consumer side takes the value as a value.** `shareSnapshot.ts` exports `parseSnapshotValue`
 beside `parseSnapshot`, and the in-app viewer calls the former: re-serialising what
@@ -372,7 +377,10 @@ done to learn nothing.
 
 `NOT_DEPLOYED`, `NOT_CONNECTED`, `MEMBERSHIP_REFUSED`, `OWNER_NAME_REQUIRED`, `UNKNOWN_SHARE`,
 `NOT_A_LINK`, `SHARE_IS_GONE`, `NO_SUCH_SHARE`, `SHARE_NOT_READY` — `share::publish` holds them all
-and `refusal()` is the pure function that picks one. Two of them carry a rule:
+and `refusal()` is the pure function that picks one. The viewer's three bounds added
+`SHARE_TOO_LARGE`, `OPEN_TIMED_OUT` and `SNAPSHOT_ELSEWHERE` on 2026-09-28, in the same file and
+[described with the bounds](#what-the-in-app-open-refuses-and-what-it-may-spend). Two of the
+older ones carry a rule:
 
 * **A 401 here does not revoke the grant.** `client::lapsed` exists because a 401 on push, pull or
   ack leaves nothing to try; here the token came back from `/token` seconds ago, so the authority
@@ -803,10 +811,101 @@ explains why in its own comment; none of it had crossed, so a body that parsed a
 opposite way round from the page the guards were written for**: the web viewer only ever loads its
 own Worker's blob, while this view opens whatever `shareLinkFrom` lets through — the scheme and a
 `/s/{id}` tail, with the **host deliberately unchecked so a fork works** — so any page anywhere
-serving a gzipped `{"folders":[],"cards":[]}` reaches this render. And `grep -rn
+serving a gzipped `{"folders":[],"cards":[]}` reaches this render. (Any `https` page, since
+2026-09-28, serving that snapshot from its own origin — the section below — which narrows where the
+document can come from and not what it can say, so the boundary stands.) And `grep -rn
 "componentDidCatch\|getDerivedStateFromError" src/` answered **nothing**: a throw here unmounted the
 whole app to a white window whose only recovery was restarting the program. `SharedBoundary` is the
 app's one error boundary, scoped to the one view whose document arrives from a pasted URL.
+
+### What the in-app open refuses, and what it may spend
+
+**2026-09-28, [issue #545](https://github.com/Msgaihede/mtg-grimoire/issues/545).** Everything
+above treats the pasted link as the capability; this is what the crate does about the fact that the
+same link is also **a URL a stranger chose**, fetched from the reader's machine. `share::publish::open`
+had three holes, and each was a convention the four publisher requests keep correctly — they talk
+to the reader's own Worker — applied to a host nobody vouched for.
+
+**1. It held the write connection for the whole trip.** `share_open` ran inside
+`on_the_write_connection` for one reason: to write its failure to `error_log`. The client's
+`read_timeout` (60 s) is **per chunk** and restarts on every byte, so a host sending one byte every
+59 seconds held the request — and with it the app's only writer — for as long as it liked, and
+every other press in the app answered `BUSY`. **Now `publish::open` takes no `Connection` at all**,
+which is the fix spelled as a signature: it answers a `Refused` carrying the reader's sentence and,
+where the old path would have written one, the `error_log` row. `share_open` hands the sentence back
+at once and writes the row **afterwards, on a detached blocking worker, through `sync::with_write`**.
+A row that meets a sync holding the writer waits out `WRITE_LOCK_WAIT`, answers `BUSY` to nobody and
+is lost — the mirror's trade for its own `error_log` row, and `errors::record`'s rule that it can
+never fail the thing it describes, extended to the lock. Which refusals owe a row did not change: a
+404, a 410, a share not ready, a paste that is not a link and a snapshot that will not parse still
+write none.
+
+**2. It read every body whole.** `response.text()` on the page, `response.bytes()` on the snapshot
+and `GzDecoder::read_to_string` on the inflation, none of them bounded. DEFLATE writes a long run of
+one byte in about a thousandth of its length, so a few megabytes of gzipped whitespace is gigabytes
+of text and the app aborted on the allocation. Every read is capped now, **counted as the bytes
+arrive** — `Content-Length` is believed only when it refuses, `combos`' rule — and the figures are
+constants in `publish.rs`, not numbers to copy from here:
+
+| Cap | Constant | Chosen because |
+| --- | --- | --- |
+| The page | `MAX_PAGE_BYTES` | `page.ts` renders one template; the only publisher text in it is a title and a name at `MAX_TEXT_CHARS` each. A quarter of a megabyte is well over an order of magnitude above the largest shell the Worker can render and leaves a fork room for an inlined stylesheet. |
+| The snapshot, gzipped | `MAX_BLOB_BYTES` | **The Worker's own `MAX_BLOB_BYTES`**, which `blob.ts` refuses above at upload — so nothing larger can have come from a share. `the_blob_cap_is_the_workers_own` reads `share-worker/src/env.ts` and multiplies its expression out. |
+| The snapshot, inflated — and a snapshot served as plain JSON | `MAX_SNAPSHOT_BYTES`, eight times the blob cap | [The sizing above](#size-measured) measured **6.6×** (273 B a card raw, 41.3 B gzipped) and calls the compressed figure a floor, so the ratio is a ceiling: a snapshot at the Worker's cap inflates to about 53 MiB, and eight times leaves a fifth to spare — roughly 245 000 cards at 273 B each. |
+
+**The snapshot's wire cap depends on what arrives**, and that is the sniff's own argument one step
+further: a body opening `1f 8b` is held to the blob cap, and anything else — JSON an edge decoded on
+the way past — is the inflated text by another route and is held to that. Holding plain JSON to the
+blob cap would refuse a large, healthy share on exactly the edge the sniff exists to survive.
+**The inflation reads through `take(cap + 1)`**, and the `+ 1` is the check: a read capped at the cap
+itself would hand the parser a truncated document, and a real document followed by padding would
+then *parse*. All three answer one sentence, `SHARE_TOO_LARGE` — nothing the Worker writes is that
+large, whichever cap noticed — and the row names the cap.
+
+**And the whole open runs inside `OPEN_TIMEOUT`**, page, snapshot and parse on one wall clock,
+because a per-chunk timeout never ends a trickle. Two minutes carries a snapshot at the Worker's cap
+at about 70 KB/s. The viewer's client keeps a 10 s connect timeout and a 30 s per-chunk one, which
+now only make a dead connection fail fast. `OPEN_TIMED_OUT` is the one sentence in the file that
+says *try again*, because a slow afternoon is not terminal. The inflate and the parse run on the
+blocking pool, since the open itself now runs on the async runtime every other command shares.
+
+**3. It fetched wherever the page pointed.** `resolve` took an absolute `href` as it stood, and the
+client followed reqwest's default ten redirects to any host — so any page a reader was handed could
+make the app `GET` any `http(s)` address, one on the reader's own network included, and hand the
+body to the render. The webview's CSP `connect-src` forbids exactly that fetch; this was the way
+round it. Three fences now, each closing a different spelling:
+
+* **The pasted link must be `https`.** Refused as `NOT_A_LINK` — the paste box's sentence word for
+  word — before any request and with no row. `shareLinkFrom` in `OpenShareDialog.tsx` still lets
+  `http:` through to the command; the reader hears the same sentence either way. **There is no
+  debug-build exception**: nothing in this repository documents opening a share from a local
+  `wrangler dev` in the app, so there was no flow for one to keep. The `httpmock` suite reaches
+  plain HTTP on loopback through a field of `Limits` that only a test can set.
+* **The snapshot must be on the page's own origin** — scheme, host and port, compared as
+  `Url::origin` after a real URL join, so `//cdn.example/…`, `http://` on the same host and another
+  port all land on the same refusal, and `https://SHARE.example:443/…` is still home. A root-relative
+  `href`, which is all the Worker writes, costs nothing; an absolute one on the same origin is taken;
+  a bare relative one is still `NOT_A_LINK`. Anything else is **`SNAPSHOT_ELSEWHERE`**, its own
+  sentence because the link passed every shape check there is, and its row names where the page
+  tried to send the app.
+* **Redirects are followed only within the origin the request started on**, by a client of the
+  viewer's own, built per open. **Not reqwest's default**, which would make the origin rule
+  decoration — a same-origin page answering `302` elsewhere is the same proxy one step on. **Not
+  `Policy::none()`** either, which would also refuse a fork's custom domain normalising a trailing
+  slash; the Worker itself redirects nothing. A hop that leaves is an error the crate reads as
+  `SNAPSHOT_ELSEWHERE`; past `MAX_REDIRECTS` hops the last `3xx` is handed back as a status. The client is
+  also `https_only`, a second fence under the scheme check. It is **never the publisher's `http()`**,
+  which is memoised, follows the defaults anywhere and falls back to `Client::default()` if it
+  cannot build — every one of which is the proxy again.
+
+**What proves it, and what does not.** `publish.rs`'s suite drives the open end to end against
+`httpmock`: two mock servers are two origins on one loopback address, so a page on one naming — or
+redirecting to — the other is the proxy's exact shape, and the second server is asserted to hear
+**nothing**. The caps are shrunk through `Limits` so a gzip bomb costs milliseconds, and the timeout
+test holds the page back ten seconds against a 300 ms clock and asserts the open answered in under
+five. **No test drives `share_open` itself**, because it needs a managed `AppState`: that the row
+is written after the answer rests on the command's own body and on `publish::open` having no
+`Connection` to hold. **Nothing here was measured against a deployed Worker**, because none is.
 
 ### The entry point, which decision 6 left nowhere to put
 
@@ -1094,7 +1193,7 @@ branch acquires an unrelated red.
 | --- | --- |
 | `src-tauri/src/share/snapshot.rs` | `ShareSnapshot`, the subtree read, the gzip, the three refusals |
 | `src-tauri/src/share/cache.rs` | `collection_shares` reads, writes and `reconcile` |
-| `src-tauri/src/share/publish.rs` | The two-step upload and the sentences |
+| `src-tauri/src/share/publish.rs` | The two-step upload, the sentences, and the viewer's bounded open |
 | `src-tauri/src/share/commands.rs` | The five commands and `ShareRow` |
 | `src-tauri/src/share/__golden__/` | The committed snapshot both TypeScript suites read |
 | `share-worker/` | The Worker — `index.ts` (router and gate), `shares.ts`, `blob.ts`, `page.ts`, `lapse.ts`, `env.ts`, `schema.sql`, `README.md` |

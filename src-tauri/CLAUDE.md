@@ -2544,6 +2544,19 @@ open — is [collection-sharing.md](../docs/reference/collection-sharing.md). Th
 - **`collection_shares` is a cache and is not synced** — the relay's list is the roster. Its
   whole-collection unique index is on the **expression** `(folder_uid IS NULL)`; the column form
   refuses nothing, because SQLite holds NULLs in a UNIQUE index as distinct.
+- ⚠️ **`share_open` fetches a stranger's URL, so it holds no connection and trusts nothing it is
+  sent** (2026-09-28, [issue #545](https://github.com/Msgaihede/mtg-grimoire/issues/545)).
+  `publish::open` takes no `Connection` — it ran on the write one until then, and a host
+  trickling a byte a minute held the app's only writer and made every other press `BUSY` — and
+  answers a `Refused` whose `error_log` row the command writes **afterwards, detached and best
+  effort**. **`https` only**; the snapshot must be on the **page's own origin** (`resolve` joins
+  with a URL parser, then compares `Url::origin`); redirects are followed **only within the
+  origin** by the viewer's own per-open client, never the publisher's `http()`, which follows
+  reqwest's defaults anywhere. Every body is **counted as it arrives** — the page, the gzip at
+  the Worker's own `MAX_BLOB_BYTES` (a test multiplies out `env.ts`), and the inflated text
+  through `take(cap + 1)` — and `OPEN_TIMEOUT` bounds the whole open, because the per-chunk
+  read timeout restarts on every byte. The figures and why each was chosen:
+  [collection-sharing.md](../docs/reference/collection-sharing.md).
 
 ## Scryfall and the network
 
