@@ -10,6 +10,7 @@ import { popup } from "@/lib/motion";
 import { COMBOS_STATUS_KEY, combosForCardsKey } from "@/lib/query";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
+import { radioKeys } from "@/lib/radioGroup";
 import { bracketWarning, estimateBracket } from "./validation/bracket";
 
 /**
@@ -320,6 +321,9 @@ const BRACKETS: readonly { value: number; label: string; name: string; clause: s
   },
 ];
 
+/** {@link BRACKETS}' values in their order, for `radioKeys`. */
+const BRACKET_VALUES = BRACKETS.map((rung) => rung.value);
+
 /**
  * What each `bracketTag` letter means, **in Commander Spellbook's own words**.
  *
@@ -450,10 +454,9 @@ function Advisory({
       {/* **A real radio group rather than six buttons**: one of six is chosen, exactly one is
           true at a time, and `aria-checked` is the only thing that says so to a reader who
           cannot see which one is gold. `ExportDialog`'s format row and `TagSearchBox`'s
-          namespace row are the app's other two, and **each radio is its own tab stop rather
-          than a roving caret** for the reason written on that second one: two radio groups in
-          one app that answered the arrow keys differently would be worse than one that answers
-          them nowhere. */}
+          namespace row are two of the app's others, and **one Tab stop with the arrow keys
+          choosing** is every group's — `radioKeys`, since issue #558 reversed the one-stop-per-
+          radio rule this comment used to state. */}
       <div
         role="radiogroup"
         // Named for the question rather than for the answers — `role="radiogroup"` takes no name
@@ -461,7 +464,7 @@ function Advisory({
         aria-label="Bracket for this deck"
         className="mt-2 flex flex-wrap gap-1"
       >
-        {BRACKETS.map((rung) => {
+        {BRACKETS.map((rung, i) => {
           const on = rung.value === bracket;
           const name = rung.label === rung.name ? rung.name : `${rung.label} ${rung.name}`;
           return (
@@ -477,6 +480,7 @@ function Advisory({
               aria-label={name}
               {...tip(`${name} — ${rung.clause}`, { describes: false })}
               onClick={() => onBracket(rung.value)}
+              {...radioKeys(BRACKET_VALUES, bracket, onBracket, i)}
               className={cn(
                 "inline-flex h-6 shrink-0 items-center rounded-md border px-2",
                 "font-mono text-[0.6875rem] tabular-nums",

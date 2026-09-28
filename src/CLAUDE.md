@@ -731,6 +731,13 @@ Every one of these has its measurement and its story in
   the suite.
 - **`aria-disabled`, never the `disabled` attribute**, on anything that greys as the reader
   types — a `disabled` button leaves the tab order. The one exception is a native `<option>`.
+  The button stays pressable, so the form's own submit handler must refuse the same states it
+  draws; `metaRows.tsx`'s `META_SUBMIT_TYPED` is the recipe's greying for it (issue #558).
+- **A `role="radiogroup"` is one Tab stop and the arrow keys choose** — spread
+  `lib/radioGroup.ts`' `radioKeys` onto every `role="radio"`, never a hand-rolled `onKeyDown`.
+  Until issue #558 each radio was its own stop and the arrows did nothing, argued as consistency;
+  one group already walked on its arrows, so it was not even that. A three-way toggle that is not
+  a choice of one value (`DeckKindGroup`) stays a `role="group"` of `aria-pressed` buttons.
 - **`loading="lazy"` belongs on a plain scroller, not on a virtualised one** — the virtualiser
   has already made the request count small, so the browser's gate only delays the pictures about
   to be looked at.

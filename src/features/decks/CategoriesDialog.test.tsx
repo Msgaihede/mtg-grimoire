@@ -542,6 +542,27 @@ describe("categories", () => {
   });
 
   /**
+   * Issue #558: the empty-name Add greys with `aria-disabled` rather than the attribute, so Tab
+   * from the field still lands on it — and the form's own handler is then what refuses it.
+   */
+  it("keeps an empty-name Add in the tab order and creates nothing from it", async () => {
+    mount();
+    await screen.findByText("Ramp");
+    const user = userEvent.setup();
+
+    const field = screen.getByLabelText("New category name");
+    const add = screen.getByRole("button", { name: "Add" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(add).not.toBeDisabled();
+
+    field.focus();
+    await user.tab();
+    expect(add).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(deckCategoryCreate).not.toHaveBeenCalled();
+  });
+
+  /**
    * The caret, asserted rather than assumed — and the assertion is `toHaveFocus` plus a bare
    * keystroke, because neither half alone would have caught the bug this test was written for.
    *

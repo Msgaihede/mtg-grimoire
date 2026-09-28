@@ -39,6 +39,7 @@ import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { cardImageUrl } from "@/lib/images";
 import type { DeckNoteCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
+import { radioKeys } from "@/lib/radioGroup";
 import { OTHER } from "./deckBuckets";
 import { ALL_CHIP, NAMED_CHIP, typeChipCounts, type NoteCardChoice } from "./deckNotes";
 import { META_SUBMIT } from "./metaRows";
@@ -204,6 +205,7 @@ function Picker({
    * or a scheme, and through these strays.
    */
   const chips = useMemo(() => typeChipCounts(offered, named.length), [offered, named.length]);
+  const chipKeys = useMemo(() => chips.map((c) => c.key), [chips]);
 
   /**
    * The rung actually in force, which is not always the one the reader pressed.
@@ -264,12 +266,13 @@ function Picker({
               is true at a time, and `aria-checked` is the only thing that says so to a reader who
               cannot see which one is gold. `TheoryDiffDialog`'s row, verbatim. */}
           <div role="radiogroup" aria-label="Which cards to show" className="flex flex-wrap gap-2">
-            {chips.map((rung) => (
+            {chips.map((rung, i) => (
               <button
                 key={rung.key}
                 type="button"
                 role="radio"
                 aria-checked={activeChip === rung.key}
+                {...radioKeys(chipKeys, activeChip, setChip, i)}
                 // **Named outright, because the visible name does not survive being computed.**
                 // The label and the count are two elements separated by a `gap`, which is CSS and
                 // not a text node — so the accessible name concatenates to `Land1`, which a screen

@@ -54,6 +54,7 @@ import { useAppStore, type PriceHistoryRequest } from "@/lib/store";
 import { finishTreatments, treatmentName } from "@/lib/treatment";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { radioKeys } from "@/lib/radioGroup";
 
 import { priceHistoryKey } from "../keys";
 import { DOWN_FILL, UP_FILL } from "../WidgetParts";
@@ -125,6 +126,9 @@ const RANGES: readonly { id: PriceMoverWindow; label: string }[] = (() => {
     label: pick?.options.find((option) => option.id === id)?.label ?? rangePhrase(id),
   }));
 })();
+
+/** {@link RANGES}' ids in their order, for `radioKeys`. */
+const RANGE_IDS = RANGES.map((range) => range.id);
 
 /**
  * The sentence a printing with no remembered days is answered with. It says *not yet* rather than
@@ -479,12 +483,6 @@ function RangeSwitch({
   value: PriceMoverWindow;
   onChange: (next: PriceMoverWindow) => void;
 }): ReactElement {
-  const buttons = useRef<(HTMLButtonElement | null)[]>([]);
-  const step = (from: number, by: number) => {
-    const next = (from + by + RANGES.length) % RANGES.length;
-    onChange(RANGES[next].id);
-    buttons.current[next]?.focus();
-  };
   return (
     <div
       role="radiogroup"
@@ -496,22 +494,13 @@ function RangeSwitch({
         return (
           <button
             key={option.id}
-            ref={(el) => {
-              buttons.current[i] = el;
-            }}
             type="button"
             role="radio"
             aria-checked={on}
             onClick={() => onChange(option.id)}
-            onKeyDown={(e) => {
-              if (e.key === "ArrowRight" || e.key === "ArrowDown") {
-                e.preventDefault();
-                step(i, 1);
-              } else if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
-                e.preventDefault();
-                step(i, -1);
-              }
-            }}
+            // One stop and the arrows choose — `radioKeys`, every radio group's (#558). This row
+            // walked on its own hand-rolled arrows before and was the one group that did.
+            {...radioKeys(RANGE_IDS, value, onChange, i)}
             className={cn(
               "h-11 px-3 text-xs @min-[640px]/card:h-9",
               "transition-colors duration-[var(--duration-fast)] ease-standard motion-reduce:transition-none",
