@@ -2397,13 +2397,14 @@ describe("FilterBar, the filters it states", () => {
   });
 
   /**
-   * **A wrapped block under the rule, and never a line of the bar's own row.** That is where
-   * `Reset all` left the bar for: on the row it took its width out of a `flex-1` search box and
-   * slid nine colour chips left under the finger that had just pressed one, while below it an
-   * appearing chip moves only the wall. The chips wrap onto further lines as they grow rather than
-   * running out of the box.
+   * **A wrapped block under the bar, and never a line of the bar's own row.** An appearing chip
+   * under the bar moves only the wall, where on the row it would take its width out of a `flex-1`
+   * search box and slide nine colour chips left under the finger that had just pressed one. The
+   * chips wrap onto further lines as they grow rather than running out of the box. `Reset all` is
+   * the other way round since 2026-09-27 — on the row, drawn from the first paint so it never
+   * appears — and "keeps Reset all on the bar's own row", in this block, pins that half.
    */
-  it("wraps the chips and Reset all in a block of their own, off the bar's row", () => {
+  it("wraps the chips in a block of their own, off the bar's row", () => {
     render(<FilterBar search={search({ colors: ["U", "R"], activeCount: 1 })} />);
 
     const block = screen.getByRole("button", {
@@ -2413,7 +2414,6 @@ describe("FilterBar, the filters it states", () => {
 
     const row = screen.getByPlaceholderText("Search cards…").parentElement!;
     expect(row).not.toContainElement(block);
-    expect(row).not.toContainElement(screen.getByRole("button", { name: /^Reset all/ }));
   });
 });
 
