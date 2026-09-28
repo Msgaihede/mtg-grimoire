@@ -323,7 +323,7 @@ export function TableView({
                 // aligned against the same edge.
                 <span className="w-[1ch] text-right">{row.card.quantity}</span>
               )}
-              {gameChanger && <span className="sr-only">Game changer</span>}
+              {gameChanger && <span className="sr-only">Game Changer</span>}
             </span>
           );
         },

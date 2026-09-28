@@ -449,7 +449,7 @@ export function QuickCategoryDialog({
     <Dialog
       open={open}
       title="New category"
-      closeLabel="Close new category"
+      closeLabel="Close"
       size="w-[26rem]"
       onDismiss={onDismiss}
       onClose={onClose}

@@ -146,7 +146,7 @@ export const Empty: Story = {
   args: { attachable: [] },
   play: async ({ canvas }) => {
     await expect(
-      await canvas.findByText("This deck has no cards to name yet."),
+      await canvas.findByText("This deck has no cards to link yet."),
     ).toBeInTheDocument();
     await expect(canvas.queryByRole("checkbox")).toBeNull();
 
@@ -166,9 +166,9 @@ export const Empty: Story = {
  */
 export const NothingNamed: Story = {
   play: async ({ canvas, args }) => {
-    await expect(await canvas.findByText("0 named")).toBeInTheDocument();
+    await expect(await canvas.findByText("0 linked")).toBeInTheDocument();
 
-    const forest = canvas.getByRole("checkbox", { name: "Name Forest in Mana base" });
+    const forest = canvas.getByRole("checkbox", { name: "Link Forest to Mana base" });
     await expect(forest).not.toBeChecked();
 
     // The tick *is* the write — there is nothing else to press.
@@ -200,10 +200,10 @@ export const SomeNamed: Story = {
     ],
   },
   play: async ({ canvas, args }) => {
-    await expect(await canvas.findByText("2 named")).toBeInTheDocument();
-    await expect(canvas.getByRole("checkbox", { name: "Name Forest in Mana base" })).toBeChecked();
+    await expect(await canvas.findByText("2 linked")).toBeInTheDocument();
+    await expect(canvas.getByRole("checkbox", { name: "Link Forest to Mana base" })).toBeChecked();
     await expect(
-      canvas.getByRole("checkbox", { name: "Name Black Lotus in Mana base" }),
+      canvas.getByRole("checkbox", { name: "Link Black Lotus to Mana base" }),
     ).not.toBeChecked();
 
     // Narrowing to what the note names is the reader's way of checking their own work.
@@ -211,7 +211,7 @@ export const SomeNamed: Story = {
     await expect(canvas.queryByRole("checkbox", { name: /Black Lotus/ })).toBeNull();
 
     // And the untick is the detach, in the same press the tick was the attach.
-    await userEvent.click(canvas.getByRole("checkbox", { name: "Name Island in Mana base" }));
+    await userEvent.click(canvas.getByRole("checkbox", { name: "Link Island to Mana base" }));
     await expect(args.onDetach).toHaveBeenCalledWith("o-island");
   },
 };
@@ -290,7 +290,7 @@ export const NamesACardTheDeckCut: Story = {
   },
   play: async ({ canvas, args }) => {
     const stray = await canvas.findByRole("checkbox", {
-      name: "Name Ancient Tomb in Mana base",
+      name: "Link Ancient Tomb to Mana base",
     });
     await expect(stray).toBeChecked();
 
@@ -330,7 +330,7 @@ export const NamesACardWithNoPrinting: Story = {
   },
   play: async ({ canvas }) => {
     const orphan = await canvas.findByRole("checkbox", {
-      name: "Name Goblin Piledriver in Mana base",
+      name: "Link Goblin Piledriver to Mana base",
     });
     await expect(orphan).toBeChecked();
 

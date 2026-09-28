@@ -523,7 +523,7 @@ function Fields({
             which is the whole reason to keep it short. It used to be the shorter of a pair —
             a `Notes` textarea sat beneath it until user schema v43 replaced the deck's single
             `notes` column with the Notes band's many notes, and this is the survivor. */}
-        <p className="mt-1 text-[0.6875rem] text-dim">The one line the gallery tile shows.</p>
+        <p className="mt-1 text-[0.6875rem] text-dim">Shown on the deck tile.</p>
       </div>
     </>
   );
@@ -594,10 +594,10 @@ function DefaultCategoryRow({
             there, and they still count toward nothing. */}
         <p className="mt-0.5 truncate text-[0.6875rem] text-dim">
           {picked === undefined
-            ? "Removal, Ramp, Draw — decided per card from what it does."
+            ? "Cards are sorted into Removal, Ramp, Draw and more by what they do."
             : picked.isActive
-              ? `Every add lands in ${picked.name}.`
-              : `Every add lands in ${picked.name}, which is switched off and counts toward nothing.`}
+              ? `New cards go to ${picked.name}.`
+              : `New cards go to ${picked.name}, which is inactive and doesn't count.`}
         </p>
       </div>
       <div className="w-44 shrink-0">
@@ -776,7 +776,7 @@ function TheoryMarkSwitches({
         id={`${id}-theory-mark-exact`}
         swatch="var(--color-theory-exact)"
         heading="Matching printing"
-        caption="A green mark on a card that is the exact printing your plan names."
+        caption="Green: the exact printing the theory list uses."
         on={exact}
         onChange={onExact}
       />
@@ -793,7 +793,7 @@ function TheoryMarkSwitches({
         // off does not leave the card unmarked, it re-resolves the row one tier down — onto
         // every printing, as a match. Unsaid, a reader who switches green off and still sees
         // marks reads the control as broken.
-        caption="A blue mark on a card your plan asks for in a printing it does not name. Turning the green one off draws this one on every printing instead, as a match."
+        caption="Blue: the right card in a different printing. With green off, blue marks every printing."
         on={name}
         onChange={onName}
       />
@@ -804,7 +804,7 @@ function TheoryMarkSwitches({
         // The last sentence is what keeps this row from reading as a third printing tier: the two
         // above are statements about *which* printing, and this one is about the card not being
         // asked for at all — so nothing it says can be undone by choosing a different printing.
-        caption="A red mark on a card your plan does not ask for at all — a stand-in, a spare or an experiment. It says nothing about the printing; the two marks above do."
+        caption="Red: a card that isn't in the theory list."
         on={unplanned}
         onChange={onUnplanned}
       />
@@ -1065,10 +1065,10 @@ function FolderRow({
         </label>
         <p className="mt-0.5 truncate text-[0.6875rem] text-dim">
           {unread !== null
-            ? `Could not read the folders — ${unread}`
+            ? `Couldn't load the folders — ${unread}`
             : folderId === null
               ? "Top level"
-              : (here?.path ?? "In a folder this list does not carry")}
+              : (here?.path ?? "In a folder not shown here")}
         </p>
       </div>
       <div className="w-44 shrink-0">

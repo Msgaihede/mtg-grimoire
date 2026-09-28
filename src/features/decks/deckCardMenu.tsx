@@ -637,7 +637,7 @@ function otherListItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
  * object would not compile until somebody worded it, which is the whole of what the shape buys.
  */
 const QUICK_ADD_REASON: Record<Exclude<ReturnType<typeof quickAddBlock>, null>, string> = {
-  theory: "a plan holds no cards",
+  theory: "the theory list holds no copies",
   // **The one arm no reader reaches through this menu**, and it is worded to the same register as
   // its neighbours anyway. `collectionItems` drops the whole submenu on a virtual deck — the three
   // writes are not passed, so the structural refusal fires before `quickAddBlock` is ever asked —
@@ -650,14 +650,14 @@ const QUICK_ADD_REASON: Record<Exclude<ReturnType<typeof quickAddBlock>, null>, 
   // and about the deck, like `a plan holds no cards` above it; not *you own no cards*, which
   // would be a claim about the reader's shelves and is exactly the wrong one — they may own every
   // card in it and be playing the deck on Arena.
-  virtual: "this deck tracks no cardboard",
+  virtual: "this deck doesn't use your collection",
   // **A phrase about the pile, not about the card**, and it is the third of these sentences for
   // the same reason the first is: nothing on the cardboard says the column it sits in is switched
   // off, and a switched-off pile is handed nothing out of the deck's folder — so the `0` owned a
   // row in one wears is a fact about the pile. The arm was added after driving the shipped window
   // found the submenu offering `Quick add 1 copy` on a Maybeboard line whose number no press could
   // move; `quickCollection.ts` carries the measurement.
-  inactive: "this pile is switched off",
+  inactive: "this category is inactive",
   "nothing-missing": "nothing missing",
 };
 
@@ -767,7 +767,7 @@ function collectionItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
       //
       // Under a picked set the head names the set, `Category for N cards`' shape one row down, so
       // the total in the rows below is read against the cards it is a total of.
-      label: many ? `Collection link for ${manyCards(picked.length)}` : "Collection link",
+      label: many ? `Missing copies for ${manyCards(picked.length)}` : "Missing copies",
       Icon: LibraryBig,
       items: [
         row(

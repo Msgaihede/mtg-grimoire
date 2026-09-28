@@ -1104,7 +1104,7 @@ export function DeckStats({
         {open &&
           (stats.copies === 0 ? (
             <p className="text-sm text-dim">
-              Nothing to measure yet — add a card and the charts fill in.
+              Add cards to see stats.
             </p>
           ) : (
             // **Columns that wrap rather than a container query**, which is a deliberate
@@ -1402,7 +1402,7 @@ function Missing({
               onClick={() => {
                 if (!spent) onSend();
               }}
-              {...tip(spent ? "This shortfall is already on your wishlist." : null)}
+              {...tip(spent ? "Missing cards are already on your wishlist." : null)}
               className={cn(
                 "rounded-md border border-border px-2 py-1 text-dim",
                 "transition-colors duration-150 hover:text-text disabled:opacity-50",
@@ -1433,7 +1433,7 @@ function Missing({
             <WishDestination
               folderId={folderId}
               onChange={onFolderChange}
-              label="Which wishlist folder this deck's shortfall goes to"
+              label="Wishlist folder for missing cards"
               size="sm"
               disabled={pending}
             />
@@ -1496,7 +1496,7 @@ function Missing({
         {added === null ? (
           ""
         ) : added === 0 ? (
-          "Nothing to add — a recount covered the shortfall, or what is short has left the card database."
+          "Nothing to add. The missing cards are already covered or no longer in the card database."
         ) : (
           // One element holding the glyph and the sentence, so the arrival is one thing that
           // happens rather than two. `popup`'s own fade and 4% grow and nothing else: a status
@@ -1516,7 +1516,7 @@ function Missing({
           <motion.span {...popup} className="flex min-w-0 origin-left items-center gap-1.5">
             <CircleCheck aria-hidden="true" className="size-3.5 shrink-0" />
             <span className="min-w-0">
-              {`Added ${count(added)} ${added === 1 ? "wish" : "wishes"}${destination === null ? "" : ` to ${destination}`} — one per card, for every copy you are short.`}
+              {`Added ${count(added)} ${added === 1 ? "card" : "cards"} to ${destination ?? "your wishlist"}.`}
             </span>
           </motion.span>
         )}
@@ -1532,7 +1532,7 @@ function Missing({
       <AnimatePresence initial={false}>
         {failure && (
           <motion.p {...statusLine} role="alert" className="overflow-hidden text-destructive">
-            Could not add to the wishlist — {failure}
+            Couldn't add to the wishlist — {failure}
           </motion.p>
         )}
       </AnimatePresence>

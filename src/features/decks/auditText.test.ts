@@ -396,7 +396,7 @@ describe("auditSentence", () => {
       ),
     ).toEqual({
       text: "Swapped printing of Sol Ring",
-      detail: "CMM → 3ED · folded into one row",
+      detail: "CMM → 3ED · merged into one row",
     });
   });
 
@@ -425,7 +425,7 @@ describe("auditSentence", () => {
       auditSentence(
         entry("swap", { category: "Ramp", fromFinish: null, toFinish: "foil", folded: true }),
       ),
-    ).toEqual({ text: "Made Sol Ring foil", detail: "regular → foil · folded into one row" });
+    ).toEqual({ text: "Made Sol Ring foil", detail: "regular → foil · merged into one row" });
   });
 
   /**
@@ -443,22 +443,22 @@ describe("auditSentence", () => {
 
   it("says what a card was labelled, and what it was wearing before", () => {
     expect(auditSentence(entry("label", { label: "Cut candidate", previous: null }))).toEqual({
-      text: "Labelled Sol Ring",
+      text: "Labeled Sol Ring",
       detail: "Cut candidate",
     });
     expect(auditSentence(entry("label", { label: "Wincon", previous: "Cut candidate" }))).toEqual({
-      text: "Labelled Sol Ring",
+      text: "Labeled Sol Ring",
       detail: "Cut candidate → Wincon",
     });
     expect(auditSentence(entry("label", { label: null, previous: "Wincon" }))).toEqual({
-      text: "Unlabelled Sol Ring",
+      text: "Unlabeled Sol Ring",
       detail: "was Wincon",
     });
   });
 
   /**
    * The same kind wears two different events, and `action` is what tells them apart. Without
-   * this branch, deleting the "Cut candidate" label renders as "Labelled a card" — a sentence
+   * this branch, deleting the "Cut candidate" label renders as "Labeled a card" — a sentence
    * about a card the row does not have, since a label CRUD row names none.
    */
   it("says what happened to a label itself, not to a card wearing it", () => {
@@ -474,14 +474,14 @@ describe("auditSentence", () => {
       detail: "4 cards carry it",
     });
     expect(labelEvent({ action: "recolour", label: "Wincon", color: "moss" })).toEqual({
-      text: "Recoloured label Wincon",
+      text: "Recolored label Wincon",
       detail: "moss",
     });
     // Deleting a label unlabels its cards rather than deleting them, which is the half of the
     // sentence a reader would otherwise have to go and check.
     expect(labelEvent({ action: "delete", label: "Wincon", cards: 1 })).toEqual({
       text: "Deleted label Wincon",
-      detail: "1 card unlabelled",
+      detail: "1 card unlabeled",
     });
     // An action this build has never heard of still reads as a line of history.
     expect(labelEvent({ action: "reticulate", label: "Wincon" })).toEqual({
@@ -601,11 +601,11 @@ describe("auditSentence", () => {
     });
     // Filed away, never deleted — `DeckPatch.archived`'s own words.
     expect(deck({ field: "archived", from: false, to: true })).toEqual({
-      text: "Filed the deck away",
+      text: "Archived the deck",
       detail: null,
     });
     expect(deck({ field: "archived", from: true, to: false })).toEqual({
-      text: "Took the deck out of the archive",
+      text: "Unarchived the deck",
       detail: null,
     });
     expect(deck({ field: "built", from: "false", to: "true" })).toEqual({
@@ -662,14 +662,14 @@ describe("auditSentence", () => {
     // the row itself stores an `oracle_id`, which is a uuid no reader can resolve.
     expect(
       deck({ field: "note", action: "attach", note: "Mana base", card: "Lightning Bolt" }),
-    ).toEqual({ text: "Attached Lightning Bolt to a note", detail: "Mana base" });
+    ).toEqual({ text: "Linked Lightning Bolt to a note", detail: "Mana base" });
     expect(
       deck({ field: "note", action: "detach", note: "Mana base", card: "Lightning Bolt" }),
-    ).toEqual({ text: "Detached Lightning Bolt from a note", detail: "Mana base" });
+    ).toEqual({ text: "Unlinked Lightning Bolt from a note", detail: "Mana base" });
     // A row that names no card says the shorter sentence rather than printing "undefined" at
     // somebody — the shape every other arm in this switch takes for a missing payload field.
     expect(deck({ field: "note", action: "attach", note: "", card: null })).toEqual({
-      text: "Attached a card to a note",
+      text: "Linked a card to a note",
       detail: null,
     });
     // **The sixth action, and the one that names nothing.** A reorder is about the list rather
@@ -707,14 +707,14 @@ describe("auditSentence", () => {
       auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
 
     expect(deck({ field: "virtualOnly", from: false, to: true })).toEqual({
-      text: "Made the deck virtual",
+      text: "Stopped tracking this deck against your collection",
       detail: "Its copies moved to Recently removed",
     });
     // Coming back the other way moves nothing — the copies are not fetched out of
     // `Recently removed`, which is the reader's own filing to redo — so there is no detail to
     // print, and a line claiming one would promise a restore that did not happen.
     expect(deck({ field: "virtualOnly", from: true, to: false })).toEqual({
-      text: "Made the deck track your collection again",
+      text: "Started tracking this deck against your collection",
       detail: null,
     });
   });
@@ -737,7 +737,7 @@ describe("auditSentence", () => {
       detail: null,
     });
     expect(deck({ field: "xGroup", from: true, to: false })).toEqual({
-      text: "Folded the X spells back into their mana values",
+      text: "Grouped X spells by mana value again",
       detail: null,
     });
     // The wrong-but-plausible spelling, so that a regression to it is a failing test rather
@@ -772,29 +772,29 @@ describe("auditSentence", () => {
       auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
 
     expect(deck({ field: "theoryMarkExact", from: false, to: true })).toEqual({
-      text: "Started marking cards in the printing the plan names",
+      text: "Turned on exact-printing marks",
       detail: null,
     });
     expect(deck({ field: "theoryMarkExact", from: true, to: false })).toEqual({
-      text: "Stopped marking cards in the printing the plan names",
+      text: "Turned off exact-printing marks",
       detail: null,
     });
     expect(deck({ field: "theoryMarkName", from: false, to: true })).toEqual({
-      text: "Started marking cards in a different printing",
+      text: "Turned on different-printing marks",
       detail: null,
     });
     expect(deck({ field: "theoryMarkName", from: true, to: false })).toEqual({
-      text: "Stopped marking cards in a different printing",
+      text: "Turned off different-printing marks",
       detail: null,
     });
     // The red tier (schema v39): the one sentence of the three that is about a card the plan
     // does **not** name, so it says nothing about a printing.
     expect(deck({ field: "theoryMarkUnplanned", from: false, to: true })).toEqual({
-      text: "Started marking cards not in the theory list",
+      text: "Turned on marks for cards not in the theory list",
       detail: null,
     });
     expect(deck({ field: "theoryMarkUnplanned", from: true, to: false })).toEqual({
-      text: "Stopped marking cards not in the theory list",
+      text: "Turned off marks for cards not in the theory list",
       detail: null,
     });
     // **No two of them may share a sentence**, which is the half a test of one arm cannot show:
@@ -831,11 +831,11 @@ describe("auditSentence", () => {
     // The tokens switch beside the mode (schema v57) — its own `camelCase` word and its own row,
     // never a sentence that calls it a mode.
     expect(deck({ field: "managedWishlistTokens", from: false, to: true })).toEqual({
-      text: "Started filing tokens in the managed wishlist",
+      text: "Started adding tokens to the managed wishlist",
       detail: null,
     });
     expect(deck({ field: "managedWishlistTokens", from: true, to: false })).toEqual({
-      text: "Stopped filing tokens in the managed wishlist",
+      text: "Stopped adding tokens to the managed wishlist",
       detail: null,
     });
     expect(deck({ field: "managed_wishlist_tokens", to: true }).text).toBe("Changed the deck");
@@ -877,7 +877,7 @@ describe("auditSentence", () => {
     });
     // Back to Auto is the half a `text()` reader loses: `0` prints as nothing.
     expect(deck({ field: "bracket", from: 4, to: 0 })).toEqual({
-      text: "Put the bracket back to Auto",
+      text: "Set the bracket to Auto",
       detail: "was bracket 4",
     });
     // One set answer to another names both, because neither is the default.
@@ -1115,7 +1115,7 @@ describe("auditSentence", () => {
       });
       expect(sentence(swap(true))).toEqual({
         text: "Swapped Treasure's art",
-        detail: `${SUBTITLE} · TCMM #48 → TVOW #17 (foil) · folded into one row`,
+        detail: `${SUBTITLE} · TCMM #48 → TVOW #17 (foil) · merged into one row`,
       });
     });
 
@@ -1229,16 +1229,16 @@ describe("auditSentence", () => {
       auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
 
     expect(deck({ field: "theory", copied: 99 })).toEqual({
-      text: "Copied the live deck into theory",
+      text: "Copied the actual list into the theory list",
       detail: "99 cards",
     });
     expect(deck({ field: "theory", copied: 1 })).toEqual({
-      text: "Copied the live deck into theory",
+      text: "Copied the actual list into the theory list",
       detail: "1 card",
     });
     // An empty live deck copies nothing, and says so by saying nothing more.
     expect(deck({ field: "theory", copied: 0 })).toEqual({
-      text: "Copied the live deck into theory",
+      text: "Copied the actual list into the theory list",
       detail: null,
     });
   });

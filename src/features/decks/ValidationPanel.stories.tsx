@@ -201,7 +201,7 @@ export const Legal: Story = {
     const panel = canvas.getByRole("dialog", { name: "Modern check" });
     await expect(panel).not.toHaveAttribute("aria-modal");
     await expect(panel).toHaveTextContent(
-      "Nothing to fix. This deck matches every Modern rule this app can check.",
+      "No issues. This deck passes every Modern rule we check.",
     );
   },
 };
@@ -525,7 +525,7 @@ export const UnknownLegality: Story = {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("dialog", { name: "Modern check" });
     await expect(panel).toHaveTextContent(
-      "Ragavan, Nimble Pilferer's Modern legality could not be read.",
+      "Couldn't read Ragavan, Nimble Pilferer's Modern legality.",
     );
     // **Severity is never carried by the colour alone.** A rule broken and a fact worth a look
     // differ by a 2px edge, which is nothing at all to a screen reader — so every sentence is

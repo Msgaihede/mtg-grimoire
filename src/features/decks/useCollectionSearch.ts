@@ -834,6 +834,6 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
  *  always has a deck — it is the fence for a story or a test mounting the tab bare. **Not
  *  exported**: nothing outside this file has ever read it, and an export nothing imports is a
  *  sentence the next reader goes looking for a second copy of. */
-const NO_DECK = "There is no deck to add to";
+const NO_DECK = "No deck to add to";
 
 export type CollectionSearch = ReturnType<typeof useCollectionSearch>;

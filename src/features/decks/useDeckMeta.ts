@@ -53,7 +53,7 @@ const LOOSE_PILES: readonly string[] = [DEFAULT_CATEGORY_NAME, UNCATEGORIZED];
  * here is a busy database or a deck another surface deleted.
  */
 const TAG_READ_REFUSED =
-  "Could not organize cards by category. Card tags could not be loaded.";
+  "Couldn't auto-categorize cards: tag data failed to load.";
 
 /**
  * A deck's **categories and labels as things in themselves** — the piles and the labels, rather

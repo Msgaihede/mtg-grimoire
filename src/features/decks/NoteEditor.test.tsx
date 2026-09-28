@@ -350,7 +350,7 @@ describe("NoteEditor", () => {
     await userEvent.click(screen.getByRole("button", { name: "Add a link" }));
 
     expect(screen.getByLabelText("Link address")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("button", { name: "Cancel the link" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.queryByLabelText("Link address")).not.toBeInTheDocument();
   });
 
@@ -410,7 +410,7 @@ describe("the empty surface's prompt", () => {
   /** The sentence the dialog's `NOTE_PLACEHOLDER` is the one home for, pinned so the naming rule
    *  cannot quietly stop being taught by being reworded into saying something else. */
   it("says what happens to the first line", () => {
-    expect(NOTE_PLACEHOLDER).toBe("Start typing — the first line becomes the note's name.");
+    expect(NOTE_PLACEHOLDER).toBe("Start typing. The first line becomes the title.");
   });
 });
 

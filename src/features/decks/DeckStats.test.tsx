@@ -93,7 +93,7 @@ vi.mock("@/features/wishlist/WishDestination", () => ({
 }));
 
 /** The trigger's whole accessible name — one spelling, so a reword is one edit here. */
-const DESTINATION = "Which wishlist folder this deck's shortfall goes to";
+const DESTINATION = "Wishlist folder for missing cards";
 
 /** The write the strip's one button makes, in whatever state a test needs it. */
 function sender(overrides: Partial<MissingWrite> = {}): MissingWrite {
@@ -1508,7 +1508,7 @@ describe("DeckStats", () => {
 
     const pips = statsCard("Mana pips");
     expect(
-      within(pips).getByText("Mana sources arrive with the next card sync"),
+      within(pips).getByText("Mana sources appear after the next card sync."),
     ).toBeInTheDocument();
     // No `Sources:` band at all — an empty track beside a filled Cost one is the row of zeroes
     // this state exists to refuse.
@@ -1665,7 +1665,7 @@ describe("DeckStats", () => {
   it("draws no readout at all for an empty deck, and says why", () => {
     strip([]);
 
-    expect(screen.getByText(/Nothing to measure yet/)).toBeInTheDocument();
+    expect(screen.getByText(/Add cards to see stats/)).toBeInTheDocument();
     const readouts = ["Mana pips", "Card distribution", "Mana curve", "Curve by color", "Figures"];
     for (const title of readouts) {
       expect(queryCard(title)).not.toBeInTheDocument();
@@ -1732,7 +1732,7 @@ describe("DeckStats", () => {
     await press(short(), sender({ isSuccess: true, data: 2 }));
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Added 2 wishes — one per card, for every copy you are short.",
+      "Added 2 cards to your wishlist.",
     );
   });
 
@@ -1758,7 +1758,7 @@ describe("DeckStats", () => {
     expect(check).toHaveAttribute("aria-hidden", "true");
     // The glyph adds no text of its own, so the region still says exactly the sentence.
     expect(region.textContent).toBe(
-      "Added 2 wishes — one per card, for every copy you are short.",
+      "Added 2 cards to your wishlist.",
     );
   });
 
@@ -1799,7 +1799,7 @@ describe("DeckStats", () => {
     await press(short(), sender({ isSuccess: true, data: 0 }));
 
     expect(screen.getByRole("status")).toHaveTextContent(
-      "Nothing to add — a recount covered the shortfall, or what is short has left the card database.",
+      "Nothing to add. The missing cards are already covered or no longer in the card database.",
     );
     expect(screen.getByRole("status")).not.toHaveTextContent(/already on your wishlist/i);
   });
@@ -1856,7 +1856,7 @@ describe("DeckStats", () => {
     act(() => button.focus());
 
     const panel = screen.getByRole("tooltip");
-    expect(panel).toHaveTextContent("This shortfall is already on your wishlist.");
+    expect(panel).toHaveTextContent("Missing cards are already on your wishlist.");
     expect(button).toHaveAttribute("aria-describedby", panel.id);
   });
 
@@ -2433,7 +2433,7 @@ describe("DeckStats", () => {
       // this one is guarding — a clause appended empty, leaving `wishes  —` with two spaces in
       // it. One matcher for the pair, so neither half can be right for the wrong reason.
       expect(screen.getByRole("status").textContent).toBe(
-        "Added 2 wishes to Buy at the LGS — one per card, for every copy you are short.",
+        "Added 2 cards to Buy at the LGS.",
       );
     });
 
@@ -2451,7 +2451,7 @@ describe("DeckStats", () => {
       await press(short(), sender({ isSuccess: true, data: 2 }));
 
       expect(screen.getByRole("status").textContent).toBe(
-        "Added 2 wishes — one per card, for every copy you are short.",
+        "Added 2 cards to your wishlist.",
       );
     });
 
@@ -2464,7 +2464,7 @@ describe("DeckStats", () => {
       await pressAt(short(), "Pick Ordered", sender({ isSuccess: true, data: 0 }));
 
       expect(screen.getByRole("status")).toHaveTextContent(
-        "Nothing to add — a recount covered the shortfall, or what is short has left the card database.",
+        "Nothing to add. The missing cards are already covered or no longer in the card database.",
       );
       expect(screen.getByRole("status")).not.toHaveTextContent(/Ordered/);
     });
@@ -2483,7 +2483,7 @@ describe("DeckStats", () => {
       );
 
       expect(screen.getByRole("alert")).toHaveTextContent(
-        "Could not add to the wishlist — That folder is not there any more.",
+        "Couldn't add to the wishlist — That folder is not there any more.",
       );
       // And the press is available again: a refusal spends nothing, so the reader can pick
       // another drawer and try. `spent` is `!send.isError`'s own arm, which the destination

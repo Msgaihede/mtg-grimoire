@@ -238,7 +238,7 @@ describe("the Notes band", () => {
     renderBand();
 
     const region = await band();
-    expect(await within(region).findByText(/No notes on this deck yet/)).toBeInTheDocument();
+    expect(await within(region).findByText(/No notes yet/)).toBeInTheDocument();
     // The add field this replaced is gone, not hidden.
     expect(screen.queryByPlaceholderText("New note title…")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("New note title")).not.toBeInTheDocument();
@@ -497,7 +497,7 @@ describe("editing a note", () => {
     // The heading *is* the question, so the panel's own accessible name carries it — curly quotes
     // and all, which is what a reader sees and therefore what this asserts.
     const question = await screen.findByRole("dialog", { name: "Delete “Mana base”?" });
-    expect(question).toHaveTextContent("The cards themselves stay in the deck.");
+    expect(question).toHaveTextContent("The cards stay in the deck.");
     await waitFor(() => expect(question).toHaveFocus());
 
     await userEvent.click(within(question).getByRole("button", { name: "Delete note" }));
@@ -514,7 +514,7 @@ describe("editing a note", () => {
       await within(region).findByRole("button", { name: "Delete Mana base" }),
     );
     const question = await screen.findByRole("dialog", { name: "Delete “Mana base”?" });
-    await userEvent.click(within(question).getByRole("button", { name: "Keep it" }));
+    await userEvent.click(within(question).getByRole("button", { name: "Cancel" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(deckNoteDelete).not.toHaveBeenCalled();
@@ -615,7 +615,7 @@ describe("giving the caret back", () => {
     const opener = await within(region).findByRole("button", { name: "Delete Mana base" });
     await userEvent.click(opener);
     const question = await screen.findByRole("dialog", { name: "Delete “Mana base”?" });
-    await userEvent.click(within(question).getByRole("button", { name: "Keep it" }));
+    await userEvent.click(within(question).getByRole("button", { name: "Cancel" }));
 
     await waitFor(() => expect(opener).toHaveFocus());
     expect(deckNoteDelete).not.toHaveBeenCalled();
@@ -653,12 +653,12 @@ describe("naming cards in a note", () => {
 
     const picker = await screen.findByRole("dialog", { name: "Burn plan" });
     await userEvent.click(
-      within(picker).getByRole("checkbox", { name: "Name Goblin Guide in Burn plan" }),
+      within(picker).getByRole("checkbox", { name: "Link Goblin Guide to Burn plan" }),
     );
     expect(deckNoteAttach).toHaveBeenCalledWith(4, 1, "o-goblin");
 
     await userEvent.click(
-      within(picker).getByRole("checkbox", { name: "Name Lightning Bolt in Burn plan" }),
+      within(picker).getByRole("checkbox", { name: "Link Lightning Bolt to Burn plan" }),
     );
     expect(deckNoteDetach).toHaveBeenCalledWith(4, 1, "o-bolt");
   });
@@ -687,7 +687,7 @@ describe("a refused read", () => {
 
     const region = await band();
     await within(region).findByRole("alert");
-    expect(within(region).queryByText(/^No notes on this deck yet/)).toBeNull();
+    expect(within(region).queryByText(/^No notes yet/)).toBeNull();
     expect(within(region).queryByText(/^Reading this deck/)).toBeNull();
   });
 
@@ -743,7 +743,7 @@ describe("a note act asked for from the card menu", () => {
     expect(await screen.findByRole("dialog", { name: "New note" })).toBeInTheDocument();
     // The subtitle is a fact about what the dialog was opened to *do* rather than about anything
     // typed into it — the attach has not happened and will ride in the create.
-    expect(screen.getByText("This note will name Lightning Bolt")).toBeInTheDocument();
+    expect(screen.getByText("Linked to Lightning Bolt")).toBeInTheDocument();
     expect(deckNoteCreate).not.toHaveBeenCalled();
   });
 

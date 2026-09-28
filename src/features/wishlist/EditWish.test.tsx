@@ -216,7 +216,7 @@ describe("EditWishButton", () => {
     await user.click(within(panel).getByRole("button", { name: /^Move to folder/ }));
 
     const list = listIn(panel, BOLT);
-    expect(within(list).getByRole("button", { name: /Expensive.*Here now/ })).toBeDisabled();
+    expect(within(list).getByRole("button", { name: /Expensive.*Current/ })).toBeDisabled();
     expect(within(list).getByRole("button", { name: "Ordered" })).toBeInTheDocument();
     expect(within(panel).queryByText("Copies wanted")).toBeNull();
   });

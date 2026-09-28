@@ -60,7 +60,7 @@ import { percent, StatsCard } from "./StatsCard";
  * would tell every reader with a stale database that none of their decks makes any mana, which is
  * a chart that is confidently wrong rather than one that is honestly absent.
  */
-const SOURCES_UNKNOWN = "Mana sources arrive with the next card sync";
+const SOURCES_UNKNOWN = "Mana sources appear after the next card sync.";
 
 /** The short form of {@link SOURCES_UNKNOWN} for a tile, which has no room for a sentence. The
  *  long one rides along as the tile's hint so the two cannot come to say different things. */

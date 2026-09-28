@@ -686,7 +686,7 @@ export const WithFolder: Story = {
     await expect(
       within(list)
         .getAllByRole("button")
-        .map((b) => b.textContent?.replace("Here now", "")),
+        .map((b) => b.textContent?.replace("Current", "")),
     ).toEqual(["Collection", "Rares", "Reserved list", "Commons"]);
     await expect(within(list).getByRole("button", { name: /^Rares/ })).toBeDisabled();
 

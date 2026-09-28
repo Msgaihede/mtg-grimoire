@@ -36,7 +36,7 @@ describe("the managed wishlist's modes", () => {
   /** The switch's own sentence names the subfolder, which is where a reader will look. */
   it("says the tokens switch files the plan's missing token printings in a Tokens subfolder", () => {
     expect(MANAGED_WISHLIST_TOKENS_HINT).toBe(
-      "Its Tokens subfolder holds the token printings the plan is short of.",
+      "Missing tokens go in its Tokens subfolder.",
     );
   });
 

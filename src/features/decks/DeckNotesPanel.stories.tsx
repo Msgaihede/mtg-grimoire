@@ -205,7 +205,7 @@ export const Empty: Story = {
     // The sentence is asked for by its opening words and not in full: `New note` inside it is a
     // `<span>`, so the `<p>`'s own text is what is left once that element is taken out — and a
     // whole-string matcher would be asserting a join `getNodeText` never makes.
-    await expect(canvas.getByText(/^No notes on this deck yet/)).toBeInTheDocument();
+    await expect(canvas.getByText(/^No notes yet/)).toBeInTheDocument();
 
     // **By role, because the words are on screen twice.** That same `<span>` reads `New note`, so
     // `getByText` finds the sentence's own emphasis as well as the control — the press has to be
@@ -335,7 +335,7 @@ export const ManyNotes: Story = {
     await userEvent.click(within(region).getByRole("button", { name: "Delete Sideboard plan" }));
     const question = await canvas.findByRole("dialog", { name: "Delete “Sideboard plan”?" });
     await expect(
-      within(question).getByText(/The cards themselves stay in the deck\./),
+      within(question).getByText(/The cards stay in the deck\./),
     ).toBeInTheDocument();
 
     await userEvent.click(within(question).getByRole("button", { name: "Delete note" }));
@@ -607,14 +607,14 @@ export const NamingFourCards: Story = {
     // a second control and the two halves cannot come to disagree about what is named. The write
     // names the card *and* the note, because another note's picker could be open on the same card.
     await userEvent.click(
-      within(picker).getByRole("checkbox", { name: "Name Goblin Guide in The one-drop suite" }),
+      within(picker).getByRole("checkbox", { name: "Link Goblin Guide to The one-drop suite" }),
     );
     await expect(args.onDetach).toHaveBeenCalledWith(1, "o-goblin");
 
     // The deck's fifth card is offered unticked rather than left out: the picker draws the deck
     // and not the difference, which is what lets one gesture do both jobs.
     const mountain = within(picker).getByRole("checkbox", {
-      name: "Name Mountain in The one-drop suite",
+      name: "Link Mountain to The one-drop suite",
     });
     await expect(mountain).not.toBeChecked();
     await userEvent.click(mountain);
@@ -647,7 +647,7 @@ export const ReadFailed: Story = {
     );
 
     // Not captioned as an empty deck, and not counted either.
-    await expect(canvas.queryByText(/^No notes on this deck yet/)).toBeNull();
+    await expect(canvas.queryByText(/^No notes yet/)).toBeNull();
     await expect(canvas.queryByText(/^\d+ notes?$/)).toBeNull();
   },
 };

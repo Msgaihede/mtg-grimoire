@@ -402,7 +402,7 @@ describe("the theory difference dialog", () => {
   it("says in the footer that the other direction is deliberately not listed", async () => {
     wrap(<TheoryDiffDialog {...props} />);
 
-    await screen.findByText(/Cards in Actual but not in Theory are excluded cuts/);
+    await screen.findByText(/aren't in the actual list yet/);
     // Spec §5: this surface is nothing but prices, so the as-of sentence is drawn rather than
     // hung on a hover.
     expect(screen.getByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeInTheDocument();
@@ -417,8 +417,8 @@ describe("the theory difference dialog", () => {
     deckTheoryDiff.mockResolvedValue(MIXED);
     wrap(<TheoryDiffDialog {...props} />);
 
-    await screen.findByText(/Cards can appear in both views/);
-    expect(screen.getByText(/different finishes count as separate printings/)).toBeVisible();
+    await screen.findByText(/Different finishes count as different printings/);
+    expect(screen.getByText(/Different finishes count as different printings/)).toBeVisible();
   });
 
   /** The two lists agreeing is an answer, and an answer is a sentence. */
@@ -426,7 +426,7 @@ describe("the theory difference dialog", () => {
     deckTheoryDiff.mockResolvedValue([]);
     wrap(<TheoryDiffDialog {...props} />);
 
-    await screen.findByText(/The two lists agree/);
+    await screen.findByText(/The deck matches the theory list/);
     expect(screen.getByRole("button", { name: "Send 0 selected to wishlist" })).toBeDisabled();
     // Three rungs reading zero and a checkbox that can never move are furniture, not controls.
     expect(screen.queryByRole("radiogroup")).not.toBeInTheDocument();
@@ -555,11 +555,11 @@ describe("the theory difference dialog", () => {
 
     const partial = await rowFor("Sol Ring");
     expect(partial).toHaveTextContent("2×");
-    expect(within(partial).getByText("1 of 2 already played as another printing")).toBeVisible();
+    expect(within(partial).getByText("1 of 2 in the deck as another printing")).toBeVisible();
 
     const whole = await rowFor("Jace, the Mind Sculptor");
     expect(whole).toHaveTextContent("1×");
-    expect(within(whole).getByText("Already played as another printing")).toBeVisible();
+    expect(within(whole).getByText("In the deck as another printing")).toBeVisible();
 
     expect(
       within(await rowFor("Lightning Bolt")).queryByText(/already played/),
@@ -634,10 +634,10 @@ describe("the theory difference dialog", () => {
 
     expect(
       screen.getByText(
-        "No card is missing. Every card the plan asks for is already on the table as another printing.",
+        "Nothing missing. Every card in the theory list is in the deck, some in a different printing.",
       ),
     ).toBeVisible();
-    expect(screen.queryByText(/The two lists agree/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/The deck matches the theory list/)).not.toBeInTheDocument();
   });
 
   /**
@@ -654,10 +654,10 @@ describe("the theory difference dialog", () => {
     await screen.findByText("Treasure");
 
     const TOKENS_ONLY =
-      "Every card the plan asks for is already in the deck. What is left is tokens.";
+      "Every card in the theory list is in the deck. Only tokens are missing.";
     for (const [label, gone] of [
-      ["Missing", /Nothing here is missing|No card is missing/],
-      ["Different printing", /No substitutions|No card substitutions/],
+      ["Missing", /Nothing missing\. Every card/],
+      ["Different printing", /No printing swaps/],
     ] as const) {
       await user.click(rung(label, 0));
       expect(screen.getByText(TOKENS_ONLY)).toBeVisible();
@@ -675,7 +675,7 @@ describe("the theory difference dialog", () => {
     await screen.findByText("Treasure");
 
     await user.click(rung("Missing", 0));
-    expect(screen.getByText(/^No card is missing\. Every card the plan asks for/)).toBeVisible();
+    expect(screen.getByText(/^Nothing missing\. Every card in the theory list/)).toBeVisible();
 
     deckTheoryDiff.mockResolvedValue([row(), TREASURE]);
     await act(async () => {
@@ -685,7 +685,7 @@ describe("the theory difference dialog", () => {
     await user.click(rung("Different printing", 0));
     expect(
       screen.getByText(
-        "No card substitutions. Every card the plan asks for is one the deck has not got in any printing.",
+        "No printing swaps. The missing cards aren't in the deck in any printing.",
       ),
     ).toBeVisible();
   });
@@ -770,8 +770,8 @@ describe("the theory difference dialog", () => {
     await user.click(rung("Tokens", 0));
 
     expect(screen.queryAllByRole("listitem")).toHaveLength(0);
-    expect(screen.getByText("The plan counts no tokens the deck is short of.")).toBeVisible();
-    expect(screen.queryByText(/The two lists agree/)).not.toBeInTheDocument();
+    expect(screen.getByText("No missing tokens.")).toBeVisible();
+    expect(screen.queryByText(/The deck matches the theory list/)).not.toBeInTheDocument();
   });
 
   /**
@@ -978,14 +978,14 @@ describe("the theory difference dialog", () => {
    */
   it("words the footer's answer for the host, at the root, in a folder and at zero", () => {
     expect(wishesSentNote({ wishes: 3, destination: null })).toBe(
-      "Sent from the plan to your wishlist — 3 wishes updated.",
+      "Added to your wishlist: 3 items updated.",
     );
     expect(wishesSentNote({ wishes: 1, destination: "Ordered" })).toBe(
-      "Sent from the plan to your wishlist — 1 wish updated in Ordered.",
+      "Added to your wishlist: 1 item updated in Ordered.",
     );
     const zero = wishesSentNote({ wishes: 0, destination: "Ordered" });
     expect(zero).toBe(
-      "No cards were sent. The cards are no longer missing or have left the card database.",
+      "Nothing sent. These cards are no longer missing or no longer in the card database.",
     );
     // Nothing was filed, so no drawer is named as having received it.
     expect(zero).not.toMatch(/Ordered/);
@@ -1087,7 +1087,7 @@ describe("the theory difference dialog", () => {
     // Born at the root, because `Dialog` mounts nothing while it is closed — so this is the
     // state of a component made fresh on this open rather than a reset somebody wrote.
     expect(destinationTrigger()).toHaveAccessibleName(
-      "Send to Wishlist — choose which wishlist folder these wishes are filed in",
+      "Send to Wishlist (choose wishlist folder)",
     );
     // And no clause anywhere: a row button is exactly the control it was before the feature.
     expect(screen.getByRole("button", { name: "Wishlist 3 more Sol Ring" })).toBeInTheDocument();
@@ -1122,7 +1122,7 @@ describe("the theory difference dialog", () => {
     await user.click(choose("Ordered"));
 
     expect(destinationTrigger()).toHaveAccessibleName(
-      "Send to Ordered — choose which wishlist folder these wishes are filed in",
+      "Send to Ordered (choose wishlist folder)",
     );
 
     await user.click(screen.getByRole("button", { name: "Send 3 selected to wishlist" }));
@@ -1347,6 +1347,6 @@ describe("the theory difference dialog", () => {
 
     // And forwards off it comes back round to the first, which is the header's ✕.
     await user.tab();
-    expect(screen.getByRole("button", { name: "Close the difference list" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: "Close" })).toHaveFocus();
   });
 });

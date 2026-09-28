@@ -41,11 +41,11 @@ export const MANAGED_WISHLIST_LABEL: Record<ManagedWishlistMode, string> = {
 /** One line for the caption under the row — the selected choice's, and only it. */
 export const MANAGED_WISHLIST_HINT: Record<ManagedWishlistMode, string> = {
   off: "No managed wishlist for this deck.",
-  all: "A wishlist folder named after this deck that holds every card the Compare dialog lists. It follows the deck and can't be edited by hand.",
+  all: "Wishlist folder for everything the Compare dialog lists. Updates automatically; can't be edited.",
   missing:
-    "A wishlist folder named after this deck that holds the cards the deck doesn't play in any printing. It follows the deck and can't be edited by hand.",
+    "Wishlist folder for cards this deck doesn't have in any printing. Updates automatically; can't be edited.",
   other:
-    "A wishlist folder named after this deck that holds the planned printings of cards the deck plays in a different printing. It follows the deck and can't be edited by hand.",
+    "Wishlist folder for the theory list's printings of cards you play in a different printing. Updates automatically; can't be edited.",
 };
 
 /** The tokens switch's word — the Compare dialog's own tab word for the view it files, and the
@@ -58,7 +58,7 @@ export const MANAGED_WISHLIST_TOKENS_LABEL = "Tokens";
  * where the wishes went; it says nothing about the mode, because it is true under all three.
  */
 export const MANAGED_WISHLIST_TOKENS_HINT =
-  "Its Tokens subfolder holds the token printings the plan is short of.";
+  "Missing tokens go in its Tokens subfolder.";
 
 /**
  * A stored word read leniently — Rust already answers one of the four, so this is a fence for a

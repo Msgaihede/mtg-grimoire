@@ -654,8 +654,7 @@ function eligibility(
         severity: "warning",
         code: "companion-unknown",
         message:
-          `${companion.name}'s companion ability is one this app does not know, so your deck ` +
-          `was not checked against it.`,
+          `${companion.name}'s companion condition isn't supported yet, so it wasn't checked.`,
         cardIds: [companion.cardId],
       },
     ];

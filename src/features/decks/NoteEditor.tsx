@@ -127,7 +127,7 @@ const NoteHeading = Heading.extend({
  * answers the body's first line. That rule is invisible unless something says it, and the one
  * place a reader is looking when it matters is the empty box they are about to type in.
  */
-export const NOTE_PLACEHOLDER = "Start typing — the first line becomes the note's name.";
+export const NOTE_PLACEHOLDER = "Start typing. The first line becomes the title.";
 
 /**
  * The whole dialect, spelled out — **including every option that is off**.
@@ -626,7 +626,7 @@ export default function NoteEditor({
           </button>
           <button
             type="button"
-            aria-label="Cancel the link"
+            aria-label="Cancel"
             onClick={() => setLinkDraft(null)}
             className={cn(TOOL_BUTTON, toolState(false))}
           >

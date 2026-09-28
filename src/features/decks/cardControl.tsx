@@ -486,7 +486,7 @@ export function deckCardName(
     short ? `you own ${card.ownedQuantity} of ${card.quantity}` : null,
     named?.toLowerCase() ?? (finish === null ? null : FINISH_LABEL[finish].toLowerCase()),
     card.labelName,
-    card.gameChanger === true ? "game changer" : null,
+    card.gameChanger === true ? "Game Changer" : null,
     // The second glyph on the same tag, in the order the tag draws them. Lowercased like every
     // clause here, since the constant is written as a mark's own name — a fragment on its own —
     // and this is a sentence.

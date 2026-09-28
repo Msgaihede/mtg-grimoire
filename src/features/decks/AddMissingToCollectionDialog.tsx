@@ -108,7 +108,7 @@ const NO_ROWS: readonly DeckMissingRow[] = [];
 const WISHLIST_ROOT_LABEL = "Wishlist";
 
 /** What the body says while the read is in flight. */
-const READING = "Reading what this deck is short of…";
+const READING = "Finding missing cards…";
 
 /**
  * What an empty plan means, in the reader's terms.
@@ -121,12 +121,7 @@ const READING = "Reading what this deck is short of…";
  * they knew about it.
  */
 const NOTHING_TO_RECORD = {
-  headline:
-    "Nothing here can be recorded — everything this deck is short of has left the card database.",
-  why:
-    "A printing the card database has dropped cannot be filed at all: its set, its collector " +
-    "number and its language are read off that row. A line the press could only refuse is left " +
-    "out of this list rather than drawn as an apology.",
+  headline: "None of the missing cards are in the card database anymore.",
 } as const;
 
 /**
@@ -146,8 +141,8 @@ const NOTHING_TO_RECORD = {
  * is half a sentence.
  */
 const ADD_NOTE =
-  "The copies are filed into this deck's own folder. The list itself does not change, and " +
-  "there is no undo — take a copy back out from the Collection tab.";
+  "Cards are added to this deck's folder in your collection. The list doesn't change, and " +
+  "this can't be undone.";
 
 /** The footer's one control over the wishlist half, for the whole batch. */
 const CLEAR_WISHES_LABEL = "Also take these off my wishlist";
@@ -212,10 +207,10 @@ function wishLine(planned: PlannedMissingRow): string | null {
   const { wish } = planned;
   if (wish === null) return null;
   if (wish.kind === "ambiguous") {
-    return `${wish.matches} wishlist lines match — left alone`;
+    return `${wish.matches} wishlist items match (unchanged)`;
   }
   return (
-    `Clears ${plural(wish.clears, "copy", "copies")} off a wish in ` +
+    `Clears ${plural(wish.clears, "copy", "copies")} from a wishlist item in ` +
     `${wish.folderName ?? WISHLIST_ROOT_LABEL}`
   );
 }
@@ -287,10 +282,10 @@ export function AddMissingToCollectionDialog({
       // wrong about a control sitting beside `Pull from collection`: the two are not opposites,
       // and this one takes nothing out of the collection at all.
       subtitle={
-        `Records copies you have just acquired into ${deckName}'s folder. ` +
-        "Nothing is moved out of your collection."
+        `Add the cards you just got to ${deckName}'s folder. ` +
+        "Nothing leaves your collection."
       }
-      closeLabel="Close the add list"
+      closeLabel="Close"
       // Narrower than the pull's `w-[52rem]`, and it is the difference list's width rather than a
       // third number: a row here carries no source sentence — no folder name, condition and up to
       // four traits — so the widest thing beside a card's name is a wish line naming one folder.
@@ -428,7 +423,6 @@ function AddMissingBody({
           // has to say why those two numbers are allowed to disagree.
           <div className="mx-auto max-w-md px-2 py-6 text-center">
             <p className="text-sm">{NOTHING_TO_RECORD.headline}</p>
-            <p className="mt-2 text-xs leading-relaxed text-dim">{NOTHING_TO_RECORD.why}</p>
           </div>
         ) : (
           // A list rather than a `<table>`: every cell here is a control or a caption on one, the
@@ -474,7 +468,7 @@ function AddMissingBody({
               role="alert"
               className="min-w-0 shrink overflow-hidden text-right text-[0.7rem] text-destructive"
             >
-              Could not record — {failure}
+              Couldn't record — {failure}
             </motion.p>
           )}
         </AnimatePresence>
@@ -638,7 +632,7 @@ function Row({
               <span className="font-mono tabular-nums">
                 {row.setCode.toUpperCase()} · {row.collectorNumber}
               </span>
-              <span className="min-w-0 truncate">Short in {row.categories.join(", ")}</span>
+              <span className="min-w-0 truncate">Missing from {row.categories.join(", ")}</span>
             </span>
 
             {/* **A statement, not a question, and not a warning.** `text-dim` and no live-region

@@ -142,11 +142,10 @@ const DEFAULT_LANG = "en";
  * half a sentence.
  */
 const PULL_NOTE =
-  "Selected copies will move into this deck. The list itself does not change, and there is no undo — " +
-  "put a copy back from the Collection tab.";
+  "Selected copies move into this deck. The list doesn't change, and this can't be undone.";
 
 /** What the body says while the read is in flight. */
-const READING = "Reading your collection…";
+const READING = "Loading your collection…";
 
 /**
  * What an empty plan means, in the reader's terms.
@@ -160,8 +159,7 @@ const READING = "Reading your collection…";
 const NOTHING_TO_PULL = {
   headline: "Nothing to pull.",
   why:
-    "Pulls require exact printing and finish matches from available collection copies. Cards in other " +
-    "decks or not yet owned cannot be pulled.",
+    "Only unassigned copies with a matching printing and finish can be pulled.",
 } as const;
 
 /**
@@ -307,8 +305,8 @@ const CONFIRM = cn(
  */
 function subtitleFor(deckName: string, cardName: string | null | undefined): string {
   return cardName === null || cardName === undefined
-    ? `Cards this deck is short of that you already own — into ${deckName}`
-    : `Copies of ${cardName} you already own — into ${deckName}`;
+    ? `Cards you own that ${deckName} is missing`
+    : `Copies of ${cardName} you own for ${deckName}`;
 }
 
 export interface PullFromCollectionDialogProps {
@@ -373,7 +371,7 @@ export function PullFromCollectionDialog({
       // per-card pull does the same thing to the same deck, and a heading that changed with the
       // opener would make one press look like two features.
       subtitle={subtitleFor(deckName, cardName)}
-      closeLabel="Close the pull list"
+      closeLabel="Close"
       // Wider than the difference list's `w-[47.5rem]`, because a row here carries a sentence the
       // shopping list does not: a source naming a folder, a condition and up to four traits is
       // longer than any price column. Still inside the app's 1024px window floor once the scrim's
@@ -470,7 +468,7 @@ function PullBody({
     !pull.isSuccess || pull.data === undefined
       ? ""
       : pull.data.copies === 0
-        ? "No copies moved. The copies were already filed elsewhere."
+        ? "No copies moved. They're already in other decks or folders."
         : `Pulled ${plural(pull.data.copies, "copy", "copies")} across ` +
           `${plural(pull.data.cards, "card")} into ${deckName}.`;
 
@@ -550,7 +548,7 @@ function PullBody({
               role="alert"
               className="min-w-0 shrink overflow-hidden text-right text-[0.7rem] text-destructive"
             >
-              Could not pull — {failure}
+              Couldn't pull — {failure}
             </motion.p>
           )}
         </AnimatePresence>
@@ -714,7 +712,7 @@ function Row({
             <span className="font-mono tabular-nums">
               {row.setCode.toUpperCase()} · {row.collectorNumber}
             </span>
-            <span className="min-w-0 truncate">Short in {row.categories.join(", ")}</span>
+            <span className="min-w-0 truncate">Missing from {row.categories.join(", ")}</span>
           </span>
 
           {/* **The choice, and only where there is one.** More than one candidate is the issue's
@@ -778,7 +776,7 @@ function Row({
               press, and saying so would be the control accusing them of its own state. */}
           {on && unfilled > 0 && (
             <span className="text-[0.7rem] text-dim">
-              {plural(unfilled, "copy", "copies")} still missing — no other matching copies in collection.
+              {plural(unfilled, "copy", "copies")} still missing (no other matching copies owned).
             </span>
           )}
         </span>

@@ -408,7 +408,7 @@ describe("TokenArtPicker — add", () => {
     renderPicker({ mode: { kind: "add", tokens: [entry(), WURM] } });
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not read the printings of Wurm — Database is busy.",
+      "Couldn’t load the printings of Wurm — Database is busy.",
     );
     expect(screen.getByRole("button", { name: TCLB_NONFOIL })).toBeInTheDocument();
   });
@@ -453,7 +453,7 @@ describe("TokenArtPicker — All tokens", () => {
     await userEvent.click(toggle);
     expect(toggle).toHaveAttribute("aria-pressed", "false");
     expect(
-      screen.getByText("This deck makes no token or emblem to add a printing of."),
+      screen.getByText("This deck doesn’t make any tokens or emblems."),
     ).toBeInTheDocument();
   });
 
@@ -549,7 +549,7 @@ describe("TokenArtPicker — All tokens", () => {
     await userEvent.click(screen.getByRole("button", { name: "All tokens" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not read every token’s printings — Database is busy.",
+      "Couldn’t load all token printings — Database is busy.",
     );
     expect(screen.getByRole("button", { name: "All tokens" })).toBeInTheDocument();
   });

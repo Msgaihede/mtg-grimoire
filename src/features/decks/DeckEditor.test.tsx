@@ -754,7 +754,7 @@ const group = (name: string) => screen.getByRole("region", { name });
  * print and the bare `Game Changers` where it does not — a game changer parked in a switched-off
  * pile, which is the one case the two gates disagree about.
  */
-const gcChip = (name = "2 game changers") => screen.findByRole("button", { name });
+const gcChip = (name = "2 Game Changers") => screen.findByRole("button", { name });
 
 /** The row the deck's own label chips live in. Its name lost its second half on 2026-09-10, when
  *  the `Game Changers` chip went back to the ledger and took the row's second gate arm with it. */
@@ -806,7 +806,7 @@ const COPIES = "Copies of Lightning Bolt in Main deck";
  *  would keep passing on the day the sentence went missing — which is the half of the name that
  *  has to stand up read out of context, with no Group by picker beside it. */
 const SPLIT_X =
-  "Split X — give cards with X in their cost a group of their own, instead of counting X as zero";
+  "Split X — group X-cost cards separately instead of counting X as 0";
 
 /** `VIEWS`' own `id → label` map, read back here because it is not exported: the two
  *  `it.each(["stacks", "table", "text", "grid"])` sweeps below pass the id as both the test's
@@ -1512,7 +1512,7 @@ describe("DeckEditor", () => {
     // The panel closes on its own Escape rung before the dialog's — one press, one layer — so
     // the dialog's own close button is still there to press next.
     await user.keyboard("{Escape}");
-    await userEvent.click(screen.getByRole("button", { name: "Close deck settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
 
     await userEvent.clear(box);
 
@@ -2361,7 +2361,7 @@ describe("DeckEditor", () => {
     await writeToDeck();
 
     expect(
-      await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
+      await screen.findByText(/this deck no longer exists\. it may have been deleted/i),
     ).toBeInTheDocument();
     expect(useAppStore.getState().selectedCardId).not.toBeNull();
   });
@@ -2719,7 +2719,7 @@ describe("DeckEditor", () => {
       await userEvent.keyboard("{Control>}z{/Control}");
 
       const alert = await screen.findByRole("alert");
-      expect(alert).toHaveTextContent(/Could not change this deck/);
+      expect(alert).toHaveTextContent(/Couldn't change this deck/);
       expect(alert).toHaveTextContent(/most recent change/);
     });
   });
@@ -3391,7 +3391,7 @@ describe("DeckEditor", () => {
     deckGet.mockResolvedValue(detail({}, [bolt({ gameChanger: true, quantity: 2 })]));
     wrap(<DeckEditor deckId={4} />);
 
-    expect(await screen.findByRole("button", { name: "2 game changers" })).toBeInTheDocument();
+    expect(await screen.findByRole("button", { name: "2 Game Changers" })).toBeInTheDocument();
   });
 
   /**
@@ -3514,7 +3514,7 @@ describe("DeckEditor", () => {
 
     // The chip draws its bare caption, because the pile counts toward nothing and a chip reading
     // `0 game changers` would point at a card that is right there.
-    expect(screen.queryByText(/0 game changers/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/0 Game Changers/)).not.toBeInTheDocument();
 
     await userEvent.click(await gcChip("Game Changers"));
     expect(
@@ -3774,9 +3774,9 @@ describe("DeckEditor", () => {
    * (which `DeckHistoryDialog.test.tsx` does), and where the caret lands is decided out here.
    */
   it.each([
-    ["Categories", "Categories", "Close categories"],
-    ["Labels", "Labels", "Close labels"],
-    ["History", "History", "Close history"],
+    ["Categories", "Categories", "Close"],
+    ["Labels", "Labels", "Close"],
+    ["History", "History", "Close"],
   ])("closes %s on its own ✕, caret back on the trigger", async (button, dialog, close) => {
     await open();
     const trigger = screen.getByRole("button", { name: button });
@@ -4403,7 +4403,7 @@ describe("DeckEditor", () => {
     deckGet.mockResolvedValue(null);
     await writeToDeck();
 
-    expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
+    expect(await screen.findByText(/this deck no longer exists/i)).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const heard: boolean[] = [];
     const listen = (e: KeyboardEvent) => {
@@ -4565,7 +4565,7 @@ describe("DeckEditor", () => {
       expect(
         screen
           .getAllByRole("status")
-          .some((region) => region.textContent?.startsWith("Sent from the plan to your wishlist")),
+          .some((region) => region.textContent?.startsWith("Added to your wishlist")),
       ).toBe(true),
     );
   });
@@ -5023,7 +5023,7 @@ describe("DeckEditor", () => {
     await waitFor(() =>
       expect(deckUpdate).toHaveBeenLastCalledWith(4, { theoryEnabled: true, virtualOnly: false }),
     );
-    await userEvent.click(screen.getByRole("button", { name: "Close deck settings" }));
+    await userEvent.click(screen.getByRole("button", { name: "Close" }));
     await screen.findByRole("group", { name: "Deck list" });
     await userEvent.click(tab("Theory"));
     await waitFor(() => expect(tab("Theory")).toHaveAttribute("aria-pressed", "true"));
@@ -5113,7 +5113,7 @@ describe("DeckEditor", () => {
     await waitFor(() => expect(deckMissingToWishlist).toHaveBeenCalledWith(4, null));
     // Wishes are cards and the shortfall is copies, so the sentence says which it counts.
     expect(
-      await screen.findByText("Added 3 wishes — one per card, for every copy you are short."),
+      await screen.findByText("Added 3 cards to your wishlist."),
     ).toBeInTheDocument();
   });
 
@@ -5172,7 +5172,7 @@ describe("DeckEditor", () => {
 
     wrap(<DeckEditor deckId={4} />);
 
-    expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
+    expect(await screen.findByText(/this deck no longer exists/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /back to decks/i })).toBeInTheDocument();
   });
 
@@ -5188,7 +5188,7 @@ describe("DeckEditor", () => {
     await open();
     await writeToDeck();
 
-    expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
+    expect(await screen.findByText(/this deck no longer exists/i)).toBeInTheDocument();
   });
 
   /**
@@ -5213,7 +5213,7 @@ describe("DeckEditor", () => {
       await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
     );
 
-    expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
+    expect(await screen.findByText(/this deck no longer exists/i)).toBeInTheDocument();
   });
 
   /**
@@ -5228,7 +5228,7 @@ describe("DeckEditor", () => {
     await open();
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
 
-    expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
+    expect(await screen.findByText(/this deck no longer exists/i)).toBeInTheDocument();
   });
 
   /**
@@ -5588,7 +5588,7 @@ describe("DeckEditor drag and drop", () => {
       // By its text, not by its role: the quick-add field keeps a `role="status"` mounted for
       // the life of the toolbar (a live region that first appears with its sentence already
       // inside announces nothing), so this view has two and `getByRole` finds both.
-      const note = await screen.findByText(/already filed under Instant/);
+      const note = await screen.findByText(/already in Instant/);
       expect(note).toHaveAttribute("role", "status");
       expect(deckMoveCard).not.toHaveBeenCalled();
     });
@@ -6249,7 +6249,7 @@ describe("DeckEditor — a card's menu", () => {
     await userEvent.click(screen.getByRole("button", { name: "Create “Cut candidate”" }));
 
     expect(
-      await screen.findByText(/Could not change this deck — The database is busy/),
+      await screen.findByText(/Couldn't change this deck — The database is busy/),
     ).toBeInTheDocument();
   });
 
@@ -6386,7 +6386,7 @@ describe("DeckEditor — a card's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Add note…" }));
 
     expect(await screen.findByRole("dialog", { name: "New note" })).toBeInTheDocument();
-    expect(screen.getByText("This note will name Lightning Bolt")).toBeInTheDocument();
+    expect(screen.getByText("Linked to Lightning Bolt")).toBeInTheDocument();
     expect(deckNoteCreate).not.toHaveBeenCalled();
 
     // The editor arrives through `React.lazy`, so it is a tick later than the dialog around it.
@@ -6783,7 +6783,7 @@ describe("DeckEditor — the Collection submenu", () => {
     expect(el).not.toBeNull();
     fireEvent.contextMenu(el as HTMLElement);
     await screen.findByRole("menu");
-    await userEvent.click(screen.getByRole("menuitem", { name: "Collection link" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Missing copies" }));
   }
 
   /**
@@ -6847,7 +6847,7 @@ describe("DeckEditor — the Collection submenu", () => {
     );
     fireEvent.contextMenu(el as HTMLElement);
     await screen.findByRole("menu");
-    await userEvent.click(screen.getByRole("menuitem", { name: "Collection link for 2 cards" }));
+    await userEvent.click(screen.getByRole("menuitem", { name: "Missing copies for 2 cards" }));
     await userEvent.click(await screen.findByRole("menuitem", { name: "Quick add 6 copies" }));
 
     await waitFor(() =>
@@ -6882,7 +6882,7 @@ describe("DeckEditor — the Collection submenu", () => {
     );
 
     await waitFor(() => expect(deckQuickAddWishes).toHaveBeenCalledWith("c-Lightning Bolt", null));
-    const dialog = await screen.findByRole("dialog", { name: "Which wish?" });
+    const dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
     expect(
       within(dialog).getByRole("radio", {
         name: "Modern staples · LEA 161 · Any finish · 4 copies",
@@ -6925,7 +6925,7 @@ describe("DeckEditor — the Collection submenu", () => {
         null,
       ),
     );
-    expect(screen.queryByRole("dialog", { name: "Which wish?" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "Which wishlist item?" })).not.toBeInTheDocument();
   });
 
   /**
@@ -6942,7 +6942,7 @@ describe("DeckEditor — the Collection submenu", () => {
       screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
     );
 
-    const dialog = await screen.findByRole("dialog", { name: "Which wish?" });
+    const dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
     expect(within(dialog).getByRole("radio", { name: /Wishlist/ })).toBeChecked();
     expect(within(dialog).getByRole("radio", { name: /Modern staples/ })).not.toBeChecked();
     expect(deckQuickAddToCollection).not.toHaveBeenCalled();
@@ -6961,7 +6961,7 @@ describe("DeckEditor — the Collection submenu", () => {
       ),
     );
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Which wish?" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Which wishlist item?" })).not.toBeInTheDocument(),
     );
   });
 
@@ -6981,12 +6981,12 @@ describe("DeckEditor — the Collection submenu", () => {
     await userEvent.click(
       screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
     );
-    const dialog = await screen.findByRole("dialog", { name: "Which wish?" });
+    const dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
 
     await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Which wish?" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Which wishlist item?" })).not.toBeInTheDocument(),
     );
     expect(deckQuickAddToCollection).not.toHaveBeenCalled();
   });
@@ -7031,7 +7031,7 @@ describe("DeckEditor — the Collection submenu", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "Pull from collection" });
     expect(
-      within(dialog).getByText("Copies of Lightning Bolt you already own — into Burn"),
+      within(dialog).getByText("Copies of Lightning Bolt you own for Burn"),
     ).toBeInTheDocument();
     expect(
       within(dialog).getByRole("checkbox", { name: "Pull Lightning Bolt, 4 copies" }),
@@ -7100,7 +7100,7 @@ describe("DeckEditor — the Collection submenu", () => {
     const dialog = await screen.findByRole("dialog", { name: "Pull from collection" });
     expect(
       await within(dialog).findByText(
-        "Cards this deck is short of that you already own — into Burn",
+        "Cards you own that Burn is missing",
       ),
     ).toBeInTheDocument();
     expect(within(dialog).getByRole("checkbox", { name: /^Pull Bear/ })).toBeInTheDocument();
@@ -7123,7 +7123,7 @@ describe("DeckEditor — the Collection submenu", () => {
     );
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not change this deck — database is locked",
+      "Couldn't change this deck — database is locked",
     );
     expect(deckQuickAddToCollection).not.toHaveBeenCalled();
   });
@@ -7140,7 +7140,7 @@ describe("DeckEditor — the Collection submenu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Pull 4 from your collection" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not change this deck — database is locked",
+      "Couldn't change this deck — database is locked",
     );
     expect(deckPullFromCollection).not.toHaveBeenCalled();
   });
@@ -7161,13 +7161,13 @@ describe("DeckEditor — the Collection submenu", () => {
     await userEvent.click(
       screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
     );
-    const dialog = await screen.findByRole("dialog", { name: "Which wish?" });
+    const dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
     await userEvent.click(within(dialog).getByRole("button", { name: "Record 4 copies" }));
 
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      "Could not record those copies — that wishlist line is not there",
+      "Couldn't record those copies — that wishlist line is not there",
     );
-    expect(screen.getByRole("dialog", { name: "Which wish?" })).toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Which wishlist item?" })).toBeInTheDocument();
   });
 
   /**
@@ -7189,7 +7189,7 @@ describe("DeckEditor — the Collection submenu", () => {
     // The plain add, refused.
     await userEvent.click(screen.getByRole("menuitem", { name: "Quick add 4 copies" }));
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not change this deck — database is locked",
+      "Couldn't change this deck — database is locked",
     );
 
     // Now the row that asks. The question opens clean.
@@ -7197,12 +7197,12 @@ describe("DeckEditor — the Collection submenu", () => {
     await userEvent.click(
       screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
     );
-    const dialog = await screen.findByRole("dialog", { name: "Which wish?" });
+    const dialog = await screen.findByRole("dialog", { name: "Which wishlist item?" });
 
     expect(within(dialog).queryByRole("alert")).not.toBeInTheDocument();
     // And the earlier refusal is where it was said in the first place.
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Could not change this deck — database is locked",
+      "Couldn't change this deck — database is locked",
     );
   });
 
@@ -7221,7 +7221,7 @@ describe("DeckEditor — the Collection submenu", () => {
     await userEvent.click(
       screen.getByRole("menuitem", { name: "Quick add 4 and remove from wishlist" }),
     );
-    await screen.findByRole("dialog", { name: "Which wish?" });
+    await screen.findByRole("dialog", { name: "Which wishlist item?" });
     // **The `<li>`, not the button inside it.** `ContextMenu` hands the caret back to the element
     // its handler is attached to, which in `StackView` is the card's row rather than the button
     // carrying `DECK_CARD_ATTR` — this folder's `CLAUDE.md` states the same asymmetry for
@@ -7235,7 +7235,7 @@ describe("DeckEditor — the Collection submenu", () => {
     await userEvent.keyboard("{Escape}");
 
     await waitFor(() =>
-      expect(screen.queryByRole("dialog", { name: "Which wish?" })).not.toBeInTheDocument(),
+      expect(screen.queryByRole("dialog", { name: "Which wishlist item?" })).not.toBeInTheDocument(),
     );
     expect(opener).toHaveFocus();
     expect(deckQuickAddToCollection).not.toHaveBeenCalled();
@@ -7343,7 +7343,7 @@ describe("DeckEditor — a virtual deck", () => {
     await open();
     await rightClickCard("Lightning Bolt");
 
-    expect(screen.queryByRole("menuitem", { name: "Collection link" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "Missing copies" })).not.toBeInTheDocument();
     // The menu really did open, and everything that is not about a binder is still on it.
     expect(screen.getByRole("menuitem", { name: "Copy card name" })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: /^Category/ })).toBeInTheDocument();
@@ -7400,7 +7400,7 @@ describe("DeckEditor — a virtual deck", () => {
 
     // And the card's own submenu.
     await rightClickCard("Lightning Bolt");
-    expect(await screen.findByRole("menuitem", { name: "Collection link" })).toBeInTheDocument();
+    expect(await screen.findByRole("menuitem", { name: "Missing copies" })).toBeInTheDocument();
   });
 });
 
@@ -7535,7 +7535,7 @@ describe("DeckEditor — a category's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Clear stack…" }));
 
     const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
-    await userEvent.click(within(dialog).getByRole("button", { name: "Keep them" }));
+    await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     expect(deckCategoryClear).not.toHaveBeenCalled();
@@ -7557,7 +7557,7 @@ describe("DeckEditor — a category's menu", () => {
 
     const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
     await waitFor(() =>
-      expect(within(dialog).getByText(/4 cards in it leave the actual list/)).toBeVisible(),
+      expect(within(dialog).getByText(/4 cards will be removed from the actual list/)).toBeVisible(),
     );
     expect(within(dialog).queryByText(/in the other list/)).not.toBeInTheDocument();
   });
@@ -7575,7 +7575,7 @@ describe("DeckEditor — a category's menu", () => {
     const dialog = await screen.findByRole("dialog", { name: /Clear “Main deck”/ });
     await userEvent.click(within(dialog).getByRole("button", { name: "Remove 4 cards" }));
 
-    expect(await within(dialog).findByText(/Could not clear that stack/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/Couldn't clear that stack/)).toBeInTheDocument();
   });
 
   /** Nothing to clear, so the row stays where the reader last found it and greys — `aria-disabled`
@@ -7720,7 +7720,7 @@ describe("DeckEditor — a category's menu", () => {
       within(dialog).getByRole("button", { name: /Delete “Main deck”|Move .* and delete/ }),
     );
 
-    expect(await within(dialog).findByText(/Could not delete that category/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/Couldn't delete that category/)).toBeInTheDocument();
   });
 
   /**
@@ -7753,7 +7753,7 @@ describe("DeckEditor — a category's menu", () => {
     await userEvent.click(
       within(first).getByRole("button", { name: /Delete “Main deck”|Move .* and delete/ }),
     );
-    await within(first).findByText(/Could not delete that category/);
+    await within(first).findByText(/Couldn't delete that category/);
 
     await userEvent.keyboard("{Escape}");
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
@@ -7768,7 +7768,7 @@ describe("DeckEditor — a category's menu", () => {
     );
 
     expect(within(second).queryByRole("alert")).toBeNull();
-    expect(within(second).queryByText(/Could not delete that category/)).toBeNull();
+    expect(within(second).queryByText(/Couldn't delete that category/)).toBeNull();
   });
 
   /**

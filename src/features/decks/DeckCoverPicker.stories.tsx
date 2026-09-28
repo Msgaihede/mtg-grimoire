@@ -111,7 +111,7 @@ export const AtCreate: Story = {
     const canvas = within(canvasElement);
 
     await expect(canvas.getByText("No cover")).toBeInTheDocument();
-    await expect(canvas.getByText(/Nothing to pick from yet/)).toBeVisible();
+    await expect(canvas.getByText(/Add cards to this deck to pick a cover/)).toBeVisible();
     await expect(canvas.queryByText(/^Art by /)).toBeNull();
   },
 };

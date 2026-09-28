@@ -677,7 +677,7 @@ describe("CollectionSearchTab", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^Add Lightning Bolt/ }));
     await userEvent.click(screen.getByRole("button", { name: "Move it here" }));
 
-    expect(await screen.findByText(/Took 1 copy from Mono-Red Aggro/)).toBeInTheDocument();
+    expect(await screen.findByText(/Moved 1 copy from Mono-Red Aggro/)).toBeInTheDocument();
   });
 
   /**
@@ -798,7 +798,7 @@ describe("CollectionSearchTab", () => {
     tab();
 
     const add = await screen.findByRole("button", {
-      name: "Lightning Bolt — reading what this deck plays",
+      name: "Lightning Bolt — checking deck…",
     });
     expect(add).toHaveAttribute("aria-disabled", "true");
 
@@ -819,7 +819,7 @@ describe("CollectionSearchTab", () => {
 
     expect(
       await screen.findByRole("button", {
-        name: "Lightning Bolt — could not read what this deck plays",
+        name: "Lightning Bolt — couldn't check the deck",
       }),
     ).toHaveAttribute("aria-disabled", "true");
   });

@@ -275,7 +275,7 @@ export const LabelledAndShortOfCopies: Story = {
     await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
-    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent("Wincon · 3 in this pile");
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent("Wincon · 3 in this category");
     await userEvent.unhover(tag);
     expect(canvas.getByRole("button", { name: /Wincon.*/ }).getAttribute("aria-label")).toContain(
       "you own 1 of 3",

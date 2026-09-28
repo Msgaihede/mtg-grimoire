@@ -414,7 +414,7 @@ export function CollectionSearchTab({
               role="alert"
               className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
             >
-              Could not move that copy — {failure}
+              Couldn't move that copy — {failure}
             </p>
           </motion.div>
         )}
@@ -483,13 +483,13 @@ export function CollectionSearchTab({
       >
         {took && (
           <span className="text-text">
-            Took {plural(took.quantity, "copy", "copies")} from {took.fromDeck}.{" "}
+            Moved {plural(took.quantity, "copy", "copies")} from {took.fromDeck}.{" "}
           </span>
         )}
         {listFailure
-          ? `Could not read your collection — ${listFailure}`
+          ? `Couldn't load your collection — ${listFailure}`
           : query.isPending
-            ? "Reading your collection…"
+            ? "Loading your collection…"
             : empty
               ? "No copies match"
               : // **Cards, and the word changed with the fold.** It counted *matches* while a row
@@ -595,7 +595,7 @@ export function CollectionSearchTab({
           split the card tab makes, and the reason the caption above cannot carry it. */}
       {!empty && listFailure && (
         <p role="alert" className="shrink-0 text-xs text-destructive">
-          {query.isFetchNextPageError ? "Could not load more copies" : "Could not refresh these"} —{" "}
+          {query.isFetchNextPageError ? "Couldn't load more copies" : "Couldn't refresh these"} —{" "}
           {listFailure}
         </p>
       )}
@@ -659,15 +659,15 @@ function AddButton({
    */
   const refusal =
     play === "unread"
-      ? `${tile.name} — reading what this deck plays`
+      ? `${tile.name} — checking deck…`
       : play === "unreadable"
-        ? `${tile.name} — could not read what this deck plays`
+        ? `${tile.name} — couldn't check the deck`
         : play === "notPlayed"
           ? `${tile.name} is not in this deck — add it from the Card search tab first`
           : tile.add === null
             ? `${tile.name} is already in this deck`
             : lands === null
-              ? `${tile.name} — this deck has no pile to file it in`
+              ? `${tile.name} — this deck has no category for it`
               : null;
 
   /**
@@ -782,7 +782,7 @@ function Confirm({
         Your copy of “{tile.name}” is in “{deckName}”. Moving it here takes it off that deck’s list
         too.
       </p>
-      {lands && <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">It lands in {lands.name}.</p>}
+      {lands && <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">It will go in {lands.name}.</p>}
 
       <div className="mt-2 flex flex-wrap gap-2">
         <button

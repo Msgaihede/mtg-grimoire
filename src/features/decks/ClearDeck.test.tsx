@@ -34,7 +34,7 @@ function clear(props: Partial<Parameters<typeof ClearDeck>[0]> = {}) {
  *  carrying two sentences, so it is read whole rather than in halves. */
 // Both verb forms, because the sentence says "leaves" at a count of one — a matcher pinned to
 // the plural would simply not find the singular frame and read as the paragraph being absent.
-const outcome = () => screen.getByText(/leaves? the deck and the piles stay/);
+const outcome = () => screen.getByText(/will be removed from the deck\. Categories stay/);
 
 describe("ClearDeck", () => {
   /**
@@ -62,7 +62,7 @@ describe("ClearDeck", () => {
     clear({ variant: "live" });
 
     expect(outcome()).toHaveTextContent(
-      "The 12 cards in it leave the deck and the piles stay. " +
+      "12 cards will be removed from the deck. Categories stay. " +
         "Any copies you own go back to Recently removed.",
     );
   });
@@ -76,8 +76,8 @@ describe("ClearDeck", () => {
     clear({ variant: "theory" });
 
     expect(outcome()).toHaveTextContent(
-      "The 12 cards in it leave the deck and the piles stay. " +
-        "A theory list holds no copies, so nothing else moves.",
+      "12 cards will be removed from the deck. Categories stay. " +
+        "The theory list doesn't use your collection, so no cards are moved.",
     );
     expect(screen.queryByText(/Recently removed/)).not.toBeInTheDocument();
   });
@@ -99,8 +99,8 @@ describe("ClearDeck", () => {
 
     expect(screen.getByText("Clear the deck?")).toBeInTheDocument();
     expect(outcome()).toHaveTextContent(
-      "The 12 cards in it leave the deck and the piles stay. " +
-        "This deck keeps no copies, so nothing else moves.",
+      "12 cards will be removed from the deck. Categories stay. " +
+        "This deck doesn't use your collection, so no cards are moved.",
     );
     expect(screen.queryByText(/Recently removed/)).not.toBeInTheDocument();
     expect(screen.queryByText(/actual list/)).not.toBeInTheDocument();
@@ -132,7 +132,7 @@ describe("ClearDeck", () => {
 
     expect(screen.getByText("The 3 cards in the other list are untouched.")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Remove 12 cards" })).toBeInTheDocument();
-    expect(outcome()).toHaveTextContent("The 12 cards in it leave the deck");
+    expect(outcome()).toHaveTextContent("12 cards will be removed from the deck");
   });
 
   /**
@@ -150,7 +150,7 @@ describe("ClearDeck", () => {
     clear({ cardCount: 1, otherCount: 1 });
 
     expect(outcome()).toHaveTextContent(
-      "The 1 card in it leaves the deck and the piles stay. " +
+      "1 card will be removed from the deck. Categories stay. " +
         "Any copies you own go back to Recently removed.",
     );
     expect(screen.getByText("The 1 card in the other list is untouched.")).toBeInTheDocument();
@@ -175,7 +175,7 @@ describe("ClearDeck", () => {
     clear({ pending: true });
 
     expect(screen.getByRole("button", { name: "Remove 12 cards" })).toBeDisabled();
-    expect(screen.getByRole("button", { name: "Keep them" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeEnabled();
   });
 
   it("runs the write from the destructive button alone", async () => {
@@ -190,7 +190,7 @@ describe("ClearDeck", () => {
   it("keeps the cards from the way out alone", async () => {
     const { onCleared, onCancel } = clear();
 
-    await userEvent.click(screen.getByRole("button", { name: "Keep them" }));
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(onCleared).not.toHaveBeenCalled();

@@ -161,8 +161,8 @@ export const Review: Story = {
     );
 
     // The three wish shapes, in one frame: nothing, a folder named, and two lines left standing.
-    await expect(canvas.getByText("Clears 2 copies off a wish in Buy soon")).toBeVisible();
-    await expect(canvas.getByText("2 wishlist lines match — left alone")).toBeVisible();
+    await expect(canvas.getByText("Clears 2 copies from a wishlist item in Buy soon")).toBeVisible();
+    await expect(canvas.getByText("2 wishlist items match (unchanged)")).toBeVisible();
 
     // One pick per row, addressed by the printing **and** the finish — the row does not exist in
     // `collection_entries` yet, so there is no id to name.
@@ -226,13 +226,13 @@ export const AmbiguousWish: Story = {
       { timeout: FRAME_WAIT },
     );
 
-    await expect(canvas.getByText("2 wishlist lines match — left alone")).toBeVisible();
+    await expect(canvas.getByText("2 wishlist items match (unchanged)")).toBeVisible();
     await expect(canvas.queryByRole("alert")).toBeNull();
 
     await userEvent.click(
       canvas.getByRole("checkbox", { name: "Also take these off my wishlist" }),
     );
-    await expect(canvas.queryByText("2 wishlist lines match — left alone")).toBeNull();
+    await expect(canvas.queryByText("2 wishlist items match (unchanged)")).toBeNull();
   },
 };
 
@@ -256,7 +256,7 @@ export const RowSwitchedOff: Story = {
     await expect(canvas.getByText(/ across /).textContent).toBe(
       "2 copies across 1 card · 2 copies off your wishlist",
     );
-    await expect(canvas.getByText("Clears 2 copies off a wish in Buy soon")).toBeVisible();
+    await expect(canvas.getByText("Clears 2 copies from a wishlist item in Buy soon")).toBeVisible();
   },
 };
 
@@ -266,10 +266,10 @@ export const Reading: Story = {
   args: { rows: null, loading: true },
   play: async ({ canvas }) => {
     await waitFor(
-      async () => expect(await canvas.findByText("Reading what this deck is short of…")).toBeVisible(),
+      async () => expect(await canvas.findByText("Finding missing cards…")).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
-    await expect(canvas.queryByText(/Nothing here can be recorded/)).toBeNull();
+    await expect(canvas.queryByText(/None of the missing cards are in the card database/)).toBeNull();
   },
 };
 
@@ -306,13 +306,10 @@ export const NothingToRecord: Story = {
   play: async ({ canvas }) => {
     await waitFor(
       async () =>
-        expect(await canvas.findByText(/Nothing here can be recorded/)).toBeVisible(),
+        expect(await canvas.findByText(/None of the missing cards are in the card database/)).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
 
-    await expect(canvas.getByText(/cannot be filed at all/)).toHaveTextContent(
-      "its set, its collector number and its language are read off that row",
-    );
     await expect(canvas.queryByRole("alert")).toBeNull();
   },
 };
@@ -348,6 +345,6 @@ export const Recorded: Story = {
       { timeout: FRAME_WAIT },
     );
     // The empty list under it is explained rather than left looking like a failed read.
-    await expect(canvas.getByText(/Nothing here can be recorded/)).toBeVisible();
+    await expect(canvas.getByText(/None of the missing cards are in the card database/)).toBeVisible();
   },
 };

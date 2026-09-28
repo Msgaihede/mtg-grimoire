@@ -92,7 +92,7 @@ export function AddLabelDialog({
       open={open}
       title="Add label"
       subtitle={cardName === null ? undefined : `Put a label on “${cardName}”.`}
-      closeLabel="Close add label"
+      closeLabel="Close"
       size="w-[26rem]"
       onDismiss={onDismiss}
       onClose={onClose}
@@ -208,8 +208,8 @@ function AddLabelBody({
       {shown.length === 0 && (
         <p className="text-[0.6875rem] text-dim">
           {choices.length === 0
-            ? "Every label you have is already in this list. Name a new one above."
-            : `No other label matches “${trimmed}”. Name it below to make it.`}
+            ? "All your labels are already in this list. Type a name above to create one."
+            : `No label named “${trimmed}”. Create it below.`}
         </p>
       )}
 

@@ -227,7 +227,7 @@ describe("buildDeckMenu", () => {
 
     const root = await screen.findByRole("menuitem", { name: /^All decks/ });
     expect(root).toHaveAttribute("aria-disabled", "true");
-    expect(root).toHaveTextContent("Here now");
+    expect(root).toHaveTextContent("Current");
 
     await userEvent.click(root);
     expect(moveToFolder).not.toHaveBeenCalled();
@@ -244,7 +244,7 @@ describe("buildDeckMenu", () => {
     // `updated_at`.
     const here = await screen.findByRole("menuitem", { name: /^Modern/ });
     expect(here).toHaveAttribute("aria-disabled", "true");
-    expect(here).toHaveTextContent("Here now");
+    expect(here).toHaveTextContent("Current");
     // Never the `disabled` attribute: a greyed row exists to be read.
     expect(here).not.toBeDisabled();
   });
@@ -277,7 +277,7 @@ describe("buildDeckMenu", () => {
     deckFolderList.mockRejectedValue(new Error("database is locked"));
     expand(find(buildDeckMenu(ATRAXA, deps()), "Move to") as MenuLazy);
 
-    expect(await screen.findByText(/Could not read your folders/)).toBeInTheDocument();
+    expect(await screen.findByText(/Couldn't load your folders/)).toBeInTheDocument();
     expect(screen.queryAllByRole("menuitem")).toHaveLength(0);
   });
 
@@ -362,8 +362,8 @@ describe("buildFolderMenu", () => {
 
     // One sentence per row, rather than one under the list: `MenuAction.reason`'s shape, and
     // the two fences are different sentences.
-    expect(row(COMMANDER.id)).toHaveTextContent("Cannot go inside itself");
-    expect(row(BUDGET.id)).toHaveTextContent("Cannot go inside what it holds");
+    expect(row(COMMANDER.id)).toHaveTextContent("A folder can't go inside itself");
+    expect(row(BUDGET.id)).toHaveTextContent("A folder can't go inside its own subfolder");
   });
 
   it("moves the folder, top level included", async () => {
@@ -388,7 +388,7 @@ describe("folderDestinations", () => {
    */
   it("offers the top level and every folder, as paths", () => {
     expect(folderDestinations(FOLDERS, { currentId: null, moving: null })).toEqual([
-      { folderId: null, name: "All decks", inert: "Here now" },
+      { folderId: null, name: "All decks", inert: "Current" },
       { folderId: COMMANDER.id, name: "Commander", inert: null },
       { folderId: BUDGET.id, name: "Commander › Budget", inert: null },
       { folderId: MODERN.id, name: "Modern", inert: null },
@@ -405,9 +405,9 @@ describe("folderDestinations", () => {
     );
 
     expect(inert).toEqual({
-      "All decks": "Here now",
-      Commander: "Cannot go inside itself",
-      "Commander › Budget": "Cannot go inside what it holds",
+      "All decks": "Current",
+      Commander: "A folder can't go inside itself",
+      "Commander › Budget": "A folder can't go inside its own subfolder",
       Modern: null,
     });
   });
@@ -428,7 +428,7 @@ describe("folderDestinations", () => {
     const destinations = folderDestinations(FOLDERS, { currentId: 99, moving: null });
 
     expect(destinations.filter((d) => d.inert !== null)).toEqual([
-      { folderId: null, name: "All decks", inert: "Here now" },
+      { folderId: null, name: "All decks", inert: "Current" },
     ]);
   });
 });

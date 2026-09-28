@@ -149,7 +149,7 @@ export const MIN_FOLDER_TREE_WIDTH_PX = 176;
  * **one deck tile at the reader's own zoom** — so zooming the wall out really does buy the tree
  * its width back, and it is the remedy a reader is least likely to think of.
  */
-const NO_ROOM = "Not enough room — zoom the decks out or widen the window";
+const NO_ROOM = "Not enough room. Zoom out or widen the window.";
 
 /**
  * How a test finds one hairline of the nesting, and which piece of the drawing it found.
@@ -685,7 +685,7 @@ export function FolderTree({
             {failure && (
               <motion.div {...statusLine} className="overflow-hidden">
                 <p role="status" className="px-1 pb-2 text-xs text-destructive">
-                  Could not read your folders — {failure}
+                  Couldn't load your folders — {failure}
                 </p>
               </motion.div>
             )}

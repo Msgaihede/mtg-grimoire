@@ -802,14 +802,14 @@ describe("DecksPage", () => {
       // The button is named for the press rather than for the state alone, so its name is the
       // other half of what the arrow says.
       const arrow = screen.getByRole("button", {
-        name: "Sort direction: ascending — press for descending",
+        name: "Sort ascending (click for descending)",
       });
       await user.click(arrow);
 
       await waitFor(() => expect(wallIds()).toEqual([11, 13, 12]));
       expect(
         screen.getByRole("button", {
-          name: "Sort direction: descending — press for ascending",
+          name: "Sort descending (click for ascending)",
         }),
       ).toBeInTheDocument();
     });
@@ -933,7 +933,7 @@ describe("DecksPage", () => {
 
       expect(await screen.findByText("No decks match this filter")).toBeInTheDocument();
       expect(screen.queryByText("No decks")).not.toBeInTheDocument();
-      expect(screen.queryByText(/^Every deck you have is filed/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/^All your decks are in folders/)).not.toBeInTheDocument();
       // The count still says the drawer holds two, which is the reassurance an emptied wall owes.
       expect(screen.getByText("0 of 2 decks")).toBeInTheDocument();
     });
@@ -2039,8 +2039,8 @@ describe("DecksPage folders", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }));
 
     const confirm = await screen.findByRole("dialog", { name: "Delete Commander" });
-    expect(confirm).toHaveTextContent("The 2 decks in it are kept — they move to the top level.");
-    expect(confirm).toHaveTextContent("The 1 folder inside goes with it.");
+    expect(confirm).toHaveTextContent("Its 2 decks will move to the top level.");
+    expect(confirm).toHaveTextContent("1 folder inside it will also be deleted.");
 
     await userEvent.click(within(confirm).getByRole("button", { name: "Delete folder" }));
 
@@ -2075,11 +2075,11 @@ describe("DecksPage folders", () => {
 
     const itself = await screen.findByRole("menuitem", { name: /^Commander(?! ›)/ });
     expect(itself).toHaveAttribute("aria-disabled", "true");
-    expect(itself).toHaveTextContent("Cannot go inside itself");
+    expect(itself).toHaveTextContent("A folder can't go inside itself");
 
     const held = screen.getByRole("menuitem", { name: /^Commander › Legends/ });
     expect(held).toHaveAttribute("aria-disabled", "true");
-    expect(held).toHaveTextContent("Cannot go inside what it holds");
+    expect(held).toHaveTextContent("A folder can't go inside its own subfolder");
 
     // The top level is where this folder already is, so it is offered and inert too — the
     // no-op write that bumps `updated_at` and changes nothing.
@@ -2177,7 +2177,7 @@ describe("DecksPage folders", () => {
     expect(await tileFor("Burn")).toBeInTheDocument();
     expect(await tileFor("Sunday draft")).toBeInTheDocument();
     expect(
-      screen.getByText(/Could not read your folders — The card database is busy/),
+      screen.getByText(/Couldn't load your folders — The card database is busy/),
     ).toBeInTheDocument();
   });
 

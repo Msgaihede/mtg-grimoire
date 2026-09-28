@@ -30,9 +30,9 @@ const CODE_LABEL: Record<string, string> = {
   restricted: "Restricted cards",
   banned: "Banned cards",
   "not-legal": "Outside the format",
-  "unknown-legality": "Legality this app could not read",
-  "unknown-copy-limit": "Copy counts this app could not read",
-  orphan: "Cards that left the card database",
+  "unknown-legality": "Unknown legality",
+  "unknown-copy-limit": "Unknown copy limit",
+  orphan: "Cards no longer in the database",
   "mana-value": "Mana value",
   "commander-zone": "Commander zone",
   "commander-missing": "Missing commander",
@@ -44,7 +44,7 @@ const CODE_LABEL: Record<string, string> = {
   "companion-zone": "Companion zone",
   "companion-count": "Companion count",
   "companion-eligibility": "Companion eligibility",
-  "companion-unknown": "Companion not recognised",
+  "companion-unknown": "Unknown companion",
   "companion-condition": "Companion condition",
 };
 
@@ -391,7 +391,7 @@ function Findings({
     >
       {issues.length === 0 ? (
         <p className="text-dim">
-          Nothing to fix. This deck matches every {spec.displayName} rule this app can check.
+          No issues. This deck passes every {spec.displayName} rule we check.
         </p>
       ) : (
         groupByCode(issues).map((group) => (

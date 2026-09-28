@@ -90,10 +90,10 @@ export const Shopping: Story = {
     await expect(canvas.getByText("Black Lotus")).toBeVisible();
     // The substitution, saying in words what the deck is already playing — beside a count that
     // is still the full quantity, because the count is what a press writes.
-    await expect(canvas.getByText("Already played as another printing")).toBeVisible();
+    await expect(canvas.getByText("In the deck as another printing")).toBeVisible();
     // The two sentences this dialog exists to say.
-    await expect(canvas.getByText(/are excluded cuts/)).toBeVisible();
-    await expect(canvas.getByText(/Cards can appear in both views/)).toBeVisible();
+    await expect(canvas.getByText(/aren't in the actual list yet/)).toBeVisible();
+    await expect(canvas.getByText(/Different finishes count as different printings/)).toBeVisible();
     await expect(
       canvas.getByText("TCGplayer prices, last updated with card data."),
     ).toBeVisible();
@@ -129,7 +129,7 @@ export const Filtered: Story = {
     await expect(lines).toHaveLength(1);
     await expect(within(lines[0]).getByText("Sol Ring")).toBeVisible();
     await expect(
-      within(lines[0]).getByText("Already played as another printing"),
+      within(lines[0]).getByText("In the deck as another printing"),
     ).toBeVisible();
 
     const copies = canvas.getByText("Copies to find").closest("div")!;
@@ -147,7 +147,7 @@ export const Filtered: Story = {
     await userEvent.click(canvas.getByRole("radio", { name: "Tokens, 0 tokens" }));
     await expect(canvas.queryAllByRole("listitem")).toHaveLength(0);
     await expect(
-      canvas.getByText("The plan counts no tokens the deck is short of."),
+      canvas.getByText("No missing tokens."),
     ).toBeVisible();
   },
 };
@@ -391,7 +391,7 @@ export const Agreed: Story = {
   play: async ({ canvas }) => {
     // The dialog's arrival, waited out once — see `Shopping`.
     await waitFor(
-      async () => expect(await canvas.findByText(/The two lists agree/)).toBeVisible(),
+      async () => expect(await canvas.findByText(/The deck matches the theory list/)).toBeVisible(),
       {
         timeout: FRAME_WAIT,
       },
@@ -445,6 +445,6 @@ export const Refused: Story = {
     );
     // The footer still says what the list is and is not. A refusal is not a reason to stop
     // explaining the surface.
-    await expect(canvas.getByText(/are excluded cuts/)).toBeVisible();
+    await expect(canvas.getByText(/aren't in the actual list yet/)).toBeVisible();
   },
 };

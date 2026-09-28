@@ -222,7 +222,7 @@ export function auditSentence(
           text: `Made ${name} ${said(p.toFinish)}`,
           detail: line(
             `${said(p.fromFinish)} → ${said(p.toFinish)}`,
-            flag(p.folded) ? "folded into one row" : null,
+            flag(p.folded) ? "merged into one row" : null,
           ),
         };
       }
@@ -237,7 +237,7 @@ export function auditSentence(
         // silently loses a line reads like a bug.
         detail: line(
           from && to ? `${from} → ${to}` : to,
-          flag(p.folded) ? "folded into one row" : null,
+          flag(p.folded) ? "merged into one row" : null,
         ),
       };
     }
@@ -473,8 +473,8 @@ function clearedFrom(entry: DeckAuditEntry, p: Record<string, unknown>): string 
 function cardLabelLine(p: Record<string, unknown>, name: string): AuditLine {
   const label = text(p.label);
   const previous = text(p.previous);
-  if (label === null) return { text: `Unlabelled ${name}`, detail: previous && `was ${previous}` };
-  return { text: `Labelled ${name}`, detail: previous ? `${previous} → ${label}` : label };
+  if (label === null) return { text: `Unlabeled ${name}`, detail: previous && `was ${previous}` };
+  return { text: `Labeled ${name}`, detail: previous ? `${previous} → ${label}` : label };
 }
 
 /**
@@ -504,17 +504,17 @@ function labelLine(p: Record<string, unknown>): AuditLine {
       // share the `rename` verb, because a colour was one of six palette tokens and never
       // appeared in a sentence. It is the reader's own hex now, and the same hex in every deck,
       // so it is a change worth being able to find again.
-      return { text: `Recoloured label ${name}`, detail: text(p.color) };
+      return { text: `Recolored label ${name}`, detail: text(p.color) };
     case "remove":
       // Taking a label off one deck's list, which is **not** deleting it — the distinction the
       // per-deck label never had to make. The sentence names the deck rather than the label as
       // the thing that changed, which is what tells the two lines apart in a history.
-      return { text: `Took label ${name} off this deck`, detail: moved("unlabelled") };
+      return { text: `Removed label ${name} from this deck`, detail: moved("unlabeled") };
     case "delete":
       // Deleting a label unlabels its cards rather than deleting them — in **every** deck
       // wearing it, since v21 — which is the half of this sentence a reader would otherwise
       // have to go and check.
-      return { text: `Deleted label ${name}`, detail: moved("unlabelled") };
+      return { text: `Deleted label ${name}`, detail: moved("unlabeled") };
     default:
       return { text: `Changed label ${name}`, detail: null };
   }
@@ -674,7 +674,7 @@ function tokenLine(p: Record<string, unknown>): AuditLine {
         detail: line(
           detail,
           from !== null && to !== null ? `${from} → ${to}` : to,
-          flag(p.folded) ? "folded into one row" : null,
+          flag(p.folded) ? "merged into one row" : null,
         ),
       };
     }
@@ -814,12 +814,12 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         // sentence rather than printing "undefined" at somebody.
         case "attach":
           return {
-            text: card ? `Attached ${card} to a note` : "Attached a card to a note",
+            text: card ? `Linked ${card} to a note` : "Linked a card to a note",
             detail: title,
           };
         case "detach":
           return {
-            text: card ? `Detached ${card} from a note` : "Detached a card from a note",
+            text: card ? `Unlinked ${card} from a note` : "Unlinked a card from a note",
             detail: title,
           };
         // **The one action that is about the list rather than about a note**, which is why it
@@ -852,7 +852,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
       if ("copied" in p) {
         const copied = numberField(p.copied);
         return {
-          text: "Copied the live deck into theory",
+          text: "Copied the actual list into the theory list",
           detail: copied > 0 ? plural(copied, "card") : null,
         };
       }
@@ -873,14 +873,16 @@ function deckLine(p: Record<string, unknown>): AuditLine {
     // card change. Folding them into one line would need a field this schema does not have.
     case "virtualOnly":
       return {
-        text: flag(p.to) ? "Made the deck virtual" : "Made the deck track your collection again",
+        text: flag(p.to)
+          ? "Stopped tracking this deck against your collection"
+          : "Started tracking this deck against your collection",
         detail: flag(p.to) ? "Its copies moved to Recently removed" : null,
       };
     case "archived":
       // Filed away, never deleted — `DeckPatch.archived`'s own words, which is why neither
       // half of this says "removed".
       return {
-        text: flag(p.to) ? "Filed the deck away" : "Took the deck out of the archive",
+        text: flag(p.to) ? "Archived the deck" : "Unarchived the deck",
         detail: null,
       };
     // `decks.separate_x_group` (schema v13). **The one multi-word field name in this switch** —
@@ -895,7 +897,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
       return {
         text: flag(p.to)
           ? "Split the X spells into their own group"
-          : "Folded the X spells back into their mana values",
+          : "Grouped X spells by mana value again",
         detail: null,
       };
     // `decks.default_category_id` (schema v16), and the **second** multi-word field name in
@@ -910,7 +912,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
     // the rule rather than a pile, because under Auto there is no one pile: it is per card.
     case "defaultCategory":
       return {
-        text: to ? `New cards now go to ${to}` : "New cards now go by what the card does",
+        text: to ? `New cards go to ${to}` : "New cards are auto-categorized",
         detail: was,
       };
     // `decks.bracket` (schema v26). **Numbers on both sides, and `0` is a value rather than an
@@ -927,7 +929,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
       const before = numberField(p.from);
       const name = (n: number) => (n === 0 ? "Auto" : `bracket ${n}`);
       return {
-        text: now === 0 ? "Put the bracket back to Auto" : `Set the deck to bracket ${now}`,
+        text: now === 0 ? "Set the bracket to Auto" : `Set the deck to bracket ${now}`,
         detail: before === now ? null : `was ${name(before)}`,
       };
     }
@@ -957,15 +959,15 @@ function deckLine(p: Record<string, unknown>): AuditLine {
     case "theoryMarkExact":
       return {
         text: flag(p.to)
-          ? "Started marking cards in the printing the plan names"
-          : "Stopped marking cards in the printing the plan names",
+          ? "Turned on exact-printing marks"
+          : "Turned off exact-printing marks",
         detail: null,
       };
     case "theoryMarkName":
       return {
         text: flag(p.to)
-          ? "Started marking cards in a different printing"
-          : "Stopped marking cards in a different printing",
+          ? "Turned on different-printing marks"
+          : "Turned off different-printing marks",
         detail: null,
       };
     // The red tier, and the one sentence here that is about a card the plan does **not** name —
@@ -974,8 +976,8 @@ function deckLine(p: Record<string, unknown>): AuditLine {
     case "theoryMarkUnplanned":
       return {
         text: flag(p.to)
-          ? "Started marking cards not in the theory list"
-          : "Stopped marking cards not in the theory list",
+          ? "Turned on marks for cards not in the theory list"
+          : "Turned off marks for cards not in the theory list",
         detail: null,
       };
     // The managed wishlist (user schema v49, issue #512): `deck.rs` records the mode under this
@@ -1003,8 +1005,8 @@ function deckLine(p: Record<string, unknown>): AuditLine {
     case "managedWishlistTokens":
       return {
         text: flag(p.to)
-          ? "Started filing tokens in the managed wishlist"
-          : "Stopped filing tokens in the managed wishlist",
+          ? "Started adding tokens to the managed wishlist"
+          : "Stopped adding tokens to the managed wishlist",
         detail: null,
       };
     // `decks.token_rail_index` (user schema v51): the Tokens & Emblems pile moved in the rail.
@@ -1038,7 +1040,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         case "collection":
           return { text: `Set ${TOKENS_HEADING} to Collection`, detail: null };
         default:
-          return { text: `Changed how the deck keeps its ${TOKENS_HEADING}`, detail: null };
+          return { text: `Changed where the deck's ${TOKENS_HEADING} are tracked`, detail: null };
       }
     // Every token write since user schema v52 — one row per command pressed. See
     // {@link tokenLine}: they are `deck` rows rather than a tenth kind for the notes' reason.

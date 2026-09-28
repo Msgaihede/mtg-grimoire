@@ -1,7 +1,7 @@
 import { useMemo, type ReactNode } from "react";
 import { Crown } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { count, plural, verb } from "@/lib/counts";
+import { count, plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -203,8 +203,8 @@ export function DeckLedger({
         className="flex shrink-0 items-baseline gap-1.5"
         {...tip(
           elsewhere
-            ? `The cards a format's size rule counts, plus ${elsewhere} it does not.`
-            : "The cards a format's size rule counts — every switched-on pile except the sideboard.",
+            ? `Cards that count toward deck size, plus ${elsewhere} (not counted).`
+            : "Cards that count toward deck size (everything active except the sideboard).",
         )}
       >
         <dt className="text-[0.6875rem] text-dim">Cards</dt>
@@ -224,11 +224,7 @@ export function DeckLedger({
         className="flex shrink-0 items-baseline gap-1.5"
         {...tip(
           mdfc > 0 &&
-            `Lands by type line, and ${plural(mdfc, "modal double-faced card")} that ${verb(
-              mdfc,
-              "plays",
-              "play",
-            )} as a land off the back.`,
+            `Lands by type, plus ${plural(mdfc, "MDFC")} with a land back face.`,
         )}
       >
         <dt className="text-[0.6875rem] text-dim">Lands</dt>
@@ -253,7 +249,7 @@ export function DeckLedger({
 
       {/* An em dash rather than a zero for a deck of nothing but lands: an average of no numbers
           is not 0, which is the same distinction `deckStats` draws in the field itself. */}
-      <div className="flex shrink-0 items-baseline gap-1.5" {...tip("Over nonlands, by copies.")}>
+      <div className="flex shrink-0 items-baseline gap-1.5" {...tip("Average mana value of nonland cards, counting each copy.")}>
         <dt className="text-[0.6875rem] text-dim">Avg. mana</dt>
         <dd className="font-mono text-[0.8125rem] tabular-nums">
           {stats.averageManaValue === null ? "—" : stats.averageManaValue.toFixed(2)}
@@ -364,8 +360,8 @@ export function DeckLedger({
             // so the spread is the whole binding.
             {...tip(
               gameChangersOnly
-                ? "Showing only the game changers. Press to show the whole deck."
-                : "Show only the game changers.",
+                ? "Showing only Game Changers. Click to show all cards."
+                : "Show only Game Changers",
             )}
             onClick={onGameChangersOnlyToggle}
             className={cn(
@@ -405,7 +401,7 @@ export function DeckLedger({
 
 /** `1 game changer`, `6 game changers`. */
 function gameChangerWords(n: number): string {
-  return n === 1 ? "1 game changer" : `${count(n)} game changers`;
+  return n === 1 ? "1 Game Changer" : `${count(n)} Game Changers`;
 }
 
 /**

@@ -71,7 +71,7 @@ export const FirstOpen: Story = {
     // The panel's arrival, waited out once — everything under it is visible in the same tick,
     // which is why the rows below need no wait of their own. See {@link FRAME_WAIT}.
     await waitFor(
-      async () => await expect(await canvas.findByText(/No cards in this list are labelled yet/)).toBeVisible(),
+      async () => await expect(await canvas.findByText(/No cards in this list are labeled yet/)).toBeVisible(),
       { timeout: FRAME_WAIT },
     );
     await expect(await canvas.findByText("Cut candidate")).toBeVisible();
@@ -121,7 +121,7 @@ export const RecolouringALabel: Story = {
   play: async ({ canvas }) => {
     const label = (await canvas.findByText("Cut candidate")).closest("li") as HTMLElement;
     await userEvent.click(
-      within(label).getByRole("button", { name: "Change colour of Cut candidate" }),
+      within(label).getByRole("button", { name: "Change color of Cut candidate" }),
     );
 
     // The six the app sanctions, one press each — the wheel and the hex field beside them are
@@ -133,7 +133,7 @@ export const RecolouringALabel: Story = {
     // It describes the button (default `describes: true`) and mounts as a sibling of the whole
     // story, not inside `label`, so it is read off `canvas` rather than `within(label)`.
     const swatch = await waitFor(() =>
-      within(label).getByRole("button", { name: "Change colour of Cut candidate" }),
+      within(label).getByRole("button", { name: "Change color of Cut candidate" }),
     );
     await userEvent.hover(swatch);
     const swatchTooltip = await canvas.findByRole("tooltip", undefined, {
@@ -165,7 +165,7 @@ export const RemovingALabelFromTheDeck: Story = {
 
     // Nothing in this list wears it any more...
     await waitFor(async () => {
-      await expect(await canvas.findByText(/No cards in this list are labelled yet/)).toBeVisible();
+      await expect(await canvas.findByText(/No cards in this list are labeled yet/)).toBeVisible();
     });
     // ...and the label is still the reader's, one section down, offering the app-wide delete.
     const moved = (await canvas.findByText("Cut candidate")).closest("li") as HTMLElement;

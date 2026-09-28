@@ -276,7 +276,7 @@ export function QuickAdd({
   const failure = lookup.isError ? ipcError(lookup.error) : null;
   /** What the live region says now — the one string both arrangements of it draw. */
   const statusText = failure
-    ? `Could not search — ${failure}`
+    ? `Couldn't search — ${failure}`
     : lookup.isPending
       ? "Looking…"
       : miss !== null

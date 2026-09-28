@@ -121,7 +121,7 @@ function CreaturePanel({
           <p className={NOTE}>
             {rows.length > 0
               ? "A creature with two types counts under both."
-              : "None of these creatures prints a creature type."}
+              : "These creatures have no creature types."}
           </p>
         </>
       )}
@@ -190,7 +190,7 @@ function LandPanel({
         // The ledger's `+2 MDFC`, said in words: these can be played as a land and are not in
         // the count above, for `isMdfcLand`'s reason.
         <p className={NOTE}>
-          {`Plus ${plural(mdfcLands, "modal double-faced card")} with a land back, counted as ${mdfcLands === 1 ? "a spell" : "spells"}.`}
+          {`Plus ${plural(mdfcLands, "MDFC")} with a land back face, counted as ${mdfcLands === 1 ? "a spell" : "spells"}.`}
         </p>
       ) : null}
     </div>

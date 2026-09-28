@@ -86,7 +86,7 @@ export const AWeekOfBuilding: Story = {
     // The sentences are `auditText`'s, verbatim — a set code is stored lowercase and printed
     // in capitals, and the fold is the half that has to be said.
     await expect(canvas.getByText("Swapped printing of Sol Ring")).toBeInTheDocument();
-    await expect(canvas.getByText("C21 → SLD · folded into one row")).toBeInTheDocument();
+    await expect(canvas.getByText("C21 → SLD · merged into one row")).toBeInTheDocument();
   },
 };
 
@@ -175,7 +175,7 @@ export const HistoryUnavailable: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(
-      await canvas.findByText("This deck's history could not be read."),
+      await canvas.findByText("Couldn't load this deck's history."),
     ).toBeInTheDocument();
     await expect(canvas.queryByText("No changes recorded yet.")).toBeNull();
   },

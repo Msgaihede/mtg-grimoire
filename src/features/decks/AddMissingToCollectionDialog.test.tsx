@@ -163,16 +163,16 @@ describe("AddMissingToCollectionDialog", () => {
   it("says the read is in flight, and nothing else", async () => {
     open({ loading: true, rows: null });
 
-    expect(await screen.findByText("Reading what this deck is short of…")).toBeInTheDocument();
-    expect(screen.queryByText(/Nothing here can be recorded/)).not.toBeInTheDocument();
+    expect(await screen.findByText("Finding missing cards…")).toBeInTheDocument();
+    expect(screen.queryByText(/None of the missing cards are in the card database/)).not.toBeInTheDocument();
   });
 
   it("prints the read's own refusal where the rows would have been", async () => {
     open({ rows: null, readError: "database is locked" });
 
     expect(await screen.findByText("database is locked")).toBeInTheDocument();
-    expect(screen.queryByText(/Nothing here can be recorded/)).not.toBeInTheDocument();
-    expect(screen.queryByText("Reading what this deck is short of…")).not.toBeInTheDocument();
+    expect(screen.queryByText(/None of the missing cards are in the card database/)).not.toBeInTheDocument();
+    expect(screen.queryByText("Finding missing cards…")).not.toBeInTheDocument();
   });
 
   /**
@@ -188,13 +188,9 @@ describe("AddMissingToCollectionDialog", () => {
 
     expect(
       await screen.findByText(
-        "Nothing here can be recorded — everything this deck is short of has left the card " +
-          "database.",
+        "None of the missing cards are in the card database anymore.",
       ),
     ).toBeInTheDocument();
-    expect(screen.getByText(/cannot be filed at all/)).toHaveTextContent(
-      "its set, its collector number and its language are read off that row",
-    );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -204,10 +200,10 @@ describe("AddMissingToCollectionDialog", () => {
     expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
     const bolt = rowFor("Lightning Bolt, M10 146");
     expect(within(bolt).getByText("M10 · 146")).toBeInTheDocument();
-    expect(within(bolt).getByText("Short in Removal")).toBeInTheDocument();
+    expect(within(bolt).getByText("Missing from Removal")).toBeInTheDocument();
     expect(within(bolt).getByText("of 3")).toBeInTheDocument();
     expect(
-      within(rowFor("Sol Ring, C21 263")).getByText("Short in Ramp, Artifacts"),
+      within(rowFor("Sol Ring, C21 263")).getByText("Missing from Ramp, Artifacts"),
     ).toBeInTheDocument();
   });
 
@@ -329,7 +325,7 @@ describe("AddMissingToCollectionDialog", () => {
     open({ rows: [row({ wishes: [wish({ folderId: 5, folderName: "Buy soon" })] })] });
     await screen.findByText("Lightning Bolt");
 
-    const note = screen.getByText("Clears 3 copies off a wish in Buy soon");
+    const note = screen.getByText("Clears 3 copies from a wishlist item in Buy soon");
     expect(note).toBeInTheDocument();
     // A statement, not a warning: a wish is not a fault and must not be coloured as one.
     expect(note).toHaveClass("text-dim");
@@ -342,7 +338,7 @@ describe("AddMissingToCollectionDialog", () => {
 
     // One copy recorded against a wish for four takes one off it — the cap is the *press*, not
     // the line, and this is the direction the other case cannot show.
-    expect(screen.getByText("Clears 1 copy off a wish in Wishlist")).toBeInTheDocument();
+    expect(screen.getByText("Clears 1 copy from a wishlist item in Wishlist")).toBeInTheDocument();
   });
 
   /** Two or more matching lines are left standing, and the reader is told so before the press
@@ -351,7 +347,7 @@ describe("AddMissingToCollectionDialog", () => {
     open({ rows: [row({ wishes: [wish({ id: 1 }), wish({ id: 2, folderName: "Buy soon" })] })] });
     await screen.findByText("Lightning Bolt");
 
-    expect(screen.getByText("2 wishlist lines match — left alone")).toBeInTheDocument();
+    expect(screen.getByText("2 wishlist items match (unchanged)")).toBeInTheDocument();
     expect(tally().textContent).toBe("3 copies across 1 card");
   });
 
@@ -381,14 +377,14 @@ describe("AddMissingToCollectionDialog", () => {
 
     await userEvent.click(screen.getByRole("checkbox", { name: "Add Lightning Bolt, M10 146" }));
 
-    expect(screen.getByText("Clears 3 copies off a wish in Buy soon")).toBeInTheDocument();
+    expect(screen.getByText("Clears 3 copies from a wishlist item in Buy soon")).toBeInTheDocument();
   });
 
   /**
    * **The checkbox is on by default and collapses every wish sentence when it is off — the
    * ambiguous ones included.**
    *
-   * That second half is the one easy to get wrong: "2 wishlist lines match — left alone" over a
+   * That second half is the one easy to get wrong: "2 wishlist items match (unchanged)" over a
    * press that was never going to touch a wish is a true sentence about the wrong world.
    */
   it("sends clearWishes true by default and false once the checkbox is off", async () => {
@@ -412,8 +408,8 @@ describe("AddMissingToCollectionDialog", () => {
 
     await userEvent.click(toggle);
 
-    expect(screen.queryByText(/off a wish in/)).not.toBeInTheDocument();
-    expect(screen.queryByText(/wishlist lines match/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/from a wishlist item in/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/wishlist items match/)).not.toBeInTheDocument();
     expect(tally().textContent).toBe("6 copies across 3 cards");
 
     await userEvent.click(screen.getByRole("button", { name: "Add 6 copies to collection" }));
@@ -491,7 +487,7 @@ describe("AddMissingToCollectionDialog", () => {
       "Recorded 3 copies of 1 card into Burn. 2 copies off your wishlist.",
     );
     // …and the empty list under it is explained rather than left to look like a failed read.
-    expect(screen.getByText(/Nothing here can be recorded/)).toBeInTheDocument();
+    expect(screen.getByText(/None of the missing cards are in the card database/)).toBeInTheDocument();
   });
 
   /** The wishlist half is a separate sentence and is drawn only when it happened — a press with
@@ -539,7 +535,7 @@ describe("AddMissingToCollectionDialog", () => {
 
     const alert = screen.getByRole("alert");
     expect(alert).toHaveTextContent(
-      "Could not record — That is more copies than this deck is short of.",
+      "Couldn't record — That is more copies than this deck is short of.",
     );
     expect(panel().contains(alert)).toBe(true);
   });
@@ -580,8 +576,7 @@ describe("AddMissingToCollectionDialog", () => {
 
     expect(
       await screen.findByText(
-        "Records copies you have just acquired into Burn's folder. Nothing is moved out of your " +
-          "collection.",
+        "Add the cards you just got to Burn's folder. Nothing leaves your collection.",
       ),
     ).toBeInTheDocument();
   });

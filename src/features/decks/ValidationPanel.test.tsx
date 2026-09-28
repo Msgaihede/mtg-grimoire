@@ -210,7 +210,7 @@ describe("ValidationPanel", () => {
   it("reports a clean deck in words when it is opened anyway", async () => {
     const panel = await open(<Harness cards={[islands(60)]} format={spec("modern")} />);
 
-    expect(within(panel).getByText(/nothing to fix/i)).toBeInTheDocument();
+    expect(within(panel).getByText(/no issues/i)).toBeInTheDocument();
   });
 
   /**

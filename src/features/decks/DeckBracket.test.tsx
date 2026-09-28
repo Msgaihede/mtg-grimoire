@@ -154,10 +154,10 @@ const trigger = () => screen.getByRole("button", { name: /^Bracket \d/ });
 
 /** The panel, once the combo read behind it has answered — the region below the picker is four
  *  states deep and three of them are transient, so a helper that returned on the dialog alone
- *  would hand half these tests a frame reading "Reading combos…". */
+ *  would hand half these tests a frame reading "Loading combos…". */
 async function panel() {
   const dialog = await screen.findByRole("dialog");
-  await waitFor(() => expect(within(dialog).queryByText("Reading combos…")).toBeNull());
+  await waitFor(() => expect(within(dialog).queryByText("Loading combos…")).toBeNull());
   return dialog;
 }
 
@@ -279,7 +279,7 @@ describe("DeckBracket", () => {
     wrap(<Harness cards={DECK} />);
     await userEvent.click(trigger());
 
-    expect(within(await panel()).getByText("Bracket ~2 · 0 game changers")).toBeInTheDocument();
+    expect(within(await panel()).getByText("Bracket ~2 · 0 Game Changers")).toBeInTheDocument();
   });
 
   /** The disclosure names every card the number was read from — a reader who disagrees with a
@@ -309,23 +309,23 @@ describe("DeckBracket", () => {
     await userEvent.click(trigger());
     const dialog = await panel();
 
-    expect(within(dialog).getByText("Bracket ~3 · 2 game changers")).toBeInTheDocument();
-    expect(within(dialog).getByText(/estimate/i)).toBeInTheDocument();
+    expect(within(dialog).getByText("Bracket ~3 · 2 Game Changers")).toBeInTheDocument();
+    expect(within(dialog).getByText(/Estimated minimum bracket/)).toBeInTheDocument();
 
-    await userEvent.click(within(dialog).getByRole("button", { name: /what this read/i }));
+    await userEvent.click(within(dialog).getByRole("button", { name: /how this was estimated/i }));
 
     expect(within(dialog).getByText(/Rhystic Study/)).toBeInTheDocument();
     expect(within(dialog).getByText(/Cyclonic Rift/)).toBeInTheDocument();
   });
 
-  /** Nothing to disclose for a deck the estimate read nothing off — an empty "What this read"
+  /** Nothing to disclose for a deck the estimate read nothing off — an empty "How this was estimated"
    *  is a control promising an answer it has not got. */
   it("offers no disclosure when it read nothing", async () => {
     wrap(<Harness cards={DECK} />);
     await userEvent.click(trigger());
 
     expect(
-      within(await panel()).queryByRole("button", { name: /what this read/i }),
+      within(await panel()).queryByRole("button", { name: /how this was estimated/i }),
     ).not.toBeInTheDocument();
   });
 
@@ -350,7 +350,7 @@ describe("DeckBracket", () => {
     wrap(<Harness cards={DECK} bracket={3} />);
     await userEvent.click(trigger());
 
-    expect((await panel()).firstElementChild).toHaveTextContent("Bracket ~2 · 0 game changers");
+    expect((await panel()).firstElementChild).toHaveTextContent("Bracket ~2 · 0 Game Changers");
   });
 
   /**
@@ -466,8 +466,8 @@ describe("DeckBracket", () => {
     await userEvent.click(trigger());
     const dialog = await panel();
 
-    expect(within(dialog).getByText(/Possible, and not counted/)).toBeInTheDocument();
-    expect(within(dialog).getByText(/Nothing here has been confirmed/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Possible combos \(not counted\)/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/can’t be checked automatically/)).toBeInTheDocument();
     expect(
       within(dialog).getByText("Kenrith, the Returned King + Sol Ring"),
     ).toBeInTheDocument();
@@ -494,9 +494,9 @@ describe("DeckBracket", () => {
     const dialog = await screen.findByRole("dialog");
 
     expect(
-      await within(dialog).findByText(/No combo list has been downloaded/),
+      await within(dialog).findByText(/Combo data hasn’t downloaded yet/),
     ).toBeInTheDocument();
-    expect(within(dialog).getByText(/downloads on its own/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/downloads automatically after launch/)).toBeInTheDocument();
     // Never a press to go and find: the panel it pointed at does not exist any more.
     expect(within(dialog).queryByText(/Settings/)).toBeNull();
     expect(within(dialog).queryByText(/No two-card combo in the list matches/)).toBeNull();
@@ -515,7 +515,7 @@ describe("DeckBracket", () => {
     await userEvent.click(trigger());
     const dialog = await screen.findByRole("dialog");
 
-    expect(await within(dialog).findByText("Reading combos…")).toBeInTheDocument();
+    expect(await within(dialog).findByText("Loading combos…")).toBeInTheDocument();
     expect(within(dialog).queryByText(/No two-card combo in the list matches/)).toBeNull();
   });
 
@@ -539,7 +539,7 @@ describe("DeckBracket", () => {
     await userEvent.click(trigger());
     const dialog = await screen.findByRole("dialog");
 
-    expect(await within(dialog).findByText(/could not be read/)).toBeInTheDocument();
+    expect(await within(dialog).findByText(/Couldn’t load combo data/)).toBeInTheDocument();
     expect(within(dialog).queryByText(/No two-card combo in the list matches/)).toBeNull();
   });
 
@@ -695,7 +695,7 @@ describe("DeckBracket", () => {
     combosForCards.mockReturnValue(new Promise(() => {}));
     const view = wrap(<Harness cards={DECK} />);
     await userEvent.click(trigger());
-    await screen.findByText("Reading combos…");
+    await screen.findByText("Loading combos…");
     vi.mocked(estimateBracket).mockClear();
 
     view.rerender(<Harness cards={DECK} />);

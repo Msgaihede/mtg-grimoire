@@ -388,7 +388,7 @@ function Advisory({
   }, []);
 
   const read: { label: string; names: string[] }[] = [
-    { label: "Game changers", names: estimate.gameChangerNames },
+    { label: "Game Changers", names: estimate.gameChangerNames },
     { label: "Mass land denial", names: estimate.massLandDenial },
     { label: "Extra turns", names: estimate.extraTurns },
   ].filter((line) => line.names.length > 0);
@@ -443,12 +443,10 @@ function Advisory({
           everywhere else data is counted. It prints the **floor** whatever the reader has set,
           because this line is the reading and the picker below is the answer. */}
       <p className="font-mono font-medium tabular-nums">
-        Bracket ~{estimate.floor} · {gameChangers} game changer{gameChangers === 1 ? "" : "s"}
+        Bracket ~{estimate.floor} · {gameChangers} Game Changer{gameChangers === 1 ? "" : "s"}
       </p>
       <p className="mt-1 text-dim">
-        An estimate from what this app can see, and a floor rather than a verdict: the cards say
-        what this deck cannot sit below, never what it is. A bracket is a conversation at the
-        table, never a rule this deck can fail.
+        Estimated minimum bracket, based on the cards. Your playgroup decides the real bracket.
       </p>
 
       {/* **A real radio group rather than six buttons**: one of six is chosen, exactly one is
@@ -526,15 +524,14 @@ function Advisory({
           last clause: nothing to press, so nothing to go and find. */}
       {comboState === "never" ? (
         <p className="mt-2 leading-snug text-dim">
-          No combo list has been downloaded yet, so nothing here has been checked for two-card
-          combos at all — this reading is three signals rather than four. The list downloads on
-          its own shortly after launch, and the fourth signal appears here when it lands.
+          Combo data hasn&rsquo;t downloaded yet, so two-card combos aren&rsquo;t checked. It
+          downloads automatically after launch.
         </p>
       ) : comboState === "reading" ? (
-        <p className="mt-2 text-dim">Reading combos…</p>
+        <p className="mt-2 text-dim">Loading combos…</p>
       ) : comboState === "failed" ? (
         <p className="mt-2 leading-snug text-dim">
-          The combo list could not be read, so this reading is three signals rather than four.
+          Couldn&rsquo;t load combo data, so two-card combos weren&rsquo;t checked.
         </p>
       ) : estimate.combos.length === 0 && estimate.possibleCombos.length === 0 ? (
         <p className="mt-2 text-dim">No two-card combo in the list matches this deck.</p>
@@ -558,9 +555,8 @@ function Advisory({
           {estimate.possibleCombos.length > 0 && (
             <>
               <p className="mt-2 leading-snug text-dim">
-                Possible, and not counted: every card named below is in this deck, but each combo
-                also needs something no card list can answer for — a creature with flying, a way
-                to sacrifice. Nothing here has been confirmed.
+                Possible combos (not counted). Each needs a generic piece, like a flier or a sac
+                outlet, that can&rsquo;t be checked automatically.
               </p>
               <ul className="mt-1 space-y-1.5">
                 {estimate.possibleCombos.map((combo) => (
@@ -591,7 +587,7 @@ function Advisory({
               )}
               aria-hidden="true"
             />
-            What this read
+            How this was estimated
           </button>
           {why && (
             <dl className="mt-1 space-y-1">

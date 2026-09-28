@@ -596,8 +596,8 @@ describe("singleton exceptions (exact phrases)", () => {
         severity: "warning",
         code: "unknown-copy-limit",
         message:
-          'Goblin Trapfinder\'s text allows up to "thirty" copies, a number this app cannot ' +
-          "read; its 8 copies were not checked.",
+          'Couldn\'t read Goblin Trapfinder\'s copy limit ("thirty"), so its 8 copies ' +
+          "weren't checked.",
         cardIds: ["c-Goblin Trapfinder"],
       },
     ]);
@@ -757,7 +757,7 @@ describe("legality (per printing — TRAP B)", () => {
         severity: "warning",
         code: "unknown-legality",
         message:
-          'Lightning Bolt\'s Modern legality is "probationary", which this app does not know.',
+          'Lightning Bolt has an unrecognized Modern legality ("probationary").',
         cardIds: ["c-Lightning Bolt"],
       },
     ]);
@@ -803,7 +803,7 @@ describe("legality (per printing — TRAP B)", () => {
         severity: "warning",
         code: "orphan",
         message:
-          "Ancient Tomb is not in the card database, so it was not checked against Modern's rules.",
+          "Ancient Tomb isn't in the card database, so it wasn't checked against Modern rules.",
         cardIds: ["c-Ancient Tomb"],
       },
     ]);
@@ -835,7 +835,7 @@ describe("legality (per printing — TRAP B)", () => {
       {
         severity: "warning",
         code: "orphan",
-        message: "Island is not in the card database, so it was not checked against Modern's rules.",
+        message: "Island isn't in the card database, so it wasn't checked against Modern rules.",
         cardIds: ["c-Island"],
       },
     ]);

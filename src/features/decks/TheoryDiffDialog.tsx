@@ -49,7 +49,7 @@ function rowKey(row: TheoryDiffRow): string {
  * says it, in words, where the number it qualifies is.
  */
 const ONE_DIRECTION =
-  "Shows cards required by Theory that are not in Actual. Cards in Actual but not in Theory are excluded cuts.";
+  "Cards in the theory list that aren't in the actual list yet.";
 
 /**
  * The second sentence of the same kind, drawn beside the control it is about.
@@ -67,7 +67,7 @@ const ONE_DIRECTION =
  * which is this file's rule for the as-of line already.
  */
 const VIEW_NOTE =
-  "Cards can appear in both views; different finishes count as separate printings.";
+  "Different finishes count as different printings.";
 
 /**
  * Which half of the difference the list is showing.
@@ -131,14 +131,12 @@ const VIEW_LABEL: Record<DiffView, string> = {
  * {@link nothingShown}.
  */
 const NOTHING_SHOWN: Record<DiffView, string> = {
-  all: "The two lists agree. Everything requested by the plan is already in the deck.",
+  all: "Nothing missing. The deck matches the theory list.",
   missing:
-    "No card is missing. Every card the plan asks for is already on the table as another " +
-    "printing.",
+    "Nothing missing. Every card in the theory list is in the deck, some in a different printing.",
   other:
-    "No card substitutions. Every card the plan asks for is one the deck has not got in any " +
-    "printing.",
-  tokens: "The plan counts no tokens the deck is short of.",
+    "No printing swaps. The missing cards aren't in the deck in any printing.",
+  tokens: "No missing tokens.",
 };
 
 /**
@@ -149,7 +147,7 @@ const NOTHING_SHOWN: Record<DiffView, string> = {
  * the difference left is the tokens a reader finds under `Tokens`.
  */
 const ONLY_TOKENS_LEFT =
-  "Every card the plan asks for is already in the deck. What is left is tokens.";
+  "Every card in the theory list is in the deck. Only tokens are missing.";
 
 /**
  * Which sentence an empty list draws — {@link NOTHING_SHOWN}'s for the rung, with two exceptions
@@ -206,8 +204,8 @@ function inView(row: TheoryDiffRow, view: DiffView): boolean {
  */
 function heldNote(row: TheoryDiffRow): string | null {
   if (row.heldAsOtherPrinting <= 0) return null;
-  if (row.heldAsOtherPrinting >= row.quantity) return "Already played as another printing";
-  return `${row.heldAsOtherPrinting} of ${row.quantity} already played as another printing`;
+  if (row.heldAsOtherPrinting >= row.quantity) return "In the deck as another printing";
+  return `${row.heldAsOtherPrinting} of ${row.quantity} in the deck as another printing`;
 }
 
 /**
@@ -323,10 +321,10 @@ export interface WishesSent {
  */
 export function wishesSentNote({ wishes, destination }: WishesSent): string {
   if (wishes === 0) {
-    return "No cards were sent. The cards are no longer missing or have left the card database.";
+    return "Nothing sent. These cards are no longer missing or no longer in the card database.";
   }
-  const noun = wishes === 1 ? "wish" : "wishes";
-  return `Sent from the plan to your wishlist — ${wishes} ${noun} updated${filedIn(destination)}.`;
+  const noun = wishes === 1 ? "item" : "items";
+  return `Added to your wishlist: ${wishes} ${noun} updated${filedIn(destination)}.`;
 }
 
 /**
@@ -663,8 +661,8 @@ export function TheoryDiffDialog({
       // Widened when the list stopped being purely a shopping list (2026-08-22): a row the live
       // deck already plays as another printing is not a card to buy or pull, and a subtitle that
       // named only those two would be describing the `Missing` view rather than the dialog.
-      subtitle="Cards needed to match Theory — missing copies, available pulls, or alternative printings"
-      closeLabel="Close the difference list"
+      subtitle="What's needed to match the theory list"
+      closeLabel="Close"
       size="w-[47.5rem]"
       onDismiss={onDismiss}
       onClose={onClose}
@@ -904,7 +902,7 @@ function TheoryDiffBody({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
         {query.isPending ? (
-          <p className="px-2 py-6 text-center text-xs text-dim">Reading the plan…</p>
+          <p className="px-2 py-6 text-center text-xs text-dim">Loading theory list…</p>
         ) : query.isError ? (
           // The read's own refusal, in the backend's words. Not a retry button: the query
           // refetches itself the next time the dialog opens, and every write in the app already
@@ -1018,7 +1016,7 @@ function TheoryDiffBody({
             // that name as its own visible content, so the name has to carry it or the two
             // disagree. `Wishlist` is the root's word — the control's own first row — rather
             // than "nowhere" or a blank.
-            label={`Send to ${destination ?? "Wishlist"} — choose which wishlist folder these wishes are filed in`}
+            label={`Send to ${destination ?? "Wishlist"} (choose wishlist folder)`}
             // Not while a press is in flight. Changing the destination clears what the answer in
             // flight is about, and a write that lands after the control has moved would be
             // announced under a folder it did not write to.
@@ -1109,8 +1107,7 @@ function FigureStrip({
         // not "how many of these you have covered". It is a count of loose copies, and it is
         // deliberately not subtracted from anything above.
         title={
-          "Unassigned copies of these exact cards in your collection. " +
-          "Not subtracted from what the plan needs."
+          "Unassigned copies you already own. Not subtracted from the total."
         }
       />
     </dl>

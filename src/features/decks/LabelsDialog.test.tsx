@@ -126,7 +126,7 @@ describe("LabelsDialog", () => {
   it("is a dialog named Labels, dismissed by Escape and closed by the scrim", async () => {
     const { onDismiss, onClose } = mount();
     const dialog = await screen.findByRole("dialog", { name: "Labels" });
-    expect(within(dialog).getByRole("button", { name: "Close labels" })).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: "Close" })).toBeInTheDocument();
 
     const press = new KeyboardEvent("keydown", { key: "Escape", cancelable: true, bubbles: true });
     window.dispatchEvent(press);
@@ -243,13 +243,13 @@ describe("the two sections", () => {
   it("says so when nothing in this list is labelled", async () => {
     deckLabelList.mockResolvedValue([]);
     mount();
-    expect(await screen.findByText(/No cards in this list are labelled yet/)).toBeInTheDocument();
+    expect(await screen.findByText(/No cards in this list are labeled yet/)).toBeInTheDocument();
   });
 
   it("says so when every label the reader has is already on a card here", async () => {
     deckLabelAll.mockResolvedValue([EVERY_LABEL[0]]);
     mount();
-    expect(await screen.findByText(/All existing labels are currently used in this list/)).toBeInTheDocument();
+    expect(await screen.findByText(/All your labels are used in this list/)).toBeInTheDocument();
   });
 });
 
@@ -320,7 +320,7 @@ describe("labels", () => {
     // decks page had to rename three of its heading triggers for exactly that collision.
     expect(within(li).getByRole("button", { name: "Remove" })).toBeDisabled();
 
-    expect(within(dialog).getByText(/^Its 3 cards stay in the deck/)).toHaveTextContent(
+    expect(within(dialog).getByText(/^The 3 cards stay in the deck/)).toHaveTextContent(
       // Three decks wear it, so two of them still will — the number the deck-scoped row cannot
       // know and the app-wide list carries.
       "The label itself stays in your list, and stays on the 2 other decks using it.",
@@ -346,7 +346,7 @@ describe("labels", () => {
       name: "Remove Cut candidate from this deck",
     });
 
-    expect(within(dialog).getByText(/^Its 3 cards stay in the deck/)).toHaveTextContent(
+    expect(within(dialog).getByText(/^The 3 cards stay in the deck/)).toHaveTextContent(
       "The label itself stays in your list.",
     );
     expect(within(dialog).queryByText(/other deck/)).toBeNull();
@@ -368,8 +368,8 @@ describe("labels", () => {
     const dialog = await screen.findByRole("group", { name: "Delete Budget swap" });
     expect(within(li).getByRole("button", { name: "Delete" })).toBeDisabled();
     // `deck_cards.label_id` is `ON DELETE SET NULL`: the cards are unlabelled, never deleted.
-    expect(within(dialog).getByText(/^Its 5 cards, across 2 decks/)).toHaveTextContent(
-      "stay where they are and lose the label",
+    expect(within(dialog).getByText(/^5 cards across 2 decks/)).toHaveTextContent(
+      "lose the label",
     );
 
     await user.click(within(dialog).getByRole("button", { name: "Delete label" }));
@@ -405,7 +405,7 @@ describe("labels", () => {
     await user.tab();
     expect(within(dialog).getByRole("button", { name: "Delete label" })).toHaveFocus();
 
-    await user.click(within(dialog).getByRole("button", { name: "Keep it" }));
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(within(li).getByRole("button", { name: "Delete" })).toHaveFocus());
   });
 
@@ -424,11 +424,11 @@ describe("labels", () => {
     deckLabelList.mockResolvedValue([]);
     deckLabelAll.mockResolvedValue([]);
     mount();
-    await screen.findByText(/No other labels created yet/);
+    await screen.findByText(/No other labels yet/);
     const user = userEvent.setup();
 
     await user.type(screen.getByLabelText("New label name"), "Playtest");
-    await user.click(screen.getByRole("button", { name: "Choose label colour" }));
+    await user.click(screen.getByRole("button", { name: "Choose label color" }));
     await user.click(screen.getByRole("button", { name: "Moss" }));
     await user.click(screen.getByRole("button", { name: "Add label" }));
 
@@ -460,7 +460,7 @@ describe("labels", () => {
       "true",
     );
     expect(screen.getByRole("status")).toHaveTextContent(
-      "“Budget swap” already exists. Label names must be unique across all decks.",
+      "“Budget swap” already exists.",
     );
     await user.click(screen.getByRole("button", { name: "Add label" }));
     expect(deckLabelCreate).not.toHaveBeenCalled();
@@ -478,12 +478,12 @@ describe("labels", () => {
     deckLabelList.mockResolvedValue([]);
     deckLabelAll.mockResolvedValue([]);
     mount();
-    await screen.findByText(/No other labels created yet/);
+    await screen.findByText(/No other labels yet/);
     const user = userEvent.setup();
 
     await user.type(screen.getByLabelText("New label name"), "Playtest");
-    await user.click(screen.getByRole("button", { name: "Choose label colour" }));
-    const hex = screen.getByLabelText("Label colour hex");
+    await user.click(screen.getByRole("button", { name: "Choose label color" }));
+    const hex = screen.getByLabelText("Label color hex");
     await user.clear(hex);
     await user.type(hex, "7b2d8e");
     await user.click(screen.getByRole("button", { name: "Add label" }));
@@ -509,7 +509,7 @@ describe("labels", () => {
     const user = userEvent.setup();
     const li = row("Cut candidate");
 
-    await user.click(within(li).getByRole("button", { name: "Change colour of Cut candidate" }));
+    await user.click(within(li).getByRole("button", { name: "Change color of Cut candidate" }));
     await user.click(within(li).getByRole("button", { name: "Slate" }));
     // The draft is on screen and nothing has been written yet.
     expect(deckLabelUpdate).not.toHaveBeenCalled();
@@ -526,7 +526,7 @@ describe("labels", () => {
     const user = userEvent.setup();
     const li = row("Cut candidate");
 
-    await user.click(within(li).getByRole("button", { name: "Change colour of Cut candidate" }));
+    await user.click(within(li).getByRole("button", { name: "Change color of Cut candidate" }));
     await user.click(within(li).getByRole("button", { name: "Done" }));
 
     expect(deckLabelUpdate).not.toHaveBeenCalled();

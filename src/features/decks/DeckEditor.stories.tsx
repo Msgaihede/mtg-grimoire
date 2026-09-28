@@ -486,8 +486,7 @@ export const GroupAndSort: Story = {
     // beside it. It begins with the visible label all the same (WCAG 2.5.3).
     const chip = canvas.getByRole("button", { name: /^Split X/ });
     await expect(chip).toHaveAccessibleName(
-      "Split X — give cards with X in their cost a group of their own, instead of counting X " +
-        "as zero",
+      "Split X — group X-cost cards separately instead of counting X as 0",
     );
     // A pressed-state control and never the `disabled` attribute, which would take it out of the
     // tab order. *Which* way it is set is the deck's own column and therefore the seed's to say,
@@ -753,7 +752,7 @@ export const CollectionSubmenu: Story = {
 
     // A submenu row says so in ARIA rather than only with a chevron — the chevron is
     // `aria-hidden`, so this is the whole of what a screen reader is told.
-    const parent = canvas.getByRole("menuitem", { name: "Collection link" });
+    const parent = canvas.getByRole("menuitem", { name: "Missing copies" });
     await expect(parent).toHaveAttribute("aria-haspopup", "menu");
     await expect(parent).toHaveAttribute("aria-expanded", "false");
 
@@ -803,7 +802,7 @@ export const QuickAddSettlesTheShortfall: Story = {
     // **Scoped to the open submenu's panel**, because two rows on this menu are called
     // `Collection` — this one and `Add to ▸ Collection` — and the repeat is deliberate: it is the
     // reader's binder in both places. What tells them apart is the panel each is in.
-    await userEvent.click(canvas.getByRole("menuitem", { name: "Collection link" }));
+    await userEvent.click(canvas.getByRole("menuitem", { name: "Missing copies" }));
     const panels = canvas.getAllByRole("menu");
     // The innermost panel, which is the one just opened. `.at(-1)` is not in this build's
     // `lib` target — see the TS 6.0.x pin.
@@ -1174,7 +1173,7 @@ export const Busy: Story = {
 
     const alert = await canvas.findByRole("alert");
     await expect(alert).toHaveTextContent(
-      "Could not change this deck — The card database is busy finishing a sync. " +
+      "Couldn't change this deck — The card database is busy finishing a sync. " +
         "Try that again in a moment.",
     );
     // The deck is still here and still sixty: a refusal is news, not a broken editor.
@@ -1204,8 +1203,7 @@ export const Gone: Story = {
     const canvas = within(canvasElement);
     await expect(
       await canvas.findByText(
-        "This deck is not there any more. It may have been deleted from the gallery — go back " +
-          "and pick another one.",
+        "This deck no longer exists. It may have been deleted.",
       ),
     ).toBeInTheDocument();
     // Not an alert: nothing failed, and a red band would make a deleted deck read as a fault.
@@ -1218,7 +1216,7 @@ export const Gone: Story = {
 };
 
 /**
- * Two printings of one card in one category, folded into one row.
+ * Two printings of one card in one category, merged into one row.
  *
  * **`deck_swap_printing` folds on `(deck, variant, category, card)`.** A category holds a printing
  * at most once per list, so swapping onto one it already has is not an error and not two rows: the
@@ -1306,7 +1304,7 @@ export const SwapFolds: Story = {
     // down.
     await user.click(canvas.getByRole("button", { name: "Deck settings" }));
     await pickOption(user, "Add cards to", "Main deck");
-    await user.click(canvas.getByRole("button", { name: "Close deck settings" }));
+    await user.click(canvas.getByRole("button", { name: "Close" }));
     await waitFor(async () => await expect(canvas.queryByRole("dialog")).toBeNull());
 
     // **All printings, because the panel collapses like the search page does.** Collapsed, Sol
@@ -1399,7 +1397,7 @@ export const GameChangerFilter: Story = {
 
     // Exact, never `/game changer/`: a card that *is* one says so in its own accessible name, so
     // a loose pattern matches the cards as well as the control.
-    const chip = await canvas.findByRole("button", { name: "1 game changer" });
+    const chip = await canvas.findByRole("button", { name: "1 Game Changer" });
     // On the ledger line and not in the label row — this deck wears no labels, so that row is not
     // drawn at all, which is what the chip's own move took away.
     await expect(canvas.queryByRole("group", { name: "Filter by label" })).toBeNull();

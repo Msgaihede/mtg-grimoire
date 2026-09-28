@@ -335,7 +335,7 @@ export function QuantityTag({
   // suite's anchored assertions are written against. `GAME_CHANGER_LABEL` and
   // {@link NOTE_MARK_LABEL} rather than the words: each is one fact, and this file owns one of the
   // two spellings and neither of the others.
-  const counted = `${quantity} in this pile`;
+  const counted = `${quantity} in this category`;
   const clauses = [name === null ? counted : `${name} · ${counted}`];
   if (gameChanger) clauses.push(GAME_CHANGER_LABEL);
   if (noted) clauses.push(NOTE_MARK_LABEL);

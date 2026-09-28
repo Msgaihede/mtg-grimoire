@@ -66,7 +66,7 @@ const ROOT_NAME = "All decks";
 
 /** Where a thing already is: offered, inert. `MoveToFolder`'s own word, for its reason — moving
  *  something to where it already is writes nothing and bumps `updated_at`. */
-const HERE_NOW = "Here now";
+const HERE_NOW = "Current";
 
 /** One offer in a "Move to" list. */
 export interface FolderDestination {
@@ -119,8 +119,8 @@ export function folderDestinations(
   const inertness = (id: number | null): string | null => {
     if (id === here) return HERE_NOW;
     if (id === null || moving === null) return null;
-    if (id === moving) return "Cannot go inside itself";
-    return held?.has(id) === true ? "Cannot go inside what it holds" : null;
+    if (id === moving) return "A folder can't go inside itself";
+    return held?.has(id) === true ? "A folder can't go inside its own subfolder" : null;
   };
 
   return [
@@ -201,9 +201,9 @@ export function moveToFolderContent({
 
     // A cabinet with no drawers in it and one that has not answered yet are told apart by
     // `isPending`, never by the empty array — the hook says so on its own `folders`.
-    if (folders.query.isPending) return <Note>Reading your folders…</Note>;
+    if (folders.query.isPending) return <Note>Loading folders…</Note>;
     if (folders.query.isError) {
-      return <Note failed>Could not read your folders — {ipcError(folders.query.error)}</Note>;
+      return <Note failed>Couldn't load your folders — {ipcError(folders.query.error)}</Note>;
     }
 
     return <MenuRows items={destinationItems(folders.folders)} />;

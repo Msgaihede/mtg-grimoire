@@ -81,14 +81,14 @@ export const LiveListWithAPlan: Story = {
     const canvas = within(canvasElement);
 
     await expect(canvas.getByText("Clear the actual list?")).toBeVisible();
-    await expect(canvas.getByText(/leave the deck and the piles stay/)).toHaveTextContent(
+    await expect(canvas.getByText(/will be removed from the deck\. Categories stay/)).toHaveTextContent(
       "Any copies you own go back to Recently removed.",
     );
     await expect(canvas.getByText("The 100 cards in the other list are untouched.")).toBeVisible();
 
     // The way out writes nothing, and is the button a reader reaches for by pressing the one that
     // is not the destructive one.
-    await userEvent.click(canvas.getByRole("button", { name: "Keep them" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Cancel" }));
     await expect(args.onCancel).toHaveBeenCalled();
     await expect(args.onCleared).not.toHaveBeenCalled();
   },
@@ -121,8 +121,8 @@ export const TheoryList: Story = {
     const canvas = within(canvasElement);
 
     await expect(canvas.getByText("Clear the theory list?")).toBeVisible();
-    await expect(canvas.getByText(/leave the deck and the piles stay/)).toHaveTextContent(
-      "A theory list holds no copies, so nothing else moves.",
+    await expect(canvas.getByText(/will be removed from the deck\. Categories stay/)).toHaveTextContent(
+      "The theory list doesn't use your collection, so no cards are moved.",
     );
     await expect(canvas.queryByText(/Recently removed/)).toBeNull();
     await expect(canvas.getByText("The 40 cards in the other list are untouched.")).toBeVisible();
@@ -150,8 +150,8 @@ export const VirtualDeck: Story = {
     const canvas = within(canvasElement);
 
     await expect(canvas.getByText("Clear the deck?")).toBeVisible();
-    await expect(canvas.getByText(/leave the deck and the piles stay/)).toHaveTextContent(
-      "This deck keeps no copies, so nothing else moves.",
+    await expect(canvas.getByText(/will be removed from the deck\. Categories stay/)).toHaveTextContent(
+      "This deck doesn't use your collection, so no cards are moved.",
     );
     // The whole point of the frame: the promise the old ternary made to a deck with no folder.
     await expect(canvas.queryByText(/Recently removed/)).toBeNull();
@@ -180,8 +180,8 @@ export const OneCardEachSide: Story = {
     await expect(canvas.getByRole("button", { name: "Remove 1 card" })).toBeVisible();
     // The whole sentence, not a prefix of it: `toHaveTextContent` matches a substring, so
     // "The 1 card in it leave" passes against the broken text *and* the fixed one.
-    await expect(canvas.getByText(/leaves the deck/)).toHaveTextContent(
-      "The 1 card in it leaves the deck and the piles stay.",
+    await expect(canvas.getByText(/will be removed from the deck/)).toHaveTextContent(
+      "1 card will be removed from the deck. Categories stay.",
     );
   },
 };
@@ -197,6 +197,6 @@ export const WriteInFlight: Story = {
     const canvas = within(canvasElement);
 
     await expect(canvas.getByRole("button", { name: "Remove 40 cards" })).toBeDisabled();
-    await expect(canvas.getByRole("button", { name: "Keep them" })).toBeEnabled();
+    await expect(canvas.getByRole("button", { name: "Cancel" })).toBeEnabled();
   },
 };

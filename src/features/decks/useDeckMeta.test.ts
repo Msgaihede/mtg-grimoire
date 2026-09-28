@@ -525,7 +525,7 @@ describe("useDeckMeta.autoCategorise", () => {
 
     await expect(
       result.current.autoCategorise.mutateAsync([SWORDS, CREATURE, LAND]),
-    ).rejects.toThrow(/^Could not organize cards by category\..*The database is busy\.$/);
+    ).rejects.toThrow(/^Couldn't auto-categorize cards: tag data failed to load\..*The database is busy\.$/);
 
     expect(deckMoveCard).not.toHaveBeenCalled();
     expect(deckCategoryCreate).not.toHaveBeenCalled();

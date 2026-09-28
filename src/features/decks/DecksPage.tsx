@@ -92,7 +92,7 @@ import { useNewDeckFormat } from "./useNewDeckFormat";
  * two slots exist to draw: the deck destination's line names a deck and needs a `deck_get`, this
  * one names nothing at all, because the deck it is about does not exist yet.
  */
-const NEW_DECK_SUBTITLE = "Paste a list or choose a file, and it becomes a deck of its own.";
+const NEW_DECK_SUBTITLE = "Paste a list or choose a file to create a deck.";
 
 /**
  * A tile's narrowest track, in px, at 100% zoom — the number the reader's gesture multiplies.
@@ -209,8 +209,8 @@ const SORT_ROWS: readonly DropdownOption[] = sortOptions(DECK_SORT_OPTIONS, (o) 
  */
 function sortDirectionName(desc: boolean): string {
   return desc
-    ? "Sort direction: descending — press for ascending"
-    : "Sort direction: ascending — press for descending";
+    ? "Sort descending (click for ascending)"
+    : "Sort ascending (click for descending)";
 }
 
 /**
@@ -1235,7 +1235,7 @@ export function DecksPage() {
         : null;
 
   const failure = query.isError ? ipcError(query.error) : null;
-  const status = query.isPending ? "Reading your decks…" : failure;
+  const status = query.isPending ? "Loading decks…" : failure;
   // The *latest* write on the screen, not whichever is still holding an error: a refused
   // archive used to leave its banner up while the reader went on to duplicate something
   // successfully, which is an alert about a thing already dealt with (the collection table's
@@ -1358,7 +1358,7 @@ export function DecksPage() {
               role="alert"
               className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
             >
-              Could not change your decks — {bannerFailure}
+              Couldn't change your decks — {bannerFailure}
             </p>
           </motion.div>
         )}
@@ -1641,7 +1641,7 @@ export function DecksPage() {
             childFolders.length === 0 &&
             here.length === 0 && (
               <p className="mx-auto max-w-prose py-12 text-center text-sm text-dim">
-                Every deck you have is filed in a folder. Open one on the left.
+                All your decks are in folders. Pick one on the left.
               </p>
             )}
 
@@ -1845,7 +1845,7 @@ export function DecksPage() {
 
           {!status && here.length === 0 && archivedHere.length > 0 && (
             <p className="py-8 text-center text-sm text-dim">
-              Nothing here — every deck in this folder is filed away below.
+              All decks in this folder are archived.
             </p>
           )}
 
@@ -1867,7 +1867,7 @@ export function DecksPage() {
                   control that broke. Its own sentence, in the live wall's voice. */}
               {shownArchived.length === 0 && (
                 <p className="py-6 text-center text-sm text-dim">
-                  No filed decks match this filter
+                  No archived decks match this filter
                 </p>
               )}
               {/* The same tracks and the same gutter as the wall above it: filed decks are the
@@ -2243,12 +2243,10 @@ function DeleteFolderConfirm({
       <p>Delete “{node.folder.name}”?</p>
       <p className="mt-1 leading-relaxed text-dim">
         {node.count === 0
-          ? "It holds no decks."
-          : `The ${plural(node.count, "deck")} in it ${
-              node.count === 1 ? "is" : "are"
-            } kept — ${node.count === 1 ? "it moves" : "they move"} to the top level.`}
+          ? "It's empty."
+          : `Its ${plural(node.count, "deck")} will move to the top level.`}
         {inside > 0 &&
-          ` The ${plural(inside, "folder")} inside ${inside === 1 ? "goes" : "go"} with it.`}
+          ` ${plural(inside, "folder")} inside it will also be deleted.`}
       </p>
       <div className="mt-2 flex gap-2">
         <button

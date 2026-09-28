@@ -83,13 +83,13 @@ export const DECK_KIND_LABEL: Record<DeckKind, string> = {
  * and therefore promises nothing.
  */
 export const DECK_KIND_HINT: Record<DeckKind, string> = {
-  regular: "One list, checked against the cards you own.",
+  regular: "One list, checked against your collection.",
   theory:
-    "A plan beside the list you have actually sleeved up. Switching to it makes the deck you " +
-    "have the plan, and starts the actual list empty.",
+    "Theory: the list you plan to build. Actual: the cards you've sleeved up. Switching moves " +
+    "your current list into Theory and starts Actual empty.",
   virtual:
-    "A deck you track without owning the cards — no collection or wishlist, and no missing " +
-    "counts. Switching to it files any copies this deck holds into Recently removed.",
+    "Track a deck without owning the cards. No collection, wishlist or missing counts. " +
+    "Switching moves any copies in this deck to Recently removed.",
 };
 
 /** Which kind this deck is. See the module doc for the table and for the impossible row. */

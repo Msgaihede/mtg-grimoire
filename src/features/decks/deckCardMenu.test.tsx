@@ -522,7 +522,7 @@ describe("buildDeckCardMenu", () => {
      *  card's chin draws. */
     const short = () => bolt({ quantity: 4, ownedQuantity: 1 });
 
-    const collection = (items: MenuItem[]) => find(items, "Collection link") as MenuSubmenu;
+    const collection = (items: MenuItem[]) => find(items, "Missing copies") as MenuSubmenu;
 
     /**
      * **The absence is the surface saying it wired no writes** — `cardMenu.tsx`'s `moveItem`
@@ -530,14 +530,14 @@ describe("buildDeckCardMenu", () => {
      * also the state every other test in this file is written against.
      */
     it("builds nothing at all where the surface wired no collection writes", () => {
-      expect(has(buildDeckCardMenu(short(), deps()), "Collection link")).toBe(false);
+      expect(has(buildDeckCardMenu(short(), deps()), "Missing copies")).toBe(false);
     });
 
     /** The three answer one question and travel together, so two of them is a half-wired
      *  surface rather than a menu with a row missing. */
     it("builds nothing where only some of the three writes are wired", () => {
       const partial = deps({ quickAdd: vi.fn(), pullCard: vi.fn() });
-      expect(has(buildDeckCardMenu(short(), partial), "Collection link")).toBe(false);
+      expect(has(buildDeckCardMenu(short(), partial), "Missing copies")).toBe(false);
     });
 
     /**
@@ -548,7 +548,7 @@ describe("buildDeckCardMenu", () => {
       const items = buildDeckCardMenu(short(), collectionDeps({ spec: spec("commander") }));
       expect(labels(items).slice(4)).toEqual([
         "Add to",
-        "Collection link",
+        "Missing copies",
         "Category",
         "Label card",
         "Set as commander",
@@ -640,7 +640,7 @@ describe("buildDeckCardMenu", () => {
       expect(actions).toHaveLength(3);
       for (const row of actions) {
         expect(row.disabled).toBe(true);
-        expect(row.reason).toBe("a plan holds no cards");
+        expect(row.reason).toBe("the theory list holds no copies");
       }
     });
 
@@ -660,7 +660,7 @@ describe("buildDeckCardMenu", () => {
       expect(actions).toHaveLength(3);
       for (const row of actions) {
         expect(row.disabled).toBe(true);
-        expect(row.reason).toBe("this pile is switched off");
+        expect(row.reason).toBe("this category is inactive");
       }
     });
 
@@ -726,8 +726,8 @@ describe("buildDeckCardMenu", () => {
       const parent = collection(stocked);
 
       expect(parent.kind).toBe("submenu");
-      expect(labels(stocked).indexOf("Collection link")).toBe(
-        labels(buildDeckCardMenu(bolt({ quantity: 4 }), collectionDeps())).indexOf("Collection link"),
+      expect(labels(stocked).indexOf("Missing copies")).toBe(
+        labels(buildDeckCardMenu(bolt({ quantity: 4 }), collectionDeps())).indexOf("Missing copies"),
       );
     });
 
@@ -750,7 +750,7 @@ describe("buildDeckCardMenu", () => {
        */
       it("draws no Collection item at all when the surface wires no collection writes", () => {
         const virtual = deps({ tracksCollection: false });
-        expect(has(buildDeckCardMenu(short(), virtual), "Collection link")).toBe(false);
+        expect(has(buildDeckCardMenu(short(), virtual), "Missing copies")).toBe(false);
       });
 
       /**
@@ -764,7 +764,7 @@ describe("buildDeckCardMenu", () => {
         const withBinder = collectionDeps({ spec: spec("commander") });
 
         expect(labels(buildDeckCardMenu(short(), virtual))).toEqual(
-          labels(buildDeckCardMenu(short(), withBinder)).filter((l) => l !== "Collection link"),
+          labels(buildDeckCardMenu(short(), withBinder)).filter((l) => l !== "Missing copies"),
         );
       });
 
@@ -785,7 +785,7 @@ describe("buildDeckCardMenu", () => {
         expect(actions).toHaveLength(3);
         for (const row of actions) {
           expect(row.disabled).toBe(true);
-          expect(row.reason).toBe("this deck tracks no cardboard");
+          expect(row.reason).toBe("this deck doesn't use your collection");
         }
       });
 
@@ -1223,7 +1223,7 @@ describe("buildDeckCardMenu with a picked set", () => {
       pressed,
       collectionDeps({ picked: [pressed, other], quickAdd, quickAddAndUnwish, pullCard }),
     );
-    const rows = (find(items, "Collection link for 2 cards") as MenuSubmenu).items;
+    const rows = (find(items, "Missing copies for 2 cards") as MenuSubmenu).items;
 
     expect(labels(rows)).toEqual([
       "Quick add 6 copies",
@@ -1253,7 +1253,7 @@ describe("buildDeckCardMenu with a picked set", () => {
       stocked,
       collectionDeps({ picked: [stocked, short, parked], quickAdd }),
     );
-    const rows = (find(items, "Collection link for 3 cards") as MenuSubmenu).items;
+    const rows = (find(items, "Missing copies for 3 cards") as MenuSubmenu).items;
 
     const add = find(rows, "Quick add 2 copies") as MenuAction;
     expect(add.disabled).toBeUndefined();
@@ -1268,7 +1268,7 @@ describe("buildDeckCardMenu with a picked set", () => {
     const rows = (
       find(
         buildDeckCardMenu(a, collectionDeps({ picked: [a, b], quickAdd })),
-        "Collection link for 2 cards",
+        "Missing copies for 2 cards",
       ) as MenuSubmenu
     ).items;
     const actions = rows.filter((i): i is MenuAction => i.kind === "action");

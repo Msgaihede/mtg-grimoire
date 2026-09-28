@@ -94,7 +94,7 @@ const CARDS: DeckCard[] = [
 /** The names those three cards answer to, once every mark is folded into them. */
 const SOL_RING = "Sol Ring, 2 copies, you own 1 of 2";
 const SIGNET = "Arcane Signet";
-const HENGE = "The Great Henge, game changer";
+const HENGE = "The Great Henge, Game Changer";
 
 /** The slot of a `card()` fixture row in the main pile, which is what a violations map is keyed
  *  by — a row, never a printing (issue #554). */
@@ -1235,7 +1235,7 @@ describe("CardStack cards", () => {
     // now binds `useTooltip()` (`describes: false`) rather than a native `title`.
     const tag = screen.getByText("3");
     expect(tag).toHaveAttribute("aria-hidden", "true");
-    expect(await openTooltip(tag)).toHaveTextContent("Wincon · 3 in this pile");
+    expect(await openTooltip(tag)).toHaveTextContent("Wincon · 3 in this category");
     await closeTooltip(tag);
     // **The fixture's `"moss"` is a colour written by a build older than this one**, and the
     // assertion is what proves such a row still draws: `deck_labels.color` held one of six token
@@ -1262,7 +1262,7 @@ describe("CardStack cards", () => {
 
     const tag = screen.getByText("1");
     expect(tag.style.backgroundColor).toBe("var(--color-mana-c)");
-    expect(await openTooltip(tag)).toHaveTextContent("1 in this pile");
+    expect(await openTooltip(tag)).toHaveTextContent("1 in this category");
   });
 
   /**
@@ -1338,7 +1338,7 @@ describe("CardStack cards", () => {
 
     expect(
       screen.getByRole("button", {
-        name: "Mana Crypt, 2 copies, you own 0 of 2, Fast mana, game changer, rule break: Mana Crypt is banned in Commander.",
+        name: "Mana Crypt, 2 copies, you own 0 of 2, Fast mana, Game Changer, rule break: Mana Crypt is banned in Commander.",
       }),
     ).toBeInTheDocument();
   });
@@ -1429,7 +1429,7 @@ describe("CardStack tooltips", () => {
     // assertion built from the constant would agree with the constant being rewritten.
     const tag = screen.getByText("2");
     expect(tag.querySelector(".lucide-crown")).not.toBeNull();
-    expect(await openTooltip(tag)).toHaveTextContent("Fast mana · 2 in this pile · Game Changer");
+    expect(await openTooltip(tag)).toHaveTextContent("Fast mana · 2 in this category · Game Changer");
     await closeTooltip(tag);
 
     const ruleBreak = screen.getByText("RULE BREAK");
@@ -1484,7 +1484,7 @@ describe("CardStack tooltips", () => {
     // Anchored, unlike every other tooltip assertion in this file: `toHaveTextContent` takes a
     // substring, and a substring passes just as happily against the crowned string that has a
     // clause on the end. The claim here is that there is nothing on the end.
-    expect(await openTooltip(tag)).toHaveTextContent(/^4 in this pile$/);
+    expect(await openTooltip(tag)).toHaveTextContent(/^4 in this category$/);
   });
 
   /**
@@ -1860,7 +1860,7 @@ describe("CardStack marks", () => {
       }),
     ).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
-      expect.stringContaining("game changer"),
+      expect.stringContaining("Game Changer"),
     );
     // `queryByText` reads text content, which is the one thing an `aria-label` cannot reach into
     // — so this is the assertion that says the ribbon is gone rather than merely renamed.

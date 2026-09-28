@@ -1294,7 +1294,7 @@ it("makes a label with a colour from the app's own palette, and puts it on the c
 
   expect(await screen.findByLabelText("New label")).toHaveValue("Cut");
 
-  await userEvent.click(screen.getByRole("button", { name: "Choose label colour" }));
+  await userEvent.click(screen.getByRole("button", { name: "Choose label color" }));
   const ember = LABEL_COLORS.find((c) => c.label === "Ember");
   await userEvent.click(await screen.findByRole("button", { name: "Ember" }));
 
