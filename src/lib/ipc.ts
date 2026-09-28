@@ -6586,9 +6586,13 @@ export interface RelayStatus {
    * ordering — an op arrived before the parent it names, which a later pull carrying that parent
    * clears on its own, or is skipped after the bound (three pulls and ten minutes on the same
    * blocks) when that parent never comes — and `null` is the ordinary case, where nothing is held
-   * at all, and always the answer on a device in no group.
+   * at all, and always the answer on a device in no group. `"clock"` is a peer whose clock runs
+   * ahead: it stamped ops more than a day (`hlc::MAX_AHEAD_MS`) past this device's wall clock, and
+   * applying them would drag this device's hybrid logical clock into that future for good — so
+   * they wait, with the cursor, until this device's own clock comes within a day of them. Like
+   * `"newer"` it is the reader's to fix, on whichever device has the wrong date.
    */
-  pullHeld: "newer" | "waiting" | null;
+  pullHeld: "newer" | "waiting" | "clock" | null;
 }
 
 /**

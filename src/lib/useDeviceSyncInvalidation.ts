@@ -1,6 +1,7 @@
 import { useEffect } from "react";
+import { DEVICE_SYNC_INVALIDATED } from "@/lib/crossWindow";
 import { ipc } from "@/lib/ipc";
-import { DEVICE_SYNC_INVALIDATED, queryClient } from "@/lib/query";
+import { queryClient, SYNC_KEY } from "@/lib/query";
 
 /**
  * Refresh the screen when a device sync lands.
@@ -10,11 +11,22 @@ import { DEVICE_SYNC_INVALIDATED, queryClient } from "@/lib/query";
  * `deck_cards`, `wishlist_entries` and the rest refreshed nothing on screen — on the automatic
  * path *and* on the manual button. It was invisible only because the button lives on the
  * Settings page; the moment a sync lands while the reader is standing on their collection,
- * stale data looks exactly like lost data.
+ * stale data looks exactly like lost data. **What it refreshes is `DEVICE_SYNC_INVALIDATED`**,
+ * the cross-window table map read at the synced tables, whose comment has the second half of this
+ * story — the same bug, still open for sticky notes, tags and the card modal's holdings, until
+ * that list stopped being written by hand.
  *
  * It **supplements** `SyncPanel`'s own invalidation rather than replacing it: that mutation
  * only fires for a trip *this window* started, and `sync:applied` is emitted for every trip —
  * including the automatic ones a background wake or another device's push can cause.
+ *
+ * **A trip that pulled nothing refreshes `SYNC_KEY` alone.** Rust emits the event when a trip
+ * pushed *or* pulled, and `pulled` counts the ops this trip newly applied — so a push-only trip,
+ * which every write of the reader's own ends in, changed no row a query reads: the window that
+ * wrote has settled its own keys and every other window heard `db:changed`. Refreshing the whole
+ * set there would re-read a deep search, an open card and the Tags page after every press — and a
+ * read under one of those roots that ever wrote a synced table would push, firing the event that
+ * re-ran it: `multi-window.md`'s refresh loop, with the relay inside it.
  *
  * Uses the module-level `queryClient` from `@/lib/query` rather than `useQueryClient()`: what
  * fires this is an event listener, not a render.
@@ -25,8 +37,8 @@ import { DEVICE_SYNC_INVALIDATED, queryClient } from "@/lib/query";
 export function useDeviceSyncInvalidation(): void {
   useEffect(
     () =>
-      ipc.onSyncApplied(() => {
-        for (const queryKey of DEVICE_SYNC_INVALIDATED) {
+      ipc.onSyncApplied((outcome) => {
+        for (const queryKey of outcome.pulled > 0 ? DEVICE_SYNC_INVALIDATED : [SYNC_KEY]) {
           void queryClient.invalidateQueries({ queryKey });
         }
       }),

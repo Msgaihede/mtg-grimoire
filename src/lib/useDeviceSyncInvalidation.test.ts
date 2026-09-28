@@ -10,7 +10,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { onSyncApplied },
 }));
 
-import { DEVICE_SYNC_INVALIDATED, queryClient } from "@/lib/query";
+import { DEVICE_SYNC_INVALIDATED } from "@/lib/crossWindow";
+import { queryClient } from "@/lib/query";
 import { useDeviceSyncInvalidation } from "./useDeviceSyncInvalidation";
 
 /** Pushes one `sync:applied` through the listener the hook registered. */
@@ -47,22 +48,35 @@ beforeEach(() => {
 
 const invalidatedKeys = () => invalidate.mock.calls.map(([filters]) => filters?.queryKey);
 
-it("invalidates the owned-write roots and the sync root when a sync applies", () => {
+it("invalidates every root a synced table feeds, and the sync root, when a pull applies", () => {
   renderHook(() => useDeviceSyncInvalidation());
   emit(outcome({ pushed: 0, pulled: 3 }));
   expect(invalidatedKeys()).toEqual([...DEVICE_SYNC_INVALIDATED]);
 });
 
 /**
- * `["sets"]` has `staleTime: Infinity` and `["card"]` is corpus data — no relay op can touch
- * either, and invalidating them on every round trip would refetch the set picker for ever.
+ * **A push-only trip changed no row a query reads**, and every write of the reader's own ends in
+ * one — so the whole set here would re-read a deep search, an open card and the Tags page after
+ * every press. What did move is the relay's own figures: the pile went, and the stamp.
  */
-it("does not invalidate the corpus roots", () => {
+it("refreshes the sync root alone when a trip only pushed", () => {
+  renderHook(() => useDeviceSyncInvalidation());
+  emit(outcome({ pushed: 4, pulled: 0, applied: 0 }));
+  expect(invalidatedKeys()).toEqual([["sync"]]);
+});
+
+/**
+ * `["sets"]` has `staleTime: Infinity` and is corpus data — a pull writes the reader's own rows
+ * and never rebuilds the corpus, and invalidating it on every round trip would refetch the set
+ * picker for ever. **`["card"]` used to sit beside it here, and was wrong to**: the card modal's
+ * holdings and every printing's `wishlisted` are filed under it, and a pull moves both.
+ */
+it("does not invalidate the set list, and does reach the card root", () => {
   renderHook(() => useDeviceSyncInvalidation());
   emit(outcome({ pushed: 0, pulled: 3 }));
   const keys = JSON.stringify(invalidatedKeys());
   expect(keys).not.toContain("sets");
-  expect(keys).not.toContain('["card"]');
+  expect(invalidatedKeys()).toContainEqual(["card"]);
 });
 
 it("registers exactly one listener", () => {
@@ -80,16 +94,27 @@ it("stops listening when it unmounts", () => {
 /**
  * The guard the constant could not be: asserting `DEVICE_SYNC_INVALIDATED` against itself lets
  * any key be deleted with the suite still green — the first test above spreads the constant
- * into its own expectation, and "does not invalidate the corpus roots" only checks that
- * `"sets"` and `["card"]` are *absent*, never that the real keys are *present*. One literal list
- * makes the contract real; updating it is a decision, not a rename that rides along.
+ * into its own expectation, and `crossWindow.test.ts`' census is read off the same table map the
+ * constant is, so a root dropped from `TABLE_KEYS` leaves both agreeing. One literal list makes
+ * the contract real; updating it is a decision, not a rename that rides along.
+ *
+ * **It read `OWNED_WRITE_KEYS` and `["sync"]` until the sticky notes found the gap** — one
+ * synced table's worth. What joined them is `["cards"]` and `["card"]` (a wish, a copy and a deck
+ * card move `wishlisted`, the owned tri-state and the holdings), the four tag roots a mute
+ * reaches, and the sticky notes' own.
  */
-it("invalidates exactly the five known roots", () => {
+it("invalidates exactly the known roots", () => {
   expect(DEVICE_SYNC_INVALIDATED).toEqual([
     ["collection"],
     ["wishlist"],
-    ["cards", "search"],
     ["decks"],
+    ["cards"],
+    ["card"],
     ["sync"],
+    ["tags-muted"],
+    ["tag-search"],
+    ["tag-children"],
+    ["tags"],
+    ["stickyNotes"],
   ]);
 });
