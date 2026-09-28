@@ -121,7 +121,9 @@ describe("AddLabelDialog", () => {
       "“Budget swap” already exists — pick it from the list above",
     );
     const create = screen.getByRole("button", { name: "Create “budget SWAP”" });
-    expect(create).toBeDisabled();
+    // `aria-disabled`, never the attribute (#558): it greys as the reader types and stays a stop.
+    expect(create).toHaveAttribute("aria-disabled", "true");
+    expect(create).not.toBeDisabled();
     await user.click(create);
     expect(onCreate).not.toHaveBeenCalled();
   });
@@ -140,7 +142,9 @@ describe("AddLabelDialog", () => {
     const user = userEvent.setup();
     const create = await screen.findByRole("button", { name: "Create label" });
 
-    expect(create).toBeDisabled();
+    // `aria-disabled`, never the attribute (#558): it greys as the reader types and stays a stop.
+    expect(create).toHaveAttribute("aria-disabled", "true");
+    expect(create).not.toBeDisabled();
     await user.click(create);
     expect(onCreate).not.toHaveBeenCalled();
   });

@@ -120,20 +120,27 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     variant and answers `CATEGORY_WRONG_LIST` (*That category belongs to the other list.*) for the
     other list's pile, and `add_card`, `set_card_quantity`, `clear_category`, `move_card`,
     `swap_printing`, `set_card_finish`, the import commit and `collection_to_deck` all go through
-    it or through the variant-scoped `category_for_name`. `reorder_categories` refuses a list that
-    mixes the two (`CATEGORY_MIXED_LISTS`); a delete's move target must be in the same list;
-    `decks.default_category_id` must name a **live** pile.
-  - **One press carries piles across, and it pours one list into the other.** The theory switch
-    moves the live cards into the plan and **clones** each live pile for them —
-    `deck_meta::counterpart_in`, by kind for a zone and by name otherwise — leaving the live piles
-    standing, empty. It records the piles it made in its undo step
+    it or through the variant-scoped `category_for_name` — and `add_card_to_other_list` through
+    `counterpart_in`, which only ever answers a pile of the list it is asked for, while
+    `SAME_LIST` refuses a source pile that is already in that list. `reorder_categories` refuses
+    a list that mixes the two (`CATEGORY_MIXED_LISTS`); a delete's move target must be in the
+    same list; `decks.default_category_id` must name a **live** pile.
+  - **Two presses carry a card across, and one rule finds its pile in the other list:
+    `deck_meta::counterpart_in`**, by kind for a zone (any non-`main` kind) whatever it is called
+    and by name otherwise. A pile the other list lacks is **made there as a copy of the source** —
+    name, kind, `is_active`, `sort_order`, `origin` — so a card out of a switched-off pile never
+    arrives in one that counts. The theory switch moves the live cards into the plan through it,
+    leaving the live piles standing, empty; `deck_add_card_to_other_list` (2026-09-28, issue
+    [#592](https://github.com/Msgaihede/mtg-grimoire/issues/592), in the card commands below)
+    carries one card. Each records the piles it made in its undo step
     (`deck_undo::push_made_categories`), so an undo takes them away again.
   - **`DeckCategoryRow.card_count_all_variants` is gone** — a pile's copies are all in one list, so
     it always equalled `card_count`, and every confirmation quotes `card_count` now.
   - **A pile's history rows stay at `DECK_LEVEL`**: the history drawer does not filter by list, and
     no category sentence names one.
-  - **The comparison is the only link between the lists**, and it matches cards, never piles
-    (`deck_theory::theory_diff`). The rung, the derived clone uids and the net for a group that
+  - **The comparison is the only standing link between the lists**, and it matches cards, never
+    piles (`deck_theory::theory_diff`); the two presses above match a pile at the press and keep
+    nothing linked afterwards. The rung, the derived clone uids and the net for a group that
     climbed unevenly: `src-tauri/CLAUDE.md`'s v53 entry.
 - **The grain is `deck_id, variant, category_id, card_id, coalesce(finish, '')`**
   (`schema::DECK_CARD_GRAIN`) — the
@@ -1319,13 +1326,15 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   the old-peer direction safe, `theory_mark_*`'s note verbatim: a deck built from an op a device
   one rung back sent arrives as an ordinary deck, which is the only thing that device can have
   meant.
-- **The six single-card commands, and what each takes** (the three bulk ones,
+- **The single-card commands, and what each takes** (the three bulk ones,
   `deck_import_commit`, `deck_category_clear` and `deck_clear`, have their own bullets below).\
   `deck_get(id, variant)`;
   `deck_add_card(deckId, cardId, categoryId, categoryName, variant, quantity)` — **either an id
   or a name**, id wins when both arrive, neither is refused in words, and the name is
   found-or-created (the word being TypeScript's `autoCategoryFor` to compute, because which
-  pile a card belongs in is domain logic); `deck_set_card_quantity(deckId, cardId, categoryId,
+  pile a card belongs in is domain logic); `deck_add_card_to_other_list(deckId, cardId,
+  fromCategoryId, variant, finish, quantity)`, the add with a third way to name the pile — see
+  its own bullet below; `deck_set_card_quantity(deckId, cardId, categoryId,
 variant, quantity)`; `deck_move_card(deckId, cardId, fromCategoryId, toCategoryId,
 toCategoryName, variant)`, which stays inside one variant and takes **either an id or a name
   exactly as the add does** — see the bullet below; `deck_swap_printing(deckId, fromCardId, toCardId, categoryId,
@@ -1356,6 +1365,24 @@ variant)`; `deck_missing_to_wishlist(deckId, folderId?)`, which reads `live` and
     precisely what the id arm's caller-side guard exists to prevent. Nothing can have been created
     on that path: `category_for_name` answers a **new** id when it makes a pile, and a new id is
     never a pile the card is already in.
+- **`deck_add_card_to_other_list` → `deck::add_card_to_other_list` copies a card into the deck's
+  other list** (2026-09-28, issue [#592](https://github.com/Msgaihede/mtg-grimoire/issues/592),
+  behind the card menu's `Add to actual` / `Add to theory`). `variant` is the list the card goes
+  **into** and `fromCategoryId` the pile it sits in now, which the write leaves alone. It is
+  `add_card` with a third way to name the pile: `add_card`'s body takes a private pile enum
+  (`AddPile` — by id, by name, or the counterpart of a pile), and the third arm is
+  `deck_meta::counterpart_in` — by kind for a zone and by name otherwise, **made as a copy of the
+  source** when the target list lacks it (the rule in the one-list bullet above, and the owner's
+  choice over a plain name match). It resolves inside the transaction and **after
+  `touch_deck`**, so a deleted deck still answers `GONE` first. Two refusals of its own:
+  **`NO_OTHER_LIST`** (*This deck keeps one list, so there is no other list to add to.*) for a
+  deck whose `theory_enabled` is off, and **`SAME_LIST`** (*That category is already in the list
+  the card is going to.*) for a source pile of the target list; a pile that is not this deck's is
+  `CATEGORY_GONE`, as in `counterpart_in` itself. The page sends a quantity of 1 — one copy per
+  press, every other add's rule — and the grain folds it, so a second press is a second copy.
+  - **The history row is an ordinary `add` in the target list**, naming the counterpart pile, and
+    the undo step is `add_card`'s: the cell, plus the pile diff that takes a pile the add made away
+    again. Undo is per deck, so Ctrl+Z on either tab reverses it.
 - **`deck_category_clear(deckId, categoryId, variant)` empties one pile of one list, and exists
   for `deck_import_commit`'s reason** (added 2026-08-15, behind a category heading's right-click
   `Clear stack…`). The frontend holds every row of the pile, so a `deck_set_card_quantity(…, 0)`
@@ -4110,6 +4137,33 @@ It is `stats_open`'s rules one control further in, and each of them is the reaso
   moves it against `stats_open`, the neighbour that defaults the other way.
 - **`UNDO_V56` drops the three `decks` capture triggers before the column** — v43's move in the
   rewind direction; [data-and-sync.md](data-and-sync.md)'s v56 paragraph has why.
+
+### `decks.managed_wishlist_tokens`, the managed wishlist's tokens switch
+
+User schema **v57** (2026-09-28, [issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617))
+is `decks.managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0` — whether a theory deck's managed
+wishlist also files the token printings its plan is short of, in the **Tokens** subfolder. Until
+v57 that was a fact about `managed_wishlist_mode`: `all` filed tokens, `missing` and `other` did not,
+and a fifth word `tokens` filed them alone. So a reader who wanted their missing cards *and* their
+tokens had no word for it. The mode is four words again (`off`, `all`, `missing`, `other`) and the
+switch sits beside it in Deck settings, drawn only when the mode is not `Off`.
+
+- **Stored whatever the mode says, acted on only when it is not `off`.** `managed_wishlist::eligible`
+  answers `None` for `off` before it reads the switch, so a mode switched off and on again brings
+  the tokens back with it.
+- **`deck_theory::wanted(view, tokens)`** — the view is card rows only now (`DiffView` lost its
+  `Tokens` variant), and `tokens` adds `token_diff`'s rows at their whole quantity under any of the
+  three. The Compare dialog's own **Tokens** tab is unchanged.
+- **The mode's rules otherwise, each for the mode's reason**: on the `decks` capture spec after
+  `managed_wishlist_mode`; a history row, `managedWishlistTokens`, booleans on both sides; on
+  `deck_undo::DECK_FIELDS` beside the mode, so one Ctrl+Z puts a Save that moved both back whole;
+  carried by `duplicate_deck` with the mode.
+- **Positional reads, at the end as always.** `DECK_SELECT` appends `d.managed_wishlist_tokens` after
+  `d.curve_creatures`; `deck_row` reads it at **31**, `update_deck`'s before-read at **19**, and the
+  UPDATE binds it as `?25`. The neighbour at 30 is `curve_creatures`, another `bool` over an
+  `INTEGER`, which is why `managed_wishlist_tokens_round_trips_audits_and_undoes` sets the two the
+  opposite way in one patch.
+- **The rung converts, uncaptured** — [data-and-sync.md](data-and-sync.md)'s v57 paragraph.
 
 ### Owed: known, parked, and not fixed
 

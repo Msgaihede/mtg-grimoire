@@ -1059,6 +1059,7 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   theoryMarkName: true,
   theoryMarkUnplanned: true,
   managedWishlist: "off",
+  managedWishlistTokens: false,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",

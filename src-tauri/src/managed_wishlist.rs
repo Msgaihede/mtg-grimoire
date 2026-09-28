@@ -1,9 +1,10 @@
-//! A theory deck's **managed wishlist** — user schema v48, and v49's mode,
-//! [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512).
+//! A theory deck's **managed wishlist** — user schema v48, v49's mode and v57's tokens switch,
+//! [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512) and
+//! [issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617).
 //!
 //! A deck whose kind is `Theory + Actual` and whose `decks.managed_wishlist_mode` names one of the
-//! Compare dialog's four views — `all`, `missing`, `other` (Different printing) or `tokens` —
-//! keeps one wishlist folder, named after the deck, holding that view:
+//! Compare dialog's three card views — `all`, `missing` or `other` (Different printing) — keeps
+//! one wishlist folder, named after the deck, holding that view's cards:
 //! [`crate::deck_theory::wanted`]. `off`, the default since v49, is no folder. The folder is the
 //! **deck's**, not the reader's: this module is the only thing that writes to it, and every other
 //! write is refused in words ([`MANAGED`]).
@@ -11,18 +12,22 @@
 //! ## The Tokens subfolder
 //!
 //! **Since user schema v55 a deck can own a second folder, inside the first** (the
-//! token-improvements spec §3.8): a child named **Tokens** holding the view's token rows. **All**
-//! and **Tokens** are the views with any — the first puts its cards in the deck's folder and its
-//! tokens in the child, the second puts nothing in the deck's folder at all — and **Missing** and
-//! **Different printing** are card rows only, so they have no child. The child exists only while
-//! there is a token to want.
+//! token-improvements spec §3.8): a child named **Tokens** holding the token printings the plan is
+//! short of. **Since v57 it is filled by `decks.managed_wishlist_tokens`, a switch of its own,
+//! under whichever of the three modes the deck follows** (issue #617). Until then tokens were a
+//! fact about the mode — **All** counted them, **Missing** and **Different printing** did not,
+//! and a fifth word, `tokens`, meant the child alone with nothing in the deck's folder — so a
+//! reader who wanted their missing cards *and* their tokens had no word for it. The switch is
+//! stored whatever the mode says and acts only when the mode is not `off`, so turning a mode back
+//! on brings the tokens back with it. The child exists only while there is a token to want.
 //!
 //! **Its identity is `wishlist_folders.managed_tokens = 1`, never its name**, and it carries the
 //! deck's `managed_deck_id` as well — which is what lets the guard, [`settle_all`]'s sweep and the
 //! frontend's `isManaged` cover it without a word about it. The cost is on the other side: a
 //! lookup of *the deck's* folder by `managed_deck_id` alone now answers either row, so every such
 //! lookup names `managed_tokens = 0` ([`managed_folder`]). A lookup that means *any managed
-//! folder* — the guard, `reset::clear_wishlist`, the optimize preview, quick add — reads
+//! folder* — the guard, `reset::clear_wishlist`, the optimize preview (and its `managed` mark on a
+//! move, issue #598), quick add — reads
 //! `managed_deck_id IS NOT NULL` and is right to cover both.
 //!
 //! ## Derived per device, never synced
@@ -69,20 +74,22 @@ use std::collections::HashMap;
 /// carries the same sentence.
 pub const MANAGED: &str = "A managed wishlist follows its deck, so it can't be edited by hand.";
 
-/// The five words `decks.managed_wishlist_mode` holds, `off` first — the frontend's
-/// `MANAGED_WISHLIST_MODES`, and the Compare dialog's `DiffView` words for the other four.
+/// The four words `decks.managed_wishlist_mode` holds, `off` first — the frontend's
+/// `MANAGED_WISHLIST_MODES`, and the Compare dialog's `DiffView` words for the other three.
 ///
-/// **`tokens` is the token-improvements spec's (§3.8)**, the Compare dialog's fourth view. A
-/// peer on an older build reads it as [`OFF`] through [`read_mode`], which is the standing rule
-/// that every device is updated before it syncs across a token-model change.
-pub const MODES: [&str; 5] = [OFF, "all", "missing", "other", "tokens"];
+/// **`tokens` was a fifth from user schema v55 to v56** (the token-improvements spec §3.8) and
+/// is one no longer: v57's rung turned every deck holding it into `missing` with
+/// `managed_wishlist_tokens = 1` (issue #617). A peer still on v56 can send it after this device
+/// climbed, and [`read_mode`] reads it as [`OFF`] like any word this build does not know — the
+/// standing rule that every device is updated before it syncs across a token-model change.
+pub const MODES: [&str; 4] = [OFF, "all", "missing", "other"];
 
 /// No managed wishlist — the column's default since v49.
 pub const OFF: &str = "off";
 
 /// What a patch naming a word outside [`MODES`] is told.
 pub const BAD_MODE: &str =
-    "A managed wishlist follows All, Missing, Different printing, Tokens or nothing.";
+    "A managed wishlist follows All, Missing, Different printing or nothing.";
 
 /// The name of the deck's **Tokens** subfolder. **Its identity is `managed_tokens = 1`, never
 /// this name**: a reader's own folder called `Tokens`, or a deck called `Tokens`, must never be
@@ -116,7 +123,6 @@ fn view_of(mode: &str) -> Option<crate::deck_theory::DiffView> {
         "all" => Some(DiffView::All),
         "missing" => Some(DiffView::Missing),
         "other" => Some(DiffView::Other),
-        "tokens" => Some(DiffView::Tokens),
         _ => None,
     }
 }
@@ -159,7 +165,8 @@ fn arm_sql() -> String {
              INSERT INTO temp.managed_wishlist_dirty VALUES (NEW.id);
          END;
          CREATE TEMP TRIGGER IF NOT EXISTS mw_deck_upd
-             AFTER UPDATE OF name, theory_enabled, virtual_only, managed_wishlist_mode ON main.decks
+             AFTER UPDATE OF name, theory_enabled, virtual_only, managed_wishlist_mode,
+                             managed_wishlist_tokens ON main.decks
          BEGIN
              INSERT INTO temp.managed_wishlist_dirty VALUES (NEW.id);
          END;
@@ -325,22 +332,32 @@ pub fn settle_all(conn: &Connection) -> Result<(), String> {
     settle(conn)
 }
 
-/// Whether this deck should have a managed folder: what it is called and which Compare view it
-/// holds. `None` for a deck that is gone, is not a theory deck, or is `off`.
-fn eligible(
-    conn: &Connection,
-    deck_id: i64,
-) -> Result<Option<(String, crate::deck_theory::DiffView)>, String> {
-    let row: Option<(String, String)> = conn
+/// What a deck's managed folders should hold: the folder's name, the Compare view its cards
+/// follow, and whether the plan's tokens are filed too.
+struct Wants {
+    name: String,
+    view: crate::deck_theory::DiffView,
+    tokens: bool,
+}
+
+/// Whether this deck should have a managed folder, and what it holds. `None` for a deck that is
+/// gone, is not a theory deck, or is `off` — **whatever its tokens switch says**: the switch is
+/// the reader's answer about a folder, and `off` is no folder (issue #617).
+fn eligible(conn: &Connection, deck_id: i64) -> Result<Option<Wants>, String> {
+    let row: Option<(String, String, bool)> = conn
         .query_row(
-            "SELECT name, managed_wishlist_mode FROM decks
+            "SELECT name, managed_wishlist_mode, managed_wishlist_tokens FROM decks
               WHERE id = ?1 AND theory_enabled = 1 AND virtual_only = 0",
             params![deck_id],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )
         .optional()
         .map_err(|e| e.to_string())?;
-    Ok(row.and_then(|(name, mode)| view_of(&mode).map(|view| (name, view))))
+    Ok(
+        row.and_then(|(name, mode, tokens)| {
+            view_of(&mode).map(|view| Wants { name, view, tokens })
+        }),
+    )
 }
 
 /// The rows of `temp.managed_wishlist_open` are what switch the guard off; this is the one
@@ -407,10 +424,9 @@ fn drop_folder(tx: &Connection, folder_id: i64) -> Result<(), String> {
 ///
 /// **Two folders since user schema v55** (the token-improvements spec §3.8): the deck's own, named
 /// after it, holding the card rows of its Compare view, and inside it a child named **Tokens**
-/// holding the token rows — for **All** and **Tokens**, the two views that have any. The child is
-/// made when there is a token to want and deleted when there is none, so a deck that wants no
-/// token has no empty drawer; **Tokens** mode leaves the deck's own folder standing and empty,
-/// because the child has to hang somewhere and the deck's folder is where the reader looks.
+/// holding the token rows — **when the deck's tokens switch is on** (v57, issue #617), under any
+/// of the three views. The child is made when there is a token to want and deleted when there is
+/// none, so a deck that wants no token has no empty drawer.
 ///
 /// **The child goes before the parent, always**, and each folder's wishes before the folder:
 /// `wishlist_folders.parent_id` CASCADEs, so a parent deleted first would take the child with it
@@ -421,7 +437,7 @@ fn settle_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
         let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
         let folder = managed_folder(&tx, deck_id, false)?;
         let tokens_folder = managed_folder(&tx, deck_id, true)?.map(|(id, _)| id);
-        let Some((name, view)) = eligible(&tx, deck_id)? else {
+        let Some(Wants { name, view, tokens }) = eligible(&tx, deck_id)? else {
             // Gone, `off`, or no longer a theory deck: the child, then the parent.
             if let Some(id) = tokens_folder {
                 drop_folder(&tx, id)?;
@@ -459,11 +475,12 @@ fn settle_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
         };
 
         // One read of the view, split by kind: the cards to the deck's folder, the tokens to its
-        // child. `Tokens` has no card rows and `Missing` and `Different printing` no token rows,
-        // so each folder gets exactly its half of the view.
-        let (tokens, cards): (Vec<_>, Vec<_>) = crate::deck_theory::wanted(&tx, deck_id, view)?
-            .into_iter()
-            .partition(|w| w.is_token);
+        // child. With the switch off `wanted` reads no token wall, so the child's half is empty
+        // and the match below takes the child away.
+        let (tokens, cards): (Vec<_>, Vec<_>) =
+            crate::deck_theory::wanted(&tx, deck_id, view, tokens)?
+                .into_iter()
+                .partition(|w| w.is_token);
         fill(&tx, folder_id, cards)?;
         match (tokens_folder, tokens.is_empty()) {
             (Some(id), true) => drop_folder(&tx, id)?,
@@ -643,6 +660,19 @@ mod tests {
         .unwrap();
     }
 
+    /// Turn a deck's managed tokens on or off (user schema v57), through the real patch.
+    fn tokens_switch(conn: &Connection, deck_id: i64, on: bool) {
+        crate::deck::update_deck(
+            conn,
+            deck_id,
+            &crate::deck::DeckPatch {
+                managed_wishlist_tokens: Some(on),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    }
+
     /// Add `qty` more copies to one list, through `deck::add_card`.
     fn put(conn: &Connection, deck_id: i64, variant: &str, card: &str, qty: i64) {
         let cat = crate::deck_meta::category_for_name(conn, deck_id, variant, "Main deck").unwrap();
@@ -704,10 +734,12 @@ mod tests {
     }
 
     /// A theory deck that plans a Tithe, two Bolts and three Treasures and sleeves a Tithe and
-    /// one Treasure — short of two Bolts and two Treasures — in `mode`.
-    fn tithe_deck(conn: &Connection, mode_word: &str) -> i64 {
+    /// one Treasure — short of two Bolts and two Treasures — in `mode`, with its tokens switch
+    /// at `tokens`.
+    fn tithe_deck(conn: &Connection, mode_word: &str, tokens: bool) -> i64 {
         let d = deck(conn, "Tithe", true);
         mode(conn, d, mode_word);
+        tokens_switch(conn, d, tokens);
         put(conn, d, "theory", "tithe", 1);
         put(conn, d, "live", "tithe", 1);
         put(conn, d, "theory", "bolt", 2);
@@ -744,14 +776,13 @@ mod tests {
         .unwrap()
     }
 
-    /// **All** is every Compare row, tokens included, so it fills two folders: the deck's own
-    /// with the cards and a child called **Tokens** with the tokens — never a token among the
-    /// cards.
+    /// **All with the tokens switch on** fills two folders: the deck's own with the cards and a
+    /// child called **Tokens** with the tokens — never a token among the cards.
     #[test]
     fn all_fills_a_tokens_subfolder_with_the_plans_missing_tokens() {
         let conn = db();
         with_treasure(&conn);
-        let d = tithe_deck(&conn, "all");
+        let d = tithe_deck(&conn, "all", true);
         settle(&conn).unwrap();
 
         let (parent, _) = folder(&conn, d).expect("the deck's own folder");
@@ -765,54 +796,64 @@ mod tests {
         );
     }
 
-    /// **Tokens** is the token rows alone: the subfolder fills and the deck's own folder holds
-    /// nothing of its own.
+    /// **The switch files tokens under every view** (issue #617) — Missing and Different printing
+    /// included, which had no way to want a token while the switch was a fact about the mode.
+    /// The deck's own folder holds that view's cards and nothing else, whichever it is.
     #[test]
-    fn tokens_mode_fills_only_the_subfolder() {
+    fn the_tokens_switch_files_tokens_under_missing_and_different_printing() {
         let conn = db();
         with_treasure(&conn);
-        let d = tithe_deck(&conn, "tokens");
-        settle(&conn).unwrap();
-
-        let (parent, _) = folder(&conn, d).expect("the deck's own folder still stands");
-        assert_eq!(wishes(&conn, parent), vec![], "no card wish in Tokens mode");
-        let (child, parent_id, _) = tokens_folder(&conn, d).expect("a Tokens subfolder");
-        assert_eq!(parent_id, Some(parent));
-        assert_eq!(wishes(&conn, child), vec![("treasure".to_owned(), 2)]);
-    }
-
-    /// **Missing** and **Different printing** are card rows only, so neither makes the child.
-    #[test]
-    fn missing_mode_has_no_tokens_subfolder() {
-        let conn = db();
-        with_treasure(&conn);
-        let d = tithe_deck(&conn, "missing");
+        let d = tithe_deck(&conn, "missing", true);
         settle(&conn).unwrap();
         let (parent, _) = folder(&conn, d).unwrap();
         assert_eq!(wishes(&conn, parent), vec![("bolt".to_owned(), 2)]);
-        assert!(tokens_folder(&conn, d).is_none());
+        let (child, parent_id, _) = tokens_folder(&conn, d).expect("a Tokens subfolder");
+        assert_eq!(parent_id, Some(parent));
+        assert_eq!(wishes(&conn, child), vec![("treasure".to_owned(), 2)]);
 
         mode(&conn, d, "other");
         settle(&conn).unwrap();
-        assert!(tokens_folder(&conn, d).is_none());
+        assert_eq!(
+            wishes(&conn, parent),
+            vec![],
+            "no Bolt is played as another printing"
+        );
+        let (child, _, _) = tokens_folder(&conn, d).expect("still there under Other");
+        assert_eq!(wishes(&conn, child), vec![("treasure".to_owned(), 2)]);
+    }
+
+    /// **The switch off is no subfolder under any view** — All included, which filed tokens
+    /// unasked until v57.
+    #[test]
+    fn without_the_switch_no_view_has_a_tokens_subfolder() {
+        let conn = db();
+        with_treasure(&conn);
+        let d = tithe_deck(&conn, "all", false);
+        for word in ["all", "missing", "other"] {
+            mode(&conn, d, word);
+            settle(&conn).unwrap();
+            assert!(
+                folder(&conn, d).is_some(),
+                "{word}: the deck's folder stands"
+            );
+            assert!(tokens_folder(&conn, d).is_none(), "{word}: no Tokens child");
+        }
         assert_eq!(treasure_wishes(&conn), 0);
     }
 
-    /// Review Focus 5: **All to Missing takes the Tokens subfolder and its wishes away and keeps
-    /// the card wishes** — in the same folder, not a rebuilt one, and as the same row rather than
-    /// a deleted and re-added one, with no Treasure left over at the root, which is where the
-    /// child's wishes would land if the child went first.
+    /// Review Focus 5, read against the switch: **turning it off takes the Tokens subfolder and
+    /// its wishes away and keeps the card wishes** — in the same folder, not a rebuilt one, and as
+    /// the same row rather than a deleted and re-added one, with no Treasure left over at the
+    /// root, which is where the child's wishes would land if the child went first. And a change
+    /// of view with the switch on leaves the child where it is.
     #[test]
-    fn switching_from_all_to_missing_removes_the_subfolder_and_keeps_the_card_wishes() {
+    fn turning_the_switch_off_removes_the_subfolder_and_keeps_the_card_wishes() {
         let conn = db();
         with_treasure(&conn);
-        let d = tithe_deck(&conn, "all");
+        let d = tithe_deck(&conn, "all", true);
         settle(&conn).unwrap();
         let (parent, _) = folder(&conn, d).unwrap();
-        assert!(
-            tokens_folder(&conn, d).is_some(),
-            "the premise: All made it"
-        );
+        let (child, _, _) = tokens_folder(&conn, d).expect("the premise: the switch made it");
         let bolt_wish = |conn: &Connection| -> i64 {
             conn.query_row(
                 "SELECT id FROM wishlist_entries WHERE folder_id = ?1 AND card_id = 'bolt'",
@@ -825,12 +866,34 @@ mod tests {
 
         mode(&conn, d, "missing");
         settle(&conn).unwrap();
+        assert_eq!(
+            tokens_folder(&conn, d).map(|f| f.0),
+            Some(child),
+            "All to Missing keeps the child"
+        );
+
+        tokens_switch(&conn, d, false);
+        settle(&conn).unwrap();
 
         assert!(tokens_folder(&conn, d).is_none());
         assert_eq!(treasure_wishes(&conn), 0, "the child's wishes went with it");
         assert_eq!(folder(&conn, d).map(|f| f.0), Some(parent));
         assert_eq!(wishes(&conn, parent), vec![("bolt".to_owned(), 2)]);
         assert_eq!(bolt_wish(&conn), kept, "the card wish is the row it was");
+    }
+
+    /// **The switch alone marks the deck dirty** — `mw_deck_upd` names
+    /// `managed_wishlist_tokens` — so a press that changes nothing else still reaches the folder.
+    #[test]
+    fn the_switch_alone_re_settles_the_wishlist() {
+        let conn = db();
+        with_treasure(&conn);
+        let d = tithe_deck(&conn, "missing", false);
+        settle(&conn).unwrap();
+        assert!(tokens_folder(&conn, d).is_none());
+        tokens_switch(&conn, d, true);
+        settle(&conn).unwrap();
+        assert!(tokens_folder(&conn, d).is_some());
     }
 
     /// **A step on a token re-settles the wishlist**, like a step on a card: the dirty triggers
@@ -840,7 +903,7 @@ mod tests {
     fn a_token_step_re_settles_the_wishlist() {
         let conn = db();
         with_treasure(&conn);
-        let d = tithe_deck(&conn, "all");
+        let d = tithe_deck(&conn, "all", true);
         settle(&conn).unwrap();
         let (child, _, _) = tokens_folder(&conn, d).unwrap();
         assert_eq!(wishes(&conn, child), vec![("treasure".to_owned(), 2)]);
@@ -873,6 +936,7 @@ mod tests {
         // arrives on the token's own row — what a pull from a peer on an older build can write.
         let other = deck(&conn, "Other", true);
         mode(&conn, other, "all");
+        tokens_switch(&conn, other, true);
         put(&conn, other, "theory", "tithe", 1);
         settle(&conn).unwrap();
         assert!(tokens_folder(&conn, other).is_none());
@@ -895,6 +959,7 @@ mod tests {
         with_treasure(&conn);
         let d = deck(&conn, "Tithe", true);
         mode(&conn, d, "all");
+        tokens_switch(&conn, d, true);
         put(&conn, d, "theory", "tithe", 1);
         put(&conn, d, "theory", "bolt", 1);
         settle(&conn).unwrap();
@@ -922,7 +987,7 @@ mod tests {
     fn off_and_a_deleted_deck_take_the_tokens_subfolder_with_the_folder() {
         let conn = db();
         with_treasure(&conn);
-        let d = tithe_deck(&conn, "all");
+        let d = tithe_deck(&conn, "all", true);
         settle(&conn).unwrap();
         assert!(tokens_folder(&conn, d).is_some());
         let left = |conn: &Connection| -> i64 {
@@ -943,7 +1008,7 @@ mod tests {
         settle(&conn).unwrap();
         assert!(
             tokens_folder(&conn, d).is_some(),
-            "switching back rebuilds both"
+            "switching back rebuilds both — `off` left the tokens switch where it was"
         );
         conn.execute("DELETE FROM decks WHERE id = ?1", params![d])
             .unwrap();
@@ -958,7 +1023,7 @@ mod tests {
     fn the_tokens_subfolder_is_refused_to_a_hand_made_edit() {
         let conn = db();
         with_treasure(&conn);
-        let d = tithe_deck(&conn, "all");
+        let d = tithe_deck(&conn, "all", true);
         settle(&conn).unwrap();
         let (parent, _) = folder(&conn, d).unwrap();
         let (child, _, _) = tokens_folder(&conn, d).unwrap();
@@ -1076,8 +1141,9 @@ mod tests {
         );
     }
 
-    /// `off` is the default, and a word outside the five is refused by a patch but read as `off`
-    /// off the row, where it would have come from a newer peer.
+    /// `off` is the default, and a word outside the four is refused by a patch but read as `off`
+    /// off the row, where it would have come from a newer peer — or, for `tokens`, from a peer
+    /// still on v56 (issue #617).
     #[test]
     fn off_is_the_default_and_an_unknown_mode_is_refused_or_read_as_off() {
         let conn = db();
@@ -1108,12 +1174,24 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(err, BAD_MODE);
-        conn.execute(
-            "UPDATE decks SET managed_wishlist_mode = 'someday' WHERE id = ?1",
-            params![id],
+        let err = crate::deck::update_deck(
+            &conn,
+            id,
+            &crate::deck::DeckPatch {
+                managed_wishlist: Some("tokens".to_owned()),
+                ..Default::default()
+            },
         )
-        .unwrap();
-        assert_eq!(read(&conn), OFF);
+        .unwrap_err();
+        assert_eq!(err, BAD_MODE, "v57 retired the fifth word");
+        for word in ["someday", "tokens"] {
+            conn.execute(
+                "UPDATE decks SET managed_wishlist_mode = ?2 WHERE id = ?1",
+                params![id, word],
+            )
+            .unwrap();
+            assert_eq!(read(&conn), OFF, "{word}");
+        }
     }
 
     #[test]
@@ -1260,13 +1338,13 @@ mod tests {
     }
 
     /// The same promise for the **Tokens** subfolder, both ways: the child's insert with its
-    /// wishes, and its drop when the mode stops including tokens, leave no op — the child is as
+    /// wishes, and its drop when the tokens switch goes off, leave no op — the child is as
     /// derived as its parent.
     #[test]
     fn the_tokens_subfolder_is_never_captured_for_sync() {
         let conn = db();
         with_treasure(&conn);
-        let d = tithe_deck(&conn, "all");
+        let d = tithe_deck(&conn, "all", true);
         let count = |sql: &str| -> i64 { conn.query_row(sql, [], |r| r.get(0)).unwrap() };
         // The token entries *are* captured, so this device records ops at all.
         assert!(count("SELECT count(*) FROM sync_ops WHERE tbl = 'deck_token_printings'") > 0);
@@ -1274,11 +1352,11 @@ mod tests {
                              WHERE tbl IN ('wishlist_entries', 'wishlist_folders')";
 
         settle(&conn).unwrap();
-        let (child, _, _) = tokens_folder(&conn, d).expect("All with a token want makes it");
+        let (child, _, _) = tokens_folder(&conn, d).expect("the switch with a token want makes it");
         assert_eq!(wishes(&conn, child), vec![("treasure".to_owned(), 2)]);
         assert_eq!(count(wishlist_ops), 0, "the child's insert is not an op");
 
-        mode(&conn, d, "missing");
+        tokens_switch(&conn, d, false);
         settle(&conn).unwrap();
         assert!(tokens_folder(&conn, d).is_none());
         assert_eq!(count(wishlist_ops), 0, "and neither is its drop");

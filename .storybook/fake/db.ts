@@ -631,8 +631,14 @@ export interface FakeDeck {
   theoryMarkExact?: boolean;
   theoryMarkName?: boolean;
   theoryMarkUnplanned?: boolean;
-  /** v48's managed-wishlist switch — `NOT NULL DEFAULT 1`, so absent reads as on. */
+  /** v49's managed-wishlist mode — `NOT NULL DEFAULT 'off'`, so absent reads as off. */
   managedWishlist?: ManagedWishlistMode;
+  /**
+   * v57's managed-wishlist tokens switch (issue #617) — `NOT NULL DEFAULT 0`, so absent reads as
+   * off. Kept whatever the mode, the crate's own rule: {@link settleManagedWishlist} reads it only
+   * while the mode is not `off`, and a mode turned off and on again finds it as it was.
+   */
+  managedWishlistTokens?: boolean;
   /**
    * What the reader was last looking at in this deck's editor: which tab, grouped how, sorted
    * how. Written by {@link writeHandlers.deck_set_view_state} and by nothing else, so that
@@ -7566,8 +7572,10 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     theoryMarkExact: d.theoryMarkExact ?? true,
     theoryMarkName: d.theoryMarkName ?? true,
     theoryMarkUnplanned: d.theoryMarkUnplanned ?? true,
-    // v48's, and `?? true` for the three lines above' reason: the column is `DEFAULT 1`.
+    // v49's, on the same `??` footing with the column's own `DEFAULT 'off'`.
     managedWishlist: d.managedWishlist ?? "off",
+    // v57's tokens switch beside it (issue #617), `DEFAULT 0`.
+    managedWishlistTokens: d.managedWishlistTokens ?? false,
     // The three v12 ones that remember where the reader was. They ride the *gallery's* row
     // rather than a read of their own because the editor already has this row when it mounts —
     // a second command to ask "which tab was I on" would be a round trip between opening a deck
@@ -10081,17 +10089,27 @@ export function readHandlers(db: FakeDb) {
      * so it answers through every second of a sync like every other read in this table, and every
      * figure in it was quoted at the marketplace the query carried. A second copy of that fact
      * travelling back is one more thing that can disagree with the hook the dialog renders with.
+     *
+     * **A deck's managed wishlist is out of scope unless `includeManaged` asks for it** (issue
+     * #598). Absent or `false` is the crate's `NOT IN` clause: a wish filed in a folder carrying a
+     * `managedDeckId` — the deck's own folder or its `Tokens` child, which carries the deck's id
+     * too — is left out of the scope rather than skipped, so it is counted nowhere. `true` puts
+     * those wishes in scope and classifies them exactly like any other wish, and every move says
+     * which it is in `managed`: `true` for a wish filed in a managed folder, and never `true` when
+     * the switch is off, because no such wish is in scope then. **A managed move is information
+     * and never an instruction** — the wish is the deck's printing, applying it is a hand edit
+     * refused in {@link MANAGED_WISHLIST}'s words, and the dialog never sends one.
      */
-    wishlist_optimize_plan: (args: { query: WishlistQuery }): WishlistOptimizePlan => {
+    wishlist_optimize_plan: (args: {
+      query: WishlistQuery;
+      includeManaged?: boolean;
+    }): WishlistOptimizePlan => {
       const q = args.query;
       const mp = marketplaceOf(q.marketplace);
-      // Never a wish in a deck's managed wishlist (user schema v48) — `wishlist_optimize::plan`'s
-      // own `NOT IN` clause: that wish is the deck's printing, and repointing it is a hand edit
-      // refused in {@link MANAGED_WISHLIST}'s words. Left out of the scope rather than skipped,
-      // exactly as the crate's `WHERE` leaves it out, so it is not counted anywhere either.
-      const rows = wishlistScope(db, q).filter(
-        (w) => w.folderId === null || (wishFolderById(db, w.folderId)?.managedDeckId ?? null) === null,
-      );
+      const includeManaged = args.includeManaged === true;
+      const isManaged = (w: FakeWish): boolean =>
+        w.folderId !== null && (wishFolderById(db, w.folderId)?.managedDeckId ?? null) !== null;
+      const rows = wishlistScope(db, q).filter((w) => includeManaged || !isManaged(w));
       const moves: WishOptimizeMove[] = [];
       let alreadyCheapest = 0;
       let skipped = 0;
@@ -10155,6 +10173,9 @@ export function readHandlers(db: FakeDb) {
           // dialog can leave such a row unticked without lying about what it would save.
           savedPerCopy: fromPrice === null ? null : fromPrice - best.price,
           saved: fromPrice === null ? null : (fromPrice - best.price) * w.quantity,
+          // Only ever `true` under `includeManaged`, since the filter above leaves every managed
+          // wish out otherwise — the header's last paragraph.
+          managed: isManaged(w),
         });
       }
       return { moves, considered: rows.length, alreadyCheapest, skipped };
@@ -11849,22 +11870,39 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_completion::deck_completion` — owned against wanted for every deck, **counted the way
-     * {@link readHandlers.deck_get} counts it** and then summed the way the editor's `deckStats`
-     * sums it.
+     * `deck_completion::deck_completion` — how far every deck is along under `compare`, **counted
+     * the way the screen that answers the same question counts it**. Two comparisons, and the
+     * word picks one; anything else, or none, is `collection` — `Marketplace`'s forgiving shape, so
+     * a word a newer build wrote measures the default rather than refusing.
      *
-     * **The measured list is the deck's kind's**: `theory` for a deck that keeps a plan, attributed
-     * from {@link theoryPool}, and `live` otherwise, attributed from {@link ownedByPrinting} — the
-     * same two pools `deck_get` picks between, handed to the same {@link attributeOwned} in the
-     * same {@link deckReadOrder}, so one `(card_id, finish)` in two piles shares one pool — and
-     * the finish is {@link entryFinish}'s, so an unsaid row and a `foil` row of one foil-only
-     * printing are that one key rather than a regular want nothing can fill. **Every
-     * active pile counts**, sideboard and companion included — `deckStats`' `counted`, and
-     * deliberately wider than {@link readHandlers.deck_values}' size pile.
+     * **`collection`** — every deck that is not virtual, its **live** list against
+     * {@link ownedByPrinting}, the copies filed in the deck's own group: the editor's `Actual` tab,
+     * owned for owned, which {@link readHandlers.deck_get} counts from the same pool handed to the
+     * same {@link attributeOwned} in the same {@link deckReadOrder}. **A deck that keeps a plan is
+     * measured on its live list too** (issue #600), where it used to be measured by the plan
+     * against {@link theoryPool}: *how much of this deck do I own* is a question about the
+     * cardboard the deck is, and a plan holds none. So `list` is always `live` here. **A virtual
+     * deck answers no row** — it holds nothing by definition, and 0 % of every deck is not a
+     * finding. Archived and empty decks answer one, ordered by id; which to draw is the widget's
+     * decision.
      *
-     * **A virtual deck answers no row**: it holds nothing by definition, and 0 % of every deck is
-     * not a finding. Archived and empty decks answer one, ordered by id; which to draw is the
-     * widget's decision.
+     * **`theory`** — every deck with a plan, **virtual ones included**, its **theory** list against
+     * its **live** one: how much of the plan is already sleeved. The pool is the live list's
+     * active piles summed per `(card_id, finish)`, and the theory rows draw on it in the read's
+     * order, so the answer is {@link theoryDiff}'s arithmetic — a copy counts only in the exact
+     * printing and finish, and `missing` is the Compare dialog's non-token lines summed, which
+     * `db.test.ts` fences deck by deck. The collection is not consulted at all, and that is why a
+     * virtual deck is not filtered out: its live list is a list whatever the cardboard is. (No
+     * patch reaches `theoryEnabled` and `virtualOnly` together — {@link deckKind} clears one as it
+     * sets the other — but `deck_create` writes what it is handed, and a read that dropped the pair
+     * would be a second, silent resolution of a tie the write side already owns.) The plan's
+     * tokens are not counted — a token is not a copy of anything a pile can be short of.
+     *
+     * **Either way every active pile counts**, sideboard and companion included — `deckStats`'
+     * `counted`, and deliberately wider than {@link readHandlers.deck_values}' size pile — and a
+     * switched-off pile on either side counts toward nothing. The key's finish is
+     * {@link entryFinish}'s, so an unsaid row and a `foil` row of one foil-only printing are one
+     * key rather than a regular want nothing can fill.
      *
      * `missingCost` is `deckStats`' `missingPrice` exactly — `null` while nothing counted is priced
      * at this marketplace, else the priced rows' `unit × short` summed (so a complete, priced deck
@@ -11872,21 +11910,35 @@ export function readHandlers(db: FakeDb) {
      * missing **copies** with no price. The unit is {@link deckPriceAt}, which is what this fake's
      * deck rows quote — so a story's widget and the editor it opens can never disagree.
      */
-    deck_completion: (args: { marketplace?: MarketplaceId | null }): DeckCompletion[] => {
+    deck_completion: (args: {
+      marketplace?: MarketplaceId | null;
+      compare?: string | null;
+    }): DeckCompletion[] => {
       const mp = marketplaceOf(args.marketplace);
+      const theory = args.compare === "theory";
+      const active = (dc: FakeDeckCard) => categoryById(db, dc.categoryId)?.isActive === true;
       return [...db.decks]
-        .filter((d) => !d.virtualOnly)
+        .filter((d) => (theory ? d.theoryEnabled : !d.virtualOnly))
         .sort((a, b) => a.id - b.id)
         .map((d): DeckCompletion => {
-          const list: DeckCompletion["list"] = d.theoryEnabled ? "theory" : "live";
+          const list: DeckCompletion["list"] = theory ? "theory" : "live";
           const rows = db.deckCards
             .filter((dc) => dc.deckId === d.id && dc.variant === list)
             .sort(deckReadOrder(db));
-          const owned = attributeOwned(
-            db,
-            rows,
-            list === "live" ? ownedByPrinting(db, d.id) : theoryPool(db, d.id),
-          );
+          let pool: Map<string, number>;
+          if (theory) {
+            // The live list as a pool of copies — its active piles only, for the reason a
+            // switched-off pile wants nothing: a card parked in the Maybeboard is not played.
+            pool = new Map();
+            for (const dc of db.deckCards) {
+              if (dc.deckId !== d.id || dc.variant !== LIVE || !active(dc)) continue;
+              const key = entryKey(db, dc.cardId, dc.finish);
+              pool.set(key, (pool.get(key) ?? 0) + dc.quantity);
+            }
+          } else {
+            pool = ownedByPrinting(db, d.id);
+          }
+          const owned = attributeOwned(db, rows, pool);
           const row: DeckCompletion = {
             deckId: d.id,
             list,
@@ -11899,7 +11951,7 @@ export function readHandlers(db: FakeDb) {
           for (const dc of rows) {
             // A switched-off pile counts toward nothing — `attributeOwned` already handed it no
             // copies, and it is not part of what the deck wants either.
-            if (categoryById(db, dc.categoryId)?.isActive !== true) continue;
+            if (!active(dc)) continue;
             const have = Math.min(owned.get(dc.id) ?? 0, dc.quantity);
             const short = dc.quantity - have;
             row.wanted += dc.quantity;
@@ -12947,6 +12999,13 @@ const CATEGORY_WRONG_DECK = "That category belongs to a different deck.";
  *  pile of the other would draw in a list that does not show that pile — a third sentence, since
  *  "not yours" would send a reader looking for another deck that is not there. */
 const CATEGORY_WRONG_LIST = "That category belongs to the other list.";
+/** `deck::NO_OTHER_LIST` (issue #592): a regular or a virtual deck keeps one list, so "the other
+ *  list" names nothing. The card menu draws no row for such a deck; this is the sentence a stale
+ *  editor gets. */
+const NO_OTHER_LIST = "This deck keeps one list, so there is no other list to add to.";
+/** `deck::SAME_LIST` — the source pile is already in the list the card is going to, so the
+ *  caller has named the target where it was asked for the pile the card is in now. */
+const SAME_LIST = "That category is already in the list the card is going to.";
 /** `deck_meta::CATEGORY_MIXED_LISTS` — a reorder naming both lists' piles (v53). Each list keeps
  *  its own `sortOrder`, so a mixed list is an order neither of them has. */
 const CATEGORY_MIXED_LISTS = "Those categories belong to two different lists.";
@@ -14568,8 +14627,9 @@ function wishFolderById(db: FakeDb, id: number): FakeWishlistFolder | undefined 
  * story that could rename a managed folder would be documenting a press the reader never gets.
  *
  * **The other half — Rust rewriting the folder — is {@link settleManagedWishlist}, run on part of
- * what the crate's dirty triggers watch**: a change to the deck row's own four columns (its name,
- * its theory switch, its kind, its mode — `deck_update`), the deck's delete, an undo or a redo,
+ * what the crate's dirty triggers watch**: a change to the deck row's own five columns (its name,
+ * its theory switch, its kind, its mode, and since user schema v57 its tokens switch —
+ * `deck_update`), the deck's delete, an undo or a redo,
  * and since user schema v55 every token write (managed tokens spec §3.8). **A card write does not
  * settle here**, which is this fake's standing gap rather than the crate's: the seeded rows stand
  * in for the folder's answer at rest, and a story that edits a card of deck 4 will not see its
@@ -14578,20 +14638,15 @@ function wishFolderById(db: FakeDb, id: number): FakeWishlistFolder | undefined 
 const MANAGED_WISHLIST = "A managed wishlist follows its deck, so it can't be edited by hand.";
 
 /**
- * `managed_wishlist::MODES` — `off`, the Compare dialog's three views, and **`tokens`** since user
- * schema v55 (managed tokens spec §3.8): the words `decks.managed_wishlist_mode` may hold.
+ * `managed_wishlist::MODES` — `off` and the Compare dialog's three card views: the words
+ * `decks.managed_wishlist_mode` may hold. **`tokens` was a fifth from user schema v55 to v56** and
+ * is refused here since v57 (issue #617), where it became {@link FakeDeck.managedWishlistTokens},
+ * a switch beside the mode.
  */
-const MANAGED_WISHLIST_MODES: readonly ManagedWishlistMode[] = [
-  "off",
-  "all",
-  "missing",
-  "other",
-  "tokens",
-];
+const MANAGED_WISHLIST_MODES: readonly ManagedWishlistMode[] = ["off", "all", "missing", "other"];
 
-/** `managed_wishlist::BAD_MODE`, with v55's fifth word — what a patch naming any other is told. */
-const MANAGED_BAD_MODE =
-  "A managed wishlist follows All, Missing, Different printing, Tokens or nothing.";
+/** `managed_wishlist::BAD_MODE`, v57's four words — what a patch naming any other is told. */
+const MANAGED_BAD_MODE = "A managed wishlist follows All, Missing, Different printing or nothing.";
 
 /** `managed_wishlist::valid_mode` — read **strictly**: this build naming a word it does not know
  *  is its own bug. */
@@ -14617,26 +14672,30 @@ interface ManagedWant {
 }
 
 /**
- * `deck_theory::wanted`, split in two for v55 — **what the deck's folder holds, and what its
- * `Tokens` subfolder holds**, under one mode (managed tokens spec §3.8).
+ * `deck_theory::wanted`, split in two — **what the deck's folder holds, and what its `Tokens`
+ * subfolder holds**, under one mode and one tokens switch.
  *
  * The card rows are the Compare view's own, **at that view's own quantity** (issue #512's
  * correction): All is the whole row, Missing is the copies no printing covers, Different printing
- * is the copies played as another — and **Tokens puts no card in the folder at all**. The token
- * rows fill the subfolder under **All** and **Tokens**, at their whole quantity, and nowhere under
- * Missing or Different printing, whose views are card rows only.
+ * is the copies played as another. The token rows fill the subfolder **while `withTokens` is on,
+ * under any of the three**, at their whole quantity — the Compare dialog's Tokens view — and
+ * nowhere while it is off. That is user schema v57's shape (issue #617); from v55 to v56 the
+ * tokens rode the mode instead, filed by All and by a fifth `tokens` word that put no card in
+ * the folder at all.
  */
 function managedWants(
   db: FakeDb,
   deckId: number,
-  mode: ManagedWishlistMode,
+  mode: Exclude<ManagedWishlistMode, "off">,
+  withTokens: boolean,
 ): { cards: ManagedWant[]; tokens: ManagedWant[] } {
   const cards: ManagedWant[] = [];
   const tokens: ManagedWant[] = [];
   for (const { oracleId, row } of theoryDiff(db, deckId, DEFAULT_MARKETPLACE)) {
     if (oracleId === null) continue;
     if (row.isToken) {
-      if (mode !== "all" && mode !== "tokens") continue;
+      // `(quantity > 0).then_some(…)` in the crate, which reads a token row as it reads a card.
+      if (!withTokens || row.quantity <= 0) continue;
       tokens.push({
         oracleId,
         cardId: row.cardId,
@@ -14651,9 +14710,7 @@ function managedWants(
         ? row.quantity
         : mode === "missing"
           ? row.quantity - row.heldAsOtherPrinting
-          : mode === "other"
-            ? row.heldAsOtherPrinting
-            : 0;
+          : row.heldAsOtherPrinting;
     if (quantity > 0) {
       cards.push({ oracleId, cardId: row.cardId, name: row.name, finish: row.finish, quantity });
     }
@@ -14707,13 +14764,14 @@ function syncManagedWishes(db: FakeDb, folderId: number, wants: readonly Managed
 
 /**
  * `managed_wishlist::settle_deck` — **bring one deck's managed wishlist to what the deck says**,
- * `Tokens` subfolder included (user schema v55, managed tokens spec §3.8).
+ * `Tokens` subfolder included (user schema v55, managed tokens spec §3.8; its switch v57, issue
+ * #617).
  *
- * A deck that is gone, is not a `Theory + Actual` deck, or is `off` keeps no folder: the
- * subfolder's wishes, then the subfolder, then the folder's wishes, then the folder. An eligible
- * one keeps a folder at the root named after it (made on demand, renamed with the deck) holding
- * the card rows its mode wants, and — **where the mode includes tokens and the plan is short of
- * one** — a subfolder named `Tokens` inside it, marked by `managedTokens` rather than by its name
+ * A deck that is gone, is not a `Theory + Actual` deck, or is `off` keeps no folder — **whatever
+ * its tokens switch says**: the subfolder's wishes, then the subfolder, then the folder's wishes,
+ * then the folder. An eligible one keeps a folder at the root named after it (made on demand,
+ * renamed with the deck) holding the card rows its mode wants, and — **where its tokens switch is
+ * on and the plan is short of a token** — a subfolder named `Tokens` inside it, marked by `managedTokens` rather than by its name
  * and carrying the deck's `managedDeckId`, so {@link refuseIfManagedFolder} covers it as it covers
  * the folder. No token want is no subfolder: a `Tokens` drawer with nothing in it is a folder the
  * reader has to open to learn nothing.
@@ -14736,7 +14794,7 @@ export function settleManagedWishlist(db: FakeDb, deckId: number): void {
     dropManagedFolder(db, parent);
     return;
   }
-  const { cards, tokens } = managedWants(db, deckId, mode);
+  const { cards, tokens } = managedWants(db, deckId, mode, deck.managedWishlistTokens ?? false);
 
   let folder = parent;
   if (folder === undefined) {
@@ -15466,25 +15524,30 @@ function createDeckGroup(db: FakeDb, deckId: number, name: string): FakeCollecti
 }
 
 /**
-/**
- * `deck_theory`'s find-or-create of **the theory pile a live pile corresponds to** (user schema
- * v53) — the rule {@link moveLiveToTheory} files a card by.
+ * `deck_meta::counterpart_in` — find or make **the pile in list `variant` that stands for
+ * `source`**, a pile of the deck's other list (user schema v53). The rule {@link moveLiveToTheory}
+ * files a card by, and {@link writeHandlers.deck_add_card_to_other_list}'s, in either direction.
  *
  * A predefined zone (`kind <> 'main'`) is matched by its **kind**, because the reader may have
- * renamed either list's Sideboard and it is still the Sideboard; a pile of their own is matched
- * by **name** within the theory list. A pile that has to be made copies the live one's kind,
- * `isActive`, `sortOrder` and `origin`, so the plan opens looking like the deck it came from —
- * and from there the two lists are independent.
+ * renamed either list's Sideboard and it is still the Sideboard; any other pile by **name**
+ * within the target list, which a zone the target somehow lacks falls through to as well. A pile
+ * that has to be made copies the source's kind, `isActive`, `sortOrder` and `origin`, so a card
+ * out of a switched-off pile does not arrive in one that counts — and from there the two lists
+ * are independent.
  */
-function theoryPileFor(db: FakeDb, live: FakeDeckCategory): FakeDeckCategory {
-  const theory = db.deckCategories.filter(
-    (c) => c.deckId === live.deckId && c.variant === THEORY,
+function counterpartIn(
+  db: FakeDb,
+  variant: DeckVariant,
+  source: FakeDeckCategory,
+): FakeDeckCategory {
+  const target = db.deckCategories.filter(
+    (c) => c.deckId === source.deckId && c.variant === variant,
   );
   const found =
-    (live.kind !== "main" ? theory.find((c) => c.kind === live.kind) : undefined) ??
-    theory.find((c) => c.name === live.name);
+    (source.kind !== "main" ? target.find((c) => c.kind === source.kind) : undefined) ??
+    target.find((c) => c.name === source.name);
   if (found) return found;
-  const made: FakeDeckCategory = { ...live, id: nextId(db.deckCategories), variant: THEORY };
+  const made: FakeDeckCategory = { ...source, id: nextId(db.deckCategories), variant };
   db.deckCategories.push(made);
   return made;
 }
@@ -15512,7 +15575,7 @@ function theoryPileFor(db: FakeDb, live: FakeDeckCategory): FakeDeckCategory {
  * number of rows moved.
  *
  * **The piles are cloned, not moved** (user schema v53, issue #561). Every live pile gets its
- * theory counterpart ({@link theoryPileFor}) — all of them, used or not, so the plan opens with
+ * theory counterpart ({@link counterpartIn}) — all of them, used or not, so the plan opens with
  * the structure the deck had — and each moved row is filed into its pile's clone. The live piles
  * stay where they are, now empty, so the Actual list keeps its shape; from here the two lists
  * are separate versions of the deck and no pile is shared. The step's snapshot holds the deck's
@@ -15523,7 +15586,7 @@ function moveLiveToTheory(db: FakeDb, deckId: number): number {
     .filter((c) => c.deckId === deckId && c.variant === LIVE)
     .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
   const clones = new Map<number, number>();
-  for (const pile of piles) clones.set(pile.id, theoryPileFor(db, pile).id);
+  for (const pile of piles) clones.set(pile.id, counterpartIn(db, THEORY, pile).id);
   const live = db.deckCards.filter((dc) => dc.deckId === deckId && dc.variant === LIVE);
   for (const row of live) {
     row.variant = THEORY;
@@ -18791,6 +18854,10 @@ export function writeHandlers(db: FakeDb) {
         // `curve_creatures INTEGER NOT NULL DEFAULT 0` (user schema v56): a deck being born
         // draws the one-colour Mana curve, and `DeckInput` does not ask.
         curveCreatures: false,
+        // `managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0` (user schema v57, issue #617): a
+        // deck being born files no tokens, and its mode is `off` besides — `DeckInput` asks
+        // about neither.
+        managedWishlistTokens: false,
         // `token_mode TEXT NOT NULL DEFAULT 'managed'` (user schema v52): every deck starts on
         // Managed, and `DeckInput` does not ask.
         tokenMode: "managed",
@@ -18881,7 +18948,7 @@ export function writeHandlers(db: FakeDb) {
       const bracket = patch.bracket === undefined ? undefined : validBracket(patch.bracket);
       const tokenMode =
         patch.tokenMode === undefined ? undefined : validTokenMode(patch.tokenMode);
-      // `managed_wishlist::valid_mode`, strict — v55's `tokens` among its five words.
+      // `managed_wishlist::valid_mode`, strict — four words since v57, `tokens` no longer one.
       const managedWishlist =
         patch.managedWishlist === undefined ? undefined : validManagedMode(patch.managedWishlist);
       // **The deck's default pile is one deck setting and names a live pile** (user schema v53).
@@ -19021,6 +19088,13 @@ export function writeHandlers(db: FakeDb) {
       const managedWas = before.managedWishlist ?? "off";
       if (patch.managedWishlist !== undefined && patch.managedWishlist !== managedWas) {
         field("managedWishlist", managedWas, patch.managedWishlist);
+      }
+      // v57's tokens switch beside the mode (issue #617): its own row, under `deck.rs`'s
+      // `camelCase` word, and only on a change — the mode's arm above, one column over.
+      const managedTokensWas = before.managedWishlistTokens ?? false;
+      const managedTokens = patch.managedWishlistTokens;
+      if (managedTokens !== undefined && managedTokens !== managedTokensWas) {
+        field("managedWishlistTokens", managedTokensWas, managedTokens);
       }
       // v51's, and **a token column on this patch that does get an arm** (v52's `tokenMode` below
       // is the other) — the paragraph above rules out a reading preference, and this is not one:
@@ -19230,6 +19304,9 @@ export function writeHandlers(db: FakeDb) {
       deck.theoryMarkName = patch.theoryMarkName ?? deck.theoryMarkName;
       deck.theoryMarkUnplanned = patch.theoryMarkUnplanned ?? deck.theoryMarkUnplanned;
       deck.managedWishlist = managedWishlist ?? deck.managedWishlist;
+      // `coalesce(?n, managed_wishlist_tokens)` — written whatever the mode, so a deck set `off`
+      // can hold the switch for the day a view is picked again.
+      deck.managedWishlistTokens = patch.managedWishlistTokens ?? deck.managedWishlistTokens;
       // `coalesce(?n, default_category_id)` again — and **`0` is a value here rather than an
       // absence**, which is the whole reason `??` is right and a truthiness test would be wrong:
       // `patch.defaultCategoryId === 0` is a reader asking to go back to Auto, and `||` would
@@ -19241,16 +19318,18 @@ export function writeHandlers(db: FakeDb) {
       // `patch.bracket`, so a refused number can never reach the row.
       deck.bracket = bracket ?? deck.bracket;
       deck.updatedAt = stamp(db);
-      // **The deck's managed wishlist follows the four columns it is made of** — the crate's
-      // `mw_deck_upd` trigger watches `name`, `theory_enabled`, `virtual_only` and
-      // `managed_wishlist_mode`, and a change to any of them re-settles the folder (and, since
-      // user schema v55, its `Tokens` subfolder). Only on a change, as the trigger only fires on
-      // one, so an untouched patch rewrites nothing.
+      // **The deck's managed wishlist follows the five columns it is made of** — the crate's
+      // `mw_deck_upd` trigger watches `name`, `theory_enabled`, `virtual_only`,
+      // `managed_wishlist_mode` and, since user schema v57, `managed_wishlist_tokens`, and a
+      // change to any of them re-settles the folder (and, since v55, its `Tokens` subfolder).
+      // Only on a change, as the trigger only fires on one, so an untouched patch rewrites
+      // nothing.
       if (
         deck.name !== before.name ||
         deck.theoryEnabled !== before.theoryEnabled ||
         deck.virtualOnly !== before.virtualOnly ||
-        (deck.managedWishlist ?? "off") !== (before.managedWishlist ?? "off")
+        (deck.managedWishlist ?? "off") !== (before.managedWishlist ?? "off") ||
+        (deck.managedWishlistTokens ?? false) !== (before.managedWishlistTokens ?? false)
       ) {
         settleManagedWishlist(db, deck.id);
       }
@@ -19437,7 +19516,8 @@ export function writeHandlers(db: FakeDb) {
       // with no new branch anywhere. `virtualOnly` came across in the spread above and did not
       // need a line of its own — it is an answer *about the deck* that a copy inherits, which is
       // `separateXGroup`'s footing rather than the three view-state columns' — so this `if` is
-      // the whole of what the kind costs here.
+      // the whole of what the kind costs here. The managed wishlist's mode and its tokens switch
+      // (user schema v57) came across in it on the same footing — `duplicate_deck` copies both.
       if (!copy.virtualOnly) createDeckGroup(db, copy.id, copy.name);
       // **The notes are not copied**, which is `duplicate_deck` naming the columns it copies read
       // one table over: it copies the deck's row, its categories and its cards, and `deck_notes`
@@ -19552,6 +19632,76 @@ export function writeHandlers(db: FakeDb) {
         id: nextId(db.deckCards),
         deckId: args.deckId,
         categoryId: category.id,
+        variant,
+        cardId: args.cardId,
+        labelId: null,
+        quantity: args.quantity,
+        name: card.name,
+        setCode: card.setCode,
+        collectorNumber: card.collectorNumber,
+        lang: card.lang,
+        finish,
+        needsReview: null,
+      };
+      db.deckCards.push(row);
+      return { id: row.id, quantity: row.quantity, removed: false };
+    },
+
+    /**
+     * `deck_add_card_to_other_list` — the card menu's `Add to actual` / `Add to theory` (issue
+     * #592): copies of one printing and finish into the deck's **other** list, filed in the pile
+     * there that stands for `fromCategoryId` ({@link counterpartIn}, found or made).
+     *
+     * **`variant` is the list the card goes into; `fromCategoryId` is the pile it is in now.**
+     * The crate runs it through `add_card`'s own body, so the refusals are that command's (busy,
+     * the variant, the finish, a zero, an unknown card) and then, in order, a deck that is gone,
+     * a deck that keeps one list ({@link NO_OTHER_LIST}), a pile that is not this deck's — read
+     * by id *and* deck, as `counterpart_in` reads it, so it is {@link CATEGORY_GONE} rather than
+     * the wrong-deck sentence — and a pile already in the target list ({@link SAME_LIST}). Every
+     * one of them comes before the pile is made, so a refused press invents no category. The fold
+     * is `deck_add_card`'s, and so is the token reroute: unreachable from a deck row, which is
+     * never a token, and kept so the two sides answer one printing the same way.
+     */
+    deck_add_card_to_other_list: (args: {
+      deckId: number;
+      cardId: string;
+      fromCategoryId: number;
+      variant: DeckVariant;
+      finish?: DeckFinish;
+      quantity: number;
+    }): EntryChange => {
+      refuseIfBusy(db);
+      const variant = validVariant(args.variant);
+      const finish = normaliseFinish(args.finish);
+      if (args.quantity <= 0) throw refuse(ZERO_ADD);
+      const card = requireCard(db, args.cardId);
+      if (isTokenCard(card)) {
+        const quantity = addTokenPrinting(
+          db,
+          args.deckId,
+          variant,
+          args.cardId,
+          finish,
+          args.quantity,
+        );
+        return { id: 0, quantity, removed: false };
+      }
+      const deck = requireDeck(db, args.deckId);
+      if (!deck.theoryEnabled) throw refuse(NO_OTHER_LIST);
+      const source = categoryById(db, args.fromCategoryId);
+      if (!source || source.deckId !== args.deckId) throw refuse(CATEGORY_GONE);
+      if (source.variant === variant) throw refuse(SAME_LIST);
+      const target = counterpartIn(db, variant, source);
+      const existing = deckCardAt(db, args.deckId, args.cardId, target.id, variant, finish);
+      deck.updatedAt = stamp(db);
+      if (existing) {
+        existing.quantity += args.quantity;
+        return { id: existing.id, quantity: existing.quantity, removed: false };
+      }
+      const row: FakeDeckCard = {
+        id: nextId(db.deckCards),
+        deckId: args.deckId,
+        categoryId: target.id,
         variant,
         cardId: args.cardId,
         labelId: null,
@@ -24162,13 +24312,13 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
  * all — an untouched patch, a stepper landing on an already-empty slot — files nothing, because
  * a step for a change that did not happen is a press that appears to do nothing.
  *
- * **Known gap, and it is this fake's rather than this feature's**: the seven card writes
- * (`deck_add_card`, `deck_set_card_quantity`, `deck_move_card`, `deck_swap_printing`,
- * `deck_set_card_finish`, `deck_category_clear` and `deck_clear`) record no history row here,
- * though their Rust twins do and `deck_audit.rs`'s
+ * **Known gap, and it is this fake's rather than this feature's**: the card writes
+ * (`deck_add_card`, `deck_add_card_to_other_list`, `deck_set_card_quantity`, `deck_move_card`,
+ * `deck_swap_printing`, `deck_set_card_finish`, `deck_category_clear` and `deck_clear`) record
+ * no history row here, though their Rust twins do and `deck_audit.rs`'s
  * `every_deck_write_leaves_exactly_one_audit_row` pins the four of them that sweep drives. So
  * Storybook's history drawer has never listed a card add, and — consistently — its Undo button
- * does not offer to take one back. The app is unaffected; closing it means giving those seven
+ * does not offer to take one back. The app is unaffected; closing it means giving those
  * handlers a `record(…)` call, which is a change to what the *history* stories draw and belongs
  * with them.
  *
@@ -24180,7 +24330,7 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
  * writes a `REMOVE` row with no card and a `scope` of the whole list.
  *
  * **`collection_to_deck` and `deck_to_collection` are outside that gap and always were.** They
- * are not among the seven, and closing the gap on the add side alone would have left the pair
+ * are not among those, and closing the gap on the add side alone would have left the pair
  * telling a reader a half-story — a Collection Search add in the drawer with the cut that
  * reverses it missing — so both record, and both are on {@link NO_UNDO_STEP} above rather than
  * relying on the wrapper finding no deck id.

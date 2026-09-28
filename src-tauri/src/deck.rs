@@ -112,6 +112,17 @@ pub const K_LAST_DECK_FORMAT: &str = "last_deck_format";
 /// `deck_cards.category_id` is `NOT NULL`.
 pub const NO_CATEGORY: &str = "A card needs a category to go in.";
 
+/// What [`add_card_to_other_list`] says about a deck with no plan (issue #592). A regular deck
+/// and a virtual one keep one list each, so "the other list" names nothing — and the card menu
+/// only offers the press on a deck that keeps both, which makes this a stale editor's sentence.
+pub const NO_OTHER_LIST: &str = "This deck keeps one list, so there is no other list to add to.";
+
+/// What [`add_card_to_other_list`] says when the pile it names as the card's current one is
+/// already in the list the card is going to. The press copies a card **across** the lists, and a
+/// pile of the target list would have [`crate::deck_meta::counterpart_in`] find that pile itself
+/// — an ordinary add, dressed as the other one.
+pub const SAME_LIST: &str = "That category is already in the list the card is going to.";
+
 /// What an adjustment says when the deck it names is not there.
 pub const GONE: &str = "That deck is not there any more.";
 
@@ -680,10 +691,20 @@ pub struct DeckPatch {
     /// Which Compare view this deck's **managed wishlist** follows — one of
     /// [`crate::managed_wishlist::MODES`], `off` for none. See [`DeckRow::managed_wishlist`].
     ///
-    /// **Refused by name outside the five words** ([`crate::managed_wishlist::BAD_MODE`]), where
+    /// **Refused by name outside the four words** ([`crate::managed_wishlist::BAD_MODE`]), where
     /// a read is lenient: a stored word this build does not know came from a newer peer and reads
     /// as `off`, but a *patch* naming one is this build's own mistake.
     pub managed_wishlist: Option<String>,
+    /// Whether this deck's managed wishlist also files the token printings the plan is short of,
+    /// in a **Tokens** subfolder — user schema v57, issue #617. See
+    /// [`DeckRow::managed_wishlist_tokens`].
+    ///
+    /// [`Self::managed_wishlist`]'s rules, less the words: an arm in [`record_deck_edit`]
+    /// (`managedWishlistTokens`), a place on `deck_undo::DECK_FIELDS`, carried by
+    /// [`duplicate_deck`]. Written whatever the mode says, because the settings form offers it
+    /// only beside a mode that is not `off` and a patch that set it under `off` is still the
+    /// reader's answer for when a mode comes back.
+    pub managed_wishlist_tokens: Option<bool>,
     /// Which of this deck's categories an add that names none lands in — the editor's "Add to"
     /// answer, asked in the deck's settings.
     ///
@@ -975,19 +996,29 @@ pub struct DeckRow {
     /// See [`DeckPatch::token_rail_index`] for why it has a history row where v47's
     /// `token_stack` had none.
     pub token_rail_index: i64,
-    /// Which of the Compare dialog's four views this deck's **managed wishlist** follows —
-    /// `all`, `missing`, `other` (Different printing) or `tokens` — or `off` for no folder at all
-    /// (`decks.managed_wishlist_mode`, schema v49, `DEFAULT 'off'`; issue #512; `tokens` since the
-    /// token-improvements spec §3.8, whose **All** and **Tokens** also fill a **Tokens** subfolder).
+    /// Which of the Compare dialog's card views this deck's **managed wishlist** follows —
+    /// `all`, `missing` or `other` (Different printing) — or `off` for no folder at all
+    /// (`decks.managed_wishlist_mode`, schema v49, `DEFAULT 'off'`; issue #512). Whether it also
+    /// fills a **Tokens** subfolder is [`Self::managed_wishlist_tokens`], since user schema v57;
+    /// from v55 to v56 it was a fifth word here, `tokens`.
     /// The folder is rewritten by [`crate::managed_wishlist`] after every write that changes the
     /// deck.
     ///
     /// **Only a theory deck acts on it.** A regular deck has no plan to be short of and a
     /// virtual one owns no cardboard, so the column is stored for both and ignored — switching a
     /// deck to either kind takes its folder away, and switching it back brings it back, because
-    /// the folder is derived rather than remembered. Always one of the five words: a stored value
+    /// the folder is derived rather than remembered. Always one of the four words: a stored value
     /// this build does not know reads as `off` ([`crate::managed_wishlist::read_mode`]).
     pub managed_wishlist: String,
+    /// Whether the managed wishlist also files the plan's missing tokens in a **Tokens**
+    /// subfolder — `decks.managed_wishlist_tokens`, user schema v57, `DEFAULT 0` (issue #617).
+    ///
+    /// **A switch beside the mode rather than a word in it**: until v57 tokens were a fact about
+    /// the view (All counted them, Missing and Different printing did not, and a fifth word
+    /// `tokens` meant them alone), so a deck could not want its missing cards and its tokens at
+    /// once. **Stored whatever the mode says and acted on only when it is not `off`** — so a mode
+    /// switched off and on again keeps the reader's answer.
+    pub managed_wishlist_tokens: bool,
     /// Which of this deck's categories an add that names none lands in — schema v16, and `0`
     /// for **Auto**, where the card's own text decides.
     ///
@@ -1300,7 +1331,7 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
             d.virtual_only, d.stats_open, d.notes_open, d.token_mode, d.managed_wishlist_mode,
-            d.token_rail_index, d.curve_creatures
+            d.token_rail_index, d.curve_creatures, d.managed_wishlist_tokens
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -1442,6 +1473,12 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // theirs read once more: a crossed index would hand the split to a band's open state and
         // both fields would still hold a `0` or a `1`.
         curve_creatures: r.get(30)?,
+        // 31, at the end of the named list, same rule — user schema v57's managed-wishlist tokens
+        // switch. Another `bool` over an `INTEGER`, and the column it most reads like a neighbour
+        // of is `managed_wishlist_mode` at 28 — a TEXT, so a crossed read there fails loudly; the
+        // silent trap is `curve_creatures` one to the left, where a crossed index would file a
+        // deck's tokens because the reader split a chart.
+        managed_wishlist_tokens: r.get(31)?,
     })
 }
 
@@ -2139,6 +2176,8 @@ struct DeckBefore {
     token_rail_index: i64,
     /// User schema v52's token mode, for the history row.
     token_mode: String,
+    /// User schema v57's managed-wishlist tokens switch, for the history row.
+    managed_wishlist_tokens: bool,
 }
 
 /// What a `deck`/`cover` history row records as the cover: the card's id, and the word
@@ -2261,7 +2300,8 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     archived, folder_id, theory_enabled, separate_x_group,
                     default_category_id, game_key, bracket,
                     theory_mark_exact, theory_mark_name, theory_mark_unplanned,
-                    virtual_only, managed_wishlist_mode, token_rail_index, token_mode
+                    virtual_only, managed_wishlist_mode, token_rail_index, token_mode,
+                    managed_wishlist_tokens
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -2323,6 +2363,9 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     // 18, at the end, same rule — TEXT like `managed_wishlist` at 16, so a
                     // crossed index records one mode moving where the other did.
                     token_mode: r.get(18)?,
+                    // 19, at the end, same rule — a `bool` over an `INTEGER` like the eight
+                    // above it, so a crossed index records the wrong switch moving.
+                    managed_wishlist_tokens: r.get(19)?,
                 })
             },
         )
@@ -2446,6 +2489,11 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- `?19` and `?20`, so a crossed number is an UPDATE that succeeds and opens a
                 -- band where the reader pressed a chart toggle.
                 curve_creatures = coalesce(?24, curve_creatures),
+                -- `?25`, the next number at the **end**, same rule one rung later. User schema
+                -- v57's managed-wishlist tokens switch is an `Option<bool>` like `?24` beside it,
+                -- so a crossed number is an UPDATE that succeeds and splits a chart where the
+                -- reader asked for tokens.
+                managed_wishlist_tokens = coalesce(?25, managed_wishlist_tokens),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -2475,6 +2523,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 managed_wishlist,
                 patch.token_rail_index,
                 patch.curve_creatures,
+                patch.managed_wishlist_tokens,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -3075,6 +3124,19 @@ fn record_deck_edit(
     {
         field("managedWishlist", json!(before.managed_wishlist), json!(to))?;
     }
+    // `managedWishlistTokens`, camelCase, booleans on both sides — the theory marks' shape.
+    // User schema v57's switch (issue #617) decides whether a folder the reader reads fills with
+    // tokens, which is `managedWishlist`'s reason for a row.
+    if let Some(to) = patch
+        .managed_wishlist_tokens
+        .filter(|t| *t != before.managed_wishlist_tokens)
+    {
+        field(
+            "managedWishlistTokens",
+            json!(before.managed_wishlist_tokens),
+            json!(to),
+        )?;
+    }
     // `tokenRail`, camelCase — `xGroup`'s rule — and the **numbers** on both sides, `-1` for
     // last: which pile that slot fell beside is a fact about the rail at the moment of the drag,
     // and `auditText.ts` words the move without it. An arrangement the reader dragged earns its
@@ -3548,17 +3610,20 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
             // happened to have open — and its `DEFAULT 'managed'` would bring a hidden pile back
             // on the copy. **`token_rail_index` (user schema v51) comes with it**: where the pile
             // sits is an arrangement of the deck, like its categories' order, and a copy whose
-            // pile jumped back to last would not be a copy.
+            // pile jumped back to last would not be a copy. **`managed_wishlist_tokens` (user
+            // schema v57) travels with `managed_wishlist_mode`**, which was already here: the
+            // two together are one answer about what the deck's folder holds.
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 folder_id, theory_enabled,
                                 separate_x_group, bracket, theory_mark_exact, theory_mark_name,
                                 theory_mark_unplanned, virtual_only, token_mode, token_rail_index,
-                                managed_wishlist_mode, archived, created_at, updated_at)
+                                managed_wishlist_mode, managed_wishlist_tokens, archived,
+                                created_at, updated_at)
              SELECT name || ' (copy)', format_key, description, cover_kind, cover_card_id,
                     folder_id, theory_enabled, separate_x_group,
                     bracket, theory_mark_exact, theory_mark_name, theory_mark_unplanned,
                     virtual_only, token_mode, token_rail_index, managed_wishlist_mode,
-                    0, unixepoch(), unixepoch()
+                    managed_wishlist_tokens, 0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
              RETURNING id, name, virtual_only",
             params![id],
@@ -4056,6 +4121,73 @@ pub fn add_card(
     finish: Option<&str>,
     quantity: i64,
 ) -> Result<EntryChange, String> {
+    // The id wins when both arrive. Neither arriving is `None`, refused inside and behind the
+    // argument fences — where `NO_CATEGORY` has always sat in the refusal order.
+    let pile = match (category_id, category_name) {
+        (Some(id), _) => Some(AddPile::Id(id)),
+        (None, Some(name)) => Some(AddPile::Name(name)),
+        (None, None) => None,
+    };
+    add_card_in(conn, deck_id, card_id, pile, variant, finish, quantity)
+}
+
+/// Add copies of one printing to the deck's **other** list — the card menu's `Add to actual` on
+/// a theory row and `Add to theory` on an actual one (issue #592).
+///
+/// `variant` is the list the card goes **into**; `from_category_id` is the pile it sits in now,
+/// in the other list. The copies land in the pile of `variant` that stands for that one —
+/// [`crate::deck_meta::counterpart_in`], the theory switch's own rule: a predefined zone by kind
+/// (a renamed Sideboard still finds the other list's Sideboard), any other pile by name, and a
+/// pile the other list lacks made there as a copy of it. The printing and the finish are the
+/// caller's exactly, so the add folds on the grain into a row already there like any other.
+///
+/// Everything after the pile is [`add_card`]'s: the same fold, one `add` history row in the
+/// target list, and one undo step whose pile diff takes a pile this made away again. Refused with
+/// [`NO_OTHER_LIST`] on a deck without a plan, [`crate::deck_meta::CATEGORY_GONE`] for a pile that
+/// is not this deck's, and [`SAME_LIST`] for a pile already in `variant`.
+pub fn add_card_to_other_list(
+    conn: &Connection,
+    deck_id: i64,
+    card_id: &str,
+    from_category_id: i64,
+    variant: &str,
+    finish: Option<&str>,
+    quantity: i64,
+) -> Result<EntryChange, String> {
+    add_card_in(
+        conn,
+        deck_id,
+        card_id,
+        Some(AddPile::CounterpartOf(from_category_id)),
+        variant,
+        finish,
+        quantity,
+    )
+}
+
+/// Which pile an add files into, named one of three ways. Not `Pile`, which
+/// [`crate::collection_alloc`] already spells.
+enum AddPile<'a> {
+    /// A pile of the list being written, by id — a drop onto a column.
+    Id(i64),
+    /// Found or made among the list's piles by name — [`crate::deck_meta::category_for_name`].
+    Name(&'a str),
+    /// The pile of the list being written that stands for this pile of the other one — found or
+    /// made by [`counterpart_pile`].
+    CounterpartOf(i64),
+}
+
+/// [`add_card`] and [`add_card_to_other_list`], once: the pile is an [`AddPile`], and `None` is
+/// [`NO_CATEGORY`].
+fn add_card_in(
+    conn: &Connection,
+    deck_id: i64,
+    card_id: &str,
+    pile: Option<AddPile<'_>>,
+    variant: &str,
+    finish: Option<&str>,
+    quantity: i64,
+) -> Result<EntryChange, String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
     let finish = normalise_finish(finish)?;
     // Not `valid_quantity`: *adding* zero copies is a no-op dressed as a write, and would
@@ -4064,9 +4196,9 @@ pub fn add_card(
     if quantity <= 0 {
         return Err(ZERO_ADD.to_owned());
     }
-    if category_id.is_none() && category_name.is_none() {
+    let Some(pile) = pile else {
         return Err(NO_CATEGORY.to_owned());
-    }
+    };
     let (set_code, collector_number, lang, name) = printing_of(conn, card_id)?;
     // Asked beside the lookup above rather than folded into it: `printing_of` is shared with
     // `collection_to_deck` and the import, and neither needs the answer — and the question is
@@ -4079,6 +4211,7 @@ pub fn add_card(
     // and a category the name arm would create for a token is a pile nothing will ever fill.
     // Its audit row (kind `deck`, `field: "token"`) and its undo step are both inside that call,
     // in this transaction, so the reroute is as much one press as the card write below.
+    // Unreachable from `add_card_to_other_list`, whose card is a deck row, and a token never is.
     if is_token {
         let landed = crate::deck_tokens::add_printing_in(
             &tx,
@@ -4100,30 +4233,27 @@ pub fn add_card(
     // the diff against this is how an undo knows to take an invented `Ramp` column away again
     // along with the card that made it.
     let categories_before = crate::deck_undo::category_ids(&tx, deck_id)?;
-    // Inside the transaction because the name arm *writes*: a category nobody has made yet is
-    // made here, and it must not survive a card insert that fails after it.
+    // Inside the transaction because the name and counterpart arms *write*: a category nobody
+    // has made yet is made here, and it must not survive a card insert that fails after it.
     //
-    // Both arms answer the category's **name** as well as its id, because the history row
+    // Every arm answers the category's **name** as well as its id, because the history row
     // below names the pile the card went into and a number nobody chose says nothing. The id
-    // arm gets it free from the fence it runs anyway; the name arm trims the caller's string
-    // the way `category_for_name` did before storing it, so the two arms record the same word
-    // for the same category.
+    // arms get it free from the fence they run anyway; the name arm trims the caller's string
+    // the way `category_for_name` did before storing it, so the arms record the same word for
+    // the same category.
     //
-    // **Both arms are the list being written** (user schema v53): an id of the other list's
-    // pile is refused, and a name is found or made among this list's piles only.
-    let (category_id, category) = match category_id {
-        Some(id) => (id, category_of_deck(&tx, deck_id, variant, id)?),
-        // Unreachable past the guard above, and written as a second refusal rather than an
-        // `expect` so that an edit which ever drops that guard answers the sentence instead
-        // of panicking in a user's face.
-        None => {
-            let Some(name) = category_name else {
-                return Err(NO_CATEGORY.to_owned());
-            };
-            (
-                crate::deck_meta::category_for_name(&tx, deck_id, variant, name)?,
-                name.trim().to_owned(),
-            )
+    // **Every arm is the list being written** (user schema v53): an id of the other list's
+    // pile is refused, a name is found or made among this list's piles only, and a counterpart
+    // is this list's pile standing for the other's.
+    let (category_id, category) = match pile {
+        AddPile::Id(id) => (id, category_of_deck(&tx, deck_id, variant, id)?),
+        AddPile::Name(name) => (
+            crate::deck_meta::category_for_name(&tx, deck_id, variant, name)?,
+            name.trim().to_owned(),
+        ),
+        AddPile::CounterpartOf(source) => {
+            let id = counterpart_pile(&tx, deck_id, variant, source)?;
+            (id, category_of_deck(&tx, deck_id, variant, id)?)
         }
     };
     // The cell this add is about, read before the INSERT. **The fold is why this is a read
@@ -4191,6 +4321,46 @@ pub fn add_card(
         quantity: landed,
         removed: false,
     })
+}
+
+/// The pile of list `variant` an [`add_card_to_other_list`] files into — the pile standing for
+/// `source`, found or made by [`crate::deck_meta::counterpart_in`] — behind the two fences that
+/// function does not run, because its other callers are never pointed at a deck without a plan
+/// or at a pile of the list they write.
+///
+/// **In the caller's transaction and behind its `touch_deck`**, the crate's placement rule for a
+/// write: a stale editor's dead deck id hears [`GONE`] before it hears that the deck keeps one
+/// list. The pile it makes is undone by the caller's step, through `categories_before`.
+fn counterpart_pile(
+    conn: &Connection,
+    deck_id: i64,
+    variant: &str,
+    source: i64,
+) -> Result<i64, String> {
+    let keeps_a_plan: bool = conn
+        .query_row(
+            "SELECT theory_enabled FROM decks WHERE id = ?1",
+            params![deck_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if !keeps_a_plan {
+        return Err(NO_OTHER_LIST.to_owned());
+    }
+    // `counterpart_in`'s own lookup, so a pile of another deck is `CATEGORY_GONE` here as there.
+    let list: String = conn
+        .query_row(
+            "SELECT variant FROM deck_categories WHERE id = ?1 AND deck_id = ?2",
+            params![source, deck_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| crate::deck_meta::CATEGORY_GONE.to_owned())?;
+    if list == variant {
+        return Err(SAME_LIST.to_owned());
+    }
+    crate::deck_meta::counterpart_in(conn, deck_id, variant, source)
 }
 
 /// Set an absolute quantity — the stepper write. **Zero removes the row.**
@@ -6725,6 +6895,38 @@ pub async fn deck_add_card(
     .map_err(unfinished)?
 }
 
+/// The card menu's `Add to actual` and `Add to theory` (issue #592). **`variant` is the list the
+/// card goes into** and `fromCategoryId` the pile it sits in now — see [`add_card_to_other_list`].
+#[tauri::command]
+pub async fn deck_add_card_to_other_list(
+    state: tauri::State<'_, Arc<AppState>>,
+    deck_id: i64,
+    card_id: String,
+    from_category_id: i64,
+    variant: String,
+    finish: Option<String>,
+    quantity: i64,
+) -> Result<EntryChange, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        // Plain `with_write`, [`deck_add_card`]'s reason: a deck write moves nothing the reader
+        // owns.
+        with_write(&state, |c| {
+            add_card_to_other_list(
+                c,
+                deck_id,
+                &card_id,
+                from_category_id,
+                &variant,
+                finish.as_deref(),
+                quantity,
+            )
+        })
+    })
+    .await
+    .map_err(unfinished)?
+}
+
 #[tauri::command]
 pub async fn deck_set_card_quantity(
     state: tauri::State<'_, Arc<AppState>>,
@@ -7546,6 +7748,317 @@ mod tests {
             1,
             "and the one row that does exist is untouched"
         );
+    }
+
+    /// A deck born with a plan — [`DeckInput::theory_enabled`], which seeds the plan's four
+    /// zones beside the live list's and moves nothing.
+    fn planned(conn: &Connection, name: &str) -> i64 {
+        create_deck(
+            conn,
+            &DeckInput {
+                theory_enabled: Some(true),
+                ..input(name, "modern")
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    /// One pile's list and shape — `variant`, `kind`, `is_active`, `sort_order`, `origin` —
+    /// which is everything `deck_meta::counterpart_in` copies onto a pile it makes, and the list
+    /// it made it in.
+    fn pile_shape(conn: &Connection, id: i64) -> (String, String, bool, i64, String) {
+        conn.query_row(
+            "SELECT variant, kind, is_active, sort_order, origin
+               FROM deck_categories WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .unwrap()
+    }
+
+    /// **`Add to actual` on a theory row** (issue #592): one more copy, in the live pile of the
+    /// same name, folded on the grain into the row already there — and the theory row stays
+    /// where it was, because the press copies a card across and moves nothing. The history row
+    /// is an ordinary `add` in the list the card went into.
+    #[test]
+    fn adding_to_the_other_list_folds_into_its_pile_of_the_same_name() {
+        let conn = seeded();
+        let deck = planned(&conn, "Burn");
+        let live_main = main_of(&conn, deck);
+        let plan_main = plan_pile(&conn, deck, live_main);
+        let planned_row = add_card(
+            &conn,
+            deck,
+            "bolt-m10",
+            Some(plan_main),
+            None,
+            THEORY,
+            None,
+            3,
+        )
+        .unwrap();
+        let sleeved = add(&conn, deck, "bolt-m10", live_main, 2);
+        let piles = count(&conn, "deck_categories");
+
+        let landed =
+            add_card_to_other_list(&conn, deck, "bolt-m10", plan_main, LIVE, None, 1).unwrap();
+
+        assert_eq!(
+            (landed.id, landed.quantity, landed.removed),
+            (sleeved.id, 3, false),
+            "folded into the live row, 2 + 1"
+        );
+        assert_eq!(
+            count(&conn, "deck_categories"),
+            piles,
+            "the pile was found, not made"
+        );
+        let plan_quantity: i64 = conn
+            .query_row(
+                "SELECT quantity FROM deck_cards WHERE id = ?1",
+                params![planned_row.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(plan_quantity, 3, "and the plan's row is untouched");
+        let newest = crate::deck_audit::list(&conn, deck, 1).unwrap().remove(0);
+        assert_eq!(
+            (newest.variant.as_str(), newest.kind.as_str()),
+            (LIVE, crate::deck_audit::ADD)
+        );
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&newest.payload).unwrap(),
+            json!({ "category": "Main deck", "quantity": 1 })
+        );
+    }
+
+    /// **A predefined zone is matched by kind, not by name** — `counterpart_in`'s rule, so a
+    /// plan's Sideboard under another name still lands its card in the live Sideboard rather
+    /// than inventing a live pile called that. Renamed in SQL, because `rename_category` refuses
+    /// a zone; the name is what a legacy deck's backfill or a synced row can carry.
+    #[test]
+    fn adding_a_renamed_zone_to_the_other_list_finds_that_lists_zone_of_the_kind() {
+        let conn = seeded();
+        let deck = planned(&conn, "Burn");
+        let plan_side = plan_pile(&conn, deck, kind_of(&conn, deck, "side"));
+        conn.execute(
+            "UPDATE deck_categories SET name = 'Wishboard' WHERE id = ?1",
+            params![plan_side],
+        )
+        .unwrap();
+        add_card(
+            &conn,
+            deck,
+            "bolt-lea",
+            Some(plan_side),
+            None,
+            THEORY,
+            None,
+            1,
+        )
+        .unwrap();
+        let piles = count(&conn, "deck_categories");
+
+        let landed =
+            add_card_to_other_list(&conn, deck, "bolt-lea", plan_side, LIVE, None, 1).unwrap();
+
+        let filed: i64 = conn
+            .query_row(
+                "SELECT category_id FROM deck_cards WHERE id = ?1",
+                params![landed.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(filed, kind_of(&conn, deck, "side"), "the live Sideboard");
+        assert_eq!(count(&conn, "deck_categories"), piles, "and no `Wishboard`");
+    }
+
+    /// **A pile the other list lacks is made there as a copy of the source** — kind,
+    /// `is_active`, `sort_order` and `origin` — and one Ctrl+Z takes it away with the card, which
+    /// is `add_card`'s `categories_before` diff doing for this arm what it does for the name arm.
+    /// Live into theory, the direction the test above does not drive, and from a switched-off
+    /// `auto` pile so the copied columns are not all their defaults.
+    #[test]
+    fn a_pile_the_other_list_lacks_is_made_as_a_copy_and_undo_takes_it_away() {
+        let conn = seeded();
+        let deck = planned(&conn, "Burn");
+        let burn = crate::deck_meta::category_for_name(&conn, deck, LIVE, "Burn spells").unwrap();
+        crate::deck_meta::set_category_active(&conn, burn, false).unwrap();
+        add(&conn, deck, "bolt-lea", burn, 2);
+        let piles = count(&conn, "deck_categories");
+
+        let landed =
+            add_card_to_other_list(&conn, deck, "bolt-lea", burn, THEORY, None, 1).unwrap();
+
+        assert_eq!(count(&conn, "deck_categories"), piles + 1);
+        let made: i64 = conn
+            .query_row(
+                "SELECT category_id FROM deck_cards WHERE id = ?1",
+                params![landed.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let (list, kind, active, order, origin) = pile_shape(&conn, burn);
+        assert_eq!(list, LIVE);
+        assert_eq!(
+            pile_shape(&conn, made),
+            (THEORY.to_owned(), kind, active, order, origin),
+            "the same shape, in the plan"
+        );
+        assert_eq!(landed.quantity, 1);
+
+        let cursor = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, cursor, true).unwrap();
+
+        assert_eq!(
+            count(&conn, "deck_categories"),
+            piles,
+            "the pile went with the card"
+        );
+        assert_eq!(
+            count(
+                &conn,
+                &format!("deck_cards WHERE deck_id = {deck} AND variant = 'theory'")
+            ),
+            0
+        );
+        assert_eq!(
+            count(
+                &conn,
+                &format!("deck_cards WHERE deck_id = {deck} AND variant = 'live'")
+            ),
+            1,
+            "and the live row it was copied from stays"
+        );
+    }
+
+    /// A regular deck and a virtual one keep one list each, so there is no other list to add
+    /// to — refused in words, and nothing written, the deck's stamp included.
+    #[test]
+    fn adding_to_the_other_list_refuses_a_deck_that_keeps_one_list() {
+        let conn = seeded();
+        for deck in [
+            create_deck(&conn, &input("Burn", "modern")).unwrap().id,
+            create_deck(&conn, &virtual_input("Arena Burn")).unwrap().id,
+        ] {
+            let main = main_of(&conn, deck);
+            add(&conn, deck, "bolt-lea", main, 1);
+            stop_the_clock(&conn, deck);
+            let (cards, piles, history) = (
+                count(&conn, "deck_cards"),
+                count(&conn, "deck_categories"),
+                count(&conn, "deck_audit"),
+            );
+
+            assert_eq!(
+                add_card_to_other_list(&conn, deck, "bolt-lea", main, THEORY, None, 1).unwrap_err(),
+                NO_OTHER_LIST
+            );
+            assert_eq!(
+                (
+                    count(&conn, "deck_cards"),
+                    count(&conn, "deck_categories"),
+                    count(&conn, "deck_audit"),
+                ),
+                (cards, piles, history)
+            );
+            assert_eq!(touched_at(&conn, deck), UNMOVED, "the stamp rolled back");
+        }
+    }
+
+    /// The source pile must be this deck's (`counterpart_in`'s own `CATEGORY_GONE`) and must be
+    /// in the **other** list — a pile of the list the card is going to would find itself, which
+    /// is an ordinary add and not this press.
+    #[test]
+    fn adding_to_the_other_list_refuses_a_pile_that_is_not_the_other_lists() {
+        let conn = seeded();
+        let deck = planned(&conn, "Burn");
+        let other = planned(&conn, "Angels");
+        let live_main = main_of(&conn, deck);
+        let plan_main = plan_pile(&conn, deck, live_main);
+        let theirs = main_of(&conn, other);
+        let (cards, piles) = (count(&conn, "deck_cards"), count(&conn, "deck_categories"));
+
+        let refuse = |source: i64, variant: &str| {
+            add_card_to_other_list(&conn, deck, "bolt-lea", source, variant, None, 1).unwrap_err()
+        };
+        assert_eq!(refuse(live_main, LIVE), SAME_LIST);
+        assert_eq!(refuse(plan_main, THEORY), SAME_LIST);
+        assert_eq!(refuse(theirs, THEORY), crate::deck_meta::CATEGORY_GONE);
+        assert_eq!(
+            refuse(theirs + 999, THEORY),
+            crate::deck_meta::CATEGORY_GONE
+        );
+        assert_eq!(
+            (count(&conn, "deck_cards"), count(&conn, "deck_categories")),
+            (cards, piles),
+            "and nothing was written"
+        );
+    }
+
+    /// A stale editor's dead deck id hears [`GONE`] — the pile check sits behind `touch_deck`,
+    /// the crate's placement rule for a write, so neither [`NO_OTHER_LIST`] nor a missing pile
+    /// gets to speak first.
+    #[test]
+    fn adding_to_the_other_list_on_a_deleted_deck_answers_gone() {
+        let conn = seeded();
+        let deck = planned(&conn, "Burn");
+        let live_main = main_of(&conn, deck);
+        add(&conn, deck, "bolt-lea", live_main, 1);
+        delete_deck(&conn, deck).unwrap();
+
+        assert_eq!(
+            add_card_to_other_list(&conn, deck, "bolt-lea", live_main, THEORY, None, 1)
+                .unwrap_err(),
+            GONE
+        );
+    }
+
+    /// **The finish is carried**: a foil theory row added to the live list is a foil live row,
+    /// on the grain beside the regular copy the live pile already holds rather than folded into
+    /// it.
+    #[test]
+    fn adding_to_the_other_list_carries_the_finish() {
+        let conn = seeded();
+        let deck = planned(&conn, "Burn");
+        let live_main = main_of(&conn, deck);
+        let plan_main = plan_pile(&conn, deck, live_main);
+        add_card(
+            &conn,
+            deck,
+            "bolt-m10",
+            Some(plan_main),
+            None,
+            THEORY,
+            Some("foil"),
+            2,
+        )
+        .unwrap();
+        let regular = add(&conn, deck, "bolt-m10", live_main, 1);
+
+        let landed =
+            add_card_to_other_list(&conn, deck, "bolt-m10", plan_main, LIVE, Some("foil"), 1)
+                .unwrap();
+
+        assert_ne!(landed.id, regular.id, "a row of its own");
+        assert_eq!(landed.quantity, 1);
+        let finish: Option<String> = conn
+            .query_row(
+                "SELECT finish FROM deck_cards WHERE id = ?1",
+                params![landed.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(finish.as_deref(), Some("foil"));
+        let regular_quantity: i64 = conn
+            .query_row(
+                "SELECT quantity FROM deck_cards WHERE id = ?1",
+                params![regular.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(regular_quantity, 1, "and the regular copy is untouched");
     }
 
     #[test]
@@ -10545,6 +11058,10 @@ mod tests {
             theory_mark_unplanned: false,
             // `false`, the column's non-default, for `bracket`'s reason below.
             managed_wishlist: "missing".to_owned(),
+            // `true` rather than the column's `DEFAULT 0`, the rule the comments below state —
+            // and `true` where `curve_creatures`' neighbour at 30 is also `true`, so it is the
+            // key below, not the value, that separates the two.
+            managed_wishlist_tokens: true,
             last_variant: "theory".to_owned(),
             last_group_by: "manaValue".to_owned(),
             last_sort_by: "price".to_owned(),
@@ -10608,6 +11125,11 @@ mod tests {
                 // Schema v48, off because `DEFAULT 1` would read correct on a field that never
                 // left Rust.
                 "managedWishlist": "missing",
+                // User schema v57, and `managedWishlistTokens` rather than
+                // `managed_wishlist_tokens`: Deck settings reads this key to draw the Tokens
+                // toggle, and a snake-cased one would be `undefined` — falsy, so a switch the
+                // reader turned on would draw off.
+                "managedWishlistTokens": true,
                 // The two mode fields carry TypeScript's own vocabulary, so the fixture spells
                 // real editor words rather than placeholders: this crate never parses them, and
                 // a test written with `"x"` would hide that they are meant to round-trip.
@@ -10715,7 +11237,7 @@ mod tests {
         let patch: DeckPatch = serde_json::from_str(
             r#"{"coverCardId":"bolt-lea","archived":true,"separateXGroup":true,"gameKey":"mtgo",
                 "virtualOnly":true,"tokenMode":"hidden","tokenRailIndex":-1,
-                "curveCreatures":true}"#,
+                "curveCreatures":true,"managedWishlistTokens":true}"#,
         )
         .expect("the patch payload");
         assert_eq!(patch.cover_card_id.as_deref(), Some("bolt-lea"));
@@ -10734,6 +11256,10 @@ mod tests {
         // User schema v56. The Mana curve's `Creatures` toggle sends this, and a misspelled key
         // would be read by `#[serde(default)]` as an omitted one — a press that saves nothing.
         assert_eq!(patch.curve_creatures, Some(true));
+        // User schema v57. Deck settings' Tokens toggle sends this beside the managed wishlist's
+        // mode, and a misspelled key would be read as an omitted one — a press that saves
+        // nothing.
+        assert_eq!(patch.managed_wishlist_tokens, Some(true));
         assert!(patch.name.is_none(), "an omitted field means leave it");
 
         // And the third: `deck_set_view_state`'s `viewState`, which the editor sends one
@@ -11906,6 +12432,109 @@ mod tests {
             read_deck(&conn, deck.id).unwrap().unwrap().token_rail_index,
             -1,
             "one Ctrl+Z puts the pile back where it was"
+        );
+    }
+
+    /// The managed wishlist's **tokens switch**, end to end (user schema v57, issue #617): off on
+    /// a new deck, a patch turns it on beside a mode, an absent field leaves it, **the change is a
+    /// history row and one Ctrl+Z puts it back**, and a copy keeps it with its mode.
+    ///
+    /// Patched beside `curve_creatures` — the `bool` one column to its left in `DECK_SELECT` and
+    /// one hole below it in the UPDATE — set the other way, so a crossed index or number changes
+    /// what this reads.
+    #[test]
+    fn managed_wishlist_tokens_round_trips_audits_and_undoes() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        assert!(
+            !deck.managed_wishlist_tokens,
+            "a new deck files no tokens — the column's own DEFAULT"
+        );
+
+        let on = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                managed_wishlist: Some("missing".to_owned()),
+                managed_wishlist_tokens: Some(true),
+                curve_creatures: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(on.managed_wishlist_tokens, "the readback is the write");
+        let read = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert_eq!(
+            (
+                read.managed_wishlist.as_str(),
+                read.managed_wishlist_tokens,
+                read.curve_creatures
+            ),
+            ("missing", true, false),
+            "…including through `DECK_SELECT`'s positional reads, the neighbours untouched"
+        );
+
+        let payloads: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 20)
+            .unwrap()
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::DECK)
+            .map(|r| serde_json::from_str(&r.payload).unwrap())
+            .collect();
+        assert!(
+            payloads.contains(&json!({
+                "field": "managedWishlistTokens", "from": false, "to": true
+            })),
+            "the switch is named in the drawer, from and to: {payloads:?}"
+        );
+
+        let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
+        assert!(
+            after.managed_wishlist_tokens,
+            "an absent field means leave it"
+        );
+
+        // The same value again is no change, and a no-change is no row.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                managed_wishlist_tokens: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            crate::deck_audit::list(&conn, deck.id, 20)
+                .unwrap()
+                .iter()
+                .filter(|r| r.payload.contains("managedWishlistTokens"))
+                .count(),
+            1,
+            "re-sending the switch the deck already holds records nothing"
+        );
+
+        let copy = duplicate_deck(&conn, deck.id).unwrap();
+        assert_eq!(
+            (copy.managed_wishlist.as_str(), copy.managed_wishlist_tokens),
+            ("missing", true),
+            "a copy's folder holds what its original's does"
+        );
+
+        // `apply_reversal` itself, the path Ctrl+Z takes. It reads the columns to put back off
+        // `deck_undo::DECK_FIELDS`, which is where `managed_wishlist_tokens` has to be for this
+        // to pass.
+        let cursor = crate::deck_undo::next_undo(&conn, deck.id)
+            .unwrap()
+            .unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck.id, cursor, true).unwrap();
+        let undone = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert_eq!(
+            (
+                undone.managed_wishlist.as_str(),
+                undone.managed_wishlist_tokens
+            ),
+            ("off", false),
+            "one Ctrl+Z puts the mode and the switch back together"
         );
     }
 

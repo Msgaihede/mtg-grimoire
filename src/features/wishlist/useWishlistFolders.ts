@@ -26,10 +26,13 @@ const NONE: readonly WishlistFolder[] = [];
  * once. A hand-written `useQuery(["wishlist", "folders"])` in `useCardMenuDeps` would have read
  * the same today and drifted the first time either copy changed.
  */
-export function useWishlistFolderList() {
+export function useWishlistFolderList({ enabled = true }: { enabled?: boolean } = {}) {
   const query = useQuery({
     queryKey: ["wishlist", "folders"],
     queryFn: () => ipc.wishlistFolderList(),
+    // Off for a reader who only sometimes needs the folders — the Wishlist savings widget reads
+    // them only once its reader chooses which wishlists it counts.
+    enabled,
   });
 
   return {

@@ -188,6 +188,10 @@ const DECK_FIELDS: &[&str] = &[
     "theory_mark_unplanned",
     // Schema v49's managed-wishlist mode — an ordinary `deck_update` answer with a history row.
     "managed_wishlist_mode",
+    // User schema v57's tokens switch beside it (issue #617), on the list with it for
+    // `theory_mark_*`'s reason: one Save of Deck settings can move both, and a Ctrl+Z that put the
+    // mode back and left the switch would restore half of one press.
+    "managed_wishlist_tokens",
     // User schema v51's rail index — an arrangement, like a category's `sort_order`: the reader
     // moved the pile and Ctrl+Z moves it back.
     "token_rail_index",
@@ -3208,7 +3212,59 @@ mod tests {
                     .unwrap();
                 },
             ),
+            (
+                // The card menu's `Add to actual` (issue #592): the plan's card into the live
+                // pile of the same name, which [`fresh`] already has.
+                "deck_add_card_to_other_list",
+                with_a_plan,
+                |c, id| {
+                    crate::deck::add_card_to_other_list(
+                        c,
+                        id,
+                        "bolt-m10",
+                        plan_ramp(c, id),
+                        "live",
+                        None,
+                        1,
+                    )
+                    .unwrap();
+                },
+            ),
+            (
+                // `Add to theory` out of a pile the plan lacks, which **makes** it. Undo has to
+                // take the plan's new `Draw` away with the card — the name arm's case above, one
+                // entrance over.
+                "deck_add_card_to_other_list (inventing the other list's pile)",
+                with_a_plan,
+                |c, id| {
+                    crate::deck::add_card_to_other_list(
+                        c,
+                        id,
+                        "serra-lea",
+                        draw(c, id),
+                        "theory",
+                        None,
+                        1,
+                    )
+                    .unwrap();
+                },
+            ),
         ]
+    }
+
+    /// [`fresh`]'s deck with its plan switched on — the only kind of deck the card menu offers
+    /// `Add to actual` / `Add to theory` on. [`fresh`] has started the plan already, so the switch
+    /// moves nothing and only seeds the plan's four zones.
+    fn with_a_plan(conn: &Connection, deck_id: i64) {
+        crate::deck::update_deck(
+            conn,
+            deck_id,
+            &crate::deck::DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     }
 
     /// The deck-row, import and theory writes.

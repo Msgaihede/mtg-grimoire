@@ -43,7 +43,7 @@ so a change to `menuKey` is a change to this row.
 
 ## `matchesChord` is exact in both directions
 
-Three rules, each with a failure behind it:
+Four rules, each with a failure behind it:
 
 - **`ctrl: true` matches `ctrlKey` *or* `metaKey`.** Not hedging about macOS — it is the rule
   `multiSelect.ts:61` already states and tests, and a second, stricter spelling of it here is the
@@ -56,6 +56,13 @@ Three rules, each with a failure behind it:
   a case-sensitive test makes every shifted letter chord dead. Longer names (`F1`, `Delete`,
   `ArrowLeft`) compare verbatim — they are already canonical, and folding them would let
   `"delete"` through as a chord nobody wrote.
+- **A digit also matches on its physical key, `e.code`** (issue #558, 2026-09-28). `e.key` is what
+  the layout prints, and AZERTY's unshifted digit row prints `&`, `é`, `"`… — the digits are
+  behind Shift, which the exactness rule refuses on `Ctrl+1`. So `Ctrl+1…9` was unreachable there
+  by either spelling. `Digit1` is the same key on every layout; `e.key` still matches as well,
+  which keeps the numeric keypad working. Only digits: a letter chord follows the letter printed
+  on the cap, so AZERTY's undo is the key that says `Z`. **Written to the spec and not tried on an
+  AZERTY keyboard** — `shortcuts.test.ts` pins it with synthetic `code`s.
 
 ### The two chords that narrowed away
 

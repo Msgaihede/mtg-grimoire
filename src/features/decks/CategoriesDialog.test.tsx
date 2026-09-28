@@ -132,6 +132,7 @@ const DECK_ROW: DeckRow = {
   theoryMarkName: true,
   theoryMarkUnplanned: true,
   managedWishlist: "off",
+  managedWishlistTokens: false,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",
@@ -539,6 +540,27 @@ describe("categories", () => {
     // Made in the list the dialog was opened on, which is `live` here.
     expect(deckCategoryCreate).toHaveBeenCalledWith(1, "live", "Draw");
     await waitFor(() => expect(field).toHaveValue(""));
+  });
+
+  /**
+   * Issue #558: the empty-name Add greys with `aria-disabled` rather than the attribute, so Tab
+   * from the field still lands on it — and the form's own handler is then what refuses it.
+   */
+  it("keeps an empty-name Add in the tab order and creates nothing from it", async () => {
+    mount();
+    await screen.findByText("Ramp");
+    const user = userEvent.setup();
+
+    const field = screen.getByLabelText("New category name");
+    const add = screen.getByRole("button", { name: "Add" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(add).not.toBeDisabled();
+
+    field.focus();
+    await user.tab();
+    expect(add).toHaveFocus();
+    await user.keyboard("{Enter}");
+    expect(deckCategoryCreate).not.toHaveBeenCalled();
   });
 
   /**

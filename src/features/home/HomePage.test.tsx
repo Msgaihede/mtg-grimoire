@@ -46,10 +46,9 @@ vi.mock("./widgets/SummaryWidget", () => ({
   SummaryWidgetSettings: stubs.settings,
 }));
 /**
- * **A settings stub that says something**, `NewPrintingsWidget`'s below and for its reason: the
- * page hands `DecksWidgetSettings` to two kinds — `decks`, and `deckCompletion`, which reuses the
- * pin checklist rather than copying it — so a missing `renderExtraSettings` arm must be a sentence
- * that is absent rather than a `null` that looks the same either way.
+ * **A settings stub that says something**, `NewPrintingsWidget`'s below and for its reason: a
+ * missing `renderExtraSettings` arm must be a sentence that is absent rather than a `null` that
+ * looks the same either way.
  */
 vi.mock("./widgets/DecksWidget", () => ({
   DecksWidget: stubs.body,
@@ -67,9 +66,16 @@ vi.mock("./widgets/RecentCardsWidget", () => ({ RecentCardsWidget: stubs.body })
 vi.mock("./widgets/SetCompletionWidget", () => ({ SetCompletionWidget: stubs.body }));
 vi.mock("./widgets/PriceMoversWidget", () => ({ PriceMoversWidget: stubs.body }));
 vi.mock("./widgets/StickyNotesWidget", () => ({ StickyNotesWidget: stubs.body }));
-vi.mock("./widgets/DeckCompletionWidget", () => ({ DeckCompletionWidget: stubs.body }));
+vi.mock("./widgets/DeckCompletionWidget", () => ({
+  DeckCompletionWidget: stubs.body,
+  // Its own checklist since issue #600 — a sentence, for the Decks stub's reason above.
+  DeckCompletionWidgetSettings: () => "the deck completion picker",
+}));
 vi.mock("./widgets/ToReviewWidget", () => ({ ToReviewWidget: stubs.body }));
-vi.mock("./widgets/WishlistSavingsWidget", () => ({ WishlistSavingsWidget: stubs.body }));
+vi.mock("./widgets/WishlistSavingsWidget", () => ({
+  WishlistSavingsWidget: stubs.body,
+  WishlistSavingsWidgetSettings: stubs.settings,
+}));
 vi.mock("./widgets/ComingSoonWidget", () => ({ ComingSoonWidget: stubs.body }));
 
 /**
@@ -252,9 +258,9 @@ describe("HomePage", () => {
    * **The four kinds of round two, through the same two switches** — four `renderBody` arms and
    * one `renderExtraSettings` arm. The previous case's argument holds for each: a forgotten `case`
    * is not a type error, so the placeholder's sentence is asserted absent as well as the body
-   * present, and `deckCompletion`'s popover must carry the Decks widget's own checklist.
+   * present, and `deckCompletion`'s popover must carry its own checklist.
    */
-  it("draws the four round-two bodies, and Deck completion's pin checklist, through the two switches", async () => {
+  it("draws the four round-two bodies, and Deck completion's checklist, through the two switches", async () => {
     const user = userEvent.setup();
     mount(
       layoutOf(
@@ -272,7 +278,8 @@ describe("HomePage", () => {
 
     await customize(user);
     await user.click(screen.getByRole("button", { name: "Settings for Deck completion" }));
-    expect(await screen.findByText("the deck pin picker")).toBeInTheDocument();
+    expect(await screen.findByText("the deck completion picker")).toBeInTheDocument();
+    expect(screen.queryByText("the deck pin picker")).toBeNull();
   });
 
   /** Each new kind is in the catalogue, previewed as its own body told it is still. */

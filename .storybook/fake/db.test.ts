@@ -4360,6 +4360,83 @@ describe("the cheapest-printing plan", () => {
     expect(plan(db).moves).toHaveLength(0);
     expect(plan(db).alreadyCheapest).toBe(1);
   });
+
+  /**
+   * **A deck's managed wishlist is out of scope unless the caller asks for it** (issue #598).
+   * Folder 1 is deck 4's managed folder and folder 2 its `Tokens` child — which carries the
+   * deck's `managedDeckId` too, and is what makes it managed rather than its name — and folder 3
+   * is the reader's own. The same $620.00 Alpha Bolt is filed in each and at the root, so all
+   * four wishes classify identically and the only thing that can tell them apart is `managed`.
+   * Flattened, because the plan's scope is the list's and the root query would see only the root.
+   */
+  function managedWorld(): FakeDb {
+    return makeDb({
+      wishlistFolders: [
+        { id: 1, parentId: null, name: "Deck 4", sortOrder: 0, managedDeckId: 4 },
+        { id: 2, parentId: 1, name: "Tokens", sortOrder: 0, managedDeckId: 4, managedTokens: true },
+        { id: 3, parentId: null, name: "Ordered", sortOrder: 1 },
+      ],
+      wishlistEntries: [
+        wish({ id: 1, cardId: BOLT.id }),
+        wish({ id: 2, cardId: BOLT.id, folderId: 1 }),
+        wish({ id: 3, cardId: BOLT.id, folderId: 2 }),
+        wish({ id: 4, cardId: BOLT.id, folderId: 3 }),
+      ],
+    });
+  }
+
+  /** Today's behaviour exactly: left out of the scope rather than skipped, so it is counted in
+   *  none of the four numbers — and `includeManaged: false` is the same answer as absent. */
+  it("leaves a managed wish out of every count unless asked, and marks nothing managed", () => {
+    const db = managedWorld();
+    for (const answer of [
+      plan(db, { flatten: true }),
+      readHandlers(db).wishlist_optimize_plan({
+        query: { limit: 10, offset: 0, flatten: true },
+        includeManaged: false,
+      }),
+    ]) {
+      expect(answer.moves.map((m) => [m.wishId, m.managed])).toEqual([
+        [1, false],
+        [4, false],
+      ]);
+      expect(answer.considered).toBe(2);
+      expect(answer.alreadyCheapest + answer.skipped).toBe(0);
+    }
+  });
+
+  /** Asked for, a managed wish is classified exactly like any other — the same move, the same
+   *  saving — and carries `managed: true`, from the deck's folder and its Tokens child alike. */
+  it("classifies a managed wish like any other when asked, and says it is managed", () => {
+    const db = managedWorld();
+    const answer = readHandlers(db).wishlist_optimize_plan({
+      query: { limit: 10, offset: 0, flatten: true },
+      includeManaged: true,
+    });
+
+    expect(answer.considered).toBe(4);
+    expect(answer.moves.map((m) => [m.wishId, m.folderId, m.managed])).toEqual([
+      [1, null, false],
+      [2, 1, true],
+      [3, 2, true],
+      [4, 3, false],
+    ]);
+    for (const m of answer.moves) {
+      expect(m).toMatchObject({
+        from: { cardId: BOLT.id, price: 620 },
+        to: { cardId: BOLT_2X2.id, price: 2.5 },
+        savedPerCopy: 617.5,
+      });
+    }
+    // Scoped to the Tokens child alone, the switch still decides: nothing in scope without it.
+    expect(plan(db, { folderId: 2 }).considered).toBe(0);
+    expect(
+      readHandlers(db).wishlist_optimize_plan({
+        query: { limit: 10, offset: 0, folderId: 2 },
+        includeManaged: true,
+      }).moves,
+    ).toEqual([expect.objectContaining({ wishId: 3, managed: true })]);
+  });
 });
 
 /**
@@ -9106,6 +9183,139 @@ describe("the deck grain (deck, variant, category, card)", () => {
   });
 });
 
+/**
+ * **`Add to actual` / `Add to theory`** (issue #592) — `deck_add_card_to_other_list`, which is
+ * handed the pile a card is in *now* and files the copy in the pile of the other list that stands
+ * for it: `deck_meta::counterpart_in`'s rule, a zone by its kind, anything else by its name, and a
+ * pile the other list lacks made there as a copy of the source.
+ */
+describe("adding a card to the deck's other list", () => {
+  /** A user pile of the given list, id chosen well clear of {@link categoryId}'s. */
+  const pile = (over: Partial<FakeDeckCategory>): FakeDeckCategory => ({
+    id: 90,
+    deckId: 1,
+    variant: "live",
+    name: "Ramp",
+    kind: "main",
+    isActive: true,
+    sortOrder: 5,
+    origin: "user",
+    ...over,
+  });
+  const planDeck = (extra: FakeDeckCategory[] = []) => {
+    const decks = [deck({ id: 1, theoryEnabled: true, updatedAt: 100 }), deck({ id: 2 })];
+    return makeDeckDb({ decks, deckCategories: [...categoriesOf(decks), ...extra] });
+  };
+  type OtherListAdd = Parameters<ReturnType<typeof writeHandlers>["deck_add_card_to_other_list"]>[0];
+  /** From the actual list's Main deck into the plan — the press `Add to theory` makes. */
+  const add: OtherListAdd = {
+    deckId: 1,
+    cardId: BOLT.id,
+    fromCategoryId: categoryId(1, "main"),
+    variant: "theory",
+    finish: null,
+    quantity: 1,
+  };
+
+  it("lands in the other list's pile of the same name, and a second press folds", () => {
+    const db = planDeck([pile({ id: 90 }), pile({ id: 91, variant: "theory", sortOrder: 9 })]);
+    const w = writeHandlers(db);
+
+    const first = w.deck_add_card_to_other_list({ ...add, fromCategoryId: 90 });
+    const second = w.deck_add_card_to_other_list({ ...add, fromCategoryId: 90 });
+
+    expect(db.deckCards).toHaveLength(1);
+    expect(db.deckCards[0]).toMatchObject({ categoryId: 91, variant: "theory", quantity: 2 });
+    expect(second).toEqual({ id: first.id, quantity: 2, removed: false });
+    // The seeded Main deck is a `main` pile too, and it is found by its name the same way.
+    w.deck_add_card_to_other_list(add);
+    expect(db.deckCards[1].categoryId).toBe(categoryId(1, "main", "theory"));
+    expect(db.decks[0].updatedAt).toBeGreaterThan(100);
+  });
+
+  it("matches a zone by its kind whatever either list calls it, in both directions", () => {
+    const db = planDeck();
+    const planSide = db.deckCategories.find((c) => c.id === categoryId(1, "side", "theory"))!;
+    planSide.name = "Board B";
+    const w = writeHandlers(db);
+
+    w.deck_add_card_to_other_list({ ...add, fromCategoryId: categoryId(1, "side") });
+    expect(db.deckCards[0]).toMatchObject({ categoryId: planSide.id, variant: "theory" });
+
+    // Theory → actual: the plan's Maybeboard lands in the deck's own.
+    w.deck_add_card_to_other_list({
+      ...add,
+      fromCategoryId: categoryId(1, "maybe", "theory"),
+      variant: "live",
+      finish: "foil",
+    });
+    expect(db.deckCards[1]).toMatchObject({
+      categoryId: categoryId(1, "maybe"),
+      variant: "live",
+      finish: "foil",
+    });
+    expect(db.deckCategories).toHaveLength(20);
+  });
+
+  it("makes a pile the other list lacks as a copy of the source, switch and origin included", () => {
+    const db = planDeck([pile({ id: 90, isActive: false, sortOrder: 7, origin: "auto" })]);
+    const w = writeHandlers(db);
+
+    w.deck_add_card_to_other_list({ ...add, fromCategoryId: 90, finish: "foil" });
+
+    const made = db.deckCategories.find((c) => c.variant === "theory" && c.name === "Ramp")!;
+    expect(made).toMatchObject({
+      deckId: 1,
+      kind: "main",
+      isActive: false,
+      sortOrder: 7,
+      origin: "auto",
+    });
+    expect(made.id).not.toBe(90);
+    expect(db.deckCards[0]).toMatchObject({ categoryId: made.id, finish: "foil", quantity: 1 });
+    // The source is untouched: it is still the actual list's pile.
+    expect(db.deckCategories.find((c) => c.id === 90)!.variant).toBe("live");
+  });
+
+  it("refuses in the crate's words and order, and writes nothing", () => {
+    const db = planDeck();
+    db.decks.push(deck({ id: 3, theoryEnabled: false, virtualOnly: true }));
+    const w = writeHandlers(db);
+    const piles = db.deckCategories.length;
+    const refused = (over: Partial<OtherListAdd>) => () =>
+      w.deck_add_card_to_other_list({ ...add, ...over });
+
+    expect(refused({ variant: "sideways" as DeckVariant })).toThrow(/not a deck variant/);
+    expect(refused({ finish: "shiny" as OtherListAdd["finish"] })).toThrow(/not a finish/);
+    expect(refused({ quantity: 0 })).toThrow(/at least one/);
+    expect(refused({ cardId: "no-such-card" })).toThrow(/no card with the id/);
+    expect(refused({ deckId: 9 })).toThrow(/deck is not there any more/);
+    // A regular deck and a virtual one both keep one list.
+    expect(refused({ deckId: 2 })).toThrow(/keeps one list/);
+    expect(refused({ deckId: 3 })).toThrow(/keeps one list/);
+    // Another deck's pile is not "yours": `counterpart_in` reads it by id and deck together.
+    expect(refused({ fromCategoryId: categoryId(2, "main") })).toThrow(/category is not there/);
+    expect(refused({ fromCategoryId: 999 })).toThrow(/category is not there/);
+    expect(refused({ fromCategoryId: categoryId(1, "main", "theory") })).toThrow(
+      /already in the list the card is going to/,
+    );
+    // The order: a zero is heard before the deck is asked about, the plan before the pile.
+    expect(refused({ deckId: 9, quantity: 0 })).toThrow(/at least one/);
+    expect(refused({ deckId: 2, fromCategoryId: 999 })).toThrow(/keeps one list/);
+
+    expect(db.deckCards).toHaveLength(0);
+    expect(db.deckCategories).toHaveLength(piles);
+    expect(db.decks[0].updatedAt).toBe(100);
+  });
+
+  it("refuses while a sync holds the database", () => {
+    const db = planDeck();
+    db.fault = "busy";
+    expect(() => writeHandlers(db).deck_add_card_to_other_list(add)).toThrow(/busy/);
+    expect(db.deckCards).toHaveLength(0);
+  });
+});
+
 describe("what a card write does to the deck row", () => {
   it("bumps updatedAt even on a removal that found nothing to remove", () => {
     const db = makeDeckDb({ decks: [deck({ id: 1, updatedAt: 100 })] });
@@ -11855,16 +12065,19 @@ describe("the busy fault", () => {
     // 122 → 123 on `main` when `collection_set_printing` (issue #564) met that removal — the
     // parse's answer over the merged table, not either side's literal plus one. 122 when managed
     // tokens met it, read from `left` after that merge.
+    // 122 → 123 on 2026-09-28 with `deck_add_card_to_other_list` (issue #592), a plain
+    // `sync::with_write` deck write — read from `left` on this tree.
     // 122 → 123 on 2026-09-28 with `set_stack_hidden` (issue #618) — an `app_meta` write through
     // `sync::with_write`, whose read half `hidden_stacks` is not in this table. Count again after
     // a merge rather than adding to the other side's figure.
+    // 124 when the two met the same day — read from `left` after the merge, never added to.
     // 123 → 125 on 2026-09-28 with issue #555's two bulk writes, `collection_remove_many` and
     // `collection_set_folder_many` — both reach `refuseIfBusy` first, and take `ids` and
     // `folderId`, which this record already names. The issue's other two commands are not in the
     // loop: `bulk_undo` joined `unlocked` above, and `collection_import_preview` is a read on
     // `db_read` in the crate and sits in `readHandlers`. Read from `left` on this tree, never
-    // added to.
-    expect(names).toHaveLength(125);
+    // added to. 126 when #555 met the 124 above — read from `left` after the merge.
+    expect(names).toHaveLength(126);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -17482,8 +17695,9 @@ describe("Compare's token rows", () => {
     ).toBe(1);
     expect(db.wishlistEntries.some((wish) => wish.cardId === GONE)).toBe(false);
 
-    // And the managed folder under All, whose settle reads the same rows.
-    w.deck_update({ id: 4, patch: { managedWishlist: "all" } });
+    // And the managed folder under All with its tokens switch on, whose settle reads the same
+    // rows.
+    w.deck_update({ id: 4, patch: { managedWishlist: "all", managedWishlistTokens: true } });
     expect(db.wishlistEntries.some((wish) => wish.cardId === GONE)).toBe(false);
     expect(
       db.wishlistEntries.some(
@@ -17536,11 +17750,12 @@ describe("Compare's token rows", () => {
 });
 
 /**
- * **The managed wishlist files tokens in a `Tokens` subfolder** (managed tokens spec §3.8,
- * user schema v55). All and Tokens fill it with the token rows' wishes, Missing and Different
- * printing leave tokens out, and Tokens puts nothing in the parent. The subfolder's identity is a
- * column (`managedTokens`), not its name, and it carries the deck's `managedDeckId`, so every
- * guard on a managed folder covers it.
+ * **The managed wishlist files tokens in a `Tokens` subfolder** (managed tokens spec §3.8, user
+ * schema v55) — **while its tokens switch is on, under any of the three views** (user schema v57,
+ * issue #617). From v55 to v56 the tokens rode the mode: All and a fifth `tokens` word filled the
+ * subfolder, and Missing and Different printing could not. The subfolder's identity is a column
+ * (`managedTokens`), not its name, and it carries the deck's `managedDeckId`, so every guard on a
+ * managed folder covers it.
  */
 describe("the managed wishlist's Tokens subfolder", () => {
   /** Deck 4 with a plan counting two Treasures more than the deck holds. */
@@ -17560,6 +17775,8 @@ describe("the managed wishlist's Tokens subfolder", () => {
       id: 4,
       patch: { managedWishlist: managedWishlist as FakeDeck["managedWishlist"] },
     });
+  const tokens = (db: FakeDb, managedWishlistTokens: boolean) =>
+    writeHandlers(db).deck_update({ id: 4, patch: { managedWishlistTokens } });
   const parentOf = (db: FakeDb) =>
     db.wishlistFolders.find((f) => f.managedDeckId === 4 && f.managedTokens !== true);
   const tokensOf = (db: FakeDb) =>
@@ -17572,10 +17789,42 @@ describe("the managed wishlist's Tokens subfolder", () => {
     quantity: 2,
   });
 
+  /** A deck that has never been asked holds the column's `DEFAULT 0`, and a patch round-trips
+   *  it — the mode left alone, as every absent `DeckPatch` field is. */
+  it("reads the tokens switch off by default and round-trips a patch of it", () => {
+    const db = world();
+    const row = () => readHandlers(db).deck_list().find((d) => d.id === 4);
+    expect(row()).toMatchObject({ managedWishlistTokens: false });
+
+    tokens(db, true);
+    expect(row()).toMatchObject({ managedWishlistTokens: true, managedWishlist: "missing" });
+    // A patch that does not name it leaves it.
+    mode(db, "other");
+    expect(row()).toMatchObject({ managedWishlistTokens: true, managedWishlist: "other" });
+
+    const created = writeHandlers(db).deck_create({ deck: { name: "Fresh", formatKey: "" } });
+    expect(created.managedWishlistTokens).toBe(false);
+  });
+
+  /** Its own history row under `deck.rs`'s word, written only on a change. */
+  it("audits the switch under its own field, and only when it changes", () => {
+    const db = world();
+    const edits = () =>
+      db.deckAudit
+        .filter((a) => a.deckId === 4 && a.kind === "deck")
+        .map((a) => JSON.parse(a.payload) as Record<string, unknown>)
+        .filter((p) => p.field === "managedWishlistTokens");
+    tokens(db, false);
+    expect(edits()).toEqual([]);
+    tokens(db, true);
+    expect(edits()).toEqual([{ field: "managedWishlistTokens", from: false, to: true }]);
+  });
+
   /** `all_fills_a_tokens_subfolder_with_the_plans_missing_tokens`. */
-  it("fills a Tokens subfolder inside the deck's folder under All", () => {
+  it("fills a Tokens subfolder inside the deck's folder under All with the switch on", () => {
     const db = world();
     mode(db, "all");
+    tokens(db, true);
 
     const parent = parentOf(db)!;
     const child = tokensOf(db)!;
@@ -17596,18 +17845,26 @@ describe("the managed wishlist's Tokens subfolder", () => {
     });
   });
 
-  /** `tokens_mode_fills_only_the_subfolder`. */
-  it("fills only the subfolder under Tokens", () => {
-    const db = world();
-    mode(db, "tokens");
-
-    expect(wishesIn(db, parentOf(db)!.id)).toEqual([]);
-    expect(wishesIn(db, tokensOf(db)!.id)).toEqual([TREASURE_WISH]);
+  /** The point of issue #617: the switch reaches all three views, the two card readings
+   *  included, and the parent keeps that view's cards beside it. */
+  it("fills the subfolder under Missing and Different printing too while the switch is on", () => {
+    for (const word of ["missing", "other"]) {
+      const db = world();
+      mode(db, word);
+      tokens(db, true);
+      expect(parentOf(db), word).toBeDefined();
+      expect(wishesIn(db, tokensOf(db)?.id), word).toEqual([TREASURE_WISH]);
+      expect(
+        wishesIn(db, parentOf(db)!.id).some((w) => w.oracleId === TOKEN_ORACLE.treasure),
+        word,
+      ).toBe(false);
+    }
   });
 
-  /** `missing_mode_has_no_tokens_subfolder`. */
-  it("has no Tokens subfolder under Missing or Different printing", () => {
-    for (const word of ["missing", "other"]) {
+  /** `missing_mode_has_no_tokens_subfolder` — read now as *the switch off has none*, under every
+   *  view, All included. */
+  it("has no Tokens subfolder under any view while the switch is off", () => {
+    for (const word of ["all", "missing", "other"]) {
       const db = world();
       mode(db, word);
       expect(parentOf(db), word).toBeDefined();
@@ -17618,25 +17875,29 @@ describe("the managed wishlist's Tokens subfolder", () => {
     }
   });
 
-  /** Review Focus 5, `switching_from_all_to_missing_removes_the_subfolder_and_keeps_the_card_wishes`. */
-  it("takes the subfolder and its wishes away when All becomes Missing, and keeps the cards", () => {
+  /** Review Focus 5, re-read for v57: turning the switch off takes the subfolder and its wishes,
+   *  and keeps the parent and its card wishes where they were. */
+  it("takes the subfolder and its wishes away when the switch goes off, and keeps the cards", () => {
     const db = world();
     mode(db, "all");
+    tokens(db, true);
     const parent = parentOf(db)!.id;
     const child = tokensOf(db)!.id;
+    const cards = wishesIn(db, parent).length;
 
-    mode(db, "missing");
+    tokens(db, false);
 
     expect(tokensOf(db)).toBeUndefined();
     expect(db.wishlistEntries.some((w) => w.folderId === child)).toBe(false);
     expect(parentOf(db)!.id).toBe(parent);
-    expect(wishesIn(db, parent).length).toBeGreaterThan(0);
+    expect(wishesIn(db, parent)).toHaveLength(cards);
   });
 
   /** `a_token_step_re_settles_the_wishlist` — the dirty triggers watch the two token tables. */
   it("re-settles the subfolder after a token step", () => {
     const db = world();
     mode(db, "all");
+    tokens(db, true);
 
     writeHandlers(db).deck_token_set_quantity({
       deckId: 4,
@@ -17650,22 +17911,21 @@ describe("the managed wishlist's Tokens subfolder", () => {
     ]);
   });
 
-  /** `no_token_wants_no_subfolder` — a plan counting no tokens under All draws no empty one. */
+  /** `no_token_wants_no_subfolder` — a plan counting no tokens draws no empty one, switch on. */
   it("makes no subfolder when the plan wants no token", () => {
     const db = seed("starter");
     mode(db, "all");
+    tokens(db, true);
     expect(parentOf(db)).toBeDefined();
     expect(tokensOf(db)).toBeUndefined();
   });
 
-  /** The mode's fifth word is accepted and audited, and a word outside the five is refused. */
-  it("accepts Tokens as a mode and refuses a word it does not know", () => {
+  /** **`tokens` is no mode since v57** — refused in the crate's four-word sentence, verbatim. */
+  it("refuses Tokens as a mode, and any word outside the four", () => {
     const db = world();
-    mode(db, "tokens");
-    expect(readHandlers(db).deck_list().find((d) => d.id === 4)).toMatchObject({
-      managedWishlist: "tokens",
-    });
-    expect(() => mode(db, "everything")).toThrow(/^A managed wishlist follows /);
+    const BAD = /^A managed wishlist follows All, Missing, Different printing or nothing\.$/;
+    expect(() => mode(db, "tokens")).toThrow(BAD);
+    expect(() => mode(db, "everything")).toThrow(BAD);
   });
 
   /** The subfolder is the deck's like its parent: every hand write to it is refused in the
@@ -17673,6 +17933,7 @@ describe("the managed wishlist's Tokens subfolder", () => {
   it("refuses a hand write to the Tokens subfolder", () => {
     const db = world();
     mode(db, "all");
+    tokens(db, true);
     const child = tokensOf(db)!.id;
     const w = writeHandlers(db);
     const NOT_BY_HAND = /^A managed wishlist follows its deck, so it can't be edited by hand\.$/;
@@ -17683,10 +17944,13 @@ describe("the managed wishlist's Tokens subfolder", () => {
   });
 
   /** A deck that stops being eligible takes the child's wishes, then the child, then the
-   *  parent's, then the parent — `settle_deck`'s delete path — and leaves no wish at the root. */
-  it("deletes both folders and every wish in them when the deck goes off", () => {
+   *  parent's, then the parent — `settle_deck`'s delete path — and leaves no wish at the root.
+   *  **Whatever the switch says**, and the switch is kept: a view picked again brings the
+   *  subfolder back without asking. */
+  it("deletes both folders when the deck goes off, keeps the switch, and restores on a view", () => {
     const db = world();
     mode(db, "all");
+    tokens(db, true);
     const ids = [parentOf(db)!.id, tokensOf(db)!.id];
     const wishes = db.wishlistEntries.length;
     const held = ids.reduce((n, id) => n + wishesIn(db, id).length, 0);
@@ -17699,6 +17963,13 @@ describe("the managed wishlist's Tokens subfolder", () => {
     expect(db.wishlistEntries.some((w) => w.folderId !== null && ids.includes(w.folderId))).toBe(
       false,
     );
+    expect(readHandlers(db).deck_list().find((d) => d.id === 4)).toMatchObject({
+      managedWishlist: "off",
+      managedWishlistTokens: true,
+    });
+
+    mode(db, "missing");
+    expect(wishesIn(db, tokensOf(db)?.id)).toEqual([TREASURE_WISH]);
   });
 });
 
@@ -19182,9 +19453,11 @@ describe("set completion", () => {
 });
 
 /**
- * `deck_completion` — owned against wanted, **counted the way the deck editor counts it**: a live
- * list against its own group, a plan-keeping deck's theory list against every copy it could use,
- * every active pile, exact `(card_id, finish)`, one shared pool per key.
+ * `deck_completion` — how far every deck is along, **counted the way the screen that answers the
+ * same question counts it**. Under `collection` (the default) a live list against its own group —
+ * a plan-keeping deck's included — as the editor's `Actual` tab counts it; under `theory` a plan
+ * against its deck's live list, as the Compare dialog counts it. Every active pile, exact
+ * `(card_id, finish)`, one shared pool per key.
  */
 describe("deck completion", () => {
   /** What the deck editor quotes one copy of deck 1's first row at. */
@@ -19223,15 +19496,18 @@ describe("deck completion", () => {
     expect(row.missingCost).toBeCloseTo(unit, 9);
   });
 
-  /** A deck that keeps a plan is measured by its plan, against the root, its own group and
-   *  Recently removed — never another deck's group. */
-  it("measures a theory deck's plan against every copy the deck could use", () => {
+  /**
+   * **A deck that keeps a plan is measured on its live list under `collection`** (issue #600),
+   * against its own group like any other deck — never by its plan, and never against the root or
+   * `Recently removed`, which are what the plan's own `ownedQuantity` would have counted.
+   */
+  it("measures a theory deck's live list against its own group under collection", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1, theoryEnabled: true }), deck({ id: 2, name: "Other" })],
       deckCards: [
+        // The plan is not what `collection` measures, however much bigger it is.
         deckCard({ id: 1, variant: "theory", quantity: 4 }),
-        // The live list is not what a plan-keeping deck is measured by.
-        deckCard({ id: 2, quantity: 1 }),
+        deckCard({ id: 2, quantity: 2 }),
       ],
       collectionEntries: [
         entry({ id: 1, quantity: 1 }),
@@ -19240,13 +19516,111 @@ describe("deck completion", () => {
         entry({ id: 4, folderId: groupId(2), quantity: 5 }),
       ],
     });
+    const rows = readHandlers(db).deck_completion({});
 
-    expect(readHandlers(db).deck_completion({}).find((r) => r.deckId === 1)).toMatchObject({
-      list: "theory",
-      wanted: 4,
-      owned: 3,
+    expect(rows.find((r) => r.deckId === 1)).toMatchObject({
+      list: "live",
+      wanted: 2,
+      owned: 1,
       missing: 1,
     });
+    // The default is the word, not the absence of one.
+    expect(readHandlers(db).deck_completion({ compare: "collection" })).toEqual(rows);
+  });
+
+  /**
+   * **`theory` measures the plan against the live list, and nothing else**: a copy counts only
+   * where the deck plays the exact printing in the exact finish, a switched-off pile on either
+   * side counts toward nothing, and the collection is not asked — the Compare dialog's arithmetic,
+   * which the last assertion holds it to.
+   */
+  it("measures a plan against the live list under theory, exact printing and finish", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, theoryEnabled: true })],
+      deckCards: [
+        // The plan: four regular Bolts in the main pile and two foils in the sideboard — both
+        // active, and one printing in two finishes, so two keys.
+        deckCard({ id: 1, variant: "theory", quantity: 4 }),
+        deckCard({ id: 2, variant: "theory", categoryKind: "side", finish: "foil", quantity: 2 }),
+        // Another printing of the same card: the exact key, so the live list's Bolts are no help.
+        deckCard({ id: 3, variant: "theory", cardId: BOLT_2X2.id, quantity: 1 }),
+        // The plan's Maybeboard wants nothing.
+        deckCard({ id: 4, variant: "theory", categoryKind: "maybe", quantity: 3 }),
+        // The live list: six regular Bolts — four for the plan's four and two spare, which the
+        // plan's foils cannot take — and a foil parked in its switched-off Maybeboard, which is
+        // not played and so fills nothing.
+        deckCard({ id: 10, quantity: 6 }),
+        deckCard({ id: 11, categoryKind: "maybe", finish: "foil", quantity: 5 }),
+      ],
+      collectionEntries: [
+        // Copies of every wanted key, in the deck's own group and at the root: irrelevant.
+        entry({ id: 1, folderId: groupId(1), finish: "foil", quantity: 9 }),
+        entry({ id: 2, cardId: BOLT_2X2.id, quantity: 9 }),
+      ],
+    });
+    const reads = readHandlers(db);
+
+    const [row] = reads.deck_completion({ compare: "theory", marketplace: "tcgplayer" });
+
+    expect(row).toMatchObject({
+      deckId: 1,
+      list: "theory",
+      wanted: 7,
+      owned: 4,
+      missing: 3,
+      unpricedMissing: 0,
+    });
+    const diff = reads.deck_theory_diff({ deckId: 1, marketplace: "tcgplayer" });
+    expect(row.missing).toBe(diff.reduce((n, r) => n + r.quantity, 0));
+    expect(row.missingCost).toBeCloseTo(
+      diff.reduce((n, r) => n + r.unitPrice! * r.quantity, 0),
+      9,
+    );
+  });
+
+  /**
+   * Under `theory` the question is only asked of a deck that has a plan — and **a virtual deck is
+   * not filtered out**, because the collection is never consulted: its live list is a list
+   * whatever the cardboard is. `deck_create` is what writes the pair; no patch can.
+   */
+  it("answers only plan-keeping decks under theory, a virtual one included", () => {
+    const db = makeDeckDb({
+      decks: [
+        deck({ id: 1 }),
+        deck({ id: 2, name: "Proxies", theoryEnabled: true, virtualOnly: true }),
+      ],
+      deckCards: [
+        deckCard({ id: 1, quantity: 4 }),
+        deckCard({ id: 2, deckId: 2, variant: "theory", quantity: 2 }),
+        deckCard({ id: 3, deckId: 2, quantity: 1 }),
+      ],
+    });
+    const reads = readHandlers(db);
+
+    expect(reads.deck_completion({ compare: "theory" })).toEqual([
+      expect.objectContaining({ deckId: 2, list: "theory", wanted: 2, owned: 1, missing: 1 }),
+    ]);
+    // And `collection` is the other way round: the virtual deck holds nothing to count.
+    expect(reads.deck_completion({}).map((r) => r.deckId)).toEqual([1]);
+  });
+
+  /** A word this build does not know measures the default rather than refusing — so does `null`. */
+  it("reads an unknown compare word as collection", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, theoryEnabled: true })],
+      deckCards: [
+        deckCard({ id: 1, variant: "theory", quantity: 4 }),
+        deckCard({ id: 2, quantity: 2 }),
+      ],
+      collectionEntries: [entry({ id: 1, folderId: groupId(1), quantity: 1 })],
+    });
+    const reads = readHandlers(db);
+    const collection = reads.deck_completion({ compare: "collection" });
+
+    expect(collection[0]).toMatchObject({ list: "live", wanted: 2, owned: 1 });
+    expect(reads.deck_completion({ compare: "sideways" })).toEqual(collection);
+    expect(reads.deck_completion({ compare: "Theory" })).toEqual(collection);
+    expect(reads.deck_completion({ compare: null })).toEqual(collection);
   });
 
   /** A virtual deck holds nothing by definition, so 0 % of it is not a finding. An archived or an
@@ -19327,8 +19701,9 @@ describe("deck completion", () => {
 
   /**
    * **The fence**: for every deck in the starter world — a live deck with copies in its group, a
-   * Commander deck, a deck with a plan — the numbers are the ones the editor's own `deckStats`
-   * draws over `deck_get` of the list that was measured.
+   * Commander deck, the two decks with a plan — the `collection` numbers are the ones the
+   * editor's own `deckStats` draws over `deck_get` of the **live** list, which is what the
+   * `Actual` tab shows whether or not the deck keeps a plan.
    */
   it("says what the deck editor says, for every deck in the starter world", () => {
     const db = seed("starter");
@@ -19341,11 +19716,12 @@ describe("deck completion", () => {
         .map((d) => d.id)
         .sort((a, b) => a - b),
     );
-    // Non-vacuity: a plan is measured, and something is missing somewhere.
-    expect(rows.some((r) => r.list === "theory")).toBe(true);
+    // Non-vacuity: a plan-keeping deck is among them, and something is missing somewhere.
+    expect(rows.some((r) => db.decks.find((d) => d.id === r.deckId)?.theoryEnabled)).toBe(true);
     expect(rows.some((r) => r.missing > 0)).toBe(true);
     for (const row of rows) {
-      const cards = reads.deck_get({ id: row.deckId, variant: row.list, marketplace: "tcgplayer" })!
+      expect(row.list, `deck ${row.deckId} list`).toBe("live");
+      const cards = reads.deck_get({ id: row.deckId, variant: "live", marketplace: "tcgplayer" })!
         .cards;
       const stats = deckStats(cards);
       expect(row.owned, `deck ${row.deckId} owned`).toBe(stats.owned);
@@ -19353,6 +19729,48 @@ describe("deck completion", () => {
       expect(row.wanted, `deck ${row.deckId} wanted`).toBe(stats.owned + stats.missing);
       if (stats.missingPrice === null) expect(row.missingCost).toBeNull();
       else expect(row.missingCost).toBeCloseTo(stats.missingPrice, 9);
+    }
+  });
+
+  /**
+   * **The second fence**: under `theory`, every plan-keeping deck in the starter world — the
+   * archived deck whose plan is its live list copy for copy, and the Testbed whose plan is not —
+   * is missing exactly the copies the Compare dialog lists, tokens aside.
+   */
+  it("says what the Compare dialog says, for every plan in the starter world", () => {
+    const db = seed("starter");
+    const reads = readHandlers(db);
+    const rows = reads.deck_completion({ compare: "theory", marketplace: "tcgplayer" });
+
+    expect(rows.map((r) => r.deckId)).toEqual(
+      db.decks
+        .filter((d) => d.theoryEnabled)
+        .map((d) => d.id)
+        .sort((a, b) => a - b),
+    );
+    // Non-vacuity: both plans answer, one of them complete and one of them not.
+    expect(rows.length).toBeGreaterThanOrEqual(2);
+    expect(rows.some((r) => r.missing === 0 && r.wanted > 0)).toBe(true);
+    expect(rows.some((r) => r.missing > 0)).toBe(true);
+    for (const row of rows) {
+      expect(row.list, `deck ${row.deckId} list`).toBe("theory");
+      const diff = reads
+        .deck_theory_diff({ deckId: row.deckId, marketplace: "tcgplayer" })
+        .filter((r) => !r.isToken);
+      expect(row.missing, `deck ${row.deckId} missing`).toBe(
+        diff.reduce((n, r) => n + r.quantity, 0),
+      );
+      expect(row.owned + row.missing, `deck ${row.deckId} wanted`).toBe(row.wanted);
+      const priced = diff.filter((r) => r.unitPrice !== null);
+      expect(row.unpricedMissing, `deck ${row.deckId} unpriced`).toBe(
+        diff.filter((r) => r.unitPrice === null).reduce((n, r) => n + r.quantity, 0),
+      );
+      if (row.missingCost !== null) {
+        expect(row.missingCost).toBeCloseTo(
+          priced.reduce((n, r) => n + r.unitPrice! * r.quantity, 0),
+          9,
+        );
+      }
     }
   });
 });

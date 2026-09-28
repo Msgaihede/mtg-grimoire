@@ -590,7 +590,9 @@ pub fn category_for_name(
 /// The pile in list `variant` that stands for pile `source` of the other list — found, or made
 /// there as a copy of it. The rule the theory switch carries a card across the lists by, and
 /// [`refile_stray_theory_cards`]' too (user schema v53, issue #561), where until then the switch
-/// simply kept the card's `category_id`, because the two lists shared one pile set.
+/// simply kept the card's `category_id`, because the two lists shared one pile set — and since
+/// issue #592 the card menu's `Add to actual` / `Add to theory`,
+/// [`crate::deck::add_card_to_other_list`], which copies one card across by it.
 ///
 /// **Matched by kind for a predefined zone and by name for everything else**, and the
 /// difference is the two unique indexes: a list holds at most one pile of each non-`main` kind
@@ -606,8 +608,9 @@ pub fn category_for_name(
 /// the writers [`DeckCategoryRow::origin`] names, and like `duplicate_deck` it copies rather than
 /// deciding.
 ///
-/// Takes the caller's transaction and records nothing: both callers file a step whose pile diff
-/// (`deck_undo::push_made_categories`) is what undoes the piles this made.
+/// Takes the caller's transaction and records nothing: the switch and the card menu each file a
+/// step whose pile diff (`deck_undo::push_made_categories`) is what undoes the piles this made,
+/// and the refile is a backstop that files no step at all.
 pub(crate) fn counterpart_in(
     conn: &Connection,
     deck_id: i64,

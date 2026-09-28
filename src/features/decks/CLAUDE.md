@@ -102,11 +102,30 @@ Full record, with every measurement and the provenance of each rung:
   own, or keep a "Cut candidates" pile in one only. **The comparison is the only link between the
   two** (`TheoryDiffDialog`, `deck_theory::theory_diff`), and it matches cards, never piles. The
   bug this replaced: one pile set per deck, so a `user` pile made on the Theory tab drew — empty —
-  on the Actual one, because `drawsWhenEmpty` draws every `user` pile. Three things follow:
-  - **Only one press carries piles across, and it pours one list into the other.** Switching the
-    plan on moves the live cards into theory and **clones** each live pile for them (the live
-    piles stay, empty), and its undo takes the clones away again. (The other writer this sentence
+  on the Actual one, because `drawsWhenEmpty` draws every `user` pile. Four things follow:
+  - **Two presses carry a card into the other list, and one rule finds its pile there:
+    `deck_meta::counterpart_in`.** A zone — any kind but `main`, so Sideboard, Commander,
+    Companion, Maybeboard — is matched by its kind whatever it is called, every other pile by its
+    name, and a pile the other list lacks is **made there as a copy of the source**: name, kind,
+    switch and origin, so a card out of a switched-off pile does not arrive in one that counts.
+    Switching the plan on pours every live card into theory this way (the live piles stay,
+    empty); the card menu's `Add to actual` / `Add to theory` carries one copy of one card
+    (below). Each press's undo takes away the piles it made, and nothing keeps the two piles in
+    step afterwards — the comparison is still the only standing link. (A writer this bullet once
     named, `deck_theory_copy_from_live`, was removed on 2026-09-27 for having no caller.)
+  - **`Add to actual` (on a theory row) and `Add to theory` (on an actual row) sit directly under
+    `Category ▸`** (2026-09-28, [#592](https://github.com/Msgaihede/mtg-grimoire/issues/592)) and
+    add **one copy** of that exact printing and finish per press — every other Add's rule, the
+    owner's call: a playset is four presses, and a second press folds into a second copy. Under a
+    picked set it reads `Add 3 cards to actual`, one copy of each picked row into its own pile's
+    counterpart. It is `useDeck`'s `addToOtherList` → `deck_add_card_to_other_list`, which is sent
+    the card's **current** pile and finds the target in Rust, so the rule above is written once.
+    **`DeckCardMenuDeps.otherList` is optional and absent draws no row**: `DeckEditor` passes it
+    only for a deck that keeps a plan, so a regular or virtual deck shows nothing rather than a
+    greyed row. An orphan printing is passed over, since the backend refuses a card the database no
+    longer has, and the row greys wordlessly only when nothing is left to add. The history row is
+    an ordinary `add` in the target list, and undo is per deck, so Ctrl+Z on either tab takes the
+    copy back, along with a pile the add made.
   - **`decks.default_category_id` is still one deck setting, and it names a _live_ pile** — Deck
     settings mounts the live list. On the Theory tab `defaultPileFor` resolves it by id, then by
     that pile's **name** among the plan's piles, else Auto: the setting is a place, and "my
@@ -640,8 +659,9 @@ layer.
 - **The deck card menu is three groups since issue #505 (2026-09-24), and two of its rows were
   renamed.** `Add to` is followed directly by **`Collection link ▸`** (the `Collection ▸` below —
   both write to the binder or the wishlist rather than to the deck); under the deck's rule come
-  **`Category ▸`** (what this page still calls the card's `Move to` in many places) and
-  `Label card ▸`, which both file the card; and under a rule of their own, `Set as commander`,
+  **`Category ▸`** (what this page still calls the card's `Move to` in many places), on a deck
+  with a plan `Add to actual` / `Add to theory` (issue #592, in the category model above), and
+  `Label card ▸`, which all file the card; and under a rule of their own, `Set as commander`,
   `Set as companion` and `Set as foil`. Read older prose here with that mapping —
   `deckCardMenu.tsx`'s header is the current picture.
 - **`Collection ▸` is the card menu's one write to the reader's _binder_ rather than to their
@@ -854,8 +874,9 @@ layer.
     clicked is one press from a deck the reader did not mean to edit. It goes through
     `setQuantityAt(…, 0)` like every other removal here; there is still no remove mutation.
   - **The card menu goes plural for the writes and stays singular for what cannot mean anything
-    else.** `Add N cards to`, `Move N cards to`, `Label N cards`, `Remove N cards` and
-    `Collection link for N cards` (since issue #510) act on the set; `Copy card name`,
+    else.** `Add N cards to`, `Move N cards to`, `Label N cards`, `Remove N cards`,
+    `Collection link for N cards` (since issue #510) and `Add N cards to actual` / `to theory`
+    (since issue #592) act on the set; `Copy card name`,
     `Copy card image`, `Open on`, `View all printings`, `Set as commander`, `Set as companion` and
     `Finish` stay about the one card that was right-clicked. A finish belongs to a *printing* —
     the toggle, the submenu and the greyed row are three shapes decided by what that printing is
@@ -3816,6 +3837,9 @@ layer.
   disabled), so it takes `onAdded` and hands the row back. `useRecentAdds` holds one timer per row,
   restarted on each press, so a card added three times in quick succession glows once for five
   seconds from the last press. The import is deliberately outside all of this: 117 lit cards is not a mark.
+  **So is the card menu's `Add to actual` / `Add to theory` (#592, 2026-09-28)**, and for a
+  sharper reason: its row lands in the *other* list, which is not on screen, so there is no row
+  to light — it goes through `useDeck.addToOtherList` rather than `addTo`.
 - **A click on the desk puts the card down, and putting it down closes the pane** — one listener on
   the editor's root, `keepsSelection` deciding what counts. The two facts are one: the ring means
   "the pane is about this card", so a mark outliving the pane is a ring around nothing and a pane
@@ -4909,11 +4933,17 @@ already effective, and `viewOf` copies them.
   It is the entry's own grain read from the buying end (a token entry always names its finish) and
   is accepted rather than missed; decks-storage.md's *pinned wish* paragraph is the same wart one
   table over, for cards.
-- **The managed wishlist follows the same four views** (managed tokens spec §3.8): Deck settings'
-  `ManagedWishlistGroup` offers `Off | All | Missing | Different printing | Tokens`
-  (`MANAGED_WISHLIST_MODES`, `tokens` the fifth word), and **All** and **Tokens** file the token
-  rows' wishes in a **`Tokens` subfolder** inside the deck's managed folder — Tokens putting
-  nothing in the parent itself. The subfolder is the deck's too (`isManaged` covers it, since it
+- **The managed wishlist follows the three card views, and files tokens by a switch beside them**
+  (managed tokens spec §3.8; issue #617, user schema v57): Deck settings' `ManagedWishlistGroup`
+  offers `Off | All | Missing | Different printing` (`MANAGED_WISHLIST_MODES`, four words) and,
+  **outside that `role="group"` but in the same row**, an `aria-pressed` **Tokens** toggle
+  (`decks.managed_wishlist_tokens`, `DeckRow.managedWishlistTokens`) that files the token rows'
+  wishes in a **`Tokens` subfolder** inside the deck's managed folder under whichever view is
+  picked. The toggle is **not drawn under `Off`** — this form's rule that a control which cannot
+  take effect is worse than none — and its stored answer is kept, so picking a view again brings
+  it back. From v55 to v56 `tokens` was a fifth mode and All carried tokens too; v57 turned every
+  `all` deck's tokens on and every `tokens` deck into `missing` with them on, and the history
+  still names an old `tokens` row by that word (`managedWishlistHistoryLabel`). The subfolder is the deck's too (`isManaged` covers it, since it
   carries the deck's `managedDeckId`), is left out of `managedWishFolders`' by-name list (every
   deck's child is named `Tokens`), and says its own empty sentence (`MANAGED_TOKENS_EMPTY`). The
   whole record is [wishlist-folders.md](../../../docs/reference/wishlist-folders.md)'s *Managed
@@ -4989,12 +5019,19 @@ already effective, and `viewOf` copies them.
   - **The subtitle is clamped in CSS and never in the string.** Oracle text is the term that
     separates the two Wurms, so a truncation short enough to fit a 150px tile would fold them back
     together in the one case this exists for.
-  - **The name and the subtitle are two elements, and every accessible name is spelled rather than
-    assembled.** Two flex children with a `gap` between them compute to a name with the words run
-    together (`"Missing2"`), so every control on a tile goes through one
-    `tokenEntryName(verb, view)` — `Quantity of …`, `Change the art for …` (through
-    `tokenArtName`, below), `Remove …` — rather than being left to the DOM to concatenate. One
-    helper, so a control added later cannot be the one that forgets a term.
+  - **Every accessible name is spelled rather than assembled.** Two flex children with a `gap`
+    between them compute to a name with the words run together (`"Missing2"`), so every control on
+    a tile goes through one `tokenEntryName(verb, view)` — `Quantity of …`, `Change the art for …`
+    (through `tokenArtName`, below), `Remove …` — rather than being left to the DOM to concatenate.
+    One helper, so a control added later cannot be the one that forgets a term.
+  - **The band's tile draws no name line since [issue #615](https://github.com/Msgaihede/mtg-grimoire/issues/615)**
+    (2026-09-28): the picture prints the name on the card, so the tile reads top to bottom as the
+    card and its chin, **the controls row across the tile's full width** (the stepper at `fill`
+    inside a `min-w-0 flex-1` box, Remove printing at the far end), **then the subtitle**, then
+    the source line. The issue asked for the subtitle row to go as well and the owner's comment on
+    it kept it, moved under the controls: it is what separates the two `Wurm`s for the eye. The
+    name stays the first term of every control's accessible name, and `CardArt`'s `name` still
+    draws it on a frame whose picture never loads.
   - **Since v52 a token does not identify a tile either**, because one token is several tiles:
     a Treasure kept as a plain and a foil copy of one printing shares its name *and* its subtitle,
     and only `Nonfoil` against `Foil` separates the two steppers. So the name is

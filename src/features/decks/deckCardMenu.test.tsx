@@ -1294,3 +1294,121 @@ describe("buildDeckCardMenu with a picked set", () => {
     ]);
   });
 });
+
+/**
+ * **Add to actual / Add to theory** — issue #592. One copy of the row's printing and finish into
+ * the deck's other list; which pile it lands in is the backend's, so the row is one action.
+ */
+describe("the other list's row", () => {
+  /** `variant` is the list the copy goes **into**, so a theory row reads `Add to actual`. */
+  const intoActual = (over: Partial<DeckCardMenuDeps> = {}) =>
+    deps({ otherList: { variant: "live", add: vi.fn() }, ...over });
+
+  const otherRow = (items: MenuItem[]) =>
+    items.find((item) => item.kind !== "separator" && item.id === "add-to-other-list") as
+      | MenuAction
+      | undefined;
+
+  /** A deck with no plan has no other list, and the surface says so by wiring nothing. */
+  it("draws no row where the surface wired no other list", () => {
+    const items = buildDeckCardMenu(bolt(), deps());
+    expect(otherRow(items)).toBeUndefined();
+    expect(has(items, /^Add to (actual|theory)$/)).toBe(false);
+  });
+
+  it("names the list the copy goes into", () => {
+    expect(otherRow(buildDeckCardMenu(bolt(), intoActual()))?.label).toBe("Add to actual");
+    expect(
+      otherRow(buildDeckCardMenu(bolt(), deps({ otherList: { variant: "theory", add: vi.fn() } })))
+        ?.label,
+    ).toBe("Add to theory");
+  });
+
+  /** Directly under `Category`, the other row about piles — and nothing else in the deck block moves. */
+  it("sits directly after Category", () => {
+    const items = buildDeckCardMenu(bolt(), intoActual());
+    expect(shape(items).slice(shape(items).indexOf("—sep-deck"))).toEqual([
+      "—sep-deck",
+      "category",
+      "add-to-other-list",
+      "label-card",
+      "—sep-set-as",
+      "set-companion",
+      "finish",
+      "—sep-remove",
+      "remove-card",
+    ]);
+  });
+
+  it("adds the card that was right-clicked, and hands the press to the batch", () => {
+    const clicked = bolt();
+    const pressed = Promise.resolve();
+    const add = vi.fn(() => pressed);
+    const batch = vi.fn();
+    otherRow(buildDeckCardMenu(clicked, intoActual({ otherList: { variant: "live", add }, batch })))!
+      .onSelect();
+
+    expect(add.mock.calls).toEqual([[clicked]]);
+    expect(batch.mock.calls).toEqual([[[pressed]]]);
+  });
+
+  it("goes plural under a picked set and adds every picked row once", () => {
+    const clicked = bolt();
+    const picked = [clicked, card({ name: "Bear", quantity: 2 }), card({ name: "Ponder" })];
+    const add = vi.fn((row: DeckCard) => Promise.resolve(row.name));
+    const batch = vi.fn();
+    const item = otherRow(
+      buildDeckCardMenu(clicked, intoActual({ otherList: { variant: "live", add }, batch, picked })),
+    )!;
+
+    expect(item.label).toBe("Add 3 cards to actual");
+    item.onSelect();
+    expect(add.mock.calls.map((call) => call[0].name)).toEqual(["Lightning Bolt", "Bear", "Ponder"]);
+    // Every promise the three writes answered, so a refusal in the middle is still said.
+    expect(batch).toHaveBeenCalledTimes(1);
+    expect(batch.mock.calls[0][0]).toHaveLength(3);
+    for (const press of batch.mock.calls[0][0] as unknown[]) expect(press).toBeInstanceOf(Promise);
+  });
+
+  it("stays singular for a set of one", () => {
+    const clicked = bolt();
+    expect(otherRow(buildDeckCardMenu(clicked, intoActual({ picked: [clicked] })))?.label).toBe(
+      "Add to actual",
+    );
+  });
+
+  /** A printing that has left the card database cannot be added anywhere — the backend refuses it. */
+  it("passes over an orphan printing in a picked set", () => {
+    const clicked = bolt();
+    const orphan = card({ name: "Gone", oracleId: null });
+    const add = vi.fn();
+    const item = otherRow(
+      buildDeckCardMenu(
+        clicked,
+        intoActual({ otherList: { variant: "live", add }, picked: [clicked, orphan] }),
+      ),
+    )!;
+
+    expect(item.label).toBe("Add 2 cards to actual");
+    expect(item.disabled).toBeUndefined();
+    item.onSelect();
+    expect(add.mock.calls).toEqual([[clicked]]);
+  });
+
+  /** Greyed and wordless — `zoneItem`'s rule for a refusal that is a fact about the card. */
+  it("greys the row silently when nothing is left to add", () => {
+    const orphan = card({ name: "Gone", oracleId: null });
+    const add = vi.fn();
+    const batch = vi.fn();
+    const item = otherRow(
+      buildDeckCardMenu(orphan, intoActual({ otherList: { variant: "live", add }, batch })),
+    )!;
+
+    expect(item.label).toBe("Add to actual");
+    expect(item.disabled).toBe(true);
+    expect(item.reason).toBeUndefined();
+    item.onSelect();
+    expect(add).not.toHaveBeenCalled();
+    expect(batch).not.toHaveBeenCalled();
+  });
+});

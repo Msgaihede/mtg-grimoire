@@ -25,6 +25,7 @@ import {
   collectionBreakdownKey,
   collectionTotalKey,
   deckCompletionKey,
+  deckCompletionRoot,
   deckListKey,
   deckReviewCountKey,
   deckValuesKey,
@@ -196,13 +197,22 @@ describe("shape", () => {
   // window because the window is the question — and the two review counts under the table each
   // counts, which is also the root Needs review's clear now fires.
   it("files round two's reads under the roots their writes already invalidate", () => {
-    expect(deckCompletionKey("cardkingdom")).toEqual(["decks", "completion", "cardkingdom"]);
+    expect(deckCompletionKey("cardkingdom", "theory")).toEqual([
+      "decks",
+      "completion",
+      "cardkingdom",
+      "theory",
+    ]);
+    // The bridge's one invalidation reaches every marketplace and both comparisons.
+    expect(deckCompletionKey("tcgplayer", "collection").slice(0, 2)).toEqual([
+      ...deckCompletionRoot,
+    ]);
     expect(upcomingSetsKey(90)).toEqual(["decks", "upcoming", 90]);
     expect(deckReviewCountKey).toEqual(["decks", "reviewCount"]);
     expect(wishlistReviewCountKey).toEqual(["wishlist", "reviewCount"]);
     expect(scannerTrayCountKey).toEqual(["scanner", "trayCount"]);
     // Not the gallery's value key: that one is the narrower main + commander + maybe pile.
-    expect(deckCompletionKey("tcgplayer")).not.toEqual(deckValuesKey("tcgplayer"));
+    expect(deckCompletionKey("tcgplayer", "collection")).not.toEqual(deckValuesKey("tcgplayer"));
   });
 
   // **The savings widget and the Wishlist page's hand-off dialog plan one question, so they are
@@ -216,6 +226,21 @@ describe("shape", () => {
     ]);
     expect(wishlistSavingsKey("manapool")).toEqual(optimizePlanKey(wholeWishlistQuery("manapool")));
     expect(wishlistSavingsKey("manapool")).not.toEqual(wishlistSavingsKey("cardmarket"));
+  });
+
+  // Issue #598: the widget's scope is part of the question, so it is part of the key — and the
+  // dialog the press opens builds the same key from the same scope.
+  it("files each savings scope under a key of its own, the same one the dialog builds", () => {
+    const scope = { includeManaged: true, shelves: [0, 7] };
+    expect(wishlistSavingsKey("manapool", scope)).toEqual([
+      "wishlist",
+      "optimize",
+      { flatten: true, marketplace: "manapool", includeManaged: true, shelves: [0, 7] },
+    ]);
+    expect(wishlistSavingsKey("manapool", scope)).toEqual(
+      optimizePlanKey(wholeWishlistQuery("manapool", scope)),
+    );
+    expect(wishlistSavingsKey("manapool", scope)).not.toEqual(wishlistSavingsKey("manapool"));
   });
 
   // `["scanner", "tray"]` *is* the tray in the window that owns the scanner, written with

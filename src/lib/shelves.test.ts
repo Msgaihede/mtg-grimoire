@@ -356,13 +356,34 @@ describe("shelvesToFetch and shelvesToCount", () => {
 });
 
 describe("visibleShelves", () => {
-  it("hides Not sorted once the counts say it holds nothing, and keeps every empty folder", () => {
+  /**
+   * Issue #597: an empty Not sorted is where a reader drags a card back to the root, so it stands
+   * like an empty folder does — whatever the counts say — rather than vanishing the moment the
+   * reader has filed everything.
+   */
+  it("keeps Not sorted and every empty folder when the counts say they hold nothing", () => {
     const shelves = build(CABINET);
     expect(ids(visibleShelves(shelves, countsOf(count(3, 11)), false))).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 21, 20, 23, 22,
+      0, 1, 2, 3, 4, 5, 6, 7, 21, 20, 23, 22,
     ]);
-    expect(ids(visibleShelves(shelves, countsOf(count(0, 0)), false))).not.toContain(0);
+    expect(ids(visibleShelves(shelves, countsOf(count(0, 0)), false))).toContain(0);
     expect(ids(visibleShelves(shelves, countsOf(count(0, 7)), false))).toContain(0);
+  });
+
+  /** With no folder of any kind, an empty Not sorted would be the whole wall — a heading over an
+   *  empty box standing where the page says it has nothing yet. */
+  it("hides an empty Not sorted that would be the only shelf on the wall", () => {
+    const alone = build([]);
+    expect(ids(visibleShelves(alone, countsOf(), false))).toEqual([]);
+    expect(ids(visibleShelves(alone, countsOf(count(0, 0)), false))).toEqual([]);
+    expect(ids(visibleShelves(alone, countsOf(count(0, 2)), false))).toEqual([0]);
+  });
+
+  /** A filter still hides a shelf with no match, Not sorted included — the same rule as a folder. */
+  it("still hides Not sorted while filtering when nothing in it matches", () => {
+    const shelves = build(CABINET, { filtering: true });
+    expect(ids(visibleShelves(shelves, countsOf(count(6, 1)), true))).toEqual([6]);
+    expect(ids(visibleShelves(shelves, countsOf(count(0, 1)), true))).toEqual([0]);
   });
 
   it("hides nothing but the collapsed subtrees while the counts are still loading", () => {
@@ -378,7 +399,7 @@ describe("visibleShelves", () => {
   it("keeps a folder whose cards are all in its subfolders", () => {
     const folders = [folder(1, null, "Aerith upgrades"), folder(2, 1, "Mana base")];
     const counts = countsOf(count(2, 7));
-    expect(ids(visibleShelves(build(folders), counts, false))).toEqual([1, 2]);
+    expect(ids(visibleShelves(build(folders), counts, false))).toEqual([0, 1, 2]);
     expect(ids(visibleShelves(build(folders, { filtering: true }), counts, true))).toEqual([1, 2]);
   });
 

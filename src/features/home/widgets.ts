@@ -483,28 +483,44 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
    * are the design canvas's. `DEFAULT_LAYOUT` moves for none of them: it fills an eight-by-seven
    * rectangle exactly, and a new kind in it would break the rectangle.
    *
-   * **`scope`'s label and its two options are the `decks` row's words, and that is load-bearing.**
-   * A `Pinned` card draws `DecksWidget`'s own checklist through `extraSettings`, and that component
-   * words its hint off the *decks* row (`Choose Pinned under Which decks…`) — so this row says the
-   * same words or the reused sentence names a control this card does not have. `widgets.test.ts`
-   * pins the pair. No `Archived too`: a deck put away is not one a reader is finishing.
+   * **`compare` is the question and `scope` the decks it is asked of** (issue #600). `Collection`
+   * is `options[0]`: every deck that is not virtual, its actual list against the copies filed in its
+   * own group. `Theory` is every deck that keeps a plan, its actual list against that plan. Both
+   * are sent to Rust, so an option the command does not know would be a card that measures the
+   * default — which is why a third word needs a `Compare` arm in `deck_completion.rs` first. It is
+   * the chip: which comparison a card draws is the one thing a glance at it cannot otherwise tell.
+   *
+   * `scope` is `newPrintings`' two words — `All decks` and a `Chosen…` checklist — rather than the
+   * `decks` row's, because the checklist here offers **only the decks the comparison can measure**
+   * (`DeckCompletionWidgetSettings`), which the Decks widget's own checklist cannot do. `All decks`
+   * leaves archived decks out, as `Most recent` did: a deck put away is not one a reader is
+   * finishing. A config stored before the rename reads `pinned` as `chosen`
+   * (`completionScope`), so nobody's picks are lost.
    *
    * `complete` starts off, `newPrintings`' `dflt: false` precedent: a finished deck is counted in
    * the footer rather than listed, and a reader who wants the finished ones listed asks for them.
    */
   deckCompletion: {
     label: "Deck completion",
-    description: "Ownership progress and remaining card costs across decks.",
+    description: "How far your decks are from your collection or from their theory lists.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 6],
     picks: [
       {
+        key: "compare",
+        label: "Compare against",
+        options: [
+          { id: "collection", label: "Collection" },
+          { id: "theory", label: "Theory" },
+        ],
+      },
+      {
         key: "scope",
         label: "Which decks",
         options: [
-          { id: "recent", label: "Most recent" },
-          { id: "pinned", label: "Pinned" },
+          { id: "all", label: "All decks" },
+          { id: "chosen", label: "Chosen…" },
         ],
       },
       {
@@ -518,7 +534,7 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
       },
     ],
     toggles: [{ key: "complete", label: "Complete decks", dflt: false }],
-    chip: "order",
+    chip: "compare",
   },
   /**
    * One row per place something is waiting, each drawn only when its count is above zero. `removed`
@@ -534,16 +550,37 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
     picks: [],
     toggles: [{ key: "removed", label: "Recently removed" }],
   },
-  /** The price sweep's own plan over the whole wishlist, read and never written. No settings:
-   *  the question is fixed, which is what lets its press open the same sweep. */
+  /**
+   * The price sweep's own plan over the wishlist, read and never written.
+   *
+   * **Two settings since issue #598, and both are the question rather than its drawing** — which
+   * is why a press still opens the same sweep: the widget hands its scope to the Wishlist page with
+   * the press (`store.ts`'s `pendingOptimize`), so the dialog plans exactly what the card counted.
+   *
+   * * `managed` — the decks' managed wishlists. **On by default**, because they are still
+   *   wishlists: a card a deck is short of is money the reader has yet to spend, and the saving on
+   *   it is as real as on any other wish. The dialog draws their moves and offers none, since only
+   *   the deck can change its printing.
+   * * `scope` — every wishlist, or the ones the reader chose in `WishlistSavingsWidgetSettings`'
+   *   checklist. `All wishlists` first, so a card nobody has configured counts everything.
+   */
   wishlistSavings: {
     label: "Wishlist savings",
     description: "Potential savings by switching wishlist items to cheapest printings.",
     def: [3, 3],
     min: [2, 2],
     max: [4, 6],
-    picks: [],
-    toggles: [],
+    picks: [
+      {
+        key: "scope",
+        label: "Which wishlists",
+        options: [
+          { id: "all", label: "All wishlists" },
+          { id: "chosen", label: "Chosen" },
+        ],
+      },
+    ],
+    toggles: [{ key: "managed", label: "Deck-managed wishlists" }],
   },
   /**
    * Sets not released yet, soonest first. `window`'s options, words and `dflt: 90` are

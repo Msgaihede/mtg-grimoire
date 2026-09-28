@@ -102,6 +102,7 @@ import { ipcError } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { radioKeys } from "@/lib/radioGroup";
 import { Dialog } from "@/components/Dialog";
 import { saveExport } from "../files";
 import {
@@ -487,15 +488,17 @@ function Body({
       {/* A radio group over every format `EXPORT_FORMATS` names, and the map is what keeps this
           row from being a list to remember to grow. In that array's own order and
           **not** through `sortOptions`: plain first is the one most readers want, the same kind
-          of deliberate order `lib/options.ts` exempts a grade scale for. */}
+          of deliberate order `lib/options.ts` exempts a grade scale for. One Tab stop and the
+          arrow keys choose, which is `radioKeys`' and every radio group's in this app. */}
       <div role="radiogroup" aria-label="Export format" className="flex flex-wrap gap-2">
-        {EXPORT_FORMATS.map((f) => (
+        {EXPORT_FORMATS.map((f, i) => (
           <button
             key={f}
             type="button"
             role="radio"
             aria-checked={format === f}
             onClick={() => chooseFormat(f)}
+            {...radioKeys(EXPORT_FORMATS, format, chooseFormat, i)}
             className={cn(
               "h-8 shrink-0 rounded-md border px-3 text-sm",
               "transition-colors duration-150 motion-reduce:transition-none",

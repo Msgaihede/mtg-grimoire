@@ -69,7 +69,11 @@ export const Populated: Story = {
     // its own reason: a reader with no labels is who this screen is hardest for, and the control
     // that fixes that must not sit under the list they have not got.
     await expect(canvas.getByPlaceholderText("New label name…")).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: "Add label" })).toBeDisabled();
+    // `aria-disabled`, never the attribute (#558): it greys as the reader types and stays a stop.
+    await expect(canvas.getByRole("button", { name: "Add label" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
 
     await waitFor(async () => {
       await expect(canvas.getAllByRole("listitem").length).toBeGreaterThan(1);

@@ -290,6 +290,10 @@ function deckCardDeps(act: Act): DeckCardMenuDeps {
     // zero is what removes a deck row. No confirmation, unlike a **pile's** `Clear stack…`: one
     // card is one add to put back.
     remove: (card) => act(`remove:${card.cardId}`),
+    // Issue #592's row, as a deck that keeps a plan wires it: `DECK_CARD` is on the Actual list,
+    // so the copy goes into the plan and the row reads `Add to theory`. A deck with no plan passes
+    // nothing here and draws no row.
+    otherList: { variant: "theory", add: (card) => act(`add-to-theory:${card.cardId}`) },
   };
 }
 
@@ -316,6 +320,7 @@ const DECK: DeckRow = {
   theoryMarkName: true,
   theoryMarkUnplanned: true,
   managedWishlist: "off",
+  managedWishlistTokens: false,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",

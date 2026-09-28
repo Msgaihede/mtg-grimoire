@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { optimizePlanKey } from "./useWishlistOptimize";
-import { wholeWishlistQuery } from "./wholeWishlistQuery";
+import { WHOLE_WISHLIST, wholeWishlistQuery } from "./wholeWishlistQuery";
 
 describe("wholeWishlistQuery", () => {
   /** Every wish, wherever it is filed, with no filter on — and the marketplace that prices it. */
@@ -30,5 +30,24 @@ describe("wholeWishlistQuery", () => {
     expect(optimizePlanKey(wholeWishlistQuery("manapool"))).not.toEqual(
       optimizePlanKey(wholeWishlistQuery("tcgplayer")),
     );
+  });
+
+  /**
+   * **A scope's fields appear exactly when they change the answer** (issue #598), so the
+   * whole-list question keeps its two-field key and a widget counting the managed wishlists or a
+   * few folders is a question — and a cache entry — of its own.
+   */
+  it("adds the managed switch and the shelves only where the scope asks for them", () => {
+    expect(wholeWishlistQuery("tcgplayer", WHOLE_WISHLIST)).toEqual(wholeWishlistQuery("tcgplayer"));
+    expect(wholeWishlistQuery("tcgplayer", { includeManaged: true, shelves: null })).toEqual({
+      flatten: true,
+      marketplace: "tcgplayer",
+      includeManaged: true,
+    });
+    expect(wholeWishlistQuery("tcgplayer", { includeManaged: false, shelves: [0, 3] })).toEqual({
+      flatten: true,
+      marketplace: "tcgplayer",
+      shelves: [0, 3],
+    });
   });
 });

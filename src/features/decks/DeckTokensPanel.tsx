@@ -110,10 +110,15 @@
  * both names were **correct** and merely not unique.
  *
  * So every control on a tile folds {@link DeckTokenView.subtitle} into its own name, through
- * {@link tokenEntryName}, and the subtitle is drawn under the token's name as an element of its
- * own — never as a second half of one line. Two flex children with a `gap` between them compute
- * to a name with the words run together (`"Missing2"`), which is why the visible name and the
- * visible subtitle are two paragraphs and every accessible name is spelled rather than assembled.
+ * {@link tokenEntryName}, and every accessible name is spelled rather than assembled: two flex
+ * children with a `gap` between them compute to a name with the words run together
+ * (`"Missing2"`).
+ *
+ * **The tile draws no line of type for the name since issue #615** (2026-09-28). The picture is the
+ * printed card and says it already, so the tile reads top to bottom as the card, the controls
+ * across its full width, the subtitle under them, and where the token came from. The name is still
+ * the first term of every control's accessible name — the ear is not the eye, and a stepper named
+ * `Quantity of <subtitle>` would be no name at all.
  *
  * **Since v52 the subtitle is not enough either**, because one token is several tiles: the two
  * Treasures above share a name *and* a subtitle, and differ only in their printing and finish.
@@ -219,9 +224,9 @@ const TILE_ICON = "size-[calc(0.875rem*var(--control-scale,1))]";
  * at its base going down. `cardZoom.ts` carries the whole argument, and `GridView`'s wall is the
  * other surface that reads it.
  *
- * The vertical one is the larger because a tile's foot is four lines of type under the picture,
- * where its neighbour's picture starts immediately: 10px between two pictures reads as the same
- * air as 16px between a caption and the next row's art.
+ * The vertical one is the larger because a tile ends in a controls row and up to three lines of
+ * type under the picture, where its neighbour's picture starts immediately: 10px between two
+ * pictures reads as the same air as 16px between a caption and the next row's art.
  */
 const TILE_GAP_X = 10;
 const TILE_GAP_Y = 16;
@@ -541,8 +546,12 @@ function TokenWall({
 }
 
 /**
- * One entry of a token or emblem: its picture, what it is, and the three things a reader can do
- * to it — change its printing, count it, remove it.
+ * One entry of a token or emblem: its picture, the three things a reader can do to it — change its
+ * printing, count it, remove it — and what it is and why it is here.
+ *
+ * **In that order, top to bottom** (issue #615): the card and its foot, the controls row across
+ * the tile's whole width, the colour-and-stats subtitle, and the source line. The card prints the
+ * token's name, so the tile draws no line of its own for it — see this file's header.
  *
  * **A token nothing in the deck makes is drawn as a rule-break card is** (managed tokens spec
  * §3.5): the destructive outline round the picture and its foot, and `NOT MADE BY DECK` in the
@@ -656,49 +665,43 @@ function TokenTile({
         />
       </div>
 
-      {/* Two elements, and that is the rule rather than a layout preference — see this file's
-          header. The name is clamped to one line and the subtitle to two; both keep their whole
-          string in the DOM, because truncating a subtitle is how the two Wurms fold back into
-          one. */}
-      <p
-        className="truncate text-[calc(0.75rem*var(--mark-scale,1))] text-text"
-        {...tip(view.name, { whenClipped: true })}
-      >
-        {view.name}
-      </p>
-      {/* **No tooltip, and that is a measurement rather than a preference.** `whenClipped` asks
-          `scrollWidth > clientWidth`, which is a question about *width* — and `line-clamp` cuts
-          on height, so an unclipped-by-width paragraph answers `false` and the hint could never
-          be shown. A hint that can never show is the `pointer-events` trap in another costume:
-          nothing goes red and nobody finds out. The whole string is in the DOM either way, so a
-          screen reader hears it, every control on this tile spells it into its own name, and the
-          art picker sets it under its heading unclamped. */}
-      {view.subtitle !== null && (
-        <p className="line-clamp-2 text-[calc(0.6875rem*var(--mark-scale,1))] leading-tight text-dim">
-          {view.subtitle}
-        </p>
-      )}
+      {/* **The controls come straight after the card, and they span the tile** (issue #615). The
+          line of type that used to sit here was the token's name, which the picture above already
+          prints on the card itself — so it said the same word twice, a line apart, and pushed the
+          one thing a reader presses on this tile down under two lines of reading. It is gone from
+          the eye and not from the ear: every control's accessible name still starts with it,
+          through `tokenEntryName`, and the frame that never loads still draws it (`CardArt`'s
+          `name`).
 
+          **Full width is `fill` on the stepper and `flex-1` around it**, so the number box takes
+          whatever the two square buttons and Remove printing leave — the card modal's controls
+          column's arrangement, and `QuantityStepper`'s own rule for it: the buttons keep their
+          square geometry and only the number grows. The wrapper is what shrinks, since the
+          stepper takes no `className`; `min-w-0` because a flex item's floor is its content. */}
       <div className="flex items-center gap-[calc(0.25rem*var(--mark-scale,1))]">
-        <QuantityStepper
-          size="xs"
-          value={view.quantity}
-          // **This entry and no other** — `entryRef`'s four facts, so a step on the foil Treasure
-          // cannot land on the plain one, and an implicit entry says so and is materialised by
-          // Rust on the way in (spec §4.2 rule 2).
-          onChange={(next) => tokens.setQuantity(entryRef(view), next)}
-          // **Zero is a value and not an absence**, so the floor is 0 and the write stores it:
-          // the token's last entry stepped to 0 stays at 0 with its printing kept (rule 3), and
-          // any other entry stepped to 0 leaves the list — Rust's rule, not this stepper's.
-          min={0}
-          label={tokenEntryName("Quantity of", view)}
-        />
+        <div className="min-w-0 flex-1">
+          <QuantityStepper
+            size="xs"
+            value={view.quantity}
+            // **This entry and no other** — `entryRef`'s four facts, so a step on the foil Treasure
+            // cannot land on the plain one, and an implicit entry says so and is materialised by
+            // Rust on the way in (spec §4.2 rule 2).
+            onChange={(next) => tokens.setQuantity(entryRef(view), next)}
+            // **Zero is a value and not an absence**, so the floor is 0 and the write stores it:
+            // the token's last entry stepped to 0 stays at 0 with its printing kept (rule 3), and
+            // any other entry stepped to 0 leaves the list — Rust's rule, not this stepper's.
+            min={0}
+            label={tokenEntryName("Quantity of", view)}
+            fill
+          />
+        </div>
         {/* **Remove printing** — this entry and no other (managed tokens spec §3.4), on every
             tile but an implicit one, which is not stored and has nothing to delete. A derived
             token's last entry falls back to the printing the deck's cards name, at 0; a hand-added
             token's last entry in both lists takes it off the deck. Named for its entry, so a
             token's plain and foil tiles are two presses; `Remove printing` is the pointer's word,
-            the same on every tile. */}
+            the same on every tile. At the row's far end, so an implicit entry's stepper simply
+            runs the whole width where a stored one stops short of it. */}
         {!view.implicit && (
           <button
             type="button"
@@ -712,6 +715,24 @@ function TokenTile({
           </button>
         )}
       </div>
+
+      {/* **The colour and stats line, under the controls rather than over them** (issue #615, the
+          owner's comment on it: keep the row, move it). It is the one line on the tile the card
+          does not already say in a form a reader can find at a glance — and it is what separates
+          the two `Wurm`s — so it stays, below the thing that is pressed.
+
+          **No tooltip, and that is a measurement rather than a preference.** `whenClipped` asks
+          `scrollWidth > clientWidth`, which is a question about *width* — and `line-clamp` cuts
+          on height, so an unclipped-by-width paragraph answers `false` and the hint could never
+          be shown. A hint that can never show is the `pointer-events` trap in another costume:
+          nothing goes red and nobody finds out. The whole string is in the DOM either way, so a
+          screen reader hears it, every control on this tile spells it into its own name, and the
+          art picker sets it under its heading unclamped. */}
+      {view.subtitle !== null && (
+        <p className="line-clamp-2 text-[calc(0.6875rem*var(--mark-scale,1))] leading-tight text-dim">
+          {view.subtitle}
+        </p>
+      )}
 
       <p
         className="truncate text-[calc(0.6875rem*var(--mark-scale,1))] text-dim"

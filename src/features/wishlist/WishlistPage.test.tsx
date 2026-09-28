@@ -21,6 +21,7 @@ import type {
 } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
+import { SHELF_INDENT_PX, SHELF_RAIL_OFFSET_PX } from "@/lib/shelfLayout";
 import { boxed, pointerDrag, recordDrags, startPointerDrag } from "@/test-drag";
 import { openDropdown, pickOption } from "@/test-dropdown";
 
@@ -118,6 +119,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { WishlistPage } from "./WishlistPage";
 import { MANAGED_EMPTY, MANAGED_EMPTY_UNKNOWN } from "./managed";
 import { NEW_FOLDER_SHELF } from "./wishShelfPlan";
+import { WHOLE_WISHLIST } from "./wholeWishlistQuery";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
 import { SHELF_FOLDS_KEY } from "@/features/shelves/useShelfFolds";
@@ -513,8 +515,11 @@ const heading = (id: number): HTMLElement => {
   return found;
 };
 const findHeading = (id: number) => waitFor(() => heading(id));
-/** The folder's own name on its heading — the press that opens it (spec §3.7). */
+/** The folder's own name on its heading — a press on it folds the shelf (issue #599). */
 const titleOf = (id: number, name: string) => within(heading(id)).getByRole("button", { name });
+/** The heading's Open button, at the row's far right — the press that opens it (issue #599). */
+const openOf = (id: number, name: string) =>
+  within(heading(id)).getByRole("button", { name: `Open ${name}` });
 /** The chevron, named "Collapse Binder" / "Expand Binder" (spec §3.2). */
 const chevronOf = (id: number, name: string) =>
   within(heading(id)).getByRole("button", { name: new RegExp(`^(Collapse|Expand) ${name}$`) });
@@ -713,7 +718,7 @@ beforeEach(() => {
     // **The two other hand-offs this page consumes**, for the folder's reason: a case that left
     // either written would open the next case on the flagged wishes or inside the price sweep.
     pendingReviewFilter: null,
-    pendingOptimize: false,
+    pendingOptimize: null,
   });
 });
 
@@ -2128,8 +2133,9 @@ describe("the shelves", () => {
     expect(screen.getByText("Filed 4")).toBeInTheDocument();
     expect(follows(heading(ORDERED.id), screen.getByText("Filed 1"))).toBe(true);
     expect(follows(heading(BACKORDERED.id), screen.getByText("Filed 4"))).toBe(true);
-    // Nothing is loose, so there is no Not sorted shelf — and no empty-page sentence either.
-    expect(queryHeading(0)).toBeNull();
+    // Nothing is loose, and Not sorted is still drawn as the way back out (issue #597) — with no
+    // empty-page sentence over the wall.
+    expect(heading(0)).toBeInTheDocument();
     expect(screen.queryByText(/Nothing on your wishlist yet/)).toBeNull();
     expect(lastQuery().shelves).toEqual([0, ORDERED.id, BACKORDERED.id, SOMEDAY.id]);
   });
@@ -2170,12 +2176,36 @@ describe("the shelves", () => {
     ).toBe(false);
   });
 
-  it("draws no Not sorted shelf when nothing is loose", async () => {
+  /**
+   * **Issue #597**: nothing is loose, and Not sorted is still drawn — first, open, over the dashed
+   * box an empty folder draws — because it is where a wish is dragged to leave every folder.
+   */
+  it("draws an empty Not sorted over its drop box when nothing is loose", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
     wishlistList.mockImplementation(listByShelves([FILED]));
     wrap(<WishlistPage />);
 
-    await screen.findByText("Rhystic Study");
+    await screen.findByAltText("Rhystic Study");
+    const loose = await findHeading(0);
+    expect(follows(loose, heading(ORDERED.id))).toBe(true);
+    expect(chevronOf(0, "Not sorted")).toHaveAttribute("aria-expanded", "true");
+    const box = emptyBoxes()[0];
+    expect(box).toHaveTextContent(EMPTY_SHELF_COPY);
+    expect(follows(loose, box)).toBe(true);
+    expect(follows(box, heading(ORDERED.id))).toBe(true);
+  });
+
+  /** With no folder at all there is nothing to drag a wish out of, so an empty Not sorted is not
+   *  drawn and the page's own empty sentence stands where the wall would be. */
+  it("draws no Not sorted and says the wishlist is empty when there are no wishes and no folders", async () => {
+    wishlistFolderList.mockResolvedValue([]);
+    wishlistList.mockReset().mockResolvedValue(page([], 0));
+    wishlistShelfCounts.mockResolvedValue([]);
+    wrap(<WishlistPage />);
+
+    expect(await screen.findByText(/Nothing on your wishlist yet/)).toBeInTheDocument();
     expect(queryHeading(0)).toBeNull();
+    expect(emptyBoxes()).toEqual([]);
   });
 
   /**
@@ -2235,8 +2265,13 @@ describe("the shelves", () => {
 
     await screen.findByAltText("Scalding Tarn");
     await waitFor(() => expect(heading(MANA.id)).toHaveTextContent("3 wishes · $55.00"));
-    // No dashed box anywhere on this wall: Mana base holds folders, and both of those hold cards.
-    expect(emptyBoxes()).toEqual([]);
+    // One dashed box on this wall, and it is Not sorted's — nothing is loose, and an empty Not
+    // sorted is drawn as a drop target (issue #597). None under Mana base: it holds folders, and
+    // both of those hold cards.
+    const boxes = emptyBoxes();
+    expect(boxes).toHaveLength(1);
+    expect(follows(heading(0), boxes[0])).toBe(true);
+    expect(follows(boxes[0], heading(MANA.id))).toBe(true);
     expect(follows(heading(MANA.id), heading(FETCH.id))).toBe(true);
     expect(follows(heading(FETCH.id), screen.getByAltText("Scalding Tarn"))).toBe(true);
     expect(heading(SHOCK.id)).toBeInTheDocument();
@@ -2799,7 +2834,7 @@ describe("the shelves", () => {
       await moveOrderedDown(user);
       await waitFor(() => expect(rereads.waiting()).toBe(true));
       // Into Someday, and back out by the path row.
-      await user.click(titleOf(SOMEDAY.id, "Someday"));
+      await user.click(openOf(SOMEDAY.id, "Someday"));
       await waitFor(() => expect(levelAsked()).toBe(SOMEDAY.id));
       await waitFor(() => expect(queryHeading(ORDERED.id)).toBeNull());
       await user.click(
@@ -2831,7 +2866,7 @@ describe("the shelves", () => {
       rereads.hold();
       await moveOrderedDown(user);
       await waitFor(() => expect(rereads.waiting()).toBe(true));
-      await user.click(titleOf(SOMEDAY.id, "Someday"));
+      await user.click(openOf(SOMEDAY.id, "Someday"));
       await waitFor(() => expect(levelAsked()).toBe(SOMEDAY.id));
       (document.activeElement as HTMLElement | null)?.blur();
       await rereads.answer(PLANNED);
@@ -3175,7 +3210,10 @@ describe("the shelves", () => {
     const deep = rowOf(await screen.findByText("Force of Will"));
 
     expect(rails(deep)).toHaveLength(2);
-    expect(rails(deep).map((rail) => rail.style.left)).toEqual(["11px", "43px"]);
+    expect(rails(deep).map((rail) => parseFloat(rail.style.left))).toEqual([
+      SHELF_RAIL_OFFSET_PX,
+      SHELF_RAIL_OFFSET_PX + SHELF_INDENT_PX,
+    ]);
     expect(rails(rowOf(heading(SIGNED.id)))).toHaveLength(2);
     expect(rails(rowOf(heading(BACKORDERED.id)))).toHaveLength(1);
     expect(rails(rowOf(screen.getByText("Rhystic Study")))).toHaveLength(0);
@@ -3296,7 +3334,7 @@ describe("the folders", () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
 
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
 
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
     expect(lastQuery().shelves).toEqual([ORDERED.id, BACKORDERED.id]);
@@ -3336,7 +3374,7 @@ describe("the folders", () => {
     await findHeading(ORDERED.id);
     await waitFor(() => expect(figure("Wishes")).toHaveTextContent("3"));
 
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
 
     const theRootWhole = () => {
@@ -3406,9 +3444,9 @@ describe("the folders", () => {
   it("walks up one folder per Escape, after opening two by their titles", async () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await findHeading(BACKORDERED.id);
-    await userEvent.click(titleOf(BACKORDERED.id, "Backordered"));
+    await userEvent.click(openOf(BACKORDERED.id, "Backordered"));
     await waitFor(() => expect(levelAsked()).toBe(BACKORDERED.id));
 
     await userEvent.keyboard("{Escape}");
@@ -3450,7 +3488,7 @@ describe("the folders", () => {
   it("spends Escape on the filter box first, and on the folder next", async () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
 
     const box = screen.getByLabelText("Search your wishlist");
@@ -3475,7 +3513,7 @@ describe("the folders", () => {
     // BOLT and ANY loose, and FILED under Ordered — the wish the drill-down used to hide.
     await waitFor(() => expect(figure("Wishes")).toHaveTextContent("3"));
 
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
 
     await waitFor(() => expect(figure("Wishes")).toHaveTextContent("1"));
   });
@@ -3709,7 +3747,7 @@ describe("the folders", () => {
   it("creates a folder inside the one the reader is standing in, from the path row", async () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await screen.findByText("Rhystic Study");
 
     await userEvent.click(pathAddFolder());
@@ -3977,7 +4015,7 @@ describe("the folders", () => {
     await userEvent.keyboard("Paid for{Enter}");
     expect(wishlistFolderCreate).toHaveBeenCalledWith(null, "Paid for");
 
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
 
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
     await waitFor(() => expect(queryHeading(NEW_FOLDER_SHELF)).toBeNull());
@@ -4033,7 +4071,7 @@ describe("the folders", () => {
   it("un-files a wish dropped on the breadcrumb's root", async () => {
     const { container } = wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await screen.findByText("Rhystic Study");
 
     await wishOnto(
@@ -4052,9 +4090,9 @@ describe("the folders", () => {
   it("walks up one level from the breadcrumb's parent segment", async () => {
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await findHeading(BACKORDERED.id);
-    await userEvent.click(titleOf(BACKORDERED.id, "Backordered"));
+    await userEvent.click(openOf(BACKORDERED.id, "Backordered"));
     await waitFor(() => expect(levelAsked()).toBe(BACKORDERED.id));
 
     await userEvent.click(within(crumbs()).getByRole("button", { name: "Ordered" }));
@@ -4072,6 +4110,26 @@ describe("the folders", () => {
     expect(source).toBeDefined();
 
     await wishOnto(source!, heading(0));
+
+    expect(wishlistSetFolder).toHaveBeenCalledWith(FILED.id, null);
+  });
+
+  /**
+   * **Issue #597**: with nothing loose, Not sorted is still drawn, and its dashed box is a way out of
+   * every folder — a wish let go on it is filed at the root, exactly as on the heading above it.
+   */
+  it("un-files a wish dropped on an empty Not sorted's dashed box", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    wishlistList.mockImplementation(listByShelves([FILED]));
+    const { container } = wrap(<WishlistPage />);
+    const filed = await screen.findByAltText("Rhystic Study");
+    const source = cardSources(container).find((tile) => tile.contains(filed));
+    expect(source).toBeDefined();
+    const loose = await findHeading(0);
+    const box = emptyBoxes().find((each) => follows(loose, each) && follows(each, heading(ORDERED.id)));
+    expect(box).toBeDefined();
+
+    await wishOnto(source!, box!);
 
     expect(wishlistSetFolder).toHaveBeenCalledWith(FILED.id, null);
   });
@@ -4203,7 +4261,7 @@ describe("the folders", () => {
     ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Close export" }));
 
-    await user.click(titleOf(ORDERED.id, "Ordered"));
+    await user.click(openOf(ORDERED.id, "Ordered"));
     await screen.findByText("Rhystic Study");
     await user.click(screen.getByRole("button", { name: "Export wishlist" }));
 
@@ -4580,7 +4638,7 @@ describe("rearranging the wishlist's cabinet", () => {
   it("moves a folder up a level when it is dropped on a breadcrumb segment", async () => {
     wrap(<WishlistPage />);
     await wall();
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await findHeading(BACKORDERED.id);
     const root = within(
       screen.getByRole("navigation", { name: "Wishlist folders" }),
@@ -4608,7 +4666,7 @@ describe("rearranging the wishlist's cabinet", () => {
   it("takes a folder anywhere on the segment, not only in its middle", async () => {
     wrap(<WishlistPage />);
     await wall();
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await findHeading(BACKORDERED.id);
     const root = within(
       screen.getByRole("navigation", { name: "Wishlist folders" }),
@@ -4684,6 +4742,7 @@ describe("the price sweep", () => {
     to: { cardId: "c2", setCode: "2x2", collectorNumber: "117", lang: "en", price: 2 },
     savedPerCopy: 3,
     saved: 6,
+    managed: false,
   };
   const SECOND: WishOptimizeMove = {
     ...MOVE,
@@ -4924,7 +4983,7 @@ describe("the search column", () => {
   it("adds from the search into the folder on screen", async () => {
     wrap(<WishlistPage />, { searchOpen: true });
     await findHeading(ORDERED.id);
-    await userEvent.click(titleOf(ORDERED.id, "Ordered"));
+    await userEvent.click(openOf(ORDERED.id, "Ordered"));
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
 
     await add("Ordered");
@@ -5025,7 +5084,7 @@ describe("a deck's managed wishlist", () => {
    *  names a tile by its art's `alt`, the table by a cell's text. */
   const openManaged = async () => {
     await findHeading(MANAGED.id);
-    await userEvent.click(titleOf(MANAGED.id, "Rhystic Testbed"));
+    await userEvent.click(openOf(MANAGED.id, "Rhystic Testbed"));
     await waitFor(() => expect(levelAsked()).toBe(MANAGED.id));
     await (useAppStore.getState().wishlistView === "grid"
       ? screen.findByAltText("Smuggler's Copter")
@@ -5178,7 +5237,7 @@ describe("a deck's managed wishlist", () => {
     await openManaged();
 
     await findHeading(TOKENS.id);
-    await userEvent.click(titleOf(TOKENS.id, "Tokens"));
+    await userEvent.click(openOf(TOKENS.id, "Tokens"));
     await waitFor(() => expect(levelAsked()).toBe(TOKENS.id));
     await screen.findByText("Treasure");
 
@@ -5438,7 +5497,7 @@ describe("a needs-review hand-off over a filed wishlist", () => {
  */
 describe("a price sweep another page asked for", () => {
   it("opens the dialog over every wish, flattened and unfiltered, and spends the hand-off", async () => {
-    useAppStore.setState({ pendingOptimize: true });
+    useAppStore.setState({ pendingOptimize: WHOLE_WISHLIST });
     wrap(<WishlistPage />);
 
     const dialog = await screen.findByRole("dialog");
@@ -5451,7 +5510,7 @@ describe("a price sweep another page asked for", () => {
     expect(asked).toEqual({ flatten: true, marketplace: "tcgplayer", limit: 0, offset: 0 });
     // The scope sentence says so, rather than naming the root the page is standing at.
     expect(within(dialog).getByText("Every folder")).toBeInTheDocument();
-    await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBe(false));
+    await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBeNull());
     // **A scope override and never a write**: the list behind the dialog is still the page's own
     // shelves, never read flat. (It also asserted the reader's persisted Flatten switch was left
     // off, until Flatten went with the shelves.)
@@ -5459,13 +5518,39 @@ describe("a price sweep another page asked for", () => {
     expect(lastQuery().shelves).toBeDefined();
   });
 
+  /**
+   * **Issue #598: the widget can count the decks' managed wishlists and only some folders**, so the
+   * hand-off carries its scope and the dialog plans exactly that — the managed switch and the
+   * shelves included, and the subtitle naming how many folders rather than "Every folder".
+   */
+  it("plans the widget's own scope — its managed switch and its folders", async () => {
+    useAppStore.setState({ pendingOptimize: { includeManaged: true, shelves: [0, 7] } });
+    wrap(<WishlistPage />);
+
+    const dialog = await screen.findByRole("dialog");
+    await waitFor(() => expect(wishlistOptimizePlan).toHaveBeenCalled());
+    const asked = wishlistOptimizePlan.mock.calls[
+      wishlistOptimizePlan.mock.calls.length - 1
+    ][0] as WishlistQuery;
+    expect(asked).toEqual({
+      flatten: true,
+      marketplace: "tcgplayer",
+      includeManaged: true,
+      shelves: [0, 7],
+      limit: 0,
+      offset: 0,
+    });
+    expect(within(dialog).getByText("2 folders")).toBeInTheDocument();
+    await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBeNull());
+  });
+
   /** The override is the hand-off's alone: the page's own button plans the page's own list. */
   it("plans the page's own list again when the Optimise button is pressed afterwards", async () => {
     const user = userEvent.setup();
-    useAppStore.setState({ pendingOptimize: true });
+    useAppStore.setState({ pendingOptimize: WHOLE_WISHLIST });
     wrap(<WishlistPage />);
     await screen.findByRole("dialog");
-    await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBe(false));
+    await waitFor(() => expect(useAppStore.getState().pendingOptimize).toBeNull());
 
     await user.click(screen.getByRole("button", { name: "Close the price check" }));
     wishlistOptimizePlan.mockClear();
@@ -5675,7 +5760,7 @@ describe("the caret after the path row's Add folder, Move to folder… and Delet
     const user = userEvent.setup();
     wrap(<WishlistPage />);
     await findHeading(ORDERED.id);
-    await user.click(titleOf(ORDERED.id, "Ordered"));
+    await user.click(openOf(ORDERED.id, "Ordered"));
     await waitFor(() => expect(levelAsked()).toBe(ORDERED.id));
     await findHeading(BACKORDERED.id);
 
