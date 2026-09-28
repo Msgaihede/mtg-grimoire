@@ -529,7 +529,7 @@ describe("the boundary around the shared view", () => {
 
     expect(await screen.findByText(SHARED_UNDRAWABLE)).toBeInTheDocument();
     // The chrome is the view's, so a reader can tell a broken document from a broken app.
-    expect(screen.getByText(/The link is good/)).toBeInTheDocument();
+    expect(screen.getByText(/Could not load collection data from this link/)).toBeInTheDocument();
     expect(noise).toHaveBeenCalled();
     noise.mockRestore();
   });

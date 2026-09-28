@@ -116,7 +116,7 @@ export function OpenShareDialog({
     <Dialog
       open={open}
       title="Open a shared collection"
-      subtitle="Paste the link somebody sent you."
+      subtitle="Paste a shared collection link."
       closeLabel="Close open a shared collection"
       size="w-[32rem]"
       onDismiss={onClose}
@@ -174,8 +174,8 @@ export function OpenShareDialog({
         )}
 
         <p className="text-sm text-dim">
-          You will see a read-only snapshot of their collection, cross-referenced against your own.
-          Nothing you do here changes their cards or yours.
+          View a read-only snapshot cross-referenced against your collection and wishlist. Neither
+          collection will be modified.
         </p>
 
         <div className="flex justify-end gap-2">
