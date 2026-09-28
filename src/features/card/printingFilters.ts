@@ -56,7 +56,7 @@ export interface PrintingFilter {
   treatments: Treatment[];
 }
 
-/** Nothing narrowed. What the modal opens on, and what "Clear all" restores. */
+/** Nothing narrowed. What the modal opens on, and what "Reset all" restores. */
 export const EMPTY_PRINTING_FILTER: PrintingFilter = {
   text: "",
   sets: [],
@@ -64,14 +64,26 @@ export const EMPTY_PRINTING_FILTER: PrintingFilter = {
   treatments: [],
 };
 
-/** Whether anything is narrowed — what decides the count line's wording and the Clear control. */
+/**
+ * How many of the four filters are narrowing — the number `Reset all` carries.
+ *
+ * **One per kind, however many values are ticked in it**, which is the search's own
+ * `activeFilterCount` rule: `Borderless` and `Foil` together are one narrowing of *which
+ * treatment*, and a reader told `Reset all 2` over one picker has been given the wrong number
+ * about one control.
+ */
+export function activePrintingFilterCount(filter: PrintingFilter): number {
+  return [
+    filter.text.trim() !== "",
+    filter.sets.length > 0,
+    filter.langs.length > 0,
+    filter.treatments.length > 0,
+  ].filter(Boolean).length;
+}
+
+/** Whether anything is narrowed — what decides the count line's wording and the reset. */
 export function isFilterActive(filter: PrintingFilter): boolean {
-  return (
-    filter.text.trim() !== "" ||
-    filter.sets.length > 0 ||
-    filter.langs.length > 0 ||
-    filter.treatments.length > 0
-  );
+  return activePrintingFilterCount(filter) > 0;
 }
 
 /**
