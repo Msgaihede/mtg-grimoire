@@ -61,6 +61,7 @@ have confirmed with `Get-Process` that nothing is running — never to jump a `H
 ```powershell
 Get-Process mtg-grimoire -ErrorAction SilentlyContinue   # must be empty, or you adopt someone else's
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
+$env:MTG_GRIMOIRE_MCP_BRIDGE = "1"   # only if you will use the mcp__tauri__* tools — see below
 Start-Process npm.cmd -ArgumentList "run","tauri","dev" -WindowStyle Hidden `
     -RedirectStandardOutput ".claude\skills\running-the-app\tauri-dev.stdout.local" `
     -RedirectStandardError ".claude\skills\running-the-app\tauri-dev.stderr.local"
@@ -69,6 +70,13 @@ do { Start-Sleep 5; $app = Get-Process mtg-grimoire -ErrorAction SilentlyContinu
 if (-not $app) { Get-Content ".claude\skills\running-the-app\tauri-dev.stderr.local"; pwsh -NoProfile -File $L release app; throw "tauri dev never came up in 8 minutes" }
 pwsh -NoProfile -File $L adopt app -ProcessId $app.Id
 ```
+
+**The MCP bridge is off unless `MTG_GRIMOIRE_MCP_BRIDGE=1` is in the launch's environment**
+(since 2026-09-28): it is an unauthenticated JavaScript-evaluating socket that a page in the
+developer's browser can reach on the loopback, so a launch that is not going to use the
+`mcp__tauri__*` tools should leave the line out. Without it `driver_session` answers
+`connected: false` and nothing is broken — `docs/reference/tauri-mcp-bridge.md` has the why.
+CDP on 9222 is opted into the same way, by the `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` line.
 
 No console window pops; `npm.cmd`'s own stdout/stderr — including a compile error — land
 in the two `*.local` files beside this file (`Start-Process` cannot redirect both streams

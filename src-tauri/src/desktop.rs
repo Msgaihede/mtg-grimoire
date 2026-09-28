@@ -201,6 +201,17 @@ fn update_api_base() -> String {
     update::GITHUB_API.to_owned()
 }
 
+/// The variable that opens the MCP bridge in a debug build — see the registration in [`run`].
+#[cfg(debug_assertions)]
+const MCP_BRIDGE_ENV: &str = "MTG_GRIMOIRE_MCP_BRIDGE";
+
+/// Whether the environment asked for the MCP bridge: **exactly `1`**. Anything else — unset,
+/// empty, `0`, `true` — leaves the port shut, because the direction to be wrong in is closed.
+#[cfg(debug_assertions)]
+fn mcp_bridge_requested(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
 pub fn run() {
     // **Before the builder, and it has to be before it.** A build that has just replaced
     // its predecessor is launched with `--await-predecessor`, and what it is waiting for is
@@ -283,6 +294,13 @@ pub fn run() {
             .build(),
     );
 
+    // **The navigation guard**: no window leaves the app's own pages (`app_origin`). A plugin
+    // hook rather than an `on_navigation` on a window builder, because `main` is built from the
+    // config and every `window-N` by `window::open_new` — a hook on either builder is a window
+    // the other one forgot. It is what keeps a link dropped on the window from loading a remote
+    // page in it; the camera handler checks the same origin set in case anything else does.
+    let builder = builder.plugin(crate::app_origin::guard());
+
     // The MCP bridge, and the only reason the chain is split in two: this plugin exists in a
     // debug build and not in a release one, which `.plugin(…)` mid-chain cannot express.
     //
@@ -305,12 +323,31 @@ pub fn run() {
     //
     // **Debug builds only, and the `cfg` is the fence rather than the capability.** The listener
     // is opened in Rust and the ACL is not in that path, so no capability can close it.
+    //
+    // ⚠️ **And only when asked for, since 2026-09-28** — `MTG_GRIMOIRE_MCP_BRIDGE=1` in the
+    // environment `tauri dev` is launched from (issue #545). The loopback bind keeps the LAN
+    // out and keeps nothing on this machine out: the plugin's `accept_async` never reads the
+    // handshake's `Origin` and has no auth option, and browsers apply no CORS to a WebSocket, so
+    // a page open in the developer's own browser could scan 9223–9322 and send `execute_js` —
+    // and with `withGlobalTauri` on, that script is one `invoke` from `export_write_file`.
+    // Whether a page can reach the loopback at all is the browser's local-network policy, which
+    // is not a fence this app controls. So the port stays shut on every dev launch that did not
+    // ask for an agent, which is most of them. Vendoring the plugin to refuse any handshake that
+    // carries an `Origin` (the Node client sends none) was the other fix on the table, and would
+    // be the one to reach for if the bridge ever has to be on by default again.
     #[cfg(debug_assertions)]
-    let builder = builder.plugin(
-        tauri_plugin_mcp_bridge::Builder::new()
-            .bind_address("127.0.0.1")
-            .build(),
-    );
+    let builder = if mcp_bridge_requested(std::env::var(MCP_BRIDGE_ENV).ok().as_deref()) {
+        eprintln!(
+            "{MCP_BRIDGE_ENV}=1: the MCP bridge is listening on 127.0.0.1 (debug build only)"
+        );
+        builder.plugin(
+            tauri_plugin_mcp_bridge::Builder::new()
+                .bind_address("127.0.0.1")
+                .build(),
+        )
+    } else {
+        builder
+    };
 
     builder
         // Card art, served from the local cache. Tauri has no `registerSchemesAsPrivileged`
@@ -1359,6 +1396,10 @@ mod tests {
     /// observe what a release build did with it. The regression this guards is somebody dropping
     /// the gate while chasing a bridge problem — a one-line edit that no other test in this file
     /// can see.
+    ///
+    /// **Two gates since 2026-09-28, and this pins both**: the `cfg`, and the environment check
+    /// inside it (issue #545) — the `let builder` the registration sits in must be the `if` on
+    /// [`mcp_bridge_requested`], so a debug launch that did not ask keeps the port shut.
     #[test]
     fn the_mcp_bridge_is_gated_on_a_debug_build() {
         // Lines, not a byte offset: the needle would otherwise have to carry an escaped
@@ -1375,9 +1416,24 @@ mod tests {
             .iter()
             .position(|l| l.trim() == "tauri_plugin_mcp_bridge::Builder::new()")
             .expect("the bridge registration moved; this test must follow it");
+        // The `let builder` the registration is the value of — the nearest one above it.
+        let binding = (0..at)
+            .rev()
+            .find(|&i| lines[i].trim_start().starts_with("let builder = "))
+            .expect("the bridge registration is no longer a `let builder`");
 
+        assert!(
+            lines[binding]
+                .trim()
+                .starts_with("let builder = if mcp_bridge_requested("),
+            concat!(
+                "the MCP bridge must open only when `MTG_GRIMOIRE_MCP_BRIDGE=1` asks for it: ",
+                "the socket authenticates nothing and reads no `Origin`, so any page in the ",
+                "developer's browser that can reach the loopback can drive the window.",
+            )
+        );
         assert_eq!(
-            lines[at - 2].trim(),
+            lines[binding - 1].trim(),
             "#[cfg(debug_assertions)]",
             concat!(
                 "the MCP bridge must be gated on `debug_assertions`: without it a release build ",
@@ -1386,6 +1442,24 @@ mod tests {
                 "in Rust, not through the ACL.",
             )
         );
+    }
+
+    /// Exactly `1` opens it. Every near miss stays shut, because a bridge that opens on a
+    /// spelling nobody meant is the failure, and one that stays shut costs a relaunch.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn the_mcp_bridge_opens_on_exactly_one() {
+        assert!(mcp_bridge_requested(Some("1")));
+        for no in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("true"),
+            Some("yes"),
+            Some(" 1"),
+        ] {
+            assert!(!mcp_bridge_requested(no), "{no:?}");
+        }
     }
 
     #[test]

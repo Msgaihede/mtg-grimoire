@@ -28,7 +28,7 @@ or a number to compare a new measurement against.
 | [motion.md](motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
 | [storybook.md](storybook.md) | The workbench and its fake, in full | [`.storybook/CLAUDE.md`](../../.storybook/CLAUDE.md) |
 | [live-ui-verification.md](live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps | [`src/CLAUDE.md`](../../src/CLAUDE.md) |
-| [tauri-mcp-bridge.md](tauri-mcp-bridge.md) | The other way to drive the window — its four pieces, three permissions, and the one tool that cannot reach an app command | [`CLAUDE.md`](../../CLAUDE.md) |
+| [tauri-mcp-bridge.md](tauri-mcp-bridge.md) | The other way to drive the window — its five pieces, the environment variable that opens it, three permissions, and the one tool that cannot reach an app command | [`CLAUDE.md`](../../CLAUDE.md) |
 | [ci-and-releases.md](ci-and-releases.md) | Both workflows, in full | [`.github/CLAUDE.md`](../../.github/CLAUDE.md) |
 | [test-coverage.md](test-coverage.md) | What both suites reach, and why the Rust figure needs a correction | [`CLAUDE.md`](../../CLAUDE.md) |
 

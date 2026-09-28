@@ -9,6 +9,9 @@ pub mod activity;
 /// **The `app_meta` key–value store, carved out of [`update`].** Eleven modules keep view state
 /// in that one table and only `update` swaps an `.exe`.
 pub mod app_meta;
+/// **Which pages are this app's own, and the navigation guard that keeps every window on them.**
+/// One origin set, read by the guard and by [`camera`], so the two cannot disagree.
+pub mod app_origin;
 /// **Taking back one bulk collection or wishlist write** (issue #555) — the before/after images of
 /// exactly the rows it changed, held in memory for the session and put back only while nothing
 /// has touched them since.

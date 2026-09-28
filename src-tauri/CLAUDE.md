@@ -2653,7 +2653,17 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 - **The bridge binds `127.0.0.1`, against the plugin's own `0.0.0.0` default.** It executes
   arbitrary JavaScript and any command in the handler on request and authenticates nothing;
   the upstream default exists for driving a phone across your LAN, and keeping it here would
-  offer that to whatever network the machine is on. Same reasoning as `dialog:allow-open`.
+  offer that to whatever network the machine is on.
+- ⚠️ **And it opens only when `MTG_GRIMOIRE_MCP_BRIDGE=1` asks for it** (2026-09-28, issue #545),
+  because the loopback bind keeps the LAN out and nothing on this machine: the plugin's
+  `accept_async` reads no `Origin` and has no auth option, browsers apply no CORS to a WebSocket,
+  and so a page in the developer's own browser could scan 9223–9322, send `execute_js`, and reach
+  every command through `window.__TAURI__`. Two gates, both pinned by
+  `the_mcp_bridge_is_gated_on_a_debug_build`: the `cfg(debug_assertions)` keeps it out of a
+  release build, and the `if mcp_bridge_requested(…)` inside it keeps it shut on every dev launch
+  that did not ask — exactly `1`, nothing looser. Do not turn it back on by default without first
+  refusing any handshake that carries an `Origin` (the Node client sends none), which means
+  vendoring the plugin. [tauri-mcp-bridge.md](../docs/reference/tauri-mcp-bridge.md) has the rest.
 - **`withGlobalTauri: true` is what the bridge needs, and it is not debug-only.** `bridge.js`
   reaches the IPC through `window.__TAURI__`, so without it IPC monitoring, script injection
   and `execute_js`'s result callback all go dark — but `tauri.conf.json` has no debug/release
@@ -2661,6 +2671,24 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   What keeps that honest is the CSP: `script-src 'self'`, no remote origin, and no
   `dangerouslySetInnerHTML` anywhere in `src/`, so no foreign script runs in the page to find
   it. Adding any one of those three back is what would make a dev-only config worth its cost.
+  **The CSP governs the app's page and no other**, which is why the next bullet exists: a remote
+  page loaded into the window brings its own policy, or none.
+- **No window leaves the app's own pages, and the camera is granted to nothing else**
+  (2026-09-28, issue #545). `app_origin::AppOrigins` is the one answer to "is this our page" —
+  the embedded frontend (`http(s)://tauri.localhost`, `tauri://localhost`) and, in a dev build
+  only, `build.devUrl` — compared as scheme, host and port, because `tauri://` has an opaque URL
+  origin that equals nothing. Two readers, so they cannot disagree: **`app_origin::guard()`**, a
+  plugin whose `on_navigation` refuses any top-level navigation off that set (a plugin hook and
+  not a builder's, because `main` comes from the config and every `window-N` from
+  `window::open_new`, and a hook on either builder is a window the other forgot; `about:blank` is
+  let through because it loads nothing and the guard was never driven on WebView2), and
+  **`camera::decide`**, which reads the `PermissionRequested` event's `Uri` and grants `CAMERA`
+  only when the set holds it — an unreadable URI refuses. Until then the grant read the kind alone
+  and nothing kept the window on the app: `dragDropEnabled: false` — load-bearing, see below — is
+  also what stops wry calling WebView2's `SetAllowExternalDrop(false)`, so a dropped link should
+  have loaded a remote page with a silent camera. That route was reasoned from wry's source and not
+  driven live; nothing in this app navigates the window anywhere else, and a link the reader means
+  to follow leaves through `openUrl`.
 - **The window's four verbs are granted one by one, because `core:window:default` grants none of
   them.** That default is the *getters* — `is-maximized`, the position and size reads, the monitor
   queries — so `decorations: false` and `components/TitleBar.tsx` needed

@@ -159,7 +159,9 @@ tauri-plugin-snap-layout = "1"
 # it dials a WebSocket this plugin opens inside the running app, so without the plugin nothing
 # listens and `driver_session` answers `connected: false` forever. Registered under
 # `#[cfg(debug_assertions)]` in `desktop.rs` — a release build compiles the crate and never
-# opens the port. It stays a plain dependency rather than an optional one on purpose:
+# opens the port — and, since 2026-09-28, only when `MTG_GRIMOIRE_MCP_BRIDGE=1` is set, because
+# the socket authenticates nothing and a page in the developer's own browser can reach the
+# loopback (`docs/reference/tauri-mcp-bridge.md`). It stays a plain dependency rather than an optional one on purpose:
 # `tauri-build` discovers a plugin's ACL permissions through the dependency graph, so dropping it
 # from the release profile would leave `capabilities/desktop.json`'s `mcp-bridge:` entries
 # unresolvable and fail the build that needs them least.
