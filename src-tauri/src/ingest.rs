@@ -1026,11 +1026,12 @@ mod tests {
     fn a_writer_gets_the_connection_between_batches_of_an_ingest() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-        let dir = std::env::temp_dir().join("mtgtest-ingest-chunked");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        crate::split::convert(&dir).unwrap();
-        let conn = crate::db::open_write(&dir).unwrap();
+        // A directory of its own, not a fixed name under the shared temp folder: two `cargo test`
+        // processes — two worktrees on one machine — would delete each other's database
+        // mid-run (3 runs of 20 died on it, measured 2026-09-28).
+        let dir = tempfile::tempdir().unwrap();
+        crate::split::convert(dir.path()).unwrap();
+        let conn = crate::db::open_write(dir.path()).unwrap();
         // **The corpus is brought to head, because a launch brings it to head** —
         // `index::fixtures::state_with_seeded_cards`' line and its whole argument. `convert`
         // builds the file through the frozen `migrate_single_file` ladder and *then* stamps
@@ -1079,8 +1080,8 @@ mod tests {
              and took it {} times",
             taken.load(Ordering::SeqCst)
         );
+        // Closed before `dir` removes the folder it lives in.
         drop(db);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

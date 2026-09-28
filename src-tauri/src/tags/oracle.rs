@@ -770,21 +770,42 @@ mod tests {
     /// batch has committed) and the ingest returning. Without that window an ingest that held
     /// the connection end to end would simply make the probe wait and then collect its locks
     /// from an idle mutex.
+    ///
+    /// **Each attempt is a command arriving at a moment of its own** (2026-09-28). `lock_for`
+    /// polls every 20 ms, and this fixture's batches are as regular as a clock — one every
+    /// ~10 ms — so one long attempt samples that cycle at a single fixed phase for nearly the
+    /// whole counting window, and at the wrong phase misses every release in the run. The
+    /// 200 ms attempt this used went red that way in a full parallel `cargo test`, and scored
+    /// below 3 in 6 idle runs of 100 (min 1). A short bound and a staggered pause after each
+    /// miss give every attempt a phase of its own; the lowest count since is 6 idle (80 runs),
+    /// 14 beside a full `cargo test` and 30 under eight CPU burners.
+    ///
+    /// **The bar is 4 because the count is also the fence on
+    /// [`crate::tags::YIELD_BETWEEN_BATCHES`]**, the pause that makes a release visible to a
+    /// 20 ms poller at all. Set it to zero and a probe that samples well finds the narrow
+    /// gaps the closure loop leaves between batches more often — one win each, where a real
+    /// yield gives several a millisecond apart — so at 3 this probe caught that regression in
+    /// 72% of runs against the old one's 83%. At 4 it is 86% idle and 97% beside a full suite.
+    /// All on a Linux debug build; Windows is unmeasured. Nothing waits inside the progress
+    /// callback instead, because that runs in the released window and would widen the very
+    /// gap under test — `maintenance`'s lesson.
     #[test]
     fn a_writer_gets_the_connection_between_batches() {
         use std::sync::atomic::AtomicUsize;
+        const BAR: usize = 4;
 
         // A file-backed database, as the app has: an in-memory one writes far faster than
         // the probe below can ask, which would make the count a measure of the fixture
-        // rather than of the locking.
-        let dir = std::env::temp_dir().join("mtgtest-oracle-tags-chunked");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        crate::split::convert(&dir).unwrap();
-        let db = Mutex::new(crate::db::open_write(&dir).unwrap());
+        // rather than of the locking. **In a directory of its own**: under the fixed name
+        // this used, two `cargo test` processes — two worktrees on one machine — deleted each
+        // other's database mid-run, and 40 runs of 40 died on `disk I/O error` at `convert`.
+        let dir = tempfile::tempdir().unwrap();
+        crate::split::convert(dir.path()).unwrap();
+        let db = Mutex::new(crate::db::open_write(dir.path()).unwrap());
 
-        // Ten batches of taggings and as many again of closure rows, so the run has plenty
-        // of release points left once counting opens.
+        // The one line holding every tagging commits as one batch, because a line is folded
+        // whole; the release points are the tags', the edges' and twenty batches of closure
+        // rows (two per card: the tag and its parent) — 22 once counting opens.
         let cards: Vec<String> = (0..BATCH * 10).map(|i| format!("oid-{i}")).collect();
         let refs: Vec<&str> = cards.iter().map(String::as_str).collect();
         let lines = [
@@ -798,13 +819,23 @@ mod tests {
         let done = AtomicBool::new(false);
         std::thread::scope(|scope| {
             scope.spawn(|| {
-                while taken.load(Ordering::SeqCst) < 3 && !done.load(Ordering::SeqCst) {
+                // After a miss, the next command arrives this many milliseconds later: no two
+                // alike and none a multiple of the poll, so no phase is held for long.
+                const PAUSES_MS: [u64; 8] = [1, 7, 3, 11, 5, 13, 2, 9];
+                let mut misses = 0;
+                while taken.load(Ordering::SeqCst) < BAR && !done.load(Ordering::SeqCst) {
                     let won =
-                        crate::db::lock_for(&db, std::time::Duration::from_millis(200)).is_some();
+                        crate::db::lock_for(&db, std::time::Duration::from_millis(40)).is_some();
                     if won && ingesting.load(Ordering::SeqCst) && !done.load(Ordering::SeqCst) {
                         taken.fetch_add(1, Ordering::SeqCst);
                     }
-                    std::thread::sleep(std::time::Duration::from_millis(1));
+                    let pause = if won {
+                        1
+                    } else {
+                        misses += 1;
+                        PAUSES_MS[misses % PAUSES_MS.len()]
+                    };
+                    std::thread::sleep(std::time::Duration::from_millis(pause));
                 }
             });
             let stats = ingest_gz(
@@ -822,13 +853,13 @@ mod tests {
         });
 
         assert!(
-            taken.load(Ordering::SeqCst) >= 3,
+            taken.load(Ordering::SeqCst) >= BAR,
             "a writer must be able to take the connection while the ingest is running, \
              and took it {} times",
             taken.load(Ordering::SeqCst)
         );
+        // Closed before `dir` removes the folder it lives in.
         drop(db);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     // ---- the read path ---------------------------------------------------------------
