@@ -298,12 +298,12 @@ deliberately**: no screenshots are stored.
   the deck twice rather than transcribing the crate's four `Op` primitives, deliberately: a step's
   whole job is "make the deck look like this again", the crate needs ops because SQL has no other
   way to say it, and a second transcription would be a second implementation to keep in step.
-  **The known gap is the fake's own and predates this**: the **seven** card writes
-  (`deck_add_card`, `deck_set_card_quantity`, `deck_move_card`, `deck_swap_printing`,
-  `deck_set_card_finish`, `deck_category_clear` and `deck_clear`) record no history row here, so
-  Storybook's history drawer does not list a card added from *search* and — consistently — Undo
-  does not offer to take one back. Closing it means giving those seven a `record(…)` call, which
-  changes what the *history* stories draw and belongs with them.
+  **The known gap is the fake's own and predates this**: the card writes
+  (`deck_add_card`, `deck_add_card_to_other_list`, `deck_set_card_quantity`, `deck_move_card`,
+  `deck_swap_printing`, `deck_set_card_finish`, `deck_category_clear` and `deck_clear`) record no
+  history row here, so Storybook's history drawer does not list a card added from *search* and —
+  consistently — Undo does not offer to take one back. Closing it means giving each of them a
+  `record(…)` call, which changes what the *history* stories draw and belongs with them.
   **It said "five" here and in `db.ts` until 2026-09-01, and it was wrong by one before
   `deck_clear` was written**: `deck_set_card_finish` arrived with `Set as foil` and its crate twin
   `set_card_finish` writes a `SWAP` row, so the gap had widened once with nothing to notice. That
