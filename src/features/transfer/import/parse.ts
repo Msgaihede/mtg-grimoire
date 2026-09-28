@@ -789,8 +789,24 @@ function bracketCategory(bracket: string): { name: string; excluded: boolean } {
 const QUANTITY = /^\d{1,4}[xX]?\s/;
 
 /** A trailing `(SET) 123`, `(SET)` or `() 123` — {@link LINE}'s hint, on its own, so a heading
- *  candidate can be refused for carrying one. */
+ *  candidate can be refused for carrying one unless the bracket below names it
+ *  ({@link bracketPileOf}). */
 const HINT_TAIL = /\s+\(\w{0,10}\)(?:\s+\S+)?$/;
+
+/**
+ * The pile a line's bracket names, flags off — `null` for a line with no bracket.
+ *
+ * {@link namesASection} asks this of the line *below* a candidate, and only about a candidate
+ * ending in a {@link HINT_TAIL} shape: `Removal (cheap)` is a real pile name and a printing hint
+ * at once, and the one thing that tells the two apart is Archidekt printing the same name in the
+ * bracket of every card under it (105 of 105 lines of the reference export). **Equality, never
+ * mere presence**, because Deckbox and MTGGoldfish write `[SET]` in the same place: a set code
+ * holds no parenthesis, so it can never be a hint-shaped line and never admits one.
+ */
+function bracketPileOf(line: string): string | null {
+  const { bracket } = stripDecorations(line);
+  return bracket === null ? null : bracketCategory(bracket).name;
+}
 
 /**
  * The first row after `index` that makes a claim — not blank, not a comment.
@@ -815,7 +831,12 @@ function nextClaim(rows: readonly string[], index: number): string | null {
  * the file that reads past the line in front of it, and each clause pays for itself:
  *
  * * **No quantity, no printing hint, no bracket.** A heading is a bare word; every card line in
- *   an export that writes headings carries at least one of the three.
+ *   an export that writes headings carries at least one of the three. **The hint alone gives way
+ *   when the next claim's bracket names this very line** ({@link bracketPileOf}) — a pile called
+ *   `Removal (cheap)` ends in a hint shape, and read as a card it left every card under it in
+ *   whatever zone came before, the command zone after `Commander`. The count never gives way:
+ *   `1 Sol Ring` above a bracketed line is a card, and so — the failure it keeps — is a pile
+ *   called `2 Drops`, whose cards reach the deck through their own bracket instead.
  * * **The next line that makes a claim carries a count.** This is what leaves a list of bare
  *   names alone — `Sol Ring` followed by `Arcane Signet` fails it — and it is *also* what makes
  *   a heading over an empty section impossible, which is how "nothing is ever silently dropped"
@@ -830,9 +851,10 @@ function nextClaim(rows: readonly string[], index: number): string | null {
  * a bare card name, then a counted line, loses that name. No exporter in scope emits that shape.
  */
 function namesASection(rows: readonly string[], index: number, trimmed: string): boolean {
-  if (QUANTITY.test(trimmed) || HINT_TAIL.test(trimmed) || trimmed.includes("[")) return false;
+  if (QUANTITY.test(trimmed) || trimmed.includes("[")) return false;
   const next = nextClaim(rows, index);
   if (next === null || !QUANTITY.test(next)) return false;
+  if (HINT_TAIL.test(trimmed) && bracketPileOf(next) !== trimmed) return false;
   return index === 0 ? next.includes("[") : rows[index - 1].trim() === "";
 }
 
@@ -981,6 +1003,11 @@ export function parseDecklist(text: string): ParsedList {
   const issues: ParseIssue[] = [];
   let section: SectionKind = "deck";
   let sectionCategory: string | null = null;
+  // Whether a bracket under the open heading has named that heading's own zone — Archidekt's
+  // `[Commander{top}]` under `Commander`. It is what lets a bracket naming a *pile* move its line
+  // out of the zone (see the bracket arm below), and a `[SET]` list never sets it: no set code is
+  // a zone word. Cleared by every heading, because it is a fact about the one that is open.
+  let zoneBracketed = false;
   let suggestedName: string | null = null;
   let inAbout = false;
 
@@ -1016,6 +1043,7 @@ export function parseDecklist(text: string): ParsedList {
     if (header !== null) {
       section = header;
       sectionCategory = null;
+      zoneBracketed = false;
       inAbout = false;
       continue;
     }
@@ -1025,6 +1053,7 @@ export function parseDecklist(text: string): ParsedList {
     if (namesASection(rows, index, trimmed)) {
       section = "deck";
       sectionCategory = trimmed;
+      zoneBracketed = false;
       inAbout = false;
       continue;
     }
@@ -1062,14 +1091,28 @@ export function parseDecklist(text: string): ParsedList {
     // bracket naming one of the section words is the *section* — `[Commander{top}]` has to reach
     // the command zone through the one mechanism the seeded piles already use — and only an
     // unknown name is a category.
+    //
+    // **An unknown name is a pile, and a pile is in the deck proper** — the bracket's half of what
+    // a pile heading does to `section`. It is what files a card back out of the command zone when
+    // the heading above it was missed (a pile called `2 Drops` reads as a card), and it is gated
+    // twice. On `zoneBracketed`, because Deckbox and MTGGoldfish write `[SET]` in this place: an
+    // ungated rule would move `Sideboard` / `2 Duress [M19]` into the main deck, and a `[SET]` line
+    // never names a zone to open the gate. And on the line's own `SB:`, because a zone is a rules
+    // fact and a pile is filing — a bracket moves a card out of the *open heading's* zone, never
+    // out of one the line names itself.
     let categoryName: string | null = sectionCategory;
     let excluded = false;
     if (decorated.bracket !== null && !FINISH_WORDS.test(decorated.bracket.trim())) {
       const read = bracketCategory(decorated.bracket);
       excluded = read.excluded;
       const known = read.name === "" ? undefined : SECTIONS.get(read.name.toLowerCase());
-      if (known !== undefined) lineSection = known;
-      else if (read.name !== "") categoryName = read.name;
+      if (known !== undefined) {
+        lineSection = known;
+        if (known === section) zoneBracketed = true;
+      } else if (read.name !== "") {
+        categoryName = read.name;
+        if (zoneBracketed && sideboardPrefix === null) lineSection = "deck";
+      }
     }
     // The invariant `ParsedLine.categoryName` documents: a card in one of the four zones is
     // filed by that zone, so a free-form name only ever applies inside the deck proper.

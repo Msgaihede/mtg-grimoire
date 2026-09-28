@@ -903,6 +903,22 @@ bracket alike. Angle brackets rather than parentheses because a heading ending `
 parser's `HINT_TAIL` and is read as a card line. The golden `awkwardPiles` scenario opens on a
 commander so its goldens hold a pile heading read back after a `Commander` heading.
 
+**A pile whose own name ends in a parenthesis is read back anyway, and one that opens with a count
+is half read.** Two parser rules, both keyed on Archidekt printing a pile's name in the bracket of
+every card under its heading (105 of 105 lines of the reference export):
+
+| Pile | Heading read as | Its cards land in | Rule |
+| --- | --- | --- | --- |
+| `Removal (cheap)` | a heading | `Removal (cheap)`, in the deck | the hint refusal gives way when the next line's bracket names the candidate **exactly** |
+| `2 Drops` | two copies of a card called `Drops` | `2 Drops`, in the deck | the count refusal does not give way; a bracket naming a pile moves its line out of a zone **whose own brackets named it** |
+
+Both are gated against the lists that write `[SET]` in the same place — Deckbox and MTGGoldfish,
+out of scope and already misread as piles named after a set. Equality cannot admit a `[SET]` line,
+because a set code holds no parenthesis; and a set code is never a zone word, so it never opens the
+second gate, which keeps `Sideboard` / `2 Duress [M19]` in the sideboard. `parse.test.ts` pins
+each half and each fence, and `decklists.test.ts` holds `Removal (cheap)` behind a `Commander` pile
+as an Archidekt fixed point.
+
 ## The live pass — 2026-08-20, `npm run tauri dev` (debug), this worktree
 
 Driven over CDP against a fresh sync (116,700 cards, this worktree's own `target/debug/data/mtg.db`,

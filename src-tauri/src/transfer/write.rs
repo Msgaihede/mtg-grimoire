@@ -124,8 +124,9 @@ fn finish_mark(card: &Card) -> &'static str {
 /// pile into a card of its own and filed the pile's cards under the heading before it. `<`, `>`
 /// and `;` are read as nothing at all, so the rewritten name comes back exactly from the bracket
 /// and from the heading. The sections are grouped by what is written, so two piles the file cannot
-/// tell apart share one heading. A name whose own parentheses already trip the heading rule —
-/// `Removal (cheap)` — is left as the reader wrote it; that is the parser's to answer.
+/// tell apart share one heading. A name ending in its own parenthesis — `Removal (cheap)` — is
+/// left as the reader wrote it, and the parser reads that heading because the bracket on the line
+/// below it names it exactly.
 ///
 /// **One `chars()` walk rather than a `str::replace` chain**, which would be the same answer four
 /// allocations later. Every character it touches and every one it writes is ASCII, so the walk
