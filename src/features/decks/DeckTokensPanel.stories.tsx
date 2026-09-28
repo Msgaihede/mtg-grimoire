@@ -233,8 +233,11 @@ export const Collapsed: Story = {
  * * **The two Wurms** — untouched, both at 0, side by side and told apart only by the subtitle.
  *   The lifelink one is stored `hidden`, as an older peer's dismissal would sync in; nothing on
  *   this band reads the word any more, so it is drawn like its twin (Review Focus 1).
- * * **The emblem** — Oko's, untouched, sorted last, with **no subtitle at all**: the tile's own
- *   name already says whose emblem it is.
+ * * **The emblem** — Oko's, untouched, sorted last, with **no subtitle at all**: the card itself
+ *   already says whose emblem it is.
+ *
+ * **No tile draws a name line** (issue #615): each reads the card, the controls across its full
+ * width, the subtitle under them and the source under that.
  *
  * Every token here is one the deck makes, so none wears `NOT MADE BY DECK`; the next story does.
  */
