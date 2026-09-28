@@ -29,7 +29,7 @@ import {
 } from "@/lib/ipc";
 import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { DEFAULT_VARIANT } from "@/features/decks/useDeck";
-import { readDecklist } from "../files";
+import { chooseDecklist } from "../files";
 
 /**
  * The reader saying they have physically built this deck — the same lines a second time, at the
@@ -352,14 +352,15 @@ export function useImport() {
   });
 
   /**
-   * The text behind the path the picker answered.
+   * The reader's choice of decklist file, as text — `null` for a cancelled picker.
    *
-   * Rust opens the file, which is why `dialog:allow-open` is enough and no `fs:` permission
-   * exists anywhere in this app — `transfer/files.ts` has the rest. A *mutation*, because a file
-   * read is a wait the button has to be disabled for.
+   * Rust opens the dialog *and* the file, so no path ever reaches this side and the page needs
+   * neither a `dialog:` nor an `fs:` permission (issue #545) — `transfer/files.ts` has the rest. A
+   * *mutation*, because the dialog being up and the file being read are one wait the button has
+   * to be disabled for.
    */
   const readFile = useMutation({
-    mutationFn: (path: string) => readDecklist(path),
+    mutationFn: () => chooseDecklist(),
   });
 
   /**

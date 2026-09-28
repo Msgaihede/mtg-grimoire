@@ -201,6 +201,17 @@ fn update_api_base() -> String {
     update::GITHUB_API.to_owned()
 }
 
+/// The variable that opens the MCP bridge in a debug build — see the registration in [`run`].
+#[cfg(debug_assertions)]
+const MCP_BRIDGE_ENV: &str = "MTG_GRIMOIRE_MCP_BRIDGE";
+
+/// Whether the environment asked for the MCP bridge: **exactly `1`**. Anything else — unset,
+/// empty, `0`, `true` — leaves the port shut, because the direction to be wrong in is closed.
+#[cfg(debug_assertions)]
+fn mcp_bridge_requested(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
 pub fn run() {
     // **Before the builder, and it has to be before it.** A build that has just replaced
     // its predecessor is launched with `--await-predecessor`, and what it is waiting for is
@@ -246,10 +257,12 @@ pub fn run() {
 
     let builder = builder
         .plugin(tauri_plugin_opener::init())
-        // The system file picker: choosing a custom deck cover (`dialog:allow-open`) and
-        // naming an export's destination (`dialog:allow-save`, `export_write_file` writes
-        // there). Only those two verbs are granted in `capabilities/desktop.json` — message,
-        // ask and confirm are unreachable from the webview however this is initialised. The
+        // The system file dialogs — choosing a decklist, saving an export, moving the mirror —
+        // **opened from Rust through `DialogExt` and never from the page** (`file_dialog.rs`,
+        // issue #545), so the path the reader chose goes to the read or the write without
+        // crossing IPC. Registered because `DialogExt` is this plugin's Rust half;
+        // `capabilities/desktop.json` grants it **no `dialog:` permission at all**, so the
+        // webview cannot summon one of its windows — open, save, message, ask or confirm. The
         // app's own questions are drawn in the page (`DeleteConfirm`, the settings dialog),
         // which is a deliberate choice and not an oversight: a native message box cannot be
         // styled, tested over CDP, or read by the story runner.
@@ -283,6 +296,13 @@ pub fn run() {
             .build(),
     );
 
+    // **The navigation guard**: no window leaves the app's own pages (`app_origin`). A plugin
+    // hook rather than an `on_navigation` on a window builder, because `main` is built from the
+    // config and every `window-N` by `window::open_new` — a hook on either builder is a window
+    // the other one forgot. It is what keeps a link dropped on the window from loading a remote
+    // page in it; the camera handler checks the same origin set in case anything else does.
+    let builder = builder.plugin(crate::app_origin::guard());
+
     // The MCP bridge, and the only reason the chain is split in two: this plugin exists in a
     // debug build and not in a release one, which `.plugin(…)` mid-chain cannot express.
     //
@@ -297,20 +317,39 @@ pub fn run() {
     // `withGlobalTauri` puts `window.__TAURI__` in reach of that script, every command in the
     // handler below is one `invoke` away from anyone who can open the socket. The plugin's
     // default is for driving a phone across your LAN; this app is a single local user, so it
-    // takes the narrow bind for the same reason `capabilities/desktop.json` takes
-    // `dialog:allow-open` over `dialog:default`.
+    // takes the narrow bind for the same reason `capabilities/desktop.json` names each
+    // permission it grants rather than any plugin's `:default`.
     //
     // Port 9223 (the plugin counts upward from it if it is busy), deliberately clear of the
     // three ports this repo hardcodes: 1420 Vite, 6006 Storybook, 9222 CDP.
     //
     // **Debug builds only, and the `cfg` is the fence rather than the capability.** The listener
     // is opened in Rust and the ACL is not in that path, so no capability can close it.
+    //
+    // ⚠️ **And only when asked for, since 2026-09-28** — `MTG_GRIMOIRE_MCP_BRIDGE=1` in the
+    // environment `tauri dev` is launched from (issue #545). The loopback bind keeps the LAN
+    // out and keeps nothing on this machine out: the plugin's `accept_async` never reads the
+    // handshake's `Origin` and has no auth option, and browsers apply no CORS to a WebSocket, so
+    // a page open in the developer's own browser could scan 9223–9322 and send `execute_js` —
+    // and with `withGlobalTauri` on, that script is one `invoke` from every command below.
+    // Whether a page can reach the loopback at all is the browser's local-network policy, which
+    // is not a fence this app controls. So the port stays shut on every dev launch that did not
+    // ask for an agent, which is most of them. Vendoring the plugin to refuse any handshake that
+    // carries an `Origin` (the Node client sends none) was the other fix on the table, and would
+    // be the one to reach for if the bridge ever has to be on by default again.
     #[cfg(debug_assertions)]
-    let builder = builder.plugin(
-        tauri_plugin_mcp_bridge::Builder::new()
-            .bind_address("127.0.0.1")
-            .build(),
-    );
+    let builder = if mcp_bridge_requested(std::env::var(MCP_BRIDGE_ENV).ok().as_deref()) {
+        eprintln!(
+            "{MCP_BRIDGE_ENV}=1: the MCP bridge is listening on 127.0.0.1 (debug build only)"
+        );
+        builder.plugin(
+            tauri_plugin_mcp_bridge::Builder::new()
+                .bind_address("127.0.0.1")
+                .build(),
+        )
+    } else {
+        builder
+    };
 
     builder
         // Card art, served from the local cache. Tauri has no `registerSchemesAsPrivileged`
@@ -472,7 +511,7 @@ pub fn run() {
             deck::deck_missing_to_wishlist,
             import::import_resolve,
             import::deck_import_commit,
-            import::import_read_file,
+            import::import_pick_file,
             deck::format_specs_list,
             deck_meta::deck_category_list,
             deck_meta::deck_category_create,
@@ -626,7 +665,7 @@ pub fn run() {
             tags::muted::tag_mute,
             tags::muted::tag_unmute,
             tags::muted::tags_muted,
-            export::export_write_file,
+            export::export_save_file,
             reset::collection_clear,
             reset::wishlist_clear,
             reset::decks_clear,
@@ -643,7 +682,7 @@ pub fn run() {
             // the two settings, and the button that rewrites it now.
             mirror::settings::mirror_status,
             mirror::settings::mirror_set_enabled,
-            mirror::settings::mirror_set_root,
+            mirror::settings::mirror_pick_root,
             mirror::settings::mirror_rebuild,
             // Pairing (spec §7.5 and §7.6). The panel's read, the presses (offer, accept,
             // confirm, cancel), the one poll that carries both `respond` and `complete` now
@@ -1359,6 +1398,10 @@ mod tests {
     /// observe what a release build did with it. The regression this guards is somebody dropping
     /// the gate while chasing a bridge problem — a one-line edit that no other test in this file
     /// can see.
+    ///
+    /// **Two gates since 2026-09-28, and this pins both**: the `cfg`, and the environment check
+    /// inside it (issue #545) — the `let builder` the registration sits in must be the `if` on
+    /// [`mcp_bridge_requested`], so a debug launch that did not ask keeps the port shut.
     #[test]
     fn the_mcp_bridge_is_gated_on_a_debug_build() {
         // Lines, not a byte offset: the needle would otherwise have to carry an escaped
@@ -1375,9 +1418,24 @@ mod tests {
             .iter()
             .position(|l| l.trim() == "tauri_plugin_mcp_bridge::Builder::new()")
             .expect("the bridge registration moved; this test must follow it");
+        // The `let builder` the registration is the value of — the nearest one above it.
+        let binding = (0..at)
+            .rev()
+            .find(|&i| lines[i].trim_start().starts_with("let builder = "))
+            .expect("the bridge registration is no longer a `let builder`");
 
+        assert!(
+            lines[binding]
+                .trim()
+                .starts_with("let builder = if mcp_bridge_requested("),
+            concat!(
+                "the MCP bridge must open only when `MTG_GRIMOIRE_MCP_BRIDGE=1` asks for it: ",
+                "the socket authenticates nothing and reads no `Origin`, so any page in the ",
+                "developer's browser that can reach the loopback can drive the window.",
+            )
+        );
         assert_eq!(
-            lines[at - 2].trim(),
+            lines[binding - 1].trim(),
             "#[cfg(debug_assertions)]",
             concat!(
                 "the MCP bridge must be gated on `debug_assertions`: without it a release build ",
@@ -1386,6 +1444,24 @@ mod tests {
                 "in Rust, not through the ACL.",
             )
         );
+    }
+
+    /// Exactly `1` opens it. Every near miss stays shut, because a bridge that opens on a
+    /// spelling nobody meant is the failure, and one that stays shut costs a relaunch.
+    #[cfg(debug_assertions)]
+    #[test]
+    fn the_mcp_bridge_opens_on_exactly_one() {
+        assert!(mcp_bridge_requested(Some("1")));
+        for no in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("true"),
+            Some("yes"),
+            Some(" 1"),
+        ] {
+            assert!(!mcp_bridge_requested(no), "{no:?}");
+        }
     }
 
     #[test]
@@ -1427,24 +1503,71 @@ mod tests {
         );
     }
 
-    /// The two permissions the export feature needs, and the two families it must never gain
-    /// on the way — same argument as `dialog:allow-open` above: the narrowest permission,
-    /// never a plugin's `:default`.
+    /// The file commands' half of the ACL, which is **nothing at all** (issue #545): no `fs:`,
+    /// because Rust does every read and write, and no `dialog:`, because Rust opens every dialog
+    /// (`file_dialog.rs`). A `dialog:allow-open` back in this file would not reopen the hole by
+    /// itself — no command takes a path any more — but it would let a script in the page put a
+    /// native window over the app, and it would be the first half of somebody "simplifying" a
+    /// command back into one that takes the path `open()` answered.
+    ///
+    /// The clipboard is the one plugin write the export feature still needs from the page, and
+    /// only its write.
     #[test]
-    fn the_capability_grants_two_new_narrow_permissions_and_no_filesystem() {
+    fn the_capability_grants_no_dialog_no_filesystem_and_only_the_clipboard_write() {
         let caps = include_str!("../capabilities/desktop.json");
-        assert!(caps.contains("\"dialog:allow-save\""));
-        assert!(caps.contains("\"clipboard-manager:allow-write-text\""));
-        // The whole reason `export_write_file` exists. See `export.rs`.
+        assert!(
+            !caps.contains("\"dialog:"),
+            "the page opens no dialog; Rust does (file_dialog.rs)"
+        );
         assert!(
             !caps.contains("\"fs:"),
             "no fs: permission is granted anywhere, deliberately"
         );
+        assert!(caps.contains("\"clipboard-manager:allow-write-text\""));
         // Nothing in this app reads the clipboard.
         assert!(!caps.contains("allow-read-text"));
-        // Never a :default -- dialog's is five commands, clipboard's includes the read.
-        assert!(!caps.contains("dialog:default"));
-        assert!(!caps.contains("clipboard-manager:default"));
+    }
+
+    /// **No plugin's `:default` but core's** — CLAUDE.md's rule, held by the build rather than by
+    /// whoever reviews the next plugin. A plugin's default is a promise about *its* future and not
+    /// about this app's: `opener:default` held `allow-reveal-item-in-dir`, an unscoped list of
+    /// paths nothing here ever called, until 2026-09-28. `core:default` is the one exception
+    /// because it is Tauri's own baseline — events, the app and window getters — and every
+    /// window needs it to hear anything at all.
+    #[test]
+    fn the_capability_grants_no_default_but_core_s() {
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/desktop.json")).unwrap();
+        let defaults: Vec<&str> = caps["permissions"]
+            .as_array()
+            .expect("the capability must list permissions")
+            .iter()
+            .map(|p| p.as_str().expect("every permission is a string"))
+            .filter(|p| *p == "default" || p.ends_with(":default"))
+            .collect();
+        assert_eq!(defaults, ["core:default"]);
+    }
+
+    /// `openUrl` and nothing else of the opener's (`src/lib/externalLinks.ts`, and
+    /// `update_open_release_page` in Rust, which the ACL does not gate). `allow-default-urls` is
+    /// the scope `allow-open-url` needs to open anything — `http(s)`, `mailto` and `tel` — and the
+    /// pair is `opener:default` (`tauri-plugin-opener-2.5.4/permissions/default.toml`) less its
+    /// third entry, `allow-reveal-item-in-dir`.
+    #[test]
+    fn the_opener_opens_urls_and_nothing_on_disk() {
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/desktop.json")).unwrap();
+        let opener: Vec<&str> = caps["permissions"]
+            .as_array()
+            .expect("the capability must list permissions")
+            .iter()
+            .map(|p| p.as_str().expect("every permission is a string"))
+            .filter(|p| p.starts_with("opener:"))
+            .collect();
+        assert_eq!(
+            opener,
+            ["opener:allow-open-url", "opener:allow-default-urls"]
+        );
     }
 
     /// The custom title bar's four window verbs, and the two the snap overlay needs.
@@ -1527,9 +1650,8 @@ mod tests {
             got,
             vec![
                 "core:default",
-                "opener:default",
-                "dialog:allow-open",
-                "dialog:allow-save",
+                "opener:allow-open-url",
+                "opener:allow-default-urls",
                 "clipboard-manager:allow-write-text",
                 "core:window:allow-minimize",
                 "core:window:allow-toggle-maximize",
@@ -1562,8 +1684,8 @@ mod tests {
     }
 
     /// A window the app opens with no capability gets no `core:` — so its `listen` rejects and
-    /// `core/tauri.ts` swallows it — no window verbs, no dialog: a window that half works and says
-    /// nothing. Every label `window::open_new` mints must be granted what `main` is.
+    /// `core/tauri.ts` swallows it — no window verbs, no clipboard: a window that half works and
+    /// says nothing. Every label `window::open_new` mints must be granted what `main` is.
     #[test]
     fn every_window_the_app_opens_is_granted_the_desktop_capability() {
         let caps: serde_json::Value =

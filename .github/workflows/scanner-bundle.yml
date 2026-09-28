@@ -10,8 +10,10 @@ on:
   schedule:
     - cron: "17 4 * * 1" # weekly: actions/cache evicts entries unused for 7 days
 
-permissions:
-  contents: write
+# Nothing at the workflow level and the grant on the one job that needs it, `release.yml`'s shape.
+# Actions are pinned by SHA and checkouts keep no token, for that file's reasons; every upload
+# below is `gh`, handed `GH_TOKEN` explicitly.
+permissions: {}
 
 concurrency:
   group: scanner-bundle
@@ -21,22 +23,27 @@ jobs:
   build:
     runs-on: ubuntu-latest
     timeout-minutes: 180
+    # Creates the prerelease and uploads the bundle to it.
+    permissions:
+      contents: write
     defaults:
       run:
         # `bash -eo pipefail`, where a bare `run:` gets `bash -e`. Two steps pipe a download into
         # another program, and without pipefail a curl that failed is a step that succeeded.
         shell: bash
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # `rust-toolchain.toml`'s pin, never `stable` — see that file.
       - uses: ./.github/actions/rust-toolchain
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: crates/card-scanner
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
 
@@ -64,7 +71,7 @@ jobs:
       # than half an hour and 1.28 GB. Keyed on the format version, so a descriptor change starts
       # from the images a previous version cached and re-hashes them locally. The glob takes the
       # SQLite `-wal` beside the database, so a run that died mid-write keeps what it wrote.
-      - uses: actions/cache/restore@v6
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: card-hashes-cache.db*
           key: scanner-cache-v${{ steps.fv.outputs.v }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -76,7 +83,7 @@ jobs:
           --manifest-path crates/card-scanner/Cargo.toml --
           --bulk default-cards.jsonl --cache card-hashes-cache.db --out card-hashes.bin --sections card
 
-      - uses: actions/cache/save@v6
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: always()
         with:
           path: card-hashes-cache.db*

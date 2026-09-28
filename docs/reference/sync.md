@@ -718,7 +718,15 @@ and one thing in it that asks — nothing is granted to a page that never asks, 
 camera light is on only while `QrScanner` is mounted, because the *stream* is what turns it on and
 that component stops every track it opens on every exit path. Making the grant conditional on the
 scanner being mounted would need state shared between the page and this handler and buys nothing
-against the threat a single-page desktop app has. The pipeline
+against the threat a single-page desktop app has. ⚠️ **"Exactly one page in this webview" was an
+assumption nothing enforced, and on 2026-09-28 it stopped being one** (issue #545): there was no
+navigation handler, and `dragDropEnabled: false` is also what keeps wry from calling
+`SetAllowExternalDrop(false)`, so a link dropped on the window should have loaded a remote page
+that was then handed a silent camera — reasoned from wry's source, not driven live. The handler now
+reads the request's `Uri` and grants `CAMERA` only to the app's own origin
+(`app_origin::AppOrigins` — the embedded frontend, or Vite in a dev build), and a navigation guard
+in the same module refuses any top-level navigation off it. Neither the kind rule nor the
+scanner-mounted argument above changed. The pipeline
 was then confirmed end to end under the *shipped* CSP: `devCsp` and the production `csp` differ
 only in `connect-src` and `style-src`, neither declares `media-src`, so both fall back to
 `default-src 'self'` — and a real camera frame through `<video srcObject>` → `canvas.drawImage` →

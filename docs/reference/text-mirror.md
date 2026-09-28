@@ -340,7 +340,8 @@ Two arms make it work rather than merely refuse:
   by the one two seconds later — the guard undone by the file that authorises it. It stays in
   `prune`'s `wanted` set unconditionally, so it can never be deleted either.
 
-`mirror_set_root` was **deliberately not** made to refuse a populated folder. The only file it could
+`set_root` — behind `mirror_pick_root`, which was `mirror_set_root` until 2026-09-28 — was
+**deliberately not** made to refuse a populated folder. The only file it could
 refuse over is exactly the one now protected, refusing turns a folder the mirror can use perfectly
 well into one the reader cannot choose at all, and it could not cover the default root or a README
 dropped in later — a second, weaker fence in front of the real one. The panel's sentence says the
@@ -398,10 +399,15 @@ reintroduces guessing, which is the thing the manifest exists to remove.
 A `BackupPanel` beside Cache, Marketplace, Hidden tags, Update and Danger Zone. On by default; the
 root with a **Change folder…** button; when the last pass ran and how it went; **Rebuild now**.
 
-**No new permission.** The picker is `tauri-plugin-dialog`'s open verb with `directory: true`, and
-`capabilities/default.json` has granted `dialog:allow-open` since the cover picker shipped. (It has
-granted `dialog:allow-save` since the export dialog shipped, which `Cargo.toml`'s comment beside the
-plugin went on denying for a whole plan before this one corrected it.)
+**No new permission — and since 2026-09-28, no dialog permission at all.** The picker was
+`tauri-plugin-dialog`'s open verb with `directory: true`, called from the page on the strength of the
+`dialog:allow-open` grant the cover picker had brought, and the folder it answered went to
+`mirror_set_root(root)`. That command took any path a script in the page sent it, so it could aim
+the background pass — a few hundred files, rewritten on every change — at any folder the reader can
+write to. **Issue #545 moved the picker into Rust**: `mirror_pick_root` opens the folder dialog
+itself, at the current root (or its parent before the first pass has made it), and hands the folder
+to `set_root_now` without it crossing IPC. `capabilities/desktop.json` grants no `dialog:`
+permission now, and `src-tauri/CLAUDE.md`'s capabilities section is the rule.
 
 **Two settings, two `app_meta` keys, no migration** — `mirror_enabled` and `mirror_root`, exactly the
 shape `marketplace` settled on. Reading can never fail: a missing row, a hand-edited row, or a row a
@@ -584,7 +590,10 @@ away and back orphaned 21 files. All three now have tests.
    instance, a half-written file on a volume that disappears mid-write.
 2. **The native folder picker has never been clicked.** `Change folder…` opens the OS dialog, which
    no CDP harness can drive; every root change in the live pass went through `ipc.mirrorSetRoot`,
-   which is the same command the button calls with the picker's answer. `Rebuild now` was likewise
+   which is the same command the button calls with the picker's answer. *(2026-09-28: that route is
+   gone. The button's command is `mirror_pick_root` now, which opens the picker from Rust and takes
+   no folder — issue #545 — so a root can no longer be set over IPC at all, and the gap is the
+   native dialog's alone. `starting_folder`, where it opens, is unit tested.)* `Rebuild now` was likewise
    pressed through IPC, so the button's own disabled and pending states are unexercised outside the
    suite.
 3. **`mirror_set_enabled`'s off→on full pass was never driven live.** The arm exists and is unit

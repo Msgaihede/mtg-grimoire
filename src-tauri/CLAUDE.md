@@ -2548,6 +2548,19 @@ open — is [collection-sharing.md](../docs/reference/collection-sharing.md). Th
 - **`collection_shares` is a cache and is not synced** — the relay's list is the roster. Its
   whole-collection unique index is on the **expression** `(folder_uid IS NULL)`; the column form
   refuses nothing, because SQLite holds NULLs in a UNIQUE index as distinct.
+- ⚠️ **`share_open` fetches a stranger's URL, so it holds no connection and trusts nothing it is
+  sent** (2026-09-28, [issue #545](https://github.com/Msgaihede/mtg-grimoire/issues/545)).
+  `publish::open` takes no `Connection` — it ran on the write one until then, and a host
+  trickling a byte a minute held the app's only writer and made every other press `BUSY` — and
+  answers a `Refused` whose `error_log` row the command writes **afterwards, detached and best
+  effort**. **`https` only**; the snapshot must be on the **page's own origin** (`resolve` joins
+  with a URL parser, then compares `Url::origin`); redirects are followed **only within the
+  origin** by the viewer's own per-open client, never the publisher's `http()`, which follows
+  reqwest's defaults anywhere. Every body is **counted as it arrives** — the page, the gzip at
+  the Worker's own `MAX_BLOB_BYTES` (a test multiplies out `env.ts`), and the inflated text
+  through `take(cap + 1)` — and `OPEN_TIMEOUT` bounds the whole open, because the per-chunk
+  read timeout restarts on every byte. The figures and why each was chosen:
+  [collection-sharing.md](../docs/reference/collection-sharing.md).
 
 ## Scryfall and the network
 
@@ -2612,30 +2625,43 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 
 ## Tauri capabilities
 
-- **`@tauri-apps/plugin-dialog` names files and never opens them, and the capability says so.**
-  `capabilities/desktop.json` grants **`dialog:allow-open`** (choosing a decklist to import; it
-  was granted for choosing a deck cover, and that caller went on 2026-08-31 while the grant
-  stayed, because `import_read_file` had always needed it too) and
-  **`dialog:allow-save`** (naming an export's destination, added 2026-08-14) — never
-  `dialog:default`, so message, ask and confirm stay unreachable from the webview however the
-  plugin is initialised. The app's own questions are drawn in the page instead, which is
-  deliberate rather than an oversight: a native message box cannot be styled, driven over CDP or
-  read by the story runner.
-- **A dialog verb answers a _path_, and a path is not permission to touch what is at it — which is
-  why every one of them has a Rust command behind it.** `import_read_file` (`import.rs`) takes
-  the path `open()` gave and Rust reads the decklist; `export_write_file` (`export.rs`) takes the
-  path `save()` gave and Rust writes the text. Doing either from the page would need an `fs:`
-  permission, and **no `fs:` permission is granted anywhere**. So this is the app's **habit** now
-  rather than one precedent, and it is the shape to copy: the day one of these is "simplified"
-  into a `readTextFile`/`writeTextFile` from the page, the answer is another twelve-line command,
-  never a wider capability. **There was a third, `deck_set_cover_image`** — it took the path
-  `open()` gave and Rust read the *image* — and it is the one place this habit has ever been
-  undone: custom deck covers went on 2026-08-31 and a cover became a card id, so the picker it
-  needed is not narrower, it is absent. Deleting the caller is the cheapest form of this rule
-  there is. **`rfd` entered `Cargo.lock` transitively** as one of the dialog plugin's own
-  dependencies and is **unreachable**, and **`tauri-plugin-fs` came in the same way**: nothing
-  registers it and it is granted **no `fs:` permission**. Adding a plugin means adding its
-  narrowest permission, never its `:default`.
+- **Every file dialog is opened by Rust, no path crosses IPC in either direction, and the page is
+  granted no `dialog:` permission at all** (issue #545, 2026-09-28). `import_pick_file`
+  (`import.rs`) shows the open dialog and reads the decklist it answered; `export_save_file`
+  (`export.rs`) shows the save dialog and writes the text there; `mirror_pick_root`
+  (`mirror/settings.rs`) shows the folder picker at the current root and saves the folder. Each
+  takes the calling `WebviewWindow` so the dialog is modal to the window that asked, and goes
+  through `file_dialog.rs`'s `modal_to` and `show` — the plugin's `blocking_*` calls on the
+  blocking pool, never the main thread. `tauri_plugin_dialog::init()` stays registered because
+  `DialogExt` is its Rust half; nothing in `src/` calls the plugin and `@tauri-apps/plugin-dialog`
+  is not a dependency. The app's own questions — message, ask, confirm — are drawn in the page,
+  which is deliberate rather than an oversight: a native message box cannot be styled, driven over
+  CDP or read by the story runner.
+- ⚠️ **A command never takes a path argument from the page — this is the rule for the next file
+  command, and the capability cannot enforce it for you.** Until 2026-09-28 the page's `open()` and
+  `save()` answered a path and `import_read_file(path)`, `export_write_file(path, contents)` and
+  `mirror_set_root(root)` took it, on the argument that `dialog:allow-open`/`allow-save` were the
+  fence. They fenced nothing: the ACL gates `plugin:` and `core:` commands, and **an app's own
+  `#[tauri::command]` is always callable with whatever arguments a script in the page sends**. So
+  those three were a read of any text file up to 1 MB (`~/.ssh/id_ed25519`, handed straight
+  back), a write anywhere the reader can write, and a mirror aimed at any folder — each one line
+  of JavaScript from anyone who got a script into the webview. The shape to copy is the one above:
+  take the window, open the dialog in Rust, act on what it answered, and answer the page the
+  *outcome* (the text, a `bool` for saved or moved, `null`/`false` for Cancel). A place the reader
+  chose once and the app remembers — the mirror's root — is read back from where Rust stored it,
+  never from the page. **Rust still does every read and write, and no `fs:` permission is granted
+  anywhere**: the day one of these is "simplified" into a `readTextFile`/`writeTextFile` from the
+  page, the answer is another command, never a wider capability. **`rfd` entered `Cargo.lock`
+  transitively** as one of the dialog plugin's own dependencies and is what `DialogExt` drives,
+  and **`tauri-plugin-fs` came in the same way**: nothing registers it and it is granted **no
+  `fs:` permission**. Adding a plugin means adding its narrowest permission, never its `:default`
+  — and `the_capability_grants_no_default_but_core_s` holds that for every plugin at once.
+- **`tauri-plugin-opener` is granted `opener:allow-open-url` and `opener:allow-default-urls`, never
+  `opener:default`** (2026-09-28). The page opens links and nothing else (`src/lib/externalLinks.ts`;
+  `update_open_release_page` calls the opener from Rust, where the ACL is not in the path).
+  `allow-default-urls` is the scope `allow-open-url` needs to open `http(s)`, `mailto` and `tel` at
+  all; `:default` is those two plus **`allow-reveal-item-in-dir`**, which takes an unscoped list of
+  paths and was never called. The deleted Android capability had already narrowed it this way.
 - **`tauri-plugin-clipboard-manager` is granted `clipboard-manager:allow-write-text` and
   deliberately not the read half.** Nothing in this app reads the clipboard; `:default` grants
   both, and a page that can read the clipboard can read whatever the reader last copied out of
@@ -2657,7 +2683,17 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 - **The bridge binds `127.0.0.1`, against the plugin's own `0.0.0.0` default.** It executes
   arbitrary JavaScript and any command in the handler on request and authenticates nothing;
   the upstream default exists for driving a phone across your LAN, and keeping it here would
-  offer that to whatever network the machine is on. Same reasoning as `dialog:allow-open`.
+  offer that to whatever network the machine is on.
+- ⚠️ **And it opens only when `MTG_GRIMOIRE_MCP_BRIDGE=1` asks for it** (2026-09-28, issue #545),
+  because the loopback bind keeps the LAN out and nothing on this machine: the plugin's
+  `accept_async` reads no `Origin` and has no auth option, browsers apply no CORS to a WebSocket,
+  and so a page in the developer's own browser could scan 9223–9322, send `execute_js`, and reach
+  every command through `window.__TAURI__`. Two gates, both pinned by
+  `the_mcp_bridge_is_gated_on_a_debug_build`: the `cfg(debug_assertions)` keeps it out of a
+  release build, and the `if mcp_bridge_requested(…)` inside it keeps it shut on every dev launch
+  that did not ask — exactly `1`, nothing looser. Do not turn it back on by default without first
+  refusing any handshake that carries an `Origin` (the Node client sends none), which means
+  vendoring the plugin. [tauri-mcp-bridge.md](../docs/reference/tauri-mcp-bridge.md) has the rest.
 - **`withGlobalTauri: true` is what the bridge needs, and it is not debug-only.** `bridge.js`
   reaches the IPC through `window.__TAURI__`, so without it IPC monitoring, script injection
   and `execute_js`'s result callback all go dark — but `tauri.conf.json` has no debug/release
@@ -2665,6 +2701,24 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   What keeps that honest is the CSP: `script-src 'self'`, no remote origin, and no
   `dangerouslySetInnerHTML` anywhere in `src/`, so no foreign script runs in the page to find
   it. Adding any one of those three back is what would make a dev-only config worth its cost.
+  **The CSP governs the app's page and no other**, which is why the next bullet exists: a remote
+  page loaded into the window brings its own policy, or none.
+- **No window leaves the app's own pages, and the camera is granted to nothing else**
+  (2026-09-28, issue #545). `app_origin::AppOrigins` is the one answer to "is this our page" —
+  the embedded frontend (`http(s)://tauri.localhost`, `tauri://localhost`) and, in a dev build
+  only, `build.devUrl` — compared as scheme, host and port, because `tauri://` has an opaque URL
+  origin that equals nothing. Two readers, so they cannot disagree: **`app_origin::guard()`**, a
+  plugin whose `on_navigation` refuses any top-level navigation off that set (a plugin hook and
+  not a builder's, because `main` comes from the config and every `window-N` from
+  `window::open_new`, and a hook on either builder is a window the other forgot; `about:blank` is
+  let through because it loads nothing and the guard was never driven on WebView2), and
+  **`camera::decide`**, which reads the `PermissionRequested` event's `Uri` and grants `CAMERA`
+  only when the set holds it — an unreadable URI refuses. Until then the grant read the kind alone
+  and nothing kept the window on the app: `dragDropEnabled: false` — load-bearing, see below — is
+  also what stops wry calling WebView2's `SetAllowExternalDrop(false)`, so a dropped link should
+  have loaded a remote page with a silent camera. That route was reasoned from wry's source and not
+  driven live; nothing in this app navigates the window anywhere else, and a link the reader means
+  to follow leaves through `openUrl`.
 - **The window's four verbs are granted one by one, because `core:window:default` grants none of
   them.** That default is the *getters* — `is-maximized`, the position and size reads, the monitor
   queries — so `decorations: false` and `components/TitleBar.tsx` needed
@@ -2699,7 +2753,7 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   the second window is `window-2`, the third `window-3`, from `window::LABEL_PREFIX` (a test pins
   the glob against that constant). Without the second entry a new window is granted **nothing**:
   no `core:`, so `listen` rejects and `core/tauri.ts` swallows the rejection, and no window verbs,
-  dialog, clipboard or snap-layout either — a window that draws and hears nothing, with no error
+  clipboard, opener or snap-layout either — a window that draws and hears nothing, with no error
   anywhere.
 - **`cfg(windows)` still matters, because CI compiles the Linux desktop build too.** When adding a
   `cfg`, prefer a `bool` parameter over a `cfg!` inside a body — `update::classify` takes
@@ -2858,7 +2912,7 @@ The whole record, including the pipeline the crate implements:
 | [image-cache.md](../docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, and the `/cover/` route as it was before 2026-08-31 — the encoder, the traversal fence and why the CSP never moved for it |
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [search-syntax.md](../docs/reference/search-syntax.md) | `filters.rs`' predicate arms and `fts_match`, `tags/query.rs`' `tag_resolve`, and **corpus schema 5** — the fourteen keywords and why `:` resolves per keyword, FTS against LIKE measured on the real corpus, the two fields that emit no SQL, `kw:`'s delimiter and the bridge that keeps it from answering zero, and which failures close and which open |
-| [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
+| [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written, and why a download needs a minisign signature beside its digest: the fail-closed refusals, the `mtg-grimoire <version> <kind>` trusted comment, `SIGNING_PUBLIC_KEY` (key id `FD103A4C389F00B0`) and the release-build assertion that refuses anything that is not a key |
 | [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, and the token resolver — the union keep rule, why there is no name test, the v37 table, and v52's entries: the six commands, the `add_card` / `collection_to_deck` reroute, the reconcile's two layers, and the captured launch conversion of v51's picks and the finish repair behind it |
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs`, the v26 rung and **corpus schema 2** — the feed measured end to end, what is kept and what is skipped, **both** match queries and the card side's three statements, the shape gate and why a version gate skips every fresh install, the launch gate and the clear, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |

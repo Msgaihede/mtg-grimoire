@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { open as pickFolder } from "@tauri-apps/plugin-dialog";
 import { FolderOpen, RefreshCw } from "lucide-react";
 import { useId, useState, type JSX } from "react";
 import { count } from "@/lib/counts";
@@ -131,9 +130,6 @@ type Rebuilt = { report: PassReport; at: number };
 export function BackupPanel(): JSX.Element {
   const id = useId();
   const client = useQueryClient();
-  /** The picker itself could not be opened — a different failure from a setting the backend
-   *  refused, and cleared by the next press so it cannot outlive the news it is about. */
-  const [pickerFailure, setPickerFailure] = useState<string | null>(null);
   /** The last rebuild this window watched finish. Held here rather than read off the mutation
    *  so that it carries a *time* — see {@link Rebuilt} and {@link errorOutranks}. */
   const [rebuilt, setRebuilt] = useState<Rebuilt | null>(null);
@@ -162,9 +158,24 @@ export function BackupPanel(): JSX.Element {
     mutationFn: (on: boolean) => ipc.mirrorSetEnabled(on),
     onSuccess: invalidate,
   });
+  /**
+   * **Change folder…, and the folder picker is the backend's rather than this panel's** (issue
+   * #545). `mirror_pick_root` opens the OS picker at the folder the mirror already uses — a reader
+   * moving a backup is nearly always moving it to somewhere beside where it is — and saves what
+   * it answered, so no path crosses IPC and nothing on this side could aim the mirror's writes
+   * at a folder. `false` is a cancelled picker, which is not a failure and changes nothing, so
+   * there is nothing to re-read.
+   *
+   * **A picker that would not open is one more refusal in the backend's own words** — "The folder
+   * picker could not be opened — …" — and joins the writes' banner below rather than a line of
+   * its own. It used to be framed here, because what `open()` handed back was plumbing; the
+   * sentence names the control now, and it is `mirror_pick_root` refusing like any other write.
+   */
   const setRoot = useMutation({
-    mutationFn: (root: string) => ipc.mirrorSetRoot(root),
-    onSuccess: invalidate,
+    mutationFn: () => ipc.mirrorPickRoot(),
+    onSuccess: (moved) => {
+      if (moved) invalidate();
+    },
   });
   const rebuild = useMutation({
     mutationFn: () => ipc.mirrorRebuild(),
@@ -179,40 +190,9 @@ export function BackupPanel(): JSX.Element {
   });
   const busy = setEnabled.isPending || setRoot.isPending || rebuild.isPending;
 
-  /**
-   * The native folder picker.
-   *
-   * **A cancelled picker is not a failure.** `open` answers `null` when the reader closed it
-   * without choosing, which is the most ordinary way to use a file dialog after changing your
-   * mind — `DeckCoverPicker`'s rule, and the same trap in the same shape.
-   *
-   * `defaultPath` is the folder the mirror is already using, so Change folder… opens *there*
-   * rather than wherever the OS last left this process — a reader moving a backup is nearly
-   * always moving it to somewhere beside where it is.
-   */
-  const choose = async () => {
-    setPickerFailure(null);
-    try {
-      const chosen = await pickFolder({
-        directory: true,
-        multiple: false,
-        title: "Choose the backup folder",
-        defaultPath: status?.root,
-      });
-      if (chosen !== null) setRoot.mutate(chosen);
-    } catch (e) {
-      // Framed rather than passed through, `DeckCoverPicker`'s wording one picker over: what
-      // comes back from a dialog that would not open is plumbing ("undefined is not an
-      // object"), and a reader needs the half of the sentence that says which control failed.
-      setPickerFailure(`Could not open the folder picker — ${ipcError(e)}`);
-    }
-  };
-
-  // The picker first, then the writes' own rule (`@/lib/writes`): the most recently *started*
-  // write owns the banner. A picker failure is not a write, so it is cleared by every press
-  // rather than ranked against them — which is what keeps it from outliving the news it is
-  // about.
-  const refusal = pickerFailure ?? writeFailure([setEnabled, setRoot, rebuild]);
+  // The writes' own rule (`@/lib/writes`): the most recently *started* write owns the banner —
+  // and Change folder… is one of them, picker and all.
+  const refusal = writeFailure([setEnabled, setRoot, rebuild]);
   const note = noteFor(refusal, rebuilt, status, read);
 
   return (
@@ -247,10 +227,7 @@ export function BackupPanel(): JSX.Element {
               aria-checked={status.enabled}
               aria-labelledby={`${id}-mirror ${id}-mirror-state`}
               disabled={busy}
-              onClick={() => {
-                setPickerFailure(null);
-                setEnabled.mutate(!status.enabled);
-              }}
+              onClick={() => setEnabled.mutate(!status.enabled)}
               className={cn(SWITCH, switchTone(status.enabled))}
             >
               <span id={`${id}-mirror-state`}>{status.enabled ? "On" : "Off"}</span>
@@ -269,7 +246,7 @@ export function BackupPanel(): JSX.Element {
             </div>
             <button
               type="button"
-              onClick={() => void choose()}
+              onClick={() => setRoot.mutate()}
               disabled={busy}
               className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
             >
@@ -287,7 +264,6 @@ export function BackupPanel(): JSX.Element {
             <button
               type="button"
               onClick={() => {
-                setPickerFailure(null);
                 // The previous pass's note goes with the press that supersedes it, so a second
                 // rebuild that fails cannot be read under the first one's success.
                 setRebuilt(null);
