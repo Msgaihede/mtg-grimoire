@@ -2649,6 +2649,16 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 - `cards.scryfall.io` is the **only** host images come from; an off-host URI is refused. A URI
   with no `?<epoch>` cache-buster is refused at resolution, and `is_current` compares that
   stored URI character for character — that is the whole of freshness.
+- **The cache is bounded (2026-09-28), and what it spares is exactly what the pre-warm owns.**
+  `images::evict`, on the `image-upkeep` thread `images::spawn_upkeep` starts, keeps every picture
+  `prewarm_keys` would fetch and evicts the rest least-recently-used against 512 MiB and 90 days
+  unread. **Both read the one `WANTED` literal, and splitting it is the change that makes eviction
+  fight the pre-warm forever.** The used-stamp is the **file's modified time, set on purpose** — by
+  `store`, and by `Cache::flush_touches` on the upkeep thread for a hit, never on the serving path
+  and never with `create` — so it needs no corpus rung and survives a rebuilt corpus; it is never
+  read as freshness, which is still the URI. Delete the file before its row, and delete nothing
+  the walk did not rebuild through `cache_path`. [image-cache.md](../docs/reference/image-cache.md)
+  has the arithmetic.
 - **There is one route.** There was a second — `/cover/<deckId>`, which touched Scryfall not at
   all, and whose `i64` parse was the whole path-traversal fence because the id became a filename.
   It went with the custom deck cover on 2026-08-31: a cover is `decks.cover_card_id` now, so a

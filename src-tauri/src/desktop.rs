@@ -834,6 +834,8 @@ fn start(app: &tauri::AppHandle) {
     // stays live. Nothing about it is fatal; the handle is dropped and the thread
     // runs detached.
     index::lifecycle::spawn_build(&state);
+    // The image cache's budget: a thread of its own, first pass a minute in (`images::evict`).
+    images::spawn_upkeep(&state);
 
     // The plain-text mirror, in two halves that must stay in this order.
     {
