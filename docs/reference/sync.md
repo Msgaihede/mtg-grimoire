@@ -594,6 +594,18 @@ a device that could **never** get out of its group — a chain that gave up on i
 sentence twice). **What a failed plan costs is the courtesy, never the departure**: nothing is
 published, so the devices that stay go on listing this one until somebody removes it by hand.
 
+**"Always possible" had quietly depended on the write lock, and issue #546 took that away.**
+`sync_group_leave` ran the three steps inside `sync::with_write`, which answers `db::BUSY` after
+`WRITE_LOCK_WAIT` (5 s) — and a sync trip holds the write connection across its whole network round
+trip, so a *Leave group* pressed during a slow trip failed with *"the database is busy"*. It now
+runs through `sync::with_write_waiting`, which does everything `with_write` does except give up:
+the one sanctioned unbounded wait, because a trip always ends (every request it makes has a 10 s
+connect and a 30 s read timeout) and a departure is the reader's instruction rather than an
+optional write. `sync_device_revoke` keeps the 5 s answer on purpose — a removal is refused without
+the relay anyway and starts with a round trip of its own. **A departure plans two epochs ahead** once
+the relay has advertised it (`identity::plan_departure_by` with `client::removal_step`), the
+removal marker under *One correction to the plan*, below.
+
 **The leaver mints the key the devices that stay will use, and that is not new exposure.** It
 reads badly on its own, and what makes it harmless is that leaving is *voluntary*: a device
 that wanted to go on reading the group would simply **not leave**, and would keep the key it
@@ -2141,6 +2153,37 @@ holding its cursor on the first, would ask for that same page for ever and never
 resolves it — the baseline carrying a waiting child's parent, or merely the page after a held one.
 The cursor-carrying loop the limit needs must walk to the head, and only then may a hold be decided.
 
+**A third hold, `clock`, since issue #546 (2026-09-28).** A batch carrying any op stamped more
+than `hlc::MAX_AHEAD_MS` — one day — past this device's wall clock holds its sender from that
+batch's stamp on, by stamp and not page position, exactly as a newer build's batch does, and holds
+`PULL_CURSOR` under `"clock"`; the panel draws `PULL_HELD_CLOCK_NOTICE`, and `error_log` gets one
+row per hold naming the device and roughly how far ahead it is. **Held rather than applied, and
+the other two answers are both worse**: applied, a device with a future-dated clock wins every
+last-writer-wins edit and `apply`'s observe drags every peer's hybrid logical clock forward for
+good; clamped — applied while refusing to let this device's clock pass it — the reader's next edit
+here is stamped *before* the op it followed, loses on every other device and stands on this one,
+which is divergence. **It is bounded by time itself**: it resolves once this device's clock comes
+within a day of the stamp, with nobody pressing anything. A day admits every honest error of the
+dual-boot kind (a hardware clock kept in local time, up to 14 hours off) and refuses a wrong date.
+Precedence is behind > newer > clock > waiting. ⚠️ **A member chooses its own stamps**, so a batch
+sealed a year ahead holds this cursor for a year less a day — within what a member holding the key
+can already do to its own group. An updated relay refuses such a push (422 `clock_ahead`, measured
+against the relay's clock, the one every device shares), so what reaches this hold is a log stored
+before that, or a receiver whose own clock is behind; the pusher is told in `error_log` and its
+outbox waits until its stamps are within a day of the relay's time.
+
+**An envelope claiming an epoch above the relay's is not an epoch hold** (issue #546, item 3).
+`pull` used to hold for any `envelope.epoch > group.epoch`, and the relay stores `epoch` exactly as
+sent — so anybody holding a token could push `{epoch: 1e12}` and freeze every peer's cursor, its
+ack and with them the relay's compaction, for good. `check_keys` now hands `pull` the epoch `/keys`
+answered (`KeyCheck::relay_epoch`): an envelope at or below it holds as before; one above it asks
+`/keys` once more per pull, for a rotation that landed between this trip's `/keys` and its `/pull`,
+and if the relay still has not reached it the envelope is counted unreadable, recorded once and
+stepped over. A failed re-ask holds for one trip — a forgery and a mid-trip rotation cannot be told
+apart without it, and stepping over a real rotation would lose its first push. An updated relay
+refuses the push itself (422 `epoch_ahead`), and one below the group's epoch (409 `stale_epoch`),
+which `push` answers with one fresh `check_keys` and a retry re-sealed at the adopted epoch.
+
 **What a hold cannot reach.**
 
 - **A v51 client still drops, and nothing here saves it.** The hold is the receiving client's, so a
@@ -2300,6 +2343,21 @@ populated, a real note, a folder uid:
 The spec quotes 453 B/op and 90.6 KB per batch. That is the *average* op; a fat one is 698 B and
 the cap is still not the binding constraint. A 50 000-row bulk import is **250 stored rows**
 against a 100 000 rows/day limit.
+
+**Bytes bind too since issue #546, because a note has no length cap.** `wire::batches` cuts at 200
+ops *or* `wire::BATCH_BYTES` (512 KiB of the JSON `seal_batch` seals, the `schema` stamp and the
+list's commas counted), whichever comes first. A full byte budget seals to 699 104 characters,
+under half the relay's `MAX_SEALED_CHARS` (1 500 000, which `wire.rs` holds to `relay/src/log.ts`
+by an `include_str!` test), so no batch of several ops is ever what the relay refuses; an ordinary
+200-op batch is ~90 KB, so the count still decides the cut and the arithmetic above stands. An op
+over the budget goes alone, up to the cap itself — 1 124 958 bytes of JSON. **Past that it can
+never be sent** (`wire::oversized`, computed from the plaintext length as ⌈4(n + 24 + 16)/3⌉ and
+checked against a real seal): before, one such op failed its chunk on every trip and `push`
+stopped there, so everything queued behind it never reached the relay. Now it is recorded once in
+`error_log` — the table, the row's uid, the size, "kept on this device" — stamped `pushed_at` and
+stepped over, the one exception to "stamped only on a 200"; a baseline leaves such a row out the
+same way and still sets its marker. What it costs is that change on the other devices, which is
+the only honest answer to a paste in the megabytes.
 
 `base64` joined the tree for one job. Hex was the alternative and is twice the bytes over the
 wire and against that cap; base64 is four thirds and URL-safe.
@@ -2918,6 +2976,9 @@ of the two ways it happens:
   put" meant the page was re-delivered for ever and one removal bricked any group of three. The
   hold was the right call against a hop that had not been built yet, and it is now what makes the
   stall temporary rather than permanent — `check_keys` runs before pull on every round trip.
+  ⚠️ **Only at or below the epoch the relay answered, since issue #546**: the relay stores an
+  envelope's `epoch` as sent, and a hold on any higher number let a token holder freeze every
+  cursor in the group with one push (*Held while it can resolve*, above, has the rule).
 - `envelope.epoch < group.epoch` — written before a rotation. **It is opened with its own epoch's
   key when this device still holds it** (`identity::group_at`), because `check_keys` adopts before
   the pull: without that key, a device offline across any pairing — and every pairing rotates —
@@ -2935,12 +2996,14 @@ of the two ways it happens:
   device, which holds *N*'s key and a token for up to a day. At most `identity::KEY_HISTORY`
   epochs are held, current included — the relay's `EPOCH_HISTORY` — in `sync_state`, never synced
   and `None` to the mirror.
-- ⚠️ **That "dropped nobody" is the relay's word.** Only the epoch is bound into the sealed blob;
-  `devices` is `Object.keys(manifest.keys)` as the relay reports it. Confidentiality holds against
-  the relay regardless — nothing here hands anybody a key — but keeping the backlog across a join
-  relies on the relay reporting the manifest honestly: a malicious relay colluding with a removed
-  device could pad `devices` with it and get that device's writes under the pre-removal epoch
-  applied. Before the key history, the same lie only kept a stale roster row.
+- ⚠️ **That "dropped nobody" is the relay's word — for a one-step rotation only, since issue
+  #546.** Only the epoch is bound into the sealed blob; `devices` is `Object.keys(manifest.keys)` as
+  the relay reports it. Confidentiality holds against the relay regardless — nothing here hands
+  anybody a key — but keeping the backlog across a `+1` relies on the relay reporting the manifest
+  honestly: a malicious relay colluding with a removed device could pad `devices` with it and get
+  that device's writes under the pre-removal epoch applied. **A removal made by an updated device
+  steps the epoch by two**, and a `+2` forgets whatever `devices` says, so the lie no longer reaches
+  one — below.
 - An old epoch whose key this device never held or has forgotten, or a failed AEAD — altered —
   opens nothing, so refusing to advance would stall the stream for the thirty days the relay keeps
   a tail, for nothing. It is counted, written to `error_log` and stepped over. **An envelope that
@@ -2949,17 +3012,31 @@ of the two ways it happens:
   schema above this build's (`WireError::Newer`) holds the cursor as `newer` instead (*Held while
   it can resolve, skipped when it cannot*, above). A forgotten key can also cost a held page:
   *What a hold cannot reach*, above.
-- **What the client cannot do on its own**, and three follow-ups, none built: a device that skips
-  *N → N+2* never gets *N+1*'s key, because `/keys` answers only the newest manifest though the
-  relay keeps eight — serving `/keys?epoch=` lifts it; a removal still costs the backlog behind it
-  — refusing a push below the group's epoch lifts it; and the trust above — **an authenticated
-  join/removal marker** would lift it, and is not built. The rotation wrap seals a bare 32-byte
-  key, which builds in the field unwrap at exactly that length, so a field there is a
-  mixed-version break. The layout-free candidate is the epoch itself, which is bound into every
-  wrap and chosen by the rotator: a removal could advance it by 2 and a join by 1. It costs two
-  things — an offline device could catch up across half as many removals inside `/keys`'s
-  eight-epoch window, and the relay would have to accept `+2`, where the relay's `/rotate`
-  accepts exactly current + 1.
+- **What the client could not do on its own — three follow-ups, built in issue #546 (2026-09-28)
+  and not yet deployed on the relay side**:
+  - **`/keys?epoch=`.** A device that skipped *N → N+2* never got *N+1*'s key, because `/keys`
+    answered only the newest manifest though the relay keeps eight epochs. `check_keys` now walks:
+    more than one epoch behind, it asks `?epoch=n` for each epoch up to the newest with the auth of
+    the epoch it holds at that step, adopts each blob through the same sealer loop, steps over a
+    404 `no_such_epoch` (a removal's gap), and leaves on a manifest that omits it. An old relay
+    ignores the parameter and answers the newest — detected by the answered epoch, and adopted as
+    before; any other failure falls back the same way rather than stalling.
+  - **The authenticated join/removal marker, and it is the epoch.** The rotation wrap still seals a
+    bare 32-byte key — a field there would have been a mixed-version break — so the step is the
+    marker: a join advances the epoch by `identity::JOIN_STEP` (1), a removal or a departure by
+    `identity::REMOVAL_STEP` (2), bound into every wrap by the rotator, and `supersede` already
+    forgot on anything but exactly `+1`. The relay's `/rotate` accepts `+1` or `+2` in one
+    statement and advertises it with `removalStep: 2` on every `/keys` answer; the app latches that
+    (`client::removal_step`, trust on first use — never un-latched, so a relay cannot quietly
+    downgrade removals back to `+1`) and plans `+2` only then, so an older relay goes on receiving
+    `+1` and nothing breaks in either deploy order. **The two costs this bullet predicted are
+    paid**: a removal spends two of `EPOCH_HISTORY`'s eight epochs, so a device dark across four
+    removals can no longer reach `/keys` (three it still can), and the relay accepts `+2`.
+  - **Refusing a push below the group's epoch** is built on the relay (409 `stale_epoch`), and
+    was recorded as what would let the superseded keys be kept across a removal. **They are still
+    forgotten, deliberately**: keeping them would trust the relay to enforce the refusal, and the
+    marker above exists so a removal no longer rests on the relay's word. A removal still costs
+    the backlog behind it.
 
 ---
 
@@ -3291,7 +3368,20 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   only when a trip pulled or pushed something, while `pulled` counts newly applied ops only, on
   purpose. So a background trip that starts a newer hold and pushes nothing draws no *Update this
   device* on a panel already open, until something else refreshes it (parked at the same review;
-  a press of **Sync now** refreshes it through its own mutation).
+  a press of **Sync now** refreshes it through its own mutation). **The clock hold (issue #546)
+  has the same gap**: a trip that starts one applies nothing, so an open panel draws
+  `PULL_HELD_CLOCK_NOTICE` only once something else refreshes `RELAY_KEY`.
+- **What a pull refreshes is derived, since issue #546**, and it used to be a hand-written list
+  that had fallen behind. `DEVICE_SYNC_INVALIDATED` was `OWNED_WRITE_KEYS` plus `SYNC_KEY`, so a
+  pull refreshed no sticky notes, no muted tags and no card holdings — and WebView2 never fires
+  `visibilitychange`, so the focus refetch never ran either; a sticky note edited from the stale
+  text then overwrote the other device's edit. It is now `crossWindow.ts`' `keysForTables` over
+  `src/lib/syncedTables.json`, reduced to outermost roots plus `SYNC_KEY` — `["collection"]`,
+  `["wishlist"]`, `["decks"]`, `["cards"]`, `["card"]`, `["sync"]`, the four tag roots and
+  `["stickyNotes"]`, never `["sets"]` — and `changes.rs`' test holds the JSON to `SYNCED_TABLES`.
+  `useDeviceSyncInvalidation` refreshes that whole set only when a trip **pulled** something
+  (`outcome.pulled > 0`); a push-only trip — the one every local write ends in — refreshes
+  `["sync"]` alone.
 - ~~**A removed device's ack pins the relay's compaction floor.**~~ **Fixed with issue #546, and
   not deployed.** `compact` took its floor as the lowest ack of every device the object had heard
   from, and nothing but a membership's end ever deleted an ack — so a removed device, a departed

@@ -550,6 +550,33 @@ pub const NO_MEMBERSHIP: &str = "Removing a device changes the key your devices 
 /// that was never about this device.
 const NOT_A_NEWER_EPOCH: &str = "that key manifest is not ahead of this device";
 
+/// How far a **join** advances the epoch: one. [`plan_join`]'s step, and the only one it takes.
+pub const JOIN_STEP: i64 = 1;
+
+/// How far a **removal or a departure** advances the epoch once the relay accepts it: two — the
+/// relay's `REMOVAL_STEP` (`relay/src/groupauth.ts`), which `/keys` advertises as `removalStep`.
+///
+/// **The step is the authenticated join/removal marker** (issue #546, item 9c). The epoch is bound
+/// into every blob a rotation seals — the key-wrapping key and the AAD of
+/// [`crypto::wrap_group_key`] — so a relay that relabelled a `+2` as a `+1` would be handing out
+/// blobs that open for nobody. A device that adopts a `+2` therefore knows it was a removal
+/// without believing the relay's `devices` list, and [`supersede`] forgets every key it held.
+///
+/// **A removal only steps by this once the relay has said it accepts it**, which is why the
+/// callers pass a step rather than this constant: `pairing` asks `client::removal_step`, which
+/// answers `2` only after a `/keys` answer carried `removalStep: 2`. A relay that predates it
+/// refuses anything but `current + 1` at `/rotate`, so a removal against one still steps by
+/// [`JOIN_STEP`] and still leans on `devices` — the residue [`supersede`] names.
+pub const REMOVAL_STEP: i64 = 2;
+
+/// What a plan says when it is asked to step by anything but [`JOIN_STEP`] or [`REMOVAL_STEP`].
+///
+/// **An `Err` rather than a panic**, though only a programming error reaches it: planning runs
+/// inside a press, and a sentence is the kinder failure there. `/rotate` would refuse such an
+/// epoch anyway — it accepts current + 1 or current + 2 — so this is the refusal met before
+/// anything is sealed rather than a new rule.
+const NOT_A_STEP: &str = "a key change advances the epoch by one or by two, and nothing else";
+
 /// Work out the rotation a removal needs, **without writing a single row.**
 ///
 /// **That separation is the fix rather than a tidiness.** The version this replaced committed the
@@ -584,7 +611,17 @@ const NOT_A_NEWER_EPOCH: &str = "that key manifest is not ahead of this device";
 /// consequence for anyone tempted to add such a sweep later: a row carries no author. Its
 /// `sync_uid` is `lower(hex(randomblob(16)))` and `apply` records no ops of its own, so on the
 /// remaining devices there is nothing that even *says* which device a row came from.
+///
+/// **One epoch ahead — [`plan_rotation_by`] with [`JOIN_STEP`]**, which is what every removal
+/// planned before the step existed advanced by, and what a removal against a relay that has not
+/// advertised [`REMOVAL_STEP`] still must. `pairing::remove_device` asks for the step it may use.
 pub fn plan_rotation(conn: &Connection, removing: &str) -> Result<Rotation, String> {
+    plan_rotation_by(conn, removing, JOIN_STEP)
+}
+
+/// [`plan_rotation`], advancing the epoch by `step` — [`JOIN_STEP`] or [`REMOVAL_STEP`], and
+/// [`NOT_A_STEP`] for anything else. `pairing::remove_device` passes `client::removal_step`.
+pub fn plan_rotation_by(conn: &Connection, removing: &str, step: i64) -> Result<Rotation, String> {
     let Some(me) = read(conn).map_err(|e| e.to_string())? else {
         return Err(NOT_IN_A_GROUP.to_owned());
     };
@@ -596,7 +633,7 @@ pub fn plan_rotation(conn: &Connection, removing: &str) -> Result<Rotation, Stri
     if me.device_id == removing {
         return Err(CANNOT_REMOVE_SELF.to_owned());
     }
-    plan(conn, removing)
+    plan(conn, removing, step)
 }
 
 /// Work out the rotation **this device's own departure** needs, writing nothing — spec §2.1.
@@ -613,18 +650,28 @@ pub fn plan_rotation(conn: &Connection, removing: &str) -> Result<Rotation, Stri
 /// **What it does not do is decide whether the departure happens.** Publishing is best effort and
 /// the local clear is unconditional — `pairing::leave_group_now` owns that order, because
 /// *"leaving is always possible"* is a promise about the whole press rather than about the plan.
+///
+/// **One epoch ahead, for [`plan_rotation`]'s reason** — [`plan_departure_by`] takes the step.
 pub fn plan_departure(conn: &Connection) -> Result<Rotation, String> {
+    plan_departure_by(conn, JOIN_STEP)
+}
+
+/// [`plan_departure`], advancing the epoch by `step`. **A departure is a removal to every device
+/// that stays**, so it steps by [`REMOVAL_STEP`] whenever a removal may: the leaver holds every
+/// superseded key, and the devices that adopt must forget them for the reason they forget a
+/// removed device's. `pairing::leave_group_now` passes `client::removal_step`.
+pub fn plan_departure_by(conn: &Connection, step: i64) -> Result<Rotation, String> {
     let Some(me) = read(conn).map_err(|e| e.to_string())? else {
         return Err(NOT_IN_A_GROUP.to_owned());
     };
-    plan(conn, &me.device_id)
+    plan(conn, &me.device_id, step)
 }
 
-/// [`plan_rotation`] and [`plan_departure`]'s shared body, with the device each of them excludes
-/// named as `Some`. Unchanged by [`plan_join`]'s arrival — that entrance calls
+/// [`plan_rotation_by`] and [`plan_departure_by`]'s shared body, with the device each of them
+/// excludes named as `Some`. Unchanged by [`plan_join`]'s arrival — that entrance calls
 /// [`plan_excluding`] directly, with `None`.
-fn plan(conn: &Connection, removing: &str) -> Result<Rotation, String> {
-    plan_excluding(conn, Some(removing))
+fn plan(conn: &Connection, removing: &str, step: i64) -> Result<Rotation, String> {
+    plan_excluding(conn, Some(removing), step)
 }
 
 /// The body all three entrances share — a removal, a departure, and now a join. **It asks
@@ -639,7 +686,19 @@ fn plan(conn: &Connection, removing: &str) -> Result<Rotation, String> {
 /// `revoked_at.is_some()` skip is **not** conditioned on `removing` and fires in every case, join
 /// included: a stamped row is a database an older build wrote to, and naming it in a fresh
 /// manifest would put a removed device back in the group on every peer that adopts this epoch.
-fn plan_excluding(conn: &Connection, removing: Option<&str>) -> Result<Rotation, String> {
+///
+/// **`step` is how far the epoch moves, and the new epoch is `current + step` everywhere
+/// downstream** — the blobs, the auth and [`commit_rotation`]'s write all read `rotated.epoch`
+/// rather than adding one of their own, which is what lets a removal step by [`REMOVAL_STEP`]
+/// with no change past this line. It is checked here, the one body every entrance shares.
+fn plan_excluding(
+    conn: &Connection,
+    removing: Option<&str>,
+    step: i64,
+) -> Result<Rotation, String> {
+    if step != JOIN_STEP && step != REMOVAL_STEP {
+        return Err(NOT_A_STEP.to_owned());
+    }
     let Some(me) = read(conn).map_err(|e| e.to_string())? else {
         return Err(NOT_IN_A_GROUP.to_owned());
     };
@@ -655,7 +714,7 @@ fn plan_excluding(conn: &Connection, removing: Option<&str>) -> Result<Rotation,
 
     let rotated = Group {
         group_id: current.group_id,
-        epoch: current.epoch + 1,
+        epoch: current.epoch + step,
         group_key: crypto::random_bytes::<32>(),
     };
     let mut keys = Vec::with_capacity(members.len());
@@ -712,9 +771,12 @@ fn plan_excluding(conn: &Connection, removing: Option<&str>) -> Result<Rotation,
 /// **It takes no argument, unlike its two siblings, and that is the shape rather than an
 /// omission.** A removal excludes one device and a departure excludes this one; a join excludes
 /// **nobody** — the joiner is already on the roster, because `pairing::confirm` calls
-/// [`add_device`] before it plans. There is no id to pass.
+/// [`add_device`] before it plans. There is no id to pass. **Nor a step**: a join is always
+/// [`JOIN_STEP`], because a `+1` is what tells every adopting device that nobody was dropped
+/// (see [`REMOVAL_STEP`]) — a join that stepped by two would be read as a removal and cost every
+/// peer the backlog [`supersede`] keeps across a join.
 pub fn plan_join(conn: &Connection) -> Result<Rotation, String> {
-    plan_excluding(conn, None)
+    plan_excluding(conn, None, JOIN_STEP)
 }
 
 /// What the [`ROSTER_DIRTY`] key is called — plain `sync_state`, in the shape
@@ -830,15 +892,25 @@ pub fn group_at(conn: &Connection, current: &Group, epoch: i64) -> rusqlite::Res
 /// writes from the removed device after it was removed. A join drops nobody, which is the case
 /// the backlog is lost in otherwise — every pairing rotates.
 ///
-/// **The manifest's device list is the relay's word, and this trusts it.** Only the epoch is
-/// bound into the sealed blob; `devices` is `Object.keys` of the manifest as the relay reports it.
-/// Confidentiality does not rest on it — nothing here gives a removed device a key it lacks — but
-/// a relay that padded `devices` with a removed device, colluding with that device, could get its
-/// writes under the pre-removal epoch applied. An authenticated join/removal marker would close
-/// it and is not built: the rotation wrap seals a bare 32-byte key that builds in the field
-/// unwrap at exactly that length, and the layout-free marker — a removal advancing the epoch,
-/// which is bound into the wrap, by 2 — halves how many removals an offline device can catch up
-/// across, and needs a relay whose `/rotate` accepts more than current + 1.
+/// **The epoch step is the authenticated join/removal marker, and this function is where it is
+/// read** (issue #546, item 9c). A join advances the epoch by [`JOIN_STEP`] and a removal or a
+/// departure by [`REMOVAL_STEP`], and the epoch is bound into every blob the rotator seals
+/// ([`crypto::wrap_group_key`]'s key-wrapping key and AAD), so the relay cannot pass a removal off
+/// as a join. **Nothing here changed for it**: `next.epoch == current.epoch + 1` was already the
+/// only case that can keep, so a `+2` forgets every superseded key whatever `devices` says — which
+/// is exactly what a removal needs.
+///
+/// **What still rests on the relay's word is a `+1`.** Only the epoch is bound into the sealed
+/// blob; `devices` is `Object.keys` of the manifest as the relay reports it, and a `+1` keeps the
+/// old keys only when that list drops nobody this device knows. Confidentiality does not rest on
+/// it — nothing here gives a removed device a key it lacks — but a removal made by a build that
+/// predates the marker, or against a relay that has not advertised `removalStep`, is a `+1`, and
+/// there a relay that padded `devices` with the removed device, colluding with it, could still get
+/// its writes under the pre-removal epoch applied. **The marker's cost** is the one the layout-free
+/// design was always going to charge: a removal spends two epochs of the relay's `EPOCH_HISTORY`
+/// window, so a device dark across removals can catch up across four of them rather than eight.
+/// (The rotation wrap seals a bare 32-byte key that builds in the field unwrap at exactly that
+/// length, which is why the marker is the step rather than a flag inside the blob.)
 fn supersede(
     tx: &Connection,
     me: &str,
@@ -2358,6 +2430,153 @@ mod tests {
         assert_eq!(current.epoch, 2);
         assert!(group_at(&conn, &current, 0).unwrap().is_none());
         assert_eq!(superseded(&conn), 0);
+    }
+
+    /// ⚠ **A removal two epochs ahead is the join/removal marker** (issue #546, item 9c): its
+    /// blobs open for every device that stays at exactly `current + 2`, and every device that
+    /// adopts it forgets the keys it superseded **even when the relay lies about `devices`**.
+    ///
+    /// B holds a superseded key, kept across a `+1` join whose manifest named everyone it knows.
+    /// A then removes the tablet by [`REMOVAL_STEP`], and B is handed a manifest the relay padded
+    /// with the tablet — the very set that kept the key across the join. Under a `+1` that is the
+    /// collusion [`supersede`]'s doc names; under a `+2` B forgets anyway. **And the blob does not
+    /// open at `+1`**, which is what makes the step a marker the relay cannot rewrite rather than a
+    /// number it reports.
+    ///
+    /// **What makes it red**: `plan_excluding` ignoring `step`; `supersede` keeping across anything
+    /// but exactly one; a wrap that stopped binding the epoch.
+    #[test]
+    fn a_removal_two_epochs_ahead_opens_for_those_who_stay_and_forgets_across_the_gap() {
+        let a = db();
+        let me_a = ensure(&a).unwrap();
+        create_group(&a, &me_a).unwrap();
+        let b = db();
+        let me_b = ensure(&b).unwrap();
+        let start = group(&a).unwrap().unwrap();
+        join_group(&b, &start.group_id, start.epoch, &start.group_key, &me_b).unwrap();
+        add_device(&a, &me_b.device_id, &me_b.keypair.public, "Phone").unwrap();
+        add_device(&b, &me_a.device_id, &me_a.keypair.public, "Desk").unwrap();
+        let tablet = crypto::keypair().public;
+        add_device(&a, "tablet", &tablet, "Tablet").unwrap();
+        add_device(&b, "tablet", &tablet, "Tablet").unwrap();
+        let for_b = |plan: &Rotation| -> (Vec<u8>, Vec<String>) {
+            let blob = plan
+                .keys
+                .iter()
+                .find(|(id, _)| id == &me_b.device_id)
+                .map(|(_, blob)| blob.clone())
+                .expect("B is on the manifest");
+            (blob, plan.keys.iter().map(|(id, _)| id.clone()).collect())
+        };
+        // Two joins, each published by A and adopted by B: the first gives the joiner a view of
+        // the group, the second is kept across because it named everyone B knows.
+        let mut everyone = Vec::new();
+        for _ in 0..2 {
+            let plan = plan_join(&a).unwrap();
+            commit_rotation(&a, "", &plan).unwrap();
+            let (blob, manifest) = for_b(&plan);
+            adopt_epoch(&b, &me_a.device_id, plan.group.epoch, &blob, &manifest).unwrap();
+            everyone = manifest;
+        }
+        let before = group(&b).unwrap().unwrap();
+        assert_eq!(before.epoch, 2);
+        assert_eq!(
+            superseded(&b),
+            1,
+            "a join kept nothing, so the forgetting below proves nothing"
+        );
+
+        let plan = plan_rotation_by(&a, "tablet", REMOVAL_STEP).expect("plan the removal");
+        assert_eq!(plan.group.epoch, before.epoch + REMOVAL_STEP);
+        assert!(plan.keys.iter().all(|(id, _)| id != "tablet"));
+        commit_rotation(&a, "tablet", &plan).expect("commit");
+        assert_eq!(group(&a).unwrap().unwrap().epoch, before.epoch + 2);
+        assert_eq!(superseded(&a), 0, "the remover kept keys the tablet holds");
+
+        let (blob, _) = for_b(&plan);
+        assert!(
+            adopt_epoch(&b, &me_a.device_id, before.epoch + 1, &blob, &everyone).is_err(),
+            "a removal's blob opened as a join, so the relay can rewrite the marker"
+        );
+        assert_eq!(
+            group(&b).unwrap().unwrap(),
+            before,
+            "a refused adopt moved B"
+        );
+
+        adopt_epoch(&b, &me_a.device_id, plan.group.epoch, &blob, &everyone)
+            .expect("B opens its blob at current + 2");
+
+        let current = group(&b).unwrap().unwrap();
+        assert_eq!(current.epoch, before.epoch + 2);
+        assert_eq!(
+            current.group_key, plan.group.group_key,
+            "B took another key"
+        );
+        assert_eq!(
+            superseded(&b),
+            0,
+            "a padded manifest kept the keys across a removal"
+        );
+        assert!(group_at(&b, &current, before.epoch).unwrap().is_none());
+    }
+
+    /// **The step is one or two and nothing else, and the two wrappers still plan one ahead.**
+    ///
+    /// [`plan_rotation`] and [`plan_departure`] are what every caller used before the marker, and
+    /// `client`'s tests still call them — they must go on planning `+1`, which is also all a
+    /// relay that predates the marker accepts. [`plan_departure_by`] at [`REMOVAL_STEP`] is the
+    /// departure `pairing::leave_group_now` makes once the relay has advertised it. A step of
+    /// three is a programming error, answered as a sentence before anything is sealed.
+    ///
+    /// **The Rust half is fenced to the relay's**: `relay/src/groupauth.ts` exports the constant
+    /// its `/rotate` statement reads, and a relay that moved it would refuse every removal made
+    /// here with a 422 while both suites stayed green.
+    #[test]
+    fn the_step_is_one_or_two_and_the_wrappers_still_plan_one() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "phone", &[9u8; 32], "Phone").unwrap();
+        add_device(&conn, "tablet", &[8u8; 32], "Tablet").unwrap();
+        let before = group(&conn).unwrap().unwrap();
+
+        for step in [0, 3, -1] {
+            assert_eq!(
+                plan_rotation_by(&conn, "tablet", step).err().as_deref(),
+                Some(NOT_A_STEP),
+                "a removal stepped by {step}"
+            );
+            assert_eq!(
+                plan_departure_by(&conn, step).err().as_deref(),
+                Some(NOT_A_STEP),
+                "a departure stepped by {step}"
+            );
+        }
+
+        assert_eq!(
+            plan_rotation(&conn, "tablet").unwrap().group.epoch,
+            before.epoch + 1
+        );
+        assert_eq!(plan_departure(&conn).unwrap().group.epoch, before.epoch + 1);
+        assert_eq!(plan_join(&conn).unwrap().group.epoch, before.epoch + 1);
+
+        let departure = plan_departure_by(&conn, REMOVAL_STEP).unwrap();
+        assert_eq!(departure.group.epoch, before.epoch + 2);
+        assert!(departure.keys.iter().all(|(id, _)| id != &me.device_id));
+        assert_eq!(departure.keys.len(), 2);
+        assert_eq!(
+            group(&conn).unwrap().unwrap(),
+            before,
+            "planning wrote a row"
+        );
+
+        assert_eq!((JOIN_STEP, REMOVAL_STEP), (1, 2));
+        assert!(
+            include_str!("../../../relay/src/groupauth.ts")
+                .contains(&format!("export const REMOVAL_STEP = {REMOVAL_STEP};")),
+            "relay/src/groupauth.ts's REMOVAL_STEP is not this one"
+        );
     }
 
     /// ⚠ **A rotation that adds one device and drops another is a drop.** The manifest is no

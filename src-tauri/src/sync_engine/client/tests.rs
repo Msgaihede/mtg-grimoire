@@ -183,7 +183,9 @@ async fn a_push_and_a_pull_carry_a_row_between_two_databases() {
     });
 
     let b = paired("dev-b", 0);
-    let (unreadable, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    let (unreadable, report) = pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!(unreadable, 0);
     assert!(report.applied > 0);
     let (rows, quantity): (i64, i64) = b
@@ -202,6 +204,14 @@ async fn a_push_and_a_pull_carry_a_row_between_two_databases() {
 
 /// **An envelope from the FUTURE holds the cursor**, because this device is behind a key
 /// rotation and those ops become readable once it catches up.
+///
+/// ⚠ **And it holds although the trip's own key check said the relay was still at epoch 0**: a
+/// rotation landed between that check and this pull, which is the race the pull's second `/keys`
+/// ask exists for. Stepped over on the trip's word alone, the rotator's first push at the new
+/// epoch was lost.
+///
+/// **What makes it red**: trusting the epoch handed down without asking again (the cursor moves
+/// to 9), or asking on every envelope and every pull (the call counts).
 #[tokio::test]
 async fn an_envelope_from_a_newer_epoch_holds_the_cursor() {
     let a = paired("dev-a", 1);
@@ -218,27 +228,40 @@ async fn an_envelope_from_a_newer_epoch_holds_the_cursor() {
     let envelope = wire::seal_batch(&newer, "dev-a", &ops).unwrap();
 
     let server = MockServer::start_async().await;
+    let twice = serde_json::to_value(&envelope).unwrap();
     server.mock(|when, then| {
         when.method(GET).path(format!("/g/{GROUP}/pull"));
         then.status(200).json_body(serde_json::json!({
-            "envelopes": [serde_json::to_value(&envelope).unwrap()],
+            "envelopes": [twice.clone(), twice],
             "cursor": 9,
         }));
     });
+    // The relay has reached epoch 1 by the time the pull asks.
+    let keys = keys_mock(&server, 1);
 
-    // `b` is still on epoch 0 and has not been handed the new key.
+    // `b` is still on epoch 0 and has not been handed the new key; its trip's check said 0.
     let b = paired("dev-b", 0);
-    let (unreadable, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
-    assert_eq!(unreadable, 1);
+    let (unreadable, report) = pull(&b, &server.base_url(), "access-1", Some(0))
+        .await
+        .unwrap();
+    assert_eq!(unreadable, 2);
     assert_eq!(report.applied, 0);
     assert_eq!(
         get_state(&b, PULL_CURSOR),
         None,
         "the cursor stepped over ops that will become readable"
     );
+    assert_eq!(keys.calls(), 1, "asked once a pull, not once an envelope");
     let rows = error_rows(&b);
-    assert_eq!(rows.len(), 1);
+    assert_eq!(rows.len(), 1, "{rows:?}");
     assert_eq!(rows[0].0, "pull");
+
+    // A trip whose own check already answered 1 does not ask again.
+    pull(&b, &server.base_url(), "access-1", Some(1))
+        .await
+        .unwrap();
+    assert_eq!(keys.calls(), 1);
+    assert_eq!(get_state(&b, PULL_CURSOR), None);
 }
 
 /// A pull that fails leaves the cursor where it was and writes one row.
@@ -251,7 +274,9 @@ async fn a_failed_pull_leaves_the_cursor_alone() {
     });
     let b = paired("dev-b", 0);
     set_state(&b, PULL_CURSOR, "4").unwrap();
-    assert!(pull(&b, &server.base_url(), "access-1").await.is_err());
+    assert!(pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .is_err());
     assert_eq!(get_state(&b, PULL_CURSOR).as_deref(), Some("4"));
     let rows = error_rows(&b);
     assert_eq!(rows.len(), 1);
@@ -976,7 +1001,10 @@ async fn a_current_epoch_with_an_empty_manifest_leaves_the_group_alone() {
     );
     let before = identity::group(&conn).unwrap().unwrap();
 
-    assert_eq!(check_keys(&conn).await.unwrap(), KeyOutcome::Current);
+    assert_eq!(
+        check_keys(&conn).await.unwrap().outcome,
+        KeyOutcome::Current
+    );
 
     assert_eq!(identity::group(&conn).unwrap().unwrap(), before);
     assert_eq!(
@@ -1028,7 +1056,10 @@ async fn a_higher_epoch_with_a_blob_is_adopted_and_sweeps_the_roster() {
         }),
     );
 
-    assert_eq!(check_keys(&conn).await.unwrap(), KeyOutcome::Adopted);
+    assert_eq!(
+        check_keys(&conn).await.unwrap().outcome,
+        KeyOutcome::Adopted
+    );
 
     let after = identity::group(&conn).unwrap().unwrap();
     assert_eq!(after.epoch, before.epoch + 1);
@@ -1074,7 +1105,10 @@ async fn a_higher_epoch_with_no_blob_leaves_the_group_and_the_grant() {
         }),
     );
 
-    assert_eq!(check_keys(&conn).await.unwrap(), KeyOutcome::Removed);
+    assert_eq!(
+        check_keys(&conn).await.unwrap().outcome,
+        KeyOutcome::Removed
+    );
 
     assert!(
         identity::group(&conn).unwrap().is_none(),
@@ -1156,7 +1190,10 @@ async fn a_key_check_presents_the_group_auth_rather_than_the_token() {
         );
     });
 
-    assert_eq!(check_keys(&conn).await.unwrap(), KeyOutcome::Current);
+    assert_eq!(
+        check_keys(&conn).await.unwrap().outcome,
+        KeyOutcome::Current
+    );
 
     let stored = identity::group(&conn).unwrap().unwrap();
     let expected = format!(
@@ -1445,8 +1482,13 @@ async fn an_old_envelope_never_held_or_altered_is_still_stepped_over() {
     });
     set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
 
-    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
-    let (unreadable, report) = pull(&phone, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(
+        check_keys(&phone).await.unwrap().outcome,
+        KeyOutcome::Adopted
+    );
+    let (unreadable, report) = pull(&phone, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
 
     assert_eq!(unreadable, 2, "{report:?}");
     assert_eq!(
@@ -1500,8 +1542,13 @@ async fn a_backlog_sealed_before_a_removal_is_still_stepped_over() {
     });
     set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
 
-    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
-    let (unreadable, _) = pull(&phone, &server.base_url(), "access-1").await.unwrap();
+    assert_eq!(
+        check_keys(&phone).await.unwrap().outcome,
+        KeyOutcome::Adopted
+    );
+    let (unreadable, _) = pull(&phone, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
 
     assert_eq!(
         unreadable, 1,
@@ -1553,13 +1600,18 @@ async fn a_device_with_no_view_of_the_group_forgets_across_a_removal_it_cannot_s
     });
     set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
 
-    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
+    assert_eq!(
+        check_keys(&phone).await.unwrap().outcome,
+        KeyOutcome::Adopted
+    );
     let at_one = identity::group(&phone).unwrap().unwrap();
     assert!(
         identity::group_at(&phone, &at_one, 0).unwrap().is_none(),
         "epoch 0's key was kept on a view that could not see the removal"
     );
-    let (unreadable, _) = pull(&phone, &server.base_url(), "access-1").await.unwrap();
+    let (unreadable, _) = pull(&phone, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!(unreadable, 1);
     assert_eq!(copies_of(&phone, "from-the-removed-tablet"), 0);
     assert_eq!(get_state(&phone, PULL_CURSOR).as_deref(), Some("4"));
@@ -1627,7 +1679,10 @@ async fn a_device_that_stays_adopts_a_departures_rotation() {
         1,
         &[&me.device_id, "dev-remover", "tablet", "leaver"],
     );
-    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
+    assert_eq!(
+        check_keys(&phone).await.unwrap().outcome,
+        KeyOutcome::Adopted
+    );
     let at_one = identity::group(&phone).unwrap().unwrap();
     assert!(
         identity::group_at(&phone, &at_one, 0).unwrap().is_some(),
@@ -1646,7 +1701,10 @@ async fn a_device_that_stays_adopts_a_departures_rotation() {
         &[&me.device_id, "dev-remover", "tablet"],
     );
 
-    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
+    assert_eq!(
+        check_keys(&phone).await.unwrap().outcome,
+        KeyOutcome::Adopted
+    );
 
     let at_two = identity::group(&phone).unwrap().unwrap();
     assert_eq!(at_two.epoch, 2);
@@ -1688,7 +1746,10 @@ async fn a_removal_whose_answer_was_lost_is_adopted_from_this_devices_own_blob()
     let removal = identity::plan_rotation(&phone, "tablet").unwrap();
     answering_own(&server, &group_id, &me, &removal);
 
-    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
+    assert_eq!(
+        check_keys(&phone).await.unwrap().outcome,
+        KeyOutcome::Adopted
+    );
 
     let after = identity::group(&phone).unwrap().unwrap();
     assert_eq!(
@@ -1723,7 +1784,10 @@ async fn a_join_whose_answer_was_lost_is_adopted_from_this_devices_own_blob() {
     let join = identity::plan_join(&phone).unwrap();
     answering_own(&server, &group_id, &me, &join);
 
-    assert_eq!(check_keys(&phone).await.unwrap(), KeyOutcome::Adopted);
+    assert_eq!(
+        check_keys(&phone).await.unwrap().outcome,
+        KeyOutcome::Adopted
+    );
 
     let after = identity::group(&phone).unwrap().unwrap();
     assert_eq!(after, join.group);
@@ -2138,7 +2202,10 @@ async fn a_pairing_never_evicts_a_device_this_one_has_not_met() {
         }));
     });
 
-    let outcome = check_keys(&tablet).await.expect("the tablet's own sync");
+    let outcome = check_keys(&tablet)
+        .await
+        .expect("the tablet's own sync")
+        .outcome;
 
     assert_ne!(
         outcome,
@@ -2327,7 +2394,9 @@ async fn a_pull_that_lands_converts_the_legacy_picks_and_one_held_at_an_epoch_do
             "cursor": 9,
         }));
     });
-    pull(&b, &held.base_url(), "access-1").await.unwrap();
+    pull(&b, &held.base_url(), "access-1", Some(1))
+        .await
+        .unwrap();
     assert_eq!(entries(&b), 0, "a pull held at an epoch converts nothing");
     assert_eq!(get_state(&b, crate::deck_tokens::PICKS_READY), None);
 
@@ -2338,7 +2407,9 @@ async fn a_pull_that_lands_converts_the_legacy_picks_and_one_held_at_an_epoch_do
         then.status(200)
             .json_body(serde_json::json!({ "envelopes": [], "cursor": 3 }));
     });
-    pull(&b, &server.base_url(), "access-1").await.unwrap();
+    pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!(entries(&b), 2, "one entry per list");
     assert_eq!(
         get_state(&b, crate::deck_tokens::PICKS_READY).as_deref(),
@@ -2655,7 +2726,9 @@ async fn an_authentic_batch_this_build_cannot_parse_holds_as_newer() {
     serving(&server, &[&malformed], 9);
     let b = paired("dev-b", 0);
     set_state(&b, PULL_CURSOR, "3").unwrap();
-    let (unreadable, _) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    let (unreadable, _) = pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!(unreadable, 1, "still counted unreadable");
     assert_eq!(
         get_state(&b, PULL_CURSOR).as_deref(),
@@ -2684,7 +2757,7 @@ async fn an_authentic_batch_this_build_cannot_parse_holds_as_newer() {
     serving(&other, &[&altered], 9);
     let c = paired("dev-c", 0);
     set_state(&c, PULL_CURSOR, "3").unwrap();
-    let (unreadable, _) = pull(&c, &other.base_url(), "access-1").await.unwrap();
+    let (unreadable, _) = pull(&c, &other.base_url(), "access-1", None).await.unwrap();
     assert_eq!(unreadable, 1);
     assert_eq!(
         get_state(&c, PULL_CURSOR).as_deref(),
@@ -2726,7 +2799,9 @@ async fn a_malformed_batch_holds_its_senders_later_batches_too() {
     let first = serving(&server, &[&later, &other, &malformed, &earlier], 9);
     let b = paired("dev-b", 0);
     set_state(&b, PULL_CURSOR, "3").unwrap();
-    let (unreadable, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    let (unreadable, report) = pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!(unreadable, 1, "{report:?}");
     assert_eq!(
         (report.held_newer, report.deferred),
@@ -2766,7 +2841,9 @@ async fn a_malformed_batch_holds_its_senders_later_batches_too() {
     first.delete_async().await;
     let parsed = wire::seal_batch(&group, "dev-a", &ops[1..2]).unwrap();
     serving(&server, &[&later, &other, &parsed, &earlier], 9);
-    let (_, landed) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    let (_, landed) = pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!((landed.applied, landed.deferred), (2, 0), "{landed:?}");
     for card in ["x0", "x1", "x2", "c1"] {
         assert_eq!(quantity_of(&b, card), (1, 1), "{card}");
@@ -2799,7 +2876,9 @@ async fn a_same_version_batch_that_does_not_parse_is_stepped_over_and_recorded_o
         serving(&server, &[&broken, &later], 9);
         let b = paired("dev-b", 0);
         set_state(&b, PULL_CURSOR, "3").unwrap();
-        let (unreadable, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+        let (unreadable, report) = pull(&b, &server.base_url(), "access-1", None)
+            .await
+            .unwrap();
         assert_eq!(unreadable, 1, "{schema:?}: still counted unreadable");
         assert_eq!(
             (report.held_newer, report.deferred, report.applied),
@@ -2861,7 +2940,9 @@ async fn a_held_pull_records_its_unreadable_batches_once() {
             .sum()
     };
     for trip in ["first", "second", "third"] {
-        let (unreadable, _) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+        let (unreadable, _) = pull(&b, &server.base_url(), "access-1", None)
+            .await
+            .unwrap();
         assert_eq!(unreadable, 2, "{trip}");
         assert_eq!(
             get_state(&b, PULL_CURSOR),
@@ -2895,7 +2976,7 @@ async fn a_waiting_hold_releases_on_the_third_pull_after_ten_minutes() {
     // Three pulls inside a minute: the count is met and the span is not.
     let early = paired("dev-b", 0);
     for n in 1..=3 {
-        let (_, report) = pull(&early, &base, "access-1").await.unwrap();
+        let (_, report) = pull(&early, &base, "access-1", None).await.unwrap();
         assert_eq!(report.held_waiting, 2, "pull {n}: {report:?}");
         assert_eq!(
             get_state(&early, PULL_CURSOR),
@@ -2912,9 +2993,9 @@ async fn a_waiting_hold_releases_on_the_third_pull_after_ten_minutes() {
 
     // Ten minutes on the second pull: the span is met and the count is not.
     let late = paired("dev-b", 0);
-    pull(&late, &base, "access-1").await.unwrap();
+    pull(&late, &base, "access-1", None).await.unwrap();
     rewind_hold(&late, 601);
-    let (_, second) = pull(&late, &base, "access-1").await.unwrap();
+    let (_, second) = pull(&late, &base, "access-1", None).await.unwrap();
     assert_eq!(
         second.held_waiting, 2,
         "the second pull released a wait: {second:?}"
@@ -2922,7 +3003,7 @@ async fn a_waiting_hold_releases_on_the_third_pull_after_ten_minutes() {
     assert_eq!(get_state(&late, PULL_CURSOR), None);
 
     // The third, past ten minutes: the deck is given up on and the +1 behind it applies.
-    let (_, third) = pull(&late, &base, "access-1").await.unwrap();
+    let (_, third) = pull(&late, &base, "access-1", None).await.unwrap();
     assert_eq!(
         (
             third.dropped,
@@ -2943,7 +3024,7 @@ async fn a_waiting_hold_releases_on_the_third_pull_after_ten_minutes() {
     assert_eq!(quantity_of(&late, "w1"), (1, 1));
 
     // The page again, from a relay that has not heard the ack: nothing moves.
-    let (_, again) = pull(&late, &base, "access-1").await.unwrap();
+    let (_, again) = pull(&late, &base, "access-1", None).await.unwrap();
     assert_eq!((again.applied, again.dropped), (0, 0), "{again:?}");
     assert_eq!(
         quantity_of(&late, "w1"),
@@ -2976,7 +3057,7 @@ async fn a_new_waiting_block_starts_the_bound_over() {
 
     let first = serving(&server, &[&stale], 9);
     for _ in 0..3 {
-        pull(&b, &base, "access-1").await.unwrap();
+        pull(&b, &base, "access-1", None).await.unwrap();
     }
     rewind_hold(&b, 601);
     assert_eq!(
@@ -2988,7 +3069,7 @@ async fn a_new_waiting_block_starts_the_bound_over() {
     // dev-x pairs, and its first trip pushes a child ahead of its parent.
     first.delete_async().await;
     let second = serving(&server, &[&stale, &fresh], 10);
-    let (_, met) = pull(&b, &base, "access-1").await.unwrap();
+    let (_, met) = pull(&b, &base, "access-1", None).await.unwrap();
     assert_eq!(
         (met.held_waiting, met.dropped, met.applied),
         (4, 0, 0),
@@ -3001,7 +3082,7 @@ async fn a_new_waiting_block_starts_the_bound_over() {
     // The parent lands on the next trip, and the child with it; dev-a's block still waits.
     second.delete_async().await;
     serving(&server, &[&stale, &fresh, &its_parent], 11);
-    let (_, landed) = pull(&b, &base, "access-1").await.unwrap();
+    let (_, landed) = pull(&b, &base, "access-1", None).await.unwrap();
     assert_eq!(
         (landed.applied, landed.held_waiting, landed.dropped),
         (3, 2, 0),
@@ -3065,7 +3146,9 @@ async fn a_release_that_uncovers_a_newer_op_holds_it_as_newer() {
     serving(&server, &[&child, &newer], 9);
     let b = paired("dev-b", 0);
     for _ in 0..2 {
-        let (_, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+        let (_, report) = pull(&b, &server.base_url(), "access-1", None)
+            .await
+            .unwrap();
         assert_eq!(
             (report.held_waiting, report.held_newer),
             (2, 0),
@@ -3074,7 +3157,9 @@ async fn a_release_that_uncovers_a_newer_op_holds_it_as_newer() {
     }
     rewind_hold(&b, 601);
 
-    let (_, released) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    let (_, released) = pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!(
         (released.dropped, released.held_newer, released.deferred),
         (1, 1, 1),
@@ -3097,7 +3182,9 @@ async fn a_release_that_uncovers_a_newer_op_holds_it_as_newer() {
     );
 
     // The next pull: the child is below its watermark now, and the newer op still holds.
-    let (_, again) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    let (_, again) = pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!(
         (again.skipped, again.held_newer, again.dropped),
         (1, 1, 0),
@@ -3136,7 +3223,9 @@ async fn a_waiting_hold_clears_when_the_parent_arrives() {
         then.status(200).json_body(page(&[&child], 5));
     });
     let b = paired("dev-b", 0);
-    let (_, held) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    let (_, held) = pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!(held.held_waiting, 2, "{held:?}");
     assert_eq!(hold_of(&b).expect("no hold")["kind"], "waiting");
 
@@ -3148,7 +3237,9 @@ async fn a_waiting_hold_clears_when_the_parent_arrives() {
             .query_param("since", "0");
         then.status(200).json_body(page(&[&child, &parent], 6));
     });
-    let (_, landed) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    let (_, landed) = pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!(
         (landed.applied, landed.dropped, landed.deferred),
         (3, 0, 0),
@@ -3180,14 +3271,18 @@ async fn a_newer_hold_is_never_released_by_the_waiting_bound() {
     let server = MockServer::start_async().await;
     serving(&server, &[&a_newer_devices_page("n1")], 9);
     let b = paired("dev-b", 0);
-    pull(&b, &server.base_url(), "access-1").await.unwrap();
+    pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     let mut hold = hold_of(&b).unwrap();
     let since = hold["since"].as_i64().unwrap() - 10_000;
     hold["since"] = since.into();
     hold["pulls"] = 50.into();
     set_state(&b, PULL_HOLD, &hold.to_string()).unwrap();
 
-    let (_, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    let (_, report) = pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!(
         (report.held_newer, report.dropped, report.applied),
         (2, 0, 0),
@@ -3224,7 +3319,9 @@ async fn a_hold_written_before_its_blocks_were_stored_reads_and_starts_over() {
         "an old row stopped reading"
     );
 
-    let (_, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+    let (_, report) = pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!(
         (report.held_waiting, report.dropped),
         (2, 0),
@@ -3237,11 +3334,12 @@ async fn a_hold_written_before_its_blocks_were_stored_reads_and_starts_over() {
 }
 
 /// **An ordinary page advances and clears whatever hold was left** — a newer one this device's
-/// update has since resolved, or a waiting one whose parent came some other way. Either left
-/// behind would go on saying so: the panel draws `"newer"` as a sentence asking for an update.
+/// update has since resolved, a clock one the clock has caught up with, or a waiting one whose
+/// parent came some other way. Any left behind would go on saying so: the panel draws `"newer"`
+/// as a sentence asking for an update.
 #[tokio::test]
 async fn an_ordinary_page_advances_and_clears_a_stale_hold() {
-    for kind in ["newer", "waiting"] {
+    for kind in ["newer", "clock", "waiting"] {
         let server = MockServer::start_async().await;
         serving(&server, &[&an_ordinary_page("c1")], 4);
         let b = paired("dev-b", 0);
@@ -3252,7 +3350,9 @@ async fn an_ordinary_page_advances_and_clears_a_stale_hold() {
         )
         .unwrap();
 
-        let (_, report) = pull(&b, &server.base_url(), "access-1").await.unwrap();
+        let (_, report) = pull(&b, &server.base_url(), "access-1", None)
+            .await
+            .unwrap();
         assert_eq!(report.applied, 1, "{kind}: {report:?}");
         assert_eq!(get_state(&b, PULL_CURSOR).as_deref(), Some("4"), "{kind}");
         assert_eq!(hold_of(&b), None, "{kind}: a stale hold outlived the page");
@@ -3284,12 +3384,950 @@ async fn no_legacy_pick_conversion_runs_behind_a_held_pull() {
 
     let held = MockServer::start_async().await;
     serving(&held, &[&a_newer_devices_page("n1")], 9);
-    pull(&b, &held.base_url(), "access-1").await.unwrap();
+    pull(&b, &held.base_url(), "access-1", None).await.unwrap();
     assert_eq!(entries(&b), 0, "a pull held for a newer device converted");
     assert_eq!(get_state(&b, PULL_CURSOR), None, "the pull did not hold");
 
     let server = MockServer::start_async().await;
     serving(&server, &[], 3);
-    pull(&b, &server.base_url(), "access-1").await.unwrap();
+    pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
     assert_eq!(entries(&b), 2, "the pull that advanced did not convert");
+}
+
+// ---------------------------------------------------------------------------------------
+// An epoch the relay never reached — issue #546 item 3
+//
+// **The relay stores an envelope's cleartext `epoch` exactly as sent**, so "ahead of this device"
+// is two different things: a rotation this device has not caught up with, which holds, and a
+// number nobody's rotation ever made, which must not.
+// ---------------------------------------------------------------------------------------
+
+/// A page from `dev-x` claiming `epoch` — sealed under the group's own key, so the only thing
+/// wrong with it is the number: what anyone holding a token could push to a relay that stores an
+/// envelope's `epoch` exactly as sent.
+fn claiming_epoch(epoch: i64, card: &str) -> Envelope {
+    let x = paired("dev-x", 0);
+    add_copy(&x, card, 1);
+    let group = identity::group(&x).unwrap().unwrap();
+    let mut envelope = wire::seal_batch(&group, "dev-x", &outbox(&x)).unwrap();
+    envelope.epoch = epoch;
+    envelope
+}
+
+/// ⚠ **An envelope claiming an epoch the relay has never reached is stepped over, and the cursor
+/// and the ack move past it.** Read as "behind a rotation", `{epoch: 1e12}` held every peer's
+/// cursor and ack for ever, and with them the relay's compaction of the whole group's log. The
+/// relay's own epoch — the trip's key check, asked again once in case a rotation landed since —
+/// is what says a rotation happened; above it, the envelope is forged or broken. Recorded, once
+/// per envelope, and counted unreadable.
+///
+/// **What makes it red**: holding on every envelope above this device's epoch (the cursor and
+/// the ack stay at 3), or asking `/keys` once per envelope rather than once per pull.
+#[tokio::test]
+async fn an_envelope_claiming_an_epoch_the_relay_never_reached_cannot_freeze_the_cursor() {
+    let server = MockServer::start_async().await;
+    let keys = keys_mock(&server, 0);
+    serving(
+        &server,
+        &[
+            &claiming_epoch(1_000_000_000_000, "f1"),
+            &claiming_epoch(7, "f2"),
+            &an_ordinary_page("c1"),
+        ],
+        9,
+    );
+    let acked = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+    let b = paired("dev-b", 0);
+    set_state(&b, RELAY_URL, &server.base_url()).unwrap();
+    grant(&b);
+    set_state(&b, PULL_CURSOR, "3").unwrap();
+    set_state(&b, LAST_ACKED, "3").unwrap();
+
+    let outcome = run_once(&b).await.unwrap().unwrap();
+
+    assert_eq!((outcome.unreadable, outcome.applied), (2, 1), "{outcome:?}");
+    assert_eq!(
+        get_state(&b, PULL_CURSOR).as_deref(),
+        Some("9"),
+        "an epoch nobody rotated to held the cursor"
+    );
+    assert_eq!(
+        get_state(&b, LAST_ACKED).as_deref(),
+        Some("9"),
+        "...and the ack"
+    );
+    acked.assert();
+    assert_eq!(
+        keys.calls(),
+        2,
+        "the trip's own check, then one ask for the whole page"
+    );
+    assert_eq!(hold_of(&b), None);
+    assert_eq!(copies_of(&b, "f1") + copies_of(&b, "f2"), 0);
+    assert_eq!(copies_of(&b, "c1"), 1);
+    assert_eq!(error_rows(&b), [("pull".to_owned(), "parse".to_owned(), 2)]);
+}
+
+// ---------------------------------------------------------------------------------------
+// Catching up across epochs with `/keys?epoch=` — issue #546 item 9a
+// ---------------------------------------------------------------------------------------
+
+/// A blob the desk sealed to `me` at `epoch`, over the key [`rotated_to`] uses for that epoch.
+fn blob_at(group: &str, desk: &crypto::Keypair, me: &identity::Identity, epoch: i64) -> String {
+    let blob = crypto::wrap_group_key(
+        &desk.secret,
+        &me.keypair.public,
+        group,
+        &me.device_id,
+        epoch,
+        &[40u8 + epoch as u8; 32],
+    )
+    .unwrap();
+    URL_SAFE_NO_PAD.encode(blob)
+}
+
+/// `/keys` answering `status` and `body` to a request for `epoch` — or, with `None`, to one that
+/// asks for no epoch at all, which is the newest manifest.
+fn keys_asked<'a>(
+    server: &'a MockServer,
+    group: &str,
+    epoch: Option<i64>,
+    status: u16,
+    body: serde_json::Value,
+) -> httpmock::Mock<'a> {
+    server.mock(|when, then| {
+        let when = when.method(GET).path(format!("/g/{group}/keys"));
+        let _ = match epoch {
+            Some(n) => when.query_param("epoch", n.to_string()),
+            None => when.query_param_missing("epoch"),
+        };
+        then.status(status).json_body(body);
+    })
+}
+
+/// [`keyed_group`]'s three devices, and `joined` after them — a manifest nobody was dropped from.
+fn everyone(me: &identity::Identity, joined: &[&str]) -> Vec<String> {
+    let mut devices = vec![
+        me.device_id.clone(),
+        "dev-remover".to_owned(),
+        "tablet".to_owned(),
+    ];
+    devices.extend(joined.iter().map(|d| (*d).to_owned()));
+    devices
+}
+
+/// ⚠ **A device several joins behind takes every key in turn, and reads what the group sealed at
+/// the epochs in between.** Adopting the newest directly never handed it epoch 1's key, and
+/// `identity::supersede` forgets across any skip — so a device offline across two pairings stepped
+/// over everything sealed between them, deletes included, for good. Walked with `/keys?epoch=`,
+/// each join is a clean `+1` and each replaced key is kept.
+///
+/// It also pins the credential moving as the walk adopts: epoch 2 is asked for with epoch 1's
+/// auth, which is the key this device holds by then.
+///
+/// **What makes it red**: adopting the newest without walking (epoch 1's envelope is unreadable
+/// and its key is gone), or presenting the starting epoch's auth all the way.
+#[tokio::test]
+async fn a_device_several_joins_behind_takes_every_key_and_reads_what_was_sealed_between() {
+    let server = MockServer::start_async().await;
+    let (phone, me, desk_keys, group_id) = keyed_group();
+    set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+    let epoch0 = identity::group(&phone).unwrap().unwrap();
+    keys_asked(
+        &server,
+        &group_id,
+        None,
+        200,
+        serde_json::json!({
+            "epoch": 3,
+            "blob": blob_at(&group_id, &desk_keys, &me, 3),
+            "devices": everyone(&me, &["j1", "j2", "j3"]),
+        }),
+    );
+    keys_asked(
+        &server,
+        &group_id,
+        Some(1),
+        200,
+        serde_json::json!({
+            "epoch": 1,
+            "blob": blob_at(&group_id, &desk_keys, &me, 1),
+            "devices": everyone(&me, &["j1"]),
+        }),
+    );
+    let auth_at_two: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+    let seen = auth_at_two.clone();
+    server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/g/{group_id}/keys"))
+            .query_param("epoch", "2")
+            .is_true(move |req: &httpmock::prelude::HttpMockRequest| {
+                // A matcher may be asked about a request another mock answers, so it records only
+                // the one it is about.
+                let asks_two = req
+                    .uri()
+                    .query()
+                    .is_some_and(|q| q.split('&').any(|kv| kv == "epoch=2"));
+                if asks_two {
+                    if let Some((_, value)) = req
+                        .headers_vec()
+                        .iter()
+                        .find(|(name, _)| name.eq_ignore_ascii_case("authorization"))
+                    {
+                        seen.lock().unwrap().push(value.clone());
+                    }
+                }
+                true
+            });
+        then.status(200).json_body(serde_json::json!({
+            "epoch": 2,
+            "blob": blob_at(&group_id, &desk_keys, &me, 2),
+            "devices": everyone(&me, &["j1", "j2"]),
+        }));
+    });
+
+    let check = check_keys(&phone).await.unwrap();
+
+    assert_eq!(
+        check,
+        KeyCheck {
+            outcome: KeyOutcome::Adopted,
+            relay_epoch: Some(3),
+        }
+    );
+    let at_three = identity::group(&phone).unwrap().unwrap();
+    assert_eq!(at_three.epoch, 3);
+    for n in 0..3 {
+        assert!(
+            identity::group_at(&phone, &at_three, n).unwrap().is_some(),
+            "epoch {n}'s key was not kept across a join"
+        );
+    }
+    let at_one = identity::group_at(&phone, &at_three, 1).unwrap().unwrap();
+    assert_eq!(at_one.group_key, [41u8; 32]);
+    let expected = format!(
+        "Bearer {}",
+        crypto::relay_auth(&at_one.group_key, &group_id, 1)
+    );
+    assert_eq!(
+        auth_at_two.lock().unwrap().first(),
+        Some(&expected),
+        "epoch 2 was not asked for with the key this device held by then"
+    );
+
+    // What the desk sealed at epoch 1 opens now.
+    let desk = desk_at(&at_one);
+    add_copy(&desk, "sealed-at-one", 1);
+    let envelope = sealed_since(&desk, 0, &at_one);
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{group_id}/pull"));
+        then.status(200).json_body(serde_json::json!({
+            "envelopes": [serde_json::to_value(&envelope).unwrap()],
+            "cursor": 4,
+        }));
+    });
+    let (unreadable, _) = pull(&phone, &server.base_url(), "access-1", Some(3))
+        .await
+        .unwrap();
+    assert_eq!(unreadable, 0, "what was sealed between two joins was lost");
+    assert_eq!(copies_of(&phone, "sealed-at-one"), 1);
+    assert!(error_rows(&phone).is_empty(), "{:?}", error_rows(&phone));
+    assert_eq!(epoch0.epoch, 0, "the fixture starts at epoch 0");
+}
+
+/// **A removal leaves a gap, and the walk steps over it and forgets.** A removal advances the
+/// epoch by two, so the epoch it skips was never stored and `/keys?epoch=` answers 404
+/// `no_such_epoch` for it. Adopting two ahead is `identity::supersede`'s removal, and every key
+/// before it goes — the removed device holds them. The 404 is an answer rather than a failure,
+/// so nothing is recorded.
+///
+/// **What makes it red**: reading the 404 as a failure (an `error_log` row), or keeping epoch 0's
+/// key across the gap.
+#[tokio::test]
+async fn a_removal_gap_is_stepped_over_and_forgets_the_keys_before_it() {
+    let server = MockServer::start_async().await;
+    let (phone, me, desk_keys, group_id) = keyed_group();
+    set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+    keys_asked(
+        &server,
+        &group_id,
+        None,
+        200,
+        serde_json::json!({
+            "epoch": 2,
+            "blob": blob_at(&group_id, &desk_keys, &me, 2),
+            "devices": [me.device_id.clone(), "dev-remover"],
+        }),
+    );
+    let gap = keys_asked(
+        &server,
+        &group_id,
+        Some(1),
+        404,
+        serde_json::json!({ "error": "no key change at that epoch", "code": "no_such_epoch" }),
+    );
+
+    assert_eq!(
+        check_keys(&phone).await.unwrap().outcome,
+        KeyOutcome::Adopted
+    );
+
+    gap.assert();
+    let at_two = identity::group(&phone).unwrap().unwrap();
+    assert_eq!(at_two.epoch, 2);
+    assert!(
+        identity::group_at(&phone, &at_two, 0).unwrap().is_none(),
+        "a key the removed tablet holds was kept"
+    );
+    assert!(!identity::roster(&phone)
+        .unwrap()
+        .iter()
+        .any(|d| d.device_id == "tablet"));
+    assert!(error_rows(&phone).is_empty(), "{:?}", error_rows(&phone));
+}
+
+/// **An older relay ignores `?epoch=` and answers its newest manifest**, which the walk reads as
+/// its end — the epoch is not the one asked for — and the device adopts the newest as it did
+/// before the walk existed. **So does any other failure on the way**, rather than stalling the
+/// device at an epoch it cannot get past; that one is recorded, as every failed key request is.
+///
+/// **What makes it red**: adopting the mismatched answer as though it were epoch 1, or failing the
+/// key check when the walk cannot go on.
+#[tokio::test]
+async fn a_walk_the_relay_cannot_serve_falls_back_to_the_newest() {
+    for older in [true, false] {
+        let server = MockServer::start_async().await;
+        let (phone, me, desk_keys, group_id) = keyed_group();
+        set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+        let newest = serde_json::json!({
+            "epoch": 2,
+            "blob": blob_at(&group_id, &desk_keys, &me, 2),
+            "devices": everyone(&me, &["j1", "j2"]),
+        });
+        if older {
+            // One answer to every request, whatever it asks for.
+            keys_answering(&server, &group_id, newest);
+        } else {
+            keys_asked(&server, &group_id, None, 200, newest);
+            keys_asked(
+                &server,
+                &group_id,
+                Some(1),
+                500,
+                serde_json::json!({ "error": "nope" }),
+            );
+        }
+
+        assert_eq!(
+            check_keys(&phone).await.unwrap().outcome,
+            KeyOutcome::Adopted,
+            "older relay: {older}"
+        );
+
+        let after = identity::group(&phone).unwrap().unwrap();
+        assert_eq!((after.epoch, after.group_key), (2, [42u8; 32]), "{older}");
+        assert!(
+            identity::group_at(&phone, &after, 0).unwrap().is_none(),
+            "{older}: a skip forgets, as it did before the walk"
+        );
+        let expected: Vec<(String, String, i64)> = if older {
+            Vec::new()
+        } else {
+            vec![("keys".to_owned(), "http".to_owned(), 1)]
+        };
+        assert_eq!(error_rows(&phone), expected, "{older}");
+    }
+}
+
+/// **A manifest on the way that does not name this device is the removal notice**, exactly as the
+/// newest one's would be: the group is left and the grant cleared — cleared, not revoked, because
+/// nothing about the reader's membership ended.
+///
+/// **What makes it red**: adopting past a manifest this device is not on.
+#[tokio::test]
+async fn a_manifest_on_the_walk_that_omits_this_device_leaves_the_group() {
+    let server = MockServer::start_async().await;
+    let (phone, me, desk_keys, group_id) = keyed_group();
+    set_state(&phone, RELAY_URL, &server.base_url()).unwrap();
+    grant(&phone);
+    keys_asked(
+        &server,
+        &group_id,
+        None,
+        200,
+        serde_json::json!({
+            "epoch": 2,
+            "blob": blob_at(&group_id, &desk_keys, &me, 2),
+            "devices": everyone(&me, &[]),
+        }),
+    );
+    keys_asked(
+        &server,
+        &group_id,
+        Some(1),
+        200,
+        serde_json::json!({
+            "epoch": 1,
+            "blob": serde_json::Value::Null,
+            "devices": ["dev-remover"],
+        }),
+    );
+
+    assert_eq!(
+        check_keys(&phone).await.unwrap().outcome,
+        KeyOutcome::Removed
+    );
+
+    assert!(
+        identity::group(&phone).unwrap().is_none(),
+        "still in a group"
+    );
+    assert_eq!(entitlement::refresh_secret(&phone), None, "grant survived");
+    assert!(
+        !entitlement::membership_ended(&phone),
+        "revoked rather than cleared"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// The removal marker's client half — issue #546 item 9c
+// ---------------------------------------------------------------------------------------
+
+/// **`removalStep: 2` on any `/keys` answer latches, and nothing un-latches it** — neither an
+/// answer without it nor leaving the group. It is a fact about the relay, and trust-on-first-use
+/// by design: a relay that could stop advertising it would have this device plan one-step
+/// removals again, whose manifest is the relay's word for whether anybody was dropped.
+///
+/// **What makes it red**: reading the field off the latest answer instead of latching it, or
+/// `leave_group` taking the row with it.
+#[tokio::test]
+async fn a_relays_two_step_removal_is_latched_and_outlives_a_leave() {
+    let server = MockServer::start_async().await;
+    let (conn, _me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    assert_eq!(removal_step(&conn), 1, "nothing has been advertised yet");
+
+    let advertised = server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{group}/keys"));
+        then.status(200).json_body(serde_json::json!({
+            "epoch": 0,
+            "blob": serde_json::Value::Null,
+            "devices": [],
+            "removalStep": 2,
+        }));
+    });
+    check_keys(&conn).await.unwrap();
+    assert_eq!(removal_step(&conn), 2);
+
+    advertised.delete_async().await;
+    keys_answering(
+        &server,
+        &group,
+        serde_json::json!({ "epoch": 0, "blob": serde_json::Value::Null, "devices": [] }),
+    );
+    check_keys(&conn).await.unwrap();
+    assert_eq!(
+        removal_step(&conn),
+        2,
+        "an answer without the field un-latched it"
+    );
+
+    identity::leave_group(&conn).unwrap();
+    assert_eq!(
+        removal_step(&conn),
+        2,
+        "leaving the group took a fact about the relay with it"
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// A push refused as sealed below the group's epoch — issue #546 item 9b, the client half
+// ---------------------------------------------------------------------------------------
+
+/// Matches a push whose envelope is sealed at `epoch`.
+fn sealed_at(
+    epoch: i64,
+) -> impl Fn(&httpmock::prelude::HttpMockRequest) -> bool + Send + Sync + 'static {
+    move |req: &httpmock::prelude::HttpMockRequest| {
+        serde_json::from_str::<Envelope>(&req.body_string()).is_ok_and(|e| e.epoch == epoch)
+    }
+}
+
+/// The refusal an updated relay answers a push sealed below the group's epoch with.
+fn stale_epoch() -> serde_json::Value {
+    serde_json::json!({
+        "error": "sealed under a key the group has moved past",
+        "code": "stale_epoch",
+    })
+}
+
+/// ⚠ **A push refused as `stale_epoch` catches up and goes again under the new key.** An updated
+/// relay refuses a push sealed below the group's epoch — this device is behind a rotation that
+/// landed after its key check — and the ops are unpushed, so re-sealing them at the epoch
+/// `check_keys` adopts is all a retry needs. Nothing is recorded: the trip mended it.
+///
+/// **What makes it red**: failing the push on the first refusal (an `Err`, the ops still pending),
+/// or retrying under the old key (a second refusal).
+#[tokio::test]
+async fn a_push_refused_as_stale_catches_up_and_goes_again_under_the_new_key() {
+    let server = MockServer::start_async().await;
+    let (conn, me, desk_keys, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    add_copy(&conn, "c1", 1);
+    rotated_to(
+        &server,
+        &group,
+        &desk_keys,
+        &me,
+        1,
+        &[&me.device_id, "dev-remover", "tablet"],
+    );
+    let stale = server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{group}/push"))
+            .is_true(sealed_at(0));
+        then.status(409).json_body(stale_epoch());
+    });
+    let fresh = server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{group}/push"))
+            .is_true(sealed_at(1));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+
+    let sent = push(&conn, &server.base_url(), "access-1").await.unwrap();
+
+    assert!(sent > 0);
+    assert_eq!((stale.calls(), fresh.calls()), (1, 1));
+    assert_eq!(identity::group(&conn).unwrap().unwrap().epoch, 1);
+    assert_eq!(unpushed_count(&conn), 0);
+    assert!(error_rows(&conn).is_empty(), "{:?}", error_rows(&conn));
+}
+
+/// ...and **a second refusal after catching up is recorded and fails the push**, every op still
+/// pending for the next trip, which starts from its own key check.
+///
+/// **What makes it red**: retrying without end, or stamping what the relay refused.
+#[tokio::test]
+async fn a_push_refused_as_stale_twice_is_recorded_and_keeps_the_ops() {
+    let server = MockServer::start_async().await;
+    let (conn, me, desk_keys, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    add_copy(&conn, "c1", 1);
+    rotated_to(
+        &server,
+        &group,
+        &desk_keys,
+        &me,
+        1,
+        &[&me.device_id, "dev-remover", "tablet"],
+    );
+    let refused = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/push"));
+        then.status(409).json_body(stale_epoch());
+    });
+    let before = unpushed_count(&conn);
+
+    let error = push(&conn, &server.base_url(), "access-1")
+        .await
+        .unwrap_err();
+
+    assert!(error.contains("moved past"), "{error}");
+    assert_eq!(refused.calls(), 2, "one retry, under the adopted key");
+    assert_eq!(unpushed_count(&conn), before);
+    assert_eq!(
+        error_rows(&conn),
+        [("push".to_owned(), "http".to_owned(), 1)]
+    );
+}
+
+/// ...and **a catch-up that finds this device removed stops the push without an error**: there is
+/// nothing left to push to, and leaving is not a failure.
+#[tokio::test]
+async fn a_push_that_catches_up_to_its_own_removal_stops_without_an_error() {
+    let server = MockServer::start_async().await;
+    let (conn, _me, _remover, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    grant(&conn);
+    add_copy(&conn, "c1", 1);
+    keys_answering(
+        &server,
+        &group,
+        serde_json::json!({
+            "epoch": 1,
+            "blob": serde_json::Value::Null,
+            "devices": ["dev-remover"],
+        }),
+    );
+    let refused = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/push"));
+        then.status(409).json_body(stale_epoch());
+    });
+
+    assert_eq!(
+        push(&conn, &server.base_url(), "access-1").await.unwrap(),
+        0
+    );
+
+    assert_eq!(refused.calls(), 1);
+    assert!(identity::group(&conn).unwrap().is_none());
+    assert!(error_rows(&conn).is_empty(), "{:?}", error_rows(&conn));
+}
+
+// ---------------------------------------------------------------------------------------
+// Pushing by bytes, and an op that can never be sent — issue #546 item 4, the client half
+// ---------------------------------------------------------------------------------------
+
+/// A note on `card`'s copy long enough that the op carrying it can never be sealed under the
+/// relay's cap — a reader pasting something in the megabytes.
+const TOO_LARGE_NOTE: usize = 2_000_000;
+
+fn a_note_of(conn: &Connection, card: &str, bytes: usize) {
+    conn.execute(
+        "UPDATE collection_entries SET notes = ?1 WHERE card_id = ?2",
+        rusqlite::params!["x".repeat(bytes), card],
+    )
+    .unwrap();
+}
+
+/// The `card_id` of every `collection_entries` op in the pushes `sent` saw, in the order sent.
+fn pushed_cards(sent: &Sent, group: &Group) -> Vec<String> {
+    let seen = sent.lock().unwrap();
+    let mut bodies: Vec<&str> = Vec::new();
+    for request in seen.iter() {
+        if request.path.ends_with("/push") && !bodies.contains(&request.body.as_str()) {
+            bodies.push(&request.body);
+        }
+    }
+    bodies
+        .into_iter()
+        .filter_map(|body| serde_json::from_str::<Envelope>(body).ok())
+        .filter_map(|envelope| wire::open_batch(group, &envelope).ok())
+        .flatten()
+        .filter(|op| op.table == "collection_entries")
+        .filter_map(|op| {
+            op.fields
+                .get("card_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        })
+        .collect()
+}
+
+/// ⚠ **An op too large ever to send is recorded once, stamped, and stepped over — and the ops
+/// queued behind it still go.** The relay refuses a `sealed` over `wire::MAX_SEALED_CHARS` on
+/// every attempt and a push stops at its first failure, so a note pasted in the megabytes used to
+/// stop every change after it from ever leaving this device.
+///
+/// **What makes it red**: posting the oversized op, or leaving it pending — the second push then
+/// posts it again and records it again.
+#[tokio::test]
+async fn an_op_too_large_to_send_is_recorded_once_and_does_not_hold_back_the_rest() {
+    let server = MockServer::start_async().await;
+    let sent = Sent::default();
+    let pushed = server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{GROUP}/push"))
+            .is_true(tap(&sent));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    let a = paired("dev-a", 0);
+    add_copy(&a, "before", 1);
+    a_note_of(&a, "before", TOO_LARGE_NOTE);
+    add_copy(&a, "after", 1);
+    let ops = outbox(&a);
+    assert_eq!(
+        ops.len(),
+        3,
+        "an insert, the note, an insert: {}",
+        ops.len()
+    );
+    assert!(
+        wire::oversized(&ops[1..2]),
+        "the fixture has to be too large to send"
+    );
+
+    let count = push(&a, &server.base_url(), "access-1").await.unwrap();
+
+    assert_eq!(count, 2, "the op no relay will take is not counted as sent");
+    assert_eq!(pushed.calls(), 2);
+    assert_eq!(
+        unpushed_count(&a),
+        0,
+        "left pending, it is a push that never finishes"
+    );
+    let group = identity::group(&a).unwrap().unwrap();
+    assert_eq!(pushed_cards(&sent, &group), ["before", "after"]);
+    assert_eq!(error_rows(&a), [("push".to_owned(), "other".to_owned(), 1)]);
+    let message: String = a
+        .query_row(
+            "SELECT message FROM error_log WHERE source = 'relay' AND operation = 'push'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        message.contains("collection_entries") && message.contains(&ops[1].uid),
+        "the sentence names the table and the row: {message}"
+    );
+    assert!(message.contains("kept on this device"), "{message}");
+
+    // The next trip has nothing to send, and records nothing again.
+    assert_eq!(push(&a, &server.base_url(), "access-1").await.unwrap(), 0);
+    assert_eq!(pushed.calls(), 2);
+    assert_eq!(error_rows(&a)[0].2, 1);
+}
+
+/// **A push an updated relay refuses is recorded in the sentence its `code` names — its `code`
+/// and never its `error`** — and every one of them keeps what this device wrote: `pushed_at`
+/// stays NULL. A body whose `error` happens to name a code and which carries no `code` is the
+/// plain sentence.
+///
+/// **What makes it red**: matching on `error`, or a coded refusal that stamps the ops.
+#[tokio::test]
+async fn a_refused_push_is_recorded_in_the_sentence_its_code_names() {
+    for (status, body, phrase) in [
+        (
+            507,
+            serde_json::json!({ "error": "x", "code": "quota" }),
+            "storage is full",
+        ),
+        (
+            422,
+            serde_json::json!({ "error": "x", "code": "clock_ahead" }),
+            "more than a day ahead",
+        ),
+        (
+            422,
+            serde_json::json!({ "error": "x", "code": "epoch_ahead" }),
+            "has not reached",
+        ),
+        (
+            413,
+            serde_json::json!({ "error": "x", "code": "too_large" }),
+            "too large",
+        ),
+        (
+            422,
+            serde_json::json!({ "error": "clock_ahead" }),
+            "answered 422",
+        ),
+    ] {
+        let server = MockServer::start_async().await;
+        let answer = body.clone();
+        server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{GROUP}/push"));
+            then.status(status).json_body(answer);
+        });
+        let a = paired("dev-a", 0);
+        add_copy(&a, "c1", 1);
+        let before = unpushed_count(&a);
+
+        let error = push(&a, &server.base_url(), "access-1").await.unwrap_err();
+
+        assert!(error.contains(phrase), "{status} {body}: {error}");
+        assert_eq!(unpushed_count(&a), before, "{status} {body}");
+        let message: String = a
+            .query_row(
+                "SELECT message FROM error_log WHERE source = 'relay' AND operation = 'push'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(message, error, "{status} {body}");
+    }
+}
+
+/// **A baseline row too large ever to send is left out of the first sync, and the marker is still
+/// stamped once the rest has landed.** The baseline is rebuilt from the tables on every trip, so a
+/// marker held NULL for its sake would offer the peer the same unsendable row — and the whole
+/// baseline around it — on every sync for good.
+///
+/// **What makes it red**: posting the row (a 413 from a real relay), or leaving the marker unset.
+#[tokio::test]
+async fn a_baseline_row_too_large_to_send_is_left_out_and_the_marker_still_set() {
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    let sent = Sent::default();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{GROUP}/push"))
+            .is_true(tap(&sent));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+    let a = paired("dev-a", 0);
+    add_copy(&a, "small", 1);
+    add_copy(&a, "big", 1);
+    a_note_of(&a, "big", TOO_LARGE_NOTE);
+    roster(&a, "dev-b");
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    grant(&a);
+
+    let outcome = run_once(&a).await.unwrap().unwrap();
+
+    assert!(outcome.baseline_ops > 0, "{outcome:?}");
+    assert!(
+        baselined_at(&a, "dev-b").is_some(),
+        "a row that can never be sent held the marker"
+    );
+    let group = identity::group(&a).unwrap().unwrap();
+    let baselined: Vec<String> = pushed_baselines(&sent, &group)
+        .into_iter()
+        .flatten()
+        .filter(|op| op.table == "collection_entries")
+        .filter_map(|op| {
+            op.fields
+                .get("card_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned)
+        })
+        .collect();
+    assert_eq!(baselined, ["small"], "{baselined:?}");
+    // Recorded twice over, in two sentences: once as this device's change, once as a first
+    // sync's row.
+    assert_eq!(
+        error_rows(&a),
+        [
+            ("push".to_owned(), "other".to_owned(), 1),
+            ("push".to_owned(), "other".to_owned(), 1),
+        ]
+    );
+}
+
+// ---------------------------------------------------------------------------------------
+// A clock too far ahead — issue #546 item 8, the client half
+// ---------------------------------------------------------------------------------------
+
+/// Hold [`super::wall_ms`] at `ms` for as long as this lives, and hand the wall back to SQLite
+/// after — a guard rather than a call, so a failing assertion cannot leave the next test on this
+/// thread two days in the future.
+struct WallAt;
+
+impl WallAt {
+    fn set(ms: i64) -> Self {
+        WALL_MS.with(|w| w.set(Some(ms)));
+        WallAt
+    }
+}
+
+impl Drop for WallAt {
+    fn drop(&mut self) {
+        WALL_MS.with(|w| w.set(None));
+    }
+}
+
+/// ⚠ **A batch stamped two days ahead of this device's clock holds its sender, and the cursor,
+/// until the clock catches up** — and then applies. Applied at once, it dragged this device's
+/// clock two days forward with it; clamped, the reader's next edit here would sort before it and
+/// the two devices would disagree about the row for good. So it waits as `"clock"`, the kind the
+/// panel reads. The sender's earlier batch is below it and applies; another device's applies;
+/// and the wait is recorded once, naming the device, not once a pull.
+///
+/// **What makes it red**: applying the batch (`fast` lands on the first pull), holding by page
+/// position (the earlier batch is served after it), recording on every pull, or a hold time never
+/// releases.
+#[tokio::test]
+async fn a_batch_stamped_days_ahead_holds_its_sender_until_the_clock_catches_up() {
+    let a = paired("dev-a", 0);
+    add_copy(&a, "early", 1);
+    add_copy(&a, "fast", 1);
+    let ops = outbox(&a);
+    assert_eq!(ops.len(), 2, "{ops:?}");
+    let group = identity::group(&a).unwrap().unwrap();
+    let now: i64 = a
+        .query_row(
+            "SELECT cast(unixepoch('subsec') * 1000 AS INTEGER)",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let two_days = 2 * 24 * 60 * 60 * 1000;
+    let early = wire::seal_batch(&group, "dev-a", &ops[0..1]).unwrap();
+    let mut ahead = ops[1].clone();
+    ahead.at.ms = now + two_days;
+    let fast = wire::seal_batch(&group, "dev-a", &[ahead]).unwrap();
+
+    let server = MockServer::start_async().await;
+    serving(&server, &[&fast, &an_ordinary_page("c1"), &early], 9);
+    let b = paired("dev-b", 0);
+    b.execute(
+        "INSERT INTO device_names (device_id, name, created_at, updated_at)
+         VALUES ('dev-a', 'Laptop', 0, 0)",
+        [],
+    )
+    .unwrap();
+    set_state(&b, PULL_CURSOR, "3").unwrap();
+
+    for trip in ["first", "second"] {
+        let (unreadable, report) = pull(&b, &server.base_url(), "access-1", None)
+            .await
+            .unwrap();
+        assert_eq!(unreadable, 0, "{trip}");
+        assert_eq!(report.deferred, 1, "{trip}: {report:?}");
+        assert_eq!(
+            get_state(&b, PULL_CURSOR).as_deref(),
+            Some("3"),
+            "{trip}: the cursor stepped past a batch that has not applied"
+        );
+        assert_eq!(
+            read_hold(&b).map(|h| h.kind).as_deref(),
+            Some("clock"),
+            "{trip}: the kind the panel reads"
+        );
+        assert_eq!(quantity_of(&b, "fast"), (0, 0), "{trip}");
+        assert_eq!(
+            quantity_of(&b, "early"),
+            (1, 1),
+            "{trip}: the sender's earlier batch"
+        );
+        assert_eq!(
+            quantity_of(&b, "c1"),
+            (1, 1),
+            "{trip}: another device's batch"
+        );
+        assert_eq!(
+            error_rows(&b),
+            [("pull".to_owned(), "other".to_owned(), 1)],
+            "{trip}: recorded once per hold"
+        );
+    }
+    assert_eq!(hold_of(&b).unwrap()["pulls"], 2);
+    let message: String = b
+        .query_row(
+            "SELECT message FROM error_log WHERE operation = 'pull'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        message.contains("Laptop") && message.contains("2 days"),
+        "{message}"
+    );
+
+    // Two days on, the batch is within a day of the clock and applies.
+    let _clock = WallAt::set(now + two_days);
+    let (_, landed) = pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
+    assert_eq!((landed.applied, landed.deferred), (1, 0), "{landed:?}");
+    assert_eq!(quantity_of(&b, "fast"), (1, 1));
+    assert_eq!(get_state(&b, PULL_CURSOR).as_deref(), Some("9"));
+    assert_eq!(hold_of(&b), None);
 }
