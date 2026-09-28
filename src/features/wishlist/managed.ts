@@ -38,11 +38,17 @@ export function userWishFolders<T extends Pick<WishlistFolder, "managedDeckId">>
  * The managed folders, sorted by name — `pinnedFolders`' opinion one cabinet over: the backend's
  * `ORDER BY sort_order, id` is the order the decks happened to be made in, which is not an order a
  * reader can predict or scan, and these rows have no `sort_order` anybody arranged.
+ *
+ * **Less every deck's Tokens child** (user schema v55): each is named `Tokens`, so a list by name
+ * would draw one indistinguishable row per deck — it is its parent that says whose it is. It is
+ * still the deck's everywhere else ({@link userWishFolders}, {@link managedIds}).
  */
-export function managedWishFolders<T extends Pick<WishlistFolder, "managedDeckId" | "name">>(
-  folders: readonly T[],
-): T[] {
-  return folders.filter(isManaged).sort((a, b) => a.name.localeCompare(b.name));
+export function managedWishFolders<
+  T extends Pick<WishlistFolder, "managedDeckId" | "name"> & Partial<Pick<WishlistFolder, "managedTokens">>,
+>(folders: readonly T[]): T[] {
+  return folders
+    .filter((folder) => isManaged(folder) && folder.managedTokens !== true)
+    .sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /** The set of managed folder ids, for the per-row question "is this wish the deck's?". */
@@ -62,11 +68,20 @@ export function managedIds(folders: readonly WishlistFolder[]): ReadonlySet<numb
  *
  * **Words, never a target**: the folder is app-owned and takes no drop, so this is said in a box
  * and not in the dashed drawer a reader's empty folder draws.
+ *
+ * **`tokens` since user schema v55** (managed tokens spec §3.8) is the one view whose folder is
+ * *always* empty of its own: it files the plan's missing tokens in a `Tokens` folder inside it and
+ * no card in itself, so its sentence says where the wishes go rather than that there are none —
+ * *a* Tokens folder, since there is none while the deck is short of nothing.
  */
 export const MANAGED_EMPTY: Record<Exclude<ManagedWishlistMode, "off">, string> = {
   all: "The two lists agree. Everything requested by the plan is already in the deck.",
   missing: "Nothing missing. The deck includes every card in the plan.",
   other: "No substitutions. Every card matches the planned printing.",
+  // "*a* Tokens folder": the settle drops that folder when the deck is short of no token, so the
+  // sentence must not point at one as though it were always there.
+  tokens:
+    "This folder follows the plan's tokens and holds no card itself — any token the deck is short of is filed in a Tokens folder inside it.",
 };
 
 /**
@@ -77,20 +92,35 @@ export const MANAGED_EMPTY: Record<Exclude<ManagedWishlistMode, "off">, string> 
 export const MANAGED_EMPTY_UNKNOWN = "Nothing here. This folder updates automatically with its deck.";
 
 /**
+ * What an empty **Tokens child** says (user schema v55) — one sentence whichever view fills it,
+ * `all` or `tokens`, because in both it holds the same thing: the token printings the plan asks
+ * for and the deck does not count. Its parent's sentence would be wrong here — under `tokens` it
+ * points at this very folder.
+ */
+export const MANAGED_TOKENS_EMPTY =
+  "No tokens missing — this deck counts every token its plan asks for.";
+
+/**
  * {@link MANAGED_EMPTY} for a mode, or {@link MANAGED_EMPTY_UNKNOWN} where there is none to read —
- * `off` included, which is a deck that keeps no folder and so cannot be the one on screen.
+ * `off` included, which is a deck that keeps no folder and so cannot be the one on screen. A
+ * managed wishlist's Tokens child (`tokens`, its `managedTokens`) says {@link MANAGED_TOKENS_EMPTY}
+ * under any view this build knows.
  *
  * **Named cases, never an index into the table.** The mode arrives over IPC from a column a later
  * schema can widen, and the type is a promise `ipc.ts` makes by hand: a mode this build has no
  * sentence for would index to `undefined` — or, for a name `Object.prototype` carries, to a
  * function — and draw nothing where a sentence belongs. Anything unnamed is the unknown sentence.
  */
-export function managedEmptySentence(mode: ManagedWishlistMode | undefined): string {
+export function managedEmptySentence(
+  mode: ManagedWishlistMode | undefined,
+  tokens = false,
+): string {
   switch (mode) {
     case "all":
     case "missing":
     case "other":
-      return MANAGED_EMPTY[mode];
+    case "tokens":
+      return tokens ? MANAGED_TOKENS_EMPTY : MANAGED_EMPTY[mode];
     default:
       return MANAGED_EMPTY_UNKNOWN;
   }

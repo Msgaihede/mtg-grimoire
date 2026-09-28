@@ -5,8 +5,14 @@ import {
   deckTokenViews,
   entryRef,
   isEmblem,
+  isHandAdded,
+  isListedToken,
   isTokenLayout,
   isTokenPrinting,
+  NOT_MADE_BY_DECK,
+  notMadeByDeckHint,
+  pileTokens,
+  tokenArtName,
   tokenEntryName,
   tokenSubtitle,
   type DeckTokenRow,
@@ -19,7 +25,8 @@ import {
  *
  * **Since user schema v52 a wire row is one _entry_** — one printing in one finish of one token
  * in one list — and Rust resolves the effective printing and quantity itself (spec §4.2). What
- * is left here is the grain the wall keys on, the order it reads in, and the dismissal.
+ * is left here is the grain the wall keys on, the order it reads in, which entries the deck's
+ * stacks draw (`pileTokens`) and which tokens nothing in the deck makes (`isHandAdded`).
  */
 
 /**
@@ -111,13 +118,24 @@ describe("deckTokenViews", () => {
 
   /**
    * **The quantity is Rust's effective answer and the view does no arithmetic on it** — an
-   * implicit entry arrives at `deck_tokens.quantity ?? 1` already. The constant stays pinned to
-   * the literal because it is still what that `?? 1` is, and the fake reads it.
+   * implicit entry arrives at `deck_tokens.quantity ?? 0` already, and a legacy count a reader
+   * stored before v52 arrives as that count. The constant stays pinned to the literal because it
+   * is still what that `?? 0` is, and the fake reads it.
    */
   it("passes the effective quantity through, zero included", () => {
     expect(deckTokenViews([row()])[0].quantity).toBe(1);
     expect(deckTokenViews([row({ quantity: 0, implicit: false })])[0].quantity).toBe(0);
-    expect(DEFAULT_TOKEN_QUANTITY).toBe(1);
+  });
+
+  /**
+   * **An untouched token reads 0** (managed tokens spec §3.1): a token is something the reader
+   * starts to use, so the default counts nothing and the first `+` is the reader's own. It was
+   * `1` until then, which put every token a deck could make into its stacks whether or not the
+   * reader ever sleeved one.
+   */
+  it("defaults an untouched token to zero copies", () => {
+    expect(DEFAULT_TOKEN_QUANTITY).toBe(0);
+    expect(deckTokenViews([row({ quantity: DEFAULT_TOKEN_QUANTITY })])[0].quantity).toBe(0);
   });
 
   /**
@@ -212,10 +230,24 @@ describe("deckTokenViews", () => {
     expect(views[0].quantity).toBe(0);
   });
 
-  it("hides a dismissed token, and shows it when asked", () => {
-    const rows = [row({ state: "hidden" })];
-    expect(deckTokenViews(rows)).toHaveLength(0);
-    expect(deckTokenViews(rows, { showDismissed: true })).toHaveLength(1);
+  /**
+   * **A `hidden` row is drawn like any other** (managed tokens spec §3.3, Review Focus 1). Dismiss
+   * is gone, and a launch pass retires the word — but a dismissal an older peer writes arrives by
+   * sync *after* that pass has run, and until the next launch retires it too, it must draw as an
+   * ordinary token. Nothing may hide it: a token that vanished on a sync, with no control anywhere
+   * to bring it back, is the one outcome worse than a stale word.
+   */
+  it("draws a hidden row like any other, and filters nothing", () => {
+    const views = deckTokenViews([
+      row({ oracleId: "o-a", name: "Angel", state: "hidden", quantity: 2, implicit: false }),
+      row({ oracleId: "o-b", name: "Bird", state: "hidden" }),
+      row({ oracleId: "o-c", name: "Cat", quantity: 0 }),
+    ]);
+    expect(views.map((v) => [v.name, v.state])).toEqual([
+      ["Angel", "hidden"],
+      ["Bird", "hidden"],
+      ["Cat", "auto"],
+    ]);
   });
 
   /**
@@ -283,20 +315,99 @@ describe("deckTokenViews", () => {
   });
 
   /**
-   * `overridden` drives the reset affordance, so it has to mean "there is something to reset"
-   * and nothing else — and since v52 reset deletes **this list's entries** (`deck_token_reset`),
-   * so what there is to reset is exactly an entry that is not implicit. A dismissal is not one:
-   * reset does not touch the state, and a reset control over a dismissed implicit token would be
-   * a press that changes nothing.
+   * `implicit` is what **Remove printing** is drawn by (managed tokens spec §3.4), on the band and
+   * the pile alike, so it passes through as Rust answered it and nothing else bends it —
+   * `deck_token_remove` deletes one stored entry, and an implicit one is not stored. The token's
+   * state is not part of it: a `hidden` implicit entry is as unstored as an `auto` one.
    */
-  it("marks an entry overridden exactly when this list holds it", () => {
+  it("passes implicit through as the read answered it, whatever the state", () => {
     const untouched = deckTokenViews([row()])[0];
-    expect(untouched.overridden).toBe(false);
+    expect(untouched.implicit).toBe(true);
     expect(untouched.state).toBe("auto");
-    expect(deckTokenViews([row({ implicit: false })])[0].overridden).toBe(true);
-    expect(
-      deckTokenViews([row({ state: "hidden" })], { showDismissed: true })[0].overridden,
-    ).toBe(false);
+    expect(deckTokenViews([row({ implicit: false })])[0].implicit).toBe(false);
+    expect(deckTokenViews([row({ state: "hidden" })])[0].implicit).toBe(true);
+  });
+});
+
+/**
+ * **The deck's stacks draw what the reader has counted; the band draws everything** (managed
+ * tokens spec §3.2). `pileTokens` is the one filter, and `DeckEditor` applies it to the pile's
+ * list alone — the band, Add printing and the plan's live side keep every row.
+ */
+describe("pileTokens", () => {
+  it("keeps only the entries with at least one copy, in the order it was handed", () => {
+    const views = deckTokenViews([
+      row({ oracleId: "o-a", name: "Angel", quantity: 0 }),
+      row({ oracleId: "o-b", name: "Bird", quantity: 1, implicit: false }),
+      row({ oracleId: "o-c", name: "Cat", quantity: 3, implicit: false }),
+      row({ oracleId: "o-d", name: "Dog", quantity: 0, implicit: false }),
+    ]);
+    expect(pileTokens(views).map((v) => v.name)).toEqual(["Bird", "Cat"]);
+  });
+
+  /** A token's two entries are two answers: the counted one is drawn, its zero twin is not. */
+  it("filters entry by entry, so one token can be half in the pile", () => {
+    const views = deckTokenViews([
+      row({ cardId: "c-a", finish: "nonfoil", quantity: 0, implicit: false }),
+      row({ cardId: "c-a", finish: "foil", quantity: 2, implicit: false }),
+    ]);
+    expect(pileTokens(views).map((v) => v.finish)).toEqual(["foil"]);
+  });
+
+  /** Review Focus 1 on the pile's side: a `hidden` entry with copies is a counted token. */
+  it("draws a hidden entry with copies like any other", () => {
+    const views = deckTokenViews([row({ state: "hidden", quantity: 2, implicit: false })]);
+    expect(pileTokens(views)).toHaveLength(1);
+  });
+
+  /** A new array, never the argument: the input is the hook's memo and must not be reordered. */
+  it("answers a new array and leaves its input alone", () => {
+    const views = deckTokenViews([row({ quantity: 0 })]);
+    const pile = pileTokens(views);
+    expect(pile).not.toBe(views);
+    expect(views).toHaveLength(1);
+  });
+});
+
+/**
+ * **A hand-added token is one nothing in the deck makes — `derived === false`, never `state`**
+ * (managed tokens spec §3.5). A token the deck derives can still be `manual` (kept by hand after a
+ * cut, or restored before this build), and marking it as not made by the deck would be a false
+ * sentence about a card that is sitting in the deck making it.
+ */
+describe("isHandAdded", () => {
+  it("reads derived and never the state", () => {
+    expect(isHandAdded({ derived: false })).toBe(true);
+    expect(isHandAdded({ derived: true })).toBe(false);
+    const [derivedManual] = deckTokenViews([row({ state: "manual", derived: true })]);
+    expect(isHandAdded(derivedManual)).toBe(false);
+    const [byHand] = deckTokenViews([row({ state: "manual", derived: false, sources: [] })]);
+    expect(isHandAdded(byHand)).toBe(true);
+  });
+});
+
+/**
+ * **The mark's words, spelled once**: the badge, its tooltip and the clause the art press's name
+ * carries — because the badge is `aria-hidden`, and a mark only sighted readers can see is a fact
+ * half the readers never get.
+ */
+describe("the not-made-by-deck mark", () => {
+  it("says the badge and the tooltip in the spec's words", () => {
+    expect(NOT_MADE_BY_DECK).toBe("NOT MADE BY DECK");
+    expect(notMadeByDeckHint("Treasure")).toBe(
+      "Nothing in this deck makes Treasure. It was added by hand.",
+    );
+  });
+
+  it("folds the mark's words into the art press's name for a hand-added token only", () => {
+    const [made] = deckTokenViews([row({ cardId: "c-a", setCode: "tafr", collectorNumber: "15" })]);
+    const [byHand] = deckTokenViews([
+      row({ cardId: "c-a", setCode: "tafr", collectorNumber: "15", derived: false, sources: [] }),
+    ]);
+    expect(tokenArtName(made)).toBe(tokenEntryName("Change the art for", made));
+    expect(tokenArtName(byHand)).toBe(
+      `${tokenEntryName("Change the art for", byHand)}, not made by deck`,
+    );
   });
 });
 
@@ -324,8 +435,8 @@ describe("tokenEntryName", () => {
   });
 
   it("says no printing for one gone from the corpus, and still says its finish", () => {
-    expect(tokenEntryName("Reset", entry({ setCode: null, collectorNumber: null }))).toBe(
-      `Reset Treasure, ${SUBTITLE}, Nonfoil`,
+    expect(tokenEntryName("Remove", entry({ setCode: null, collectorNumber: null }))).toBe(
+      `Remove Treasure, ${SUBTITLE}, Nonfoil`,
     );
   });
 });
@@ -396,6 +507,59 @@ describe("isTokenPrinting", () => {
     expect(isTokenPrinting("flip", undefined)).toBe(false);
     expect(isTokenPrinting("flip", "")).toBe(false);
     expect(isTokenPrinting("flip", "token Creature — Spirit")).toBe(false);
+  });
+});
+
+describe("isListedToken", () => {
+  /**
+   * `deck_tokens::is_listed_token`'s twin over the shapes the crate's
+   * `token_printings_keeps_the_game_helpers_and_leaves_out_other_games` holds: every real token
+   * and emblem, and the game helpers a deck brings to the table — while other games' cards, the
+   * minigames and the checklists stay out. Lines, texts and set types off the debug corpus.
+   */
+  it("lists tokens, emblems and game helpers, and nothing from another game", () => {
+    const FACE_DOWN = "(You can cover a face-down manifested creature with this reminder card.)";
+    const CHECKLIST = "(You can mark this card to represent a double-faced card in your library.)";
+    const yes: [string, string, string | null, string | null][] = [
+      ["token", "Token Artifact — Treasure", null, "token"],
+      ["emblem", "Emblem — Elspeth", null, "token"],
+      ["flip", "Token Enchantment — Aura Role // Token Enchantment — Aura Role", null, "token"],
+      // A real token is listed from any set, an other game's included.
+      ["token", "Token Creature — Soldier", null, "memorabilia"],
+      ["token", "Card", "At the beginning of your end step, draw a card.", "token"], // The Monarch
+      ["double_faced_token", "Card // Card", null, "token"], // Day // Night
+      ["double_faced_token", "Dungeon — Undercity // Card", null, "token"], // The Initiative
+      ["token", "Creature", FACE_DOWN, "token"], // Manifest
+      ["token", "Artifact Creature — Cyberman", "(You can cover a face-down creature…)", "token"],
+      ["token", "Card", null, "masters"], // The List's City's Blessing
+      ["token", "Card", null, null], // a set `sets` does not list: in doubt, kept
+    ];
+    for (const [layout, line, text, setType] of yes) {
+      expect(isListedToken(layout, line, text, setType), `${layout} ${line} ${setType}`).toBe(
+        true,
+      );
+    }
+    const no: [string, string, string | null, string | null][] = [
+      ["token", "Card", null, "memorabilia"], // a World Championships ad
+      ["token", "Creature — Minotaur", "Haste", "memorabilia"], // Battle the Horde
+      ["double_faced_token", "Card // Card", null, "minigame"], // Booster Sleuth
+      ["token", "Card", CHECKLIST, "token"], // Innistrad Checklist
+      ["token", "Boss", "Whenever a creature the bosses control dies…", "token"], // TMNT arena
+      ["token", "Event", "Destroy all Turtles.", "token"],
+      ["token", "Creature — Ninja", "This creature can't block.", "token"],
+      // The helper arm is `token` and `double_faced_token` only, and never a real card.
+      ["emblem", "Card", null, "token"],
+      ["normal", "Card", null, "token"],
+      ["flip", "Creature — Human Monk // Legendary Creature — Spirit", null, "expansion"],
+      // Case-sensitive, as the crate's `instr` is.
+      ["token", "card", null, "token"],
+    ];
+    for (const [layout, line, text, setType] of no) {
+      expect(isListedToken(layout, line, text, setType), `${layout} ${line} ${setType}`).toBe(
+        false,
+      );
+    }
+    expect(isListedToken(null, "Card", null, "token")).toBe(false);
   });
 });
 

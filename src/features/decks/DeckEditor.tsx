@@ -45,7 +45,6 @@ import {
   type DeckPullRow,
   type DeckQuickAddWish,
   type DeckVariant,
-  type TokenMode,
 } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { PLAIN_PRESS } from "./headerControls";
@@ -91,12 +90,19 @@ import { useDeckNotes } from "./useDeckNotes";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
-import { DeckTokensPanel } from "./DeckTokensPanel";
+import { DeckTokensPanel, tokenWallDrawn } from "./DeckTokensPanel";
 import { TokenArtPicker } from "./TokenArtPicker";
-import { entryRef, type DeckTokenView } from "./deckTokens";
+import { entryRef, pileTokens, type DeckTokenView } from "./deckTokens";
 import { useDeckTokens } from "./useDeckTokens";
+import {
+  focusable,
+  TOKEN_ADD_ATTR,
+  TOKEN_BAND_ATTR,
+  usePickCaret,
+  useRemoveCaret,
+} from "./tokenCaret";
 import { tokenTheoryMark, tokenTheoryPlan } from "./tokenTheory";
-import type { TokenPile } from "./views/TokenPile";
+import { TOKEN_PILE_ATTR, type TokenPile } from "./views/TokenPile";
 import { useDeckUndo } from "./useDeckUndo";
 import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
@@ -963,8 +969,8 @@ const REFILE_NOTE_MS = 6000;
  * instead (token stacks, spec §4.6: *tokens never become deck cards*, whichever pile they were
  * dropped on). No SQLite row is numbered 0, so this is a sentinel and never an address, and the
  * landed mark skips it ({@link DeckEditor}'s `markAdded`): there is no card to point at. The
- * token shows up on the Tokens & Emblems band — and in the views' pile too, on a deck whose token
- * mode draws one (not `hidden`) — both re-read by the add's own `["decks"]` invalidation.
+ * token shows up on the Tokens & Emblems band — and in the views' pile too, at the copies the add
+ * filed — both re-read by the add's own `["decks"]` invalidation.
  */
 const NO_DECK_CARD = 0;
 
@@ -1508,13 +1514,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   /**
    * The tokens and emblems this deck makes — **read once, here, for every surface that draws
-   * them** (issue #507). The Tokens & Emblems band and, on a deck whose token mode draws it
-   * ({@link tokenPileDrawn}), the pile each view draws are two drawings of one answer: a quantity
-   * stepped on one is the number the other draws, and a dismissal made on the band takes the token
-   * out of the pile. A hook call per surface would be two `showDismissed` switches and two write
-   * observers, each free to own a refusal the other never hears about. ({@link planTokens} is a
-   * second call and not a second drawing: it reads the *other* list, for the plan's marks, and
-   * draws nothing.)
+   * them** (issue #507). The Tokens & Emblems band and the pile each view draws are two drawings
+   * of one answer: a quantity stepped on one is the number the other draws, and a token stepped to
+   * 0 on the band leaves the pile. A hook call per surface would be two write observers, each free
+   * to own a refusal the other never hears about. ({@link planTokens} is a second call and not a
+   * second drawing: it reads the *other* list, for the plan's marks, and draws nothing.)
    *
    * **One view per entry** since token stacks PR 2 (user schema v52, spec §4.2) — a token with a
    * foil and a regular copy in this list is two views — and every write addresses an entry.
@@ -1570,16 +1574,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // failure is the failure of a press rather than of a background query. It is last in the
   // chain because a refused *write* is the more specific answer whenever both are standing.
   //
-  // **The token writes join this family exactly while the Tokens & Emblems band is shut** (token
-  // stacks PR 2). The band says their refusal itself — once, above its wall, the newest token
-  // write's sentence (`useDeckTokens`' `failure`) — but the wall is unmounted while the band is
-  // collapsed, which is every deck's default, and since PR 2 the views draw the pile on every
-  // managed deck. So a refused pile stepper or pile swap (a busy database, a deck deleted under the
-  // reader) would otherwise be a press that changed nothing and said nothing anywhere. Open, the
-  // band speaks and this banner leaves them out: two sentences for one refusal is the reason this
-  // family leaves the docked panel's add out too.
-  const bannerWrites =
-    row?.tokensOpen === true ? writes : ([...writes, ...deckTokens.writes] as const);
+  // **The token writes join this family exactly while the Tokens & Emblems wall is not drawn**
+  // (token stacks PR 2). The band says their refusal itself — once, above its wall, the newest
+  // token write's sentence (`useDeckTokens`' `failure`) — but the wall is unmounted while the band
+  // is collapsed, which is every deck's default, and the views draw the pile on every deck that has
+  // counted a token. So a refused pile stepper or pile swap (a busy database, a deck deleted under
+  // the reader) would otherwise be a press that changed nothing and said nothing anywhere. Drawn,
+  // the band speaks and this banner leaves them out: two sentences for one refusal is the reason
+  // this family leaves the docked panel's add out too.
+  //
+  // **The wall and not the band's open flag** (`tokenWallDrawn`, the band's own condition): an
+  // open band over a deck that makes nothing draws no wall, and since managed tokens that deck is
+  // the one Add printing is offered on precisely to add a first token by hand — the press opens
+  // the band, so a refused first add keyed on `tokensOpen` was said nowhere at all.
+  const bannerWrites = tokenWallDrawn(deckTokens, row?.tokensOpen === true)
+    ? writes
+    : ([...writes, ...deckTokens.writes] as const);
   /**
    * **The last batch of card writes, as one write** — a multi-card drop or Delete over a picked
    * set (issue #553). Each card in a batch is its own call on the same observer, so the observer
@@ -2263,15 +2273,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // **`setLabel` rides in through `writes`** and is live coverage for the same reason: nothing
   // in the app could reach it until that menu, and every one of the four views can now.
   //
-  // **The token writes ride here always, and in the banner only while the band is shut** (token
-  // stacks PR 2, spec §4.7). Here always, because each one is a journalled deck write now — a
-  // stepper press, a swap, an added printing, a dismissal, a reset — so a success has to clear the
-  // redo stack below like any other, and a refusal (a deck deleted under the reader answers `GONE`
-  // from `touch_deck`) has to re-read the deck like any other. Not in `writes` itself, because
-  // the band says their refusal once, above its own wall (`useDeckTokens`' `failure`, the newest
-  // token write's sentence), and while it is open a banner too would be two sentences for one
-  // refusal; {@link bannerWrites} is what adds them while the band is shut. `planTokens`' writes
-  // are never pressed, so they are in neither list.
+  // **The token writes ride here always, and in the banner only while the band's wall is not
+  // drawn** (token stacks PR 2, spec §4.7). Here always, because each one is a journalled deck
+  // write now — a stepper press, a swap, an added printing, a removed one — so a success has to
+  // clear the redo stack below like any other, and a refusal (a deck deleted under the reader
+  // answers `GONE` from `touch_deck`) has to re-read the deck like any other. Not in `writes`
+  // itself, because the band says their refusal once, above its own wall (`useDeckTokens`'
+  // `failure`, the newest token write's sentence), and while that wall is drawn a banner too would
+  // be two sentences for one refusal; {@link bannerWrites} is what adds them while it is not.
+  // `planTokens`' writes are never pressed, so they are in neither list.
   const refetch = deck.query.refetch;
   const lastOfAny = newestWrite([
     ...writes,
@@ -4299,37 +4309,31 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const tokenZoom = useAppStore((s) => s.cardZoom.deck);
 
   /**
-   * Whether the views draw the Tokens & Emblems pile — `decks.token_mode` (user schema v52), where
-   * `hidden` takes it out of all four views and `managed` (and PR 3's `collection`) draw it. It was
-   * the `token_stack` switch, off by default; **every deck starts on `managed`** now (spec §4.1),
-   * so a deck that makes tokens shows its pile unless the reader has hidden it. `false` until the
-   * deck row has answered, as the switch was: a pile drawn before the mode is known could be one
-   * the reader hid.
-   *
-   * The band is drawn in every mode, which is what lets a reader switch back from `Hide`.
+   * Whether the views draw the Tokens & Emblems pile at all — **once the deck row has answered,
+   * and on every deck** (managed tokens spec §3.9). It was `decks.token_mode`'s, where `hidden`
+   * took the pile out of all four views; the mode's control is gone and the column stays with
+   * nothing reading it, because with every token at 0 until the reader counts it there was nothing
+   * left for it to decide. A deck set to `hidden` before this build draws its pile again, which is
+   * the tokens its reader has counted and nothing else ({@link pileTokenList}). Still `false` until
+   * the row has answered, so the pile does not flash into a deck mid-open.
    */
-  const tokenPileDrawn = row !== null && row.tokenMode !== "hidden";
+  const tokenPileDrawn = row !== null;
   const tokenList = deckTokens.tokens;
   const setTokenQuantity = deckTokens.setQuantity;
   const swapToken = deckTokens.swap;
   const addTokenPrinting = deckTokens.addPrinting;
+  const removeToken = deckTokens.remove;
 
   /**
-   * The tokens the deck **brings** — every entry the band draws less the dismissed tokens'
-   * entries, whatever the band's `Show dismissed` says. That switch is the band's own tool for
-   * finding a token to put back, and a pile on the desk is a statement of what the deck brings,
-   * which a dismissed token is not.
-   *
-   * **One list for the pile, for the live side of {@link tokenPlan} and for the picker's `add`
-   * mode**, so a mark is only ever about an entry the pile draws, the two sides of the plan are
-   * one population (the plan's side is filtered the same way below, and a live side that took the
-   * band's switch in would be a plan whose answer moved with a press on the band), and `Add
-   * printing` offers the printings of the tokens the deck brings rather than of one it dismissed.
+   * **The tokens the stacks draw: the ones the reader has counted** — `pileTokens`, the band's
+   * list less every entry at 0 (managed tokens spec §3.2). **This is the one place the filter is
+   * applied**: the band draws every row, the picker's `add` mode offers the printings of every
+   * token the deck has, and the live side of {@link tokenPlan} reads every row too, so a mark is
+   * about an entry the reader can see on the band whether or not it is in the pile. Nothing reads
+   * `hidden` any more (§3.3): a dismissal an older peer synced in after the launch pass ran is
+   * drawn like any other token, in the pile once it has copies.
    */
-  const keptTokens = useMemo(
-    () => tokenList.filter((view) => view.state !== "hidden"),
-    [tokenList],
-  );
+  const pileTokenList = useMemo(() => pileTokens(tokenList), [tokenList]);
 
   /**
    * What the one printing picker is open for — **one picker for the band's tiles, the views' pile
@@ -4340,15 +4344,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *   entry** (rule 4) and never the token's other entries, so it is held by the entry's
    *   `entryKey` — the printing and the finish — and not by the token's `oracle_id`, which a
    *   token's two entries share.
-   * - **`add`**, from the band's `Add printing`: the printings of every token the deck brings
-   *   ({@link keptTokens}), and a pick is rule 5 at one copy.
+   * - **`add`**, from the band's `Add printing`: the printings of every token the deck has — the
+   *   band's whole list, at 0 included — or, with the picker's `All tokens`, of any token in the
+   *   game; a pick is rule 5 at one copy.
    *
    * **A key and never the view**, which is the `Layer` union's rule: the entries are re-derived
    * after every write, so a frozen view would answer about the entry as it was when it was
    * pressed — a quantity stepped since, a printing another write has moved — and a swap made
    * through it would name a `from` the list may no longer hold. Looked up in `deckTokens.tokens`,
-   * which is every entry either surface can draw: the pile draws a subset of it (never a dismissed
-   * token) and the band draws all of it.
+   * which is every entry either surface can draw: the pile draws a subset of it (the entries with
+   * copies) and the band draws all of it.
    *
    * **An entry that has gone is no entry to swap, and the key goes with it** — reset here, during
    * render, which is this file's own pattern for state that has to follow a read (never an effect,
@@ -4366,34 +4371,67 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   if (pickingToken?.kind === "swap" && pickedEntry === undefined) setPickingToken(null);
   const tokenPicker = useMemo(() => {
     if (pickingToken === null) return null;
-    if (pickingToken.kind === "add") return { kind: "add" as const, tokens: keptTokens };
+    if (pickingToken.kind === "add") return { kind: "add" as const, tokens: tokenList };
     return pickedEntry === undefined ? null : { kind: "swap" as const, entry: pickedEntry };
-  }, [pickingToken, keptTokens, pickedEntry]);
+  }, [pickingToken, tokenList, pickedEntry]);
+  /**
+   * **The control that opened the picker** — read off `document.activeElement` at the press, which
+   * is {@link openPull}'s answer for its reason: the press is a picture on a tile or a line, or the
+   * band's Add printing, none of which hands a ref up, and a press focuses what it presses. It is
+   * where Escape and the ✕ hand the caret back (`Dialog`'s `onDismiss` contract), where a refused
+   * pick leaves it, and — by the surface it sits in, the band or the pile — where a landed pick
+   * looks for the tile it made ({@link pickCaret}).
+   */
+  const tokenPickerOpener = useRef<HTMLElement | null>(null);
   /** A press on an entry, from the pile or the band — stable, because the pile's memo holds it. */
-  const pickTokenEntry = useCallback(
-    (view: DeckTokenView) => setPickingToken({ kind: "swap", entryKey: view.entryKey }),
+  const pickTokenEntry = useCallback((view: DeckTokenView) => {
+    tokenPickerOpener.current = focusable(document.activeElement);
+    setPickingToken({ kind: "swap", entryKey: view.entryKey });
+  }, []);
+  /** The band's Add printing. */
+  const addTokenEntry = useCallback(() => {
+    tokenPickerOpener.current = focusable(document.activeElement);
+    setPickingToken({ kind: "add" });
+  }, []);
+  /**
+   * Where a pick's caret goes when the tile it made cannot be found, where the pick was refused,
+   * and where Escape sends it: the opener, **if it can still take it** — a swap takes its own
+   * entry's tile away, opener and all — and otherwise the band's Add printing, the floor
+   * `tokenCaret.ts` names for both surfaces.
+   */
+  const tokenPickerHandBack = useCallback(
+    () =>
+      focusable(tokenPickerOpener.current) ??
+      focusable(editorRef.current?.querySelector(`[${TOKEN_ADD_ATTR}]`)) ??
+      editorRef.current,
     [],
   );
+  /** Escape and the ✕ — `Dialog`'s contract: hand the caret back to the opener, then close. */
+  const dismissTokenPicker = useCallback(() => {
+    tokenPickerHandBack()?.focus();
+    setPickingToken(null);
+  }, [tokenPickerHandBack]);
   const closeTokenPicker = useCallback(() => setPickingToken(null), []);
+  /** The caret owed by a pick — see {@link tokenPickerOpener}. Every entry, the band's list: a
+   *  swapped or added printing is on it whether or not the pile draws it. */
+  const pickCaret = usePickCaret(tokenList);
 
   /**
    * The **theory** list's tokens — the plan's half of the token pile's marks (token stacks, spec
    * §3.5 and §4.8), and emphatically not a second drawing of anything.
    *
-   * **Only `tokens` is read here, never a write.** The hook comes with its writes and a
-   * `showDismissed` switch, and every one of them belongs to {@link deckTokens}: one picker, one
-   * write observer. A write through this copy would land on the theory list — the list the reader
-   * is not looking at — and report its refusal to nobody; and the dismissals it could make are the
-   * token-level state both lists share, which the band already owns. This is a read.
+   * **Only `tokens` is read here, never a write.** The hook comes with its writes, and every one
+   * of them belongs to {@link deckTokens}: one picker, one write observer. A write through this
+   * copy would land on the theory list — the list the reader is not looking at — and report its
+   * refusal to nobody. This is a read.
    *
    * **A `null` deck id unless the question is being asked**, which is `theoryPlan`'s pair one
-   * read over — a deck that keeps a plan, read on its Live list — **and the pile drawn**
-   * ({@link tokenPileDrawn}): the marks are drawn on the pile and nowhere else, so on a deck that
-   * hides its tokens a read here would be a second `deck_tokens` on every Live open and after
-   * every deck write, answering marks nothing draws. `null` disables the query (the hook gates on
-   * it) *and* moves its key off this deck's, so a disabled read cannot serve a cached answer the
-   * way issue #159's did — though the gate that means it is still on the derivation below, where
-   * the question is asked.
+   * read over — a deck that keeps a plan, read on its Live list — once the deck row has answered
+   * ({@link tokenPileDrawn}). It also waited on the token mode until managed tokens retired it
+   * (spec §3.9): a deck whose pile was hidden drew no marks, and every deck draws its pile now.
+   * `null` disables the query (the hook gates on it) *and* moves its key off this deck's, so a
+   * disabled read cannot serve a cached answer the way issue #159's did — though the gate that
+   * means it is still on the derivation below, where the question is asked.
    */
   const planTokens = useDeckTokens(
     tokenPileDrawn && theoryEnabled && variant === "live" ? deckId : null,
@@ -4414,23 +4452,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * Gated on exactly the pair {@link theoryPlan} is gated on, for that memo's reason; `row !==
    * null` narrows the three switches into reach.
+   *
+   * **Both sides are every row of their list** — the band's, not the pile's — so the plan's
+   * arithmetic sees a live entry at 0 as the 0 it is, rather than as an entry the deck does not
+   * hold; the marks are drawn on the pile, which is the counted subset of the same rows.
    */
   const tokenPlan = useMemo(
     () =>
       row === null || !(theoryEnabled && variant === "live")
         ? undefined
-        : tokenTheoryPlan(
-            planTokensLoaded
-              ? planTokenRows.filter((view) => view.state !== "hidden")
-              : undefined,
-            keptTokens,
-            {
-              exact: row.theoryMarkExact,
-              name: row.theoryMarkName,
-              unplanned: row.theoryMarkUnplanned,
-            },
-          ),
-    [row, theoryEnabled, variant, planTokensLoaded, planTokenRows, keptTokens],
+        : tokenTheoryPlan(planTokensLoaded ? planTokenRows : undefined, tokenList, {
+            exact: row.theoryMarkExact,
+            name: row.theoryMarkName,
+            unplanned: row.theoryMarkUnplanned,
+          }),
+    [row, theoryEnabled, variant, planTokensLoaded, planTokenRows, tokenList],
   );
 
   /**
@@ -4499,17 +4535,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * The pile each view draws among the rail's piles, or `undefined` — which is the whole of the
    * off switch, since a view handed nothing draws exactly what it drew before the pile existed.
-   * `undefined` on a deck whose token mode is `hidden` ({@link tokenPileDrawn}).
+   * `undefined` until the deck row has answered ({@link tokenPileDrawn}); a pile whose tokens are
+   * all at 0 is an empty list, which the views draw as no pile at all (`hasTokenPile`).
    *
-   * Its tokens are {@link keptTokens}, never a dismissed one — one view per entry, so a token with
-   * two printings is two cards. The stepper writes the entry it is on (`setQuantity` takes the
-   * entry's address) and a press opens the picker to swap that entry ({@link pickTokenEntry}).
+   * Its tokens are {@link pileTokenList} — **the counted entries only**, one view per entry, so a
+   * token with two printings is two cards and one at 0 is none. The stepper writes the entry it is
+   * on (`setQuantity` takes the entry's address), a press opens the picker to swap that entry
+   * ({@link pickTokenEntry}), and **Remove printing** deletes it (`remove`, managed tokens spec
+   * §3.4) — the same stable write the band's tile presses.
    *
    * **Nothing here enters `groups`, `deck.cards` or `buildGroups`**, and that is what keeps a
    * token out of the deck's size, every pile total, the ledger, the stats and validation — the
    * views place it in their own layer, beside the groups this editor hands them.
    *
-   * **Three fields beyond the tokens and their two writes** (token stacks, PR 1):
+   * **Three fields beyond the tokens and their three writes** (token stacks, PR 1):
    * - `railIndex` is the reader's last press while it is in flight ({@link localTokenRail}), and
    *   otherwise `decks.token_rail_index` as stored — `-1`, or any slot the rail no longer has,
    *   reads as last. The views clamp it on read (`tokenRailSlot`); this passes the column through
@@ -4519,17 +4558,44 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *   to ask — a deck without one, the Theory tab, or a plan still loading. Absent draws no marks,
    *   which is the same statement `theoryPlan` being `undefined` makes about the deck's cards.
    *
-   * Memoised on the tokens, a `setQuantity` that `useDeckTokens` keeps stable while the rows are,
-   * a stable press, the drawn index (the in-flight move, else the stored column), a stable move and
+   * Memoised on the tokens, a `setQuantity` that `useDeckTokens` keeps stable, a `remove` that
+   * changes only with the tokens ({@link removePileToken} reads them as the list before), a
+   * stable press, the drawn index (the in-flight move, else the stored column), a stable move and
    * the plan, so a keystroke anywhere in the editor does not hand four views a new pile.
    */
   const tokenRailIndex = localTokenRail?.index ?? row?.tokenRailIndex ?? -1;
+
+  /**
+   * **The pile's Remove printing, handing the caret on** (`tokenCaret.ts`) — kept here rather than
+   * in the pile, because the pile unmounts with its last entry and would take an owed caret with
+   * it. The target is looked up in the pile by attribute after the re-read has drawn it: the same
+   * token's next entry, else the next token. **The floor is the band's Add printing, not the
+   * pile's grip**, and that is not a shortcut: the floor is only reached when the pile has no
+   * entry left, and a pile with no entry is not drawn, grip and all (`hasTokenPile`). The editor's
+   * own box is under that, for a band whose read was refused and draws no Add printing.
+   */
+  const pileRoot = useCallback(
+    () => editorRef.current?.querySelector(`[${TOKEN_PILE_ATTR}]`) ?? null,
+    [],
+  );
+  const pileFloor = useCallback(
+    () => focusable(editorRef.current?.querySelector(`[${TOKEN_ADD_ATTR}]`)) ?? editorRef.current,
+    [],
+  );
+  const removePileToken = useRemoveCaret({
+    views: pileTokenList,
+    remove: removeToken,
+    root: pileRoot,
+    fallback: pileFloor,
+  });
+
   const tokenPile = useMemo<TokenPile | undefined>(
     () =>
       tokenPileDrawn
         ? {
-            tokens: keptTokens,
+            tokens: pileTokenList,
             setQuantity: setTokenQuantity,
+            remove: removePileToken,
             pickArt: pickTokenEntry,
             railIndex: tokenRailIndex,
             moveTo: moveTokenPile,
@@ -4539,8 +4605,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         : undefined,
     [
       tokenPileDrawn,
-      keptTokens,
+      pileTokenList,
       setTokenQuantity,
+      removePileToken,
       pickTokenEntry,
       tokenRailIndex,
       moveTokenPile,
@@ -5637,20 +5704,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // the token wall in front of them is an answer about a *particular* deck, and a
         // `useState` here would ask it again every time they opened one.
         //
-        // **The mode is the deck's too, and it is written from the band's header** (token
-        // stacks, spec §4.5) — `decks.token_mode` through the deck's own `update`, the write
-        // `tokensOpen` rides, so a refusal is the editor's banner and the change is an undo step.
-        // The band is drawn in every mode, `hidden` included, which is what makes the control
-        // reachable again on a deck whose pile it took away. `Add printing` opens the one picker
-        // below in `add` mode; a press on a tile opens it on that entry, as the pile's does.
+        // **No mode control since managed tokens** (spec §3.9): the band's header carried the
+        // deck's `Managed | Hide` until then, and with every token at 0 until the reader counts it
+        // there is nothing left for it to decide — `decks.token_mode` stays in the schema, and
+        // nothing here reads it. The band draws every token; the views draw the counted ones.
+        // `Add printing` opens the one picker below in `add` mode; a press on a tile opens it on
+        // that entry, as the pile's does; its Remove printing is `deckTokens.remove`, the write
+        // the pile's own button makes, and the band hands its own caret on after it
+        // (`tokenCaret.ts`), since it is always drawn and the pile is not.
         <DeckTokensPanel
           tokens={deckTokens}
           open={row.tokensOpen}
           onToggle={(next) => deck.update.mutate({ tokensOpen: next })}
           onPick={pickTokenEntry}
-          onAddPrinting={() => setPickingToken({ kind: "add" })}
-          mode={row.tokenMode}
-          onMode={(tokenMode: TokenMode) => deck.update.mutate({ tokenMode })}
+          onAddPrinting={addTokenEntry}
         />
       )}
 
@@ -5660,6 +5727,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           printing and finish the list already holds folds the two in Rust); a pick in `add` mode
           is rule 5, one copy of that printing and finish on the list on screen. Either way the
           picker shuts on the pick, before the write answers — the refusal is the band's to draw.
+
+          **The caret is owed on both exits** (`tokenCaret.ts`). The panel it was on unmounts with
+          the pick, so once the write has answered and the re-read draws the picked printing, the
+          caret goes to that tile's picture on the surface the picker was opened from — the band
+          or the pile — and back to the opener where the tile cannot be found or the write was
+          refused. Escape and the ✕ hand it back to the opener before closing, `Dialog`'s own
+          `onDismiss` contract; an outside click moves nothing, since the reader is elsewhere.
 
           **Mounted in this column, and the check that makes that legal is written down rather
           than assumed.** `Dialog`'s scrim is a bare `fixed inset-0` and corrects for nothing, so
@@ -5672,11 +5746,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         mode={tokenPicker}
         zoom={tokenZoom}
         onPick={(to) => {
-          if (tokenPicker?.kind === "swap") swapToken(entryRef(tokenPicker.entry), to);
-          else if (tokenPicker?.kind === "add") addTokenPrinting(to.cardId, to.finish);
+          const written =
+            tokenPicker?.kind === "swap"
+              ? swapToken(entryRef(tokenPicker.entry), to)
+              : tokenPicker?.kind === "add"
+                ? addTokenPrinting(to.cardId, to.finish)
+                : undefined;
           setPickingToken(null);
+          if (written === undefined) return;
+          // The surface by its attribute, asked when the caret is placed — never the element the
+          // opener sat in, which a view switch in the meantime could have replaced.
+          const surface = tokenPickerOpener.current?.closest(`[${TOKEN_PILE_ATTR}]`)
+            ? TOKEN_PILE_ATTR
+            : TOKEN_BAND_ATTR;
+          pickCaret(
+            written,
+            to,
+            () => editorRef.current?.querySelector(`[${surface}]`) ?? null,
+            tokenPickerHandBack,
+          );
         }}
-        onDismiss={closeTokenPicker}
+        onDismiss={dismissTokenPicker}
         onClose={closeTokenPicker}
       />
 

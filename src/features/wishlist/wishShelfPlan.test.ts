@@ -60,6 +60,7 @@ describe("toShelfFolder", () => {
     name: "Foils",
     sortOrder: 2,
     managedDeckId: null,
+    managedTokens: false,
   };
 
   it("reads a reader's folder as a folder and a deck's as managed, and locks neither", () => {

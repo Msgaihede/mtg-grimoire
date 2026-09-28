@@ -584,7 +584,17 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// rung backfills it from this device's own `del` ops; a delete applied from a peer before the
 /// upgrade recorded nothing anywhere and is not recovered. **Written as 53 and renumbered at the
 /// merge**: the per-list piles above landed on `main` first, and a shipped number is spent.
-pub const USER_SCHEMA_VERSION: i64 = 54;
+///
+/// **55 (2026-09-27, the token-improvements spec §3.8) is `wishlist_folders.managed_tokens`**, the
+/// managed wishlist's **Tokens** subfolder: `1` on the child folder that holds a theory deck's
+/// token wishes, `0` everywhere else, and `idx_wishlist_folders_managed` widened to
+/// `(managed_deck_id, managed_tokens)` so a deck can own that child beside its own folder. Not
+/// synced, v48's column's reason — the managed wishlist is derived per device. The same build
+/// makes an untouched token read zero and retires every pre-v55 dismissal at launch
+/// (`deck_tokens::retire_hidden`), neither of which is a rung: the first writes nothing and the
+/// second reads the corpus. **Written as 54 and renumbered at the merge**, for the reason the
+/// rung above gives: the per-list piles and the tombstones both landed first.
+pub const USER_SCHEMA_VERSION: i64 = 55;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -4243,7 +4253,7 @@ CREATE TABLE {schema}.wishlist_folders (
                 sort_order INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
-             , sync_uid TEXT, needs_review TEXT, managed_deck_id INTEGER);
+             , sync_uid TEXT, needs_review TEXT, managed_deck_id INTEGER, managed_tokens INTEGER NOT NULL DEFAULT 0);
 
 CREATE TABLE {schema}."deck_labels" (
             id INTEGER PRIMARY KEY,
@@ -4577,7 +4587,7 @@ CREATE UNIQUE INDEX {schema}.idx_wishlist_entries_uid ON wishlist_entries (sync_
 
 CREATE UNIQUE INDEX {schema}.idx_wishlist_folders_uid ON wishlist_folders (sync_uid);
 
-CREATE UNIQUE INDEX {schema}.idx_wishlist_folders_managed ON wishlist_folders (managed_deck_id);
+CREATE UNIQUE INDEX {schema}.idx_wishlist_folders_managed ON wishlist_folders (managed_deck_id, managed_tokens);
 
 CREATE INDEX {schema}.idx_sync_ops_unpushed
                  ON sync_ops (seq) WHERE pushed_at IS NULL;
@@ -5287,6 +5297,26 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
              launch: {e}\nThey are tried again at the next launch."
         );
     }
+    // Logged and left owing, the same reason once more: a token dismissed before v55 that this
+    // pass has not retired draws as an ordinary token anyway — no reader treats `hidden` as
+    // hidden any more — and nothing a reader could act on is gained by refusing to start over
+    // one. **After the conversion and the repair**, because it zeroes entries they may have
+    // filed, and **after `migrate_corpus`**, because whether the deck still makes the token is a
+    // derivation over `cards.raw`, which is why this is a pass and not part of the v55 rung.
+    // Behind `capture::suppressed` and idempotent, so a `hidden` an older peer sends later is
+    // retired at the next launch and every launch after costs one read that finds nothing.
+    crate::deck_tokens::retire_hidden_logged(conn);
+    // **And then the dirty marks every pass since `settle_all` left, drained the way
+    // `sync::with_write` drains a write's — rule 7's backstop first, then the managed wishlist.**
+    // `settle_all` above armed this connection, so the conversion, the repair, the refile and the
+    // retire pass each marked the decks they wrote, and nothing read those marks until the first
+    // write of the session. Worse, `settle_all` ran *before* the retire pass: on the first v55
+    // launch a theory deck following `all` or `tokens` built its Tokens subfolder from a
+    // dismissed token's counts, which the pass then zeroed under it — a shopping list for tokens
+    // the reader had said they did not want (the final review's M2). Logged, for the reason
+    // every step here is.
+    crate::deck_tokens::reconcile_dirty_logged(conn);
+    crate::managed_wishlist::settle_logged(conn);
     Ok(())
 }
 
@@ -7442,6 +7472,39 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v55 (2026-09-27, the token-improvements spec §3.8): `wishlist_folders.managed_tokens`, the
+    // managed wishlist's **Tokens** subfolder. Written as v54 and renumbered at the merge, because
+    // the tombstones above took 54 first. A theory deck's managed folder gains one child
+    // folder that holds the Compare dialog's token rows when the mode is All or Tokens, and **its
+    // identity is this column rather than its name**: a reader who renames a folder `Tokens`, or
+    // a deck whose own name is `Tokens`, must never be taken for it. `0` is the deck's own folder
+    // — every managed folder that exists, and every folder the reader made — and `1` its Tokens
+    // child, which carries the deck's `managed_deck_id` too so the TEMP guard and the sweep that
+    // already cover the parent cover it.
+    //
+    // **`idx_wishlist_folders_managed` widens to `(managed_deck_id, managed_tokens)`** — one
+    // folder per deck per kind, where v48's was one per deck and would refuse the child. It is
+    // dropped first, `src-tauri/CLAUDE.md`'s rule for a changed index definition: a `CREATE`
+    // over the old one would be refused by name, and an `IF NOT EXISTS` would be the silent
+    // no-op on exactly the machines that need the widening. NULLs stay distinct in it, so every
+    // folder the reader made is untouched.
+    //
+    // **Not synced**, v48's column's reason: a managed folder is derived per device behind
+    // `capture::suppressed`, so the column is on no capture spec and no op ever carries it. It
+    // owes [`tests::UNDO_V55`] for [`tests::UNDO_V13`]'s loud reason — `ADD COLUMN` is not
+    // idempotent.
+    if v < 55 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE wishlist_folders ADD COLUMN managed_tokens INTEGER NOT NULL DEFAULT 0;
+             DROP INDEX IF EXISTS idx_wishlist_folders_managed;
+             CREATE UNIQUE INDEX idx_wishlist_folders_managed ON wishlist_folders (managed_deck_id, managed_tokens);",
+        )?;
+        // Literal `55`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA main.user_version = 55;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -9189,7 +9252,7 @@ pub(crate) mod tests {
         assert_eq!(
             want.len(),
             85,
-            "thirty-two tables, fifty indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason and `sticky_notes` brings none for the `INTEGER PRIMARY KEY` one, so thirty plus forty-seven plus three was eighty, and v48's `idx_wishlist_folders_managed` makes it forty-eight and eighty-one. v52's `deck_token_printings` is a table and two indexes, and no autoindex for the `INTEGER PRIMARY KEY` reason — thirty-one, fifty and eighty-four. v53's `deck_categories.variant` moves neither figure: a column, and two indexes dropped and rebuilt wider under the names they had. v54's `sync_gone` is a table and nothing else: `WITHOUT ROWID`, so its composite primary key IS the table and brings neither an index nor an autoindex — thirty-two, fifty and eighty-five, counted off the literal rather than added. \n             Re-COUNT the two figures when a rung moves them; adding one to the number written here is how a wrong one survives"
+            "thirty-two tables, fifty indexes, and the three `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own, while `collection_shares` is a rowid table and \n             so brings one. `deck_notes`, `deck_note_cards` and `activity` bring none either: all \n             three are `INTEGER PRIMARY KEY`, which is the rowid itself. `price_snapshots` brings none for the `WITHOUT ROWID` reason and `sticky_notes` brings none for the `INTEGER PRIMARY KEY` one, so thirty plus forty-seven plus three was eighty, and v48's `idx_wishlist_folders_managed` makes it forty-eight and eighty-one. v52's `deck_token_printings` is a table and two indexes, and no autoindex for the `INTEGER PRIMARY KEY` reason — thirty-one, fifty and eighty-four. v53's `deck_categories.variant` moves neither figure: a column, and two indexes dropped and rebuilt wider under the names they had. v54's `sync_gone` is a table and nothing else: `WITHOUT ROWID`, so its composite primary key IS the table and brings neither an index nor an autoindex — thirty-two, fifty and eighty-five, counted off the literal rather than added. v55 moves none of the three: a column, and `idx_wishlist_folders_managed` dropped and created again wider under its own name. \n             Re-COUNT the two figures when a rung moves them; adding one to the number written here is how a wrong one survives"
         );
         for (w, g) in want.iter().zip(got.iter()) {
             assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
@@ -9419,14 +9482,34 @@ pub(crate) mod tests {
     /// `idx_device_names_uid` with it.
     const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
 
-    /// v54's tombstones — the newest rewind on the user ladder, directly above [`UNDO_V53`].
+    /// v55's Tokens subfolder column — the newest rewind on the user ladder, directly above
+    /// [`UNDO_V54`], and prepended to every chain that starts with it. (Written as `UNDO_V54`,
+    /// with its rung; renumbered to 55 at the merge with the tombstones, which took 54 first.)
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason: `ADD COLUMN` is not idempotent, so a fixture that
+    /// kept `managed_tokens` dies at `duplicate column name` on the way back up. **The widened
+    /// index goes first**, because SQLite refuses `DROP COLUMN` on a column an index names, and
+    /// v48's one-column index comes back last, so the rewind lands on v54's shape rather than
+    /// near it — the climb drops it again before it widens it.
+    ///
+    /// **It runs first, before [`UNDO_V54`]**, because a rewind walks the ladder backwards — and
+    /// on a fixture that ran `capture::install` that order is what lets it run at all:
+    /// `sync_gone` is still there, so the `sync_gone_wishlist_folders` trigger [`UNDO_V54`]'s ⚠️
+    /// describes does not refuse this `DROP COLUMN`.
+    const UNDO_V55: &str = "DROP INDEX IF EXISTS idx_wishlist_folders_managed;
+         ALTER TABLE wishlist_folders DROP COLUMN managed_tokens;
+         CREATE UNIQUE INDEX idx_wishlist_folders_managed ON wishlist_folders (managed_deck_id);";
+
+    /// v54's tombstones — the rewind directly under [`UNDO_V55`] and directly above
+    /// [`UNDO_V53`].
     ///
     /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V37`]'s and [`UNDO_V31`]'s exactly: the rung
     /// is a bare `CREATE TABLE`, so a fixture that kept `sync_gone` dies at `table sync_gone
     /// already exists` on the way back up — a failure no real upgrade can produce, and one that
-    /// takes every unrelated test in the chain with it. **It runs first**, because a rewind walks
-    /// the ladder backwards. (Written as `UNDO_V53`, with its rung; renumbered to 54 at the merge
-    /// with `main`, whose per-list piles took 53 first.)
+    /// takes every unrelated test in the chain with it. **It runs straight after [`UNDO_V55`]**,
+    /// because a rewind walks the ladder backwards; it read "It runs first" until v55 landed above
+    /// it. (Written as `UNDO_V53`, with its rung; renumbered to 54 at the merge with `main`, whose
+    /// per-list piles took 53 first.)
     ///
     /// **No index needs a line of its own**, [`UNDO_V20`]'s rule, and here there is none to name:
     /// the table is `WITHOUT ROWID`, so its primary key *is* the table.
@@ -9436,11 +9519,12 @@ pub(crate) mod tests {
     /// there until the climb puts it back. SQLite then refuses a `DROP COLUMN` or a `RENAME` on
     /// any table carrying one (`error in trigger sync_gone_decks: no such table: main.sync_gone`,
     /// measured against 3.53.0), as well as a delete from it — even one that matches no row. So
-    /// such a fixture may rewind v54 and nothing below it: [`UNDO_V53`]'s very first statement,
-    /// `DELETE FROM deck_categories WHERE variant = 'theory'`, is refused over
+    /// such a fixture may rewind v55 and v54 and nothing below them: [`UNDO_V53`]'s very first
+    /// statement, `DELETE FROM deck_categories WHERE variant = 'theory'`, is refused over
     /// `sync_gone_deck_categories` with `no such table: main.sync_gone` (measured against 3.53.0
-    /// on 2026-09-27, over a table holding no theory pile). v54's own climb alters none of those
-    /// tables.
+    /// on 2026-09-27, over a table holding no theory pile). The climb back alters none of those
+    /// tables until v54 has put `sync_gone` back: v55's `ADD COLUMN` on `wishlist_folders` runs
+    /// after it.
     const UNDO_V54: &str = "DROP TABLE IF EXISTS sync_gone;";
 
     /// v53's per-list piles — the rewind directly under [`UNDO_V54`] and directly above
@@ -9971,7 +10055,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();
@@ -10003,7 +10087,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 31;"
         ))
         .unwrap();
         conn
@@ -10030,7 +10114,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} PRAGMA main.user_version = 33;"
         ))
         .unwrap();
         conn
@@ -10057,7 +10141,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
         conn
@@ -10081,7 +10165,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} PRAGMA main.user_version = 37;"
         ))
         .unwrap();
         conn
@@ -10102,7 +10186,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} PRAGMA main.user_version = 38;"
         ))
         .unwrap();
         conn
@@ -10123,7 +10207,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} PRAGMA main.user_version = 39;"
         ))
         .unwrap();
         conn
@@ -10144,7 +10228,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} PRAGMA main.user_version = 41;"
         ))
         .unwrap();
         conn
@@ -10175,7 +10259,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} PRAGMA main.user_version = 42;"
         ))
         .unwrap();
         conn
@@ -10196,7 +10280,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} PRAGMA main.user_version = 43;"
         ))
         .unwrap();
         conn
@@ -10211,7 +10295,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} PRAGMA main.user_version = 44;"
         ))
         .unwrap();
         conn
@@ -10223,7 +10307,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} PRAGMA main.user_version = 46;"
         ))
         .unwrap();
         conn
@@ -10232,19 +10316,21 @@ pub(crate) mod tests {
     /// A user file at 49 — the shape every machine carries the day before a price snapshot
     /// recorded how many copies it was of, and the only population the v50 rung is *for*.
     ///
-    /// Head rewound past **all five** rungs above it, newest first — [`UNDO_V54`], [`UNDO_V53`],
-    /// [`UNDO_V52`], [`UNDO_V51`] and then [`UNDO_V50`]. It read "both" until v52 landed, "all
-    /// three" until v53 did and "all four" until v54 did, which is the prediction every fixture doc
-    /// on this ladder makes coming true once more. Without [`UNDO_V51`] the file would keep
-    /// `decks.token_rail_index` and the v51 rung would die at `duplicate column name` on the climb
-    /// this fixture exists for; without [`UNDO_V52`], v52's at `table deck_token_printings already
-    /// exists`; without [`UNDO_V53`], v53's at `duplicate column name` over
-    /// `deck_categories.variant`; without [`UNDO_V54`], v54's at `table sync_gone already exists`.
+    /// Head rewound past **all six** rungs above it, newest first — [`UNDO_V55`], [`UNDO_V54`],
+    /// [`UNDO_V53`], [`UNDO_V52`], [`UNDO_V51`] and then [`UNDO_V50`]. It read "both" until v52
+    /// landed, "all three" until v53 did, "all four" until v54 did and "all five" until v55 did,
+    /// which is the prediction every fixture doc on this ladder makes coming true once more.
+    /// Without [`UNDO_V51`] the file would keep `decks.token_rail_index` and the v51 rung would die
+    /// at `duplicate column name` on the climb this fixture exists for; without [`UNDO_V52`],
+    /// v52's at `table deck_token_printings already exists`; without [`UNDO_V53`], v53's at
+    /// `duplicate column name` over `deck_categories.variant`; without [`UNDO_V54`], v54's at
+    /// `table sync_gone already exists`; without [`UNDO_V55`], v55's at `duplicate column name:
+    /// managed_tokens`.
     fn user_file_at_49() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} PRAGMA main.user_version = 49;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} PRAGMA main.user_version = 49;"
         ))
         .unwrap();
         conn
@@ -10253,15 +10339,15 @@ pub(crate) mod tests {
     /// A user file at 50 — the shape every machine carries the day before the token pile could
     /// be moved in the rail, and the only population the v51 rung is *for*.
     ///
-    /// Head rewound past v54, v53, v52 and v51, newest first, so it carries v50's holdings table
-    /// exactly as a real v50 file does. (Written as `user_file_at_49`, before the rung was
+    /// Head rewound past v55, v54, v53, v52 and v51, newest first, so it carries v50's holdings
+    /// table exactly as a real v50 file does. (Written as `user_file_at_49`, before the rung was
     /// renumbered to v51; renamed with it, which also keeps it clear of the v50 rung's own
     /// `user_file_at_49` above.)
     fn user_file_at_50() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} PRAGMA main.user_version = 50;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} PRAGMA main.user_version = 50;"
         ))
         .unwrap();
         conn
@@ -10270,16 +10356,16 @@ pub(crate) mod tests {
     /// A user file at 51 — the shape every machine carries the day before a token's printings
     /// became entries, and the only population the v52 rung is *for*.
     ///
-    /// Head rewound past v54, v53 and v52 — v52 alone until v53's piles and v54's table landed
-    /// above it, neither of which a file at 51 can hold. What makes a test built on it a real
-    /// upgrade rather than a fresh install is what the test seeds afterwards: a `deck_tokens` row
-    /// carrying a picked `card_id`, which nothing at head writes any more, and a
+    /// Head rewound past v55, v54, v53 and v52 — v52 alone until v53's piles, v54's table and
+    /// v55's column landed above it, none of which a file at 51 can hold. What makes a test built
+    /// on it a real upgrade rather than a fresh install is what the test seeds afterwards: a
+    /// `deck_tokens` row carrying a picked `card_id`, which nothing at head writes any more, and a
     /// `decks.token_stack` that head does not have.
     fn user_file_at_51() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} PRAGMA main.user_version = 51;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} PRAGMA main.user_version = 51;"
         ))
         .unwrap();
         conn
@@ -10288,15 +10374,15 @@ pub(crate) mod tests {
     /// A user file at 52 — the shape every machine carries the day before each list of a deck
     /// got its own piles, and the only population the v53 rung is *for*.
     ///
-    /// Head rewound past v54 and v53 — v53 alone until v54's `sync_gone` landed above it, which a
-    /// file at 52 cannot hold. What makes a test built on it a real upgrade rather than a fresh
-    /// install is what the test seeds afterwards: theory cards filed in a pile the live list also
-    /// uses, which no write at head can produce any more.
+    /// Head rewound past v55, v54 and v53 — v53 alone until v54's `sync_gone` and v55's column
+    /// landed above it, neither of which a file at 52 can hold. What makes a test built on it a
+    /// real upgrade rather than a fresh install is what the test seeds afterwards: theory cards
+    /// filed in a pile the live list also uses, which no write at head can produce any more.
     fn user_file_at_52() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} PRAGMA main.user_version = 52;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} PRAGMA main.user_version = 52;"
         ))
         .unwrap();
         conn
@@ -10346,7 +10432,7 @@ pub(crate) mod tests {
         // without `{UNDO_V38}` v38 dies at `duplicate column name`; the third tier adds one
         // more, so without `{UNDO_V39}` v39 dies the same way. Newest first.
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} PRAGMA main.user_version = 35;"
         ))
         .unwrap();
         seed_v35_groups(&conn);
@@ -10503,7 +10589,7 @@ pub(crate) mod tests {
         .unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} PRAGMA main.user_version = 32;"
         ))
         .unwrap();
         conn
@@ -10560,7 +10646,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} \
              PRAGMA main.user_version = 27;"
         ))
         .unwrap();
@@ -10938,7 +11024,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 54);
+        assert_eq!(USER_SCHEMA_VERSION, 55);
     }
 
     /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
@@ -11918,7 +12004,7 @@ pub(crate) mod tests {
         .unwrap();
 
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} PRAGMA main.user_version = 34;"
         ))
         .unwrap();
 
@@ -12005,7 +12091,7 @@ pub(crate) mod tests {
         // The literal, for the reason the two tests below spell out. It is **head**, not this
         // rung's own number — `migrate_user` climbs the whole ladder — so every rung that lands
         // moves it.
-        assert_eq!(version, 54);
+        assert_eq!(version, 55);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-lea", "nonfoil"),
             2,
@@ -12316,7 +12402,7 @@ pub(crate) mod tests {
         // edited only the four this comment then named and left v43's red. **Do not trust this
         // list.** Bump what you can find, run `cargo test --lib schema::tests`, and every one
         // you missed names itself in a `left: <head>, right: <old>` panic.
-        assert_eq!(version, 54);
+        assert_eq!(version, 55);
         assert_eq!(
             in_group(&conn, DECK_A, "bolt-m10", "nonfoil"),
             1,
@@ -12338,7 +12424,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         // The literal, for the reason the test above spells out — head, which every rung moves.
-        assert_eq!(version, 54);
+        assert_eq!(version, 55);
     }
 
     /// The fixture is a real v35 file and not head wearing a v35 label.
@@ -12779,7 +12865,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v41 — `migrate_user` climbs the whole ladder. One of the five the v36
         // block's ⚠️ warns about; this one is why that warning exists.
-        assert_eq!(v, 54);
+        assert_eq!(v, 55);
         conn.execute(
             "INSERT INTO collection_shares
                  (id, folder_uid, title, owner_name, url, fields, state, updated_at)
@@ -13015,7 +13101,7 @@ pub(crate) mod tests {
             .unwrap();
         // Head, not v43 — `migrate_user` climbs the whole ladder. The fifth of the five the
         // v36 block's ⚠️ warns about, and the one v46 missed.
-        assert_eq!(v, 54);
+        assert_eq!(v, 55);
 
         assert_eq!(
             has_column(&conn, "decks", "notes"),
@@ -13476,7 +13562,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 54);
+        assert_eq!(version, 55);
         assert_eq!(has_column(&conn, "decks", "token_stack"), 0, "v52 took it");
         let (mode, stats): (String, i64) = conn
             .query_row(
@@ -13552,9 +13638,9 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        // Head, not v50 — `migrate_user` climbs the whole ladder, and v51 to v54 sit above this
+        // Head, not v50 — `migrate_user` climbs the whole ladder, and v51 to v55 sit above this
         // rung.
-        assert_eq!(version, 54);
+        assert_eq!(version, 55);
         assert_eq!(has_column(&conn, "price_snapshots", "copies"), 1);
         assert_eq!(price_is_required(&conn), 0, "an unpriced holding is a row");
         let (rows, null_copies, price_sum): (i64, i64, f64) = conn
@@ -13706,7 +13792,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 54);
+        assert_eq!(version, 55);
         assert_eq!(has_column(&conn, "decks", "token_rail_index"), 1);
         let (index, stats): (i64, i64) = conn
             .query_row(
@@ -13801,7 +13887,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 54);
+        assert_eq!(version, 55);
         assert_eq!(
             overrides(&conn),
             before,
@@ -14136,7 +14222,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 54);
+        assert_eq!(version, 55);
         assert_eq!(has_column(&conn, "deck_categories", "variant"), 1);
 
         // The live side, untouched: every pile it had, under the same id and uid and stamps.
@@ -14439,8 +14525,12 @@ pub(crate) mod tests {
         .unwrap();
 
         // Back to a v53 file: no table, so the trigger's rows are gone and only `sync_ops` remains.
-        conn.execute_batch(&format!("{UNDO_V54} PRAGMA main.user_version = 53;"))
-            .unwrap();
+        // v55's column goes first, while `sync_gone` is still there for the installed
+        // `sync_gone_wishlist_folders` trigger to name — [`UNDO_V55`]'s own reason.
+        conn.execute_batch(&format!(
+            "{UNDO_V55} {UNDO_V54} PRAGMA main.user_version = 53;"
+        ))
+        .unwrap();
         migrate_user(&conn).unwrap();
 
         let mut stmt = conn
@@ -14458,6 +14548,76 @@ pub(crate) mod tests {
                 ("decks".to_owned(), deck)
             ]
         );
+    }
+
+    /// **The v55 rung widens the managed index**, over a real v54 file that already holds a
+    /// deck's managed folder: the folder reads `managed_tokens = 0` afterwards, the deck can then
+    /// own a Tokens child beside it, and a second child — or a second own folder — is refused.
+    /// Folders the reader made (NULL `managed_deck_id`) stay as distinct as ever.
+    ///
+    /// **The index is read off `sqlite_master`**, because the failure this guards is the one
+    /// `src-tauri/CLAUDE.md` names for a changed index definition: a rung that forgot the `DROP`
+    /// would leave v48's one-column index in place and refuse the child on exactly the machines
+    /// that climbed.
+    #[test]
+    fn the_v55_rung_widens_the_managed_index() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!("{UNDO_V55} PRAGMA main.user_version = 54;"))
+            .unwrap();
+        assert_eq!(has_column(&conn, "wishlist_folders", "managed_tokens"), 0);
+        let folder = |name: &str, deck: Option<i64>, tokens: Option<i64>| {
+            conn.execute(
+                "INSERT INTO wishlist_folders
+                     (name, sort_order, created_at, updated_at, managed_deck_id, managed_tokens)
+                 VALUES (?1, 0, 0, 0, ?2, ?3)",
+                params![name, deck, tokens],
+            )
+        };
+        conn.execute(
+            "INSERT INTO wishlist_folders (name, sort_order, created_at, updated_at, managed_deck_id)
+             VALUES ('Deck 7', 0, 0, 0, 7)",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 55);
+        let own: i64 = conn
+            .query_row(
+                "SELECT managed_tokens FROM wishlist_folders WHERE name = 'Deck 7'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(own, 0, "the deck's own folder, as every folder was");
+        let index: String = conn
+            .query_row(
+                "SELECT sql FROM sqlite_master WHERE name = 'idx_wishlist_folders_managed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            index.ends_with("(managed_deck_id, managed_tokens)"),
+            "widened, not left at v48's shape: {index}"
+        );
+
+        folder("Tokens", Some(7), Some(1)).expect("the deck's Tokens child beside its own folder");
+        assert!(
+            folder("Tokens again", Some(7), Some(1)).is_err(),
+            "one Tokens child per deck"
+        );
+        assert!(
+            folder("Deck 7 again", Some(7), Some(0)).is_err(),
+            "and still one own folder per deck"
+        );
+        folder("Mine", None, Some(0)).unwrap();
+        folder("Mine too", None, Some(0)).expect("a reader's folders are NULL, and distinct");
     }
 
     /// **The entry table's own fences, at head.** The grain folds one printing in one finish in
@@ -14788,7 +14948,7 @@ pub(crate) mod tests {
             })
             .collect();
         conn.execute_batch(&format!(
-            "{UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
+            "{UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
              PRAGMA main.user_version = 28;"
         ))
         .unwrap();

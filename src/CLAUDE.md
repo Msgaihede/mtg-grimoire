@@ -68,17 +68,24 @@ Every one of these has its measurement and its story in
   "some cards never load until I move the mouse over them". It is reachable on Windows — every
   `mtgimg:` response is handed to the UI thread with `PostMessageW` (`wry`'s
   `webview2::dispatch_handler`), and a post that does not arrive leaves the request's deferral
-  uncompleted forever. So a visible frame that has heard nothing for **5 s** asks again with a
-  `?stall=N` mark, twice, and then dispatches `error` on the element so the hook's ordinary
+  uncompleted forever. So a frame **on screen** that has heard nothing for **5 s** asks again with
+  a `?stall=N` mark, twice, and then dispatches `error` on the element so the hook's ordinary
   failure path takes it. **In `CardImage` rather than in `useImageRetry`, because two frames that
   draw a card use no hook at all** — `AllPrintingsDialog`'s printing tiles and `TheoryDiffDialog`'s —
-  which is the `draggable` paragraph above happening a second time. **It is gated on the frame
-  having a layout box**, which is both the right semantics (nothing to heal where nobody is
-  looking) and what keeps it out of the suite's way: jsdom reports `width: 0` and
-  `complete: false` for every image forever, so without the gate every mounted card in every test
-  would arm a timer against a picture that can never arrive. Nothing in jsdom can go red for the
-  behaviour itself; the deadline is sized from the shipped window and the figures are in
-  [image-cache.md](../docs/reference/image-cache.md).
+  which is the `draggable` paragraph above happening a second time. **The clock runs only while
+  the frame is in the viewport** (2026-09-28): one shared `IntersectionObserver` arms it when the
+  frame enters with a box, disarms it when the frame leaves (the next entry starts a whole one),
+  and never re-arms a frame that has loaded or been refused. **It used to start at mount, gated on
+  `getBoundingClientRect().width > 0`, and a box is not being on screen**: a `loading="lazy"`
+  picture below the fold has a box and has never been requested, so its silence read as the
+  dropped message, and the All tokens wall showed "No image" on 1 691 of 4 357 frames 40 s after
+  opening, none recovering — while every tick's `getBoundingClientRect()` forced a layout per
+  picture and held the wall at 100–150 ms frames. Never measure the layout per image per tick
+  here; the observer's entry carries the box. **jsdom's observer never reports**, which is what
+  keeps the watchdog out of the suite's way — without that floor every mounted card in every test
+  would arm a timer against a picture jsdom never loads — and a test that wants to watch it stubs
+  a driven observer (`CardImage.test.tsx`'s `viewport()`). The deadline is sized from the shipped
+  window and the figures are in [image-cache.md](../docs/reference/image-cache.md).
   **And it decodes `sync`, which is a fourth failure and the opposite of the third** (2026-09-08).
   The watchdog above asks again when a frame has heard *nothing*, and its first question is
   `el.complete && el.naturalWidth > 0`. The failure readers kept reporting after it shipped answers

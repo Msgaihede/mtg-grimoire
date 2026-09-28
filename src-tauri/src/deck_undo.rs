@@ -3683,7 +3683,12 @@ mod tests {
     }
 
     /// Two live Treasure entries — the reader kept both printings, one of them foil.
+    ///
+    /// **The Tithe's own Treasure is counted first**: an untouched token reads zero since user
+    /// schema v55, and an add beside a zero entry clears it, so the add alone would leave one
+    /// entry rather than two.
     fn two_treasures(conn: &Connection, deck_id: i64) {
+        crate::deck_tokens::set_quantity(conn, deck_id, "live", "o-treasure", None, 1).unwrap();
         crate::deck_tokens::add_printing(conn, deck_id, "live", "treasure-b", Some("foil"))
             .unwrap();
     }
@@ -3695,7 +3700,7 @@ mod tests {
         }
     }
 
-    /// The five token writes, and the card and category writes whose reconcile takes a token's
+    /// The four token writes, and the card and category writes whose reconcile takes a token's
     /// entries — each driven once over [`fresh_with_tokens`].
     fn token_write_cases() -> Vec<Case> {
         vec![
@@ -3755,12 +3760,34 @@ mod tests {
                 crate::deck_tokens::add_printing(c, id, "live", "treasure-b", Some("foil"))
                     .unwrap();
             }),
-            ("deck_token_state (hidden)", nothing, |c, id| {
-                crate::deck_tokens::set_state(c, id, "o-treasure", "hidden").unwrap();
+            ("deck_token_remove (one of two)", two_treasures, |c, id| {
+                crate::deck_tokens::remove_entry(
+                    c,
+                    id,
+                    "live",
+                    "o-treasure",
+                    &treasure_entry("treasure-b", "foil"),
+                )
+                .unwrap();
             }),
-            ("deck_token_reset", two_treasures, |c, id| {
-                crate::deck_tokens::reset(c, id, "live", "o-treasure").unwrap();
-            }),
+            (
+                // The last entry of a derived token goes, and the list draws its implicit one
+                // again — the step has to bring back exactly the row it took.
+                "deck_token_remove (the last)",
+                |c, id| {
+                    crate::deck_tokens::set_quantity(c, id, "live", "o-treasure", None, 2).unwrap();
+                },
+                |c, id| {
+                    crate::deck_tokens::remove_entry(
+                        c,
+                        id,
+                        "live",
+                        "o-treasure",
+                        &treasure_entry("treasure-a", "nonfoil"),
+                    )
+                    .unwrap();
+                },
+            ),
             (
                 // **Review Focus 2**: cut the card that makes the Treasure while the reader keeps
                 // two printings of it. The cut's own step carries the two entries its reconcile

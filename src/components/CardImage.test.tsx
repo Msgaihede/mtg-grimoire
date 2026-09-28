@@ -7,27 +7,83 @@ const BOLT = "http://mtgimg.localhost/grid/aaa/0";
 const RECALL = "http://mtgimg.localhost/grid/bbb/0";
 
 /**
- * Give every `<img>` in the test a box, because jsdom gives none and the watchdog below is
- * deliberately gated on having one.
+ * **A viewport the test drives**: an `IntersectionObserver` that reports only when told to.
  *
- * jsdom reports `width: 0` for every element — measured — so a card frame there looks exactly
- * like a frame nobody can see, and {@link CardImage}'s watchdog leaves those alone on purpose.
- * That is what keeps the whole suite quiet: without the gate every mounted card in every test
- * would arm a timer that fires against a permanently `complete: false` image. A suite that wants
- * to watch the watchdog therefore has to say the frame is on screen, which is this.
+ * {@link CardImage}'s watchdog arms its clock only while its frame is on screen, and the one way
+ * it asks is an observer. jsdom has none, and the setup file's shim never reports — so a frame in
+ * the suite is a frame nobody can see, and the watchdog leaves it alone on purpose: that is what
+ * keeps the whole suite quiet, where every mounted card would otherwise arm a timer against a
+ * picture jsdom never loads. A test that wants to watch the watchdog therefore says, per frame,
+ * when it is on screen and when it is not. A real observer reports every frame once on `observe`;
+ * this one reports nothing until {@link Viewport.enter}, which is the lazy frame below the fold.
  */
-function onScreen(): void {
+interface Viewport {
+  /** The frame scrolled into view, with a box. */
+  enter(el: Element): void;
+  /** The frame scrolled out of view. */
+  leave(el: Element): void;
+  /** Whether the frame is being watched at all. */
+  watched(el: Element): boolean;
+}
+
+function viewport(): Viewport {
+  const watching = new Map<Element, IntersectionObserverCallback>();
+  class DrivenObserver {
+    readonly callback: IntersectionObserverCallback;
+    constructor(callback: IntersectionObserverCallback) {
+      this.callback = callback;
+    }
+    observe(target: Element) {
+      watching.set(target, this.callback);
+    }
+    unobserve(target: Element) {
+      watching.delete(target);
+    }
+    disconnect() {}
+    takeRecords() {
+      return [];
+    }
+  }
+  vi.stubGlobal("IntersectionObserver", DrivenObserver);
+  const report = (el: Element, onScreen: boolean) => {
+    const entry = {
+      target: el,
+      isIntersecting: onScreen,
+      boundingClientRect: { width: onScreen ? 170 : 0 },
+    } as unknown as IntersectionObserverEntry;
+    act(() => watching.get(el)?.([entry], {} as IntersectionObserver));
+  };
+  return {
+    enter: (el) => report(el, true),
+    leave: (el) => report(el, false),
+    watched: (el) => watching.has(el),
+  };
+}
+
+/**
+ * Give every `<img>` a layout box, as a tile below the fold has one: jsdom reports `width: 0`
+ * for everything. **A box is not being on screen**, and that difference is the bug the lazy
+ * cases below pin — the watchdog used to take one for the other.
+ */
+function hasABox(): void {
   vi.spyOn(HTMLImageElement.prototype, "getBoundingClientRect").mockReturnValue({
     width: 170,
     height: 238,
     x: 0,
-    y: 0,
-    top: 0,
+    y: 4_000,
+    top: 4_000,
     left: 0,
     right: 170,
-    bottom: 238,
+    bottom: 4_238,
     toJSON: () => ({}),
   });
+}
+
+/** The frame on screen: enter the viewport. The alt text names the only image rendered. */
+function onScreen(view: Viewport, alt = "Lightning Bolt"): HTMLElement {
+  const el = screen.getByAltText(alt);
+  view.enter(el);
+  return el;
 }
 
 /** What the browser reports for an image whose bytes arrived. jsdom never says this by itself. */
@@ -43,6 +99,7 @@ function waitOutTheDeadline(attempt: number): void {
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
@@ -163,9 +220,9 @@ describe("CardImage", () => {
   describe("the watchdog", () => {
     it("asks again for a picture that never arrived and never failed", () => {
       vi.useFakeTimers();
-      onScreen();
+      const view = viewport();
       render(<CardImage src={BOLT} alt="Lightning Bolt" />);
-      const first = screen.getByAltText("Lightning Bolt");
+      const first = onScreen(view);
 
       waitOutTheDeadline(1);
 
@@ -186,11 +243,32 @@ describe("CardImage", () => {
      */
     it("leaves a picture alone when the bytes did arrive", () => {
       vi.useFakeTimers();
-      onScreen();
+      const view = viewport();
       render(<CardImage src={BOLT} alt="Lightning Bolt" />);
       const first = screen.getByAltText("Lightning Bolt") as HTMLImageElement;
       pretendItLoaded(first);
+      view.enter(first);
 
+      waitOutTheDeadline(1);
+
+      expect(screen.getByAltText("Lightning Bolt")).toBe(first);
+      expect(first.getAttribute("src")).toBe(BOLT);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    /**
+     * A frame nobody can see is left alone — a card in a closed dialog, a hidden tab, and every
+     * `<img>` in jsdom, whose setup-file observer never reports. There is nothing to heal, so no
+     * timer is even armed; this is what keeps the watchdog out of the way of the rest of the
+     * suite.
+     */
+    it("leaves a frame nobody can see alone, with no timer armed", () => {
+      vi.useFakeTimers();
+      // No `viewport()`: the setup file's inert observer is the case being pinned.
+      render(<CardImage src={BOLT} alt="Lightning Bolt" />);
+      const first = screen.getByAltText("Lightning Bolt");
+
+      expect(vi.getTimerCount()).toBe(0);
       waitOutTheDeadline(1);
 
       expect(screen.getByAltText("Lightning Bolt")).toBe(first);
@@ -198,36 +276,120 @@ describe("CardImage", () => {
     });
 
     /**
-     * A frame with no box is a frame nobody is looking at — a card in a closed dialog, a
-     * hidden tab, and every `<img>` in jsdom. There is nothing to heal, so nothing is asked
-     * twice; this is what keeps the watchdog out of the way of the rest of the suite.
+     * **A lazy frame below the fold is never waited on** (2026-09-28). The walls draw their
+     * pictures `loading="lazy"`, so the browser asks for nothing until a frame nears the
+     * viewport — and a clock started at mount read that silence as a dropped answer, asked twice
+     * more and put "No image" on 1 691 of the All tokens wall's 4 357 frames for good. Watched and
+     * never on screen, this frame arms nothing and fails nothing, however long it waits.
      */
-    it("leaves a frame nobody can see alone", () => {
+    it("never arms for a lazy frame that never comes into view", () => {
       vi.useFakeTimers();
-      // No `onScreen()`: jsdom's own zero box is the case being pinned.
-      render(<CardImage src={BOLT} alt="Lightning Bolt" />);
+      const view = viewport();
+      // Laid out, as a tile further down the wall is — and still never on screen.
+      hasABox();
+      const onError = vi.fn();
+      render(<CardImage src={BOLT} alt="Lightning Bolt" loading="lazy" onError={onError} />);
       const first = screen.getByAltText("Lightning Bolt");
+      expect(view.watched(first)).toBe(true);
+
+      for (let attempt = 1; attempt <= IMAGE_STALL_LIMIT + 1; attempt++) {
+        waitOutTheDeadline(attempt);
+      }
+
+      expect(vi.getTimerCount()).toBe(0);
+      expect(screen.getByAltText("Lightning Bolt")).toBe(first);
+      expect(first.getAttribute("src")).toBe(BOLT);
+      expect(onError).not.toHaveBeenCalled();
+    });
+
+    /**
+     * The other half: the same lazy frame, **scrolled into view long after it mounted**, is
+     * watched from then — silent for the deadline, it is asked for again exactly as a frame on
+     * screen at mount is.
+     */
+    it("arms when a lazy frame comes into view, and asks again after a silent deadline", () => {
+      vi.useFakeTimers();
+      const view = viewport();
+      hasABox();
+      render(<CardImage src={BOLT} alt="Lightning Bolt" loading="lazy" />);
+      waitOutTheDeadline(3);
+      const first = onScreen(view);
+      expect(vi.getTimerCount()).toBe(1);
 
       waitOutTheDeadline(1);
 
+      const second = screen.getByAltText("Lightning Bolt");
+      expect(second).not.toBe(first);
+      expect(second.getAttribute("src")).toBe(`${BOLT}?stall=1`);
+    });
+
+    /**
+     * **Leaving the viewport stops the clock, and coming back starts a whole one.** A picture
+     * scrolled past was never being waited for: 4 s on screen, then away, then back, is 4 s of
+     * waiting and not the deadline — the frame is asked for only once it has been on screen and
+     * silent for the full deadline in one stretch.
+     */
+    it("stops the clock when the frame leaves the viewport, and starts it over on return", () => {
+      vi.useFakeTimers();
+      const view = viewport();
+      render(<CardImage src={BOLT} alt="Lightning Bolt" loading="lazy" />);
+      const first = onScreen(view);
+      act(() => void vi.advanceTimersByTime(imageStallDeadlineMs(1, 0) - 1_000));
+
+      view.leave(first);
+      expect(vi.getTimerCount()).toBe(0);
+      waitOutTheDeadline(2);
       expect(screen.getByAltText("Lightning Bolt")).toBe(first);
-      expect(first.getAttribute("src")).toBe(BOLT);
+
+      view.enter(first);
+      act(() => void vi.advanceTimersByTime(imageStallDeadlineMs(1, 0) - 1_000));
+      expect(screen.getByAltText("Lightning Bolt")).toBe(first);
+      waitOutTheDeadline(1);
+      expect(screen.getByAltText("Lightning Bolt").getAttribute("src")).toBe(`${BOLT}?stall=1`);
+    });
+
+    /**
+     * A picture the protocol **refused** is the backoff's, not the watchdog's — and scrolling
+     * its frame out and back must not make it the watchdog's again, or a refused picture would
+     * be asked for on a clock beside the backoff's own.
+     */
+    it("stands down for a picture the protocol refused, however it scrolls", () => {
+      vi.useFakeTimers();
+      const view = viewport();
+      const onError = vi.fn();
+      render(<CardImage src={BOLT} alt="Lightning Bolt" onError={onError} />);
+      const first = onScreen(view);
+
+      act(() => void first.dispatchEvent(new Event("error")));
+      expect(onError).toHaveBeenCalledTimes(1);
+      view.leave(first);
+      view.enter(first);
+
+      expect(vi.getTimerCount()).toBe(0);
+      waitOutTheDeadline(1);
+      expect(screen.getByAltText("Lightning Bolt")).toBe(first);
+      expect(onError).toHaveBeenCalledTimes(1);
     });
 
     /**
      * Bounded, and the boundary hands the frame back to the caller's own failure handling —
      * `useImageRetry`'s `onError`, which is what draws "No image" and schedules the long
-     * backoff. A picture that has not arrived after this many asks is not a lost message.
+     * backoff. A picture that has not arrived after this many asks is not a lost message. Each
+     * ask is a new element, watched afresh, and still on screen.
      */
     it("hands a picture that never arrives to the caller's error handling", () => {
       vi.useFakeTimers();
-      onScreen();
+      const view = viewport();
       const onError = vi.fn();
       render(<CardImage src={BOLT} alt="Lightning Bolt" onError={onError} />);
 
-      for (let attempt = 1; attempt <= IMAGE_STALL_LIMIT; attempt++) waitOutTheDeadline(attempt);
+      for (let attempt = 1; attempt <= IMAGE_STALL_LIMIT; attempt++) {
+        onScreen(view);
+        waitOutTheDeadline(attempt);
+      }
       expect(onError).not.toHaveBeenCalled();
 
+      onScreen(view);
       waitOutTheDeadline(IMAGE_STALL_LIMIT + 1);
 
       expect(onError).toHaveBeenCalledTimes(1);
@@ -240,14 +402,16 @@ describe("CardImage", () => {
      */
     it("starts over when the slot is handed a different card", () => {
       vi.useFakeTimers();
-      onScreen();
+      const view = viewport();
       const { rerender } = render(<CardImage src={BOLT} alt="Lightning Bolt" />);
+      onScreen(view);
       waitOutTheDeadline(1);
       expect(screen.getByAltText("Lightning Bolt").getAttribute("src")).toBe(`${BOLT}?stall=1`);
 
       rerender(<CardImage src={RECALL} alt="Ancestral Recall" />);
 
       expect(screen.getByAltText("Ancestral Recall").getAttribute("src")).toBe(RECALL);
+      onScreen(view, "Ancestral Recall");
       waitOutTheDeadline(1);
       expect(screen.getByAltText("Ancestral Recall").getAttribute("src")).toBe(`${RECALL}?stall=1`);
     });
@@ -259,8 +423,9 @@ describe("CardImage", () => {
      */
     it("adds its mark to a URL that already has one", () => {
       vi.useFakeTimers();
-      onScreen();
+      const view = viewport();
       render(<CardImage src={`${BOLT}?retry=1`} alt="Lightning Bolt" />);
+      onScreen(view);
 
       waitOutTheDeadline(1);
 

@@ -577,8 +577,8 @@ function categoryLine(p: Record<string, unknown>): AuditLine {
 }
 
 /**
- * A token write — `deck_tokens.rs`' five commands, one `deck` row each with `field: "token"`
- * (user schema v52, token stacks spec §4.7).
+ * A token write — `deck_tokens.rs`' writes, one `deck` row each with `field: "token"` (user schema
+ * v52, token stacks spec §4.7) — and the rows the two retired ones left behind.
  *
  * **A `deck` row and never a tenth audit kind**, and the reason is sync rather than the rebuild
  * the notes paid attention to: `deck_audit` is a synced, append-only table, so a word its `CHECK`
@@ -615,9 +615,18 @@ function categoryLine(p: Record<string, unknown>): AuditLine {
  *   the entry that left and the one it landed as, read off the corpus at the write so the drawer
  *   can say which art without it. The extra **`folded`** is the swap landing on an entry the list
  *   already held, whose copies were summed into it.
+ * * **`remove`** — Remove printing (managed tokens spec §3.4): the common `card_id`/`finish` are
+ *   the entry deleted, `from` the count it held, and the extras **`set_code`** and
+ *   **`collector_number`** name the printing so the drawer can say which without the corpus —
+ *   *Removed Treasure's TMOM #12 printing*. An `entry_facts` object in `from`, the shape a swap's
+ *   ends carry, is read the same way.
  * * **`state`** — the state words, the token's before (`auto` where it had no row) and the one
  *   written after. Any of the three can be the `from`: every restore's is `hidden`.
  * * **`reset`** — both `null`, and the extra **`entries`** is how many entries went.
+ *
+ * **`state` and `reset` are no longer written** — Dismiss and Reset printings are retired (spec
+ * §3.3, §3.4) — and are worded all the same, because `deck_audit` is append-only and synced: a
+ * history written before the change still has to read as what the reader did then.
  */
 function tokenLine(p: Record<string, unknown>): AuditLine {
   const name = text(p.name) ?? "a token";
@@ -669,17 +678,36 @@ function tokenLine(p: Record<string, unknown>): AuditLine {
         ),
       };
     }
+    case "remove": {
+      // Which printing went, off the row's own extras or — for a crate that records the entry as
+      // a swap records its ends — off an `entry_facts` object in `from`. A row naming no set (its
+      // printing gone from the corpus when it was written) says what happened to which token
+      // rather than inventing a printing.
+      const facts = nested(p.from);
+      const set = text(p.set_code) ?? (facts === null ? null : text(facts.set_code));
+      const number =
+        text(p.collector_number) ?? (facts === null ? null : text(facts.collector_number));
+      return {
+        text:
+          set === null
+            ? `Removed a printing of ${name}${held}`
+            : `Removed ${name}'s ${set.toUpperCase()}${number === null ? "" : ` #${number}`} printing${held}`,
+        detail,
+      };
+    }
     case "state":
       // `hidden` is the dismissal; either other word is the token back on the wall, and which
       // one (`auto` or `manual`) is the resolver's bookkeeping rather than something the reader
-      // chose between.
+      // chose between. No build writes this row any more (Dismiss is retired); its rows on disk
+      // still read as what the reader did.
       return {
         text: text(p.to) === "hidden" ? `Dismissed ${name}` : `Restored ${name}`,
         detail,
       };
     case "reset": {
       // `entries` is how many went. A reset of a token with none records nothing at all, so a
-      // `0` here is a row this build did not write, and it says nothing rather than "0".
+      // `0` here is a row no build wrote, and it says nothing rather than "0". Reset printings is
+      // retired (Remove printing took its place); the rows it wrote are still history.
       const entries = countField(p.entries);
       return {
         text: `Reset ${name}'s printings`,
@@ -913,9 +941,12 @@ function deckLine(p: Record<string, unknown>): AuditLine {
     // like its two siblings rather than the column's `theory_mark_unplanned`.
     //
     // **The reader's words, not the columns'.** The three switches are labelled *Matching
-    // printing*, *Different printing* and *Not in the theory list* in the deck's settings, so
-    // that is what the history says — a line reading "turned theory_mark_exact on" would be
-    // naming a column at somebody who pressed a switch with a name.
+    // printing*, *Any printing* and *Not in the theory list* in the deck's settings, so that is
+    // what the history says — a line reading "turned theory_mark_exact on" would be naming a
+    // column at somebody who pressed a switch with a name. (The second was *Different printing*
+    // until 2026-09-27, managed tokens spec §3.10, and its sentence below still says "a different
+    // printing": that is what the switch adds on a deck whose green mark is on, which is every
+    // deck's default, where "marking cards in any printing" would read as marking every card.)
     //
     // **Three arms rather than one**, `record_deck_edit`'s own reason: the switches are
     // independent and one Save can move all of them, so three rows is what happened and a single
@@ -979,7 +1010,9 @@ function deckLine(p: Record<string, unknown>): AuditLine {
     // wrote no row at all, so there is no old word to keep reading. `deck.rs` records the mode as
     // **`tokenMode`** with the two words, and the sentence is the mode's rather than the
     // column's: a reader pressed *Managed* or *Hide*, never `hidden`. No `detail`, the marks'
-    // reason — three words, and the one not named is not worth a line.
+    // reason — three words, and the one not named is not worth a line. The control is gone
+    // (managed tokens spec §3.9) and the column stays, so no build writes this row now; the rows
+    // already in a history still need their words.
     case "tokenMode":
       switch (text(p.to)) {
         case "hidden":
@@ -991,7 +1024,7 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         default:
           return { text: `Changed how the deck keeps its ${TOKENS_HEADING}`, detail: null };
       }
-    // Every token write since user schema v52 — the five commands, one row each. See
+    // Every token write since user schema v52 — one row per command pressed. See
     // {@link tokenLine}: they are `deck` rows rather than a tenth kind for the notes' reason.
     case "token":
       return tokenLine(p);

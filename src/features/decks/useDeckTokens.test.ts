@@ -8,8 +8,7 @@ const deckTokens = vi.hoisted(() => vi.fn());
 const deckTokenSetQuantity = vi.hoisted(() => vi.fn());
 const deckTokenSwap = vi.hoisted(() => vi.fn());
 const deckTokenAddPrinting = vi.hoisted(() => vi.fn());
-const deckTokenState = vi.hoisted(() => vi.fn());
-const deckTokenReset = vi.hoisted(() => vi.fn());
+const deckTokenRemove = vi.hoisted(() => vi.fn());
 const getMarketplace = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
@@ -18,8 +17,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTokenSetQuantity,
     deckTokenSwap,
     deckTokenAddPrinting,
-    deckTokenState,
-    deckTokenReset,
+    deckTokenRemove,
     getMarketplace,
   },
 }));
@@ -69,8 +67,7 @@ beforeEach(() => {
     deckTokenSetQuantity,
     deckTokenSwap,
     deckTokenAddPrinting,
-    deckTokenState,
-    deckTokenReset,
+    deckTokenRemove,
     getMarketplace,
   ]) {
     fn.mockReset();
@@ -81,8 +78,7 @@ beforeEach(() => {
     deckTokenSetQuantity,
     deckTokenSwap,
     deckTokenAddPrinting,
-    deckTokenState,
-    deckTokenReset,
+    deckTokenRemove,
   ]) {
     write.mockResolvedValue(undefined);
   }
@@ -125,7 +121,7 @@ describe("useDeckTokens", () => {
       ),
     );
 
-    act(() => result.current.swap(entryRef(treasure), { cardId: "c-b", finish: "foil" }));
+    act(() => void result.current.swap(entryRef(treasure), { cardId: "c-b", finish: "foil" }));
     await waitFor(() =>
       expect(deckTokenSwap).toHaveBeenLastCalledWith(7, "theory", "o-treasure", null, {
         cardId: "c-b",
@@ -133,22 +129,30 @@ describe("useDeckTokens", () => {
       }),
     );
 
-    act(() => result.current.addPrinting("c-b", "etched"));
+    act(() => void result.current.addPrinting("c-b", "etched"));
     await waitFor(() =>
       expect(deckTokenAddPrinting).toHaveBeenLastCalledWith(7, "theory", "c-b", "etched"),
     );
 
-    act(() => result.current.reset("o-wurm"));
-    await waitFor(() => expect(deckTokenReset).toHaveBeenLastCalledWith(7, "theory", "o-wurm"));
+    // **Remove printing names the entry by its grain, always** (managed tokens spec §3.4): the
+    // command deletes one stored entry, so there is no `null` arm — an implicit entry draws no
+    // Remove button, and a stored one is sent as the two fields the command reads.
+    act(() => void result.current.remove(entryRef(wurm)));
+    await waitFor(() =>
+      expect(deckTokenRemove).toHaveBeenLastCalledWith(7, "theory", "o-wurm", {
+        cardId: "c-wurm",
+        finish: "foil",
+      }),
+    );
   });
 
   /**
-   * **A dismissal names no list**, because the state is the token's in both; and a restore picks
-   * `auto` or `manual` by whether the deck still derives the token — `hidden` costs a `manual`
-   * token its manual-ness, and restoring one nothing derives to `auto` would take it off the wall
-   * a second time.
+   * **Dismiss, restore and reset are gone, and so is the switch that revealed a dismissal**
+   * (managed tokens spec §3.3, §3.4). A `hidden` row is drawn like any other — Review Focus 1: a
+   * dismissal an older peer syncs in after the launch pass ran must not vanish from a wall that
+   * has no control left to bring it back.
    */
-  it("dismisses without a list and restores by derivation", async () => {
+  it("offers no dismiss, restore, reset or dismissed switch, and draws a hidden row", async () => {
     deckTokens.mockResolvedValue([
       row({ state: "hidden" }),
       row({ oracleId: "o-emblem", name: "Emblem", layout: "emblem", derived: false, sources: [] }),
@@ -156,13 +160,25 @@ describe("useDeckTokens", () => {
     const { result } = mount();
     await waitFor(() => expect(result.current.query.isSuccess).toBe(true));
 
-    act(() => result.current.dismiss("o-emblem"));
-    await waitFor(() => expect(deckTokenState).toHaveBeenLastCalledWith(7, "o-emblem", "hidden"));
-    act(() => result.current.restore("o-treasure"));
-    await waitFor(() => expect(deckTokenState).toHaveBeenLastCalledWith(7, "o-treasure", "auto"));
-    act(() => result.current.restore("o-emblem"));
+    for (const retired of ["dismiss", "restore", "reset", "showDismissed", "setShowDismissed"]) {
+      expect(result.current, retired).not.toHaveProperty(retired);
+    }
+    expect(result.current.tokens.map((view) => view.oracleId)).toEqual(["o-treasure", "o-emblem"]);
+    // Four writes, Remove printing among them — each journalled, so each is a deck write the
+    // editor's redo stack has to be thrown away after.
+    expect(result.current.writes).toHaveLength(4);
+  });
+
+  /** A refused remove is the newest write's sentence, like every other token write's. */
+  it("says a refused remove through the hook's one failure line", async () => {
+    deckTokenRemove.mockRejectedValue("That printing of the token is not in this list any more.");
+    deckTokens.mockResolvedValue([row({ implicit: false, cardId: "c-a" })]);
+    const { result } = mount();
+    await waitFor(() => expect(result.current.tokens).toHaveLength(1));
+
+    act(() => void result.current.remove(entryRef(result.current.tokens[0])));
     await waitFor(() =>
-      expect(deckTokenState).toHaveBeenLastCalledWith(7, "o-emblem", "manual"),
+      expect(result.current.failure).toBe("That printing of the token is not in this list any more."),
     );
   });
 
@@ -183,9 +199,11 @@ describe("useDeckTokens", () => {
 
     const keys = spy.mock.calls.map(([filters]) => filters?.queryKey);
     expect(keys).toContainEqual(["decks"]);
-    // A token write touches no card, so the managed wishlist Rust rewrites after a card write
-    // has nothing to answer for.
-    expect(keys).not.toContainEqual(["wishlist"]);
+    // **And the wishlist since user schema v55** (managed tokens spec §3.8): a theory deck's
+    // managed wishlist files the plan's missing tokens in a `Tokens` subfolder, and its dirty
+    // triggers watch the two token tables — so a token step re-settles it like a card step does,
+    // and `useDeck`'s own reason for firing `["wishlist"]` after every deck write is this one's too.
+    expect(keys).toContainEqual(["wishlist"]);
   });
 
   /** The setters are stable while nothing they read changes — the editor hands `setQuantity` to

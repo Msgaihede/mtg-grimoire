@@ -74,6 +74,7 @@ const EXPENSIVE: WishlistFolder = {
   parentId: null,
   sortOrder: 0,
   managedDeckId: null,
+  managedTokens: false,
 };
 
 const shelf = (id: number, name: string): Shelf => ({

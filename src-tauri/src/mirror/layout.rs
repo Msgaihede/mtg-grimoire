@@ -687,6 +687,7 @@ mod tests {
     fn wish_folder(id: i64, parent_id: Option<i64>, name: &str) -> WishlistFolder {
         WishlistFolder {
             managed_deck_id: None,
+            managed_tokens: false,
             id,
             parent_id,
             name: name.to_owned(),

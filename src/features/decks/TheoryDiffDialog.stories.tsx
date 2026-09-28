@@ -106,7 +106,9 @@ export const Shopping: Story = {
  * `Missing` is what the reader would have to find; `Different printing` is what the deck is
  * already playing as something else. Deck 4 stages exactly one of the second kind, so the counts
  * here are 5 / 4 / 1 — and the strip follows the rung, because a caption a reader cannot check
- * against the list under it is a caption they have to take on trust.
+ * against the list under it is a caption they have to take on trust. The fourth rung, `Tokens`,
+ * reads 0 here: `starter`'s plan makes tokens and counts none of them, which is every untouched
+ * plan since a token's default went to 0 — **Tokens** below is the seed where it counts some.
  */
 export const Filtered: Story = {
   play: async ({ canvas }) => {
@@ -140,6 +142,59 @@ export const Filtered: Story = {
     await expect(canvas.getAllByRole("listitem")).toHaveLength(4);
     await expect(canvas.queryByText("Sol Ring")).not.toBeInTheDocument();
     await expect(canvas.getByText("Black Lotus")).toBeVisible();
+
+    // The plan counts no tokens, and the Tokens view says so in words rather than going blank.
+    await userEvent.click(canvas.getByRole("radio", { name: "Tokens, 0 tokens" }));
+    await expect(canvas.queryAllByRole("listitem")).toHaveLength(0);
+    await expect(
+      canvas.getByText("The plan counts no tokens the deck is short of."),
+    ).toBeVisible();
+  },
+};
+
+/**
+ * **Compare counts tokens** (managed tokens spec §3.7) — on the `tokenPlan` seed, where deck 4's
+ * plan counts three plain and one foil Treasure and two Constructs against one plain Treasure on
+ * the deck: three token rows, filed under `Tokens & Emblems`.
+ *
+ * **`All` is every row, tokens included, and `Tokens` is those rows alone**; `Missing` and
+ * `Different printing` are questions about cards and draw none of them. A token row is otherwise
+ * an ordinary line — its printing, its finish, its price at that finish and its own Wishlist
+ * press, which files a wish pinned to the printing.
+ */
+export const Tokens: Story = {
+  parameters: { fake: { seed: "tokenPlan" } },
+  play: async ({ canvas }) => {
+    // The dialog's arrival, waited out once — see `Shopping`.
+    await waitFor(async () => expect(await canvas.findByText("Smuggler's Copter")).toBeVisible(), {
+      timeout: FRAME_WAIT,
+    });
+
+    // The five card rows and the three token rows, all under `All`.
+    await expect(canvas.getByRole("radio", { name: "All, 8 cards" })).toHaveAttribute(
+      "aria-checked",
+      "true",
+    );
+    await expect(canvas.getAllByText("Treasure")).toHaveLength(2);
+    await expect(canvas.getByText("Construct")).toBeVisible();
+
+    await userEvent.click(canvas.getByRole("radio", { name: "Tokens, 3 tokens" }));
+    const lines = canvas.getAllByRole("listitem");
+    await expect(lines).toHaveLength(3);
+    for (const line of lines) {
+      await expect(within(line).getByText("Tokens & Emblems")).toBeInTheDocument();
+    }
+    await expect(canvas.queryByText("Smuggler's Copter")).not.toBeInTheDocument();
+    // The foil line names its finish, so two Treasure lines are never two identical controls.
+    await expect(
+      canvas.getByRole("button", { name: "Wishlist 1 more Foil Treasure (THOB #13)" }),
+    ).toBeEnabled();
+
+    // The card readings are the card rows they always were.
+    await userEvent.click(canvas.getByRole("radio", { name: "Missing, 4 cards" }));
+    await expect(canvas.queryByText("Treasure")).not.toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("radio", { name: "Different printing, 1 card" }));
+    await expect(canvas.queryByText("Construct")).not.toBeInTheDocument();
   },
 };
 
@@ -329,7 +384,7 @@ export const SendToFolder: Story = {
  * explicit copy command that once did it in one step never had a caller and was removed on
  * 2026-09-27. A blank panel here would read as a dialog that failed to load. The bulk button
  * disables itself rather than offering to send nothing, and the filter is not drawn at all:
- * three rungs reading zero and a checkbox that can never move are furniture rather than controls.
+ * four rungs reading zero and a checkbox that can never move are furniture rather than controls.
  */
 export const Agreed: Story = {
   args: { deckId: 3 },

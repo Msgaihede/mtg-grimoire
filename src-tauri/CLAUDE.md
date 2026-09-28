@@ -169,8 +169,12 @@ picks it up from any directory under the root.
   captured**, and **gated**: it converts on a device in no sync group, and on one in a group only
   once a pull at v52 has landed, `sync_engine::client::pull` converting behind every such pull
   meanwhile, because a conversion before the device has heard its group reverted a peer's later
-  edits; the repair after it and suppressed) are logged and left owing — their likeliest cause is a full
-  or read-only disk,
+  edits; the repair after it and suppressed; v55's `deck_tokens::retire_hidden`, suppressed, which
+  brings every pre-v55 dismissal back as an ordinary token at zero; and **last, the drain of the
+  dirty marks those passes left** — `deck_tokens::reconcile_dirty_logged` then
+  `managed_wishlist::settle_logged`, `sync::with_write`'s pair, because `settle_all` armed the
+  connection before them and would otherwise have settled a managed wishlist on counts the retire
+  pass then zeroed) are logged and left owing — their likeliest cause is a full or read-only disk,
   and `init_state` turns any error into a refusal to start, which does that disk no good (it no
   longer says "move it aside": `user.db` is the one file nothing can rebuild). **A corpus
   that will not open is not one of those failures**: it is deleted and rebuilt, and the
@@ -211,8 +215,19 @@ picks it up from any directory under the root.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v54**
-  (2026-09-27, the folder-deletes spec §3.1) is `sync_gone`, a **tombstone table** — a row saying a
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v55**
+  (2026-09-27, [the token-improvements spec](../docs/superpowers/specs/2026-09-27-token-improvements-design.md)
+  §3.8) is `wishlist_folders.managed_tokens INTEGER NOT NULL DEFAULT 0`, the managed wishlist's
+  **Tokens** subfolder — `1` on the child a theory deck's managed folder holds its token wishes in,
+  `0` everywhere else — with `idx_wishlist_folders_managed` **dropped and recreated** on
+  `(managed_deck_id, managed_tokens)`, the changed-index rule above, so a deck can own that child
+  beside its own folder. Not synced, v48's column's reason, and owed its `UNDO_V55`, which runs
+  first in every chain. The same build makes an untouched token read zero and retires every
+  pre-v55 dismissal at launch (`deck_tokens::retire_hidden`), **neither of which is a rung**: the
+  first writes nothing and the second reads the corpus. It was written as v54 and renumbered at the
+  merge with the folder-deletes branch, which carried `main`'s v53 and its own v54 — the ladder's
+  rule once more. That is one above **v54**
+  (2026-09-27, the folder-deletes spec §3.1), which is `sync_gone`, a **tombstone table** — a row saying a
   parent went, not the `del` op in `sync_ops` also called a tombstone — `(tbl, uid)`,
   `WITHOUT ROWID` and **not synced**, one row per deleted row of a table other rows are filed
   under, written by `capture::install`'s `sync_gone_{table}` trigger (ungated by the apply guard,
@@ -1292,8 +1307,14 @@ shared_cell` walks both into two databases and compares them column by column.
   its `UPDATE` guards name columns, so bookkeeping columns stay writable. **And a trigger body's
   conflict clause is overridden by the outer statement's**, which is why the dirty table has no
   key: an `INSERT OR IGNORE` fired by an UPSERT failed the deck add itself.
-  `db::CrossFileFence` ignores the `temp` schema for the same bookkeeping.
-  [wishlist-folders.md](../docs/reference/wishlist-folders.md) has the rest.
+  `db::CrossFileFence` ignores the `temp` schema for the same bookkeeping. **Since user schema v55
+  a deck can own a second managed folder**, its **Tokens** child (`managed_tokens = 1`), filled by
+  the `all` and `tokens` modes with the Compare dialog's token rows: so **every lookup of a deck's
+  own folder by `managed_deck_id` adds `AND managed_tokens = 0`**, while one that means *any*
+  managed folder keeps `managed_deck_id IS NOT NULL`. The token tables' triggers mark a **second**
+  TEMP table, `managed_wishlist_token_dirty`, which only `settle` reads — never the card table
+  `deck_tokens::reconcile_dirty` also reads, because a token write gives that reconcile nothing to
+  do. [wishlist-folders.md](../docs/reference/wishlist-folders.md) has the rest.
 - `needs_review` is a **sentence, not a flag** — the reconciler writes what happened, and
   the first message wins (a later sweep does not overwrite one). Non-NULL means "listed,
   counted, and asking to be looked at", never "hidden".
@@ -2356,11 +2377,19 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   **entries**, one printing in one finish in one list with a quantity, on
   `DECK_TOKEN_PRINTING_GRAIN` (`deck_id, variant, card_id, finish` — `finish` NOT NULL, because a
   unique index holds NULLs as distinct, and `oracle_id` a stored fact rather than a grain term,
-  because a printing has one oracle). A token with no entries in a list is drawn as one
-  **implicit** entry — the resolver's printing in its `default_finish`, at the legacy quantity or
-  1 — and the first write to it materialises it in that list only. **A stored zero lives here
-  now**: stepping an entry to 0 deletes it unless it is the token's last in that list, which stays
-  at 0 so the implicit default does not reappear. Spec §4.2's seven entry rules are
+  because a printing has one oracle). A token the list **derives** with no entries in it is drawn
+  as one **implicit** entry — the resolver's printing in its `default_finish`, at the legacy
+  quantity or **0** (`implicit_quantity`; **1 until user schema v55**, the token-improvements spec
+  §3.1: a token is something the reader starts to use) — and the first write to it materialises it
+  in that list only. **A token added by hand draws no implicit entry** since v55: it is on a list's
+  wall only where that list holds an entry of it. **A stored zero lives here now**: stepping an
+  entry to 0 deletes it unless it is the token's last in that list, which stays at 0 so the
+  implicit default does not reappear — and **`remove_entry`** (v55's Remove printing) is the one
+  write that takes that last one, a derived token falling back to its implicit entry and a
+  hand-added one leaving the list, its `manual` row going when it holds nothing in either list.
+  **Nothing writes `hidden` since v55**: the dismiss is gone, every reader draws a `hidden` row as
+  an ordinary token, and `retire_hidden` retires each at launch behind `capture::suppressed`.
+  Spec §4.2's seven entry rules are
   `deck_tokens.rs`' (`src/features/decks/CLAUDE.md` states them from the page's side), and four
   things about them are this crate's:
   - **Routing is structural, at the two writes every add ends in.** `deck::add_card` and
@@ -2383,11 +2412,15 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
     `Op::Tokens` step over the token's entries in that list, carrying `states` only when the state
     moved. `touch_deck` is split off the fence because its `UPDATE` stamps as it checks, and a no-op
     press must not move the deck up the gallery.
-  - **Rule 7's reconcile runs in two layers.** `reconcile_in` inside `deck_undo::record_cells`,
+  - **Rule 7's reconcile takes only an `auto` token's entries** — never a `manual` one's, and since
+    v55's final review never a `hidden` one's either, because the wall draws a dismissal of a token
+    nothing makes as the reader's own until `retire_hidden` settles it at launch. **It runs in two
+    layers.** `reconcile_in` inside `deck_undo::record_cells`,
     `record_variant` and the three hand-built steps (the theory switch, `set_category_active`,
     `delete_category`), so its deletions ride the card write's own step; and
     `reconcile_dirty_logged` in `sync::with_write` after every write, off the managed wishlist's
-    TEMP dirty-deck table — **before** `managed_wishlist::settle_logged`, which empties that table —
+    TEMP dirty-deck table (the card marks only: v55's token triggers write a second table, which
+    only the settle reads) — **before** `managed_wishlist::settle_logged`, which empties that table —
     for the writers that file no step, undo and redo included (Scryfall's `reconcile::apply` goes
     through `lock_db`, not `with_write`, so its marks are reconciled one write late). Its deletions
     ride no step, so **a
@@ -2417,9 +2450,11 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   `deck_row` and nine in the before-image mapper each shifted down by one — and `IMAGE_COL`, the
   image tail's offset until 2026-09-27, came out at **27 both before and after**, because the two
   edits cancel at the end of the row and nowhere in the middle of it. The one number a reader would
-  check to decide whether the read had moved is the one number that did not. The six commands
-  (the read and five writes since v52, which retired `deck_token_set`, `deck_token_clear` and
-  `deck_token_add`), the tie-break, the sync registrations, the reconcile and every measurement:
+  check to decide whether the read had moved is the one number that did not. The commands (the
+  read and five writes since v52, which retired `deck_token_set`, `deck_token_clear` and
+  `deck_token_add`; since v55 the read, four writes and `token_printings`, which retired
+  `deck_token_state` and `deck_token_reset` and added `deck_token_remove`), the tie-break, the
+  sync registrations, the reconcile, `retire_hidden` and every measurement:
   [decks-storage.md](../docs/reference/decks-storage.md).
 
 ## Sharing a collection (`share/`)

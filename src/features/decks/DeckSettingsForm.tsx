@@ -24,7 +24,6 @@ import {
   type DeckKind,
 } from "./deckKind";
 import { CAPTION, FIELD } from "./formFields";
-import { TOKEN_MODE_HINT, TokenModeControl, type TokenMode } from "./TokenModeControl";
 // The **vocabulary**, not the control. `FormatSelect.tsx`'s `GameSelect` draws these same four
 // rows for the import dialog and is deliberately not reused here, exactly as its `FormatSelect`
 // is not: that file's labels are `text-xs text-dim` and this form's are `CAPTION`, so one
@@ -79,7 +78,7 @@ export interface DeckSettingsValue {
    */
   theoryMarkExact: boolean;
   /** Whether this deck draws the **blue** theory mark — the same card in a printing the plan did
-   *  not name. */
+   *  not name, or in any printing with {@link theoryMarkExact} off. The `Any printing` switch. */
   theoryMarkName: boolean;
   /**
    * Whether this deck draws the **red** theory mark — a live row the plan does not ask for at
@@ -107,21 +106,11 @@ export interface DeckSettingsValue {
    * sends nothing, which is exactly what a deck with no categories yet can honestly answer.
    */
   defaultCategoryId: number;
-  /**
-   * How the deck keeps its tokens — `decks.token_mode`, user schema v52 (token stacks spec §4.5).
-   * `managed` draws the **Tokens & Emblems** pile in Stacks, Grid, Text and Table; `hidden` takes
-   * it out of all four. It replaced v47's `tokenStack` switch, and every deck starts `managed`.
-   *
-   * A *reading* preference as far as the deck's cards go: the pile is appended in the view layer
-   * and never enters them, so no size, total, ledger figure or validation rule can see it — and
-   * the band under the desk keeps every token in every mode.
-   *
-   * **Required on the value although only the edit host draws a control for it** —
-   * {@link DeckSettingsValue.defaultCategoryId}'s rule again. `DeckInput` carries no such field,
-   * so the create draft holds `managed`, sends nothing, and the column's `DEFAULT 'managed'`
-   * agrees.
-   */
-  tokenMode: TokenMode;
+  // **No `tokenMode` since 2026-09-27** (managed tokens spec §3.9). `decks.token_mode` stays in
+  // the schema, on the `decks` capture spec and on `deck_undo::DECK_FIELDS`, and nothing reads
+  // it: with every token at 0 until the reader counts it, the pile draws only what they use and
+  // there is nothing left for a mode to decide — so the `Managed | Hide` row this field fed went
+  // with it, and neither host carries the column any more.
 }
 
 export interface DeckSettingsFormProps {
@@ -229,17 +218,6 @@ export interface DeckSettingsFormProps {
    * draft holds `true` for all three and sends none of them.
    */
   canSetTheoryMarks?: boolean;
-  /**
-   * Whether the deck's **token mode** has anywhere to be written — absent (or `false`) for a host
-   * asking about a deck that does not exist yet, and then the control is not drawn.
-   *
-   * {@link DeckSettingsFormProps.canSetTheoryMarks}' argument word for word, and a prop of its own
-   * for that prop's own reason: `DeckInput` has no `tokenMode`, so a press at create would reach
-   * nothing and the deck would be born `managed` whatever the control said. The two hosts answer
-   * this and the marks the same way today, and they are still two questions — the day
-   * `deck_create` learns one and not the other, one prop standing for both would be wrong.
-   */
-  canSetTokenMode?: boolean;
   cover: DeckCoverPickerProps;
   idPrefix: string;
 }
@@ -264,7 +242,7 @@ export interface DeckSettingsFormProps {
  * | Control | `onChange` | `onCommit` |
  * | --- | --- | --- |
  * | Name, Description | every keystroke | on blur — and Enter blurs the name field, unless a host took Enter for {@link DeckSettingsFormProps.onSubmit} |
- * | Game, Format, Deck kind, the switches, the token mode, Folder, the cover | on the one act that settles them | never |
+ * | Game, Format, Deck kind, the switches, the managed wishlist, Folder, the cover | on the one act that settles them | never |
  *
  * A select, a switch and a tile all finish in a single act, so there is nothing for a second
  * callback to add. A text field does not, which is the whole reason the pair exists.
@@ -296,8 +274,6 @@ export function DeckSettingsForm({
   categories,
   // Absent is a host that cannot write the answer, which is the create dialog — see the prop.
   canSetTheoryMarks = false,
-  // Absent is the create dialog again — see the prop.
-  canSetTokenMode = false,
   cover,
   idPrefix,
 }: DeckSettingsFormProps): JSX.Element {
@@ -373,28 +349,12 @@ export function DeckSettingsForm({
               id={idPrefix}
             />
           )}
-          {/* One gate, the host's: whether the deck has a row to write to. Deliberately not the
-              kind — a Regular, a Theory + Actual and a Virtual deck all make tokens, and the
-              mode decides the pile over whichever list is on screen.
-
-              **The `Show Tokens & Emblems in the deck` switch stood here until user schema v52**,
-              and the mode replaced it rather than joining it: `token_stack` is dropped in the rung
-              that adds `token_mode`, so the two could never be two answers. The control is the
-              band header's own; the sentence under it is this panel's, as `DeckKindGroup` draws
-              its kind's — the band's one-row header has no room for it and gets the same words as
-              each button's tooltip instead. */}
-          {canSetTokenMode && (
-            <div>
-              <TokenModeControl
-                value={value.tokenMode}
-                onChange={(tokenMode) => onChange({ tokenMode })}
-                idPrefix={idPrefix}
-              />
-              <p className="mt-1 text-[0.6875rem] leading-snug text-dim">
-                {TOKEN_MODE_HINT[value.tokenMode]}
-              </p>
-            </div>
-          )}
+          {/* **The token mode's `Managed | Hide` row stood here from user schema v52 until
+              2026-09-27** (managed tokens spec §3.9), and v47's `Show Tokens & Emblems in the
+              deck` switch before it. Both are gone rather than moved: every token reads 0 until
+              the reader counts it, so the pile already draws only the tokens in use, and a
+              control choosing whether to draw it had nothing left to decide. Nothing replaced it
+              here or in the band's header. */}
           <FolderRow
             folderId={value.folderId}
             paths={folders.paths}
@@ -805,11 +765,17 @@ function TheoryMarkSwitches({
       <MarkSwitch
         id={`${id}-theory-mark-name`}
         swatch="var(--color-theory-name)"
-        heading="Different printing"
+        // **`Any printing`, and it said `Different printing` until 2026-09-27** (managed tokens
+        // spec §3.10). With the green switch off this mark is drawn on *every* printing of a
+        // planned card, the named one included, and worded `Match` — so the heading names what the
+        // switch lets through rather than the one case of it that the green mark leaves over.
+        // Settings → Appearance's colour row carries the same words, so the two say one thing.
+        heading="Any printing"
         // The second sentence is the half a reader cannot see coming: turning the strict mark
-        // off does not leave the card unmarked, it re-resolves the row one tier down. Unsaid, a
-        // reader who switches green off and still sees marks reads the control as broken.
-        caption="A blue mark on a card your plan asks for in a different printing. Turning the green one off draws this one instead."
+        // off does not leave the card unmarked, it re-resolves the row one tier down — onto
+        // every printing, as a match. Unsaid, a reader who switches green off and still sees
+        // marks reads the control as broken.
+        caption="A blue mark on a card your plan asks for in a printing it does not name. Turning the green one off draws this one on every printing instead, as a match."
         on={name}
         onChange={onName}
       />
@@ -832,13 +798,15 @@ function TheoryMarkSwitches({
 }
 
 /**
- * Which Compare view the deck's managed wishlist follows — `Off`, `All`, `Missing` or
- * `Different Printing`, one control, four exclusive presses.
+ * Which Compare view the deck's managed wishlist follows — `Off`, `All`, `Missing`,
+ * `Different Printing` or `Tokens`, one control, five exclusive presses.
  *
  * {@link DeckKindGroup}'s grammar exactly — `role="group"` over `aria-pressed` buttons, the joined
  * box, the selected choice's caption underneath — because it is the same kind of question: one
- * choice out of a closed set, where a switch could only say *whether*. The three view words are
+ * choice out of a closed set, where a switch could only say *whether*. The four view words are
  * the Compare dialog's own tabs, so a reader who picks `Missing` here meets the same list there.
+ * `Tokens` joined them with user schema v55 (managed tokens spec §3.8), and its caption is the one
+ * that names the `Tokens` subfolder its wishes are filed in — `managedWishlist.ts` has the words.
  */
 function ManagedWishlistGroup({
   mode,

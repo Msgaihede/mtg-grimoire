@@ -2,7 +2,7 @@ import { useState, type JSX } from "react";
 import { RotateCcw } from "lucide-react";
 import { TheoryMatchMark } from "@/features/decks/CardMarks";
 import { LabelColorRow, LabelSwatch } from "@/features/decks/LabelColorPicker";
-import type { TheoryTier } from "@/features/decks/theoryMatch";
+import type { TheoryMark, TheoryTier } from "@/features/decks/theoryMatch";
 import { FOCUS } from "@/lib/focus";
 import { labelFgCss } from "@/lib/hexColor";
 import { MARK_COLOR_DEFAULTS, useMarkColors, type MarkColorKey } from "@/lib/useMarkColors";
@@ -111,9 +111,9 @@ export function TheoryMarksPanel(): JSX.Element {
                       A second box beside it would have to hold either a duplicate X or a number
                       that tier never draws — a preview of a state the app cannot reach. */}
                   <span className="flex items-center gap-2 rounded-md bg-bg px-2 py-1.5">
-                    <TheoryMatchMark tier={mark.tier} delta={0} />
+                    <TheoryMatchMark mark={previewMark(mark.tier, 0)} />
                     {mark.tier !== "unplanned" && (
-                      <TheoryMatchMark tier={mark.tier} delta={PREVIEW_DELTA} />
+                      <TheoryMatchMark mark={previewMark(mark.tier, PREVIEW_DELTA)} />
                     )}
                   </span>
 
@@ -241,6 +241,19 @@ export function TheoryMarksPanel(): JSX.Element {
  */
 const PREVIEW_DELTA = 2;
 
+/**
+ * A mark for the preview to draw — `CardMarks.tsx`'s components take a whole `TheoryMark` since
+ * 2026-09-27, so a preview with no deck behind it spells one out.
+ *
+ * **`anyPrinting: false`**, because it is a statement about a deck's switches and this panel
+ * belongs to no deck: the preview shows each tier as it is worded on a deck whose `Matching
+ * printing` switch is on, which is every deck's default. The flag moves the tooltip's word and
+ * nothing a colour preview is about.
+ */
+function previewMark(tier: TheoryTier, delta: number): TheoryMark {
+  return { tier, delta, anyPrinting: false };
+}
+
 /** One row of this panel: a mark, the words for it, and the name its two controls are found by. */
 interface MarkRow {
   /** The stored key, and what `set_mark_color` is called with. */
@@ -309,16 +322,25 @@ const MARKS: readonly MarkRow[] = [
     key: "theoryName",
     tier: "name",
     id: "theory-name",
-    title: "Different printing",
-    blurb: "The same card, but in a different printing than planned.",
-    noun: "different-printing mark",
-    subject: "Different printing colour",
+    // **`Any printing`, and `Different printing` until 2026-09-27** — the Deck settings switch this
+    // colour belongs to was renamed (managed tokens spec §3.10), and {@link MarkRow.subject}'s
+    // rule is one name in all three places. The blurb says both of what the mark covers: another
+    // printing, and — on a deck with `Matching printing` off — every printing, as a match.
+    title: "Any printing",
+    blurb: "Card is present in another printing, or any printing if exact matching is disabled.",
+    noun: "any-printing mark",
+    subject: "Any printing colour",
     fill: "--color-theory-name",
   },
   {
     key: "theoryUnplanned",
     tier: "unplanned",
     id: "theory-unplanned",
+    // The heading is the mark's own sentence — `CardMarks.tsx`'s `THEORY_UNPLANNED_LABEL`, which
+    // is what the mark's tooltip and `deckCardName`'s clause both say. The other two rows are
+    // named for the *distinction* they draw (the matching printing, any printing), which is a
+    // thing only the theory list can say; this one is named for what a reader sees on the card,
+    // because "no printing" and "no card" are not phrases anybody would recognise.
     title: "Not in the theory list",
     blurb: "Card is present in the active deck, but not in the planned list.",
     noun: "unplanned-card mark",

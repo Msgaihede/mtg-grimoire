@@ -2,6 +2,48 @@ import { useEffect, useRef, useState, type ImgHTMLAttributes } from "react";
 import { IMAGE_STALL_LIMIT, imageStallDeadlineMs } from "@/lib/images";
 
 /**
+ * **One `IntersectionObserver` for every card picture in the window**, and a callback per frame.
+ *
+ * The watchdog below asks one question of the layout — is this frame on screen? — and an observer
+ * is the one way to ask it that never forces a layout: its entries are computed in the browser's
+ * own rendering step and delivered afterwards, with the frame's box already measured. One shared
+ * observer rather than one per frame, because the All tokens wall mounts 4 357 frames at once and
+ * an observer is not free; the callback map is what routes each entry to its frame.
+ *
+ * **Rebuilt when the global constructor changes**, which only a test does: a suite that stubs
+ * `IntersectionObserver` with a controllable one gets an observer built from its stub, where a
+ * cached one would still be the setup file's inert shim. **Absent entirely, nothing is watched**
+ * — every frame then stays unarmed, which is the no-layout floor this gate replaced.
+ */
+let shared: {
+  ctor: typeof IntersectionObserver;
+  observer: IntersectionObserver;
+  frames: Map<Element, (onScreen: boolean) => void>;
+} | null = null;
+
+function watchOnScreen(el: Element, onChange: (onScreen: boolean) => void): () => void {
+  if (typeof IntersectionObserver === "undefined") return () => {};
+  if (shared === null || shared.ctor !== IntersectionObserver) {
+    const frames = new Map<Element, (onScreen: boolean) => void>();
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        // A box as well as an intersection: a frame of no width is nobody's to look at, and an
+        // observer can report a zero-area target touching the viewport as intersecting.
+        frames.get(entry.target)?.(entry.isIntersecting && entry.boundingClientRect.width > 0);
+      }
+    });
+    shared = { ctor: IntersectionObserver, observer, frames };
+  }
+  const { observer, frames } = shared;
+  frames.set(el, onChange);
+  observer.observe(el);
+  return () => {
+    frames.delete(el);
+    observer.unobserve(el);
+  };
+}
+
+/**
  * One card image, drawn so that a frame can never show the wrong card.
  *
  * **The rule, and why it needs a component rather than a convention.** A browser keeps
@@ -98,39 +140,82 @@ export function CardImage({ src, alt, onError, onLoad, ...rest }: CardImageProps
   const url = stall === 0 ? src : `${src}${src.includes("?") ? "&" : "?"}stall=${stall}`;
 
   const img = useRef<HTMLImageElement>(null);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  /** This element's answer arrived — `load` or `error` — so the watchdog stands down for it. */
+  const settle = useRef<() => void>(undefined);
 
+  /**
+   * **The watchdog's clock runs only while the frame is on screen** (2026-09-28), where it ran
+   * from mount.
+   *
+   * A clock started at mount cannot tell a request nobody answered from a request nobody made.
+   * The walls draw their pictures `loading="lazy"`, so the browser does not ask for a frame below
+   * the fold at all — and the watchdog read that silence as the dropped message it exists for,
+   * asked twice more, and put "No image" on the frame for good. Measured in the shipped window on
+   * the All tokens wall (debug build, 4 357 tiles): 40 s after it opened, **1 691** frames read
+   * "No image", five of six on screen after a scroll to the middle, and none recovered in 20 s —
+   * pictures that load at once when they are on screen at mount. The same pass found the other
+   * cost: every tick asked `getBoundingClientRect()` of its frame, a forced layout per picture,
+   * and the wall's frames ran at 100–150 ms for ten seconds after each redraw.
+   *
+   * So the frame is watched by the one shared observer ({@link watchOnScreen}): entering the
+   * viewport arms the deadline, and leaving it disarms it — the next entry starts a full one,
+   * because a picture scrolled past was never being waited for. **On screen is also when a lazy
+   * picture is asked for**, so the clock now starts when the request can have started, which is
+   * the one moment silence means something. Nothing here measures the layout any more: the
+   * observer hands over whether the frame has a box.
+   *
+   * **The floor is unchanged, and it is what keeps the suite quiet**: jsdom has no observer that
+   * ever reports, so no frame there arms a timer — the same answer the old `width === 0` gate gave,
+   * for the same reason.
+   */
   useEffect(() => {
-    const deadline = setTimeout(() => {
-      const el = img.current;
-      if (!el) return;
-      // The element is the honest answer, not a `load` we may have missed: a wall of forty
-      // tiles must not re-request forty pictures it already has.
-      if (el.complete && el.naturalWidth > 0) return;
-      // A frame with no box is a frame nobody is looking at — a card in a closed dialog, a
-      // hidden tab, and every `<img>` in jsdom, which reports `width: 0` for everything and
-      // never loads an image at all. There is nothing to heal there, and arming against it
-      // would put a five-second timer under every card in the test suite.
-      if (el.getBoundingClientRect().width === 0) return;
-      if (stall < IMAGE_STALL_LIMIT) {
-        setStall(stall + 1);
+    const el = img.current;
+    if (!el) return;
+    let deadline: ReturnType<typeof setTimeout> | undefined;
+    let settled = false;
+    const disarm = () => {
+      clearTimeout(deadline);
+      deadline = undefined;
+    };
+    settle.current = () => {
+      settled = true;
+      disarm();
+    };
+    const stop = watchOnScreen(el, (onScreen) => {
+      if (!onScreen) {
+        disarm();
         return;
       }
-      // Spent. A picture still silent after this many requests is not a dropped message, so it
-      // goes through the door a 502 comes through — the frame says "No image" and joins the
-      // backoff rather than asking forever.
-      //
-      // Said to the element rather than by calling the prop, and that is the honest spelling
-      // as well as the tidy one: `error` is what an `<img>` says when it has no picture, React
-      // attaches this one *directly* to the element (it does not bubble, so it is not
-      // delegated to the root), and going through the element means the handler below runs
-      // too — one path for a failure the protocol reported and a failure it never did.
-      el.dispatchEvent(new Event("error"));
-    }, imageStallDeadlineMs(stall + 1));
-    timer.current = deadline;
-    return () => clearTimeout(deadline);
-    // `url` rather than `src`: each ask gets its own deadline, and the reset above starts the
-    // count over for a new card.
+      // Armed already, or answered: an entry for a frame that is still on screen changes
+      // nothing, and a frame whose picture came (or was refused) has nothing to wait for. The
+      // element is the honest answer, not a `load` we may have missed: a wall of forty tiles
+      // must not re-request forty pictures it already has.
+      if (deadline !== undefined || settled || (el.complete && el.naturalWidth > 0)) return;
+      deadline = setTimeout(() => {
+        deadline = undefined;
+        if (el.complete && el.naturalWidth > 0) return;
+        if (stall < IMAGE_STALL_LIMIT) {
+          setStall(stall + 1);
+          return;
+        }
+        // Spent. A picture still silent after this many requests is not a dropped message, so
+        // it goes through the door a 502 comes through — the frame says "No image" and joins the
+        // backoff rather than asking forever.
+        //
+        // Said to the element rather than by calling the prop, and that is the honest spelling
+        // as well as the tidy one: `error` is what an `<img>` says when it has no picture, React
+        // attaches this one *directly* to the element (it does not bubble, so it is not
+        // delegated to the root), and going through the element means the handler below runs
+        // too — one path for a failure the protocol reported and a failure it never did.
+        el.dispatchEvent(new Event("error"));
+      }, imageStallDeadlineMs(stall + 1));
+    });
+    return () => {
+      stop();
+      disarm();
+    };
+    // `url` rather than `src`: each ask is a new element with its own watch and its own
+    // deadline, and the reset above starts the count over for a new card.
   }, [url, stall]);
 
   return (
@@ -190,15 +275,15 @@ export function CardImage({ src, alt, onError, onLoad, ...rest }: CardImageProps
       src={url}
       alt={alt}
       onLoad={(event) => {
-        // Nothing left to watch for. Cleared here rather than through state so a screenful of
+        // Nothing left to watch for. Settled here rather than through state so a screenful of
         // arriving pictures is not a screenful of re-renders.
-        clearTimeout(timer.current);
+        settle.current?.();
         onLoad?.(event);
       }}
       onError={(event) => {
         // The protocol answered, and it answered "no". That is the backoff's business, not
-        // this watchdog's.
-        clearTimeout(timer.current);
+        // this watchdog's — and scrolling the frame back into view must not make it so.
+        settle.current?.();
         onError?.(event);
       }}
       ref={img}
