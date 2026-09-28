@@ -4698,8 +4698,22 @@ already effective, and `viewOf` copies them.
   - **Token prices never reach the deck's totals** — they are summed in this heading and nowhere
     else. **What a token still is not** is unchanged from #507, and the reader confirmed it
     (*"tokens should not act as 'real' cards"*): no drag source, no drop target, no deck card
-    menu, no card modal, no selection ring, not in the arrow walk. A press on the face opens the
-    one art picker. The *pile* may move along the rail; the cards in it never do.
+    menu, no selection ring, not in the arrow walk. The *pile* may move along the rail; the cards
+    in it never do.
+  - **A press on a token opens its card details, as a press on a deck card does** (2026-09-28,
+    [issue #619](https://github.com/Msgaihede/mtg-grimoire/issues/619)) — the card face in Stacks
+    and Grid, the line in Text, the name in Table, through `TokenPile.openCard`. Until then the
+    face opened the art picker, so a token was the one card on the desk a reader could not click
+    to read. `DeckEditor` opens it with **`setSelectedCardId`, never `openCardFromDeck`**: a token
+    is no `deck_cards` row, so the modal is handed no deck context and can offer no swap or
+    finish write against a row that does not exist — which is why this is not the "no card
+    modal" rule broken, only its reason honoured another way. **Change the art** moved to a button
+    of its own: the controls column's picture glyph between the stepper and Remove printing on the
+    two card drawings, a 20px glyph beside the stepper on a Text line, and Table's existing art
+    column. The face's name is `tokenCardName` (`Show details for …`) and carries the plan's
+    clause; the art button keeps `tokenArtName` and `TOKEN_ART_MARK`, so the caret hand-offs in
+    `tokenCaret.ts` are unchanged. **The band's tile is untouched** — its picture still opens the
+    picker, since the band is where a token is found and counted rather than read.
 - **The pile's place in the rail is the reader's since 2026-09-26, and it is stored as a count**
   (token stacks spec §3.4; the reader, twice: *"the tokens stack should be draggable to reorder in
   the right hand rail"*). `decks.token_rail_index`, user schema **v51**, is **the number of rail
@@ -5031,7 +5045,8 @@ already effective, and `viewOf` copies them.
   included — `Treasure — TMOM · 12 · 2023, Foil, art by …`. A printing that lists no finish this
   app knows draws once, as nonfoil, rather than vanishing. A press hands the host
   `{ cardId, finish }` and nothing else; `mode` is the job:
-  - **`{ kind: "swap", entry }`** — a press on one entry's picture, from the band or the pile. The
+  - **`{ kind: "swap", entry }`** — a press on one entry's picture on the band, or on its
+    **Change the art** button in the pile (the pile's card opens the card details, issue #619). The
     current tile is marked by the pair `(printingId, finish)`, with `aria-pressed` and a gold ring
     around the art and its foot, and the pick swaps **that entry and no other** (rule 4) — a
     Treasure kept in two printings changes one of them.
