@@ -164,9 +164,10 @@ export const Everything: Story = {
  * The chip pressed — the deck on screen behind this line is narrowed to its game changers.
  *
  * `aria-pressed` is what says so; the gold edge and the gold words are the sighted half of that
- * same sentence, and they are `pie-gold` rather than the accent because that is the colour the
- * crowns and banners on the cards themselves are drawn in. The accent on this very line already
- * means something else — `DeckBracket`'s edge says *a reading you can go and look at*.
+ * same sentence, in the accent — the colour the crowns on the cards themselves are drawn in. It was
+ * a separate crown gold, kept off the accent because `DeckBracket`'s accent edge on this very line
+ * says *a reading you can go and look at*, until that gold was retired on 2026-09-28; the crown and
+ * the press are what tell the two apart now.
  *
  * The crown does not move between the two states: here it is the chip's identity rather than its
  * state, so a press changes the colour and never the width.

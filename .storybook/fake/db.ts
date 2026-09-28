@@ -716,6 +716,13 @@ export interface FakeDeck {
    */
   notesOpen?: boolean;
   /**
+   * `decks.curve_creatures` (user schema v56): whether the Deck stats band's Mana curve splits
+   * its bars into creatures and noncreatures. `NOT NULL DEFAULT 0` — {@link notesOpen}'s default
+   * and not {@link statsOpen}'s, because the split is new — so {@link toDeckRow} resolves the
+   * absence to `false`. Rides the ordinary `deck_update`, {@link statsOpen}'s reason.
+   */
+  curveCreatures?: boolean;
+  /**
    * `decks.token_mode` (user schema v52): how the deck keeps its tokens — `managed`,
    * `collection` or `hidden` — which replaced v47's `token_stack` switch in the same rung.
    * `NOT NULL DEFAULT 'managed'`, so {@link toDeckRow} resolves the absence to `managed`: **every
@@ -7576,6 +7583,9 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // `1` was protecting a band already on every screen. `tokensOpen` two lines up is the
     // precedent character for character.
     notesOpen: d.notesOpen ?? false,
+    // v56's, `?? false` for `curve_creatures INTEGER NOT NULL DEFAULT 0` — `notesOpen`'s shape,
+    // not `statsOpen`'s: the split is new, so an unsaid seed draws the one-colour curve.
+    curveCreatures: d.curveCreatures ?? false,
     // v52's, `?? "managed"` for `token_mode TEXT NOT NULL DEFAULT 'managed'` — every deck starts
     // there, the ones whose v47 stack was off included, so a seed that never says draws its pile.
     tokenMode: d.tokenMode ?? "managed",
@@ -18076,6 +18086,9 @@ export function writeHandlers(db: FakeDb) {
         // shut. It holds no notes to draw — `DeckInput` carries no prose at all any more, and a
         // note is written *after* the deck exists, one at a time, through `deck_note_create`.
         notesOpen: false,
+        // `curve_creatures INTEGER NOT NULL DEFAULT 0` (user schema v56): a deck being born
+        // draws the one-colour Mana curve, and `DeckInput` does not ask.
+        curveCreatures: false,
         // `token_mode TEXT NOT NULL DEFAULT 'managed'` (user schema v52): every deck starts on
         // Managed, and `DeckInput` does not ask.
         tokenMode: "managed",
@@ -18493,6 +18506,10 @@ export function writeHandlers(db: FakeDb) {
       // was never written reads, which is a different question from what a patch that says
       // nothing does to a row that was.
       deck.notesOpen = patch.notesOpen ?? deck.notesOpen;
+      // `coalesce(?24, curve_creatures)`, and **nothing else happens**: the split is drawn in
+      // TypeScript from the deck's cards on every read, so the toggle writes one column. `??`
+      // against the stored value, the line above's reason.
+      deck.curveCreatures = patch.curveCreatures ?? deck.curveCreatures;
       // `coalesce(?n, token_mode)`, and in PR 2 **nothing else happens**: the pile is drawn — or,
       // under `hidden`, not drawn — in the view layer from the tokens answer on every read, and
       // no mode touches the collection until PR 3's Collection mode gives one custody.

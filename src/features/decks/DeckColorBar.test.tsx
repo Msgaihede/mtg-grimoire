@@ -17,8 +17,8 @@ function pips(counts: Partial<PipCounts>): PipCounts {
  * of these two tables: a `MANA_FILL` whose `B` and `C` were transposed, or a `manaSymbolClass`
  * that answered the wrong letter, is a table that agrees with itself perfectly. The expected
  * answer has to come from somewhere the component cannot reach — so these are the six token names
- * and the six class names, typed out, and a `--color-pie-*` string appearing in either is the
- * failure this file exists to make loud.
+ * and the six class names, typed out, and any other token appearing in either is the failure this
+ * file exists to make loud.
  */
 const EXPECTED_FILL: Record<ManaKey, string> = {
   W: "var(--color-mana-w)",
@@ -205,8 +205,8 @@ describe("DeckColorBar", () => {
 
   /**
    * Every field is a `--color-mana-*` custom property — the fills a real printed symbol's disc
-   * carries, which is what a near-black glyph can be read on. The pie deeps this replaced are
-   * the colour-identity family and `--color-pie-b` is #3b3a3e, so a black `ms-b` on one is a
+   * carries, which is what a near-black glyph can be read on. The pie deeps this replaced were
+   * the colour-identity family and the black one was #3b3a3e, so a black `ms-b` on one was a
    * black symbol on a near-black field. Nothing in this app invents a colour, and a bar mixing
    * its own would be the same deck drawn two ways on two screens.
    */

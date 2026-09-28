@@ -38,6 +38,13 @@ const SOURCES = import.meta.glob<string>("/src/**/*.{ts,tsx,css}", {
  */
 const OLD_DIM_TEXT = new RegExp(`\\btext-${"muted"}\\b(?!-foreground)`);
 
+/**
+ * The seven colour-identity deeps deleted on 2026-09-28 — one per colour, colourless and gold — in
+ * any spelling: the custom property, a utility built from it, or a bare name in prose. Assembled
+ * from pieces for `OLD_DIM_TEXT`'s two reasons.
+ */
+const RETIRED_DEEP = new RegExp(`\\b${"pie"}-(?:w|u|b|r|g|c|gold)\\b`);
+
 describe("colour tokens", () => {
   /**
    * The tripwire this rename removed: Tailwind builds `bg-muted` *and* the dim-text class
@@ -65,6 +72,24 @@ describe("colour tokens", () => {
 
     const offenders = Object.entries(SOURCES)
       .filter(([, source]) => OLD_DIM_TEXT.test(source))
+      .map(([path]) => path);
+
+    expect(offenders).toEqual([]);
+  });
+
+  /**
+   * The mana colours are the only palette for anything that stands for a Magic colour, and the
+   * saturated deeps that stood beside them are gone from `index.css`. What that leaves is the
+   * failure `src/CLAUDE.md` names for a mistyped arbitrary value: a utility built from a deleted
+   * token **compiles to no rule at all**, so a mark reaching for one loses its fill in silence and
+   * neither suite can see it — jsdom applies no stylesheet. So the names are refused outright, in
+   * prose too, since a doc comment naming one is how it gets copied into a component.
+   */
+  it("names none of the retired colour-identity deeps", () => {
+    expect(Object.keys(SOURCES).length).toBeGreaterThan(20);
+
+    const offenders = Object.entries(SOURCES)
+      .filter(([, source]) => RETIRED_DEEP.test(source))
       .map(([path]) => path);
 
     expect(offenders).toEqual([]);

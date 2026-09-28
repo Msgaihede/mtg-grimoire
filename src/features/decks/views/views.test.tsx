@@ -3287,7 +3287,7 @@ describe("the deck's two views and their two zoom sections", () => {
  * gutter of its own and tints the quantity beside it. Two things follow, and both are what this
  * case is here for: the gutter is drawn on **every** row rather than on the crowned ones, which
  * is what holds the numbers in one column down a list of eighty — a conditional element would
- * step them in and out — and the crown carries the gold *itself* (`text-pie-gold`), because there
+ * step them in and out — and the crown carries the gold *itself* (`text-accent`), because there
  * is no filled tag here for it to take a foreground from.
  *
  * It replaces the gold `GC` badge, which stood in the line's **tail** among the finish glyph and
@@ -3313,7 +3313,7 @@ describe("TextView lines", () => {
     expect(gutter).toHaveAttribute("aria-hidden", "true");
     expect(gutter.firstElementChild).toHaveClass("lucide-crown");
     // The count wears the fact too, so the pair reads as one mark two elements wide.
-    expect((gutter.nextElementSibling as HTMLElement).classList.contains("text-pie-gold")).toBe(
+    expect((gutter.nextElementSibling as HTMLElement).classList.contains("text-accent")).toBe(
       true,
     );
 
@@ -3324,7 +3324,7 @@ describe("TextView lines", () => {
     expect(empty).toHaveAttribute("aria-hidden", "true");
     expect(empty.children).toHaveLength(0);
     const count = empty.nextElementSibling as HTMLElement;
-    expect(count.classList.contains("text-pie-gold")).toBe(false);
+    expect(count.classList.contains("text-accent")).toBe(false);
     expect(count.classList.contains("text-dim")).toBe(true);
 
     // The words are the button's on this view, as they are on the two card faces: a line with an

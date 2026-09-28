@@ -102,7 +102,7 @@ describe("AddLabelDialog", () => {
     await user.click(screen.getByRole("button", { name: "Moss" }));
     await user.click(screen.getByRole("button", { name: "Create “Sac outlet”" }));
 
-    expect(onCreate).toHaveBeenCalledWith("Sac outlet", "#00733e");
+    expect(onCreate).toHaveBeenCalledWith("Sac outlet", "#9bd3ae");
   });
 
   /**

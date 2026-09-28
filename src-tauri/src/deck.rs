@@ -640,6 +640,16 @@ pub struct DeckPatch {
     /// default takes nothing from anybody. A patch says nothing about defaults either way:
     /// absent still means "leave it".
     pub notes_open: Option<bool>,
+    /// Whether the Deck stats band's **Mana curve** splits each bar into creatures and
+    /// noncreatures — user schema v56, the `Creatures` toggle in that card's header.
+    ///
+    /// [`Self::stats_open`]'s rules one control further in: storage only on this side (what a
+    /// creature *is* and how a split bar draws are TypeScript's), on this patch rather than on
+    /// [`DeckViewState`] because a toggle a reader sets once and leaves is worth an `updated_at`,
+    /// and **no arm in [`record_deck_edit`]** — how a chart is drawn is not an edit anybody reads
+    /// a history drawer for. The column is `DEFAULT 0`, [`Self::notes_open`]'s answer: the split
+    /// is new, so off is exactly today's chart and the upgrade changes nothing on screen.
+    pub curve_creatures: Option<bool>,
     /// How this deck treats its tokens — one of [`TOKEN_MODES`], user schema v52, replacing
     /// v47's `token_stack` switch. `hidden` takes the Tokens & Emblems pile out of all four
     /// views; `managed` draws it, and so will `collection` once PR 3 gives it custody.
@@ -938,6 +948,14 @@ pub struct DeckRow {
     /// **[`duplicate_deck`] deliberately does not carry it**, both neighbours' note — so a copy
     /// takes the column default, which here is *shut*.
     pub notes_open: bool,
+    /// Whether the Mana curve splits its bars into creatures and noncreatures — user schema
+    /// v56, `DEFAULT 0`, so every existing deck draws the one-colour curve it always has.
+    ///
+    /// Read here as well as written through [`DeckPatch`], for [`Self::stats_open`]'s reason: a
+    /// switch the app can set and never see is a switch nothing can draw. **[`duplicate_deck`]
+    /// deliberately does not carry it**, the three disclosures' note — so a copy takes the
+    /// column default, which here is *unsplit*. See [`DeckPatch::curve_creatures`].
+    pub curve_creatures: bool,
     /// How this deck treats its tokens — `managed`, `collection` or `hidden` (user schema v52,
     /// `DEFAULT 'managed'`, replacing v47's `token_stack`). **Every deck on every disk reads
     /// `managed` after the upgrade, the ones whose switch was off included** — the reader's
@@ -1282,7 +1300,7 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
             d.virtual_only, d.stats_open, d.notes_open, d.token_mode, d.managed_wishlist_mode,
-            d.token_rail_index
+            d.token_rail_index, d.curve_creatures
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -1419,6 +1437,11 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // hand the pile's slot to a bracket and type out perfectly; only the position tells them
         // apart.
         token_rail_index: r.get(29)?,
+        // 30, at the end of the named list, same rule — user schema v56's Mana curve split. A
+        // `bool` over an `INTEGER` like the three disclosures at 20, 25 and 26, and the trap is
+        // theirs read once more: a crossed index would hand the split to a band's open state and
+        // both fields would still hold a `0` or a `1`.
+        curve_creatures: r.get(30)?,
     })
 }
 
@@ -2418,6 +2441,11 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- v51's rail index is an `Option<i64>` like `?11` and `?13`, so a crossed number
                 -- is an UPDATE that succeeds and moves a pile, a default category or a bracket.
                 token_rail_index = coalesce(?23, token_rail_index),
+                -- `?24`, the next number at the **end**, same rule one rung later. User schema
+                -- v56's curve split is an `Option<bool>` like the three disclosures at `?14`,
+                -- `?19` and `?20`, so a crossed number is an UPDATE that succeeds and opens a
+                -- band where the reader pressed a chart toggle.
+                curve_creatures = coalesce(?24, curve_creatures),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -2446,6 +2474,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 token_mode,
                 managed_wishlist,
                 patch.token_rail_index,
+                patch.curve_creatures,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -10545,6 +10574,9 @@ mod tests {
             // which share a value because three booleans cannot be pairwise distinct — the
             // theory marks' own note, one set of fields along.
             notes_open: true,
+            // `true` rather than the column's `DEFAULT 0`, the same rule: `false` is what every
+            // deck carries and would read correct on a field that never left Rust.
+            curve_creatures: true,
             // `hidden` rather than the column's `DEFAULT 'managed'`, the same rule again:
             // `managed` is what every deck carries and would read correct on a field that never
             // left Rust. And a word no other TEXT field here can hold — `managedWishlist` beside
@@ -10618,6 +10650,10 @@ mod tests {
                 // crossed index among them succeeds silently, and only the values (`true`,
                 // `false`, `true`) and these three keys tell them apart.
                 "notesOpen": true,
+                // User schema v56, and `curveCreatures` rather than `curve_creatures`: the Mana
+                // curve reads this key to know whether to split its bars, and a snake-cased one
+                // would be `undefined` — falsy, so a split the reader saved would never draw.
+                "curveCreatures": true,
                 // User schema v52, and `tokenMode` rather than `token_mode`: the four views read
                 // this key to decide whether to draw the token pile at all, and a snake-cased one
                 // would be `undefined` — which no mode is, so the page would fall back on
@@ -10678,7 +10714,8 @@ mod tests {
 
         let patch: DeckPatch = serde_json::from_str(
             r#"{"coverCardId":"bolt-lea","archived":true,"separateXGroup":true,"gameKey":"mtgo",
-                "virtualOnly":true,"tokenMode":"hidden","tokenRailIndex":-1}"#,
+                "virtualOnly":true,"tokenMode":"hidden","tokenRailIndex":-1,
+                "curveCreatures":true}"#,
         )
         .expect("the patch payload");
         assert_eq!(patch.cover_card_id.as_deref(), Some("bolt-lea"));
@@ -10694,6 +10731,9 @@ mod tests {
         // one a misspelled key would lose: `#[serde(default)]` would read it as `None`, *leave
         // it*, and the pile would stay wherever the reader had just dragged it from.
         assert_eq!(patch.token_rail_index, Some(-1));
+        // User schema v56. The Mana curve's `Creatures` toggle sends this, and a misspelled key
+        // would be read by `#[serde(default)]` as an omitted one — a press that saves nothing.
+        assert_eq!(patch.curve_creatures, Some(true));
         assert!(patch.name.is_none(), "an omitted field means leave it");
 
         // And the third: `deck_set_view_state`'s `viewState`, which the editor sends one
@@ -11179,6 +11219,93 @@ mod tests {
         );
     }
 
+    /// The Mana curve's creature split, end to end — and **`false` on a new deck is the
+    /// assertion**, user schema v56's `DEFAULT 0` and never a Rust fallback.
+    ///
+    /// [`the_notes_disclosure_round_trips_and_is_not_recorded`]'s job one column along. The
+    /// split is a fourth `bool` over an `INTEGER` beside the three disclosures, read at 30 by
+    /// `deck_row` and bound to `?24` in `update_deck`, so it is moved against `stats_open` —
+    /// the neighbour that defaults the *other* way — and a crossed index or hole between the two
+    /// changes both readbacks. No history row, the disclosures' rule.
+    #[test]
+    fn the_curve_split_round_trips_and_is_not_recorded() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        assert!(
+            !deck.curve_creatures,
+            "a new deck's curve is unsplit — the column's own DEFAULT 0, never a Rust fallback"
+        );
+        assert!(
+            deck.stats_open,
+            "and the neighbour that defaults open still does"
+        );
+
+        let patched = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                curve_creatures: Some(true),
+                stats_open: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(patched.curve_creatures, "the readback is the write");
+        assert!(!patched.stats_open, "and the neighbour moved the other way");
+
+        let read = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert!(
+            read.curve_creatures && !read.stats_open,
+            "…including through `DECK_SELECT`'s positional reads"
+        );
+
+        // Absent means "leave it", the `coalesce(?n, column)` contract.
+        let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
+        assert!(after.curve_creatures, "an absent field means leave it");
+        assert!(!after.stats_open);
+
+        assert!(
+            !update_deck(
+                &conn,
+                deck.id,
+                &DeckPatch {
+                    curve_creatures: Some(false),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .curve_creatures,
+            "and it switches back off"
+        );
+
+        // A real edit first, so the absence below is an absence and not an empty list.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                name: Some("Burn II".to_owned()),
+                curve_creatures: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let words: Vec<String> = crate::deck_audit::list(&conn, deck.id, 20)
+            .unwrap()
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::DECK)
+            .map(|r| r.payload.clone())
+            .collect();
+        assert!(
+            words.iter().any(|p| p.contains("name")),
+            "the drawer has to be reachable for the next assertion to mean anything: {words:?}"
+        );
+        assert!(
+            !words.iter().any(|p| p.contains("curveCreatures")),
+            "how a chart is drawn is not an edit anybody reads a drawer for: {words:?}"
+        );
+    }
+
     /// A copy shows its stats, because [`duplicate_deck`] does not carry the column and the
     /// column's own `DEFAULT` is open.
     ///
@@ -11199,12 +11326,17 @@ mod tests {
                 stats_open: Some(false),
                 tokens_open: Some(true),
                 notes_open: Some(true),
+                curve_creatures: Some(true),
                 ..Default::default()
             },
         )
         .unwrap();
 
         let copy = duplicate_deck(&conn, deck.id).unwrap();
+        assert!(
+            !copy.curve_creatures,
+            "nor the curve split — user schema v56's DEFAULT 0, the disclosures' rule"
+        );
         assert!(
             copy.stats_open,
             "a copy shows its stats, which is the column's DEFAULT 1 rather than the \

@@ -289,7 +289,7 @@ describe("CollectionValueWidget", () => {
     const fills = Array.from(container.querySelectorAll<HTMLElement>("li span.h-full")).map(
       (fill) => fill.style.background,
     );
-    expect(fills).toEqual(["var(--color-mana-u)", "var(--color-pie-gold)"]);
+    expect(fills).toEqual(["var(--color-mana-u)", "var(--color-accent)"]);
   });
 
   it("puts a rarity gem before a rarity bar's label", () => {

@@ -5885,7 +5885,12 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               exactly as the tokens band's does one component up. What it does *not* share is the
               default: that column is `DEFAULT 1`, because this band has been on screen for every
               deck since 2026-08-14 with no control that hides it, so a collapsed default would
-              take a band away from every deck in the database rather than choose one. */}
+              take a band away from every deck in the database rather than choose one.
+
+              **The Mana curve's creature split is `decks.curve_creatures` and rides the same
+              patch** (user schema v56), wired the way `open` is one prop up. Its default is the
+              other one — `DEFAULT 0`, because the split is new and off is the chart every deck
+              already drew. */}
           <DeckStats
             cards={deck.cards}
             send={deck.missingToWishlist}
@@ -5896,6 +5901,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             theory={theoryDone}
             open={row.statsOpen}
             onToggle={(next) => deck.update.mutate({ statsOpen: next })}
+            creatureSplit={row.curveCreatures}
+            onCreatureSplitChange={(next) => deck.update.mutate({ curveCreatures: next })}
             separateXGroup={separateX}
           />
         </>

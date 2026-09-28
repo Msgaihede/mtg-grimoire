@@ -145,7 +145,8 @@ export const Default: Story = {
  * Reset stays unavailable, which is the whole of what makes that button readable: it is the one
  * control on the panel that says whether the reader has customised anything.
  *
- * **Ember is deliberately the colour picked**, and it is the app's own destructive red. Nothing
+ * **Ember is deliberately the colour picked**: it is Magic's red (`--color-mana-r` since
+ * 2026-09-28), the one quick pick a reader could take for the app's destructive red. Nothing
  * stops a reader choosing it, and this panel is not the place to stop them: the mark's other three
  * separations from the `RULE BREAK` mark — the corner, the shape and the card's own edge — are
  * structural and hold whatever is picked here, which is exactly why `CardMarks.tsx` insists on
@@ -174,7 +175,7 @@ export const Customised: Story = {
     await waitFor(async () => {
       await expect(trigger).toHaveAttribute("aria-expanded", "false");
     });
-    await expect(swatchOf(trigger)).toHaveStyle({ backgroundColor: "#d3202a" });
+    await expect(swatchOf(trigger)).toHaveStyle({ backgroundColor: "#f9aa8f" });
 
     // There is something to put back now, and only on this row.
     await expect(
@@ -272,6 +273,6 @@ export const RefusedWrite: Story = {
 
     // And the swatch is still on the colour they chose. Taking it back *and* explaining why
     // would be the rail's silent trade with the compensation removed.
-    await expect(swatchOf(trigger)).toHaveStyle({ backgroundColor: "#00733e" });
+    await expect(swatchOf(trigger)).toHaveStyle({ backgroundColor: "#9bd3ae" });
   },
 };

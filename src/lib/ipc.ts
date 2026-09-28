@@ -3539,6 +3539,16 @@ export interface DeckPatch {
    */
   notesOpen?: boolean;
   /**
+   * Whether the Deck stats band's **Mana curve** splits its bars into creatures and
+   * noncreatures. See {@link DeckRow.curveCreatures} — a per-deck reading preference, so the
+   * `Creatures` toggle writes one column and touches not one `deck_cards` row.
+   *
+   * **It rides this patch and not {@link ipc.deckSetViewState}**, for the argument spelled out
+   * on {@link tokensOpen}: a toggle a reader sets once and leaves is a handful of writes over a
+   * deck's life, where a tab or a sort is written on every press.
+   */
+  curveCreatures?: boolean;
+  /**
    * How the deck keeps its tokens. See {@link DeckRow.tokenMode} — `decks.token_mode`, user
    * schema v52, which replaced v47's `token_stack` switch. Writing it touches no `deck_cards`,
    * `deck_tokens` or `deck_token_printings` row, and in PR 2 no collection row either.
@@ -3943,6 +3953,21 @@ export interface DeckRow {
    * because a deck's tile and its gallery read want a row and not a notebook.
    */
   notesOpen: boolean;
+  /**
+   * Whether the Deck stats band's **Mana curve** splits each bar into creatures and noncreatures
+   * — `decks.curve_creatures INTEGER NOT NULL DEFAULT 0`, user schema v56, and `false` on every
+   * deck that predates it.
+   *
+   * **The default is {@link notesOpen}'s answer and not {@link statsOpen}'s**: the split is new,
+   * so off is exactly the chart every deck already draws and the upgrade changes nothing on
+   * screen. **Per deck**, for {@link statsOpen}'s reason — whether a reader wants the curve
+   * broken down is an answer about a particular list. What counts as a creature, and how a split
+   * bar draws, are the page's (`DeckStats`); Rust stores the one bit.
+   *
+   * Read on the row as well as written through {@link DeckPatch}: a setting the app can write
+   * and never see is a setting nothing can draw.
+   */
+  curveCreatures: boolean;
   /**
    * Which of the Compare dialog's three views this deck's **managed wishlist** follows — `all`,
    * `missing` or `other` (Different printing) — or `off` for no folder

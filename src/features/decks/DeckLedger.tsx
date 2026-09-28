@@ -345,10 +345,13 @@ export function DeckLedger({
           // went when the handlers did. Both are back together.
           //
           // Off is the line's own dim mono with the border every control on it wears; on takes
-          // `text-pie-gold` and the edge with it. That gold is what the crowns and banners on the
-          // cards themselves are drawn in, so the chip and what it narrows to say one fact in one
-          // colour — deliberately not the accent, which on this very line already means something
-          // else: `DeckBracket`'s accent edge says *a reading you can go and look at*.
+          // `text-accent` and the edge with it. That gold is what the crowns on the cards
+          // themselves are drawn in, so the chip and what it narrows to say one fact in one
+          // colour. **It was a separate crown gold until 2026-09-28**, kept apart from the accent
+          // because `DeckBracket`'s accent edge on this same line says *a reading you can go and
+          // look at*; that gold was retired with the colour-identity deeps and the accent is the
+          // one gold now, so a pressed chip and the bracket share it. The crown, and the chip
+          // being a press with `aria-pressed` rather than a standing edge, are what tell them apart.
           <button
             type="button"
             // A toggle, so the press is `aria-pressed` and the name never changes with it. The
@@ -370,8 +373,8 @@ export function DeckLedger({
               "border px-2 font-mono text-[0.6875rem] tabular-nums",
               "transition-colors duration-150 motion-reduce:transition-none",
               gameChangersOnly
-                ? "border-pie-gold text-pie-gold"
-                : "border-border text-dim hover:text-pie-gold focus-visible:text-pie-gold",
+                ? "border-accent text-accent"
+                : "border-border text-dim hover:text-accent focus-visible:text-accent",
               FOCUS,
             )}
           >

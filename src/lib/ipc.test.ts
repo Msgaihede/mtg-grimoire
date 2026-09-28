@@ -961,6 +961,10 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { tokenRailIndex: 2 } });
     await ipc.deckUpdate(4, { tokenRailIndex: -1 });
     expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { tokenRailIndex: -1 } });
+    // User schema v56's Mana curve split, the same quiet failure as `notesOpen` above: a
+    // misspelt key is a `Creatures` toggle that turns itself off on every reload.
+    await ipc.deckUpdate(4, { curveCreatures: true });
+    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { curveCreatures: true } });
 
     invoke.mockResolvedValue(undefined);
     await ipc.deckDelete(4);

@@ -192,7 +192,7 @@ describe("PriceMoversWidget", () => {
     const lotus = screen.getByText("Black Lotus").closest("li") as HTMLElement;
     expect(within(lotus).getByText("LEA · nonfoil")).toBeInTheDocument();
     const gain = within(lotus).getByText("+$184.00");
-    expect(gain.getAttribute("style")).toContain("--color-pie-g");
+    expect(gain.getAttribute("style")).toContain("--color-mana-g");
 
     const bolt = screen.getByText("Lightning Bolt").closest("li") as HTMLElement;
     expect(within(bolt).getByText("SLD · foil")).toBeInTheDocument();

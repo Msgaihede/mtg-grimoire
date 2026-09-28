@@ -130,6 +130,8 @@ const DECK_FIELDS: &[&str] = &[
     // is gone — one paragraph became [`Op::Notes`]' many rows — and `notes_open` is not its
     // successor on this list any more than `tokens_open` or `stats_open` are on it: a
     // disclosure is not an audited edit, so there is nothing for a Ctrl+Z to put back.
+    // User schema v56's `curve_creatures` (the Mana curve's creature split) is absent on the
+    // same terms: how a chart is drawn has no history row either.
     // `token_stack` (user schema v47) was absent on the same terms — a view setting with no
     // history row — and user schema v52 dropped the column for `token_mode`, below, which is
     // not a view setting and is on this list.

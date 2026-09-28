@@ -21,11 +21,18 @@
  * slivers. Hidden, it leaves both bands **and both denominators**, so a tile's percentage keeps
  * agreeing with the band above it; the Colourless tile stays in the grid, for the grid's reason,
  * with its counts still printed and both shares an em dash — `percent`'s *not in the question*.
- * Component state and not a stored preference, like `CardDistribution`'s `by`: it is a way of
- * reading the chart rather than a fact about the deck.
+ * Not a stored preference, like `CardDistribution`'s `by`: it is a way of reading the chart rather
+ * than a fact about the deck. **It is `DeckStats`' state rather than this card's** since
+ * 2026-09-28, handed in as `hideColorless` with `onHideColorlessChange` beside it, because the
+ * band's three-column layout moves this card between column containers and a move remounts it —
+ * held here, widening the window past the breakpoint would put colourless back.
+ *
+ * **Labels sit above what they label** (2026-09-28): `Cost` and `Sources` over their bands, which
+ * take the card's whole width, and each tile's `(U) Cost` / `(U) Sources` over its own track. The
+ * tile's separate symbol row is gone — the symbol leads each header instead, so a tile is two
+ * figures rather than a glyph and two figures.
  */
-import type { CSSProperties, JSX, ReactNode } from "react";
-import { useState } from "react";
+import type { JSX, ReactNode } from "react";
 import { ManaText } from "@/components/ManaText";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { plural } from "@/lib/counts";
@@ -41,7 +48,7 @@ import {
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import type { DeckStatsSummary } from "../DeckStats";
-import { percent, StatsCard, Track } from "./StatsCard";
+import { percent, StatsCard } from "./StatsCard";
 
 /**
  * The sentence the Sources half says when the corpus has never answered the question.
@@ -65,17 +72,27 @@ const COST_HINT =
 const SOURCES_HINT =
   "Mana-producing cards for each required color and colorless. Multi-color sources count toward each color they produce.";
 
-/** The band's own label column. Fixed, so `Cost` and `Sources` start their tracks at one x. */
-const BAND_LABEL = "w-[4.5rem] shrink-0 text-[0.9375rem] font-medium text-text";
+/** A band's label, set **above** its strip so the strip takes the card's full width.
+ *  `CreatureSplitBar` spells the same label, so the two bands read as one grammar. */
+const BAND_LABEL = "text-[0.9375rem] font-medium text-text";
 
 /** The toggle's accessible name. Names the card it acts on, so it cannot be confused with any
  *  other colourless control on the screen, and stays one string whether pressed or not —
  *  `aria-pressed` carries the state. */
 export const HIDE_COLORLESS_LABEL = "Hide colorless in mana pips";
 
-export function ManaPips({ stats }: { stats: DeckStatsSummary }): JSX.Element {
+export function ManaPips({
+  stats,
+  hideColorless,
+  onHideColorlessChange,
+}: {
+  stats: DeckStatsSummary;
+  /** Colourless taken out of both bands and both denominators — issue #513, held by `DeckStats`. */
+  hideColorless: boolean;
+  /** Asked for the other state when the toggle is pressed; this card never sets it itself. */
+  onHideColorlessChange: (next: boolean) => void;
+}): JSX.Element {
   const { pips, pipCards, sources, sourcesKnown } = stats;
-  const [hideColorless, setHideColorless] = useState(false);
   const tip = useTooltip();
 
   // The keys in the question. Everything below reads this rather than `MANA_KEYS`, so a hidden
@@ -100,7 +117,7 @@ export function ManaPips({ stats }: { stats: DeckStatsSummary }): JSX.Element {
           type="button"
           aria-pressed={hideColorless}
           aria-label={HIDE_COLORLESS_LABEL}
-          onClick={() => setHideColorless((hidden) => !hidden)}
+          onClick={() => onHideColorlessChange(!hideColorless)}
           {...tip(
             hideColorless
               ? "Include colorless mana in Cost and Sources."
@@ -124,7 +141,7 @@ export function ManaPips({ stats }: { stats: DeckStatsSummary }): JSX.Element {
         </button>
       }
     >
-      <div className="flex flex-col gap-2">
+      <div className="flex flex-col gap-2.5">
         <Band label="Cost" keys={present} counts={pips} total={costTotal} hint={COST_HINT} />
         {sourcesKnown ? (
           <Band
@@ -135,13 +152,13 @@ export function ManaPips({ stats }: { stats: DeckStatsSummary }): JSX.Element {
             hint={SOURCES_HINT}
           />
         ) : (
-          <div className="flex items-center gap-2">
+          <div className="flex flex-col gap-1">
             <span className={BAND_LABEL}>Sources</span>
             {/* No track at all rather than an empty one: an empty `bg-surface` strip beside a
                 filled Cost band is exactly the row of zeroes this state exists to refuse, and a
                 sentence in its place is the only thing that reads as a question nobody has
                 answered yet. The height matches a band's so the pair stays a pair. */}
-            <span className="flex h-8 min-w-0 flex-1 items-center text-[0.8125rem] text-dim">
+            <span className="flex h-8 min-w-0 items-center text-[0.8125rem] text-dim">
               {SOURCES_UNKNOWN}
             </span>
           </div>
@@ -218,13 +235,14 @@ function Band({
           .join(", ")}.`;
 
   return (
-    <div className="flex items-center gap-2" {...tip(hint)}>
-      <span className={BAND_LABEL}>{label}</span>
+    <div className="flex flex-col gap-1" {...tip(hint)}>
+      {/* `aria-hidden` because the sentence beside it opens with the same word — `Cost: White
+          42%, …` — and a label read out before its own sentence is the word twice. */}
+      <span className={BAND_LABEL} aria-hidden="true">
+        {label}
+      </span>
       <span className="sr-only">{spoken}</span>
-      <span
-        aria-hidden="true"
-        className="flex h-8 min-w-0 flex-1 overflow-hidden rounded-md bg-surface"
-      >
+      <span aria-hidden="true" className="flex h-8 w-full overflow-hidden rounded-md bg-surface">
         {keys.map((key) => (
           <span
             key={key}
@@ -312,13 +330,13 @@ function ColorTile({
         idle && "opacity-45",
       )}
     >
-      <span aria-hidden="true">
-        <ManaText source={`{${colour}}`} className="text-[0.875rem]" />
-      </span>
-      {/* `ManaText` spells its own token — "W" — which is a wire format rather than a word. */}
+      {/* The colour's name for a screen reader, said once for the tile. The symbol that stands for
+          it on screen leads each header below, and `ManaText` spells its own token — "W" — which
+          is a wire format rather than a word. */}
       <span className="sr-only">{MANA_LABEL[colour]}</span>
 
       <Figure
+        colour={colour}
         word="Cost"
         share={shareOf(pips, costTotal)}
         fill={MANA_FILL[colour]}
@@ -327,13 +345,15 @@ function ColorTile({
 
       {sourcesKnown ? (
         <Figure
+          colour={colour}
           word="Sources"
           share={shareOf(sources, sourceTotal)}
-          fill={MANA_FILL[colour]}
           // The two halves of one colour are one hue at two weights: the supply is the fainter
           // of the pair, so a tile reads as one colour answering two questions rather than as
-          // two colours that happen to sit together.
-          fillStyle={{ opacity: 0.55 }}
+          // two colours that happen to sit together. **Thinned with `color-mix` and never
+          // `opacity`** (2026-09-28): the percentage is printed on the fill now, and opacity on
+          // the fill would take the number down with it.
+          fill={`color-mix(in srgb, ${MANA_FILL[colour]} 55%, transparent)`}
           // **`N sources`, and deliberately not `N sources · M cards`.** The design spells a
           // two-term caption here, mirroring the cost's, and it cannot be honest: Scryfall's
           // `produced_mana` says *which* colours a card makes and never *how much*, so a source
@@ -344,6 +364,7 @@ function ColorTile({
         />
       ) : (
         <Figure
+          colour={colour}
           word="Sources"
           share={null}
           fill={MANA_FILL[colour]}
@@ -359,63 +380,123 @@ function ColorTile({
 }
 
 /**
- * One line of a tile: the word, the track, the percentage, and the caption under them.
+ * One figure of a tile: `(U) Cost` over its track, the caption under it.
  *
- * The word and the percentage take fixed columns so the six tiles' tracks start and end at the
- * same two x positions — six bars that each began where their own label happened to end would be
- * six charts rather than one grid. What that costs is the track itself at the narrowest useful
- * width, and the sum is taken at the band's own floor: a stats column is `min-w-[22rem]` (352px),
- * which leaves this card 326px of content, a tile 159px and a tile's content box **141px** — of
- * which the two fixed columns and the two gaps take 96, leaving the track **~45px**. It is a
- * proportion bar rather than something anybody measures off, and the percentage beside it is the
- * number, so a short track is a legible failure; the alternative — a track on a line of its own —
- * spends a third line per figure and six lines per card.
+ * **The percentage lives inside the track** (2026-09-28), which is what freed the header and the
+ * track to take the tile's whole width. It used to be a fixed `w-9` column right of a track
+ * squeezed between it and a `w-13` word column, which at the band's 22rem floor left the track
+ * ~45px — a proportion bar nobody could read a proportion off. Now the word sits over the track
+ * with the colour's symbol before it, the track is {@link TRACK_HEIGHT}px tall across the tile's
+ * full content box (~141px at that floor), and the number is on the fill it stands for.
  *
- * **All three strings are `text-xs`, and the two column widths are that size measured rather than
- * guessed** (2026-09-10, the reader's report that the tile read too small). They were
- * `text-[0.625rem]` — the app's smallest type, two steps under the `text-xs` every other readout
- * in this band writes its figures at, on the one card where the numbers are the whole readout. At
- * 12px in this app's own faces `Sources` is **46.1px** and a mono `100%` is **28.8px**, so the
- * columns are `w-13` (52) and `w-9` (36) rather than the 44 and 32 that fitted 10px type; a word
- * that does not fit its `shrink-0` column wraps to two lines and takes the row's baseline with it.
  * **The caption is deliberately left free to wrap** — it is the one string with no ceiling
- * (`110 pips · 100 cards` is 144px at this size), and a second line under a tall deck's tile is a
+ * (`110 pips · 100 cards` is 144px at `text-xs`), and a second line under a tall deck's tile is a
  * better failure than a truncation that eats the `· N cards` half.
  */
 function Figure({
+  colour,
   word,
   share,
   fill,
-  fillStyle,
   caption,
   drawTrack = true,
   hint,
 }: {
+  colour: ManaKey;
   word: string;
   /** `null` where there is nothing to take a share of — drawn as an em dash, never `0%`. */
   share: number | null;
+  /** The fill as a CSS colour — the mana fill, or the thinned `color-mix` of it for Sources. */
   fill: string;
-  /** Spread onto the fill itself, which is what `Track` does with its `style`. */
-  fillStyle?: CSSProperties;
   caption: string;
   drawTrack?: boolean;
   hint?: ReactNode;
 }): JSX.Element {
   const tip = useTooltip();
   return (
-    <div className="flex min-w-0 flex-col gap-0.5" {...tip(hint)}>
-      <div className="flex items-center gap-1">
-        <span className="w-13 shrink-0 text-xs font-medium text-text">{word}</span>
-        {drawTrack ? (
-          <Track share={share ?? 0} fill={fill} style={fillStyle} />
-        ) : (
-          <span className="min-w-0 flex-1" />
-        )}
-        <span className="w-9 shrink-0 text-right font-mono text-xs tabular-nums text-text">
-          {percent(share)}
+    <div className="flex min-w-0 flex-col gap-1" {...tip(hint)}>
+      <span className="flex items-center gap-1.5 text-xs font-medium text-text">
+        {/* The symbol and never the colour's name: the tile's `sr-only` name has said it once. */}
+        <span aria-hidden="true" className="inline-flex">
+          <ManaText source={`{${colour}}`} className="text-[0.8125rem]" />
         </span>
-      </div>
+        {word}
+      </span>
+      {drawTrack ? <ShareTrack share={share} fill={fill} /> : null}
       <span className="font-mono text-xs text-dim">{caption}</span>
     </div>
+  );
+}
+
+/** How tall a tile's track is drawn — room for an 11px figure inside it with air either side. */
+const TRACK_HEIGHT = 18;
+
+/**
+ * The share below which the percentage is printed **just past** the fill rather than on it.
+ *
+ * 0.2 is where the figure stops fitting on its fill: it is 11px Geist Mono, ~6.6px a character,
+ * so `20%` is ~20px, and a fifth of a tile's content box at the band's floor (~141px) is 28px.
+ * Under it the number would overhang its own fill onto the empty track in black, which is the
+ * one colour that disappears there.
+ */
+const INSIDE_MIN_SHARE = 0.2;
+
+/** The figure's type, on the fill or off it. */
+const SHARE_TYPE = "font-mono text-[0.6875rem] font-semibold leading-none tabular-nums";
+
+/**
+ * A tile's track with its percentage drawn in it — this file's own rather than `StatsCard`'s
+ * `Track`, which draws a bare fill for the odds table and the creature rows and has no place for
+ * a number.
+ *
+ * Three placements, one per state a share can be in: **on the fill**, centred, in black like a
+ * glyph on a mana symbol; **just past the fill** in `text-text` where the fill is under
+ * {@link INSIDE_MIN_SHARE}; and an **em dash centred in the empty track** in `text-dim` where
+ * there is no share at all (`percent`'s *not in the question*). Only the fill is `aria-hidden` —
+ * the number is text a screen reader reads after the header word, as it did when it sat in a
+ * column of its own.
+ */
+function ShareTrack({ share, fill }: { share: number | null; fill: string }): JSX.Element {
+  // Clamped for `Track`'s reason: two independently rounded counts can land a hair outside.
+  const width = share === null ? 0 : Math.max(0, Math.min(1, share)) * 100;
+  return (
+    <span
+      className="relative block w-full overflow-hidden rounded-sm bg-surface"
+      style={{ height: TRACK_HEIGHT }}
+    >
+      <span
+        aria-hidden="true"
+        data-share-fill=""
+        className="absolute inset-y-0 left-0 rounded-sm"
+        style={{ width: `${width}%`, background: fill }}
+      />
+      {share === null ? (
+        <span
+          data-share="none"
+          className={cn("absolute inset-0 flex items-center justify-center text-dim", SHARE_TYPE)}
+        >
+          {percent(null)}
+        </span>
+      ) : share >= INSIDE_MIN_SHARE ? (
+        <span
+          data-share="inside"
+          className={cn(
+            "absolute inset-y-0 left-0 flex items-center justify-center text-black",
+            SHARE_TYPE,
+          )}
+          style={{ width: `${width}%` }}
+        >
+          {percent(share)}
+        </span>
+      ) : (
+        <span
+          data-share="beside"
+          className={cn("absolute inset-y-0 flex items-center text-text", SHARE_TYPE)}
+          style={{ left: `calc(${width}% + 4px)` }}
+        >
+          {percent(share)}
+        </span>
+      )}
+    </span>
   );
 }

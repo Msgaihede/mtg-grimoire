@@ -311,21 +311,29 @@
   /* "Nothing to fix" — and the app's first success colour, added 2026-08-18 when the deck
      check became a glyph and its two states had to be told apart without words.
 
-     The palette had no green a *reader* could be shown: `--color-mana-g` is a mana fill
-     ("Mana UI only — chips, pips, the line. Never a panel, never a border, never text") and
-     `--color-pie-g` is a colour-identity deep, dark enough on this background to read as
-     grey at 16px. A check mark in either would be saying "green cards" to the one reader who
-     has learned what those colours mean here.
+     The palette had no green a *reader* could be shown: `--color-mana-g` is Magic's green, the
+     colour that stands for green cards everywhere in this app. A check mark in it would be
+     saying "green cards" to the one reader who has learned what that colour means here. (A
+     second green, a saturated colour-identity deep, sat beside it until 2026-09-28, dark
+     enough on this background to read as grey at 16px; it was retired with the rest of its
+     family — see the mana block below.)
 
-     So it is a peer of `--destructive` rather than of the mana families, and is tuned like
+     So it is a peer of `--destructive` rather than of the mana colours, and is tuned like
      one: the same lightness (0.70–0.72 against an oklch(0.16) background), a chroma pulled
      back from it so a legal deck is stated rather than celebrated, and — like the red — it
      colours a *glyph* or a hairline, never a panel. */
   --color-ok: oklch(0.72 0.14 152);
 
-  /* The five colours, as printed symbols are filled. Mana UI only — chips, pips, the
-     line. Never a panel, never a border, never text. Glyphs sit on these in near-black,
-     exactly like a real symbol. */
+  /* The five colours and colourless, as printed symbols are filled — and, since 2026-09-28,
+     the app's only palette for anything that stands for a Magic colour: chips, pips, the
+     line, chart fills, rails, count tags, and a glyph drawn in one on the dark ground alike.
+     Something printed *on* one of these is near-black, exactly like a real symbol; they are
+     all pale, so light text on one is illegible (`labelFgCss` answers dark for every one).
+
+     A second family, the saturated frame/pie deeps, stood beside these until that date and
+     was deleted outright rather than deprecated, so no utility built from it compiles any
+     more. `lib/tokens.test.ts` sweeps `src/` for the retired names. Gold has no mana
+     equivalent: a gold mark — the game changer's crown, a multicolour fill — is `--color-accent`. */
   --color-mana-w: #fffbd5;
   --color-mana-u: #aae0fa;
   --color-mana-b: #cbc2bf;
@@ -333,45 +341,51 @@
   --color-mana-g: #9bd3ae;
   --color-mana-c: #c8c4bf;
 
-  /* Frame/pie deeps — saturated enough to carry meaning at 1px. For identity pips and,
-     later, charts. Not interchangeable with the fills above. */
-  --color-pie-w: #f8e7b9;
-  --color-pie-u: #0e68ab;
-  --color-pie-b: #3b3a3e;
-  --color-pie-r: #d3202a;
-  --color-pie-g: #00733e;
-  --color-pie-gold: #d9b95c;
-  --color-pie-c: #c8c4bf;
-
   /* The deckbuilder's three theory marks (2026-09-07, a third added 2026-09-08). Green where a
      live row is the printing the plan named, blue where it is the same card in a printing it did
      not, red where the plan does not ask for the card at all.
 
-     Literal hexes rather than `var(--color-ok)` / `var(--color-pie-u)`, for `LABEL_COLORS`'
+     Literal hexes rather than `var(--color-ok)` / a `var()` into the palette, for `LABEL_COLORS`'
      reason one file over: these are the values a colour picker opens on and the values a reader's
      own choice replaces, so they cannot be a reference to something the palette decides later.
      `#56bd78` is `--color-ok`'s `oklch(0.72 0.14 152)` converted to sRGB — in gamut, so exact.
+     `#0e68ab` was the retired azure deep's value when it was copied here, and it stays: it is a
+     default a reader may already have compared their own choice against, not a palette entry.
 
      `#e2484f` is `--destructive`'s own hue — `oklch(0.704 0.191 22.216)`, Tailwind's red-400,
      which is outside sRGB and renders as `#ff6467` — with the chroma pulled into gamut and taken
      a step deeper, so the unplanned mark is a red of its own rather than the app's *there is a
-     problem here* paint. It is not `--color-pie-r` either, which is the Ember label a reader may
-     already have put on a card in the same 27px strip. Its luma is under `labelFgCss`' 0.55
-     threshold, so the glyph on it is `--color-text` like the other two.
+     problem here* paint. It is not the Ember label's `#d3202a` either (the retired red deep, and
+     still stored on labels picked before 2026-09-28), which a reader may already have put on a
+     card in the same 27px strip. Its luma is under `labelFgCss`' 0.55 threshold, so the glyph on
+     it is `--color-text` like the other two.
 
      The `-fg` pair is what is legible printed on each: the banner mark is a filled box with a
      tick, an X or a signed number on it. `useMarkColors` overwrites all six when the reader has
      chosen, computing each foreground with `labelFgCss`' luminance formula, so a pale custom
      green does not swallow the tick.
 
-     Placed after the pie deeps rather than inside them because they are not a sixth identity
-     colour: they say what a mark *means*, and only three of the app's marks wear them. */
+     Placed after the mana colours rather than among them because they are not a Magic colour:
+     they say what a mark *means*, and only three of the app's marks wear them. */
   --color-theory-exact: #56bd78;
   --color-theory-exact-fg: var(--color-text);
   --color-theory-name: #0e68ab;
   --color-theory-name-fg: var(--color-text);
   --color-theory-unplanned: #e2484f;
   --color-theory-unplanned-fg: var(--color-text);
+
+  /* The deck stats band's creature split (2026-09-28): the Mana curve's two-part bars, their
+     legend, and Card distribution's `Creatures vs noncreatures` band. One violet hue, a light
+     field for creatures and a deep one for everything else, so the split reads as one fact in
+     two parts rather than as two more colours.
+
+     **Violet because every other hue here already means something**: five are the colours of
+     Magic, gold is the accent, green is `--color-ok`, red is a rule break and blue is the theory
+     name tier. A creature is none of those. `-fg` is what is legible printed on the light field
+     (the counts inside the bar); on the deep field the text is `--color-text`. */
+  --color-creature: oklch(0.72 0.07 305);
+  --color-creature-fg: oklch(0.2 0.03 305);
+  --color-noncreature: oklch(0.5 0.08 305);
 
   /* Rarity, as a gem dot or tinted text. Nothing bigger — a rarity is a footnote. */
   --color-rarity-common: #9aa0a6;
@@ -380,8 +394,8 @@
   --color-rarity-mythic: #e86a33;
 
   /* The five sticky-note fills (user schema v46). Deliberately low chroma and placed outside
-     the pie deeps: a note's colour is the reader's own filing and carries no meaning the app
-     reads, so it must not be mistaken for a sixth identity colour or out-shout a mana pip.
+     the mana colours: a note's colour is the reader's own filing and carries no meaning the app
+     reads, so it must not be mistaken for a Magic colour or out-shout a mana pip.
      Surfaces sit at L 26% against `--color-surface`'s 21%, so a note reads as paper raised
      off the panel; the strip is the 3px edge across its top. */
   --color-note-amber: oklch(0.26 0.04 85);

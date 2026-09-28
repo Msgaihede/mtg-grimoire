@@ -181,7 +181,8 @@ Every one of these has its measurement and its story in
   rows.
   **Gold survives exactly where the mark is _unfilled_, and that is one rule and not two
   colours.** A crown floating over somebody's artwork, or standing in a line of type, has nothing
-  but `text-pie-gold` saying which fact it is — never the destructive colour, which belongs to a
+  but `text-accent` saying which fact it is (a separate crown gold until 2026-09-28, when the
+  colour-identity deeps it belonged to were deleted) — never the destructive colour, which belongs to a
   rule break. A crown printed on a filled `QuantityTag` takes that tag's own foreground, because
   the tag already carries a colour that means the card's **label**: a fixed gold there would be
   the one mark in the strip ignoring what it stands on, and invisible on a Gold-labelled card.
@@ -1067,6 +1068,15 @@ Every one of these has its measurement and its story in
   first appears with its sentence already inside announces nothing — and the number inside it is
   `aria-hidden`.
 - Mana/set symbols come from the bundled `mana-font`/`keyrune` npm packages, **never a CDN**.
+- **Anything that stands for a Magic colour is `--color-mana-w|u|b|r|g|c`, and nothing else**
+  (2026-09-28, the owner's decision). That covers chips and pips as it always did, and now chart
+  fills, rails, count tags and a glyph inked on the dark ground too — the old *"mana UI only,
+  never a panel, never a border, never text"* rule is retired. The saturated `--color-pie-*`
+  deeps are **deleted**, so a utility built from one emits no rule at all; `lib/tokens.test.ts`
+  refuses the names anywhere in `src/`. Gold is not a mana colour: a gold mark — the game
+  changer's crown, a multicolour fill — is `--color-accent`. **All six are pale**, so text or a
+  glyph printed *on* one is near-black (`--color-accent-fg`, `labelFgCss`' answer for every one
+  of them) and never `--color-text`, which reads 1.2–1.5:1 there.
 - shadcn components: always `npx shadcn@latest add <x>` with Radix base (components.json). The
   app palette maps `accent` to a **text** colour (gold), so rewrite a vendored component's
   `bg-accent` surfaces to `bg-surface`. `bg-muted` needs no rewrite.
@@ -1093,7 +1103,7 @@ Every one of these has its measurement and its story in
   filled banner's rule and not the badge's**: `TableView` and `TextView` draw the glyph bare, in
   the fill colour itself on the row's own background, so those two read the `-fg` half not at all.
   The defaults are **literal hexes** rather than
-  `var(--color-ok)` / `var(--color-pie-u)`, for `LABEL_COLORS`' reason one file over: these are
+  `var(--color-ok)` / a palette `var()`, for `LABEL_COLORS`' reason one file over: these are
   the values a colour picker opens on and a reader's choice replaces, so they cannot be a
   reference to something the palette decides later.
 - Card images arrive over `mtgimg://`; `mtgimg:` is an `img-src` and nothing else — **read images

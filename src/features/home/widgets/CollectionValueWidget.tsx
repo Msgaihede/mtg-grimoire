@@ -110,9 +110,11 @@ const OTHER_KEY = "__other__";
  *  dim ink rather than in gold. */
 const NEUTRAL_FILL = "var(--color-accent)";
 
-/** Two or more colours. Gold is what multicolour is in Magic and what this palette already
- *  spends on it — `--color-pie-gold` is the game changer's crown. */
-const MULTI_FILL = "var(--color-pie-gold)";
+/** Two or more colours. Gold is what multicolour is in Magic, and the mana colours have no gold
+ *  of their own, so it is the app's gold — the accent, which is also the game changer's crown
+ *  (2026-09-28; it was a separate saturated gold until that family was retired). Being the accent,
+ *  `WidgetBars` prints this bar's money in dim ink like every other accent bar. */
+const MULTI_FILL = NEUTRAL_FILL;
 
 /** The `color` dimension's two keys that are not one of Scryfall's five letters: the bucket for a
  *  card with no colours, and the bucket for a card with several. */

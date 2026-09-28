@@ -2,14 +2,21 @@
  * The lower half of the Card distribution card: the chance of meeting each bucket in an opening
  * hand.
  *
- * **It owns the three numbers the reading is made of and none of the cut.** `by` arrives from the
+ * **It draws the three numbers the reading is made of and none of the cut.** `by` arrives from the
  * card above, because the select that decides it is drawn in that card's header and a control in
  * a header that moved only one half of its own card would read as broken. What is asked here is
  * the other half of the question — *at least how many, in a hand of how many* — and those two are
  * nobody else's business: no other readout in the band changes when the reader steps the hand to
  * eight to see what a Commander mulligan looks like.
+ *
+ * **Drawn here and held in `DeckStats`, not in this component** (2026-09-28). They were three
+ * `useState`s until the band learned a three-column layout: moving a card from one column
+ * container to another remounts it, so a reader who widened the window past the breakpoint lost
+ * the hand of eight they had just stepped to. So they arrive as one {@link OddsQuestion} with a
+ * setter beside it, the shape `CardDistribution`'s `by` has for the same reason. Still not a
+ * stored preference — it is a way of reading the deck, not a fact about it.
  */
-import { useMemo, useState, type JSX } from "react";
+import { useMemo, type JSX } from "react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { plural } from "@/lib/counts";
@@ -24,6 +31,23 @@ import {
 } from "../deckBuckets";
 import { DEFAULT_HAND_SIZE, handOdds, ODDS_MODES, type OddsMode } from "../openingHand";
 import { percent, Track } from "./StatsCard";
+
+/**
+ * What the odds table is asked — the three numbers beside its heading, held by the caller.
+ *
+ * Its own named shape rather than `openingHand`'s `HandOdds`, which is the arithmetic's input and
+ * carries the deck and the successes as well: this is only the part the reader chooses.
+ */
+export interface OddsQuestion {
+  mode: OddsMode;
+  /** Copies to draw — `0` or more. */
+  want: number;
+  /** Cards in the opening hand — `1` or more. */
+  hand: number;
+}
+
+/** The question a fresh deck opens on: at least one copy in a hand of seven. */
+export const DEFAULT_ODDS: OddsQuestion = { mode: "atLeast", want: 1, hand: DEFAULT_HAND_SIZE };
 
 /**
  * The height of one row, on both sides of the grid.
@@ -59,17 +83,21 @@ const FIGURE = "text-right font-mono text-xs tabular-nums text-text";
  * library an opening hand is actually drawn from.
  * @param by the cut, from the card above. Buckets are **not** folded on this side: a table row is
  * legible at any length, and a reader who set the cut to `Card name` did it to find one card.
+ * @param odds the question's three numbers, held by `DeckStats` — see this file's header.
+ * @param onOddsChange asked for the whole next question; one control changes one field of it.
  */
 export function OpeningHandOdds({
   cards,
   by,
+  odds,
+  onOddsChange,
 }: {
   cards: readonly DeckCard[];
   by: DistributionBy;
+  odds: OddsQuestion;
+  onOddsChange: (next: OddsQuestion) => void;
 }): JSX.Element {
-  const [mode, setMode] = useState<OddsMode>("atLeast");
-  const [want, setWant] = useState(1);
-  const [hand, setHand] = useState(DEFAULT_HAND_SIZE);
+  const { mode, want, hand } = odds;
 
   const sized = useMemo(() => sizedCards(cards), [cards]);
   /** The population — **copies, not rows**, which is the only reading the hypergeometric
@@ -133,7 +161,7 @@ export function OpeningHandOdds({
               // the state — the same fence the cut's own select uses one component up.
               onChange={(value) => {
                 const picked = ODDS_MODES.find((option) => option.value === value);
-                if (picked) setMode(picked.value);
+                if (picked) onOddsChange({ ...odds, mode: picked.value });
               }}
               options={ODDS_MODES}
               label="How to count the copies drawn"
@@ -142,7 +170,7 @@ export function OpeningHandOdds({
               size="sm"
               min={0}
               value={want}
-              onChange={setWant}
+              onChange={(next) => onOddsChange({ ...odds, want: next })}
               // Named for the question rather than "Quantity": there are two steppers on this
               // row, and a reader hearing "Quantity" twice has been told nothing about either.
               label="Copies to draw"
@@ -154,7 +182,7 @@ export function OpeningHandOdds({
               // — a table of noughts is a worse answer than a control that will not go there.
               min={1}
               value={hand}
-              onChange={setHand}
+              onChange={(next) => onOddsChange({ ...odds, hand: next })}
               label="Cards in the opening hand"
             />
             <span>cards</span>

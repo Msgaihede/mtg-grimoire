@@ -369,7 +369,7 @@ function tint(fill: string): string {
 /** Which way a row moved copies. The rail carries emphasis only — the sentence beside it is what
  *  says what happened, and nothing here depends on the hue. */
 function rail(delta: number): string {
-  if (delta > 0) return "bg-pie-g";
+  if (delta > 0) return "bg-mana-g";
   if (delta < 0) return "bg-destructive";
   return "bg-border";
 }

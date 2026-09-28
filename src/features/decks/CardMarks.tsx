@@ -15,7 +15,7 @@
  *
  * **Two of those clauses read differently until 2026-09-08, and both moved rather than
  * weakened**, when the game changer stopped being a mark of its own and became the crown on
- * {@link QuantityTag}: the words were *two letters* (`GC`) and the colour was *the pie gold*.
+ * {@link QuantityTag}: the words were *two letters* (`GC`) and the colour was *a fixed gold*.
  * One gold for one fact was that mark's rule and is `components/GameChangerMark`'s still,
  * wherever the crown is a mark in its own right on somebody else's artwork. What a crown printed
  * *on* a fill the reader picked cannot be is a fixed colour — so here the separation is carried
@@ -72,9 +72,9 @@
  * **On the two row views the separation is _shape_ rather than place**, and that is the one thing
  * about this mark a new reader gets wrong: `TableView` and `TextView` have no corners at all, so
  * {@link NoteMark} sits inline beside {@link LabelDot} — a stroked glyph against an 8px filled
- * square. The mark takes **no colour of its own** on either surface: the `--color-pie-*` deeps are
- * what a label means and gold is what a picked card wears, so a sixth vocabulary word would have
- * been spent saying something the shape already says.
+ * square. The mark takes **no colour of its own** on either surface: the label colours are what a
+ * label means and gold is what a picked card wears, so a sixth vocabulary word would have been
+ * spent saying something the shape already says.
  *
  * ## Every one of these is `aria-hidden`, and that is deliberate
  *
@@ -181,7 +181,7 @@ export const NOTE_MARK_LABEL = "Has a note";
  * ## It takes no colour of its own
  *
  * `currentColor` and no colour utility, so it is the row's own text colour. There was none to give
- * it: the `--color-pie-*` deeps are what a **label** means (the dot beside it may be wearing any of
+ * it: the label colours are what a **label** means (the dot beside it may be wearing any of
  * them), gold is what a picked card wears, and destructive is a rule break. A mark that borrowed
  * one of those would be saying a second thing by accident, and this mark has only one thing to say.
  *
@@ -677,8 +677,9 @@ const THEORY_PAINT: Readonly<Record<TheoryTier, { fill: string; fg: string }>> =
  * Azure keeps the looser one — the same card in a printing the plan did not name — where the old
  * argument still applies, because that is a fact rather than a verdict.
  *
- * Azure **is** one of the six label colours, and that is the one cost. A card labelled Azure draws
- * an azure {@link QuantityTag} at the other end of this strip — but that mark is a *number* at
+ * Azure **was** one of the six label quick picks, and that is the one cost. The pick is the pale
+ * mana blue since 2026-09-28, but a label chosen before then still stores `#0e68ab`, and a card
+ * wearing one draws an azure {@link QuantityTag} at the other end of this strip — but that mark is a *number* at
  * the opposite end, so the pair are still told apart by content and position, which is the same
  * argument that lets two gold things (a Gold label and the banner) already coexist. **The green is
  * not one of the six**, so the exact tier pays nothing at all here; `#56bd78` is `--color-ok`
@@ -688,8 +689,9 @@ const THEORY_PAINT: Readonly<Record<TheoryTier, { fill: string; fg: string }>> =
  * `--destructive` is written in — with its chroma pulled into sRGB and taken a step deeper, so it
  * is deliberately *not* the destructive's rendered `#ff6467`: a mark meaning "the plan does not
  * ask for this" must not wear the app's "there is a problem here" paint, and a stand-in card is
- * not a fault. It is not `--color-pie-r` (`#d3202a`) either, which is the Ember label colour and
- * a thing a reader may already have put on a card in this same strip.
+ * not a fault. It is not `#d3202a` either, which was the Ember label colour until 2026-09-28 and is
+ * still stored on every Ember label picked before — a thing a reader may already have put on a card
+ * in this same strip.
  *
  * No colour is a literal here any more. All three are `--color-theory-*` custom properties, so
  * the reader's own choice in Settings → Appearance moves every surface at once; `src/index.css`
@@ -1060,5 +1062,5 @@ export function DeckFinishMark({
 
 export function rowMarkColor(ruleBreakText: string | null, gameChanger: boolean | null): string {
   if (ruleBreakText !== null) return "var(--color-destructive)";
-  return gameChanger === true ? "var(--color-pie-gold)" : "transparent";
+  return gameChanger === true ? "var(--color-accent)" : "transparent";
 }

@@ -384,8 +384,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   existing mark at a cost of 14px rather than drawn beside it — and this is the sixth, at the same
   14px, moving no padding for the same reason (`COUNT_TAG_BOX`'s `pl − pr = 5px` is a derivation
   the content width cancels out of).
-  **It takes no colour of its own**, which is the rule below read once more: the `--color-pie-*`
-  deeps are spoken for by labels and gold is spoken for by selection, so the glyph is
+  **It takes no colour of its own**, which is the rule below read once more: the label colours
+  are spoken for by labels and gold is spoken for by selection, so the glyph is
   `currentColor` and inherits whatever the label already decided. Against `LabelDot` it separates
   by **shape** — a stroked outline against an 8px filled square — because separating by colour
   there would be a seventh thing colour means.
@@ -417,10 +417,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   chooses a drawing by how much space it has.
   **Gold survives exactly where the mark is unfilled, and that is one rule rather than two
   colours.** A crown floating over artwork or standing in a line of type has nothing but
-  `text-pie-gold` saying which fact it is — and never the destructive colour, because the spec is
+  `text-accent` saying which fact it is — and never the destructive colour, because the spec is
   explicit that a game changer (a fact about a powerful card) and a rule break (a problem) must
-  never be confusable. A crown printed on a filled `QuantityTag` takes that tag's `fg` instead:
-  white on a blue label, dark on a gold one, `NEUTRAL_COUNT_PAINT`'s foreground unlabelled. The tag
+  never be confusable. (It was a separate crown gold, `--color-pie-gold`, until 2026-09-28, when
+  every `--color-pie-*` deep was deleted: the mana colours are the only palette for a Magic colour
+  and the accent is the one gold.) A crown printed on a filled `QuantityTag` takes that tag's `fg`
+  instead: light on a dark label, dark on a pale one — every quick pick since 2026-09-28 —
+  `NEUTRAL_COUNT_PAINT`'s foreground unlabelled. The tag
   already carries a colour that means the card's **label**, so a fixed gold there would be a second
   colour inside one object — the one mark in the strip ignoring what it stands on, and invisible on
   a Gold-labelled card.
@@ -511,7 +514,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **What replaced it narrows instead of dimming**: a `Game Changers` chip pressed and pressed
   again like a label chip, joining the label chips' OR, drawn only where the deck has a game
   changer, and lit `pie-gold` with a crown rather than the accent — because that is the gold the
-  crowns on the cards themselves wear. **It draws nothing on any card**, which is the drawing
+  crowns on the cards themselves wear. **Since 2026-09-28 it is lit in the accent**: the crown
+  gold was deleted with the rest of the `--color-pie-*` deeps, so a pressed chip and
+  `DeckBracket`'s accent edge share one gold, told apart by the crown and by being a press. **It draws nothing on any card**, which is the drawing
   decision this whole entry turns into: a card that survives the filter looks exactly as it looks
   unfiltered, so there is no class to spread across four views, no container attribute to arm and
   no drag to exempt.
@@ -6371,6 +6376,9 @@ position.
   deck's name** rather than as a rule belonging to the picture. The 4px above the bar is half the
   8px below it for the same reason — the bar is a fact about the cards, drawn as part of the
   picture, so it hugs the art and leaves the name its own air.
+- ⚠️ **Superseded twice over:** the bar's successor below fills from `--color-mana-*`, and on
+  2026-09-28 the `--color-pie-*` deeps were deleted outright — the mana colours are the app's only
+  palette for a Magic colour. What follows is the 5px bar as it shipped.
 - **The fills are `--color-pie-w/u/b/r/g/c` and nothing else.** These are the same deeps
   `DeckStats`' identity pips draw with (`PIP_COLOR` plus its `COLORLESS`), keyed over all six of
   `MANA_KEYS` rather than the five of the mana *line*. **A colour in this app is a `--color-*`

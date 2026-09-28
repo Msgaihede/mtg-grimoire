@@ -450,7 +450,7 @@ function TextGroup({
  * step in and out. It is {@link rowMarkColor}'s own reasoning one mark over, which returns
  * `transparent` rather than nothing so that every row keeps the same 2px of indent.
  *
- * **The crown carries the gold itself**, `text-pie-gold`, where the card-face views take the
+ * **The crown carries the gold itself**, `text-accent`, where the card-face views take the
  * colour from the filled chip or banner the crown is printed on. There is no fill here to print
  * on, so the mark is the colour — the same gold the stripe beside it is already drawn in, and
  * the same gold the badge was. One colour for one fact.
@@ -545,7 +545,7 @@ function TextRow({
             everything inside it is decoration by construction and the words are
             `deckCardName`'s — which already says "game changer". An `sr-only` twin here would
             be announced to nobody, which is worse than none because it looks accessible. */}
-        <span aria-hidden="true" className="flex w-2.5 shrink-0 text-pie-gold">
+        <span aria-hidden="true" className="flex w-2.5 shrink-0 text-accent">
           {card.gameChanger === true && (
             <Crown className="block size-2.5" strokeWidth={2.75} aria-hidden="true" />
           )}
@@ -556,7 +556,7 @@ function TextRow({
             // The count wears the fact rather than merely standing next to it: gold digits
             // under a gold crown are one mark two elements wide, which is what makes the pair
             // findable at the head of an eighty-line list.
-            card.gameChanger === true ? "text-pie-gold" : "text-dim",
+            card.gameChanger === true ? "text-accent" : "text-dim",
           )}
         >
           {card.quantity}
@@ -578,8 +578,8 @@ function TextRow({
         )}
         {card.labelName !== null && <LabelDot name={card.labelName} color={card.labelColor} />}
         {/* Beside the dot, and separating from it by **shape** rather than by colour — a stroked
-            glyph against an 8px filled square. The `--color-pie-*` deeps are spoken for by
-            labels and gold is spoken for by selection, so there was no colour left for a fifth
+            glyph against an 8px filled square. The label colours are spoken for by labels and
+            gold is spoken for by selection, so there was no colour left for a fifth
             mark to take. Decoration like every other mark on this line: the words are
             `deckCardName`'s, since an `aria-label` replaces an element's content for naming. */}
         {noted && <NoteMark />}

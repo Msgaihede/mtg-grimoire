@@ -131,7 +131,9 @@ const NO_WISHES: WishTotals = { wishes: 0, copies: 0, cost: 0, unpriced: 0 };
  *  heart's red, and the app's own folders are dim, because a glyph is where "these are four
  *  different statements" is cheapest to say. */
 const ACCENT = "var(--color-accent)";
-const WISH = "var(--color-pie-r)";
+// Magic's red, `--color-mana-r`, drawn as a glyph on the dark ground, where the pale fill reads
+// 10:1 — the saturated red deep it replaced on 2026-09-28 read 3.7:1.
+const WISH = "var(--color-mana-r)";
 const DIM = "var(--color-dim)";
 
 /** The list's accessible name, per scope — the card's title is `Folders` either way, so the list

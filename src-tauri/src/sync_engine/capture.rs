@@ -437,6 +437,11 @@ pub const TABLES: [Spec; 17] = [
             // arrives at what that device can only have meant — the band open, which is what
             // every deck on that device is showing.
             "stats_open",
+            // And whether that band's Mana curve splits its bars into creatures and noncreatures
+            // (user schema v56) — per-deck view state on `stats_open`'s terms, so it travels for
+            // the same reason. `DEFAULT 0` keeps the old-peer direction safe: a device on v55
+            // names no such field and the curve arrives unsplit, which is all it can have drawn.
+            "curve_creatures",
             // How the deck treats its tokens — `managed`, `collection` or `hidden` (user schema
             // v52, replacing v47's `token_stack` switch under a **new name**, as v49 did with
             // `managed_wishlist_mode` below: a peer still on v51 skips a field it does not know,
@@ -1412,6 +1417,33 @@ mod tests {
             fields.get("token_rail_index"),
             Some(&serde_json::json!(2)),
             "the pile's place must reach the reader's other devices, in {fields}"
+        );
+    }
+
+    /// **A deck's Mana curve split travels** (user schema v56) — the same missing-fence
+    /// argument, for a column that would otherwise split the curve on one device and draw it
+    /// whole on the next, with nothing on screen saying why.
+    #[test]
+    fn a_decks_curve_split_is_captured() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        conn.execute("UPDATE decks SET curve_creatures = 1 WHERE id = 1", [])
+            .unwrap();
+
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 1, "one write, one op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
+        assert_eq!(
+            fields.get("curve_creatures"),
+            Some(&serde_json::json!(1)),
+            "a split curve must reach the reader's other devices, in {fields}"
         );
     }
 

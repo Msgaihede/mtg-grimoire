@@ -418,7 +418,7 @@ describe("labels", () => {
    *
    * The colour is a **hex string** and no longer one of six token words — see `labelColors.ts` for
    * what that trades away and why. The six the picker offers first are still the app's own
-   * palette, so pressing "Moss" writes what `--color-pie-g` is.
+   * palette, so pressing "Moss" writes what `--color-mana-g` is.
    */
   it("makes a first label from the field, in the colour the picker is on", async () => {
     deckLabelList.mockResolvedValue([]);
@@ -432,7 +432,7 @@ describe("labels", () => {
     await user.click(screen.getByRole("button", { name: "Moss" }));
     await user.click(screen.getByRole("button", { name: "Add label" }));
 
-    expect(deckLabelCreate).toHaveBeenCalledWith(1, "Playtest", "#00733e");
+    expect(deckLabelCreate).toHaveBeenCalledWith(1, "Playtest", "#9bd3ae");
   });
 
   /**

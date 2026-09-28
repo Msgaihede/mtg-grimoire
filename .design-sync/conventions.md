@@ -50,9 +50,12 @@ Two traps that silently produce near-invisible UI:
 
 Underlying tokens, if you need `var()` directly: `--color-bg` `--color-surface` `--color-border`
 `--color-text` `--color-dim` `--color-accent` `--color-accent-fg` `--radius`. Domain colour is
-tokenised too and is **not** interchangeable: `--color-mana-w|u|b|r|g|c` are the five colours as
-printed symbols are filled (mana UI only — chips and pips, never a panel, border or text);
-`--color-pie-*` are the saturated frame deeps for identity pips and charts; and
+tokenised too: `--color-mana-w|u|b|r|g|c` are the five colours and colourless as printed symbols
+are filled, and since 2026-09-28 they are **the only palette for anything that stands for a Magic
+colour** — chips, pips, chart fills, rails, count tags and glyphs alike. All six are pale, so
+anything printed on one is near-black (`--color-accent-fg`), never light text. There is no gold
+among them: a gold mark (a game changer's crown, a multicolour fill) is `--color-accent`. The
+saturated `--color-pie-*` deeps that used to sit beside them are deleted and must not come back.
 `--color-rarity-common|uncommon|rare|mythic` are footnote-sized only.
 
 ### Magic symbols are components, never glyphs you type
