@@ -87,7 +87,8 @@ export interface LabelsDialogProps {
 /** The heading's line, and the two facts that are true of the whole dialog rather than of one
  *  control in it. The second is the one nothing on screen can show: a label is shared, so the
  *  colour a reader picks here is the colour it has in every deck. */
-export const LABELS_SUBTITLE = "A card carries at most one. Labels are shared by all your decks.";
+export const LABELS_SUBTITLE =
+  "Cards can have at most one label. Labels are shared across all decks.";
 
 /**
  * The chrome is {@link Dialog}'s and the body below is this file's.
@@ -271,8 +272,7 @@ function LabelsBody({ deckId, variant }: { deckId: number; variant: DeckVariant 
         </form>
         {clash !== undefined && (
           <p className="mt-1.5 text-[0.6875rem] text-dim" role="status">
-            “{clash.name}” already exists — every deck shares one list, so there is only ever one
-            of a name.
+            “{clash.name}” already exists. Label names must be unique across all decks.
           </p>
         )}
         {pickerOpen && (
@@ -288,7 +288,7 @@ function LabelsBody({ deckId, variant }: { deckId: number; variant: DeckVariant 
           <p className="text-xs text-dim">Reading this deck’s labels…</p>
         ) : labels.length === 0 ? (
           <p className="text-xs text-dim">
-            Nothing in this list is labelled yet — right-click a card to put a label on it.
+            No cards in this list are labelled yet. Right-click a card to apply a label.
           </p>
         ) : (
           <ul className="flex flex-col gap-1">
@@ -316,8 +316,8 @@ function LabelsBody({ deckId, variant }: { deckId: number; variant: DeckVariant 
         ) : others.length === 0 ? (
           <p className="text-[0.6875rem] text-dim">
             {allLabels.length === 0
-              ? "None yet — name one above, then right-click a card to put it on."
-              : "Every label you have is on a card in this list."}
+              ? "No other labels created yet. Add one above, then right-click a card to apply it."
+              : "All existing labels are currently used in this list."}
           </p>
         ) : (
           <ul className="flex flex-col gap-1">

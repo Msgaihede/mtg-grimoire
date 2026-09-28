@@ -200,7 +200,7 @@ describe("PullFromCollectionDialog", () => {
 
     expect(await screen.findByText("Nothing to pull.")).toBeInTheDocument();
     expect(screen.getByText(/exact printing and finish/)).toHaveTextContent(
-      "never a copy another deck is already holding",
+      "Cards in other decks or not yet owned cannot be pulled.",
     );
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
@@ -350,7 +350,7 @@ describe("PullFromCollectionDialog", () => {
 
     const note = screen.getByText(/still missing/);
     expect(note).toHaveTextContent(
-      "2 copies still missing — nothing else you own loose matches this printing.",
+      "2 copies still missing — no other matching copies in collection.",
     );
     expect(note).toHaveClass("text-dim");
     expect(note).not.toHaveAttribute("role");

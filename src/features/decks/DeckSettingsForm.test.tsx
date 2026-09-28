@@ -567,7 +567,7 @@ describe("DeckSettingsForm", () => {
     // The selected mode's sentence under the control, as the kind group draws its kind's.
     expect(
       screen.getByText(
-        "A Tokens & Emblems pile in Stacks, Grid, Text and Table. Tokens never count toward the deck's card total.",
+        "Displays a Tokens & Emblems category in deck views. Tokens do not count toward the deck's card total.",
       ),
     ).toBeInTheDocument();
 
@@ -582,7 +582,7 @@ describe("DeckSettingsForm", () => {
     // …and the sentence follows the press.
     expect(
       screen.getByText(
-        "No token pile in the deck's views. The Tokens & Emblems band under the deck still keeps every token.",
+        "Hides the token category from deck views. Tokens remain accessible in the Tokens & Emblems panel below.",
       ),
     ).toBeInTheDocument();
   });

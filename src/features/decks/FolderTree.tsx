@@ -787,7 +787,7 @@ export function FolderTree({
 
             {!pending && !failure && rows.length === 0 && naming === null && (
               <li className="px-1 pt-2 text-[0.7rem] leading-relaxed text-dim">
-                Folders file decks the way drawers file paper. Make one, then drag a deck onto it.
+                Create a folder, then drag a deck onto it to organize.
               </li>
             )}
           </ul>

@@ -60,10 +60,10 @@ const SOURCES_UNKNOWN = "Mana sources arrive with the next card sync";
 const SOURCES_UNKNOWN_SHORT = "awaiting card sync";
 
 const COST_HINT =
-  "Coloured pips this deck's costs ask for. A hybrid counts once in each of its halves, and generic mana is not a pip.";
+  "Total colored mana symbols in casting costs. Hybrid symbols count toward both colors; generic mana is excluded.";
 
 const SOURCES_HINT =
-  "Copies that can produce each colour this deck's costs ask for, plus colourless. A dual land counts in every such colour it makes, so these can add up to more than the number of mana sources in the deck.";
+  "Mana-producing cards for each required color and colorless. Multi-color sources count toward each color they produce.";
 
 /** The band's own label column. Fixed, so `Cost` and `Sources` start their tracks at one x. */
 const BAND_LABEL = "w-[4.5rem] shrink-0 text-[0.9375rem] font-medium text-text";
@@ -103,8 +103,8 @@ export function ManaPips({ stats }: { stats: DeckStatsSummary }): JSX.Element {
           onClick={() => setHideColorless((hidden) => !hidden)}
           {...tip(
             hideColorless
-              ? "Colorless is left out of the Cost and Sources bars. Press to count it again."
-              : "Leave colorless out of the Cost and Sources bars.",
+              ? "Include colorless mana in Cost and Sources."
+              : "Exclude colorless mana from Cost and Sources.",
           )}
           className={cn(
             // `Dropdown size="sm"`'s box, so this sits on the heading line at the height the

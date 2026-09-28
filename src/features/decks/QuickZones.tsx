@@ -503,11 +503,10 @@ function QuickCategoryBody({
       <p className="text-[0.6875rem] leading-relaxed text-dim">
         {cardName ? (
           <>
-            <span className="text-text">{cardName}</span> goes in the new pile as soon as it is
-            made.
+            <span className="text-text">{cardName}</span> will be moved to the new category.
           </>
         ) : (
-          "The card goes in the new pile as soon as it is made."
+          "The card will be moved to the new category."
         )}
       </p>
 

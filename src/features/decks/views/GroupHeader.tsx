@@ -253,7 +253,7 @@ export function GroupHeader({
             <Marker
               icon={Gavel}
               words={MARKER_WORDS.rule}
-              title="The format's rules read this pile by name, so it cannot be renamed or removed."
+              title="Format rules read this pile by name; it cannot be renamed or removed."
             />
           </>
         )}
@@ -263,7 +263,7 @@ export function GroupHeader({
             <Marker
               icon={PowerOff}
               words={MARKER_WORDS.inactive}
-              title="Switched off: nothing here counts toward the deck's size, its copy limits or its legality, and no collection copy is reserved for it."
+              title="Switched off: nothing counts toward deck size, copy limits, legality, or collection reservations."
             />
           </>
         )}

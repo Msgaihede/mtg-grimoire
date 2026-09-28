@@ -291,9 +291,7 @@ function QuickUnwishBody({
           reduced by what is recorded and disappears when that empties it, which is the fact a
           reader most wants before pressing and cannot read off a radio. */}
       <p className="text-[0.6875rem] leading-relaxed text-dim">
-        The copies are recorded in this deck&rsquo;s folder as the printing in the deck, and taken
-        off the line you pick — whatever printing it asks for. It goes when nothing is left on it.
-        Cancel does neither.
+        Copies will be recorded in this deck&rsquo;s folder and deducted from the selected wishlist item.
       </p>
 
       {/* Beside the button that was pressed, not in the editor's banner behind the scrim. Its

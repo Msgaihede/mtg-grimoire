@@ -167,7 +167,7 @@ export function TokenArtPicker({
         mode?.kind === "swap"
           ? (mode.entry.subtitle ?? undefined)
           : mode?.kind === "add"
-            ? "Any printing of a token or emblem this deck makes, added at one copy."
+            ? "Add a copy of any token or emblem created by this deck."
             : undefined
       }
       closeLabel={mode?.kind === "add" ? "Close the printing picker" : "Close the art picker"}
@@ -285,7 +285,7 @@ function SwapBody({
     // nothing.
     return (
       <p className={cn(STATE_LINE, "text-dim")}>
-        No paper printing of this token is in your card data yet.
+        No paper printings found for this token.
       </p>
     );
   }
@@ -402,14 +402,14 @@ function AddBody({
 
       {distinct.length === 0 ? (
         <p className={cn(STATE_LINE, "text-dim")}>
-          This deck makes no token or emblem to add a printing of.
+          This deck does not create any tokens or emblems.
         </p>
       ) : pending ? (
         <p className={cn(STATE_LINE, "text-dim")}>Reading the printings…</p>
       ) : shown.length === 0 && failures.length < distinct.length ? (
         <p className={cn(STATE_LINE, "text-dim")}>
           {needle === ""
-            ? "No paper printing of these tokens is in your card data yet."
+            ? "No paper printings found for these tokens."
             : `No printing matches “${find.trim()}”. Search by a token’s name or a set code.`}
         </p>
       ) : (

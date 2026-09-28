@@ -60,11 +60,11 @@ export const TOKEN_MODE_LABEL: Readonly<Record<TokenMode, string>> = {
  */
 export const TOKEN_MODE_HINT: Readonly<Record<TokenMode, string>> = {
   managed:
-    "A Tokens & Emblems pile in Stacks, Grid, Text and Table. Tokens never count toward the deck's card total.",
+    "Displays a Tokens & Emblems category in deck views. Tokens do not count toward the deck's card total.",
   collection:
     "Collection tokens, set by a newer version of the app. This version draws the pile as it does for Managed.",
   hidden:
-    "No token pile in the deck's views. The Tokens & Emblems band under the deck still keeps every token.",
+    "Hides the token category from deck views. Tokens remain accessible in the Tokens & Emblems panel below.",
 };
 
 /**

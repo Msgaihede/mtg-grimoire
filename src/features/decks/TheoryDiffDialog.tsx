@@ -48,8 +48,7 @@ function rowKey(row: TheoryDiffRow): string {
  * says it, in words, where the number it qualifies is.
  */
 const ONE_DIRECTION =
-  "Only what Theory wants and Actual does not have. Cards in Actual but not in Theory are cuts " +
-  "you have already made, so they are not listed.";
+  "Shows cards required by Theory that are not in Actual. Cards in Actual but not in Theory are excluded cuts.";
 
 /**
  * The second sentence of the same kind, drawn beside the control it is about.
@@ -67,7 +66,7 @@ const ONE_DIRECTION =
  * which is this file's rule for the as-of line already.
  */
 const VIEW_NOTE =
-  "A card can be in both views — and a different finish counts as a different printing.";
+  "Cards can appear in both views; different finishes count as separate printings.";
 
 /**
  * Which half of the difference the list is showing.
@@ -104,12 +103,11 @@ const VIEW_LABEL: Record<DiffView, string> = {
  * built. One sentence for both would be wrong on whichever case it was not written for.
  */
 const NOTHING_SHOWN: Record<DiffView, string> = {
-  all: "The two lists agree. Everything the plan asks for is already in the deck.",
+  all: "The two lists agree. Everything requested by the plan is already in the deck.",
   missing:
-    "Nothing here is missing. Every copy the plan asks for is already on the table as another " +
-    "printing.",
+    "Nothing here is missing. All planned cards are in the deck as alternative printings.",
   other:
-    "No substitutions. Every copy the plan asks for is one the deck has not got in any printing.",
+    "No substitutions. All planned cards are completely missing from the deck.",
 };
 
 /**
@@ -235,10 +233,7 @@ export interface WishesSent {
  */
 export function wishesSentNote({ wishes, destination }: WishesSent): string {
   if (wishes === 0) {
-    return (
-      "Nothing sent from the plan — those cards are no longer missing, or have left the card " +
-      "database."
-    );
+    return "No cards were sent. The cards are no longer missing or have left the card database.";
   }
   const noun = wishes === 1 ? "wish" : "wishes";
   return `Sent from the plan to your wishlist — ${wishes} ${noun} updated${filedIn(destination)}.`;
@@ -572,7 +567,7 @@ export function TheoryDiffDialog({
       // Widened when the list stopped being purely a shopping list (2026-08-22): a row the live
       // deck already plays as another printing is not a card to buy or pull, and a subtitle that
       // named only those two would be describing the `Missing` view rather than the dialog.
-      subtitle="What the plan asks for and the deck has not got — to buy, to pull, or already played as another printing"
+      subtitle="Cards needed to match Theory — missing copies, available pulls, or alternative printings"
       closeLabel="Close the difference list"
       size="w-[47.5rem]"
       onDismiss={onDismiss}
@@ -1017,7 +1012,7 @@ function FigureStrip({
         // not "how many of these you have covered". It is a count of loose copies, and it is
         // deliberately not subtracted from anything above.
         title={
-          "Copies of these exact cards in your collection that no built deck has claimed. " +
+          "Unassigned copies of these exact cards in your collection. " +
           "Not subtracted from what the plan needs."
         }
       />

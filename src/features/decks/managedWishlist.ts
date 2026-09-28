@@ -30,11 +30,11 @@ export const MANAGED_WISHLIST_LABEL: Record<ManagedWishlistMode, string> = {
 /** One line for the caption under the group — the selected choice's, and only it. */
 export const MANAGED_WISHLIST_HINT: Record<ManagedWishlistMode, string> = {
   off: "No managed wishlist for this deck.",
-  all: "A wishlist folder named after this deck that holds everything the Compare dialog lists. It follows the deck and can't be edited by hand.",
+  all: "Auto-synced wishlist folder containing all cards from the Compare list.",
   missing:
-    "A wishlist folder named after this deck that holds the cards the deck doesn't play in any printing. It follows the deck and can't be edited by hand.",
+    "Auto-synced wishlist folder containing unowned cards needed for this deck.",
   other:
-    "A wishlist folder named after this deck that holds the planned printings of cards the deck plays in a different printing. It follows the deck and can't be edited by hand.",
+    "Auto-synced wishlist folder containing target printings for cards currently played in other versions.",
 };
 
 /**

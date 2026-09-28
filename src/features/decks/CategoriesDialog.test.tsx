@@ -903,7 +903,7 @@ describe("categories", () => {
     await user.click(screen.getByRole("button", { name: "File cards by what they do" }));
 
     const alert = await screen.findByRole("alert");
-    expect(alert).toHaveTextContent(/^Nothing was filed\./);
+    expect(alert).toHaveTextContent(/^Could not organize cards by category\./);
     expect(alert).toHaveTextContent("The database is busy.");
     // Not one card moved, and not one pile made: the refusal is the whole press.
     expect(deckMoveCard).not.toHaveBeenCalled();
