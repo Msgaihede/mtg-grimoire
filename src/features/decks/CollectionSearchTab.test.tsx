@@ -2,6 +2,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BUTTON_OVER_ART } from "@/components/QuantityStepper";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import type { CollectionFolder, CollectionRow, DeckCategory } from "@/lib/ipc";
@@ -897,6 +898,15 @@ describe("CollectionSearchTab", () => {
     // Asked while the drag is still up: `started` is a live reading of the manager's operation.
     expect(again.started).toBe(true);
     await again.cancel();
+  });
+
+  /** Issue #645, as the card-search tab's test of the same name has it: one button, both tabs. */
+  it("backs its Add button the way the deck's card steppers are backed", async () => {
+    tab();
+
+    expect(await screen.findByRole("button", { name: /^Add Lightning Bolt/ })).toHaveClass(
+      ...BUTTON_OVER_ART.split(" "),
+    );
   });
 
   /**
