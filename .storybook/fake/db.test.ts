@@ -11470,6 +11470,13 @@ describe("the busy fault", () => {
       // for a ticket it holds; `bulk_undo`'s own describe proves that, with a ticket minted
       // before the fault is set.
       "bulk_undo",
+      // Unlocked since 2026-09-28 (issue #545), for a reason of its own: `share_open` fetches
+      // somebody else's document with **no connection held** and takes `sync::with_write` only
+      // afterwards, best effort, to note a failure in `error_log` — a note that answers BUSY is
+      // a lost log row, never the reader's refusal. It used to fetch inside the lock, and a
+      // host trickling one byte a minute held the only write connection for as long as it
+      // liked. Its four `share_*` neighbours still go through `on_the_write_connection`.
+      "share_open",
     ];
     const args: Record<string, unknown> = {
       id: 1,
@@ -12021,7 +12028,8 @@ describe("the busy fault", () => {
     // Which table a handler sits in here is a fact about the **lock** and never about whether
     // the command sounds like a read — `share_open` fetches somebody else's document over the
     // network and still takes the write connection, because `publish::open` records a failure in
-    // `error_log` like every other network path in that module.
+    // `error_log` like every other network path in that module. (Until 2026-09-28 — it holds no
+    // connection while it fetches now and joined `unlocked` above; issue #545.)
     //
     // Nothing joined `unlocked`, and no `share_*` read went to `readHandlers`: this feature's
     // whole command surface is in one table for one reason, which is the first time that has
@@ -12160,7 +12168,9 @@ describe("the busy fault", () => {
     // loop: `bulk_undo` joined `unlocked` above, and `collection_import_preview` is a read on
     // `db_read` in the crate and sits in `readHandlers`. Read from `left` on this tree, never
     // added to. 126 when #555 met the 124 above — read from `left` after the merge.
-    expect(names).toHaveLength(126);
+    // 126 → 125 on 2026-09-28 when `share_open` joined `unlocked` (issue #545: it fetches with no
+    // connection held) — read from `left` on this tree.
+    expect(names).toHaveLength(125);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

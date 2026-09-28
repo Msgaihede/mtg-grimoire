@@ -23172,9 +23172,11 @@ export function writeHandlers(db: FakeDb) {
      *
      * **All five `share_*` commands are in `writeHandlers`, and two of them are reads.** That is
      * `sync_relay_status`' call one feature over and it is the crate's own words rather than an
-     * inference: every one of the five goes through `on_the_write_connection`, so a running sync
-     * really does refuse them. Which table a handler sits in here is a fact about the *lock*,
-     * never about whether the command sounds like a read.
+     * inference: four of the five go through `on_the_write_connection`, so a running sync really
+     * does refuse them. Which table a handler sits in here is a fact about the *lock*, never
+     * about whether the command sounds like a read. **`share_open` is the fifth and the
+     * exception since 2026-09-28** (issue #545): it holds no connection while it fetches, so it
+     * answers through a sync — see its own doc below.
      *
      * **It reconciles first when it can and answers the cache either way**, which is the whole
      * point of `collection_shares` being a cache: a device with no membership makes no request at
@@ -23298,9 +23300,12 @@ export function writeHandlers(db: FakeDb) {
      *
      * **No membership and no token** (spec §9): viewing is open to everyone and the link is the
      * whole of the capability, so this is the one command here that never asks
-     * {@link refuseIfNotSharing}. It is still in `writeHandlers` because the crate still takes
-     * the write connection for it — `publish::open` records a failure in `error_log` like every
-     * other network path in that module.
+     * {@link refuseIfNotSharing}. **And it never answers BUSY, since 2026-09-28** (issue #545):
+     * the crate used to fetch inside `sync::with_write` only so a failure could reach
+     * `error_log`, which let a host that trickled one byte a minute hold the only write
+     * connection indefinitely. It fetches with no connection held now and writes the failure
+     * note afterwards, best effort — so this handler skips {@link refuseIfBusy} and sits in the
+     * busy sweep's `unlocked` list. It stays in `writeHandlers` because the note is a write.
      *
      * ⚠️ **It answers a `ShareSnapshot` where `ipc.shareOpen` declares `unknown`, and that is not
      * a mismatch.** The crate answers `serde_json::Value` on purpose — spec §10 wants a document
@@ -23310,7 +23315,6 @@ export function writeHandlers(db: FakeDb) {
      * a story still goes through the same parse the app does.
      */
     share_open: (args: { url: string }): ShareSnapshot => {
-      refuseIfBusy(db);
       const id = shareIdIn(args.url);
       // Before any request, exactly as the crate refuses it: this is the shape check, and it is
       // the refusal a reader produces by pasting the wrong thing.
@@ -23465,7 +23469,8 @@ function shareIdIn(url: string): string | null {
   } catch {
     return null;
   }
-  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return null;
+  // `https:` alone, as the crate's `publish::open` refuses plain `http:` since 2026-09-28.
+  if (parsed.protocol !== "https:") return null;
   const segments = parsed.pathname.split("/").filter((s) => s !== "");
   if (segments.length < 2 || segments[segments.length - 2] !== "s") return null;
   return segments[segments.length - 1];
