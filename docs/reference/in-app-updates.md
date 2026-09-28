@@ -41,12 +41,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     panel ending *Download it from the release page instead.*, the partial download is deleted,
     and nothing is extracted or staged. So is an asset with no digest, as before.
   - **The key is compiled in** — `update::SIGNING_PUBLIC_KEY`, minisign's base64 line — and a
-    build trusts that key and no other. ⚠️ **It is a placeholder until the production keypair is
-    generated**, and the placeholder is not a key: a build carrying it refuses every download
+    build trusts that key and no other. It is key id **`FD103A4C389F00B0`**, generated on
+    2026-09-28 with the script below; its secret was handed to the maintainer to become the
+    `UPDATE_SIGNING_KEY` repository secret and is in no file of this repository. Something that
+    is not a key is refused rather than trusted: a build carrying one refuses every download
     (`a_build_without_a_key_refuses_every_download_before_fetching_it`), and a **release** build
     does not compile at all — a `const` assertion, `#[cfg(not(debug_assertions))]`, requires 56
-    characters starting `RW`. Debug builds and tests are unaffected; the tests pass a throwaway
-    key of their own.
+    characters starting `RW`. The tests pass a throwaway key of their own and never read this
+    one.
   - **Signing is `scripts/update-signing.mjs`**, `node:crypto` and `node:fs` and nothing else:
     `keygen <secret-out-path>` writes the secret (mode 0600, never overwriting a file, never
     printed) and prints the public key; `sign <file> --trusted-comment <text>` reads the secret
@@ -79,10 +81,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
      (`gh secret set UPDATE_SIGNING_KEY < <path>`), and keep the file somewhere safe that is not
      this repository. Without it the `sign` job fails and every release stays a draft.
   - **The first time, both halves must land before the next release is cut** — a release build
-    carrying the placeholder does not compile, and a release with no secret stays a draft — but
-    their order between themselves is free: every install built before this change verifies no
+    carrying no key does not compile, and a release with no secret stays a draft — but their
+    order between themselves is free: every install built before this change verifies no
     signature at all, so the release that introduces the key is installed by digest alone, and
-    the release after it is the first that is verified.
+    the release after it is the first that is verified. For key `FD103A4C389F00B0` step 2 is
+    done; step 3 is the maintainer's, and until it is, a release run fails at `sign` and stays a
+    draft.
   - **A rotation takes effect one release late, and the old secret keeps signing until then.**
     Release *N* carries the new public key but is still installed by builds that trust the old
     one, so *N* is signed with the **old** secret; only once *N* is out does `UPDATE_SIGNING_KEY`

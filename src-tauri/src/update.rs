@@ -63,11 +63,12 @@ pub const GITHUB_API: &str = "https://api.github.com";
 /// verified by the installs updating *to* it, which trust the old one, so the old secret keeps
 /// signing until that release is out. `docs/reference/in-app-updates.md` has the order.
 ///
-/// ⚠️ **A placeholder until the production keypair is generated**, and a placeholder is not a
-/// key: [`signing_key`] refuses it, so a build carrying it refuses every update it is offered,
-/// and a release build does not compile at all (the assertion below). Public on the same terms
-/// as `REPO` — the half that verifies is meant to be read.
-pub const SIGNING_PUBLIC_KEY: &str = "REPLACE_WITH_PRODUCTION_PUBLIC_KEY";
+/// Key id `FD103A4C389F00B0`, generated 2026-09-28. Public on the same terms as `REPO` — the half
+/// that verifies is meant to be read. A key that is not one (the placeholder this held while the
+/// change was written, a paste that lost a character) is refused by [`signing_key`], so a build
+/// carrying it refuses every update it is offered, and a release build does not compile at all
+/// (the assertion below).
+pub const SIGNING_PUBLIC_KEY: &str = "RWSwAJ84TDoQ/QZzQ1PtYrHsfIh+ZHJUYtP/2iTFlS29AigcbjocN6wf";
 
 /// **A release build refuses to compile without a real key**, because the failure it prevents is
 /// silent and permanent: an install built with the placeholder can verify no update ever again,
@@ -2698,8 +2699,8 @@ mod tests {
     }
 
     /// The debug-build half of the release-only `const` assertion beside [`SIGNING_PUBLIC_KEY`]:
-    /// that one checks the shape, this one decodes the key in full — once it is not the
-    /// placeholder, which it is until the production keypair is generated.
+    /// that one checks the shape, this one decodes the key in full. The placeholder arm is kept
+    /// for a fork that blanks the key before generating its own.
     #[test]
     fn the_compiled_in_key_is_a_minisign_key_once_set() {
         if SIGNING_PUBLIC_KEY == PLACEHOLDER {
