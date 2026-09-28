@@ -2365,6 +2365,135 @@ async fn a_later_trip_acks_again_once_the_cursor_moves_past_the_stored_watermark
     assert_eq!(get_state(&a, LAST_ACKED).as_deref(), Some("9"));
 }
 
+/// A second group, for the tests that move a device from [`GROUP`] into another.
+const OTHER_GROUP: &str = "fedcba9876543210";
+
+/// A device that was deep into [`GROUP`]'s log — pulled through `cursor`, acked through `acked` —
+/// and has left it and joined [`OTHER_GROUP`] under `key`, the way a *Leave group* press and a
+/// pairing leave it.
+fn moved_groups(cursor: &str, acked: &str, key: &[u8; 32]) -> Connection {
+    let b = crate::schema::memory_pair();
+    capture::install(&b).unwrap();
+    let me = identity::ensure(&b).unwrap();
+    identity::join_group(&b, GROUP, 0, &[7u8; 32], &me).unwrap();
+    set_state(&b, PULL_CURSOR, cursor).unwrap();
+    set_state(&b, LAST_ACKED, acked).unwrap();
+
+    identity::leave_group(&b).unwrap();
+    identity::join_group(&b, OTHER_GROUP, 0, key, &me).unwrap();
+    b
+}
+
+/// **A device that leaves a group and joins another reads the new group's log from its first
+/// row.** The relay's `seq` is an `AUTOINCREMENT` per Durable Object, which is one per group, so a
+/// cursor is a position in *one* group's log and means nothing in the next. Carried across, a
+/// cursor of 500 asks the new group `since=500`, and `relay/src/group.ts` seeds the head it answers
+/// with the cursor it was asked — so a log seven rows long hands back no envelopes and `500`. The
+/// device never receives rows 1..7 (a baseline carries current state and never a delete), and its
+/// next ack tells the new group it has consumed through 500, which lets it compact rows this
+/// device never read.
+///
+/// **What makes it red**: `PULL_CURSOR` surviving the move — forgotten by neither
+/// `identity::leave_group` nor `identity::join_group`, each of which now forgets it.
+#[tokio::test]
+async fn a_device_that_changes_group_pulls_the_new_log_from_the_start() {
+    let key = [9u8; 32];
+    let a = crate::schema::memory_pair();
+    capture::install(&a).unwrap();
+    let a_me = identity::ensure(&a).unwrap();
+    identity::join_group(&a, OTHER_GROUP, 0, &key, &a_me).unwrap();
+    add_copy(&a, "c1", 2);
+    let ops: Vec<Op> = {
+        let sql = format!("{} ORDER BY seq", capture::OPS_SELECT);
+        let mut stmt = a.prepare(&sql).unwrap();
+        stmt.query_map([], capture::op_from_row)
+            .unwrap()
+            .map(|r| r.unwrap().1)
+            .collect()
+    };
+    let envelope = wire::seal_batch(
+        &identity::group(&a).unwrap().unwrap(),
+        &a_me.device_id,
+        &ops,
+    )
+    .unwrap();
+
+    let server = MockServer::start_async().await;
+    let from_start = server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/g/{OTHER_GROUP}/pull"))
+            .query_param("since", "0");
+        then.status(200).json_body(serde_json::json!({
+            "envelopes": [serde_json::to_value(&envelope).unwrap()],
+            "cursor": 7,
+        }));
+    });
+    // What the relay answers a cursor carried in from another group's log: nothing, and the same
+    // number back.
+    server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/g/{OTHER_GROUP}/pull"))
+            .query_param("since", "500");
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 500 }));
+    });
+    let acked = server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{OTHER_GROUP}/ack"))
+            .json_body_includes(r#"{ "cursor": 7 }"#);
+        then.status(204);
+    });
+
+    let b = moved_groups("500", "500", &key);
+    pull(&b, &server.base_url(), "access-1", Some(0))
+        .await
+        .unwrap();
+    ack(&b, &server.base_url(), "access-1").await.unwrap();
+
+    from_start.assert_calls(1);
+    let quantity: i64 = b
+        .query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM collection_entries",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(quantity, 2, "the new group's first rows never arrived");
+    assert_eq!(get_state(&b, PULL_CURSOR).as_deref(), Some("7"));
+    acked.assert_calls(1);
+    assert_eq!(get_state(&b, LAST_ACKED).as_deref(), Some("7"));
+}
+
+/// **...and acks the new log even at the number it last acked the old one at.** `ack` stays quiet
+/// when the cursor equals the stored watermark, so a watermark carried across from the old group
+/// silences the first ack of any new log whose head happens to land on it — the new group's relay
+/// never hears this device at all.
+///
+/// **What makes it red**: `LAST_ACKED` surviving the move, as `PULL_CURSOR` does above.
+#[tokio::test]
+async fn a_device_that_changes_group_acks_the_new_log_at_the_old_logs_number() {
+    let server = MockServer::start_async().await;
+    server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/g/{OTHER_GROUP}/pull"))
+            .query_param("since", "0");
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 7 }));
+    });
+    let acked = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{OTHER_GROUP}/ack"));
+        then.status(204);
+    });
+
+    let b = moved_groups("7", "7", &[9u8; 32]);
+    pull(&b, &server.base_url(), "access-1", Some(0))
+        .await
+        .unwrap();
+    ack(&b, &server.base_url(), "access-1").await.unwrap();
+
+    acked.assert_calls(1);
+}
+
 /// **A pull that lands converts user schema v52's legacy art picks behind it, captured — and a
 /// pull held at an epoch converts nothing.** A paired device's launch leaves its picks alone until
 /// it has heard its group (`deck_tokens::convert_legacy_picks_at_launch` has the reversion that
