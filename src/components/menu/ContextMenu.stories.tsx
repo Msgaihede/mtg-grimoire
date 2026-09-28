@@ -320,6 +320,7 @@ const DECK: DeckRow = {
   theoryMarkName: true,
   theoryMarkUnplanned: true,
   managedWishlist: "off",
+  managedWishlistTokens: false,
   lastVariant: "live",
   lastGroupBy: "category",
   lastSortBy: "alphabetical",

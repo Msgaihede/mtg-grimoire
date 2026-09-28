@@ -274,7 +274,8 @@ export const Default: Story = {
 /**
  * **The headline case** (spec §1): every loose copy filed. The old root asked for the copies filed
  * nowhere and drew `Cards 0` over a full binder; now every card is on the wall under its folder's
- * heading, there is no Not sorted shelf, and the header counts the whole collection.
+ * heading, Not sorted is still drawn — empty, over its dashed drop box, as the way back out of a
+ * folder (issue #597) — and the header counts the whole collection.
  */
 export const EverythingFiled: Story = {
   args: { view: "grid" },
@@ -284,7 +285,7 @@ export const EverythingFiled: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const binder = await waitFor(() => headingNamed(canvas, "Binder"), SETTLED);
-    await expect(canvasElement.querySelector('[data-shelf-heading="0"]')).toBeNull();
+    await expect(headingNamed(canvas, "Not sorted")).toBeInTheDocument();
     // A copy that was loose a moment ago, on the wall under the drawer it was filed into — named
     // by its stepper, because a tile's button says only "Lightning Bolt" and this seed has four.
     // `Binder` is the first shelf now, so its first tiles are inside the runner's window (see
@@ -438,8 +439,9 @@ export const CardMode: Story = {
  * the one they worked in.
  *
  * It costs the wall no height — the strip is `absolute inset-x-0 bottom-0`, so `tileHeight` is
- * unchanged — and it is revealed on hover **and on focus-within**, never removed from the tab
- * order, because "visible on hover" is not a state a keyboard has.
+ * unchanged — and it is revealed on hover **and on focus-within**, and is in the tab order on the
+ * wall's one roving stop tile (issue #558), because "visible on hover" is not a state a keyboard
+ * has. The arrows make any tile that stop.
  *
  * **The number it shows is the tile's sum, which is the same figure `OwnedBadge` draws in the
  * corner** — two numbers six pixels apart disagreeing about one piece of art is not a state this
@@ -972,10 +974,10 @@ export const WithSearch: Story = {
     ).toBeInTheDocument();
 
     // And in a drawer it is the drawer. `Binder` is the seed's own top-level folder, opened from
-    // its heading's title — the way into a folder since the folder cards left (spec §3.7). Waited
+    // its heading's → — the way into a folder since issue #599 moved it off the title. Waited
     // for: the wall is its own reads, and nothing above has asked whether they have answered.
     const binder = await waitFor(() => headingNamed(canvas, "Binder"), SETTLED);
-    await userEvent.click(within(binder).getByRole("button", { name: "Binder" }));
+    await userEvent.click(within(binder).getByRole("button", { name: "Open Binder" }));
     await waitFor(async () => {
       await expect(
         within(panel).getByRole("button", { name: /^Add Ancient Tomb .* to Binder$/ }),

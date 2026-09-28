@@ -1777,6 +1777,127 @@ describe("the arrow-key walk", () => {
 });
 
 /**
+ * **One Tab stop per wall, where the arrows walk it** — issue #558's roving tabindex.
+ *
+ * Every tile's art is a button, so a wall that left them all in the Tab order made a keyboard
+ * reader Tab through the whole result set to reach whatever followed it. On an `arrowNav` wall one
+ * tile is the stop — its art and the caller's controls on it — and every other tile is `-1`, with
+ * the arrows as the way between them. A wall without the arrows keeps every tile a stop, because
+ * there a `-1` tile would be reachable by nothing.
+ *
+ * jsdom lays nothing out, so the wall is one column of ~5 drawn rows (a 600px `offsetHeight` stub
+ * and two rows of overscan); the long lists below lean on that to put a tile out of the window.
+ */
+describe("the roving Tab stop", () => {
+  const base = {
+    onNeedNextPage: vi.fn(),
+    listKey: "k",
+    zoomSection: "search" as const,
+    arrowNav: true,
+  };
+  const MANY = Array.from({ length: 30 }, (_, i) => card(`c${i}`, `Card ${i}`));
+  /** The caller's control on every tile — the search's quick-add, reduced to a button. */
+  const action = (c: CardSummary) => <button type="button">{`Add ${c.name}`}</button>;
+
+  /** The tiles whose art Tab can reach, by `data-grid-index`. */
+  const stops = (container: HTMLElement) =>
+    [...container.querySelectorAll<HTMLElement>("[data-grid-index]")]
+      .filter((tile) => tile.querySelector("button")!.tabIndex === 0)
+      .map((tile) => Number(tile.dataset.gridIndex));
+
+  it("makes one tile the stop, and takes the rest out of the Tab order with their controls", () => {
+    const { container } = render(
+      <CardGrid rows={MANY} onSelect={vi.fn()} {...base} action={action} />,
+    );
+
+    // Several tiles are drawn and exactly one is a stop: the first, with nothing remembered yet.
+    expect(container.querySelectorAll("[data-grid-index]").length).toBeGreaterThan(1);
+    expect(stops(container)).toEqual([0]);
+    // **The caller's control goes with its tile** — a wall that roved only the art would still
+    // cost a press per tile, and the collection's stepper is three.
+    expect(screen.getByRole("button", { name: "Add Card 0" })).not.toHaveAttribute("tabindex");
+    expect(screen.getByRole("button", { name: "Add Card 1" })).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("moves the stop with an arrow step, and hands the controls back to the tile it lands on", async () => {
+    const { container } = render(
+      <CardGrid rows={MANY} onSelect={vi.fn()} {...base} action={action} />,
+    );
+
+    screen.getByRole("button", { name: "Card 0" }).focus();
+    await userEvent.keyboard("{ArrowDown}");
+
+    expect(stops(container)).toEqual([1]);
+    expect(screen.getByRole("button", { name: "Add Card 1" })).not.toHaveAttribute("tabindex");
+    expect(screen.getByRole("button", { name: "Add Card 0" })).toHaveAttribute("tabindex", "-1");
+  });
+
+  /**
+   * A click on a `-1` control still focuses it, and focus anywhere in a tile makes that tile the
+   * stop — so Shift+Tab out and Tab back in returns to where the reader was, not to the top.
+   */
+  it("moves the stop to a tile focus lands in, by any of its controls", () => {
+    const { container } = render(
+      <CardGrid rows={MANY} onSelect={vi.fn()} {...base} action={action} />,
+    );
+
+    act(() => screen.getByRole("button", { name: "Add Card 2" }).focus());
+
+    expect(stops(container)).toEqual([2]);
+    expect(screen.getByRole("button", { name: "Add Card 2" })).not.toHaveAttribute("tabindex");
+  });
+
+  /**
+   * **The virtualiser trap**: the remembered tile can leave the drawn window and unmount, and a
+   * wall whose only stop is not in the DOM is one Tab walks straight past. So the first drawn tile
+   * stands in — and the remembered one is the stop again the moment it is drawn, because the stop
+   * is remembered by tile key rather than by position.
+   */
+  it("stands the first drawn tile in for a stop the virtualiser has not drawn", () => {
+    const { container, rerender } = render(<CardGrid rows={MANY} onSelect={vi.fn()} {...base} />);
+    act(() => screen.getByRole("button", { name: "Card 1" }).focus());
+    expect(stops(container)).toEqual([1]);
+
+    // `Card 1` moved to the end of the same list, far past the drawn window.
+    const moved = [MANY[0], ...MANY.slice(2), MANY[1]];
+    rerender(<CardGrid rows={moved} onSelect={vi.fn()} {...base} />);
+    expect(container.querySelector('[data-grid-index="29"]')).toBeNull();
+    expect(stops(container)).toEqual([0]);
+
+    // Back inside the window, and it is the stop again.
+    const back = [MANY[0], MANY[2], MANY[1], ...MANY.slice(3)];
+    rerender(<CardGrid rows={back} onSelect={vi.fn()} {...base} />);
+    expect(stops(container)).toEqual([2]);
+  });
+
+  /** A new list starts its stop at its top, as it starts its scroll there. */
+  it("starts a new list's stop at its first tile", () => {
+    const { container, rerender } = render(<CardGrid rows={MANY} onSelect={vi.fn()} {...base} />);
+    act(() => screen.getByRole("button", { name: "Card 3" }).focus());
+    expect(stops(container)).toEqual([3]);
+
+    rerender(<CardGrid rows={MANY} onSelect={vi.fn()} {...base} listKey="another" />);
+
+    expect(stops(container)).toEqual([0]);
+  });
+
+  /**
+   * **Without the arrows every tile stays a stop** — the printings modal and the docked search
+   * columns. A `-1` tile there would be reachable by nothing at all.
+   */
+  it("keeps every tile a stop on a wall the arrows do not walk", () => {
+    const { container } = render(
+      <CardGrid rows={MANY} onSelect={vi.fn()} {...base} arrowNav={false} action={action} />,
+    );
+    const drawn = container.querySelectorAll("[data-grid-index]").length;
+
+    expect(stops(container)).toHaveLength(drawn);
+    expect(container.querySelector("[data-roving-held]")).toBeNull();
+    expect(screen.getByRole("button", { name: "Add Card 1" })).not.toHaveAttribute("tabindex");
+  });
+});
+
+/**
  * **Multi-select on a wall** — issue #214.
  *
  * The arithmetic is `lib/multiSelect.ts`'s truth table and the drag contract is

@@ -71,7 +71,7 @@ import {
   CONFIRM_CANCEL,
   CONFIRM_DESTRUCTIVE,
   META_FIELD,
-  META_SUBMIT,
+  META_SUBMIT_TYPED,
   RenameField,
   RowAction,
   sectionFailure,
@@ -200,7 +200,7 @@ export function LabelsPanel(): JSX.Element {
         onSubmit={(e) => {
           e.preventDefault();
           const trimmed = name.trim();
-          if (!trimmed || clash !== undefined) return;
+          if (!trimmed || clash !== undefined || createLabel.isPending) return;
           createLabel.mutate(
             { name: trimmed, color },
             {
@@ -227,8 +227,8 @@ export function LabelsPanel(): JSX.Element {
         <LabelColorButton color={color} open={pickerOpen} onToggle={() => setPickerOpen((o) => !o)} />
         <button
           type="submit"
-          disabled={createLabel.isPending || name.trim() === "" || clash !== undefined}
-          className={META_SUBMIT}
+          aria-disabled={createLabel.isPending || name.trim() === "" || clash !== undefined}
+          className={META_SUBMIT_TYPED}
         >
           Add label
         </button>

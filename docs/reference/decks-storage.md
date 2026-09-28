@@ -4138,6 +4138,33 @@ It is `stats_open`'s rules one control further in, and each of them is the reaso
 - **`UNDO_V56` drops the three `decks` capture triggers before the column** — v43's move in the
   rewind direction; [data-and-sync.md](data-and-sync.md)'s v56 paragraph has why.
 
+### `decks.managed_wishlist_tokens`, the managed wishlist's tokens switch
+
+User schema **v57** (2026-09-28, [issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617))
+is `decks.managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0` — whether a theory deck's managed
+wishlist also files the token printings its plan is short of, in the **Tokens** subfolder. Until
+v57 that was a fact about `managed_wishlist_mode`: `all` filed tokens, `missing` and `other` did not,
+and a fifth word `tokens` filed them alone. So a reader who wanted their missing cards *and* their
+tokens had no word for it. The mode is four words again (`off`, `all`, `missing`, `other`) and the
+switch sits beside it in Deck settings, drawn only when the mode is not `Off`.
+
+- **Stored whatever the mode says, acted on only when it is not `off`.** `managed_wishlist::eligible`
+  answers `None` for `off` before it reads the switch, so a mode switched off and on again brings
+  the tokens back with it.
+- **`deck_theory::wanted(view, tokens)`** — the view is card rows only now (`DiffView` lost its
+  `Tokens` variant), and `tokens` adds `token_diff`'s rows at their whole quantity under any of the
+  three. The Compare dialog's own **Tokens** tab is unchanged.
+- **The mode's rules otherwise, each for the mode's reason**: on the `decks` capture spec after
+  `managed_wishlist_mode`; a history row, `managedWishlistTokens`, booleans on both sides; on
+  `deck_undo::DECK_FIELDS` beside the mode, so one Ctrl+Z puts a Save that moved both back whole;
+  carried by `duplicate_deck` with the mode.
+- **Positional reads, at the end as always.** `DECK_SELECT` appends `d.managed_wishlist_tokens` after
+  `d.curve_creatures`; `deck_row` reads it at **31**, `update_deck`'s before-read at **19**, and the
+  UPDATE binds it as `?25`. The neighbour at 30 is `curve_creatures`, another `bool` over an
+  `INTEGER`, which is why `managed_wishlist_tokens_round_trips_audits_and_undoes` sets the two the
+  opposite way in one patch.
+- **The rung converts, uncaptured** — [data-and-sync.md](data-and-sync.md)'s v57 paragraph.
+
 ### Owed: known, parked, and not fixed
 
 - **A pre-reroute deck-card row naming a token printing collides with a token entry in

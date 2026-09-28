@@ -80,7 +80,7 @@ import { OptimizeWishlistDialog } from "./OptimizeWishlistDialog";
 import { useWishlist, type Wishlist } from "./useWishlist";
 import { useWishlistFolders } from "./useWishlistFolders";
 import { useWishlistOptimize } from "./useWishlistOptimize";
-import { wholeWishlistQuery } from "./wholeWishlistQuery";
+import { wholeWishlistQuery, type SweepScope } from "./wholeWishlistQuery";
 import type { WishDrop } from "./wishDrag";
 import {
   WishEmptyShelf,
@@ -119,6 +119,21 @@ import {
  * buying.
  */
 const ROOT_LABEL = "Wishlist";
+
+/**
+ * What the optimise dialog's subtitle calls a sweep over the folders the home page's Wishlist
+ * savings widget chose (issue #598): the one folder's name, or how many folders are planned. The
+ * scope's shelves already hold every folder inside the chosen ones, so the count is what the plan
+ * covers rather than what the reader ticked. `0` is the root, named in the page's own word.
+ */
+function sweepFolderName(
+  scope: SweepScope,
+  folderNameOf: (id: number | null) => string | null,
+): string {
+  const shelves = scope.shelves ?? [];
+  if (shelves.length === 1) return folderNameOf(shelves[0] === 0 ? null : shelves[0]) ?? ROOT_LABEL;
+  return plural(shelves.length, "folder");
+}
 
 /**
  * The root as {@link reorderedLevel} has to address it — an id no folder has, because
@@ -504,19 +519,22 @@ export function WishlistPage() {
    * **Which list the sweep is taken over** — the one on screen, or the whole wishlist.
    *
    * `"page"` is the Optimise button's, and it is `wishlist.filters` exactly as it always was.
-   * `"whole"` is the home page's Wishlist savings widget, arriving through `store.ts`'s
-   * `pendingOptimize`: the widget counted what *every* pinned wish would save, so the dialog it
-   * opens plans {@link wholeWishlistQuery} — the widget's own question, and therefore its own cache
-   * entry. **A scope override and never a write**: the folder the reader stands in and the filters
-   * are theirs, so the hand-off touches neither — it plans every wish whatever the wall is showing.
+   * A {@link SweepScope} is the home page's Wishlist savings widget, arriving through `store.ts`'s
+   * `pendingOptimize`: the widget counted what the pinned wishes in its scope would save — the
+   * decks' managed wishlists included unless its reader switched them off, and only the folders
+   * they chose if they chose any (issue #598) — so the dialog it opens plans
+   * {@link wholeWishlistQuery} over that scope — the widget's own question, and therefore its own
+   * cache entry. **A scope override and never a write**: the folder the reader stands in and the
+   * filters are theirs, so the hand-off touches neither — it plans the widget's wishes whatever the
+   * wall is showing.
    *
    * **Left where it is when the dialog closes**, deliberately: the panel outlives the flag by the
    * length of its fade, and a scope put back on close would re-key the plan mid-fade and flash the
    * body to its loading sentence. The button writes `"page"` on its own press instead.
    */
-  const [sweepOver, setSweepOver] = useState<"page" | "whole">("page");
+  const [sweepOver, setSweepOver] = useState<"page" | SweepScope>("page");
   const optimize = useWishlistOptimize(
-    sweepOver === "whole" ? wholeWishlistQuery(marketplace.id) : wishlist.filters,
+    sweepOver === "page" ? wishlist.filters : wholeWishlistQuery(marketplace.id, sweepOver),
     optimizing,
   );
   /**
@@ -531,12 +549,12 @@ export function WishlistPage() {
    */
   const pendingOptimize = useAppStore((s) => s.pendingOptimize);
   const clearPendingOptimize = useAppStore((s) => s.clearPendingOptimize);
-  if (pendingOptimize && !(optimizing && sweepOver === "whole")) {
-    setSweepOver("whole");
+  if (pendingOptimize !== null && !(optimizing && sweepOver === pendingOptimize)) {
+    setSweepOver(pendingOptimize);
     setOptimizing(true);
   }
   useEffect(() => {
-    if (pendingOptimize) clearPendingOptimize();
+    if (pendingOptimize !== null) clearPendingOptimize();
   }, [pendingOptimize, clearPendingOptimize]);
 
   /**
@@ -1905,9 +1923,10 @@ export function WishlistPage() {
 
   /**
    * An empty folder's box, in whichever view draws it — `layoutShelves` decides *which* shelves get
-   * one, for the wall and the table alike. A reader's folder is the dashed drawer and a card target;
-   * a deck's managed folder is the sentence for the Compare view its deck follows, in words and
-   * never a target, since the folder takes no hand write.
+   * one, for the wall and the table alike. A reader's folder is the dashed drawer and a card target,
+   * and so is an empty Not sorted (issue #597), which files at the root through `cardDrops`; a
+   * deck's managed folder is the sentence for the Compare view its deck follows, in words and never
+   * a target, since the folder takes no hand write.
    */
   const renderEmpty = useCallback(
     (shelf: Shelf) =>
@@ -2656,14 +2675,19 @@ export function WishlistPage() {
         // resolves to the root's word, the same "resolve towards the root" rule `trailOf` applies
         // to a broken trail.
         scope={
-          // The hand-off's override says what it planned — every folder, nothing filtered — rather
-          // than naming the drawer and the filters the page happens to be standing in.
-          sweepOver === "whole"
-            ? { folder: ROOT_LABEL, everyFolder: true, filtered: false }
-            : {
+          // The hand-off's override says what it planned — every folder or the ones the widget
+          // chose, nothing filtered — rather than naming the drawer and the filters the page
+          // happens to be standing in.
+          sweepOver === "page"
+            ? {
                 folder: folderNameOf(folderId) ?? ROOT_LABEL,
                 everyFolder: folderId === null,
                 filtered: wishlist.activeCount > 0,
+              }
+            : {
+                folder: sweepFolderName(sweepOver, folderNameOf),
+                everyFolder: sweepOver.shelves === null,
+                filtered: false,
               }
         }
         plan={optimize.plan.data ?? null}

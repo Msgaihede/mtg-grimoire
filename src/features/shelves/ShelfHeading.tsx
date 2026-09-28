@@ -14,6 +14,14 @@
  * payloads differ, and keeps every rule about *which* folder may take *what* on the page that owns
  * the tree.
  *
+ * **The folder's name folds its shelf, and Open is a button at the row's right end** (issue #599).
+ * Spec decision 6 had the name as the way *into* a folder, with no Open button; readers aimed at
+ * the name to fold and were taken somewhere else, so the name now does what the chevron does —
+ * hovering it lights the chevron, to say they are one control — and the way in is a ghost `→` at
+ * the row's far right, after the `⋯`, so it stands in one column on every heading whatever else
+ * that heading carries. **The lead segments still open their ancestors** — they are a path, not
+ * this shelf, and each is underlined on hover as a link, where the name is not.
+ *
  * **One thing it enforces whatever it is handed**: Add folder, Rename and the drag source exist only
  * on a reader's own folder (`kind === "folder"`), and Not sorted has no menu. A deck group with a
  * Rename button is a control that writes into a deck.
@@ -29,6 +37,7 @@ import {
   type ReactElement,
 } from "react";
 import {
+  ArrowRight,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -72,8 +81,9 @@ export interface ShelfHeadingProps {
   stat: string;
   /** Up to {@link PEEK_LIMIT}, drawn only while collapsed. */
   peek: readonly { cardId: string; name: string }[];
+  /** The chevron and the folder's own name — both fold the shelf (issue #599). */
   onToggle: () => void;
-  /** The title and every lead segment. */
+  /** The Open button at the row's right end, and every lead segment. */
   onOpen: (folderId: number) => void;
   /** Absent ⇒ no Add folder button. Ignored on anything but a reader's own folder. */
   onAddFolder?: () => void;
@@ -104,8 +114,11 @@ export interface ShelfHeadingProps {
    * Why folding is refused right now — `FOLD_PAUSED_REASON` while a filter is on (spec §3.4).
    * Set, the chevron is `aria-disabled` (never `disabled`: it keeps its tab stop, so the reason is
    * reachable by keyboard), carries the reason as its description and as its tooltip, and a press
-   * calls nothing. Its name and `aria-expanded` go on saying what the shelf is. Nothing else on
-   * the row is about folding, so nothing else changes. Absent is the chevron exactly as before.
+   * calls nothing. Its name and `aria-expanded` go on saying what the shelf is. **The title folds
+   * too, so it is refused the same way** — `aria-disabled` and the reason as its description —
+   * but keeps its colour and its clipped-name tooltip: dimming every folder's name under every
+   * filter would cost the wall its legibility to say what the chevron already says. Nothing else
+   * on the row is about folding, so nothing else changes. Absent is the row exactly as before.
    */
   foldPaused?: string;
 }
@@ -158,6 +171,25 @@ export function ShelfGlyph({
 /** A path segment: a button that reads as words until hovered. */
 const SEGMENT = cn("min-w-0 truncate rounded-sm underline-offset-[3px] hover:underline", FOCUS);
 
+/**
+ * The folder's own name, which folds its shelf: words, never underlined — an underline is what the
+ * lead segments beside it wear, and they are links. What it wears on hover is the chevron's own
+ * hover, drawn on the chevron ({@link CHEVRON_LIT_BY_TITLE}), so the reader sees which control the
+ * name is.
+ */
+const TITLE = cn("min-w-0 truncate rounded-sm text-text", FOCUS);
+
+/** Marks the name, so the row can light its chevron while the name is hovered. */
+const TITLE_ATTR = "data-shelf-title";
+
+/**
+ * The chevron's hover, drawn while the pointer is on the **name** — spelt out whole, because
+ * Tailwind emits a rule only for a class it finds written in source. Not drawn while folding is
+ * paused, where `FOLD_PAUSED_LOOK` holds the chevron still under its own pointer too.
+ */
+const CHEVRON_LIT_BY_TITLE =
+  "group-has-[[data-shelf-title]:hover]/shelf:bg-surface group-has-[[data-shelf-title]:hover]/shelf:text-text";
+
 export function ShelfHeading({
   shelf,
   stat,
@@ -175,6 +207,7 @@ export function ShelfHeading({
 }: ShelfHeadingProps): ReactElement {
   const tip = useTooltip();
   const foldRefused = Boolean(foldPaused);
+  const toggle = foldRefused ? undefined : onToggle;
   const own = shelf.kind === "folder";
   const unfiled = shelf.kind === "unfiled";
   const addFolder = own ? onAddFolder : undefined;
@@ -223,22 +256,22 @@ export function ShelfHeading({
       className={cn(
         // `border-transparent` so the row owns an edge all day and a drag recolours it rather than
         // adding one — `DROP_EDGE`'s rule for a target that has an edge.
-        "relative flex h-10 w-full min-w-0 items-center gap-2 rounded-lg border border-transparent px-1",
+        "group/shelf relative flex h-10 w-full min-w-0 items-center gap-2 rounded-lg border border-transparent px-1",
         (dropMark === "armed" || edge !== null) && DROP_EDGE,
         (dropMark === "over" || dropMark === "inside") && cn("border-accent", DROP_OVER),
       )}
     >
       {creating ? (
         // Nothing to collapse yet — the space is kept so the name sits where it will live.
-        <span aria-hidden="true" className="size-6 flex-none" />
+        <span aria-hidden="true" className="size-8 flex-none" />
       ) : (
         <button
           type="button"
           aria-expanded={open}
           aria-label={`${open ? "Collapse" : "Expand"} ${shelf.name}`}
           data-no-drag=""
-          onClick={foldRefused ? undefined : onToggle}
-          className={cn(SHELF_CHEVRON, foldRefused && FOLD_PAUSED_LOOK)}
+          onClick={toggle}
+          className={cn(SHELF_CHEVRON, foldRefused ? FOLD_PAUSED_LOOK : CHEVRON_LIT_BY_TITLE)}
           // Refused in the open while a filter is on — `ShelfToolbar`'s Expand all and Collapse
           // all wear the same three things. `aria-description` rather than the tooltip's own
           // `aria-describedby`, which is wired only while the panel is open.
@@ -251,9 +284,9 @@ export function ShelfHeading({
             : {})}
         >
           {open ? (
-            <ChevronDown className="size-4" aria-hidden="true" />
+            <ChevronDown className="size-5" aria-hidden="true" />
           ) : (
-            <ChevronRight className="size-4" aria-hidden="true" />
+            <ChevronRight className="size-5" aria-hidden="true" />
           )}
         </button>
       )}
@@ -313,10 +346,16 @@ export function ShelfHeading({
           <button
             ref={caretHome === "title" ? caretReturn : undefined}
             type="button"
-            aria-description="Open folder"
-            onClick={() => onOpen(shelf.id)}
+            {...{ [TITLE_ATTR]: "" }}
+            aria-expanded={open}
+            onClick={toggle}
             onKeyDown={manage?.onKeyDown}
-            className={cn(SEGMENT, "text-text")}
+            className={TITLE}
+            // Refused with the chevron, and in the chevron's words — but the clipped-name tooltip
+            // stays, since the name is still what this button shows.
+            {...(foldRefused
+              ? { "aria-disabled": true as const, "aria-description": foldPaused }
+              : {})}
             {...tip(shelf.name, { whenClipped: true })}
           >
             {shelf.name}
@@ -393,6 +432,20 @@ export function ShelfHeading({
           className={SHELF_ICON_BUTTON}
         >
           <MoreHorizontal className="size-4" aria-hidden="true" />
+        </button>
+      )}
+      {renaming === undefined && !unfiled && (
+        // The way into the folder (issue #599) — last, so it is one column on every heading: a
+        // deck group carries no Add folder, Rename or ⋯, and its → still lines up with a binder's.
+        <button
+          type="button"
+          aria-label={`Open ${shelf.name}`}
+          data-no-drag=""
+          onClick={() => onOpen(shelf.id)}
+          className={SHELF_ICON_BUTTON}
+          {...tip("Open folder", { describes: false })}
+        >
+          <ArrowRight className="size-4" aria-hidden="true" />
         </button>
       )}
 

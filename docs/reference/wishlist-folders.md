@@ -669,8 +669,10 @@ un-counted to own up to. `Total cost` reads `—` while the wall holds no wishes
 
 `toShelfFolder` (`wishShelfPlan.ts`) maps a folder with a `managedDeckId` to the kind `managed`,
 which `buildShelves` draws **at the root only**, under a `Managed by decks` label, by name, and shut
-by default. A managed heading draws its chevron, its title, a **Managed** pill (`ShelfHeading`) and
-its figures, and **nothing a hand write could be refused for** — no Add folder, no Rename, no `⋯`,
+by default. A managed heading draws its chevron, its title, a **Managed** pill (`ShelfHeading`),
+its figures and the `→` that opens it (issue #599 — the title folds now, as on every heading; see
+[collection-folders.md](collection-folders.md#shelves-2026-09-26)), and **nothing a hand write could
+be refused for** — no Add folder, no Rename, no `⋯`,
 no drag, and no card target that arms. `renderHeading` wires the first four only for a reader's own
 folder, and every heading's card target comes from `cardDrops`, which asks `canFile` — and
 `canFile` refuses a managed destination (all three in `WishlistPage.tsx`).
@@ -688,18 +690,17 @@ where a managed folder exists):
 
 | Mode | The box says |
 | --- | --- |
-| `all` | *The two lists agree — everything this deck's plan asks for is already in the deck.* |
-| `missing` | *Nothing missing — this deck has every card its plan asks for.* |
-| `other` | *No substitutions — nothing in this deck stands in for a printing its plan asks for.* |
-| `tokens` (v55) | *This folder follows the plan's tokens and holds no card itself — any token the deck is short of is filed in a Tokens folder inside it.* |
-| a deck's **Tokens** child, `all` or `tokens` (v55) | *No tokens missing — this deck counts every token its plan asks for.* (`MANAGED_TOKENS_EMPTY`) |
-| not known yet, or a deck this page cannot find | *Nothing here — this folder follows its deck and fills itself.* (`MANAGED_EMPTY_UNKNOWN`) |
+| `all` | *The two lists agree. Everything requested by the plan is already in the deck.* |
+| `missing` | *Nothing missing. The deck includes every card in the plan.* |
+| `other` | *No substitutions. Every card matches the planned printing.* |
+| a deck's **Tokens** child, under any mode (v55; filled by the tokens switch since v57) | *No tokens missing — this deck counts every token its plan asks for.* (`MANAGED_TOKENS_EMPTY`) |
+| not known yet, or a deck this page cannot find | *Nothing here. This folder updates automatically with its deck.* (`MANAGED_EMPTY_UNKNOWN`) |
 
-**`tokens`' own folder is always empty of its own**, which is why its sentence says where the
-wishes go rather than that there are none — and says *a* Tokens folder, because the settle drops
-that child while the deck is short of no token, so the sentence must not point at one as though it
-were always there. The child says one sentence under either view that fills it, since in both it
-holds the same thing; its parent's `tokens` sentence would point at the child itself.
+**The three mode sentences are about cards**, which is what the deck's own folder holds under
+every mode since v57 ([issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617)) — the
+tokens are the child's, and the child says one sentence for itself. **From v55 to v56 there was a
+fourth**, for the `tokens` mode, whose own folder was always empty and whose sentence said where the
+wishes went instead; the mode is gone, and the sentence with it.
 
 **The status line says nothing over it**: `statusOf` stays silent whenever the wall draws anything,
 headings or an empty box, because the box already says the folder is empty. Standing inside a
@@ -1434,34 +1435,43 @@ they were before the press. Findings B and C, both known and accepted, are recor
 | `src-tauri/src/deck_theory.rs` | `missing_to_wishlist`, the Compare dialog's write and its up-front folder check |
 | `src-tauri/src/deck.rs` | `missing_to_wishlist`, the live deck's, taking the same optional folder |
 
-## Managed wishlists — a folder a deck owns (user schema v48 and v49, 2026-09-24; its Tokens subfolder v55, 2026-09-27)
+## Managed wishlists — a folder a deck owns (user schema v48 and v49, 2026-09-24; its Tokens subfolder v55, 2026-09-27; its tokens switch v57, 2026-09-28)
 
 [Issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512). A `Theory + Actual` deck whose
-`decks.managed_wishlist_mode` names one of the Compare dialog's four views keeps one wishlist
-folder, named after the deck, holding **that view's own copies** — `deck_theory::wanted(view)`
-over the same difference the dialog reads (`grouped_diff`, and since v55 `token_diff` beside it):
+`decks.managed_wishlist_mode` names one of the Compare dialog's three card views keeps one
+wishlist folder, named after the deck, holding **that view's own copies** —
+`deck_theory::wanted(view, tokens)` over the same difference the dialog reads (`grouped_diff`, and
+`token_diff` beside it when the tokens switch is on):
 
-| Mode | The dialog's view | Each wish's quantity | Token rows |
-| --- | --- | --- | --- |
-| `off` (the default) | — | no folder | — |
-| `all` | All | the row's whole shortfall | in the **Tokens** subfolder |
-| `missing` | Missing | `quantity − held_as_other_printing` — copies no printing in the deck covers | none |
-| `other` | Different printing | `held_as_other_printing` — copies to swap for the planned printing | none |
-| `tokens` (v55) | Tokens | the token row's whole shortfall | in the **Tokens** subfolder, and nothing in the deck's own folder |
+| Mode | The dialog's view | Each wish's quantity |
+| --- | --- | --- |
+| `off` (the default) | — | no folder, whatever the tokens switch says |
+| `all` | All | the row's whole shortfall |
+| `missing` | Missing | `quantity − held_as_other_printing` — copies no printing in the deck covers |
+| `other` | Different printing | `held_as_other_printing` — copies to swap for the planned printing |
 
-The choice is a five-button group in Deck settings under the theory marks (four until v55), drawn
-only for that kind: a regular deck has no plan to be short of and a virtual one owns no cardboard,
-so switching a deck to either removes its folder. A peer on an older build reads `tokens` as `off`
-through `managed_wishlist::read_mode`, which is the standing rule that every device is updated
-before it syncs across a token-model change.
+**And `decks.managed_wishlist_tokens`** ([issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617),
+user schema v57): on, the token rows the plan is short of go in the **Tokens** subfolder, at their
+whole shortfall, under whichever of the three modes the deck follows. Until v57 that was a fact
+about the mode — `all` filed tokens, `missing` and `other` did not, and a fifth word, `tokens`
+(v55), filed them alone with nothing in the deck's own folder — so the missing cards *and* the
+tokens was a choice nobody could make. The v57 rung turned `all` into `all` with the switch on and
+`tokens` into `missing` with the switch on.
 
-### The Tokens subfolder (user schema v55, the token-improvements spec §3.8)
+The choice is a four-button group in Deck settings under the theory marks, with the **Tokens**
+toggle beside it in the same row and outside the group, drawn only when the mode is not `Off` —
+and the whole row only for that kind of deck: a regular deck has no plan to be short of and a
+virtual one owns no cardboard, so switching a deck to either removes its folder. A peer still on
+v56 can send `tokens` after this device climbed; `managed_wishlist::read_mode` reads it as `off`,
+the standing rule that every device is updated before it syncs across a token-model change.
 
-**All** and **Tokens** file the Compare dialog's **token rows** — the token printings the plan
-counts more of than the deck (decks-storage.md's *A token line is sent like a card line*) — in one
-child folder named **Tokens** inside the deck's managed folder. **Missing** and **Different
-printing** are card rows only, so they have no child, and the child exists only while there is a
-token to want: the settle drops it, its wishes first, when the deck is short of none.
+### The Tokens subfolder (user schema v55, the token-improvements spec §3.8; filled by the switch since v57)
+
+The tokens switch files the Compare dialog's **token rows** — the token printings the plan counts
+more of than the deck (decks-storage.md's *A token line is sent like a card line*) — in one child
+folder named **Tokens** inside the deck's managed folder. With the switch off there is no child
+under any mode, and with it on the child exists only while there is a token to want: the settle
+drops it, its wishes first, when the deck is short of none.
 
 - **Its identity is a column, never its name**: `wishlist_folders.managed_tokens INTEGER NOT NULL
   DEFAULT 0` — `1` on the child, `0` on the deck's own folder and on every folder the reader made —
@@ -1480,7 +1490,8 @@ token to want: the settle drops it, its wishes first, when the deck is short of 
   and the frontend's `isManaged` cover it without a word about it. The cost is on the other side:
   a lookup of *the deck's own* folder by `managed_deck_id` now answers either row, so **every such
   lookup names `managed_tokens = 0`** (`managed_wishlist::managed_folder`), while one that means
-  *any managed folder* — the guard, `reset::clear_wishlist`, the optimize preview, quick add —
+  *any managed folder* — the guard, `reset::clear_wishlist`, the optimize preview (its exclusion and
+  its `managed` mark alike), quick add —
   reads `managed_deck_id IS NOT NULL` and is right to cover both. The guard's `UPDATE` trigger
   names `managed_tokens` among its columns, because it is identity rather than bookkeeping.
   `settle_deck` deletes the child's wishes before the child, and the child before the parent.
@@ -1515,7 +1526,8 @@ their folders.
 - **"Whenever the deck changes" is per-connection `TEMP` triggers.** `managed_wishlist::arm`
   installs them on the write connection the first time `sync::with_write` hands it out; they
   mark a deck dirty on any write to its `deck_cards`, a category's switch or delete, and the
-  `decks` columns that decide eligibility or the folder's name — and since v55 on any write to its
+  `decks` columns that decide eligibility or the folder's name (`managed_wishlist_tokens` among
+  them since v57) — and since v55 on any write to its
   `deck_token_printings` or `deck_tokens`, into a second table (*The Tokens subfolder*, above).
   `with_write` settles the dirty
   decks after the write's own transaction, so a folder is rewritten once per press, and sync's
@@ -1531,7 +1543,10 @@ their folders.
   (`sync_state.applying`). The `UPDATE` guards are `UPDATE OF <columns>`, so a `sync_uid` or
   `needs_review` write is never refused. Two readers were narrowed rather than left to hit it:
   `reset::clear_wishlist` sweeps everything but managed folders, and the optimize preview never
-  offers a managed wish.
+  offers a managed wish **as something to apply**. Since issue #598 it can *read* them — the home
+  page's Wishlist savings widget asks with `include_managed`, because they are still wishlists —
+  and each such move comes back marked `managed`, drawn in the dialog with no checkbox and never
+  put in the apply payload. The Wishlist page's own Optimise button still asks without it.
 - **The frontend draws no editing control for a managed folder or wish**, and never offers one
   as a destination; the deck hooks' `invalidate` helpers fire `["wishlist"]` with `["decks"]`
   because every deck write can rewrite a folder. Since 2026-09-26 the folders are shelves under

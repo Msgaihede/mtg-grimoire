@@ -200,8 +200,9 @@ deliberately**: no screenshots are stored.
   written**: the seed asks `db.ts`'s `settleManagedWishlist` for the folders, `Tokens` subfolder
   included, rather than guessing at the rows the crate would have left. That function is also what
   the fake runs after a token write, an undo or redo, a deck's delete and a change to its name,
-  kind or mode — a card write still does not settle here, the fake's standing gap (`db.ts`'s
-  `MANAGED_WISHLIST` has it).
+  kind, mode or tokens switch — a card write still does not settle here, the fake's standing gap
+  (`db.ts`'s `MANAGED_WISHLIST` has it). Deck 4 follows `All` with its tokens switch on (user
+  schema v57), which is what that migration made of an `all` deck.
   **Re-count the faults when you add one** (the seeds are named and not counted) — it said "four"
   for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only

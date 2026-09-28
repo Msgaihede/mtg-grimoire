@@ -188,6 +188,10 @@ const DECK_FIELDS: &[&str] = &[
     "theory_mark_unplanned",
     // Schema v49's managed-wishlist mode — an ordinary `deck_update` answer with a history row.
     "managed_wishlist_mode",
+    // User schema v57's tokens switch beside it (issue #617), on the list with it for
+    // `theory_mark_*`'s reason: one Save of Deck settings can move both, and a Ctrl+Z that put the
+    // mode back and left the switch would restore half of one press.
+    "managed_wishlist_tokens",
     // User schema v51's rail index — an arrangement, like a category's `sort_order`: the reader
     // moved the pile and Ctrl+Z moves it back.
     "token_rail_index",

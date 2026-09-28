@@ -60,6 +60,9 @@ export const PER_WINDOW_KEYS: readonly QueryKey[] = [
   ["deckSearchTab"],
   ["printingGroupBy"],
   ["shelfFolds"],
+  // `features/decks/useHiddenStacks.ts`' `HIDDEN_STACKS_KEY`, spelled here for `["shelfFolds"]`'s
+  // reason above: which stacks a deck hides is a view preference, per window like the folds.
+  ["hiddenStacks"],
 ];
 
 /**

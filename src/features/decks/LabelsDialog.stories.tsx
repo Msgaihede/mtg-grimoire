@@ -212,7 +212,11 @@ export const RefusingADuplicateName: Story = {
     await userEvent.type(canvas.getByLabelText("New label name"), "budget SWAP");
 
     await expect(await canvas.findByRole("status")).toHaveTextContent("already exists");
-    await expect(canvas.getByRole("button", { name: "Add label" })).toBeDisabled();
+    // `aria-disabled`, never the attribute (#558): it greys as the reader types and stays a stop.
+    await expect(canvas.getByRole("button", { name: "Add label" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   },
 };
 

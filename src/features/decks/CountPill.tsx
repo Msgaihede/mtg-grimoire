@@ -53,7 +53,12 @@ export function CountPill({ count, words }: { count: number; words: string }): J
       // so this reads as the heading's figure rather than as a badge stuck on beside it. A pill
       // rather than a slanted `CountTag`: that shape is a mark laid *on* a card, and this sits in
       // a line of type.
-      className="relative inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full border border-border bg-surface px-1.5 font-mono text-[0.625rem] leading-none tabular-nums text-dim"
+      //
+      // **`text-text`, not `text-dim`** (issue #618, 2026-09-28): the reader found the count too
+      // faint to read at a glance. 10px mono in the dim colour on the pill's own surface was the
+      // quietest figure on the heading; in the text colour it reads like the name beside it,
+      // while the price stays dim — the count is what a reader scans a desk for.
+      className="relative inline-flex h-4 min-w-4 shrink-0 items-center justify-center rounded-full border border-border bg-surface px-1.5 font-mono text-[0.625rem] leading-none tabular-nums text-text"
     >
       <span aria-hidden="true">{count}</span>
       <span className="sr-only">{words}</span>

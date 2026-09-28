@@ -1045,14 +1045,17 @@ pub(crate) struct Wanted {
     pub is_token: bool,
 }
 
-/// Which of the Compare dialog's four views a managed wishlist follows — `TheoryDiffDialog.tsx`'s
-/// `DiffView`, in Rust.
+/// Which of the Compare dialog's card views a managed wishlist follows — `TheoryDiffDialog.tsx`'s
+/// `DiffView`, in Rust, less its **Tokens** tab.
 ///
-/// **All is every row and Tokens the token rows alone; Missing and Different printing are card
-/// rows only** (the token-improvements spec §3.7) — [`Self::cards`] and [`Self::tokens`].
+/// **Card rows only since user schema v57** (issue #617). Until then this enum had a fourth
+/// variant, `Tokens`, and All counted token rows too, so whether a managed wishlist wanted tokens
+/// was a fact about the view. It is a switch of its own now, `decks.managed_wishlist_tokens`,
+/// and [`wanted`] takes it beside the view. The dialog's Tokens tab is unchanged: it still asks
+/// which tokens the plan is short of, which is the question the switch answers into a folder.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum DiffView {
-    /// Every row, card and token, at its whole quantity.
+    /// Every card row, at its whole quantity.
     All,
     /// The copies no printing in the deck covers: `quantity − held_as_other_printing`, the
     /// dialog's `quantity > heldAsOtherPrinting`.
@@ -1060,22 +1063,6 @@ pub(crate) enum DiffView {
     /// The copies the deck plays as a different printing: `held_as_other_printing`, the dialog's
     /// `heldAsOtherPrinting > 0` — the cardboard to swap for the printing the plan names.
     Other,
-    /// The token rows, each at its whole quantity.
-    Tokens,
-}
-
-impl DiffView {
-    /// Whether the view holds the card rows — every view but [`Self::Tokens`].
-    fn cards(self) -> bool {
-        self != DiffView::Tokens
-    }
-
-    /// Whether the view holds the token rows — [`Self::All`] and [`Self::Tokens`]. Missing and
-    /// Different printing are questions about cards the deck plays in some printing, and a token
-    /// is never a card the deck plays.
-    fn tokens(self) -> bool {
-        matches!(self, DiffView::All | DiffView::Tokens)
-    }
 }
 
 /// One Compare view of the plan against the live list, as wishes pinned to the printing and
@@ -1084,24 +1071,26 @@ impl DiffView {
 /// **Each view's quantity is that view's own, not the row's** (the reader's correction to
 /// issue #512: a managed wishlist following `Missing` was listing `All`). The dialog filters rows
 /// and still shows each row's whole count; a wishlist line is a count of cardboard to go and get,
-/// so it carries only the copies the view is about, and a line with none is dropped. A token row
-/// is only ever in a view that counts it whole.
+/// so it carries only the copies the view is about, and a line with none is dropped.
+///
+/// **`tokens` adds the token rows, each at its whole quantity, whichever view the cards
+/// follow** (user schema v57, issue #617): a token is never a card the deck plays in some other
+/// printing, so Missing and Different printing have nothing to say about one, and a token's
+/// shortfall is the same line under all three. `false` reads no token wall at all.
 ///
 /// Reads [`grouped_diff`] and [`token_diff`] rather than a query of its own, so the folder and
-/// the dialog beside it cannot come to disagree about which rows a view holds — and reads each
-/// only for a view that holds its rows, because this runs after every write that touches a deck
+/// the dialog beside it cannot come to disagree about which rows a view holds — and reads the
+/// token wall only when it is asked for, because this runs after every write that touches a deck
 /// with a managed wishlist, and a token wall is a derivation over the deck's cards.
 pub(crate) fn wanted(
     conn: &Connection,
     deck_id: i64,
     view: DiffView,
+    tokens: bool,
 ) -> Result<Vec<Wanted>, String> {
     let market = crate::sorting::Marketplace::default();
-    let mut lines = Vec::new();
-    if view.cards() {
-        lines.extend(grouped_diff(conn, deck_id, market)?);
-    }
-    if view.tokens() {
+    let mut lines = grouped_diff(conn, deck_id, market)?;
+    if tokens {
         lines.extend(token_diff(conn, deck_id, market)?);
     }
     Ok(lines
@@ -1111,7 +1100,8 @@ pub(crate) fn wanted(
             let oracle_id = g.oracle_id?;
             let held = g.row.held_as_other_printing;
             let quantity = match view {
-                DiffView::All | DiffView::Tokens => g.row.quantity,
+                _ if g.row.is_token => g.row.quantity,
+                DiffView::All => g.row.quantity,
                 DiffView::Missing => g.row.quantity - held,
                 DiffView::Other => held,
             };
@@ -1782,7 +1772,7 @@ mod tests {
                 "plan {plan:?} against {deck_has:?}: {diff:?}"
             );
             assert!(
-                wanted(&conn, id, DiffView::All).unwrap().is_empty(),
+                wanted(&conn, id, DiffView::All, true).unwrap().is_empty(),
                 "the managed wishlist follows the diff"
             );
             assert_eq!(

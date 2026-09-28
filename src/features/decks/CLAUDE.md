@@ -3923,7 +3923,16 @@ layer.
 - **A pile's heading is one row since 2026-09-26, and its count is a pill** (token stacks spec
   §3.1 — the reader's ask, made while the token pile was being redrawn). `GroupHeader` is drawn by
   all four views and by `CategoriesDialog`, so the change is in every one of them rather than a
-  fork of the stacked layout: `[grip] name [rule][switched off] ········ [pill] price`.
+  fork of the stacked layout: `[grip] name [pill] [rule][switched off] ········ price [eye]`.
+  **The pill moved to the left, straight after the name, on 2026-09-28**
+  ([issue #618](https://github.com/Msgaihede/mtg-grimoire/issues/618)) — it was
+  `········ [pill] price` on the right until then — and is set in `text-text` rather than
+  `text-dim`, the reader finding the count too faint. The stacked floor went `min-w-16` →
+  `min-w-24` with it (the pill's ~20–32px left the figures for the name's block, so the sum the
+  row wraps on is unchanged); **nothing below was re-measured after the move**, so read the figures
+  as the 2026-09-26 layout's. A name computed over a heading reads
+  `Sideboard 3 cards Rules pile Switched off $4.97` now. `[eye]` is `GroupHeader`'s `trailing`,
+  drawn only on a hidden stack — see *Hidden stacks* below.
   - **The count is `CountPill` (`CountPill.tsx`), and the `N cards` line is gone.** A bare number
     with its visible digits `aria-hidden` and **one** `sr-only` phrase the caller spells through
     `words` — `cardCountWords` (`3 cards`) by default, `tokenCountWords` (`3 tokens and emblems`)
@@ -3950,8 +3959,9 @@ layer.
     at 0.8×, 5px at 0.9×. As chips the chrome is 54px. The rule mark is `Gavel` (not `Scale`,
     which the header's `Compare` already draws) and the switched-off mark `PowerOff` (the category
     menu's `Deactivate` glyph); each spells its words in an `sr-only` span — `MARKER_WORDS`,
-    `Rules pile` and `Switched off` — so a heading's name reads
-    `Sideboard Rules pile Switched off 3 cards $4.97`, and each keeps its tooltip through
+    `Rules pile` and `Switched off` — so a heading's name read
+    `Sideboard Rules pile Switched off 3 cards $4.97` (the count comes second since issue #618),
+    and each keeps its tooltip through
     `useTooltip()` on the chip. The meaning of the two marks did not move; `RULE_KINDS` still has no
     `maybe`, and `GroupHeader.tsx` says why.
   All of it measured in a Chromium class-rewrite harness over these classes (a `file://` page,
@@ -3966,6 +3976,28 @@ layer.
   row at 0.8×, 0.9×, 1×, 1.1× and 2×, every heading two rows at 0.5×, and at all six stops no chip
   over the pill, nothing past the heading's box and `document.scrollWidth === clientWidth`.
   [decks-live-findings.md](../../../docs/reference/decks-live-findings.md) has the rest.
+- **Hidden stacks: a stack can be hidden in the Stacks view, and it draws its heading and none of
+  its cards** (2026-09-28, [issue #618](https://github.com/Msgaihede/mtg-grimoire/issues/618)).
+  - **The pile's right-click offers `Hide` / `Unhide`**, above the transfers beside Rename — a view
+    preference, not a write to the deck, so it sits above the rule. **Only in the Stacks view**:
+    `categoryMenu`'s `stackVisibility` dep is handed while `view === "stacks"` and never
+    otherwise, because the other three views draw every card of a hidden stack and a row that
+    changed nothing on screen would read as broken.
+  - **A hidden stack wears an eye** — `EyeOff`, the state drawn — at the far right of its heading,
+    after the price (`GroupHeader`'s `trailing`). It is a real button named `Show <pile>`, and its
+    press shows the stack and hands the caret to the pile (`DeckEditor`'s `showStack`), because the
+    button goes with the press.
+  - **A hidden stack is still a drop target, still reorders and still carries its menu.** What it
+    loses is its cards: no `CardStack`, no "Nothing here yet.", no lift room reserved at the foot
+    of the view, and the arrow walk steps over it as if it were empty. `HIDDEN_STACK_ATTR`
+    (`data-stack-hidden`) marks the section for a test or a live pass.
+  - **Stored per device, never synced — the reader's call.** One `app_meta` row, `hidden_stacks`
+    (`src-tauri/src/stackhide.rs`, `shelffolds.rs`' shape keyed by deck): deck id → hidden
+    category ids. `useHiddenStacks` reads it under `["hiddenStacks", deckId]` — **not under
+    `["decks"]`**, which every deck write invalidates — writes optimistically and never rolls back,
+    and the key is on `crossWindow.ts`' `PER_WINDOW_KEYS`. Keyed by category id, which is already
+    one list's pile since user schema v53, so hiding the Theory tab's Sideboard leaves the Actual
+    tab's drawn. A stale id (a deleted pile) is answered rather than pruned and matches nothing.
 - **A pile at rest has no edge, and the box that edge was drawn in is still there** (changed
   2026-08-14). `StackGroup`'s `<section>` is `border border-transparent` in **both** states, with
   a `bg-surface/60` wash under the inactive one; it used to be `border-border` active and
@@ -4901,11 +4933,17 @@ already effective, and `viewOf` copies them.
   It is the entry's own grain read from the buying end (a token entry always names its finish) and
   is accepted rather than missed; decks-storage.md's *pinned wish* paragraph is the same wart one
   table over, for cards.
-- **The managed wishlist follows the same four views** (managed tokens spec §3.8): Deck settings'
-  `ManagedWishlistGroup` offers `Off | All | Missing | Different printing | Tokens`
-  (`MANAGED_WISHLIST_MODES`, `tokens` the fifth word), and **All** and **Tokens** file the token
-  rows' wishes in a **`Tokens` subfolder** inside the deck's managed folder — Tokens putting
-  nothing in the parent itself. The subfolder is the deck's too (`isManaged` covers it, since it
+- **The managed wishlist follows the three card views, and files tokens by a switch beside them**
+  (managed tokens spec §3.8; issue #617, user schema v57): Deck settings' `ManagedWishlistGroup`
+  offers `Off | All | Missing | Different printing` (`MANAGED_WISHLIST_MODES`, four words) and,
+  **outside that `role="group"` but in the same row**, an `aria-pressed` **Tokens** toggle
+  (`decks.managed_wishlist_tokens`, `DeckRow.managedWishlistTokens`) that files the token rows'
+  wishes in a **`Tokens` subfolder** inside the deck's managed folder under whichever view is
+  picked. The toggle is **not drawn under `Off`** — this form's rule that a control which cannot
+  take effect is worse than none — and its stored answer is kept, so picking a view again brings
+  it back. From v55 to v56 `tokens` was a fifth mode and All carried tokens too; v57 turned every
+  `all` deck's tokens on and every `tokens` deck into `missing` with them on, and the history
+  still names an old `tokens` row by that word (`managedWishlistHistoryLabel`). The subfolder is the deck's too (`isManaged` covers it, since it
   carries the deck's `managedDeckId`), is left out of `managedWishFolders`' by-name list (every
   deck's child is named `Tokens`), and says its own empty sentence (`MANAGED_TOKENS_EMPTY`). The
   whole record is [wishlist-folders.md](../../../docs/reference/wishlist-folders.md)'s *Managed
@@ -4981,12 +5019,19 @@ already effective, and `viewOf` copies them.
   - **The subtitle is clamped in CSS and never in the string.** Oracle text is the term that
     separates the two Wurms, so a truncation short enough to fit a 150px tile would fold them back
     together in the one case this exists for.
-  - **The name and the subtitle are two elements, and every accessible name is spelled rather than
-    assembled.** Two flex children with a `gap` between them compute to a name with the words run
-    together (`"Missing2"`), so every control on a tile goes through one
-    `tokenEntryName(verb, view)` — `Quantity of …`, `Change the art for …` (through
-    `tokenArtName`, below), `Remove …` — rather than being left to the DOM to concatenate. One
-    helper, so a control added later cannot be the one that forgets a term.
+  - **Every accessible name is spelled rather than assembled.** Two flex children with a `gap`
+    between them compute to a name with the words run together (`"Missing2"`), so every control on
+    a tile goes through one `tokenEntryName(verb, view)` — `Quantity of …`, `Change the art for …`
+    (through `tokenArtName`, below), `Remove …` — rather than being left to the DOM to concatenate.
+    One helper, so a control added later cannot be the one that forgets a term.
+  - **The band's tile draws no name line since [issue #615](https://github.com/Msgaihede/mtg-grimoire/issues/615)**
+    (2026-09-28): the picture prints the name on the card, so the tile reads top to bottom as the
+    card and its chin, **the controls row across the tile's full width** (the stepper at `fill`
+    inside a `min-w-0 flex-1` box, Remove printing at the far end), **then the subtitle**, then
+    the source line. The issue asked for the subtitle row to go as well and the owner's comment on
+    it kept it, moved under the controls: it is what separates the two `Wurm`s for the eye. The
+    name stays the first term of every control's accessible name, and `CardArt`'s `name` still
+    draws it on a frame whose picture never loads.
   - **Since v52 a token does not identify a tile either**, because one token is several tiles:
     a Treasure kept as a plain and a foil copy of one printing shares its name *and* its subtitle,
     and only `Nonfoil` against `Foil` separates the two steppers. So the name is

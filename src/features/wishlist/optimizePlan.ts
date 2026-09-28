@@ -22,6 +22,16 @@
  * reader touches something — which is what lets a refetch under an open dialog (a marketplace
  * switch, a sync landing) re-seed rather than strand a set of ids that name nothing.
  *
+ * ## A managed wishlist's moves are drawn and never sent
+ *
+ * The home page's Wishlist savings widget counts the decks' managed wishlists (issue #598), and a
+ * press there opens this dialog on the same plan — so the plan can carry moves marked
+ * {@link WishOptimizeMove.managed}. Each is the deck's printing, which the backend refuses to
+ * repoint by hand, and one refusal inside `wishlist_optimize_apply`'s single transaction would roll
+ * back every row ticked beside it. So {@link canApply} is false for them and every function below
+ * that seeds, fills or reads the ticked set passes them over: they are on screen for the saving
+ * they name, and the reader acts on one in the deck.
+ *
  * ## Nothing here holds a copy of the plan
  *
  * Every function takes the moves it is asked about. A ticked id no move carries contributes
@@ -49,6 +59,14 @@ export type WishId = number;
 export const NOTHING_TICKED: ReadonlySet<WishId> = Object.freeze(new Set<WishId>());
 
 /**
+ * Whether one press could make this move — every move but a deck's managed wishlist's, which is
+ * the deck's printing and changes only in the deck. See the module doc.
+ */
+export function canApply(move: WishOptimizeMove): boolean {
+  return !move.managed;
+}
+
+/**
  * What the dialog opens with: every move that carries a figure.
  *
  * `saved !== null` is the whole test, and it is the contract's own partition rather than a
@@ -63,15 +81,18 @@ export const NOTHING_TICKED: ReadonlySet<WishId> = Object.freeze(new Set<WishId>
 export function defaultTicked(plan: WishlistOptimizePlan | undefined): ReadonlySet<WishId> {
   if (plan === undefined || plan.moves.length === 0) return NOTHING_TICKED;
   const ticked = new Set<WishId>();
-  for (const move of plan.moves) if (move.saved !== null) ticked.add(move.wishId);
-  return ticked;
+  for (const move of plan.moves) {
+    if (move.saved !== null && canApply(move)) ticked.add(move.wishId);
+  }
+  return ticked.size === 0 ? NOTHING_TICKED : ticked;
 }
 
-/** Every move in the plan, which is what one press of a select-all at `"none"` or `"some"` asks
- *  for — the unpriced rows included, because the reader is saying so by hand. */
+/** Every move one press could make, which is what one press of a select-all at `"none"` or
+ *  `"some"` asks for — the unpriced rows included, because the reader is saying so by hand, and a
+ *  managed wishlist's rows left out, because no press can make them ({@link canApply}). */
 export function everyMove(moves: readonly WishOptimizeMove[]): ReadonlySet<WishId> {
-  if (moves.length === 0) return NOTHING_TICKED;
-  return new Set(moves.map((move) => move.wishId));
+  const ids = moves.filter(canApply).map((move) => move.wishId);
+  return ids.length === 0 ? NOTHING_TICKED : new Set(ids);
 }
 
 /**
@@ -124,6 +145,9 @@ export interface OptimizeSelection {
    *  here. The qualification {@link OptimizeSelection.saved} needs to stay honest — the same
    *  shape as the wishlist header's own `unpriced` note. */
   readonly unpriced: number;
+  /** How many moves a press could make at all — every move less a managed wishlist's
+   *  ({@link canApply}). What `N of M selected` counts against, and what `"all"` means. */
+  readonly applicable: number;
   readonly all: SelectAllState;
 }
 
@@ -133,6 +157,7 @@ const EMPTY_SELECTION: OptimizeSelection = Object.freeze({
   count: 0,
   saved: 0,
   unpriced: 0,
+  applicable: 0,
   all: "none",
 });
 
@@ -156,8 +181,14 @@ export function selectionOf(
   const items: WishOptimizeApplyItem[] = [];
   let saved = 0;
   let unpriced = 0;
+  let applicable = 0;
 
   for (const move of moves) {
+    // **A managed wishlist's move never reaches the payload, ticked or not** — the backend refuses
+    // it, and inside the one transaction that refusal would take every other row down with it.
+    // A tick naming one is ignored the way a tick naming no move is.
+    if (!canApply(move)) continue;
+    applicable += 1;
     if (!ticked.has(move.wishId)) continue;
     // A fresh object rather than anything reachable from the rendered plan: `WishOptimizeApplyItem`
     // is the wire type and its fields are mutable, so sharing one with the row on screen would let
@@ -177,7 +208,8 @@ export function selectionOf(
     count: items.length,
     saved,
     unpriced,
-    all: items.length === 0 ? "none" : items.length === moves.length ? "all" : "some",
+    applicable,
+    all: items.length === 0 ? "none" : items.length === applicable ? "all" : "some",
   };
 }
 

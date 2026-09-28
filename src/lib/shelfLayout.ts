@@ -53,7 +53,12 @@ export const SHELF_EMPTY_HEIGHT = 108; // 96 + 12 gap
 export const SHELF_STICKY_HEIGHT = 36;
 /** Indent per level, and where a level's 1px rail sits inside it — one pair for every wall (grid and tables). */
 export const SHELF_INDENT_PX = 32;
-export const SHELF_RAIL_OFFSET_PX = 11;
+/**
+ * Under the parent heading's chevron, at its centre: the heading's 1px border, its `px-1`, and
+ * half of `SHELF_CHEVRON`'s 32px — `1 + 4 + 16`. It read 11 until issue #599, which was 6px left
+ * of the old 24px chevron's centre and would have been 10px left of the 32px one.
+ */
+export const SHELF_RAIL_OFFSET_PX = 21;
 
 type TileRow = Extract<LayoutRow, { kind: "tiles" }>;
 
@@ -77,12 +82,14 @@ function holdsNext(sections: readonly ShelfSection[], index: number): boolean {
  * - Each shelf's **heading** — except the headless shelf, whose folder the path row names.
  * - Its **tiles**, `columns` to a row, from that shelf only; the last row may be short.
  * - An **empty** row for an open shelf with no cards and nothing drawn inside it — a reader's
- *   folder, where it is the dashed drop box, or a deck's **managed** wishlist folder, where it is
- *   the box that says the folder's mode sentence (live-pass FAIL 13, 2026-09-26: the grid drew
- *   nothing there while the table said it). **The row is a place, not a target**: what it draws,
- *   and whether it takes a drop, is the page's `renderEmpty` — a managed folder is app-owned and
- *   takes none. A container whose cards are all in its subfolders gets no box, and neither does
- *   Not sorted, a deck group or Recently removed.
+ *   folder or Not sorted, where it is the dashed drop box, or a deck's **managed** wishlist
+ *   folder, where it is the box that says the folder's mode sentence (live-pass FAIL 13,
+ *   2026-09-26: the grid drew nothing there while the table said it). **The row is a place, not a
+ *   target**: what it draws, and whether it takes a drop, is the page's `renderEmpty` — a managed
+ *   folder is app-owned and takes none. A container whose cards are all in its subfolders gets no
+ *   box, and neither does a deck group or Recently removed. Not sorted joined the reader's folders
+ *   with issue #597, when `visibleShelves` stopped hiding it empty: a bare open heading over the
+ *   next one reads as a shelf that failed to load, and the box is what says "drop cards here".
  * - A **collapsed** shelf is its heading alone. Its `tileCount` is ignored, because its cards are
  *   never fetched; it still gets a `tileStart`, at the running index, so every section has one.
  *
@@ -113,7 +120,7 @@ export function layoutShelves(sections: readonly ShelfSection[], columns: number
     }
     if (
       count === 0 &&
-      (shelf.kind === "folder" || shelf.kind === "managed") &&
+      (shelf.kind === "folder" || shelf.kind === "unfiled" || shelf.kind === "managed") &&
       !holdsNext(sections, index)
     ) {
       rows.push({ kind: "empty", shelf });

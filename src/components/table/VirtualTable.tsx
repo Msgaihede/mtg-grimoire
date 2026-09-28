@@ -4,6 +4,7 @@ import {
   useLayoutEffect,
   useMemo,
   useRef,
+  useState,
   useSyncExternalStore,
   type CSSProperties,
   type ReactNode,
@@ -63,11 +64,42 @@ const TABBABLE =
   'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), ' +
   'textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
-/** A row's first control: the row itself when it is a stop (a data row), else its first. */
+/** A row's first control: the row itself when it is a stop (a data row), else its first. A data
+ *  row off the roving stop is `tabIndex={-1}` and still counts: focusing it makes it the stop. */
 function firstControlOf(row: Element | null | undefined): HTMLElement | null {
   if (!row) return null;
-  return row.matches(TABBABLE) ? (row as HTMLElement) : row.querySelector<HTMLElement>(TABBABLE);
+  return row.matches(`${TABBABLE}, [role="row"][tabindex]`)
+    ? (row as HTMLElement)
+    : row.querySelector<HTMLElement>(TABBABLE);
 }
+
+/**
+ * A heading rather than a data row: one of this table's own bands (`data-band`), or a row a
+ * caller drew as one through `renderRow` — a single cell spanning every column, which is the
+ * shape the deck's table gives its piles. Read off the element because the second kind is the
+ * caller's decision and the table never sees it; the arrow keys and the roving stop skip both.
+ */
+function isHeadingRow(row: Element): boolean {
+  if (row.hasAttribute("data-band")) return true;
+  for (const cell of row.children) {
+    if (cell.getAttribute("role") === "cell" && cell.hasAttribute("aria-colspan")) return true;
+  }
+  return false;
+}
+
+/** The drawn row elements of a rowgroup, by their index in `rows` (`aria-rowindex` − 2). */
+function drawnRows(group: HTMLElement): Map<number, HTMLElement> {
+  const byIndex = new Map<number, HTMLElement>();
+  for (const child of group.children) {
+    if (child.getAttribute("role") !== "row") continue;
+    const index = Number(child.getAttribute("aria-rowindex")) - 2;
+    if (Number.isInteger(index) && index >= 0) byIndex.set(index, child as HTMLElement);
+  }
+  return byIndex;
+}
+
+/** The keys a focused row answers under the roving stop (issue #558). */
+const ROW_NAV_KEYS = new Set(["ArrowDown", "ArrowUp", "Home", "End", "PageDown", "PageUp"]);
 
 /**
  * **The table's own keyboard focus, drawn on the table's frame**: the box with the border and
@@ -149,6 +181,9 @@ interface LaidOutRow {
 export interface RowRenderProps {
   role: "row";
   "aria-rowindex": number;
+  /** `0` on the one roving stop and `-1` on every other row while rows activate (issue #558);
+   *  absent without `onActivate` or `rove`. A caller that overrides it opts that row out of the
+   *  roving. */
   tabIndex?: number;
   /** Takes the event since issue #214 — a caller reads the chords off it to tell "open this row"
    *  from "add it to the picked set". */
@@ -196,6 +231,7 @@ export function VirtualTable<Row>({
   extraHeight,
   grow = false,
   onActivate,
+  rove = false,
   isSelected,
   rowClassName,
   renderRow,
@@ -258,8 +294,19 @@ export function VirtualTable<Row>({
    * that Ctrl and Shift can mean "add this row to the picked set" rather than "open it". Both
    * kinds of activation carry the four modifier booleans, so the keyboard path is not a second
    * case. A caller with no use for it takes one argument and is unchanged.
+   *
+   * **It also makes the rows one roving tab stop** (issue #558): one row is `tabIndex={0}`, the
+   * rest `-1`, and the arrow keys, Home, End and Page Up/Down move between them — so Tab crosses
+   * the table in one press rather than once per loaded row. Without it rows are no stop at all.
    */
   onActivate?: (row: Row, event: React.MouseEvent | React.KeyboardEvent) => void;
+  /**
+   * The roving tab stop without `onActivate`, for a caller whose rows activate **per row** and
+   * so cannot pass the table's all-or-nothing callback — the wishlist, where an any-printing wish
+   * opens nothing. The caller handles the press itself and spreads the `tabIndex` it is handed
+   * rather than writing its own, or every row is a stop again (issue #558).
+   */
+  rove?: boolean;
   isSelected?: (row: Row) => boolean;
   rowClassName?: (row: Row) => string | undefined;
   /**
@@ -557,6 +604,150 @@ export function VirtualTable<Row>({
     ? rows.map((_row, index) => ({ index, key: index, item: null }))
     : virtualRows.map((v) => ({ index: v.index, key: v.key, item: v }));
 
+  // **The roving tab stop** (issue #558). Every activatable row used to be `tabIndex={0}`, so Tab
+  // walked the whole loaded result set. Now one data row is the stop and the arrows move it.
+  // `rover` is the row the caret was last on, by index, written by the rowgroup's one focus
+  // listener. The virtualiser can unmount that row, and a stop that is not drawn is no stop, so
+  // the *effective* stop falls back when it is gone: the open pane's row (`isSelected`) if it
+  // is in view, since Tab should come back to where the reader is, else the first data row in
+  // view. "In view" rather than merely drawn, because the overscan draws ten rows above the
+  // scrollport and focusing one of those would scroll the list. An index past a shrunk `rows`
+  // is never laid out, so it falls back the same way.
+  const rowGroupRef = useRef<HTMLDivElement>(null);
+  const [rover, setRover] = useState<number | null>(null);
+  const roving = onActivate !== undefined || rove;
+  let stop: number | null = null;
+  if (roving) {
+    const isData = (i: number) => !bandAt?.[i] && rows[i] !== undefined;
+    if (rover !== null && isData(rover) && laidOut.some((r) => r.index === rover)) {
+      stop = rover;
+    } else {
+      // The top of the view is the header's bottom edge (and the bar's), not the scroller's:
+      // `range.startIndex` is the row at the scroller's top, already behind the sticky chrome.
+      const range = grow ? null : virtualizer.range;
+      const top =
+        range &&
+        (virtualizer.getVirtualItemForOffset((virtualizer.scrollOffset ?? 0) + topCover)?.index ??
+          range.startIndex);
+      const inView =
+        range && top !== null
+          ? laidOut.filter((r) => r.index >= top && r.index <= range.endIndex)
+          : laidOut;
+      const candidates = (inView.length > 0 ? inView : laidOut).filter((r) => isData(r.index));
+      const selected = isSelected && candidates.find((r) => isSelected(rows[r.index]));
+      stop = (selected || candidates[0])?.index ?? null;
+    }
+  }
+
+  // A caller can draw a data row as a heading of its own (the deck's piles, through
+  // `renderRow`), which the table only learns from the DOM. If the stop landed on one, the stop
+  // moves to the first drawn data row instead, so the rows always keep exactly one way in.
+  useLayoutEffect(() => {
+    const group = rowGroupRef.current;
+    if (stop === null || !group) return;
+    const drawn = drawnRows(group);
+    const at = drawn.get(stop);
+    if (!at || !isHeadingRow(at)) return;
+    for (const [index, el] of [...drawn].sort(([a], [b]) => a - b)) {
+      if (!isHeadingRow(el)) {
+        setRover(index);
+        return;
+      }
+    }
+  }, [stop, rows]);
+
+  // An arrow's target is not always drawn: a long move (End, Page Down) scrolls first and the
+  // row mounts a render later. This is where it waits, and the effect below focuses it once the
+  // virtualiser's window changes to include it — `CardGrid`'s `pendingIndex`, table-sized.
+  const pendingFocus = useRef<number | null>(null);
+  useEffect(() => {
+    const index = pendingFocus.current;
+    const group = rowGroupRef.current;
+    if (index === null || !group) return;
+    // A caret the reader has since put somewhere else is theirs; `<body>` is what the row the
+    // press came from leaves behind when the scroll unmounts it, so that one still waits.
+    const active = document.activeElement;
+    if (active && active !== document.body && !scrollRef.current?.contains(active)) {
+      pendingFocus.current = null;
+      return;
+    }
+    const el = drawnRows(group).get(index);
+    if (!el) return;
+    pendingFocus.current = null;
+    el.focus({ preventScroll: true });
+  }, [virtualRows]);
+
+  /** Scroll a row into view through the virtualiser (or the page, under `grow`) and focus it. */
+  const moveCaretTo = (index: number, drawn: Map<number, HTMLElement>) => {
+    const el = drawn.get(index);
+    if (grow) {
+      el?.focus({ preventScroll: true });
+      // jsdom leaves `scrollIntoView` undefined, hence the optional call.
+      el?.scrollIntoView?.({ block: "nearest" });
+      return;
+    }
+    // `revealIndex`'s guard: move nothing when the row is already clear of both edges.
+    const target = virtualizer.getOffsetForIndex(index, "auto");
+    if (target && target[1] !== "auto" && target[0] !== virtualizer.scrollOffset) {
+      virtualizer.scrollToIndex(index, { align: "auto" });
+    }
+    if (el) el.focus({ preventScroll: true });
+    else pendingFocus.current = index;
+  };
+
+  // The rowgroup's two listeners, one each rather than a closure per row.
+  const onRowGroupFocus = (e: React.FocusEvent<HTMLDivElement>) => {
+    if (!roving) return;
+    // A caret on a control inside a row moves the stop to that row too.
+    const row = (e.target as Element).closest('[role="row"]');
+    if (!row || row.parentElement !== e.currentTarget || isHeadingRow(row)) return;
+    const index = Number(row.getAttribute("aria-rowindex")) - 2;
+    if (Number.isInteger(index) && index >= 0) setRover(index);
+  };
+  const onRowGroupKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!roving || !ROW_NAV_KEYS.has(e.key) || e.defaultPrevented) return;
+    // Shift is refused with the rest: Shift+arrow is the range-selection chord everywhere else
+    // (`lib/multiSelect.ts`), and moving the caret under it would claim the chord for nothing.
+    if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) return;
+    // Only the row itself: a control inside one (a stepper, a menu button) keeps its own keys.
+    const row = e.target as HTMLElement;
+    if (row.parentElement !== e.currentTarget || row.getAttribute("role") !== "row") return;
+    const from = Number(row.getAttribute("aria-rowindex")) - 2;
+    if (!Number.isInteger(from)) return;
+    // The browser's own scroll keys would move the scroller under the caret as well.
+    e.preventDefault();
+    const drawn = drawnRows(e.currentTarget);
+    /** The next data row from `start` (exclusive) in `dir`, skipping headings of both kinds. */
+    const next = (start: number, dir: 1 | -1): number | null => {
+      for (let i = start + dir; i >= 0 && i < rows.length; i += dir) {
+        if (bandAt?.[i]) continue;
+        const el = drawn.get(i);
+        if (el && isHeadingRow(el)) continue;
+        return i;
+      }
+      return null;
+    };
+    // Roughly a scrollport of rows: the virtualiser's own visible range, or the window's
+    // height under `grow`, where the page scrolls.
+    const range = grow ? null : virtualizer.range;
+    const page = Math.max(
+      1,
+      range
+        ? range.endIndex - range.startIndex
+        : Math.floor(document.documentElement.clientHeight / TABLE_ROW_HEIGHT),
+    );
+    const last = rows.length - 1;
+    let target: number | null;
+    if (e.key === "ArrowDown") target = next(from, 1);
+    else if (e.key === "ArrowUp") target = next(from, -1);
+    else if (e.key === "Home") target = next(-1, 1);
+    else if (e.key === "End") target = next(rows.length, -1);
+    else if (e.key === "PageDown") {
+      target = next(Math.min(from + page, last) - 1, 1) ?? next(rows.length, -1);
+    } else target = next(Math.max(from - page, 0) + 1, -1) ?? next(-1, 1);
+    if (target !== null && target !== from) moveCaretTo(target, drawn);
+  };
+
   // The table. **It is the scroller too, except while a sticky band is live**. Then a `div`
   // around it scrolls instead (below), because the bar is not something a table may own.
   // What makes it a *table* (the role, the name, the count) stays here in both shapes. What
@@ -671,8 +862,11 @@ export function VirtualTable<Row>({
           normal flow: there is no scrollbar to hold open, and nothing absolute for this box to
           be the containing block of. A fixed height there would be the letterbox again. */}
       <div
+        ref={rowGroupRef}
         role="rowgroup"
         style={grow ? undefined : { height: virtualizer.getTotalSize(), position: "relative" }}
+        onFocus={onRowGroupFocus}
+        onKeyDown={onRowGroupKeyDown}
       >
         {laidOut.map(({ index, key, item }) => {
           const row = rows[index];
@@ -726,7 +920,8 @@ export function VirtualTable<Row>({
           const props: RowRenderProps = {
             role: "row",
             "aria-rowindex": index + 2,
-            tabIndex: onActivate ? 0 : undefined,
+            // One stop for all the rows; see `stop` above (issue #558).
+            tabIndex: roving ? (index === stop ? 0 : -1) : undefined,
             onClick: onActivate ? (e) => onActivate(row, e) : undefined,
             onKeyDown: onActivate
               ? (e) => {

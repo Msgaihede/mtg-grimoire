@@ -49,7 +49,7 @@ drill-down: the list query asks for that folder's *direct* members and nothing b
 | 3 | Cards in no folder come **first**, under a heading reading **Not sorted** | last, after the folders |
 | 4 | While any search or filter is active, **collapse is ignored**: every shelf with a match is open, shelves with none are hidden, headings read "3 of 42" | respecting collapse and showing a match count on the shut heading |
 | 5 | Collapse is remembered **on this device only**, per window | a synced column on the folder row |
-| 6 | **Clicking a folder's title opens it**; there is no Open button | a separate Open button on every heading |
+| 6 | **Clicking a folder's title opens it**; there is no Open button — *reversed 2026-09-28 by issue #599: the title folds the shelf and a `→` at the row's far right opens it* | a separate Open button on every heading |
 | 7 | **Add folder** and **Rename** are buttons on every heading of the reader's own folders; **Add folder** is also on the path row, for the level you stand on | Add folder behind a hover control, Rename in the ⋯ menu |
 | 8 | **Expand all** and **Collapse all** sit on the path row | Collapse all only |
 | 9 | Folders are **reordered by dragging their heading**, and every shelf folds to its heading for the length of that drag | leaving the page unchanged and auto-scrolling |

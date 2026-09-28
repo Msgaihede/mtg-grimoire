@@ -97,9 +97,14 @@ export function QuantityStepper({
    * **Off everywhere else, and it has to be.** Every other surface draws this inside a *row* of
    * controls — a deck line, a wall tile, a card's right margin — where the stepper is one item
    * among several and an `inline-flex` sized to its own three boxes is what keeps it from
-   * elbowing the rest of the row. The card modal's controls column is the one place it is a
+   * elbowing the rest of the row. The card modal's controls column is one place it is a
    * **row of its own**, in a stack where every other control fills the column, and there an
    * intrinsically-sized stepper reads as a stray fragment against four full-width boxes.
+   *
+   * **The deck editor's Tokens & Emblems tile is the other** (issue #615, 2026-09-28): there the
+   * row is the stepper and one icon button under a card, and the reader asked for it to span the
+   * card rather than sit in its left third. The caller wraps it in a `min-w-0 flex-1` box, since a
+   * `w-full` span beside a fixed button has to be told it may shrink.
    *
    * The buttons keep their square geometry at every size — they are touch targets, and a `+`
    * stretched to 120px is a worse control, not a bigger one. Only the number grows.

@@ -98,6 +98,7 @@ const DECK: DeckRow = {
   theoryMarkName: true,
   theoryMarkUnplanned: true,
   managedWishlist: "off",
+  managedWishlistTokens: false,
   // How the editor was last read, written by `deckSetViewState` alone — `rememberView` below is
   // the only mutation here that touches them, and the only one that does not invalidate.
   lastVariant: "live",

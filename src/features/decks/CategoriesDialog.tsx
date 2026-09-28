@@ -72,7 +72,7 @@ import {
   CONFIRM_CANCEL,
   CONFIRM_DESTRUCTIVE,
   META_FIELD,
-  META_SUBMIT,
+  META_SUBMIT_TYPED,
   RenameField,
   RowAction,
   sectionFailure,
@@ -208,7 +208,7 @@ function CategoriesBody({ deckId, variant }: { deckId: number; variant: DeckVari
   const add = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();
-    if (!trimmed) return;
+    if (!trimmed || meta.createCategory.isPending) return;
     meta.createCategory.mutate(trimmed, { onSuccess: () => setName("") });
   };
 
@@ -279,8 +279,8 @@ function CategoriesBody({ deckId, variant }: { deckId: number; variant: DeckVari
         />
         <button
           type="submit"
-          disabled={meta.createCategory.isPending || name.trim() === ""}
-          className={META_SUBMIT}
+          aria-disabled={meta.createCategory.isPending || name.trim() === ""}
+          className={META_SUBMIT_TYPED}
         >
           Add
         </button>

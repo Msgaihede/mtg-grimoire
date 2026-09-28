@@ -454,7 +454,11 @@ describe("labels", () => {
 
     await user.type(screen.getByLabelText("New label name"), "budget SWAP");
 
-    expect(screen.getByRole("button", { name: "Add label" })).toBeDisabled();
+    // `aria-disabled`, never the attribute (#558): it greys as the reader types and stays a stop.
+    expect(screen.getByRole("button", { name: "Add label" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
     expect(screen.getByRole("status")).toHaveTextContent(
       "“Budget swap” already exists. Label names must be unique across all decks.",
     );

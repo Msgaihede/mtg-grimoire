@@ -2024,8 +2024,15 @@ the only shelf that is not a folder. The button is **Add folder**, never "New fo
 
 `buildShelves` (`src/lib/shelves.ts`) decides the whole order, and it is TypeScript's:
 
-- **At the root, Not sorted comes first**, and is drawn only once the counts say it holds
-  something (`visibleShelves`). **Then the reader's folders, depth-first** — a shelf
+- **At the root, Not sorted comes first, and it is drawn empty too** (`visibleShelves`, issue
+  #597, 2026-09-28). The spec drew it only once the counts said it held something, and that made
+  it vanish exactly when a reader had filed everything — the moment its heading was the only drop
+  target that files a card back to the root, which is #283's one-way drawer come back with the
+  shelves. **The one exception is a wall with no other shelf on it** — no folder of any kind, so
+  nowhere a card could be dragged *from*; there an empty Not sorted would be the whole wall, and
+  the page's own empty sentence stands instead. That cannot arise on this page, since `Recently
+  removed` always exists; it is the wishlist's first run. A filter still hides it with no match,
+  like any shelf. **Then the reader's folders, depth-first** — a shelf
   before its subfolders' shelves, siblings in `buildFolderTree`'s `sortOrder, name, id`. **Then, at
   the root only, the app's own under a `Decks` label**: every deck group by name, then `Recently
   removed`.
@@ -2050,10 +2057,12 @@ the only shelf that is not a folder. The button is **Add folder**, never "New fo
 - **Indentation stops at three levels** (`MAX_SHELF_INDENT`); a deeper heading keeps the
   third level's indent and names its path from the ancestor on the cap. `SHELF_INDENT_PX` is 32 per
   level on the grid and the table alike (`SHELF_INDENT_PX`, `src/lib/shelfLayout.ts`).
-- **An empty folder is a heading over a dashed drop box, and only a reader's folder with nothing
-  drawn inside it gets one** (`layoutShelves`). A folder whose cards are
-  all in its subfolders draws its heading and no box; Not sorted, a deck group and `Recently
-  removed` never draw one.
+- **An empty folder is a heading over a dashed drop box, and only a reader's folder or Not sorted
+  with nothing drawn inside it gets one** (`layoutShelves`). A folder whose cards are
+  all in its subfolders draws its heading and no box; a deck group and `Recently removed` never
+  draw one. Not sorted's box files at the root, as its heading does, and it joined with issue #597:
+  an open heading with nothing under it reads as a shelf that failed to load, and the box is what
+  says a card can be dropped there.
 
 **The path row** is the breadcrumb on the left and `ShelfToolbar` on the right — **Add folder**,
 **Expand all**, **Collapse all** — with Add folder gated by
@@ -2061,13 +2070,32 @@ the only shelf that is not a folder. The button is **Add folder**, never "New fo
 all and Collapse all reach every shelf below the level, app-owned ones included, and skip the
 headless one, which has no chevron to reopen it with (`foldAll` in
 `collectionShelfModel.ts`). **A reader's-folder heading carries Add folder, Rename and `⋯`;
-a deck group or `Recently removed` heading carries its chevron, its title and its figures and
-nothing a press could be refused for**, because every folder write refuses those two kinds in words
+a deck group or `Recently removed` heading carries its chevron, its title, its figures and its
+`→` and nothing a press could be refused for**, because every folder write refuses those two kinds in words
 (`headingFor` in `CollectionPage.tsx`). Not sorted has a chevron and plain text. Add folder
 draws a heading whose name is the naming field, last among its siblings, under the id
 `NEW_FOLDER_SHELF` (`-1`, `collectionShelfModel.ts`), which never reaches the wire. The field is
 `FolderNameField` at `size="heading"`: a 36px frame inside the 40px row, with ✓ and ✕ on the
-row's centre line. **A create clears any fold stored under the id it answers** (the final
+row's centre line.
+
+**A heading's name folds its shelf, and the way into the folder is a `→` at the row's far right**
+(issue #599, 2026-09-28), which reverses the spec's decision 6 (*clicking a folder's title opens
+it; there is no Open button*). Readers aimed at the name to fold a shelf and were walked into the
+folder instead, and the 24px chevron beside it was the smaller target of the two. So the name is
+a second fold control — `aria-expanded`, refused with the chevron's `aria-disabled` and
+`FOLD_PAUSED_REASON` while a filter is on, but never dimmed, since greying every name under every
+filter costs the wall its legibility — and hovering it lights the chevron (a named `group/shelf` on
+the row, `group-has-[[data-shelf-title]:hover]` on the chevron), so the reader sees they are one
+control. **Open** is a ghost `SHELF_ICON_BUTTON`, named `Open <folder>` with the tooltip *Open
+folder*, drawn on every heading but Not sorted's — deck groups, `Recently removed` and managed
+wishlist folders included — and **last in the row, after the `⋯`**, so it stands in one column
+whether or not a heading carries Add folder, Rename and a menu. **The lead segments of a heading
+past the indent cap still open their ancestors**: they are a path rather than this shelf, and are
+underlined on hover as links where the name is not. **The chevron went from 24px to 32px** around a
+20px glyph — the most the 38px content box holds with a pixel either side — and
+`SHELF_RAIL_OFFSET_PX` moved from 11 to **21** with it (`1 + 4 + 16`: the row's border, its `px-1`
+and half the chevron). 11 had been written as *under the parent chevron's centre* and was 6px left
+of the 24px one's; it would have been 10px left of the new one. **A create clears any fold stored under the id it answers** (the final
 review's R-M2): `collection_folders.id` is `INTEGER PRIMARY KEY` without `AUTOINCREMENT`, so a new
 folder can be handed a deleted folder's id, and would otherwise open shut, or open, the way the
 deleted one was left. A create whose id has nothing stored writes nothing to the folds.

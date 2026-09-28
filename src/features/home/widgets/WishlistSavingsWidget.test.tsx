@@ -6,9 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type {
   HomeWidget,
+  OptimizePlanQuery,
   OptimizePrinting,
+  WishlistFolder,
   WishlistOptimizePlan,
-  WishlistQuery,
   WishOptimizeMove,
 } from "@/lib/ipc";
 
@@ -18,14 +19,16 @@ import type {
  * and the re-issue a marketplace switch causes, which is also where the question itself is pinned.
  */
 const wishlistOptimizePlan = vi.hoisted(() =>
-  vi.fn<(query: WishlistQuery) => Promise<WishlistOptimizePlan>>(),
+  vi.fn<(query: OptimizePlanQuery) => Promise<WishlistOptimizePlan>>(),
 );
+/** The folders a `Chosen` card expands its picks against — read only under `Chosen`. */
+const wishlistFolderList = vi.hoisted(() => vi.fn<() => Promise<WishlistFolder[]>>());
 vi.mock("@/lib/ipc", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ipc")>();
-  return { ...actual, ipc: { ...actual.ipc, wishlistOptimizePlan } };
+  return { ...actual, ipc: { ...actual.ipc, wishlistOptimizePlan, wishlistFolderList } };
 });
 
-import { wholeWishlistQuery } from "@/features/wishlist/wholeWishlistQuery";
+import { wholeWishlistQuery, type SweepScope } from "@/features/wishlist/wholeWishlistQuery";
 import { DEFAULT_MARKETPLACE, MARKETPLACES, type MarketplaceId } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
@@ -43,15 +46,19 @@ import type { Density } from "../widgetSettings";
 import { wishlistSavingsKey } from "../keys";
 import {
   ALL_CHEAPEST,
+  CHOSEN_GONE,
   cutFooter,
   moveCaption,
   NO_WISHES,
+  NOTHING_CHOSEN,
+  sweepScopeOf,
   skippedFooter,
   skippedOnly,
   splitSavings,
   unpricedFooter,
   unpricedOnly,
   WishlistSavingsWidget,
+  WishlistSavingsWidgetSettings,
 } from "./WishlistSavingsWidget";
 
 function printingOf(over: Partial<OptimizePrinting> & { cardId: string }): OptimizePrinting {
@@ -68,6 +75,7 @@ function move(over: Partial<WishOptimizeMove> & { wishId: number; name: string }
     to: printingOf({ cardId: `to-${over.wishId}`, price: 21.6 }),
     savedPerCopy: 18.4,
     saved: 18.4,
+    managed: false,
     ...over,
   };
 }
@@ -84,9 +92,13 @@ function plan(
  * `WishlistQuery` requires and the command ignores — `useWishlistOptimize`'s own spelling, so the
  * widget and the dialog it opens put one question under one key.
  */
-function payloadAt(marketplace: MarketplaceId): WishlistQuery {
-  return { ...wholeWishlistQuery(marketplace), limit: 0, offset: 0 };
+function payloadAt(marketplace: MarketplaceId, scope: SweepScope = DEFAULT_SCOPE): OptimizePlanQuery {
+  return { ...wholeWishlistQuery(marketplace, scope), limit: 0, offset: 0 };
 }
+
+/** What a card nobody has configured asks: every wishlist, the decks' managed ones included —
+ *  they are still wishlists (issue #598). */
+const DEFAULT_SCOPE: SweepScope = { includeManaged: true, shelves: null };
 
 const BOLT = move({ wishId: 1, name: "Lightning Bolt" });
 const RING = move({
@@ -107,9 +119,21 @@ const FROG = move({
   saved: null,
 });
 
-function widget(): HomeWidget {
-  return { id: "wishlistSavings", kind: "wishlistSavings", x: 0, y: 0, w: 3, h: 3, config: null };
+function widget(config: unknown = null): HomeWidget {
+  return { id: "wishlistSavings", kind: "wishlistSavings", x: 0, y: 0, w: 3, h: 3, config };
 }
+
+function folder(over: Partial<WishlistFolder> & { id: number; name: string }): WishlistFolder {
+  return { parentId: null, sortOrder: over.id, managedDeckId: null, managedTokens: false, ...over };
+}
+
+/** A reader's own drawer with one inside it, and a deck's managed wishlist with its Tokens child. */
+const FOLDERS: WishlistFolder[] = [
+  folder({ id: 1, name: "Commander" }),
+  folder({ id: 2, name: "Upgrades", parentId: 1 }),
+  folder({ id: 5, name: "Burn", managedDeckId: 9 }),
+  folder({ id: 6, name: "Tokens", parentId: 5, managedDeckId: 9, managedTokens: true }),
+];
 
 function fitFor(w: number, h: number, cell = 104, density: Density = "comfortable"): WidgetFit {
   return makeFit({ w, h, widthPx: spanPx(w, cell), heightPx: spanPx(h, cell), density });
@@ -123,14 +147,18 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-function seed(answer: WishlistOptimizePlan) {
-  qc.setQueryData(wishlistSavingsKey(DEFAULT_MARKETPLACE), answer);
+function seed(answer: WishlistOptimizePlan, scope: SweepScope = DEFAULT_SCOPE) {
+  qc.setQueryData(wishlistSavingsKey(DEFAULT_MARKETPLACE, scope), answer);
 }
 
-function draw({ fit = ROOMY, still = false }: { fit?: WidgetFit; still?: boolean } = {}) {
+function draw({
+  fit = ROOMY,
+  still = false,
+  config = null,
+}: { fit?: WidgetFit; still?: boolean; config?: unknown } = {}) {
   return render(
     <WishlistSavingsWidget
-      widget={widget()}
+      widget={widget(config)}
       fit={fit}
       editing={false}
       still={still}
@@ -142,6 +170,7 @@ function draw({ fit = ROOMY, still = false }: { fit?: WidgetFit; still?: boolean
 
 beforeEach(() => {
   wishlistOptimizePlan.mockReset().mockResolvedValue(plan([]));
+  wishlistFolderList.mockReset().mockResolvedValue(FOLDERS);
   qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   qc.setQueryData(MARKETPLACE_KEY, DEFAULT_MARKETPLACE);
   qc.setQueryData(MARKETPLACE_FEEDS_KEY, []);
@@ -571,9 +600,9 @@ describe("WishlistSavingsWidget", () => {
           writes.push(`view:${view}`);
           real.setActiveView(view);
         },
-        setPendingOptimize: () => {
+        setPendingOptimize: (scope) => {
           writes.push("optimize");
-          real.setPendingOptimize();
+          real.setPendingOptimize(scope);
         },
       });
       return writes;
@@ -590,7 +619,8 @@ describe("WishlistSavingsWidget", () => {
 
       expect(writes).toEqual(["view:wishlist", "optimize"]);
       expect(useAppStore.getState().activeView).toBe("wishlist");
-      expect(useAppStore.getState().pendingOptimize).toBe(true);
+      // The card's own question travels with the press, so the dialog plans what it counted.
+      expect(useAppStore.getState().pendingOptimize).toEqual(DEFAULT_SCOPE);
     });
 
     it("opens the same dialog from the figure", async () => {
@@ -611,6 +641,162 @@ describe("WishlistSavingsWidget", () => {
 
       expect(screen.queryByRole("button")).toBeNull();
       expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+    });
+  });
+});
+
+/**
+ * **Issue #598: the decks' managed wishlists are still wishlists**, and a reader can narrow the
+ * card to the wishlists they choose. Both are the question, so both ride in the key and the press.
+ */
+describe("which wishes it counts", () => {
+  describe("sweepScopeOf", () => {
+    it("counts every wishlist, the managed ones included, on a card nobody has configured", () => {
+      expect(sweepScopeOf(widget(), FOLDERS)).toEqual(DEFAULT_SCOPE);
+    });
+
+    it("leaves the managed wishlists out once the switch is off", () => {
+      expect(sweepScopeOf(widget({ managed: false }), FOLDERS)).toEqual({
+        includeManaged: false,
+        shelves: null,
+      });
+    });
+
+    /** A chosen drawer is the drawer: the plan answers direct members only, so its sub-folders
+     *  are named too — a deck's Tokens child with the deck's folder. */
+    it("expands each chosen folder into every folder inside it, sorted", () => {
+      expect(sweepScopeOf(widget({ scope: "chosen", folderIds: [5, 1] }), FOLDERS)).toEqual({
+        includeManaged: true,
+        shelves: [1, 2, 5, 6],
+      });
+    });
+
+    it("keeps the root and drops a chosen folder that no longer exists", () => {
+      expect(sweepScopeOf(widget({ scope: "chosen", folderIds: [0, 404] }), FOLDERS)).toEqual({
+        includeManaged: true,
+        shelves: [0],
+      });
+    });
+  });
+
+  it("asks the plan with the managed wishlists in scope by default", async () => {
+    wishlistOptimizePlan.mockResolvedValue(plan([BOLT]));
+
+    draw();
+
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    expect(wishlistOptimizePlan).toHaveBeenCalledWith(
+      expect.objectContaining({ includeManaged: true }),
+    );
+    // Every wishlist: no folder is read to answer it.
+    expect(wishlistFolderList).not.toHaveBeenCalled();
+  });
+
+  it("asks without them once the switch is off", async () => {
+    wishlistOptimizePlan.mockResolvedValue(plan([BOLT]));
+
+    draw({ config: { managed: false } });
+
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    expect(wishlistOptimizePlan).toHaveBeenCalledWith(payloadAt(DEFAULT_MARKETPLACE, {
+      includeManaged: false,
+      shelves: null,
+    }));
+    expect(wishlistOptimizePlan.mock.calls[0][0]).not.toHaveProperty("includeManaged");
+  });
+
+  it("asks about the chosen folders and everything inside them", async () => {
+    wishlistOptimizePlan.mockResolvedValue(plan([BOLT]));
+
+    draw({ config: { scope: "chosen", folderIds: [1] } });
+
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    expect(wishlistOptimizePlan).toHaveBeenCalledWith(
+      payloadAt(DEFAULT_MARKETPLACE, { includeManaged: true, shelves: [1, 2] }),
+    );
+  });
+
+  it("says nothing is chosen rather than counting everything", () => {
+    draw({ config: { scope: "chosen", folderIds: [] } });
+
+    expect(screen.getByText(NOTHING_CHOSEN)).toBeInTheDocument();
+    expect(wishlistOptimizePlan).not.toHaveBeenCalled();
+  });
+
+  it("says the chosen wishlists are gone rather than counting everything", async () => {
+    draw({ config: { scope: "chosen", folderIds: [404] } });
+
+    expect(await screen.findByText(CHOSEN_GONE)).toBeInTheDocument();
+    expect(wishlistOptimizePlan).not.toHaveBeenCalled();
+  });
+
+  it("hands the chosen scope to the dialog with the press", async () => {
+    const user = userEvent.setup();
+    const scope: SweepScope = { includeManaged: false, shelves: [1, 2] };
+    seed(plan([BOLT]), scope);
+
+    draw({ config: { scope: "chosen", folderIds: [1], managed: false } });
+    await user.click(await screen.findByRole("button", { name: /^Lightning Bolt · / }));
+
+    expect(useAppStore.getState().pendingOptimize).toEqual(scope);
+  });
+
+  describe("its settings", () => {
+    function settings(config: unknown, onConfig = vi.fn()) {
+      render(<WishlistSavingsWidgetSettings widget={widget(config)} onConfig={onConfig} />, {
+        wrapper,
+      });
+      return onConfig;
+    }
+
+    it("points at the scope row instead of drawing a picker that would do nothing", () => {
+      settings(null);
+
+      expect(screen.queryByRole("button", { name: "Wishlists to count" })).toBeNull();
+      expect(
+        screen.getByText(
+          "Choose Chosen under Which wishlists to pick the wishlists this card counts.",
+        ),
+      ).toBeInTheDocument();
+    });
+
+    /** The tree's own order, the root first, a deck's managed wishlist saying so. */
+    it("offers the root and every folder in the tree's order, the managed ones marked", async () => {
+      const user = userEvent.setup();
+      settings({ scope: "chosen" });
+
+      await user.click(await screen.findByRole("button", { name: "Wishlists to count" }));
+
+      await waitFor(() =>
+        expect(screen.getAllByRole("option").map((el) => el.textContent)).toEqual([
+          expect.stringContaining("Not in a folder"),
+          expect.stringContaining("Commander"),
+          expect.stringContaining("Upgrades"),
+          expect.stringContaining("Burn (managed)"),
+          expect.stringContaining("Burn › Tokens (managed)"),
+        ]),
+      );
+    });
+
+    /** Ticking one would count nothing while the plan leaves them out, so they are not offered. */
+    it("leaves the managed wishlists out of the list while the switch is off", async () => {
+      const user = userEvent.setup();
+      settings({ scope: "chosen", managed: false });
+
+      await user.click(await screen.findByRole("button", { name: "Wishlists to count" }));
+
+      await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
+      expect(screen.queryByRole("option", { name: /managed/ })).toBeNull();
+    });
+
+    it("adds a ticked folder at the end of the chosen set", async () => {
+      const user = userEvent.setup();
+      const onConfig = settings({ scope: "chosen", folderIds: [0] });
+
+      await user.click(await screen.findByRole("button", { name: "Wishlists to count" }));
+      await user.click(await screen.findByRole("option", { name: /Commander/ }));
+
+      await waitFor(() => expect(onConfig).toHaveBeenCalledWith({ folderIds: [0, 1] }));
     });
   });
 });

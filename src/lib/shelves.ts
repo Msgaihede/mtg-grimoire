@@ -242,9 +242,12 @@ export function shelvesToCount(shelves: readonly Shelf[]): number[] {
  * The shelves that get a place on the wall, in order.
  *
  * - **Under a collapsed shelf**: hidden — the fold is what the chevron promised.
- * - **Not sorted with no cards**: hidden (spec §3.1), once `counts` says so. Only the unfiled
- *   shelf goes this way; an empty *folder* is a heading over a dashed box, because it is a thing
- *   the reader made and can drop into.
+ * - **Not sorted with no cards is drawn, like an empty folder** (issue #597, reversing spec §3.1's
+ *   "drawn only when it has cards"). It is the root's drop target — a card let go on it is filed
+ *   in no folder — and a target that vanishes the moment the reader has filed everything leaves
+ *   no way back out of a folder by dragging. **The one exception is a wall with no other shelf
+ *   on it**: with no folder of any kind there is nowhere a card could be dragged *from*, and an
+ *   empty Not sorted would be the whole wall, standing where the page says it has nothing yet.
  * - **While filtering**: a shelf is hidden only when neither it nor anything under it has a
  *   match. A folder whose matches are all in its subfolders keeps its heading as their container
  *   — the review's `Mana base` case — so a match deep inside a folder the reader had collapsed
@@ -266,7 +269,10 @@ export function visibleShelves(
   if (counts === null) return open;
 
   const hasCards = (id: number) => (counts.get(id)?.tiles ?? 0) > 0;
-  if (!filtering) return open.filter((shelf) => shelf.kind !== "unfiled" || hasCards(shelf.id));
+  if (!filtering) {
+    const alone = shelves.every((shelf) => shelf.kind === "unfiled");
+    return open.filter((shelf) => shelf.kind !== "unfiled" || !alone || hasCards(shelf.id));
+  }
 
   // A shelf with a match lights itself and every ancestor between it and the level.
   const lit = new Set<number>();

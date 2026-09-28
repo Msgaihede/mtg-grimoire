@@ -14,9 +14,14 @@ export const SHELF_ICON_BUTTON = cn(
   FOCUS,
 );
 
-/** The collapse chevron: the icon button a size down, the canvas's 24px. */
+/**
+ * The collapse chevron: the icon button a size **up**, 32px around a 20px glyph (issue #599). It
+ * was the canvas's 24px around 16px — a size down — and a reader aiming at it missed. 32px is the
+ * most the heading's 38px content box holds with a pixel either side; `SHELF_RAIL_OFFSET_PX` is
+ * derived from this width, so a change here moves the rails.
+ */
 export const SHELF_CHEVRON = cn(
-  "grid size-6 flex-none place-items-center rounded-md text-dim hover:bg-surface hover:text-text",
+  "grid size-8 flex-none place-items-center rounded-md text-dim hover:bg-surface hover:text-text",
   PRESS,
   FOCUS,
 );

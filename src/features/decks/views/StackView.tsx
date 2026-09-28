@@ -3,7 +3,7 @@
  * built around.
  */
 import { useCallback, useRef, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { GripVertical } from "lucide-react";
+import { EyeOff, GripVertical } from "lucide-react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { keepCaretForCard } from "@/lib/caretWalk";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
@@ -296,6 +296,13 @@ export const STACK_ATTR = "data-deck-stack";
  */
 export const COMMAND_ATTR = "data-deck-command";
 
+/**
+ * How a test — or a live pass — finds a stack the reader hid (issue #618). An attribute for
+ * {@link STACK_ATTR}'s reason: that the cards are not drawn is a layout, and the reader hears it
+ * from the eye's own name, `Show <pile>`, which is the one thing a hidden stack adds.
+ */
+export const HIDDEN_STACK_ATTR = "data-stack-hidden";
+
 export function StackView({
   groups,
   marketplace,
@@ -308,12 +315,23 @@ export function StackView({
   selectedSlot,
   landed,
   tokenPile,
+  hiddenStacks,
+  onShowStack,
   className,
 }: {
   groups: readonly CardGroup[];
   /** Which marketplace every price in this view is quoted from — the heading's total and each
    *  card's own unit price. One value for the whole view, so the two cannot disagree. */
   marketplace: Marketplace;
+  /**
+   * The category ids of the stacks the reader hid (issue #618) — each draws its heading, count
+   * and price, and none of its cards. Absent, or a derived heading, draws every card as ever. An
+   * id no pile carries is ignored, which is what makes a stale stored id harmless.
+   */
+  hiddenStacks?: ReadonlySet<number>;
+  /** The eye on a hidden stack's heading — show its cards again. Without it the eye is not drawn,
+   *  and a hidden stack is shown again from its heading's menu alone. */
+  onShowStack?: (categoryId: number) => void;
   /**
    * Does this deck read the collection at all? `deckKind.ts`'s `tracksCollection(deck)`, `false`
    * for a **virtual** deck (issue #401) — the kind the reader tracks without owning the
@@ -419,12 +437,17 @@ export function StackView({
   // Every group, not just `flow`: the rail is inside this same box, and a pile in it overflows
   // downward exactly as one in the flow does.
   const drawsTokens = hasTokenPile(tokenPile);
+  // A hidden stack draws none of its cards (issue #618), so it has none to open and nothing to
+  // push — it reserves no lift room, and the arrows below walk past it as if it were empty.
+  const isHidden = (group: CardGroup) =>
+    group.categoryId !== null && hiddenStacks?.has(group.categoryId) === true;
   // The token pile is drawn with the deck stack's own parts — a token card is a `DeckCardFace`
   // over a `CardChin`, exactly a deck card's height — so it fans the same way and an open token
   // pushes its tail exactly as far as an open deck card does. A token pile of two or more
   // therefore reserves the same room, and asks nothing of its own.
   const liftRoom =
-    groups.some((group) => group.cards.length > 1) || (drawsTokens && tokenPile.tokens.length > 1)
+    groups.some((group) => group.cards.length > 1 && !isHidden(group)) ||
+    (drawsTokens && tokenPile.tokens.length > 1)
       ? stackLiftRoom(cardZoom)
       : 0;
   // **The split happens before anything is drawn, and it has to.** The flow runs in the reader's
@@ -498,7 +521,13 @@ export function StackView({
   // reader arrowing left off the first flowing pile is asking for the commander and one arrowing
   // right past the last is asking for the Sideboard. Where a pile sits is a layout; what the caret
   // can reach is not.
-  const walk = [...command, ...flow, ...rail];
+  //
+  // **A hidden stack is in the walk with no cards** (issue #618): its cards are not drawn, so an
+  // arrow must not land on one — the walk already steps over an empty pile, and a hidden pile is
+  // one as far as the caret is concerned.
+  const walk = [...command, ...flow, ...rail].map((group) =>
+    isHidden(group) ? { ...group, cards: [] } : group,
+  );
 
   /**
    * **Every selection this view makes, press and arrow alike — and the caret stays on the card.**
@@ -773,6 +802,8 @@ export function StackView({
             landed={landed}
             zoom={cardZoom}
             columnWidth={columnWidth}
+            hiddenStacks={hiddenStacks}
+            onShowStack={onShowStack}
           />
         )}
         {flow.map((group) => (
@@ -791,6 +822,8 @@ export function StackView({
             zoom={cardZoom}
             flowWidth={columnWidth}
             reorderIds={flowIds}
+            hidden={isHidden(group)}
+            onShow={onShowStack}
           />
         ))}
       </div>
@@ -881,6 +914,8 @@ export function StackView({
                 reorderIds={isBeside(item.group) ? besideIds : offIds}
                 tokenSlot={moveTokens === undefined ? undefined : index}
                 onTokenMove={moveTokens === undefined ? undefined : moveTokensTo}
+                hidden={isHidden(item.group)}
+                onShow={onShowStack}
               />
             ),
           )}
@@ -954,6 +989,8 @@ function CommandZone({
   landed,
   zoom,
   columnWidth,
+  hiddenStacks,
+  onShowStack,
 }: {
   /** The active command-zone piles, in `splitRail`'s order — commander, then companion. This box
    *  draws them down the column in the order it is given and sorts nothing, for the rail's
@@ -999,6 +1036,10 @@ function CommandZone({
   /** {@link stackColumnWidth} at that zoom — one column, the same width a flowing pile is given,
    *  because this box occupies one track of the same grid. */
   columnWidth: number;
+  /** Handed through to the piles — see {@link StackView}'s own props. A commander can be hidden
+   *  like any other stack. */
+  hiddenStacks?: ReadonlySet<number>;
+  onShowStack?: (categoryId: number) => void;
 }) {
   const { elementRef, span } = useFlowRowSpan(true);
   // A callback rather than the ref object handed straight to `ref=`: the hook is shared with
@@ -1043,6 +1084,8 @@ function CommandZone({
           selectedSlot={selectedSlot}
           landed={landed}
           zoom={zoom}
+          hidden={group.categoryId !== null && hiddenStacks?.has(group.categoryId) === true}
+          onShow={onShowStack}
         />
       ))}
     </div>
@@ -1072,6 +1115,8 @@ function StackGroup({
   reorderIds,
   tokenSlot,
   onTokenMove,
+  hidden = false,
+  onShow,
 }: {
   group: CardGroup;
   marketplace: Marketplace;
@@ -1126,6 +1171,15 @@ function StackGroup({
   /** Where a token pile let go here goes — the rail's own `moveTokensTo`, a slot in, the stored
    *  index out. Absent with {@link tokenSlot}. */
   onTokenMove?: (slot: number) => void;
+  /**
+   * The reader hid this stack (issue #618): its heading, count and price are drawn and its cards
+   * are not, with an eye at the heading's far end that shows them again. **It is still a drop
+   * target** — a card let go on a hidden stack lands in it, which is the one affordance a stack
+   * the reader is not looking at still owes them — and still reorders and still carries its menu.
+   */
+  hidden?: boolean;
+  /** The eye's press — see {@link StackView}'s `onShowStack`. Absent, the eye is not drawn. */
+  onShow?: (categoryId: number) => void;
 }) {
   const { attach, over, eligible } = useCategoryDrop(group.categoryId, actions?.drop);
   const inFlow = flowWidth !== undefined;
@@ -1207,6 +1261,7 @@ function StackGroup({
           : undefined
       }
       {...(inFlow ? { [STACK_ATTR]: "" } : {})}
+      {...(hidden ? { [HIDDEN_STACK_ATTR]: "" } : {})}
       // **The pile's own menu, on the section rather than on `GroupHeader`** — see
       // `deckGroupMenuProps`, which carries the whole reason: that header is drawn inside
       // `CategoriesDialog`'s scrimmed dialog too, and a menu opened there would paint under the
@@ -1304,10 +1359,21 @@ function StackGroup({
                 />
               ) : undefined
             }
+            trailing={
+              hidden && onShow !== undefined && group.categoryId !== null ? (
+                <ShowStackButton
+                  categoryId={group.categoryId}
+                  name={group.name}
+                  onShow={onShow}
+                />
+              ) : undefined
+            }
           />
         </div>
         {deckGroupRename(group.categoryId, actions)}
-        {group.cards.length === 0 ? (
+        {/* A hidden stack draws its heading and nothing under it — not even "Nothing here yet.",
+            which would be a claim about cards the reader has only asked not to see. */}
+        {hidden ? null : group.cards.length === 0 ? (
           // An empty category is a place as well as a heading — this is where the next card
           // goes, and saying so is what makes the empty column worth drawing.
           <p className="px-1 pb-1 text-xs text-dim">Nothing here yet.</p>
@@ -1344,6 +1410,46 @@ function StackGroup({
         )}
       </div>
     </section>
+  );
+}
+
+/**
+ * The eye at the far end of a hidden stack's heading (issue #618) — **the state, drawn, and the
+ * press that ends it.** `EyeOff` because what it pictures is the stack as it is now, the way the
+ * heading's `PowerOff` chip pictures a switched-off pile; the name says what the press does.
+ *
+ * **A real button with its own name**, where the heading's two chips are marks: this is the one
+ * control a hidden stack adds, so a caret reaches it with Tab and a screen reader hears
+ * `Show Ramp`. The name carries the pile's so a desk with three hidden stacks is three
+ * addressable controls. Its tooltip spells the state as well, which the glyph alone does not.
+ *
+ * The caret the press leaves behind is the editor's to place — the button is gone with it — and
+ * `DeckEditor`'s `showStack` hands it to the pile.
+ */
+function ShowStackButton({
+  categoryId,
+  name,
+  onShow,
+}: {
+  categoryId: number;
+  name: string;
+  onShow: (categoryId: number) => void;
+}) {
+  const tip = useTooltip();
+  return (
+    <button
+      type="button"
+      onClick={() => onShow(categoryId)}
+      aria-label={`Show ${name}`}
+      {...tip("Hidden — press to show its cards")}
+      className={cn(
+        "grid size-4 shrink-0 place-items-center rounded-sm text-text",
+        "transition-colors duration-150 hover:text-accent motion-reduce:transition-none",
+        FOCUS,
+      )}
+    >
+      <EyeOff className="size-3.5" aria-hidden="true" />
+    </button>
   );
 }
 

@@ -41,6 +41,7 @@ import searchRs from "../../src-tauri/src/search.rs?raw";
 import setCompletionRs from "../../src-tauri/src/set_completion.rs?raw";
 import shareRs from "../../src-tauri/src/share/commands.rs?raw";
 import shelffoldsRs from "../../src-tauri/src/shelffolds.rs?raw";
+import stackhideRs from "../../src-tauri/src/stackhide.rs?raw";
 import startupRs from "../../src-tauri/src/startup.rs?raw";
 import startviewRs from "../../src-tauri/src/startview.rs?raw";
 import stickyNotesRs from "../../src-tauri/src/sticky_notes.rs?raw";
@@ -660,6 +661,39 @@ describe("ipc argument names match the Rust command signatures", () => {
       "shelffolds::shelf_folds,",
       "shelffolds::set_shelf_folds,",
     ]) {
+      expect(desktopRs).toContain(registered);
+    }
+  });
+
+  /**
+   * The hidden stacks (issue #618) — the deck's id rides both commands, and the write names the
+   * pile and the state. Tauri maps each camelCase key onto its snake_case parameter, so the Rust
+   * parameter names are read rather than trusted.
+   */
+  it("sends the hidden stacks under the names their commands declare", async () => {
+    expect(stackhideRs.length, "stackhide.rs was not read").toBeGreaterThan(1_000);
+
+    invoke.mockResolvedValue([9, 12]);
+    await expect(ipc.hiddenStacks(4)).resolves.toEqual([9, 12]);
+    expect(invoke).toHaveBeenLastCalledWith("hidden_stacks", { deckId: 4 });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.setStackHidden(4, 12, true);
+    expect(invoke).toHaveBeenLastCalledWith("set_stack_hidden", {
+      deckId: 4,
+      categoryId: 12,
+      hidden: true,
+    });
+
+    const declares = (command: string, param: string) =>
+      expect(stackhideRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+    declares("hidden_stacks", "deck_id");
+    declares("set_stack_hidden", "deck_id");
+    declares("set_stack_hidden", "category_id");
+    declares("set_stack_hidden", "hidden");
+    for (const registered of ["stackhide::hidden_stacks,", "stackhide::set_stack_hidden,"]) {
       expect(desktopRs).toContain(registered);
     }
   });
@@ -3247,9 +3281,13 @@ describe("ipc argument names match the Rust command signatures", () => {
       );
 
     invoke.mockResolvedValue([]);
-    await ipc.deckCompletion("cardkingdom");
-    expect(invoke).toHaveBeenCalledWith("deck_completion", { marketplace: "cardkingdom" });
+    await ipc.deckCompletion("cardkingdom", "theory");
+    expect(invoke).toHaveBeenCalledWith("deck_completion", {
+      marketplace: "cardkingdom",
+      compare: "theory",
+    });
     declares(deckCompletionRs, "deck_completion", "marketplace");
+    declares(deckCompletionRs, "deck_completion", "compare");
 
     invoke.mockResolvedValue(2);
     await ipc.deckReviewCount();
