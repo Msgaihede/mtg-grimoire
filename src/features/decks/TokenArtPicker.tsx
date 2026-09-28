@@ -469,7 +469,7 @@ const DeckTokensWall = memo(function DeckTokensWall({
 
       {distinct.length === 0 ? (
         <p className={cn(STATE_LINE, "text-dim")}>
-          This deck does not create any tokens or emblems.
+          This deck makes no token or emblem to add a printing of.
         </p>
       ) : pending ? (
         <p className={cn(STATE_LINE, "text-dim")}>Reading the printings…</p>
