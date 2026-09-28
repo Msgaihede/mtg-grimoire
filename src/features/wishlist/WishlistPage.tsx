@@ -38,7 +38,7 @@ import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import type { SearchCardDrag } from "@/features/search/searchCardDrag";
 import { FilterBar, StatedFiltersLine, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
-import { count, plural, verb } from "@/lib/counts";
+import { count, plural } from "@/lib/counts";
 import { useDragRecord } from "@/lib/dndTarget";
 import { readFolderDrag, type FolderDrag, type FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
@@ -1566,7 +1566,7 @@ export function WishlistPage() {
             // press that would have worked.
             ...(folders.summaryQuery.data !== undefined &&
             (folders.summary.get(folder.id)?.wishes ?? 0) === 0
-              ? { disabled: true, reason: "Nothing filed directly here" }
+              ? { disabled: true, reason: "No cards directly in this folder" }
               : {}),
             onSelect: () => {
               folders.clear.reset();
@@ -2088,7 +2088,7 @@ export function WishlistPage() {
       ? ipcError(wishlist.countsQuery.error)
       : null;
   // The *latest* write on the screen, not whichever is still holding an error: a refused stepper
-  // press would otherwise leave "Could not change your wishlist" up while the reader went on to
+  // press would otherwise leave "Couldn't change your wishlist" up while the reader went on to
   // remove the row successfully — an alert about something already dealt with. The folder writes
   // are in the list because they are writes this screen makes, and they share the banner because
   // they share the sentence: everything here is a change to the reader's wishlist.
@@ -2221,11 +2221,11 @@ export function WishlistPage() {
               }}
               aria-haspopup="dialog"
               // The visible word is shorter than the accessible name, `ImportExportPair`'s rule
-              // and legally the same trade: `Optimise` is contained in the name beside it (WCAG
-              // 2.5.3), and the name says *what* is being optimised — the dialog it opens carries
-              // a control of its own, and two things called `Optimise` on one screen is a pair a
+              // and legally the same trade: `Optimize` is contained in the name beside it (WCAG
+              // 2.5.3), and the name says *what* is being optimized — the dialog it opens carries
+              // a control of its own, and two things called `Optimize` on one screen is a pair a
               // screen reader can only tell apart by position.
-              aria-label="Optimise wishlist prices"
+              aria-label="Optimize wishlist prices"
               // `ImportExportPair`'s button shape, spelled out rather than shared: that component
               // is a joined *pair* whose hairline is its second button's own border, and this is
               // one control standing beside it. What is shared is the geometry a reader
@@ -2242,13 +2242,13 @@ export function WishlistPage() {
                   Scryfall's two taxonomies, so any of the three would spend a word this app has
                   already given away. */}
               <TrendingDown className="size-4 shrink-0" aria-hidden="true" />
-              Optimise
+              Optimize
             </button>
 
             <ImportExportPair
               onImport={() => setImporting(true)}
               onExport={() => setExporting(true)}
-              importLabel="Import wishes"
+              importLabel="Import to wishlist"
               exportLabel="Export wishlist"
             />
           </div>
@@ -2256,7 +2256,7 @@ export function WishlistPage() {
       >
         {/* **Both figures count the whole wall** (spec §3.6) — this level and every shelf below it,
             shut ones included — summed from the per-shelf counts, never from the rows loaded. */}
-        <Figure label="Wishes" value={totals === null ? "—" : count(totals.wishes)} />
+        <Figure label="Cards" value={totals === null ? "—" : count(totals.wishes)} />
         {/* The one number this view exists for, in the currency the reader picked, with how old
             the prices are and whose. An unpriced wish is left out of the sum and counted in the
             note — never quoted at another marketplace's rate.
@@ -2526,7 +2526,7 @@ export function WishlistPage() {
                   role="alert"
                   className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive"
                 >
-                  Could not change your wishlist — {bannerFailure}
+                  Couldn't change your wishlist — {bannerFailure}
                 </p>
               </motion.div>
             )}
@@ -2835,8 +2835,7 @@ function DeleteFolderConfirm({
       label={`Delete ${name}`}
       question={`Delete “${name}”?`}
       explanation={
-        "Its wishes can move back to your wishlist or be deleted with it; " +
-        "folders inside it are deleted either way."
+        "Its cards can go back to your wishlist or be deleted. Subfolders are always deleted."
       }
       pending={pending}
       onCancel={onCancel}
@@ -2851,7 +2850,7 @@ function DeleteFolderConfirm({
         disabled={pending}
         className={DESTRUCTIVE_ANSWER}
       >
-        Delete folder and wishes
+        Delete folder and cards
       </button>
     </FolderQuestion>
   );
@@ -2891,20 +2890,19 @@ function ClearFolderConfirm({
 }) {
   const direct =
     wishes === null
-      ? "The wishes filed directly in it are removed from your wishlist."
+      ? "Cards in this folder are removed from your wishlist."
       : wishes === 0
         ? // Reachable only when the summary answered after the question opened, since the menu
-          // row greys at zero — but an honest sentence costs one line and "Its 0 wishes … are
+          // row greys at zero — but an honest sentence costs one line and "Its 0 cards will be
           // removed" is not one.
-          "Nothing is filed directly in it."
-        : `Its ${plural(wishes, "wish", "wishes")} filed directly in it ` +
-          `${verb(wishes, "is", "are")} removed from your wishlist.`;
+          "This folder has no cards of its own."
+        : `Its ${plural(wishes, "card")} will be removed from your wishlist.`;
 
   return (
     <FolderQuestion
       label={`Clear ${name}`}
       question={`Clear “${name}”?`}
-      explanation={hasChildren ? `${direct} Folders inside it keep theirs.` : direct}
+      explanation={hasChildren ? `${direct} Subfolders aren't affected.` : direct}
       pending={pending}
       onCancel={onCancel}
       onClose={onClose}
@@ -2944,21 +2942,21 @@ function statusOf(
 
   if (empty) {
     if (failure) return failure;
-    if (pending) return "Reading your wishlist…";
+    if (pending) return "Loading wishlist…";
     // A wall with anything on it — headings, or the empty folder's own box — is the answer to
     // "what is here", and the box already says the folder is empty. `CollectionPage`'s order. That
     // includes a deck's managed folder: `layoutShelves` draws its box too, holding the sentence for
     // the view the deck follows, so the status line never has to say it.
     if (drawn) return "";
     // Something was filtered out rather than never there: a statement about the filters.
-    if (activeCount > 0) return "No wishes match these filters.";
+    if (activeCount > 0) return "No cards match these filters.";
     // Nothing filtered and nothing there. Two statements, and which one is honest depends on
     // where the reader is: "No wishes match" would blame the reader for a list nobody has put
     // anything on yet, and the root's instruction would answer the wrong question inside a
     // folder they have just made.
     return inFolder
-      ? "Nothing filed here yet."
-      : "Nothing on your wishlist yet. Add cards from search with the + on any row or tile.";
+      ? "No cards in this folder yet."
+      : "Your wishlist is empty. Add cards from search with the + button.";
   }
 
   // With wishes on the wall the shelves caption themselves and the header counts them, so the

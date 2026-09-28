@@ -182,11 +182,11 @@ export const Preview: Story = {
     // by a saving nobody quoted.
     const rhystic = canvas.getByRole("checkbox", { name: /^Switch Rhystic Study/ });
     await expect(rhystic).not.toBeChecked();
-    await expect(within(rhystic.closest("li")!).getByText("No saving to count")).toBeVisible();
+    await expect(within(rhystic.closest("li")!).getByText("No savings")).toBeVisible();
 
-    await expect(canvas.getByRole("button", { name: "Switch 2 wishes" })).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Switch 2 cards" })).toBeVisible();
 
-    await userEvent.click(canvas.getByRole("button", { name: "Switch 2 wishes" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Switch 2 cards" }));
     await expect(args.apply.mutate).toHaveBeenCalledWith([
       { wishId: 1, fromCardId: "bolt-lea", toCardId: "bolt-2x2" },
       { wishId: 2, fromCardId: "rag-mh2", toCardId: "rag-jp" },
@@ -210,9 +210,9 @@ export const UntickingARow: Story = {
     await userEvent.click(canvas.getByRole("checkbox", { name: /^Switch Ragavan/ }));
 
     await expect(canvas.getByText("1 of 3 selected")).toBeVisible();
-    await expect(canvas.getByRole("button", { name: "Switch 1 wish" })).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Switch 1 card" })).toBeVisible();
 
-    await userEvent.click(canvas.getByRole("button", { name: "Switch 1 wish" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Switch 1 card" }));
     await expect(args.apply.mutate).toHaveBeenCalledWith([
       { wishId: 1, fromCardId: "bolt-lea", toCardId: "bolt-2x2" },
     ]);
@@ -239,7 +239,7 @@ export const SelectingEverything: Story = {
     await userEvent.click(all);
     await expect(all).toBeChecked();
     await expect(canvas.getByText("3 of 3 selected")).toBeVisible();
-    await expect(canvas.getByRole("button", { name: "Switch 3 wishes" })).toBeVisible();
+    await expect(canvas.getByRole("button", { name: "Switch 3 cards" })).toBeVisible();
   },
 };
 
@@ -289,7 +289,7 @@ export const ManagedWishlist: Story = {
     await expect(canvas.getByText("Ragavan, Nimble Pilferer")).toBeVisible();
     await expect(canvas.queryByRole("checkbox", { name: /Ragavan/ })).toBeNull();
     await expect(
-      canvas.getByText("In a deck's managed wishlist — change the printing in the deck."),
+      canvas.getByText("Managed by a deck. Change the printing in the deck."),
     ).toBeVisible();
     await expect(canvas.getByText("1 of 1 selected")).toBeVisible();
   },
@@ -362,14 +362,14 @@ export const Done: Story = {
     });
     const body = within(bodyOf(canvasElement));
     await expect(
-      body.getByText("Switched 2 wishes to the cheapest printing, saving $46.75."),
+      body.getByText("Switched 2 cards to the cheapest printing, saving $46.75."),
     ).toBeVisible();
     // The merge is the app's documented rule rather than a card going missing, and the skipped
     // row is named rather than counted.
     await expect(
-      body.getByText(/folded into a wish you already had in the same folder/),
+      body.getByText(/merged with an existing entry in the same folder/),
     ).toBeVisible();
-    await expect(body.getByText(/^Rhystic Study — its printing had already changed/)).toBeVisible();
+    await expect(body.getByText(/^Rhystic Study — printing already changed/)).toBeVisible();
     await expect(canvas.getByRole("button", { name: "Done" })).toBeVisible();
   },
 };

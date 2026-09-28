@@ -387,7 +387,7 @@ describe("WishDestination", () => {
     await user.keyboard("Prerelease{Enter}");
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not make the folder — The card database is busy finishing a sync.",
+      "Couldn't create the folder — The card database is busy finishing a sync.",
     );
     expect(onPick).not.toHaveBeenCalled();
     expect(screen.getByRole("button", { name: LABEL })).toHaveTextContent(/^Wishlist$/);

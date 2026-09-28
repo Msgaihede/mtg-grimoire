@@ -82,7 +82,7 @@ describe("managedEmptySentence", () => {
 
   it("keeps the words this page already said for `missing`", () => {
     expect(managedEmptySentence("missing")).toBe(
-      "Nothing missing. The deck includes every card in the plan.",
+      "Nothing missing. The deck includes every card in the theory list.",
     );
   });
 
