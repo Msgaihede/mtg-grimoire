@@ -936,6 +936,23 @@ describe("delivery holds", () => {
     ).toBeInTheDocument();
   });
 
+  it("says a device's clock runs ahead, verbatim, when a pull is held on the clock", async () => {
+    // Issue #546 item 8: a peer's changes stamped more than a day past this device's clock wait
+    // here rather than drag its clock forward for good. The sentence says "catches up" because
+    // fixing the peer's clock does not release what it already stamped.
+    syncRelayStatus.mockResolvedValue({ ...RELAY_ON, pullHeld: "clock" });
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(
+      await screen.findByText(
+        "A device in your group has its clock set more than a day ahead of this one. Its " +
+          "changes wait until this device's clock catches up — check the date and time on both.",
+      ),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/runs a newer version/i)).not.toBeInTheDocument();
+  });
+
   it("says nothing when the hold is only a waiting one", async () => {
     syncRelayStatus.mockResolvedValue({ ...RELAY_ON, pullHeld: "waiting" });
     syncSupporterStatus.mockResolvedValue(SUPPORTING);
