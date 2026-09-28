@@ -79,10 +79,24 @@ const COLLECTION_ROWS: CollectionFolderSummary[] = [
   { folderId: 5, cards: 2, value: null },
 ];
 
-const BUY_SOON: WishlistFolder = { id: 10, parentId: null, name: "Buy soon", sortOrder: 0, managedDeckId: null };
-const STAPLES: WishlistFolder = { id: 11, parentId: 10, name: "Staples", sortOrder: 0, managedDeckId: null };
-const LATER: WishlistFolder = { id: 12, parentId: null, name: "Later", sortOrder: 1, managedDeckId: null };
+const BUY_SOON: WishlistFolder = { id: 10, parentId: null, name: "Buy soon", sortOrder: 0, managedDeckId: null, managedTokens: false };
+const STAPLES: WishlistFolder = { id: 11, parentId: 10, name: "Staples", sortOrder: 0, managedDeckId: null, managedTokens: false };
+const LATER: WishlistFolder = { id: 12, parentId: null, name: "Later", sortOrder: 1, managedDeckId: null, managedTokens: false };
 const WISHES = [BUY_SOON, STAPLES, LATER];
+
+/**
+ * A deck's **managed** wishlist folder at the root and its `Tokens` child inside it (managed tokens
+ * spec §3.8, user schema v55) — the child is `Tokens` on every deck, which is the whole reason the
+ * cases that use these exist. The child's id is the parent's plus one.
+ */
+function deckWishFolders(id: number, name: string, deckId: number): WishlistFolder[] {
+  const base = { sortOrder: 0, managedDeckId: deckId };
+  return [
+    { ...base, id, parentId: null, name, managedTokens: false },
+    { ...base, id: id + 1, parentId: id, name: "Tokens", managedTokens: true },
+  ];
+}
+const TWO_DECKS = [...deckWishFolders(20, "Burn", 3), ...deckWishFolders(22, "Elves", 4)];
 
 const WISHLIST_ROWS: WishlistFolderSummary[] = [
   { folderId: 10, wishes: 1, copies: 1, cost: 5, unpriced: 0 },
@@ -272,6 +286,26 @@ describe("FoldersWidget", () => {
     ]);
   });
 
+  /**
+   * **Two decks' pinned `Tokens` folders are two rows a reader can tell apart** — each named by
+   * the deck folder it sits in, on the row and in its spoken name, the settings picker's own
+   * spelling. Named by itself, each would be a row reading `Tokens`, twice.
+   */
+  it("names a pinned managed Tokens folder by the deck folder it sits in", () => {
+    draw(
+      { cabinets: "wishlist", wishlistFolderIds: [21, 23, 20] },
+      { seed: { wishlist: [...WISHES, ...TWO_DECKS], wishlistRows: [] } },
+    );
+
+    expect(rows()).toEqual([
+      "Burn › Tokens, managed wishlist, 0 wishes",
+      "Elves › Tokens, managed wishlist, 0 wishes",
+      "Burn, managed wishlist, 0 wishes",
+    ]);
+    expect(screen.getByText("Burn › Tokens")).toBeInTheDocument();
+    expect(screen.getByText("Elves › Tokens")).toBeInTheDocument();
+  });
+
   describe("cabinets and captions", () => {
     it("draws only the collection when that is the cabinet chosen", () => {
       draw({ cabinets: "collection" });
@@ -336,6 +370,7 @@ describe("FoldersWidget", () => {
         name: `Wish ${i + 1}`,
         sortOrder: i,
         managedDeckId: null,
+        managedTokens: false,
       }));
 
     /**
@@ -526,6 +561,29 @@ describe("FoldersWidget", () => {
       await user.click(screen.getByRole("option", { name: "Buy soon" }));
 
       expect(onConfig).toHaveBeenCalledWith({ wishlistFolderIds: [12, 10] });
+    });
+
+    /**
+     * **Every deck's managed Tokens child is called `Tokens`** (managed tokens spec §3.8), so a
+     * picker that named folders by their own name drew one identical `Tokens (managed)` row per
+     * deck. Such a folder is named by the deck folder it sits in instead — the path a reader
+     * would say out loud — and the deck folders themselves keep their own label.
+     */
+    it("names a managed Tokens folder by the deck folder it sits in", async () => {
+      const user = userEvent.setup();
+      renderWith(
+        { wishlist: [...WISHES, ...TWO_DECKS] },
+        <FoldersWidgetSettings widget={widget(null)} onConfig={vi.fn()} />,
+      );
+
+      await openDropdown(user, "Wishlist folders");
+
+      expect(screen.getByRole("option", { name: "Burn (managed)" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Burn › Tokens (managed)" })).toBeInTheDocument();
+      expect(screen.getByRole("option", { name: "Elves › Tokens (managed)" })).toBeInTheDocument();
+      expect(screen.queryByRole("option", { name: "Tokens (managed)" })).toBeNull();
+      // A reader's own folder is drawn by its own name, nested or not.
+      expect(screen.getByRole("option", { name: "Staples" })).toBeInTheDocument();
     });
   });
 });

@@ -494,19 +494,20 @@ pub fn run() {
             deck_theory::deck_theory_diff,
             deck_theory::deck_theory_slots,
             deck_theory::deck_theory_missing_to_wishlist,
-            // The tokens and emblems a deck needs, one row per entry, and the five writes over
-            // their entries and states (user schema v52, which retired `deck_token_set`,
-            // `deck_token_clear` and `deck_token_add`). `generate_handler!` names a command after
-            // the **last path segment**, so `deck_tokens::deck_tokens` registers as
-            // `deck_tokens` — the module and the read wear the same name on purpose, because the
-            // wire name is the one `src/lib/ipc.ts` invokes and `deck_tokens_list` would be a
-            // second thing to remember.
+            // The tokens and emblems a deck needs, one row per entry, the four writes over their
+            // entries (user schema v52, which retired `deck_token_set`, `deck_token_clear` and
+            // `deck_token_add`; v55 retired `deck_token_state` and `deck_token_reset` for
+            // `deck_token_remove`), and every token printing in the corpus for Add printing's
+            // All tokens. `generate_handler!` names a command after the **last path segment**, so
+            // `deck_tokens::deck_tokens` registers as `deck_tokens` — the module and the read wear
+            // the same name on purpose, because the wire name is the one `src/lib/ipc.ts` invokes
+            // and `deck_tokens_list` would be a second thing to remember.
             deck_tokens::deck_tokens,
             deck_tokens::deck_token_set_quantity,
             deck_tokens::deck_token_swap,
             deck_tokens::deck_token_add_printing,
-            deck_tokens::deck_token_state,
-            deck_tokens::deck_token_reset,
+            deck_tokens::deck_token_remove,
+            deck_tokens::token_printings,
             // The Notes band's read, its six writes, and the one read that is not deck-scoped at
             // all. `generate_handler!` names a command after the **last path segment** again, so
             // `deck_notes::deck_notes` registers as `deck_notes` — the module and the read wear

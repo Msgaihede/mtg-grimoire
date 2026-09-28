@@ -100,7 +100,7 @@ import type { DeckCard } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { labelColorCss, labelFgCss } from "./labelColors";
-import { THEORY_TIER_NAMES, type TheoryTier } from "./theoryMatch";
+import { THEORY_TIER_NAMES, type TheoryMark, type TheoryTier } from "./theoryMatch";
 
 /**
  * The one label a card wears, as an 8px chip in its own colour with the name one hover away.
@@ -296,9 +296,10 @@ export function QuantityTag({
    * Whether this card is one the format calls a game changer — the crown on the tag, and the
    * clause on the sentence.
    *
-   * **Required, and deliberately not defaulted**, which is {@link TheoryMatchMark.tier}'s argument
-   * one component down: a mark is a thing a reader believes at a glance, so a caller that has not
-   * thought about the fact must not be able to draw a tag quietly saying the card is ordinary.
+   * **Required, and deliberately not defaulted**, which is the argument
+   * {@link TheoryMatchMark.mark} makes about its tier, one component down: a mark is a thing a
+   * reader believes at a glance, so a caller that has not thought about the fact must not be able
+   * to draw a tag quietly saying the card is ordinary.
    * `false` is a claim; an omission is not one, and this is the only mark on a deck's card face
    * that says the fact at all now.
    */
@@ -391,6 +392,20 @@ export const THEORY_MATCH_LABEL = THEORY_TIER_NAMES.exact;
 export const THEORY_MATCH_NAME_LABEL = THEORY_TIER_NAMES.name;
 
 /**
+ * The loose tier said in words **on a deck that asks for any printing** — `Matching printing`
+ * switched off, so every name-tier mark is {@link TheoryMark.anyPrinting} (managed tokens spec
+ * §3.10, 2026-09-27).
+ *
+ * The reader has asked not to be told printings apart, so {@link THEORY_MATCH_NAME_LABEL} would be
+ * telling them the one thing they switched off — over the very printing the plan names, which
+ * falls through to this tier with the switch off. `Match` is the statement that is left: the card
+ * is the planned one. It is **not** one of `THEORY_TIER_NAMES`, because it is not a tier — the
+ * `Matches theory` headings bucket by the plan and keep their three words whatever the switches
+ * say — so it lives here, beside the three constants that *are* those names read out.
+ */
+export const THEORY_MATCH_ANY_LABEL = "Match";
+
+/**
  * The third tier said in words — a live row the plan does not ask for at all (2026-09-08).
  *
  * It carries **no count clause ever**, unlike the other two: there is no order to be short of or
@@ -432,10 +447,23 @@ export const THEORY_UNPLANNED_LABEL = THEORY_TIER_NAMES.unplanned;
  * and the early return is what makes the sentence true of a caller that passes something else —
  * a story, a Storybook control, a future arm that computes a number for a different reason.
  * "No Match · 3 to add" would be a sentence about an order the plan does not carry.
+ *
+ * **It takes the whole mark since 2026-09-27**, when the name tier's word came to depend on the
+ * deck's exact switch as well as on the tier: {@link TheoryMark.anyPrinting} words it
+ * {@link THEORY_MATCH_ANY_LABEL} rather than {@link THEORY_MATCH_NAME_LABEL} (managed tokens spec
+ * §3.10). Three positional arguments would have been a boolean nobody could read at a call site,
+ * and the three callers that say this sentence in words — the card's name, the table's `sr-only`
+ * twin, the token pile's press — already hold the mark `theoryMatchMark` answered, so they hand it
+ * over whole and cannot forget the third half. The count clause is the tier's, after either word.
  */
-export function theoryMatchLabel(tier: TheoryTier, delta: number): string {
+export function theoryMatchLabel({ tier, delta, anyPrinting }: TheoryMark): string {
   if (tier === "unplanned") return THEORY_UNPLANNED_LABEL;
-  const base = tier === "exact" ? THEORY_MATCH_LABEL : THEORY_MATCH_NAME_LABEL;
+  const base =
+    tier === "exact"
+      ? THEORY_MATCH_LABEL
+      : anyPrinting
+        ? THEORY_MATCH_ANY_LABEL
+        : THEORY_MATCH_NAME_LABEL;
   if (delta === 0) return base;
   return delta > 0 ? `${base} · ${delta} to add` : `${base} · ${-delta} to remove`;
 }
@@ -677,42 +705,40 @@ const THEORY_PAINT: Readonly<Record<TheoryTier, { fill: string; fg: string }>> =
  * `sr-only` twin.
  */
 export function TheoryMatchMark({
-  tier,
-  delta = 0,
+  mark,
   className,
 }: {
   /**
-   * Which of the three statements this mark is making — `theoryMatch.ts`'s `TheoryTier`, and the
-   * whole of what decides its colour **and its glyph**.
+   * What the plan says about this row — `theoryMatch.ts`'s `TheoryMark`, **taken whole** since
+   * 2026-09-27, when a third field joined the two this component used to take one prop at a time.
+   * `anyPrinting` changes nothing but the tooltip's word, which is exactly the kind of field a
+   * surface passing props one by one forgets without anything going red; handed the mark, a
+   * caller cannot draw one field and drop another. Its three fields, and what each decides here:
    *
-   * **Required, and deliberately not defaulted.** A default would let a caller that has not
-   * thought about the tier draw the green *this is the printing you planned* over a substitute
-   * printing, which is the exact confusion the tiers exist to remove — and it would do it
-   * silently, on a mark whose whole job is to be believed at a glance. Since 2026-09-08 the same
-   * argument runs the other way too: `unplanned` is the one tier that draws an X, and a default
-   * would be a way of drawing a tick over a card the plan never asked for.
+   * - **`tier`** — which of the three statements this is, and the whole of what decides the colour
+   *   **and the glyph**. It was a required prop that was deliberately not defaulted, and that
+   *   argument now holds for the whole mark: a default would let a caller that has not thought
+   *   about the tier draw the green *this is the printing you planned* over a substitute printing,
+   *   silently, on a mark whose whole job is to be believed at a glance — and, since 2026-09-08,
+   *   would be a way of drawing a tick over a card the plan never asked for, `unplanned` being the
+   *   one tier that draws an X.
+   * - **`delta`** — how many copies the reader has to **add** (positive) or **remove** (negative),
+   *   `0` for the row that matches. It is at the tier's own grain, `theoryMatch.ts`'s rule: an
+   *   `exact` row's number is about that printing and a `name` row's is about the card, so the two
+   *   arrive paired and nothing is recomputed here. **Ignored entirely on the `unplanned` tier**,
+   *   where there is no order to be short of — see the X section above; `theoryMatchMark` answers
+   *   `0` there, and this component does not depend on it having done so.
+   * - **`anyPrinting`** — a name-tier row on a deck with `Matching printing` off, whose tooltip
+   *   says `Match` rather than `Art Mismatch` (managed tokens spec §3.10). **Words only**: the fill,
+   *   the glyph and the attribute are the tier's, untouched.
+   *
+   * A deck with no plan, or a card the plan does not ask for with that tier switched off, is a
+   * `null` mark — drawn as no mark, which is the caller's branch and never this component's.
    */
-  tier: TheoryTier;
-  /**
-   * How many copies the reader has to **add** (positive) or **remove** (negative) for the live
-   * list to meet the plan — `theoryMatch.ts`'s `TheoryMark.delta`, which is `0` for the row that
-   * matches, where the whole mark is `null` for a card the plan does not ask for at all (drawn as
-   * no mark).
-   *
-   * **It is at {@link tier}'s own grain**, which is that module's rule rather than this one's: an
-   * `exact` row's number is about that printing and a `name` row's is about the card, so the two
-   * arrive here already paired and nothing is recomputed from a tier here.
-   *
-   * **Ignored entirely on the `unplanned` tier**, where there is no order to be short of — see
-   * the X section above. `theoryMatchMark` answers `0` there, and this component does not depend
-   * on it having done so.
-   *
-   * Defaults to `0`, so a caller that has not thought about counts gets the tick this component
-   * has always drawn. The tier above deliberately has no such default.
-   */
-  delta?: number;
+  mark: TheoryMark;
   className?: string;
 }) {
+  const { tier, delta } = mark;
   const paint = THEORY_PAINT[tier];
   // **The glyph is the tier's, decided before the delta is read** — an unplanned row draws the X
   // whatever number it was handed, because nothing is planned for there to be a difference from.
@@ -724,10 +750,10 @@ export function TheoryMatchMark({
       // The tier as the value, which is how a test and a live probe tell the three marks apart
       // without reading a colour — see {@link THEORY_MATCH_ATTR}.
       {...{ [THEORY_MATCH_ATTR]: tier }}
-      // Redundant with `deckCardName`'s own clause (`theoryMatchLabel(tier, delta)`) — the words
-      // are already the whole of what a keyboard reader gets from the button this sits inside, so
+      // Redundant with `deckCardName`'s own clause (`theoryMatchLabel(mark)`) — the words are
+      // already the whole of what a keyboard reader gets from the button this sits inside, so
       // `describes: false` leaves `aria-describedby` unset.
-      {...tip(theoryMatchLabel(tier, delta), { describes: false })}
+      {...tip(theoryMatchLabel(mark), { describes: false })}
       style={{
         // Mirrored — **reflected** across the vertical axis, not rotated 180°, which is the whole
         // of issue #182 — because this sits in the card's **right**-hand corner; see the constant.
@@ -850,18 +876,16 @@ export function TheoryMatchMark({
  * and it is the shape half of a distinction whose colour half the reader is free to defeat.
  */
 export function TheoryMatchBadge({
-  tier,
-  delta = 0,
+  mark,
   className,
 }: {
-  /** See {@link TheoryMatchMark.tier} — required for that component's reason, and the whole of
-   *  what decides this glyph's colour and which glyph it is. */
-  tier: TheoryTier;
-  /** See {@link TheoryMatchMark.delta} — `0` is the row that matches, and the tick; ignored
-   *  entirely on the `unplanned` tier, which has no order to be short of. */
-  delta?: number;
+  /** See {@link TheoryMatchMark.mark} — taken whole for that component's reason: the tier decides
+   *  this glyph's colour and which glyph it is, the delta is `0` for the tick and ignored on the
+   *  `unplanned` tier, and `anyPrinting` is the tooltip's word and nothing else. */
+  mark: TheoryMark;
   className?: string;
 }) {
+  const { tier, delta } = mark;
   const tip = useTooltip();
   // The tier's, before the delta is read — `TheoryMatchMark`'s rule, one surface over.
   const glyph = tier === "unplanned" || delta === 0;
@@ -871,7 +895,7 @@ export function TheoryMatchBadge({
       // The tier as the value — see {@link THEORY_MATCH_ATTR}.
       {...{ [THEORY_MATCH_ATTR]: tier }}
       // Redundant with `deckCardName`'s own clause, exactly as `TheoryMatchMark`'s is.
-      {...tip(theoryMatchLabel(tier, delta), { describes: false })}
+      {...tip(theoryMatchLabel(mark), { describes: false })}
       // The text colour only — there is no fill to print on, which is why this takes `fill` out
       // of {@link THEORY_PAINT} and never the `-fg` beside it.
       style={{ color: THEORY_PAINT[tier].fill }}
@@ -913,23 +937,80 @@ export function TheoryMatchBadge({
  * stack's card and the Grid view's tile — are card faces the reader can zoom, so both read that
  * card's `--mark-scale` (`lib/cardZoom.ts`). The border, the radius and the vertical padding stay
  * where they are: all three are one pixel or three, and a hairline is a hairline at every size.
+ * All of that is {@link WordMark}'s, which is the box this and `NOT MADE BY DECK` share.
  */
 export function RuleBreakMark({ text, className }: { text: string; className?: string }) {
+  // The hint is redundant with `deckCardName`'s own `rule break: ${text}` clause — the button
+  // beside this mark already says the finding in full to a keyboard reader.
+  return <WordMark word="RULE BREAK" hint={text} className={className} />;
+}
+
+/**
+ * A word spelled out over a card's art in the destructive colour, boxed, with its sentence one
+ * hover away — **the one recipe {@link RuleBreakMark} and `NotMadeByDeckMark` both draw**, so the
+ * two cannot come to disagree about what that corner's mark looks like.
+ *
+ * `NOT MADE BY DECK` (managed tokens spec §3.5, 2026-09-27) is a token nothing in the deck makes,
+ * and the reader asked for it to be marked the way a rule-break card is: *that* mark's place and
+ * *that* mark's style. It landed as a copy of the classes below while this file belonged to
+ * another change, which its own header called a debt; this is the fold that pays it. One
+ * component rather than an exported class string, because the box is not all the two share —
+ * `aria-hidden`, the tooltip binding and `describes: false` are the same decision made twice.
+ *
+ * Everything but the box's geometry is the caller's: the word, the sentence, and the place (a
+ * `className`, like every mark here). The two still differ in words, which is the separation
+ * this file's header asks every pair of marks to keep — and a token never breaks a rule, so the
+ * two are never drawn on one card.
+ *
+ * ## Two surfaces, one box
+ *
+ * **`art`** is the corner mark over a card's picture — the rule break's, and the hand-added
+ * token's on the pile's card and the band's tile. **`line`** is the same words as a tag after a
+ * name on a 22px line — the token pile's Text and Table drawings, which have no corner and no
+ * card edge (spec §3.5). The box's shared half — the hairline in the destructive colour, the 3px
+ * radius, the data face and the destructive words — is written once for both, so a change to the
+ * rule-break box reaches the tag too. What only `art` has is what only art needs: the felt at 85%
+ * that keeps the word legible over a picture, and `--mark-scale`, because a card face zooms and a
+ * line of type does not.
+ */
+export function WordMark({
+  word,
+  hint,
+  surface = "art",
+  className,
+}: {
+  /** What the box spells, in capitals — a mark's whole visible statement. */
+  word: string;
+  /** The full sentence, for a pointer. `aria-hidden` below, so a keyboard reader gets it from the
+   *  name of the button the mark sits in, which every caller words itself. */
+  hint: string;
+  /** Over a card's art (the default, and every corner mark's) or after a name on a line — see
+   *  "Two surfaces, one box" above. */
+  surface?: "art" | "line";
+  className?: string;
+}) {
   const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
-      // Redundant with `deckCardName`'s own `rule break: ${text}` clause — the button beside
-      // this mark already says the finding in full to a keyboard reader.
-      {...tip(text, { describes: false })}
+      // `describes: false`: the words are already the button's, so an `aria-describedby` would say
+      // them twice — and this span is `aria-hidden`, so it could not usefully carry one anyway.
+      {...tip(hint, { describes: false })}
       className={cn(
-        "rounded-[3px] border border-destructive/50 bg-bg/85 py-px",
-        "px-[calc(0.25rem*var(--mark-scale,1))]",
-        "font-mono text-[calc(0.5625rem*var(--mark-scale,1))] text-destructive",
+        // The shared half, which is the recipe.
+        "rounded-[3px] border border-destructive/50 font-mono text-destructive",
+        surface === "art"
+          ? cn(
+              "bg-bg/85 py-px",
+              "px-[calc(0.25rem*var(--mark-scale,1))]",
+              "text-[calc(0.5625rem*var(--mark-scale,1))]",
+            )
+          : // The line's 9px on a 12px line-height, so the tag sits in the name's own line box.
+            "px-1 text-[0.5625rem] leading-3",
         className,
       )}
     >
-      RULE BREAK
+      {word}
     </span>
   );
 }

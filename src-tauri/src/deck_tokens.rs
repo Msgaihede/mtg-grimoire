@@ -27,8 +27,11 @@
 //! **Which printings of each token the reader keeps is stored**, since user schema v52, because
 //! nothing can derive it: an **entry** is one printing in one finish of one token in one list
 //! (`live` or `theory`), with a quantity — [`crate::schema::DECK_TOKEN_PRINTING_GRAIN`]. A token
-//! with no entries in a list draws one **implicit** entry: the resolver's default printing in its
-//! default finish, at `deck_tokens.quantity ?? 1`. `deck_tokens` keeps what is shared by both
+//! the list derives and holds no entries of draws one **implicit** entry: the resolver's default
+//! printing in its default finish, at `deck_tokens.quantity ?? 0` — **zero since user schema
+//! v55**, because a token is something the reader starts to use (the token-improvements spec
+//! §3.1). A token the reader added by hand draws only the entries it has in that list, and none
+//! in a list with none. `deck_tokens` keeps what is shared by both
 //! lists — the token's **state**, `auto`, `hidden` or `manual` — and its `card_id` and `quantity`
 //! are legacy: read for an implicit entry, and written again only by [`convert_legacy_picks`],
 //! which turns a v51 pick into entries and clears it — at launch on a device in no sync group,
@@ -44,9 +47,10 @@
 //!
 //! # The boundary
 //!
-//! Rust supplies *facts* and TypeScript draws *conclusions*, the crate root's rule. Whether a
-//! dismissed row is drawn and what order the wall is in are `src/features/decks/deckTokens.ts`'s;
-//! a `hidden` row is answered here like any other. **What an implicit entry *is* is answered
+//! Rust supplies *facts* and TypeScript draws *conclusions*, the crate root's rule. Which rows the
+//! stacks draw and what order the wall is in are `src/features/decks/deckTokens.ts`'s; a `hidden`
+//! row is answered here like any other — and since user schema v55 nothing hides one:
+//! [`retire_hidden`] turns every dismissal back into an ordinary token at launch. **What an implicit entry *is* is answered
 //! here and not there**, since v52, because a write has to be able to materialise it (rule 2) and
 //! the two halves must not be able to disagree about which printing that is.
 //!
@@ -71,12 +75,13 @@
 //! # Every token write is a deck write
 //!
 //! **One `deck_audit` row of kind `deck` with `field: "token"`, and one `deck_undo` step**, for
-//! each of the five writes — which reverses what this module said until v52, that token writes
-//! record nothing. Never a new audit kind: `deck_audit` syncs, a word a paired device's `CHECK`
+//! each of the four writes — which reverses what this module said until v52, that token writes
+//! record nothing. (Five until v55, which retired the state write and the reset and added
+//! [`remove_entry`].) Never a new audit kind: `deck_audit` syncs, a word a paired device's `CHECK`
 //! does not know would be refused there, and its applier would defer the op — which a v51 client
 //! drops, taking the rest of that device's page with it, and a v52 or later client holds, pinning
 //! the relay's log until it upgrades (`sync.md`, *Held while it can resolve, skipped when it
-//! cannot*). [`journal_in`] is the one place the five record, so they cannot differ in how.
+//! cannot*). [`journal_in`] is the one place the four record, so they cannot differ in how.
 
 use crate::deck_undo::{Op, Step, TokenEntryRow, TokenStateRow};
 use crate::schema::{DECK_TOKEN_GRAIN, DECK_TOKEN_PRINTING_GRAIN};
@@ -121,21 +126,51 @@ const TOKEN_LAYOUTS: [&str; 3] = ["token", "double_faced_token", "emblem"];
 /// on the debug corpus, 2026-09-26.
 const TWO_SIDED_LAYOUTS: [&str; 2] = ["flip", "reversible_card"];
 
+/// The words a [`TWO_SIDED_LAYOUTS`] printing's type line — or any ` // ` face of it — begins with
+/// when it is a token or an emblem: the second half of [`is_token_printing`], and the same words
+/// [`list_token_printings`] asks SQL for, so the two cannot be spelled apart.
+const TOKEN_LINE_WORDS: [&str; 2] = ["Token", "Emblem"];
+
+/// The layouts a **game helper** is filed under — [`is_listed_token`]'s second half. The two
+/// [`TOKEN_LAYOUTS`] a card with no `Token` face can wear; every helper on the debug corpus is one
+/// of them (measured 2026-09-28), and an `emblem` row always names its `Emblem`.
+const HELPER_LAYOUTS: [&str; 2] = ["token", "double_faced_token"];
+
+/// The `sets.set_type`s whose helper cards belong to **another game** than the one a deck is
+/// played in — the World Championship decks' ads, bios and decklists and the Theros challenge
+/// decks (`memorabilia`), and the booster minigames (`minigame`). [`is_listed_token`] leaves their
+/// helpers out; a real token in such a set is listed like any other.
+const OTHER_GAME_SET_TYPES: [&str; 2] = ["memorabilia", "minigame"];
+
+/// The type line a helper face carries — `Card`, exactly, on one ` // ` face or the only one: The
+/// Monarch, Day // Night, Undercity // The Initiative, Punchcard.
+const HELPER_FACE: &str = "Card";
+
+/// The words every face-down reminder card's text carries — Manifest, Morph, A Mysterious Creature
+/// and the Doctor Who Cyberman, whose type line is a creature's rather than [`HELPER_FACE`].
+const FACE_DOWN_WORDS: &str = "face-down";
+
+/// The words only the set checklists' text carries (`You can mark this card to represent a
+/// double-faced card in your library`) — the one `Card` helper the reader chose to leave out.
+const CHECKLIST_WORDS: &str = "this card to represent ";
+
 /// The three words `deck_tokens.state` may hold, in the order the DDL's `CHECK` spells them.
 ///
 /// * `auto` — the row exists only to carry a legacy quantity for a token the deck derives anyway.
-/// * `hidden` — the reader dismissed it. Still derived, deliberately not drawn. Shared by both
-///   lists: a dismissal is "not in this deck".
-/// * `manual` — drawn whether or not anything derives it: a token the reader added by hand, and
-///   also what a derived token becomes when they want it kept after cutting the card that made it.
-///   [`reconcile_in`] never takes a manual token's entries — no card made it, so no cut can
-///   unmake it.
+/// * `hidden` — the reader dismissed it, on a build before user schema v55. **Nothing here writes
+///   it any more**: the dismiss went with the token-improvements spec §3.3, and [`retire_hidden`]
+///   turns every one back into an ordinary token at launch. It stays in the `CHECK` because a
+///   peer on an older build can still write it and an old undo step can still restore it, and
+///   every reader treats it as not hidden until the next launch retires it.
+/// * `manual` — the reader's own: a token added by hand, drawn in each list that holds an entry
+///   of it whether or not anything derives it. [`reconcile_in`] never takes a manual token's
+///   entries — no card made it, so no cut can unmake it.
 ///
-/// A constant here as well as a `CHECK` in the table, so an unknown word is a **sentence**
-/// ([`BAD_STATE`]) rather than a constraint failure — [`crate::deck::set_folder`]'s rule, and it
-/// applies here because a command parameter reaches this column.
-/// `an_unknown_state_word_is_refused_by_name` walks every word in this constant through the real
-/// table, which is what holds the two spellings together.
+/// A constant here as well as a `CHECK` in the table, so the words this module writes are named
+/// rather than respelled. `every_state_word_is_one_the_table_accepts` walks every word in this
+/// constant through the real table, which is what holds the two spellings together. (It also
+/// turned an unknown word into a sentence while `deck_token_state` let a command parameter reach
+/// this column; v55 retired that command, and no parameter reaches it now.)
 const TOKEN_STATES: [&str; 3] = ["auto", "hidden", "manual"];
 
 /// The column's own DEFAULT, by index rather than by spelling — [`crate::deck`]'s `LIVE`
@@ -147,9 +182,6 @@ const HIDDEN_STATE: &str = TOKEN_STATES[1];
 
 /// `TOKEN_STATES[2]`, by index for [`AUTO_STATE`]'s reason.
 const MANUAL_STATE: &str = TOKEN_STATES[2];
-
-/// What a write says when the state word is not one of [`TOKEN_STATES`].
-pub const BAD_STATE: &str = "That is not something a token can be.";
 
 /// What a write says when the printing it was handed is not in the corpus.
 ///
@@ -171,12 +203,13 @@ pub const NOT_A_TOKEN: &str = "That card is not a token or an emblem.";
 /// the resolver groups as a Treasure.
 pub const NOT_THIS_TOKEN: &str = "That printing is not one of this token's.";
 
-/// What a stepper or a swap says when the entry it names is not in the list any more — a stale
-/// editor, or another window that stepped it to nothing first.
+/// What a stepper, a swap or a remove says when the entry it names is not in the list any more —
+/// a stale editor, or another window that stepped it to nothing or removed it first.
 pub const ENTRY_GONE: &str = "That printing of the token is not in this list any more.";
 
-/// What a write naming the implicit entry says when the token is not on the wall at all — the
-/// list derives nothing for it and the reader never added it.
+/// What a write naming the implicit entry says when the token has none — the list derives nothing
+/// for it. A hand-added token has no implicit entry in any list: it is drawn only where it holds
+/// an entry, so a page naming its implicit one is naming a tile that is not there.
 pub const TOKEN_GONE: &str = "That token is not in this list any more.";
 
 /// A deck card that makes a token — the answer to *why is this here*.
@@ -228,10 +261,14 @@ pub struct DeckTokenRow {
     pub default_card_id: String,
     /// The deck cards that make it. Empty for a `manual` token nothing derives.
     pub sources: Vec<TokenSource>,
+    /// Whether this list's cards make the token. `false` is a token the reader added by hand —
+    /// the one the page marks as not made by the deck (the token-improvements spec §3.5).
     pub derived: bool,
     /// The token's **effective** state — `auto`, `hidden` or `manual` — shared by both lists and
     /// by every entry of the token. `auto` where `deck_tokens` holds no row, which is the
-    /// ordinary case: that table stores only deviations.
+    /// ordinary case: that table stores only deviations. **Whether the deck makes the token is
+    /// [`Self::derived`] and never this**: a derived token can be `manual`. `hidden` is a
+    /// pre-v55 dismissal the launch has not retired yet, and nothing draws it any differently.
     pub state: String,
     /// **This entry's printing.** An implicit entry's is [`Self::default_card_id`].
     pub card_id: String,
@@ -241,7 +278,7 @@ pub struct DeckTokenRow {
     pub finish: String,
     /// This entry's **effective** quantity. A stored entry's is its row's, and may be `0` — the
     /// last entry of a token stepped to nothing stays at nothing (rule 3). An implicit entry's is
-    /// `deck_tokens.quantity ?? 1`.
+    /// `deck_tokens.quantity ?? 0` ([`implicit_quantity`]).
     pub quantity: i64,
     /// Whether this is the implicit entry of a token with no entries in this list — the one the
     /// first write to it materialises (rule 2).
@@ -558,10 +595,13 @@ fn derive(conn: &Connection, deck_id: i64, variant: &str) -> Result<Derivation, 
 /// that would not open over it is a worse answer than a wall that is empty. [`derive`] is the
 /// walk, and its doc carries the five things about it.
 ///
-/// **Which tokens are on the wall is unchanged by entries**: every token the list derives, and
-/// every `manual` token it does not. A token with entries that is neither — its maker was cut
-/// through a write the reconcile could not reach yet — draws nothing, and [`reconcile_in`] will
-/// take its entries at the next write.
+/// **Which tokens are on the wall**: every token the list derives, and every token it does not
+/// whose state is `manual` — or a pre-v55 `hidden` the launch has not retired yet — **and that
+/// holds an entry in this list**. A hand-added token draws its entries and never an implicit one
+/// (the token-improvements spec §3.4), so a Soldier added to the live list is not on the plan's
+/// wall. An `auto` token with entries that the list does not derive — its maker was cut through a
+/// write the reconcile could not reach yet — draws nothing, and [`reconcile_in`] will take its
+/// entries at the next write.
 ///
 /// Order is `(name, oracle_id)`, derived tokens first and hand-added ones after, and within one
 /// token its entries by `(card_id, finish)`. Which order the wall is actually in is
@@ -604,12 +644,22 @@ pub fn deck_token_rows(
         )?;
     }
 
-    // The hand-added tail: a `manual` token the list derives nothing for is on the wall because
-    // the reader said so. Resolved by `oracle_id`, so a token whose every entry names a printing
-    // that has left the corpus still draws — `default_card_id` is answerable without them.
+    // The hand-added tail: a token the list derives nothing for is on the wall because the reader
+    // said so — **in a list that holds an entry of it, and only there**. There is no implicit row
+    // here: an implicit entry is the deck's default for a token its cards make, and nothing makes
+    // this one, so a list with none of its entries has nothing to draw.
+    // **Any state but `auto` says so**: `manual`, and a `hidden` that arrived by sync after the
+    // launch retired this device's own — a hand-added token dismissed on an older peer, which must
+    // draw like any other until the next launch (Review Focus 1). An `auto` row with entries is a
+    // token whose maker was cut, which the reconcile takes.
+    // Resolved by `oracle_id`, so a token whose every entry names a printing that has left the
+    // corpus still draws — `default_card_id` is answerable without them.
     let mut added: Vec<(&String, Printing)> = Vec::new();
     for (oracle_id, stored) in &overrides {
-        if stored.2 != MANUAL_STATE || on_wall.contains(oracle_id) {
+        if stored.2 == AUTO_STATE || on_wall.contains(oracle_id) {
+            continue;
+        }
+        if entries.get(oracle_id).is_none_or(Vec::is_empty) {
             continue;
         }
         if let Some(printing) = newest_printing(conn, oracle_id)? {
@@ -685,12 +735,19 @@ fn push_rows(
     Ok(())
 }
 
-/// An implicit entry's quantity: the legacy `deck_tokens.quantity`, or one.
+/// An implicit entry's quantity: the legacy `deck_tokens.quantity`, or **none**.
 ///
-/// `??` and never "truthy": a legacy `0` is a token the reader zeroed before v52, and it stays
-/// zeroed.
+/// **Zero since user schema v55, and one until then** (the token-improvements spec §3.1). A token
+/// is something the reader starts to use — a Treasure the deck *can* make is not a Treasure on
+/// the table — so an untouched one counts nothing, stays out of the stacks, and the first `+`
+/// materialises it at one. Nothing stored changes with it: an untouched token was never written,
+/// so it simply reads zero from this build on, and a peer still on v54 goes on drawing it at one —
+/// a difference in what two builds draw, never in what they store.
+///
+/// `??` and never "truthy": a legacy count a reader set before v52 is still theirs, a `0`
+/// included.
 fn implicit_quantity(legacy: Option<i64>) -> i64 {
-    legacy.unwrap_or(1)
+    legacy.unwrap_or(0)
 }
 
 /// A string field, if present and actually a string — [`crate::card`]'s helper, one file over.
@@ -1023,10 +1080,85 @@ pub fn is_token_printing(layout: &str, type_line: Option<&str>) -> bool {
     if !TWO_SIDED_LAYOUTS.contains(&layout) {
         return false;
     }
+    line_names_a_token(type_line)
+}
+
+/// Whether a type line — **or any ` // ` face of it** — begins `Token` or `Emblem`
+/// ([`TOKEN_LINE_WORDS`]): [`is_token_printing`]'s second half, and the whole of what
+/// [`is_listed_token`] adds to the layout.
+fn line_names_a_token(type_line: Option<&str>) -> bool {
     type_line.is_some_and(|line| {
         line.split(" // ")
-            .any(|face| face.starts_with("Token") || face.starts_with("Emblem"))
+            .any(|face| TOKEN_LINE_WORDS.iter().any(|word| face.starts_with(word)))
     })
+}
+
+/// **Whether All tokens lists a printing: a real token or emblem, or a game helper** — narrower
+/// than [`is_token_printing`], and on purpose. Two arms:
+///
+/// 1. **A token or an emblem** — a layout [`is_token_printing`] trusts on its own
+///    ([`TOKEN_LAYOUTS`]) or a two-sided one ([`TWO_SIDED_LAYOUTS`]), **and** a type line naming a
+///    `Token` or `Emblem` face, whatever the layout. Every token and emblem the keep rule can
+///    derive has one, the six two-sided Role tokens and Mechtitan included.
+/// 2. **A game helper** ([`is_game_helper`]) — a card a deck brings to the table during an
+///    ordinary game: The Monarch, The Initiative, Day // Night, City's Blessing, Energy Reserve,
+///    Radiation, the face-down Manifest and Morph cards. The reader's rule (2026-09-28): keep
+///    those, leave out advertising, checklists, standalone minigames and other games' cards, and
+///    keep anything in doubt — a list with one card too many costs a scroll, one that hides a card
+///    the reader needs costs a card they cannot add.
+///
+/// **Why the layout alone is not enough.** Scryfall files every helper under `token` or
+/// `double_faced_token` — measured on the debug corpus (`node:sqlite` over a copy, 2026-09-28),
+/// 280 of the 3 303 paper printings the layout admits name no `Token` or `Emblem` face — and the
+/// same layouts carry the World Championship decks' ads, bios and decklists, the set checklists,
+/// the booster minigames, the Theros challenge decks' Minotaurs, Revelers and Hydra heads, and the
+/// TMNT arena's bosses and events. The list went from 3 303 printings over 1 096 tokens (the layout
+/// alone), to 3 023 over 911 (the first arm alone), to **3 110 over 940** with the helpers back.
+///
+/// **What separates the two sides is structural, not a list of names.** The other games' cards
+/// sit in `memorabilia` and `minigame` sets ([`OTHER_GAME_SET_TYPES`]) — the TMNT arena is the
+/// exception, a `token` set, and its `Boss`, `Event` and `Creature — Ninja` lines are neither a
+/// helper face nor a face-down card. The best signal, which card names which in `all_parts`, is not
+/// in a column: every helper this keeps but the Bounties, Punchcard, Companion and Enduring Story
+/// is named by real cards (Morph by 402, The Monarch by 131), and nothing it leaves out is but the
+/// checklists, which double-faced cards name as the proxy they are — left out by the reader's
+/// choice ([`CHECKLIST_WORDS`]).
+///
+/// **Not the routing question.** [`is_token_printing`] still decides where an add of one of these
+/// is filed — a helper picked here is added as a token entry, which is what it is on the table —
+/// so that predicate is left as it is. `set_type` is the printing's `sets.set_type`, `None` where
+/// the set is not in `sets`, which lists it.
+pub fn is_listed_token(
+    layout: &str,
+    type_line: Option<&str>,
+    oracle_text: Option<&str>,
+    set_type: Option<&str>,
+) -> bool {
+    let token_shaped = is_token_layout(layout) || TWO_SIDED_LAYOUTS.contains(&layout);
+    (token_shaped && line_names_a_token(type_line))
+        || is_game_helper(layout, type_line, oracle_text, set_type)
+}
+
+/// [`is_listed_token`]'s second arm: a [`HELPER_LAYOUTS`] printing outside the
+/// [`OTHER_GAME_SET_TYPES`], which either has a [`HELPER_FACE`] (and is not a checklist,
+/// [`CHECKLIST_WORDS`]) or is a face-down reminder ([`FACE_DOWN_WORDS`]).
+///
+/// **Case-sensitive, as the SQL is** — `instr`, not `LIKE` — so
+/// `token_printings_keeps_the_game_helpers_and_leaves_out_other_games` holds the two to one answer.
+fn is_game_helper(
+    layout: &str,
+    type_line: Option<&str>,
+    oracle_text: Option<&str>,
+    set_type: Option<&str>,
+) -> bool {
+    if !HELPER_LAYOUTS.contains(&layout)
+        || set_type.is_some_and(|t| OTHER_GAME_SET_TYPES.contains(&t))
+    {
+        return false;
+    }
+    let text = oracle_text.unwrap_or("");
+    let helper_face = type_line.is_some_and(|line| line.split(" // ").any(|f| f == HELPER_FACE));
+    (helper_face && !text.contains(CHECKLIST_WORDS)) || text.contains(FACE_DOWN_WORDS)
 }
 
 /// [`is_token_printing`] over the row `card_id` names — the one read the two add paths make.
@@ -1153,6 +1285,24 @@ fn write_state(tx: &Connection, deck_id: i64, oracle_id: &str, state: &str) -> R
     .map_err(|e| e.to_string())
 }
 
+/// **A dismissal's legacy count, cleared**: `deck_tokens.quantity` becomes `NULL` where the row
+/// carries no pick and `0` where a v51 pick still waits for conversion — the reader's rule that a
+/// dismissed token comes back **at zero**, which [`write_state`] alone breaks by keeping a legacy
+/// count (a dismissed Treasure counted at 3 before v52 would come back at 3 in every list with no
+/// entries of it). [`retire_hidden`]'s step 2, and every write that settles a stale `hidden` sooner
+/// ([`settle_hidden`], [`add_printing_in`]) — so a dismissal comes back at zero whichever of them
+/// reaches it first. Inside the caller's [`journal_in`] where there is one, whose state row carries
+/// the quantity, so one Undo puts the count back with the word.
+fn clear_legacy_count(tx: &Connection, deck_id: i64, oracle_id: &str) -> Result<(), String> {
+    tx.execute(
+        "UPDATE deck_tokens SET quantity = CASE WHEN card_id IS NULL THEN NULL ELSE 0 END
+          WHERE deck_id = ?1 AND oracle_id = ?2",
+        params![deck_id, oracle_id],
+    )
+    .map(|_| ())
+    .map_err(|e| e.to_string())
+}
+
 /// Write one entry at an absolute quantity, on [`DECK_TOKEN_PRINTING_GRAIN`] — interpolated for
 /// [`write_state`]'s reason.
 fn put_entry(tx: &Connection, deck_id: i64, row: &TokenEntryRow) -> Result<(), String> {
@@ -1191,12 +1341,12 @@ fn drop_entry(tx: &Connection, deck_id: i64, row: &TokenEntryRow) -> Result<(), 
 
 /// The entry a token draws when it has none in this list — **rule 1**, computed exactly as
 /// [`deck_token_rows`] computes it so that a write materialises the entry the reader was looking
-/// at: the derived printing where the list makes the token, the newest printing where it is a
-/// `manual` token nothing makes, in its [`default_finish`], at [`implicit_quantity`].
+/// at: the derived printing, in its [`default_finish`], at [`implicit_quantity`].
 ///
-/// `None` for a token that is not on the wall at all — the list derives nothing for it and it is
-/// not `manual` — which has no implicit entry to materialise. A `hidden` token that the list
-/// derives *has* one, drawn and not shown, and so is materialised like any other.
+/// `None` for a token the list derives nothing for — `manual` included since user schema v55,
+/// because a hand-added token is drawn only where it holds an entry and so has no implicit one to
+/// materialise (the token-improvements spec §3.4). A `hidden` token that the list derives *has*
+/// one, and is materialised like any other.
 fn implicit_entry(
     tx: &Connection,
     deck_id: i64,
@@ -1230,18 +1380,16 @@ fn implicit_of(
     oracle_id: &str,
     best: Option<Printing>,
 ) -> Result<Option<TokenEntryRow>, String> {
-    let state = state_of(tx, deck_id, oracle_id)?;
-    let printing = match best {
-        Some(best) => Some(best),
-        None if state.state.as_deref() == Some(MANUAL_STATE) => newest_printing(tx, oracle_id)?,
-        None => None,
+    let Some(p) = best else {
+        return Ok(None);
     };
-    Ok(printing.map(|p| TokenEntryRow {
+    let legacy = state_of(tx, deck_id, oracle_id)?.quantity;
+    Ok(Some(TokenEntryRow {
         variant: variant.to_owned(),
         oracle_id: oracle_id.to_owned(),
         finish: default_finish(p.finishes.as_deref()).to_owned(),
         card_id: p.id,
-        quantity: implicit_quantity(state.quantity),
+        quantity: implicit_quantity(legacy),
     }))
 }
 
@@ -1283,15 +1431,44 @@ fn named_entry(
     }
 }
 
+/// **A stale `hidden`, settled by the write that touches the token** — `auto` where this list
+/// makes it, `manual` where it does not, the answer [`add_printing_in`] has always given, and **its
+/// legacy count cleared** ([`clear_legacy_count`]) the way [`retire_hidden`] clears it, so the
+/// other list's implicit entry comes back at zero rather than at the dismissal's old count (the
+/// final review's deferred 1). The word is a pre-v55 dismissal nothing draws any more
+/// ([`retire_hidden`] settles the rest at launch), and a step, a swap or a remove on the token is
+/// the reader using it; leaving the word behind would leave a row every reader has to remember
+/// means nothing.
+///
+/// Called inside the write's own [`journal_in`], so the state change is captured with the write
+/// and rides its undo step: one Undo brings the count and the word back together. A token in any
+/// other state is left alone, without a derivation.
+fn settle_hidden(
+    tx: &Connection,
+    deck_id: i64,
+    variant: &str,
+    oracle_id: &str,
+) -> Result<(), String> {
+    if state_of(tx, deck_id, oracle_id)?.state.as_deref() != Some(HIDDEN_STATE) {
+        return Ok(());
+    }
+    clear_legacy_count(tx, deck_id, oracle_id)?;
+    let made = derived_printing(tx, deck_id, variant, oracle_id)?.is_some();
+    let state = if made { AUTO_STATE } else { MANUAL_STATE };
+    write_state(tx, deck_id, oracle_id, state)
+}
+
 /// What one token write did — the variable half of its history row.
 struct Change {
-    /// `quantity`, `swap`, `add`, `state` or `reset` — `auditText.ts`' arms.
+    /// `quantity`, `swap`, `add` or `remove` — `auditText.ts`' arms. (`state` and `reset` were
+    /// the other two until v55 retired their commands; rows already on disk still carry them.)
     action: &'static str,
     card_id: Option<String>,
     finish: Option<String>,
     from: Value,
     to: Value,
-    /// Keys one action records beside the common nine (`add`'s `quantity`, `swap`'s `folded`).
+    /// Keys one action records beside the common nine (`add`'s `quantity`, `swap`'s `folded`,
+    /// `remove`'s printing).
     extra: serde_json::Map<String, Value>,
 }
 
@@ -1321,7 +1498,7 @@ impl Change {
 }
 
 /// **The one place a token write records**, inside the transaction the caller already opened —
-/// so the five writes cannot differ in how they journal.
+/// so the four writes cannot differ in how they journal.
 ///
 /// In order: the deck fence (a read, answering `deck::GONE` for a stale editor's dead id before
 /// anything else can refuse); a read of every entry of the token in `list` and of its state; the
@@ -1339,20 +1516,20 @@ impl Change {
 ///   module's header — and `delta` 0: a token is not a card, and the day header's `+7 / −6` adds
 ///   up cards. Its payload is `{ field, action, name, subtitle, card_id, finish, list, from, to }`
 ///   plus [`Change::extra`]; `name` and `subtitle` are the token's own, written down now because
-///   a history is read after the corpus has moved. `list` is `null` for a state write, which is
-///   shared by both lists.
+///   a history is read after the corpus has moved. (`list` was `null` on a state write, which
+///   was shared by both lists; every write since v55 is in one list.)
 /// * **The step is [`Op::Tokens`] over the whole token in that list**, both sides: the undo side
 ///   deletes what the write left and restores what it found, the redo side the other way round.
 ///   `states` rides only when the state moved — a quantity step that recorded the state it did
-///   not change would be refused by a later dismissal it never touched.
+///   not change would be refused by a later state write it never touched.
 /// * **A write that changed nothing records nothing** — a stepper landing on the quantity it was
-///   already at, a reset of a token with no entries. `deck_set_card_quantity` removing a card
+///   already at, a swap onto the entry's own art. `deck_set_card_quantity` removing a card
 ///   that is not there is the precedent: a history of a change that never happened is a line the
 ///   drawer would have to explain.
 fn journal_in(
     tx: &Connection,
     deck_id: i64,
-    list: Option<&str>,
+    list: &str,
     oracle_id: &str,
     f: impl FnOnce(&Connection) -> Result<Change, String>,
 ) -> Result<(), String> {
@@ -1368,10 +1545,7 @@ fn journal_in(
     }
     let read = |tx: &Connection| -> Result<(Vec<TokenEntryRow>, TokenStateRow), String> {
         Ok((
-            match list {
-                Some(variant) => entries_of(tx, deck_id, variant, oracle_id)?,
-                None => Vec::new(),
-            },
+            entries_of(tx, deck_id, list, oracle_id)?,
             state_of(tx, deck_id, oracle_id)?,
         ))
     };
@@ -1422,13 +1596,13 @@ fn journal_in(
     crate::deck_undo::record_step(tx, audit_id, deck_id, &Step::new(vec![undo], vec![redo]))
 }
 
-/// [`journal_in`] in a transaction of its own — what four of the five commands are. The fifth,
+/// [`journal_in`] in a transaction of its own — what three of the four writes are. The fourth,
 /// [`add_printing_in`], is also called from inside `deck::add_card`'s and
 /// `collection_alloc::collection_to_deck`'s transactions, so it takes one rather than opening one.
 fn write_tokens(
     conn: &Connection,
     deck_id: i64,
-    list: Option<&str>,
+    list: &str,
     oracle_id: &str,
     f: impl FnOnce(&Connection) -> Result<Change, String>,
 ) -> Result<(), String> {
@@ -1547,7 +1721,7 @@ pub fn set_quantity(
 ) -> Result<(), String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
     let quantity = crate::collection::valid_quantity(quantity, "token quantity")?;
-    write_tokens(conn, deck_id, Some(variant), oracle_id, |tx| {
+    write_tokens(conn, deck_id, variant, oracle_id, |tx| {
         let (target, implicit) = named_entry(tx, deck_id, variant, oracle_id, entry)?;
         if implicit {
             put_entry(tx, deck_id, &target)?;
@@ -1565,6 +1739,7 @@ pub fn set_quantity(
                 },
             )?;
         }
+        settle_hidden(tx, deck_id, variant, oracle_id)?;
         Ok(
             Change::new("quantity", json!(target.quantity), json!(quantity))
                 .about(&target.card_id, &target.finish),
@@ -1595,7 +1770,7 @@ pub fn swap(
         return Err(NOT_THIS_TOKEN.to_owned());
     }
     let finish = entry_finish(&printing, Some(&to.finish))?;
-    write_tokens(conn, deck_id, Some(variant), oracle_id, |tx| {
+    write_tokens(conn, deck_id, variant, oracle_id, |tx| {
         let (source, _) = named_entry(tx, deck_id, variant, oracle_id, from)?;
         if source.card_id == printing.id && source.finish == finish {
             return Ok(Change::new("swap", Value::Null, Value::Null));
@@ -1614,6 +1789,7 @@ pub fn swap(
             ..source.clone()
         };
         put_entry(tx, deck_id, &landed)?;
+        settle_hidden(tx, deck_id, variant, oracle_id)?;
         Ok(
             Change::new("swap", entry_facts(tx, &source)?, entry_facts(tx, &landed)?)
                 .about(&landed.card_id, &landed.finish)
@@ -1646,16 +1822,21 @@ pub fn add_printing(
 /// the deck is touched, and the history row and the undo step are written:
 ///
 /// 1. **An implicit entry is materialised first** (rule 2), so adding art B to a token drawn at
-///    art A keeps A — the whole point of the rule.
+///    art A keeps A — the whole point of the rule. Only a derived token has one, and **only one
+///    at a count is materialised**: since v55 an untouched implicit entry is at zero, which step 2
+///    would clear again in the same write, so writing it would be a captured insert and delete of
+///    a row nobody saw, sent to every device in the group. B is filed alone; what keeps A is a
+///    legacy count.
 /// 2. The entry is inserted at `quantity`, or an existing entry of that printing and finish is
 ///    stepped up by it — and **the token's zero-quantity entries in this list are deleted**,
 ///    never the one just added to. Rule 3 held one at zero because it was the last; beside the
 ///    new entry it is not, and a `0` tile no stepper can zero again is stuck on the band. The
 ///    deletes are the write's own, so one Undo restores them.
 /// 3. **A token the list derives nothing for becomes `manual`** — the reader's own, which no cut
-///    can reconcile away. A derived token the reader had **dismissed** comes back to `auto`: an
-///    add is *put this on the wall*, and filing a printing of a token that stays hidden would be a
-///    press that did nothing anyone can see.
+///    can reconcile away. A derived token still `hidden` from a pre-v55 dismissal comes back to
+///    `auto`, as [`retire_hidden`] would have sent it at the next launch — and **at zero**: its
+///    legacy count is cleared before step 1 ([`clear_legacy_count`]), so no implicit entry is
+///    materialised at the dismissal's old count.
 ///
 /// **The three callers** are this module's [`add_printing`] (one copy, from the band's picker),
 /// and the two writes every add of a card ends in — `deck::add_card` and
@@ -1681,11 +1862,22 @@ pub fn add_printing_in(
     let finish = entry_finish(&printing, finish)?;
     let oracle_id = printing.oracle_id.clone();
     let mut landed = 0;
-    journal_in(tx, deck_id, Some(variant), &oracle_id, |tx| {
+    journal_in(tx, deck_id, variant, &oracle_id, |tx| {
         let best = derived_printing(tx, deck_id, variant, &oracle_id)?;
         let derived = best.is_some();
+        // **A stale `hidden` comes back at zero, and before the implicit entry is written** (the
+        // final review's deferred 1): its legacy count is what the implicit entry would be
+        // materialised at, and a dismissal the reader is settling by using the token comes back
+        // at none — so the entry this press files stands alone, as `retire_hidden` would have left
+        // it, rather than beside the old count in this list and under it in the other.
+        let was_hidden = state_of(tx, deck_id, &oracle_id)?.state.as_deref() == Some(HIDDEN_STATE);
+        if was_hidden {
+            clear_legacy_count(tx, deck_id, &oracle_id)?;
+        }
         if entries_of(tx, deck_id, variant, &oracle_id)?.is_empty() {
-            if let Some(implicit) = implicit_of(tx, deck_id, variant, &oracle_id, best)? {
+            if let Some(implicit) = implicit_of(tx, deck_id, variant, &oracle_id, best)?
+                .filter(|implicit| implicit.quantity > 0)
+            {
                 put_entry(tx, deck_id, &implicit)?;
             }
         }
@@ -1715,10 +1907,9 @@ pub fn add_printing_in(
         {
             drop_entry(tx, deck_id, &zero)?;
         }
-        let state = state_of(tx, deck_id, &oracle_id)?.state;
         if !derived {
             write_state(tx, deck_id, &oracle_id, MANUAL_STATE)?;
-        } else if state.as_deref() == Some(HIDDEN_STATE) {
+        } else if was_hidden {
             write_state(tx, deck_id, &oracle_id, AUTO_STATE)?;
         }
         Ok(Change::new("add", json!(held), json!(landed))
@@ -1728,51 +1919,57 @@ pub fn add_printing_in(
     Ok(landed)
 }
 
-/// Dismiss, restore or keep a token — **shared by both lists**, because a dismissal is "not in
-/// this deck" and a hand-added token is the deck's whichever list the reader is looking at.
+/// **Remove printing** (the token-improvements spec §3.4): delete one entry of a token in one
+/// list, **unconditionally** — the one write that can take a token's last entry, which a stepper
+/// holds at zero (rule 3) — and answer [`ENTRY_GONE`] for an entry that is not there.
 ///
-/// Which of `auto` and `manual` a *restore* sends is TypeScript's conclusion (a token the list
-/// derives goes back to `auto`, one it does not stays the reader's own as `manual`); this writes
-/// the word it is handed, fenced by [`BAD_STATE`], keeping the legacy columns the row carries and
-/// deleting a row `auto` would leave empty ([`write_state`]).
-pub fn set_state(
-    conn: &Connection,
-    deck_id: i64,
-    oracle_id: &str,
-    state: &str,
-) -> Result<(), String> {
-    let Some(state) = TOKEN_STATES.iter().copied().find(|s| *s == state) else {
-        return Err(BAD_STATE.to_owned());
-    };
-    write_tokens(conn, deck_id, None, oracle_id, |tx| {
-        let before = state_of(tx, deck_id, oracle_id)?
-            .state
-            .unwrap_or_else(|| AUTO_STATE.to_owned());
-        write_state(tx, deck_id, oracle_id, state)?;
-        Ok(Change::new("state", json!(before), json!(state)))
-    })
-}
-
-/// Back to the implicit entry: every entry of this token **in this list** goes, and nothing else
-/// does — not the other list's (rule 6), and not the token's state.
+/// What the list draws afterwards follows from rule 1 with nothing more written, except in one
+/// case:
 ///
-/// A token with no entries is a success that records nothing.
-pub fn reset(
+/// * **A derived token** whose last entry here goes falls back to its implicit entry — the
+///   default printing, at [`implicit_quantity`] — which is what the retired Reset printings did,
+///   one printing at a time. Its state is not touched.
+/// * **A hand-added token** — one this list derives nothing for — is drawn only where it holds an
+///   entry, so it leaves this list's band. **When it holds none in either list**, its state goes
+///   back to `auto` through [`write_state`], which deletes the row: a `manual` row with no entry
+///   anywhere would be a token on no wall that no cut could ever reconcile away. An add of it
+///   later makes it `manual` again.
+///
+/// Journalled by [`journal_in`] like every token write: one `deck` row with `action: "remove"`
+/// and one [`Op::Tokens`] step, which carries the state as well when it moved, so one Undo puts
+/// back the entry and the reader's `manual` together. Beside the common keys the payload carries
+/// `oracle_id`, `set_code` and `collector_number` — the printing as the drawer names it
+/// (*Removed Treasure's TMOM #12 printing*), read now because a history is read after the corpus
+/// has moved — with `from` the copies the entry held and `to` null.
+pub fn remove_entry(
     conn: &Connection,
     deck_id: i64,
     variant: &str,
     oracle_id: &str,
+    entry: &TokenEntryKey,
 ) -> Result<(), String> {
     let variant = crate::deck_meta::valid_variant(variant)?;
-    write_tokens(conn, deck_id, Some(variant), oracle_id, |tx| {
-        let entries = tx
-            .execute(
-                "DELETE FROM deck_token_printings
-                  WHERE deck_id = ?1 AND variant = ?2 AND oracle_id = ?3",
-                params![deck_id, variant, oracle_id],
+    write_tokens(conn, deck_id, variant, oracle_id, |tx| {
+        let (target, _) = named_entry(tx, deck_id, variant, oracle_id, Some(entry))?;
+        drop_entry(tx, deck_id, &target)?;
+        settle_hidden(tx, deck_id, variant, oracle_id)?;
+        let held_anywhere: bool = tx
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM deck_token_printings
+                                WHERE deck_id = ?1 AND oracle_id = ?2)",
+                params![deck_id, oracle_id],
+                |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        Ok(Change::new("reset", Value::Null, Value::Null).with("entries", json!(entries)))
+        if !held_anywhere && derived_printing(tx, deck_id, variant, oracle_id)?.is_none() {
+            write_state(tx, deck_id, oracle_id, AUTO_STATE)?;
+        }
+        let facts = entry_facts(tx, &target)?;
+        Ok(Change::new("remove", json!(target.quantity), Value::Null)
+            .about(&target.card_id, &target.finish)
+            .with("oracle_id", json!(oracle_id))
+            .with("set_code", facts["set_code"].clone())
+            .with("collector_number", facts["collector_number"].clone()))
     })
 }
 
@@ -1781,7 +1978,7 @@ pub fn reset(
 // ---------------------------------------------------------------------------------------
 
 /// **Rule 7**: delete every entry, in each of `variants`, of a token that list no longer derives
-/// and that is not `manual` — and answer the rows it deleted, so the caller's undo step can put
+/// and whose state is `auto` — and answer the rows it deleted, so the caller's undo step can put
 /// them back.
 ///
 /// **A reconcile after every write that changes a list's cards, never a rule applied at read
@@ -1794,13 +1991,19 @@ pub fn reset(
 ///   three steps built without them — the theory switch, a pile switched off, a pile deleted.
 /// * **After every write, as a backstop** ([`reconcile_dirty`]), for the writes that file none.
 ///
-/// **A `manual` token is never touched** — no card made it, so no cut can unmake it — and a
-/// `hidden` one is: a dismissal is still a token the deck makes, and once it does not, it has
-/// nothing left to be dismissed from. Cutting the card and adding it back brings the token back
-/// as its implicit entry, which is what a reader who never picked a printing had anyway.
+/// **Only an `auto` token is the deck's to take** — the one [`deck_token_rows`]' hand-added tail
+/// does not draw once nothing makes it. **A `manual` token is never touched** — no card made it, so
+/// no cut can unmake it — **and nor, since the final review of user schema v55, is a `hidden`
+/// one**: that tail draws any state but `auto`, so a pre-v55 dismissal of a token nothing makes is
+/// on the wall like a `manual` one, and until [`retire_hidden`] settles it at the next launch it is
+/// as much the reader's. It said the opposite until then — *a dismissal is still a token the deck
+/// makes, and once it does not, it has nothing left to be dismissed from* — which was true while a
+/// dismissal was hidden, and took the entries of a token the wall was drawing, captured, and from
+/// the backstop on no undo step. Cutting a card and adding it back brings an `auto` token back as
+/// its implicit entry, which is what a reader who never picked a printing had anyway.
 ///
 /// **Three things keep it cheap and one keeps it safe.** The common case — a list with no
-/// non-`manual` entries at all — is one indexed read and no derivation. A list is only derived
+/// entries of an `auto` token at all — is one indexed read and no derivation. A list is only derived
 /// when there is something it could delete. The deletes are ordinary captured writes: every
 /// device derives the same answer, a delete that finds nothing is a no-op there, and a captured
 /// delete keeps an undo's captured restore meaningful on the other device. **And a list whose
@@ -1824,12 +2027,12 @@ pub fn reconcile_in(
                         AND NOT EXISTS (SELECT 1 FROM deck_tokens t
                                          WHERE t.deck_id = e.deck_id
                                            AND t.oracle_id = e.oracle_id
-                                           AND t.state = ?3)
+                                           AND t.state <> ?3)
                       ORDER BY e.oracle_id, e.card_id, e.finish",
                 )
                 .map_err(|e| e.to_string())?;
             let rows = stmt
-                .query_map(params![deck_id, variant, MANUAL_STATE], entry_row)
+                .query_map(params![deck_id, variant, AUTO_STATE], entry_row)
                 .map_err(|e| e.to_string())?;
             rows.collect::<rusqlite::Result<_>>()
                 .map_err(|e| e.to_string())?
@@ -1866,7 +2069,11 @@ pub fn reconcile_in(
 /// fills from triggers on `deck_cards`, `deck_categories` and `decks` — read here and **never
 /// cleared**: `managed_wishlist::settle` is what empties it, which is why `with_write` runs this
 /// *before* the settle rather than after it, where the table would already be empty. A
-/// connection that was never armed has no table and nothing to reconcile.
+/// connection that was never armed has no table and nothing to reconcile. **The triggers user
+/// schema v55 added on `deck_token_printings` and `deck_tokens` mark a table of their own**,
+/// `managed_wishlist_token_dirty`, which the settle alone reads: a token write changes no card, so
+/// it gives this reconcile nothing to do, and marked here every stepper press would derive both
+/// of its deck's lists for nothing.
 ///
 /// One transaction per deck, so a deck that fails leaves every other deck reconciled; the first
 /// failure is the answer.
@@ -2136,7 +2343,7 @@ pub fn convert_legacy_picks(conn: &Connection) -> Result<(), String> {
                     .flatten()
             });
             let finish = default_finish(listed.as_deref());
-            let converted = one_pick(&tx, || {
+            let converted = one_row(&tx, || {
                 let (uid, named_here) = name_of(&tx, pick)?;
                 for variant in crate::schema::DECK_VARIANTS {
                     convert_pick_in(&tx, pick, &uid, variant, finish)?;
@@ -2156,25 +2363,28 @@ pub fn convert_legacy_picks(conn: &Connection) -> Result<(), String> {
         }
     }
     for pick in owed {
-        if let Err(e) = one_pick(&tx, || clear_pick(&tx, pick)) {
+        if let Err(e) = one_row(&tx, || clear_pick(&tx, pick)) {
             skipped(pick, &e);
         }
     }
     tx.commit().map_err(|e| e.to_string())
 }
 
-/// Run one pick's writes inside a savepoint of their own: released when `f` succeeds, rolled back
-/// to when it fails, so one pick's failure costs that pick alone — [`convert_legacy_picks`]' doc.
-fn one_pick<T>(tx: &Connection, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
-    tx.execute_batch("SAVEPOINT convert_pick")
+/// Run one row's writes inside a savepoint of their own: released when `f` succeeds, rolled back
+/// to when it fails, so one row's failure costs that row alone — a pick in
+/// [`convert_legacy_picks`], a dismissal in [`retire_hidden`]. Both are launch passes over every
+/// deck at once, where one transaction for the file would let one bad row undo every other, at
+/// every launch, for as long as it kept failing.
+fn one_row<T>(tx: &Connection, f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+    tx.execute_batch("SAVEPOINT token_pass")
         .map_err(|e| e.to_string())?;
     match f() {
         Ok(value) => tx
-            .execute_batch("RELEASE convert_pick")
+            .execute_batch("RELEASE token_pass")
             .map(|()| value)
             .map_err(|e| e.to_string()),
         Err(e) => {
-            let _ = tx.execute_batch("ROLLBACK TO convert_pick; RELEASE convert_pick");
+            let _ = tx.execute_batch("ROLLBACK TO token_pass; RELEASE token_pass");
             Err(e)
         }
     }
@@ -2413,8 +2623,302 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
     })
 }
 
+/// **The launch pass that retires a dismissal** (user schema v55, the token-improvements spec
+/// §3.3): every token still `hidden` comes back as an ordinary token **at zero, its printings
+/// kept** — the reader's own rule, and the whole of what this does. Per token:
+///
+/// 1. **Its entries' quantities go to zero** in both lists, at the printings they name.
+/// 2. **So does its legacy count**: `deck_tokens.quantity` is `NULL` where the row carries no pick
+///    and `0` where a v51 pick still waits for conversion. [`write_state`] alone keeps a legacy
+///    count — a dismissed Treasure counted at 3 before v52 would come back at 3 in every list with
+///    no entries — and a paired device climbing from v51 runs this pass *before* the pull that
+///    converts its picks, at `quantity ?? 1`; the `0` is what makes those entries arrive at zero.
+///    ([`clear_legacy_count`], which a write that settles a `hidden` sooner runs too.)
+/// 3. **Its state becomes `auto` where the deck still makes the token** — in either list,
+///    because the state is shared by both — **or where it holds nothing**, and `manual` where it
+///    holds an entry or a pick nothing makes, through [`write_state`]. A dismissed Treasure the
+///    deck makes is then no row at all; a dismissed token nothing makes stays on the wall as the
+///    reader's own, at zero, in the lists that hold it; and one nothing makes or holds is gone,
+///    where `manual` would be a row drawn in no list.
+///
+/// **A pass and not a rung**, because whether the deck still makes the token is [`derive`]'s
+/// answer, which reads `cards.raw`, and no rung reads the corpus — `migrate_user` runs before
+/// `migrate_corpus`. `schema::prepare_database` runs it after [`repair_entry_finishes`] and
+/// `deck_meta::refile_stray_theory_cards_at_launch`, logged and left owing like them
+/// ([`retire_hidden_logged`]), and then drains the marks every one of those passes left —
+/// [`reconcile_dirty_logged`] and the managed wishlist's settle — so the first v55 launch settles
+/// each theory deck's managed wishlist on the zeroed counts rather than before them.
+///
+/// **Behind `capture::suppressed`**, `src-tauri/CLAUDE.md`'s rule for a write every device
+/// derives for itself: each device retires the same synced rows over the same corpus to the same
+/// answer, so there is nothing to announce — and an announced zero would reach a peer still on
+/// v54 as a count nobody set there. The entries are rewritten **in place**, for
+/// [`repair_entry_finishes`]' reason: each keeps its row and its `sync_uid`, so the next captured
+/// step on it names the row every peer holds.
+///
+/// **Idempotent, which is what Review Focus 1 rests on.** A `hidden` that arrives by sync after
+/// the pass has run — an older peer's dismissal — draws as an ordinary token, because no reader
+/// treats the word as hidden any more, until the next launch retires it here. A database with
+/// nothing dismissed costs one read.
+///
+/// ⚠️ **A token the pass cannot prove unmade waits.** Where no list derives the token and a list
+/// has a maker this corpus cannot read ([`Derivation::unreadable`]) — a device synced before its
+/// corpus downloaded — `manual` would be a guess, and a wrong one keeps the token's entries from
+/// every reconcile after its maker is cut. So that token is left as it is, entries and all, for a
+/// launch whose corpus can answer: retired whole or not at all. One the deck provably still makes
+/// is retired whatever else in the deck is unreadable.
+///
+/// **One savepoint per token** ([`one_row`]), [`convert_legacy_picks`]' shape: a token whose
+/// derivation or write fails is rolled back to its own savepoint, written to stderr and left
+/// `hidden` for the next launch, and every other token is still retired.
+pub fn retire_hidden(conn: &Connection) -> Result<(), String> {
+    let hidden: Vec<(i64, String)> = {
+        let mut stmt = conn
+            .prepare(
+                "SELECT deck_id, oracle_id FROM deck_tokens
+                  WHERE state = ?1
+                  ORDER BY deck_id, oracle_id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![HIDDEN_STATE], |r| Ok((r.get(0)?, r.get(1)?)))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(|e| e.to_string())?
+    };
+    if hidden.is_empty() {
+        return Ok(());
+    }
+    crate::sync_engine::capture::suppressed(conn, || {
+        let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+        // One derivation per list per deck, however many of its tokens were dismissed. A
+        // derivation is a read, so one cached before a later token's savepoint rolled back is
+        // still true.
+        let mut derived: Derivations = HashMap::new();
+        for (deck_id, oracle_id) in &hidden {
+            let retired = one_row(&tx, || retire_one(&tx, &mut derived, *deck_id, oracle_id));
+            if let Err(e) = retired {
+                eprintln!(
+                    "a dismissed token (deck {deck_id}, token {oracle_id}) could not be brought \
+                     back at launch: {e}\nIt is tried again at the next launch, and draws as an \
+                     ordinary token until then; every other dismissed token was tried on its own."
+                );
+            }
+        }
+        tx.commit().map_err(|e| e.to_string())
+    })
+}
+
+/// [`retire_hidden`]'s cache: one [`Derivation`] per deck per list.
+type Derivations = HashMap<(i64, &'static str), Derivation>;
+
+/// One dismissal, retired — [`retire_hidden`]'s three steps, or nothing where the token cannot be
+/// proved unmade.
+fn retire_one(
+    tx: &Connection,
+    derived: &mut Derivations,
+    deck_id: i64,
+    oracle_id: &str,
+) -> Result<(), String> {
+    let (mut made, mut unsure) = (false, false);
+    for variant in crate::schema::DECK_VARIANTS {
+        let derivation = match derived.entry((deck_id, variant)) {
+            std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+            std::collections::hash_map::Entry::Vacant(e) => e.insert(derive(tx, deck_id, variant)?),
+        };
+        made |= derivation.tokens.contains_key(oracle_id);
+        unsure |= derivation.unreadable;
+    }
+    if !made && unsure {
+        return Ok(());
+    }
+    tx.execute(
+        "UPDATE deck_token_printings SET quantity = 0, updated_at = unixepoch()
+          WHERE deck_id = ?1 AND oracle_id = ?2",
+        params![deck_id, oracle_id],
+    )
+    .map_err(|e| e.to_string())?;
+    clear_legacy_count(tx, deck_id, oracle_id)?;
+    // A pick still waiting for conversion counts as held: it becomes the token's entries.
+    let held: bool = tx
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM deck_token_printings
+                            WHERE deck_id = ?1 AND oracle_id = ?2)
+                 OR EXISTS(SELECT 1 FROM deck_tokens
+                            WHERE deck_id = ?1 AND oracle_id = ?2 AND card_id IS NOT NULL)",
+            params![deck_id, oracle_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let state = if made || !held {
+        AUTO_STATE
+    } else {
+        MANUAL_STATE
+    };
+    write_state(tx, deck_id, oracle_id, state)
+}
+
+/// [`retire_hidden`] with its failure written to stderr rather than returned — what
+/// `schema::prepare_database` calls, [`reconcile_dirty_logged`]'s shape, because a dismissal not
+/// yet retired draws as an ordinary token anyway and is tried again at the next launch: nothing a
+/// reader could act on is gained by refusing to start over one.
+pub fn retire_hidden_logged(conn: &Connection) {
+    if let Err(e) = retire_hidden(conn) {
+        eprintln!(
+            "the decks' dismissed tokens could not be brought back at launch: {e}\nThey are \
+             tried again at the next launch; until then each draws as an ordinary token."
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------------------
-// The six commands
+// Every token in the game — the picker's All tokens
+// ---------------------------------------------------------------------------------------
+
+/// One paper printing of a token or an emblem, **anywhere in the corpus** — a row of
+/// [`list_token_printings`], what Add printing's **All tokens** lists (the token-improvements spec
+/// §3.6).
+///
+/// **The printings picker's own [`crate::card::Printing`], flattened**, so its tile code draws
+/// one of these without a branch — finish prices, picture and chin included — with the token's
+/// facts beside it: the `oracle_id` the picker groups by and a pick is filed under, the name its
+/// group heading reads, and the fields `deckTokens.ts`' `tokenSubtitle` tells two `Wurm`s apart
+/// by, the same ones [`DeckTokenRow`] carries (`typeLine` among them, because that function's
+/// argument type names it).
+///
+/// **No `layout` of its own**: the printing's is on the wire already, and a field of the same
+/// name beside a flattened struct would write the key twice.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TokenPrinting {
+    pub oracle_id: String,
+    pub name: String,
+    pub type_line: Option<String>,
+    /// Concatenated letters, [`DeckTokenRow::colors`]' shape.
+    pub colors: Option<String>,
+    /// A string, [`DeckTokenRow::power`]'s reason.
+    pub power: Option<String>,
+    pub toughness: Option<String>,
+    pub oracle_text: Option<String>,
+    #[serde(flatten)]
+    pub printing: crate::card::Printing,
+}
+
+/// A list of words as the SQL literals an `IN (…)` takes — [`crate::sorting::finish_literals`]'
+/// rule, so the layout lists below are [`TOKEN_LAYOUTS`] and [`TWO_SIDED_LAYOUTS`] themselves
+/// rather than a second spelling of them.
+fn sql_words(words: &[&str]) -> String {
+    words
+        .iter()
+        .map(|w| format!("'{w}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+/// **Every paper printing [`is_listed_token`] answers yes for**, priced at `market` — the All
+/// tokens toggle's list, grouped by token: ordered by name, then `oracle_id` (two tokens can share
+/// a name), then newest printing first by `list_printings`' own tail.
+///
+/// **One statement with the predicate in SQL**, both of [`is_listed_token`]'s arms: a token or
+/// two-sided layout with a type line — or any ` // ` face of it — beginning `Token` or `Emblem`;
+/// or a game helper, a [`HELPER_LAYOUTS`] row outside a set of [`OTHER_GAME_SET_TYPES`] with a
+/// face that is exactly [`HELPER_FACE`] and no [`CHECKLIST_WORDS`], or with [`FACE_DOWN_WORDS`] in
+/// its text. `token_printings_answers_every_token_and_nothing_else` and
+/// `token_printings_keeps_the_game_helpers_and_leaves_out_other_games` hold the SQL to the Rust
+/// function over fixtures of every shape, so the two cannot come to disagree about what the picker
+/// offers. `LIKE` is ASCII-case-insensitive where `starts_with` is not, and on the debug corpus
+/// that changes nothing (checked with a case-sensitive `GLOB`, `node:sqlite`, 2026-09-27); the
+/// helper arm is `instr`, case-sensitive like its Rust.
+///
+/// **The set type is a correlated `NOT EXISTS` rather than a join**: `sets` is a thousand rows keyed
+/// by code, so each helper row is one primary-key lookup of its own set — and a card whose set
+/// `sets` does not list is kept, as a helper in doubt is. **Never a `NOT IN` over the other games'
+/// codes**: `sets.code` is a `TEXT PRIMARY KEY` without `NOT NULL`, and one row holding a NULL code
+/// makes `x NOT IN (…)` NULL for every `x`, which dropped every helper while [`is_listed_token`]
+/// kept them (`token_printings_keeps_the_helpers_when_a_set_has_no_code`).
+///
+/// **The list, measured over a copy of the debug corpus on 2026-09-28**: 3 303 printings over 1 096
+/// oracle ids while the layout decided alone; 3 023 over 911 for one day, when only a `Token` or
+/// `Emblem` face was listed and the live pass's World Championships ads went with every helper; and
+/// **3 110 over 940** with the game helpers back — 87 printings of 29 helpers returned, and the
+/// 193 still left out are the other games' cards, the minigames and the checklists.
+///
+/// **No index is added**, because this runs on a press and not per keystroke: the toggle asks
+/// once and the picker's search box narrows the answer in the page. **And `NOT INDEXED` keeps
+/// SQLite from the plan it picks unasked**, which walks `idx_cards_name` to skip the sort and pays
+/// a table lookup for each of the corpus's 118 610 rows: a plain scan with a sort of the ~3 300
+/// matches was faster in both paired runs on that corpus the same day — ~0.7 s against 3–6 s, and
+/// ~2.4 s against 4–55 s — on a machine busy enough that the absolute figures are noise and only
+/// the order is worth quoting.
+///
+/// A row with no `oracle_id` is skipped — [`printing_from`]'s fence, around a case that does not
+/// occur — because it could not be filed as an entry of any token.
+pub fn list_token_printings(
+    conn: &Connection,
+    market: Marketplace,
+) -> Result<Vec<TokenPrinting>, String> {
+    /// The token's own columns, in front of [`crate::card::printing_columns`] so that list's
+    /// reader starts at a fixed offset, the one [`crate::card::printing_row`] is handed.
+    const PRINTING_AT: usize = 7;
+    let lines = TOKEN_LINE_WORDS
+        .iter()
+        .map(|word| format!("c.type_line LIKE '{word}%' OR c.type_line LIKE '% // {word}%'"))
+        .collect::<Vec<_>>()
+        .join(" OR ");
+    // `' // ' || line || ' // '` holds ` // Card // ` exactly when one face is `Card` — the
+    // Rust's `split(" // ").any(…)` without a JSON parse or a recursive query.
+    let sql = format!(
+        "SELECT c.oracle_id, c.name, c.type_line, c.colors, c.power, c.toughness, c.oracle_text,
+                {printing}
+           FROM cards c NOT INDEXED
+          WHERE c.is_paper = 1
+            AND ((c.layout IN ({tokens}, {two_sided}) AND ({lines}))
+                 OR (c.layout IN ({helpers})
+                     AND NOT EXISTS
+                         (SELECT 1 FROM sets s
+                           WHERE s.code = c.set_code AND s.set_type IN ({other_games}))
+                     AND ((instr(' // ' || COALESCE(c.type_line, '') || ' // ',
+                                 ' // {helper_face} // ') > 0
+                           AND instr(COALESCE(c.oracle_text, ''), '{checklist}') = 0)
+                          OR instr(COALESCE(c.oracle_text, ''), '{face_down}') > 0)))
+          ORDER BY c.name, c.oracle_id, c.released_at DESC, c.set_code, c.collector_number, c.id",
+        printing = crate::card::printing_columns(market),
+        tokens = sql_words(&TOKEN_LAYOUTS),
+        two_sided = sql_words(&TWO_SIDED_LAYOUTS),
+        helpers = sql_words(&HELPER_LAYOUTS),
+        other_games = sql_words(&OTHER_GAME_SET_TYPES),
+        helper_face = HELPER_FACE,
+        checklist = CHECKLIST_WORDS,
+        face_down = FACE_DOWN_WORDS,
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            let oracle_id: Option<String> = r.get(0)?;
+            let Some(oracle_id) = oracle_id.filter(|o| !o.trim().is_empty()) else {
+                return Ok(None);
+            };
+            Ok(Some(TokenPrinting {
+                oracle_id,
+                name: r.get(1)?,
+                type_line: r.get(2)?,
+                colors: r.get(3)?,
+                power: r.get(4)?,
+                toughness: r.get(5)?,
+                oracle_text: r.get(6)?,
+                printing: crate::card::printing_row(r, PRINTING_AT)?,
+            }))
+        })
+        .map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for row in rows {
+        out.extend(row.map_err(|e| e.to_string())?);
+    }
+    Ok(out)
+}
+
+// ---------------------------------------------------------------------------------------
+// The six commands — the deck's read, the four writes, and every token in the game
 // ---------------------------------------------------------------------------------------
 
 /// [`deck_token_rows`]' command. Read-only connection on the blocking pool, as
@@ -2425,8 +2929,8 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
 /// rather than refusing to draw a deck's tokens over a setting. It prices each entry's
 /// [`DeckTokenRow::unit_price`], which a pile heading sums. The art picker the reader opens next
 /// is `card_printings`, which already answers on a token — its predicate is
-/// `oracle_id = ?1 AND is_paper = 1` and every token row satisfies both — so this feature adds no
-/// second read command.
+/// `oracle_id = ?1 AND is_paper = 1` and every token row satisfies both. Only its **All tokens**
+/// toggle, which is not about one token, reads [`token_printings`] instead.
 #[tauri::command]
 pub async fn deck_tokens(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
@@ -2445,7 +2949,7 @@ pub async fn deck_tokens(
 
 /// [`set_quantity`]'s command. `entry` is `{ cardId, finish }`, or `null` for the implicit entry.
 ///
-/// Plain [`crate::sync::with_write`] and **not** `with_write_owned`, for all five writes: that one
+/// Plain [`crate::sync::with_write`] and **not** `with_write_owned`, for all four writes: that one
 /// is for the commands that move copies across the collection/deck boundary, and no token write
 /// touches the collection.
 #[tauri::command]
@@ -2508,41 +3012,50 @@ pub async fn deck_token_add_printing(
     .map_err(|e| format!("that token could not be added: {e}"))?
 }
 
-/// [`set_state`]'s command.
+/// [`remove_entry`]'s command — **Remove printing**. `entry` is always `{ cardId, finish }`: an
+/// implicit entry is not in the table, so there is nothing to remove, and the page draws the
+/// button on a stored entry only.
 ///
-/// **The token's state is the wire key `state`, so the managed [`crate::sync::AppState`] is
-/// `app` here** — Tauri injects a `tauri::State` by its type and never by its name, which is what
-/// frees the name for the argument the page sends. (The retired `deck_token_set` took
-/// `tokenState` instead, and `src/lib/ipc.ts` had to know the rename.)
+/// It replaced two commands at v55: `deck_token_state`, whose dismiss went with the eye button
+/// (and whose restore had nothing left to restore once [`retire_hidden`] runs), and
+/// `deck_token_reset`, which one Remove per printing covers.
 #[tauri::command]
-pub async fn deck_token_state(
-    app: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
-    deck_id: i64,
-    oracle_id: String,
-    state: String,
-) -> Result<(), String> {
-    let app = app.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::sync::with_write(&app, |c| set_state(c, deck_id, &oracle_id, &state))
-    })
-    .await
-    .map_err(|e| format!("that token could not be saved: {e}"))?
-}
-
-/// [`reset`]'s command.
-#[tauri::command]
-pub async fn deck_token_reset(
+pub async fn deck_token_remove(
     state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
     deck_id: i64,
     variant: String,
     oracle_id: String,
+    entry: TokenEntryKey,
 ) -> Result<(), String> {
     let app = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::sync::with_write(&app, |c| reset(c, deck_id, &variant, &oracle_id))
+        crate::sync::with_write(&app, |c| {
+            remove_entry(c, deck_id, &variant, &oracle_id, &entry)
+        })
     })
     .await
-    .map_err(|e| format!("that token could not be reset: {e}"))?
+    .map_err(|e| format!("that token's printing could not be removed: {e}"))?
+}
+
+/// [`list_token_printings`]' command — every paper token and emblem printing, for Add printing's
+/// **All tokens**. Read-only connection on the blocking pool, [`deck_tokens`]' shape, and
+/// `marketplace` is `card_printings`' argument exactly, so the two pickers price alike.
+///
+/// **The read wears the `list_` name and the command the short one**, `card::list_printings` and
+/// `card_printings`' arrangement: `generate_handler!` registers a command under its last path
+/// segment, so the name here is the wire name `src/lib/ipc.ts` invokes.
+#[tauri::command]
+pub async fn token_printings(
+    state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
+    marketplace: Option<String>,
+) -> Result<Vec<TokenPrinting>, String> {
+    let app = state.inner().clone();
+    let market = Marketplace::from_opt(marketplace.as_deref());
+    tauri::async_runtime::spawn_blocking(move || {
+        list_token_printings(&crate::sync::lock_db_read(&app), market)
+    })
+    .await
+    .map_err(|e| format!("the tokens could not be read: {e}"))?
 }
 
 #[cfg(test)]
@@ -3039,9 +3552,9 @@ mod tests {
                 row.state.as_str(),
                 row.implicit
             ),
-            (treasure().id, "nonfoil", 1, "auto", true),
+            (treasure().id, "nonfoil", 0, "auto", true),
             "nothing stored is the implicit entry — the default printing in its default finish, \
-             at one, `auto` — never a null"
+             at zero, `auto` — never a null"
         );
     }
 
@@ -3705,7 +4218,7 @@ mod tests {
     // ── Rule 1: one row per entry, or one implicit row ───────────────────────────────
 
     /// **A token with no entries draws one implicit entry** — the resolver's default printing, in
-    /// its default finish, at `deck_tokens.quantity ?? 1`.
+    /// its default finish, at `deck_tokens.quantity ?? 0`.
     #[test]
     fn a_derived_token_with_no_entries_yields_one_implicit_row() {
         let conn = open();
@@ -3717,13 +4230,83 @@ mod tests {
         assert_eq!(out[0].card_id, treasure().id, "the default printing");
         assert_eq!(out[0].card_id, out[0].default_card_id);
         assert_eq!(out[0].finish, "nonfoil");
-        assert_eq!(out[0].quantity, 1, "no legacy quantity, so one");
+        assert_eq!(out[0].quantity, 0, "no legacy quantity, so none");
         assert_eq!(out[0].state, "auto", "no row is `auto`, never a null");
+    }
 
-        // A legacy quantity — a pre-v52 override that named no printing — is the implicit
-        // entry's quantity, zero included.
-        seed_state(&conn, deck, treasure().oracle_id, Some(0), "auto");
-        assert_eq!(rows(&conn, deck)[0].quantity, 0);
+    /// **An untouched token reads zero, and the first step writes one** (the token-improvements
+    /// spec §3.1): a token is something the reader starts to use, so nothing is counted until
+    /// they count it — and the `+` that does is the write that materialises the entry.
+    #[test]
+    fn an_untouched_token_reads_zero_and_its_first_step_writes_one() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+
+        let out = rows(&conn, deck);
+        assert_eq!(
+            (out.len(), out[0].implicit, out[0].quantity),
+            (1, true, 0),
+            "the Tithe makes a Treasure, and nobody has counted one yet"
+        );
+
+        set_quantity(&conn, deck, "live", treasure().oracle_id, None, 1).unwrap();
+        assert_eq!(
+            entries(&conn, deck),
+            vec![e("live", treasure().oracle_id, treasure().id, "nonfoil", 1)],
+            "one entry, at one, at the printing the reader was looking at"
+        );
+    }
+
+    /// **A legacy quantity is still honoured** — a pre-v52 override that named no printing is the
+    /// count the reader set, and the new default is only what an *untouched* token reads.
+    #[test]
+    fn a_legacy_quantity_is_still_honoured() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        seed_state(&conn, deck, treasure().oracle_id, Some(3), "auto");
+
+        let out = rows(&conn, deck);
+        assert_eq!((out[0].implicit, out[0].quantity), (true, 3));
+    }
+
+    /// **A hand-added token is drawn only in a list that holds an entry of it** (spec §3.4): the
+    /// hand-added tail emits no implicit row for a list with none. A Soldier added to the live
+    /// list is not on the plan's wall, a press naming its implicit entry there has nothing to
+    /// address, and a first add there files the printing alone — where the tail's implicit row
+    /// used to be materialised beside it and the add landed at two.
+    #[test]
+    fn a_hand_added_token_is_drawn_only_in_a_list_that_holds_an_entry_of_it() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        add_printing(&conn, deck, "live", soldier().id, None).unwrap();
+
+        let live = rows(&conn, deck);
+        assert_eq!(names(&live), vec!["Treasure", "Soldier"]);
+        assert!(!live[1].derived, "the Soldier is the reader's own");
+        let theory = deck_token_rows(&conn, deck, "theory", Marketplace::Tcgplayer).unwrap();
+        assert!(
+            theory.is_empty(),
+            "the plan makes nothing and holds no Soldier: {theory:?}"
+        );
+        assert_eq!(
+            set_quantity(&conn, deck, "theory", soldier().oracle_id, None, 1),
+            Err(TOKEN_GONE.to_owned()),
+            "and there is no implicit Soldier in the plan to step"
+        );
+
+        assert_eq!(
+            add_printing(&conn, deck, "theory", soldier().id, None).unwrap(),
+            1,
+            "an add in the plan is that one copy and nothing materialised beside it"
+        );
+        assert_eq!(
+            entries(&conn, deck),
+            vec![
+                e("live", soldier().oracle_id, soldier().id, "nonfoil", 1),
+                e("theory", soldier().oracle_id, soldier().id, "nonfoil", 1),
+            ]
+        );
     }
 
     /// An implicit entry on a foil-only printing is the foil — **its sole finish**, never a
@@ -3807,8 +4390,9 @@ mod tests {
         assert!(!theory[0].implicit);
     }
 
-    /// A dismissed token is still answered — every one of its rows carrying `hidden` — and left
-    /// for TypeScript to drop. The state is shared by both lists.
+    /// A dismissed token is still answered — every one of its rows carrying `hidden` — and drawn
+    /// like any other, since v55, until the next launch retires it. The state is shared by both
+    /// lists.
     #[test]
     fn a_dismissed_tokens_rows_carry_its_state() {
         let conn = open();
@@ -3816,7 +4400,7 @@ mod tests {
         play(&conn, deck, main, &tithe(), "theory");
         seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 1);
         seed_entry(&conn, deck, "live", &treasure_older(), "nonfoil", 1);
-        set_state(&conn, deck, treasure().oracle_id, "hidden").unwrap();
+        seed_state(&conn, deck, treasure().oracle_id, None, "hidden");
 
         let live = rows(&conn, deck);
         assert_eq!(
@@ -3857,11 +4441,37 @@ mod tests {
         );
     }
 
+    /// **Review Focus 1: a hand-added token dismissed on an older peer is still drawn** — it
+    /// arrives by sync as `hidden`, nothing derives it, and it holds a live entry. The tail
+    /// answers every token nothing makes whose state is not `auto`, so it draws in the list that
+    /// holds it until the next launch retires the word; nothing may hide it meanwhile.
+    #[test]
+    fn a_dismissed_token_nothing_makes_is_drawn_where_it_holds_an_entry() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        seed_state(&conn, deck, soldier().oracle_id, None, "hidden");
+        seed_entry(&conn, deck, "live", &soldier(), "nonfoil", 2);
+
+        let live = rows(&conn, deck);
+        assert_eq!(names(&live), vec!["Treasure", "Soldier"]);
+        assert_eq!(
+            (live[1].derived, live[1].quantity, live[1].state.as_str()),
+            (false, 2, "hidden")
+        );
+        assert!(
+            deck_token_rows(&conn, deck, "theory", Marketplace::Tcgplayer)
+                .unwrap()
+                .is_empty(),
+            "and only where it holds an entry"
+        );
+    }
+
     #[test]
     fn a_manual_state_on_a_derived_token_is_not_appended_twice() {
         let conn = open();
         let (deck, _, _) = tithe_deck(&conn);
-        set_state(&conn, deck, treasure().oracle_id, "manual").unwrap();
+        seed_state(&conn, deck, treasure().oracle_id, None, "manual");
 
         let out = rows(&conn, deck);
         assert_eq!(out.len(), 1);
@@ -3896,7 +4506,7 @@ mod tests {
             "one live entry at the default printing, and nothing in theory"
         );
         let theory = deck_token_rows(&conn, deck, "theory", Marketplace::Tcgplayer).unwrap();
-        assert!(theory[0].implicit && theory[0].quantity == 1);
+        assert!(theory[0].implicit && theory[0].quantity == 0);
     }
 
     /// An implicit entry picks up its legacy quantity when it is materialised, so the swap that
@@ -4036,9 +4646,10 @@ mod tests {
                 treasure().oracle_id,
                 treasure_older().id,
                 "foil",
-                1
+                0
             )],
-            "art B replaces art A — a swap is not an add"
+            "art B replaces art A at A's count, which for an untouched token is none — a swap \
+             is not an add"
         );
     }
 
@@ -4164,8 +4775,16 @@ mod tests {
             ),
             gone
         );
-        assert_eq!(set_state(&conn, 9999, treasure().oracle_id, "hidden"), gone);
-        assert_eq!(reset(&conn, 9999, "live", treasure().oracle_id), gone);
+        assert_eq!(
+            remove_entry(
+                &conn,
+                9999,
+                "live",
+                treasure().oracle_id,
+                &treasure_key(&treasure(), "nonfoil"),
+            ),
+            gone
+        );
         assert_eq!(
             add_printing(&conn, 9999, "live", treasure().id, None).map(|_| ()),
             gone
@@ -4174,23 +4793,30 @@ mod tests {
 
     // ── Rule 5: adding a printing ────────────────────────────────────────────────────
 
-    /// **Adding art B keeps art A** — the implicit entry is materialised first — and a second add
-    /// of B steps it up.
+    /// **Adding art B keeps art A** — the implicit entry is materialised first, at the count it
+    /// was drawn at — and a second add of B steps it up.
+    ///
+    /// **An untouched token's implicit entry is at zero**, so the add does not materialise it —
+    /// it would be one of the token's zero entries the same write clears — and B is filed alone.
+    /// A legacy count is what makes A worth keeping.
     #[test]
     fn adding_a_printing_materialises_the_implicit_one_then_steps_up() {
         let conn = open();
         let (deck, _, _) = tithe_deck(&conn);
-
         assert_eq!(
             add_printing(&conn, deck, "live", treasure_older().id, Some("foil")).unwrap(),
             1
         );
         assert_eq!(
             entries(&conn, deck),
-            vec![
-                e("live", treasure().oracle_id, treasure_older().id, "foil", 1),
-                e("live", treasure().oracle_id, treasure().id, "nonfoil", 1),
-            ]
+            vec![e(
+                "live",
+                treasure().oracle_id,
+                treasure_older().id,
+                "foil",
+                1
+            )],
+            "an untouched Treasure's A was at zero, so B is filed alone"
         );
         assert_eq!(
             add_printing(&conn, deck, "live", treasure_older().id, Some("foil")).unwrap(),
@@ -4202,6 +4828,40 @@ mod tests {
             vec![],
             "a token the deck derives stays `auto` — no row"
         );
+
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        seed_state(&conn, deck, treasure().oracle_id, Some(2), "auto");
+        assert_eq!(
+            add_printing(&conn, deck, "live", treasure_older().id, Some("foil")).unwrap(),
+            1
+        );
+        assert_eq!(
+            entries(&conn, deck),
+            vec![
+                e("live", treasure().oracle_id, treasure_older().id, "foil", 1),
+                e("live", treasure().oracle_id, treasure().id, "nonfoil", 2),
+            ],
+            "a counted A is materialised at its count and kept beside B"
+        );
+    }
+
+    /// **The first add of an untouched token announces one entry and nothing else** — its implicit
+    /// entry is at zero, so materialising it only to clear it in the same write would be a captured
+    /// insert and delete of a row no reader ever saw, sent to every device in the group.
+    #[test]
+    fn adding_a_printing_to_an_untouched_token_announces_one_entry() {
+        let conn = paired();
+        let (deck, _, _) = tithe_deck(&conn);
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        add_printing(&conn, deck, "live", treasure_older().id, Some("foil")).unwrap();
+        let ops: Vec<String> = recorded(&conn)
+            .into_iter()
+            .filter(|(t, ..)| t == "deck_token_printings")
+            .map(|(_, _, kind, _)| kind)
+            .collect();
+        assert_eq!(ops, ["put"], "one put for the added printing");
     }
 
     /// **A token nothing derives becomes `manual`** — the reader's own, which no cut reconciles
@@ -4232,13 +4892,13 @@ mod tests {
         assert_eq!(rows(&conn, deck).len(), 1, "and it is on the wall");
     }
 
-    /// An add of a token the reader dismissed brings it back: *put this on the wall* is what an
-    /// add is, and a printing filed under a token that stays hidden is a press nobody can see.
+    /// An add of a token still dismissed from before v55 — one the launch has not retired yet —
+    /// sends it back to `auto`, where the retirement would have sent it.
     #[test]
     fn adding_a_printing_of_a_dismissed_token_restores_it() {
         let conn = open();
         let (deck, _, _) = tithe_deck(&conn);
-        set_state(&conn, deck, treasure().oracle_id, "hidden").unwrap();
+        seed_state(&conn, deck, treasure().oracle_id, None, "hidden");
 
         add_printing(&conn, deck, "live", treasure_older().id, Some("nonfoil")).unwrap();
         assert!(
@@ -4331,55 +4991,300 @@ mod tests {
         assert!(entries(&conn, deck).is_empty());
     }
 
-    // ── Reset and state ──────────────────────────────────────────────────────────────
+    // ── Remove printing ──────────────────────────────────────────────────────────────
 
-    /// Reset deletes **that list's** entries of **that token**, and nothing else — not the other
-    /// list's, not another token's, not the state.
+    /// **A derived token's entries go one at a time, the last included** — which is what a
+    /// stepper never does, holding the last at zero — and a list left with none draws the
+    /// implicit entry again, at zero: Reset's old answer, reached one printing at a time. The
+    /// token's state is not this write's.
     #[test]
-    fn a_reset_deletes_that_lists_entries_only() {
+    fn removing_a_derived_tokens_last_entry_falls_back_to_its_default_printing_at_zero() {
         let conn = open();
-        let (deck, main, _) = tithe_deck(&conn);
-        play(&conn, deck, main, &tithe(), "theory");
-        soldier().insert(&conn);
-        seed_state(&conn, deck, soldier().oracle_id, None, "manual");
-        seed_state(&conn, deck, treasure().oracle_id, Some(2), "auto");
+        let (deck, _, _) = tithe_deck(&conn);
         seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 2);
-        seed_entry(&conn, deck, "live", &treasure_older(), "foil", 1);
-        seed_entry(&conn, deck, "theory", &treasure(), "nonfoil", 4);
-        seed_entry(&conn, deck, "live", &soldier(), "nonfoil", 1);
+        seed_entry(&conn, deck, "live", &treasure_older(), "foil", 3);
 
-        reset(&conn, deck, "live", treasure().oracle_id).unwrap();
+        remove_entry(
+            &conn,
+            deck,
+            "live",
+            treasure().oracle_id,
+            &treasure_key(&treasure(), "nonfoil"),
+        )
+        .unwrap();
         assert_eq!(
             entries(&conn, deck),
-            vec![
-                e("live", soldier().oracle_id, soldier().id, "nonfoil", 1),
-                e("theory", treasure().oracle_id, treasure().id, "nonfoil", 4),
-            ]
+            vec![e(
+                "live",
+                treasure().oracle_id,
+                treasure_older().id,
+                "foil",
+                3
+            )],
+            "one of two goes whatever its count, and the other is untouched"
         );
-        assert_eq!(stored(&conn, deck).len(), 2, "both states stand");
-        let live = rows(&conn, deck);
-        let treasure_row = live.iter().find(|r| r.name == "Treasure").unwrap();
-        assert!(treasure_row.implicit, "back to the implicit entry");
-        assert_eq!(treasure_row.quantity, 2, "at the legacy quantity");
+
+        remove_entry(
+            &conn,
+            deck,
+            "live",
+            treasure().oracle_id,
+            &treasure_key(&treasure_older(), "foil"),
+        )
+        .unwrap();
+        assert!(entries(&conn, deck).is_empty(), "the last one goes too");
+        let out = rows(&conn, deck);
+        assert_eq!(out.len(), 1, "the Tithe still makes the Treasure");
+        assert_eq!(
+            (
+                out[0].card_id.as_str(),
+                out[0].finish.as_str(),
+                out[0].quantity,
+                out[0].implicit,
+                out[0].derived
+            ),
+            (treasure().id, "nonfoil", 0, true, true),
+            "back to the default printing, at zero"
+        );
+        assert!(stored(&conn, deck).is_empty(), "and the state is untouched");
+
+        assert_eq!(
+            remove_entry(
+                &conn,
+                deck,
+                "live",
+                treasure().oracle_id,
+                &treasure_key(&treasure_older(), "foil"),
+            ),
+            Err(ENTRY_GONE.to_owned()),
+            "a stale tile's second press is refused in words"
+        );
     }
 
-    /// The vocabulary is closed in Rust as well as by the DDL `CHECK`, so an unknown word is a
-    /// **sentence** rather than a constraint failure — `deck::set_folder`'s rule.
+    /// **Review Focus 3: a hand-added token's last entry in one list goes while the other list
+    /// still holds one** — it leaves this list's band only, and stays the reader's own.
     #[test]
-    fn an_unknown_state_word_is_refused_by_name() {
+    fn removing_a_hand_added_tokens_last_entry_in_one_list_keeps_it_in_the_other() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        add_printing(&conn, deck, "live", soldier().id, None).unwrap();
+        add_printing(&conn, deck, "theory", soldier().id, None).unwrap();
+
+        remove_entry(
+            &conn,
+            deck,
+            "theory",
+            soldier().oracle_id,
+            &treasure_key(&soldier(), "nonfoil"),
+        )
+        .unwrap();
+        assert_eq!(
+            entries(&conn, deck),
+            vec![e("live", soldier().oracle_id, soldier().id, "nonfoil", 1)]
+        );
+        assert!(
+            deck_token_rows(&conn, deck, "theory", Marketplace::Tcgplayer)
+                .unwrap()
+                .is_empty(),
+            "it leaves the plan's band"
+        );
+        assert_eq!(
+            names(&rows(&conn, deck)),
+            vec!["Treasure", "Soldier"],
+            "and stays on the live one's"
+        );
+        assert_eq!(
+            stored(&conn, deck),
+            vec![(
+                soldier().oracle_id.to_owned(),
+                None,
+                None,
+                "manual".to_owned()
+            )],
+            "still the reader's own"
+        );
+    }
+
+    /// **A hand-added token's last entry anywhere takes it off the deck** — its state goes back
+    /// to `auto`, which is no row, and neither list draws it.
+    #[test]
+    fn removing_a_hand_added_tokens_last_entry_everywhere_takes_it_off_the_deck() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        add_printing(&conn, deck, "live", soldier().id, None).unwrap();
+
+        remove_entry(
+            &conn,
+            deck,
+            "live",
+            soldier().oracle_id,
+            &treasure_key(&soldier(), "nonfoil"),
+        )
+        .unwrap();
+        assert!(entries(&conn, deck).is_empty());
+        assert!(stored(&conn, deck).is_empty(), "no `manual` row is left");
+        assert_eq!(names(&rows(&conn, deck)), vec!["Treasure"]);
+        assert!(
+            deck_token_rows(&conn, deck, "theory", Marketplace::Tcgplayer)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// **A remove is one `deck` history row and one undo step, and the undo puts the entry and
+    /// the state back** — the hand-added case, because it is the one whose step has to carry the
+    /// state as well. The payload names the printing by set and number, the way the drawer says
+    /// it, because the history is read after the corpus has moved.
+    #[test]
+    fn a_remove_files_one_history_row_and_one_undo_step_that_puts_it_back() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        add_printing(&conn, deck, "live", soldier().id, None).unwrap();
+        set_quantity(
+            &conn,
+            deck,
+            "live",
+            soldier().oracle_id,
+            Some(&treasure_key(&soldier(), "nonfoil")),
+            2,
+        )
+        .unwrap();
+        conn.execute("DELETE FROM deck_audit", []).unwrap();
+        let snap = |c: &Connection| (entries(c, deck), stored(c, deck));
+        let before = snap(&conn);
+
+        remove_entry(
+            &conn,
+            deck,
+            "live",
+            soldier().oracle_id,
+            &treasure_key(&soldier(), "nonfoil"),
+        )
+        .unwrap();
+        let after = snap(&conn);
+        assert_eq!(after, (vec![], vec![]));
+
+        assert_eq!(audit_rows(&conn), 1, "one history row");
+        let (kind, payload) = newest_audit(&conn, deck);
+        assert_eq!(kind, "deck", "a `deck` row, never a tenth kind");
+        assert_eq!(
+            (
+                &payload["field"],
+                &payload["action"],
+                &payload["name"],
+                &payload["oracle_id"],
+                &payload["list"],
+                &payload["card_id"],
+                &payload["finish"],
+                &payload["set_code"],
+                &payload["collector_number"],
+                &payload["from"],
+                &payload["to"],
+            ),
+            (
+                &json!("token"),
+                &json!("remove"),
+                &json!("Soldier"),
+                &json!(soldier().oracle_id),
+                &json!("live"),
+                &json!(soldier().id),
+                &json!("nonfoil"),
+                &json!("tmoc"),
+                &json!("8"),
+                &json!(2),
+                &serde_json::Value::Null,
+            ),
+            "the entry, the printing it was, and the copies it held"
+        );
+        let steps: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_undo WHERE deck_id = ?1",
+                params![deck],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(steps, 1, "one undo step");
+
+        let audit = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, audit, true).unwrap();
+        assert_eq!(
+            snap(&conn),
+            before,
+            "Undo puts the entry and the state back"
+        );
+        crate::deck_undo::apply_reversal(&conn, deck, audit, false).unwrap();
+        assert_eq!(snap(&conn), after, "and Redo takes them again");
+    }
+
+    /// **Every token write settles a stale `hidden`**, as an add always has: the dismissal is a
+    /// pre-v55 word nothing draws, and a write to the token is the reader using it. A step on a
+    /// Treasure the deck makes sends it to `auto` (no row), a remove on a Soldier nothing makes that
+    /// still holds another entry sends it to `manual`, and each rides its write's own undo step.
+    #[test]
+    fn a_write_to_a_dismissed_token_settles_its_state_with_the_write() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        seed_state(&conn, deck, treasure().oracle_id, None, "hidden");
+
+        set_quantity(&conn, deck, "live", treasure().oracle_id, None, 2).unwrap();
+        assert!(stored(&conn, deck).is_empty(), "`auto`, which is no row");
+        let audit = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, audit, true).unwrap();
+        assert_eq!(
+            (entries(&conn, deck), stored(&conn, deck)),
+            (
+                vec![],
+                vec![(
+                    treasure().oracle_id.to_owned(),
+                    None,
+                    None,
+                    "hidden".to_owned()
+                )]
+            ),
+            "one Undo puts the count and the word back together"
+        );
+
+        seed_state(&conn, deck, soldier().oracle_id, None, "hidden");
+        seed_entry(&conn, deck, "live", &soldier(), "nonfoil", 1);
+        seed_entry(&conn, deck, "theory", &soldier(), "nonfoil", 1);
+        remove_entry(
+            &conn,
+            deck,
+            "theory",
+            soldier().oracle_id,
+            &treasure_key(&soldier(), "nonfoil"),
+        )
+        .unwrap();
+        assert_eq!(
+            stored(&conn, deck).last().map(|r| r.3.as_str()),
+            Some("manual"),
+            "the reader's own, still held in the live list"
+        );
+    }
+
+    // ── The state ────────────────────────────────────────────────────────────────────
+
+    /// **Every word the constant carries is one the DDL's `CHECK` takes**, and a word outside it
+    /// is refused by the table — the constant is held to the table rather than to itself. No
+    /// command hands this column a word any more (v55 retired `deck_token_state`), so the fence
+    /// is the table's, and the constant is how this module names what it writes.
+    #[test]
+    fn every_state_word_is_one_the_table_accepts() {
         let conn = open();
         let (deck, _, _) = tithe_deck(&conn);
 
-        assert_eq!(
-            set_state(&conn, deck, treasure().oracle_id, "nonsense"),
-            Err(BAD_STATE.to_owned())
-        );
-        // Each word the constant carries is one the DDL's CHECK takes — the constant is held to
-        // the table rather than to itself.
         for word in TOKEN_STATES {
-            set_state(&conn, deck, treasure().oracle_id, word)
+            write_state(&conn, deck, treasure().oracle_id, word)
                 .unwrap_or_else(|e| panic!("`{word}` must be a state the table accepts: {e}"));
         }
+        assert!(
+            write_state(&conn, deck, treasure().oracle_id, "nonsense").is_err(),
+            "and the table refuses a word it does not know"
+        );
     }
 
     /// **`auto` with nothing to carry is not representable** — the write deletes rather than
@@ -4389,16 +5294,16 @@ mod tests {
         let conn = open();
         let (deck, _, _) = tithe_deck(&conn);
 
-        set_state(&conn, deck, treasure().oracle_id, "hidden").unwrap();
+        write_state(&conn, deck, treasure().oracle_id, "manual").unwrap();
         assert_eq!(stored(&conn, deck).len(), 1);
-        set_state(&conn, deck, treasure().oracle_id, "auto").unwrap();
+        write_state(&conn, deck, treasure().oracle_id, "auto").unwrap();
         assert!(
             stored(&conn, deck).is_empty(),
             "back to no row, never a husk"
         );
 
         seed_state(&conn, deck, treasure().oracle_id, Some(3), "hidden");
-        set_state(&conn, deck, treasure().oracle_id, "auto").unwrap();
+        write_state(&conn, deck, treasure().oracle_id, "auto").unwrap();
         assert_eq!(
             stored(&conn, deck),
             vec![(
@@ -4415,8 +5320,8 @@ mod tests {
     fn the_state_grain_refuses_a_duplicate_deck_and_oracle() {
         let conn = open();
         let (deck, _, _) = tithe_deck(&conn);
-        set_state(&conn, deck, treasure().oracle_id, "hidden").unwrap();
-        set_state(&conn, deck, treasure().oracle_id, "manual").unwrap();
+        seed_state(&conn, deck, treasure().oracle_id, None, "hidden");
+        write_state(&conn, deck, treasure().oracle_id, "manual").unwrap();
         assert_eq!(
             stored(&conn, deck),
             vec![(
@@ -4434,7 +5339,7 @@ mod tests {
         );
         assert!(
             second.is_err(),
-            "and a write going round the command is refused"
+            "and a write going round the module is refused"
         );
     }
 
@@ -4464,7 +5369,7 @@ mod tests {
     #[test]
     fn every_token_write_is_one_deck_row_and_one_step() {
         type Write = (&'static str, fn(&Connection, i64));
-        let writes: [Write; 5] = [
+        let writes: [Write; 4] = [
             ("quantity", |c, d| {
                 set_quantity(c, d, "live", treasure().oracle_id, None, 3).unwrap();
             }),
@@ -4482,13 +5387,17 @@ mod tests {
             ("add", |c, d| {
                 add_printing(c, d, "live", treasure_older().id, Some("foil")).unwrap();
             }),
-            ("state", |c, d| {
-                set_state(c, d, treasure().oracle_id, "hidden").unwrap();
-            }),
-            ("reset", |c, d| {
+            ("remove", |c, d| {
                 seed_entry(c, d, "live", &treasure(), "nonfoil", 2);
                 c.execute("DELETE FROM deck_audit", []).unwrap();
-                reset(c, d, "live", treasure().oracle_id).unwrap();
+                remove_entry(
+                    c,
+                    d,
+                    "live",
+                    treasure().oracle_id,
+                    &treasure_key(&treasure(), "nonfoil"),
+                )
+                .unwrap();
             }),
         ];
         for (action, write) in writes {
@@ -4547,10 +5456,10 @@ mod tests {
                 &json!(treasure().id),
                 &json!("nonfoil"),
                 &json!("live"),
-                &json!(1),
+                &json!(0),
                 &json!(3)
             ),
-            "from the implicit entry's 1 to 3, on the entry it materialised"
+            "from the implicit entry's 0 to 3, on the entry it materialised"
         );
 
         add_printing(&conn, deck, "live", treasure_older().id, Some("foil")).unwrap();
@@ -4561,12 +5470,31 @@ mod tests {
             "`quantity` is the copies added, `to` the entry's total"
         );
 
-        set_state(&conn, deck, treasure().oracle_id, "hidden").unwrap();
-        let (_, state) = newest_audit(&conn, deck);
+        remove_entry(
+            &conn,
+            deck,
+            "live",
+            treasure().oracle_id,
+            &treasure_key(&treasure_older(), "foil"),
+        )
+        .unwrap();
+        let (_, remove) = newest_audit(&conn, deck);
         assert_eq!(
-            (&state["list"], &state["from"], &state["to"]),
-            (&serde_json::Value::Null, &json!("auto"), &json!("hidden")),
-            "a state is shared by both lists, so it names none"
+            (
+                &remove["finish"],
+                &remove["set_code"],
+                &remove["collector_number"],
+                &remove["from"],
+                &remove["to"]
+            ),
+            (
+                &json!("foil"),
+                &json!("tvow"),
+                &json!("17"),
+                &json!(1),
+                &serde_json::Value::Null
+            ),
+            "the printing by set and number, and the copies the entry held"
         );
     }
 
@@ -4596,7 +5524,7 @@ mod tests {
         );
     }
 
-    /// **Undo puts the table back and redo takes it forward again, for each of the five** —
+    /// **Undo puts the table back and redo takes it forward again, for each of the four** —
     /// through `deck_undo::apply_reversal`, the command's own path. `deck_undo`'s own sweep
     /// drives the same writes over its fixture; this one reads the two token tables directly,
     /// which that sweep's snapshot only reaches through its `decks`-shaped lens.
@@ -4609,7 +5537,7 @@ mod tests {
             seed_entry(c, d, "live", &treasure_older(), "foil", 1);
         }
         fn nothing(_: &Connection, _: i64) {}
-        let cases: [Case; 7] = [
+        let cases: [Case; 8] = [
             ("quantity (materialising)", nothing, |c, d| {
                 set_quantity(c, d, "live", treasure().oracle_id, None, 3).unwrap();
             }),
@@ -4645,12 +5573,46 @@ mod tests {
                     add_printing(c, d, "live", soldier().id, None).unwrap();
                 },
             ),
-            ("state", two_entries, |c, d| {
-                set_state(c, d, treasure().oracle_id, "hidden").unwrap();
+            ("remove (one of two)", two_entries, |c, d| {
+                remove_entry(
+                    c,
+                    d,
+                    "live",
+                    treasure().oracle_id,
+                    &treasure_key(&treasure_older(), "foil"),
+                )
+                .unwrap();
             }),
-            ("reset", two_entries, |c, d| {
-                reset(c, d, "live", treasure().oracle_id).unwrap();
-            }),
+            (
+                "remove (a derived token's last entry, back to its implicit one)",
+                |c, d| seed_entry(c, d, "live", &treasure_older(), "foil", 2),
+                |c, d| {
+                    remove_entry(
+                        c,
+                        d,
+                        "live",
+                        treasure().oracle_id,
+                        &treasure_key(&treasure_older(), "foil"),
+                    )
+                    .unwrap();
+                },
+            ),
+            (
+                "remove (a hand-added token's last entry anywhere, which takes its state)",
+                |c, d| {
+                    add_printing(c, d, "live", soldier().id, None).unwrap();
+                },
+                |c, d| {
+                    remove_entry(
+                        c,
+                        d,
+                        "live",
+                        soldier().oracle_id,
+                        &treasure_key(&soldier(), "nonfoil"),
+                    )
+                    .unwrap();
+                },
+            ),
         ];
         for (name, setup, write) in cases {
             let conn = open();
@@ -4733,6 +5695,37 @@ mod tests {
             entries(&conn, deck),
             vec![e("live", soldier().oracle_id, soldier().id, "nonfoil", 3)],
             "the manual token stays — no card made it, so no cut can unmake it"
+        );
+    }
+
+    /// **A dismissed token nothing makes keeps its entries through a card write's reconcile**
+    /// (the final review's M1). A `hidden` row with entries in a list that derives nothing is drawn
+    /// like `manual` — `deck_token_rows`' hand-added tail reads any state but `auto` — and until the
+    /// next launch's [`retire_hidden`] settles it, it is the reader's as much as a `manual` one is.
+    /// A reconcile that took it would delete what the wall is drawing, capture the deletes for the
+    /// group, and — from the backstop — file them on no undo step. Only `auto` is the deck's to
+    /// take.
+    #[test]
+    fn a_reconcile_keeps_a_dismissed_token_nothing_makes() {
+        let conn = open();
+        let (deck, main, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 2);
+        seed_entry(&conn, deck, "live", &soldier(), "nonfoil", 3);
+        seed_state(&conn, deck, soldier().oracle_id, None, "hidden");
+
+        // The card write: the Tithe cut through a write that files a step, so its own
+        // transaction runs the reconcile.
+        crate::deck::set_card_quantity(&conn, deck, tithe().id, main, "live", None, 0).unwrap();
+
+        assert_eq!(
+            entries(&conn, deck),
+            vec![e("live", soldier().oracle_id, soldier().id, "nonfoil", 3)],
+            "the Treasure the Tithe made is gone; the dismissed Soldier nothing makes is not"
+        );
+        assert!(
+            reconcile_in(&conn, deck, &["live"]).unwrap().is_empty(),
+            "nor does a later reconcile take it"
         );
     }
 
@@ -5075,6 +6068,367 @@ mod tests {
             *mark = *seq;
         }
         rows.into_iter().map(|(_, op)| op).collect()
+    }
+
+    // ── The launch pass that retires a dismissal ─────────────────────────────────────
+
+    fn ops(conn: &Connection) -> i64 {
+        conn.query_row("SELECT count(*) FROM sync_ops", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// **A token dismissed before this build comes back at zero, its printings kept** (spec
+    /// §3.3). A dismissed Treasure the deck still makes has entries at 2 in the live list and 1
+    /// in the plan; both go to zero at the printings they name, and the token is `auto` again,
+    /// which is no row. A dismissed Soldier nothing makes becomes the reader's own. **On a paired
+    /// device, and no op is recorded**: every device retires the same synced rows alike, so there
+    /// is nothing to announce. And a second launch changes nothing — which is also what retires a
+    /// `hidden` an older peer sends after the first (Review Focus 1).
+    #[test]
+    fn retire_hidden_zeroes_a_dismissed_tokens_entries_and_keeps_them() {
+        let conn = paired();
+        let (deck, main, _) = tithe_deck(&conn);
+        play(&conn, deck, main, &tithe(), "theory");
+        soldier().insert(&conn);
+        seed_entry(&conn, deck, "live", &treasure_older(), "foil", 2);
+        seed_entry(&conn, deck, "theory", &treasure(), "nonfoil", 1);
+        seed_entry(&conn, deck, "live", &soldier(), "nonfoil", 3);
+        seed_state(&conn, deck, treasure().oracle_id, None, "hidden");
+        seed_state(&conn, deck, soldier().oracle_id, None, "hidden");
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        retire_hidden(&conn).unwrap();
+
+        let once = (entries(&conn, deck), stored(&conn, deck));
+        assert_eq!(
+            once.0,
+            vec![
+                e("live", treasure().oracle_id, treasure_older().id, "foil", 0),
+                e("live", soldier().oracle_id, soldier().id, "nonfoil", 0),
+                e("theory", treasure().oracle_id, treasure().id, "nonfoil", 0),
+            ],
+            "every entry at zero, in both lists, at the printing it named"
+        );
+        assert_eq!(
+            once.1,
+            vec![(
+                soldier().oracle_id.to_owned(),
+                None,
+                None,
+                "manual".to_owned()
+            )],
+            "the Treasure the deck still makes is `auto` again, which is no row; the Soldier \
+             nothing makes is the reader's own"
+        );
+        assert_eq!(ops(&conn), 0, "and nothing was announced");
+        let live = rows(&conn, deck);
+        assert_eq!(names(&live), vec!["Treasure", "Soldier"]);
+        assert!(live.iter().all(|r| r.state != "hidden" && r.quantity == 0));
+
+        retire_hidden(&conn).unwrap();
+        assert_eq!(
+            (entries(&conn, deck), stored(&conn, deck)),
+            once,
+            "a second launch changes nothing"
+        );
+        assert_eq!(ops(&conn), 0);
+    }
+
+    /// **A dismissal the pass cannot prove unmade is left for a later launch** —
+    /// [`Derivation::unreadable`]'s rule, one pass over. A list with a maker this corpus cannot
+    /// read might still make the Soldier, and `manual` would keep it from every reconcile after
+    /// its maker was cut. The Treasure is proved made by a maker that *can* be read, so it is
+    /// retired all the same.
+    #[test]
+    fn retire_hidden_leaves_a_token_it_cannot_prove_unmade() {
+        let conn = open();
+        let (deck, main, _) = tithe_deck(&conn);
+        let gone = Card {
+            id: "c-left-the-corpus",
+            ..Card::default()
+        };
+        play(&conn, deck, main, &gone, "live");
+        soldier().insert(&conn);
+        seed_entry(&conn, deck, "live", &soldier(), "nonfoil", 2);
+        seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 1);
+        seed_state(&conn, deck, soldier().oracle_id, None, "hidden");
+        seed_state(&conn, deck, treasure().oracle_id, None, "hidden");
+
+        retire_hidden(&conn).unwrap();
+        assert_eq!(
+            stored(&conn, deck),
+            vec![(
+                soldier().oracle_id.to_owned(),
+                None,
+                None,
+                "hidden".to_owned()
+            )],
+            "the Soldier waits; the Treasure is `auto` again"
+        );
+        assert_eq!(
+            entries(&conn, deck),
+            vec![
+                e("live", treasure().oracle_id, treasure().id, "nonfoil", 0),
+                e("live", soldier().oracle_id, soldier().id, "nonfoil", 2),
+            ],
+            "and the waiting token keeps its count until it is retired whole"
+        );
+    }
+
+    /// **A dismissed token whose only count is the legacy column comes back at zero too** — the
+    /// reader's rule is *at zero*, and `write_state` alone keeps a legacy quantity. The row
+    /// carried nothing but that count and the dismissal, so once both are gone it is no row, and
+    /// each list draws the implicit entry at zero.
+    #[test]
+    fn retire_hidden_brings_a_legacy_count_back_at_zero() {
+        let conn = open();
+        let (deck, main, _) = tithe_deck(&conn);
+        play(&conn, deck, main, &tithe(), "theory");
+        seed_state(&conn, deck, treasure().oracle_id, Some(3), "hidden");
+
+        retire_hidden(&conn).unwrap();
+
+        assert!(
+            stored(&conn, deck).is_empty(),
+            "no dismissal and no count left to carry, so no row: {:?}",
+            stored(&conn, deck)
+        );
+        for variant in crate::schema::DECK_VARIANTS {
+            let out = deck_token_rows(&conn, deck, variant, Marketplace::Tcgplayer).unwrap();
+            assert_eq!(
+                (out.len(), out[0].implicit, out[0].quantity),
+                (1, true, 0),
+                "the {variant} list draws the implicit Treasure at zero"
+            );
+        }
+    }
+
+    /// **A dismissal settled by a write comes back at zero in the other list too** (the final
+    /// review's deferred 1). A step on the live list settles the stale `hidden` there and then —
+    /// and until then [`write_state`] kept the legacy count, so the plan's implicit Treasure came
+    /// back at the old 3 while [`retire_hidden`] would have brought it back at 0. The count is
+    /// cleared with the word, inside the write's own step, so one Undo puts both back.
+    #[test]
+    fn a_write_that_settles_a_dismissal_clears_its_legacy_count() {
+        let conn = open();
+        let (deck, main, _) = tithe_deck(&conn);
+        play(&conn, deck, main, &tithe(), "theory");
+        seed_state(&conn, deck, treasure().oracle_id, Some(3), "hidden");
+
+        set_quantity(&conn, deck, "live", treasure().oracle_id, None, 2).unwrap();
+
+        let plan = deck_token_rows(&conn, deck, "theory", Marketplace::Tcgplayer).unwrap();
+        assert_eq!(
+            (plan.len(), plan[0].implicit, plan[0].quantity),
+            (1, true, 0),
+            "the plan's implicit Treasure at zero, not at the dismissal's old 3"
+        );
+        assert!(
+            stored(&conn, deck).is_empty(),
+            "no dismissal and no count left to carry, so no row: {:?}",
+            stored(&conn, deck)
+        );
+
+        let audit = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, audit, true).unwrap();
+        assert_eq!(
+            stored(&conn, deck),
+            vec![(
+                treasure().oracle_id.to_owned(),
+                None,
+                Some(3),
+                "hidden".to_owned()
+            )],
+            "one Undo brings the word and the count back together"
+        );
+    }
+
+    /// **And an added printing clears it before the implicit entry is written**, so the Treasure
+    /// the dismissal left at 3 is not materialised at 3 beside the new printing: the add files the
+    /// new printing alone, and the plan's implicit Treasure reads zero.
+    #[test]
+    fn an_add_that_settles_a_dismissal_clears_its_legacy_count_first() {
+        let conn = open();
+        let (deck, main, _) = tithe_deck(&conn);
+        play(&conn, deck, main, &tithe(), "theory");
+        seed_state(&conn, deck, treasure().oracle_id, Some(3), "hidden");
+
+        add_printing(&conn, deck, "live", treasure_older().id, Some("foil")).unwrap();
+
+        assert_eq!(
+            entries(&conn, deck),
+            vec![e(
+                "live",
+                treasure().oracle_id,
+                treasure_older().id,
+                "foil",
+                1
+            )],
+            "the new printing alone — no implicit Treasure materialised at the old count"
+        );
+        let plan = deck_token_rows(&conn, deck, "theory", Marketplace::Tcgplayer).unwrap();
+        assert_eq!((plan[0].implicit, plan[0].quantity), (true, 0));
+        assert!(stored(&conn, deck).is_empty(), "{:?}", stored(&conn, deck));
+    }
+
+    /// **The launch settles the managed wishlist after it retires the dismissals** (the final
+    /// review's M2). `prepare_database` ran `managed_wishlist::settle_all` ahead of the retire
+    /// pass, so on the first v55 launch a theory deck following `tokens` filed a wish for the
+    /// Treasure its plan counted at 3 — a count the pass then zeroed, with nothing left to settle
+    /// the folder again until the reader's first write. The launch drains the marks the passes
+    /// left, so the plan is short of nothing and the folder holds nothing.
+    #[test]
+    fn the_launch_files_no_managed_token_wish_for_a_dismissal_it_retires() {
+        let conn = open();
+        let (deck, main, _) = tithe_deck(&conn);
+        conn.execute(
+            "UPDATE decks SET theory_enabled = 1, managed_wishlist_mode = 'tokens' WHERE id = ?1",
+            params![deck],
+        )
+        .unwrap();
+        play(&conn, deck, main, &tithe(), "theory");
+        seed_entry(&conn, deck, "theory", &treasure(), "nonfoil", 3);
+        seed_state(&conn, deck, treasure().oracle_id, None, "hidden");
+
+        crate::schema::prepare_database(&conn).unwrap();
+
+        assert_eq!(
+            entries(&conn, deck),
+            vec![e(
+                "theory",
+                treasure().oracle_id,
+                treasure().id,
+                "nonfoil",
+                0
+            )],
+            "the pass retired the dismissal at zero"
+        );
+        let wishes: i64 = conn
+            .query_row("SELECT count(*) FROM wishlist_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            wishes, 0,
+            "and the managed wishlist was settled after it, so it wants no Treasure"
+        );
+    }
+
+    /// **A dismissed pick a paired device has not converted yet comes back at zero as well.** On a
+    /// device climbing from v51 the launch converts nothing until a pull lands
+    /// ([`convert_legacy_picks_at_launch`]'s gate), so this pass runs first and the pull's
+    /// conversion after it — which files each pick at `quantity ?? 1`. The pass zeroes the pick's
+    /// count so the entries it becomes are at zero: the Treasure's count of 3 and the Soldier's
+    /// absent one alike. The Soldier nothing makes stays the reader's own, because the pick it
+    /// holds becomes its entries.
+    #[test]
+    fn retire_hidden_zeroes_a_pick_the_pull_has_not_converted_yet() {
+        let conn = paired();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        seed_pick(&conn, deck, &treasure_older(), Some(3), "u-treasure");
+        seed_pick(&conn, deck, &soldier(), None, "u-soldier");
+        conn.execute(
+            "UPDATE deck_tokens SET state = 'hidden' WHERE deck_id = ?1",
+            params![deck],
+        )
+        .unwrap();
+
+        convert_legacy_picks_at_launch(&conn).unwrap();
+        assert!(entries(&conn, deck).is_empty(), "the gate holds the picks");
+        retire_hidden(&conn).unwrap();
+        convert_legacy_picks_after_pull(&conn).unwrap();
+
+        assert_eq!(
+            entries(&conn, deck),
+            vec![
+                e(
+                    "live",
+                    treasure().oracle_id,
+                    treasure_older().id,
+                    "nonfoil",
+                    0
+                ),
+                e("live", soldier().oracle_id, soldier().id, "nonfoil", 0),
+                e(
+                    "theory",
+                    treasure().oracle_id,
+                    treasure_older().id,
+                    "nonfoil",
+                    0
+                ),
+                e("theory", soldier().oracle_id, soldier().id, "nonfoil", 0),
+            ],
+            "every entry the pull converts is at zero, the printings kept"
+        );
+        let states: Vec<String> = stored(&conn, deck).into_iter().map(|r| r.3).collect();
+        assert_eq!(states, ["auto", "manual"]);
+    }
+
+    /// **A dismissed token nothing makes and nothing holds goes back to `auto`**, which is no row
+    /// — `manual` there would be a row drawn in no list.
+    #[test]
+    fn retire_hidden_sends_a_token_nothing_makes_or_holds_to_auto() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        seed_state(&conn, deck, soldier().oracle_id, None, "hidden");
+
+        retire_hidden(&conn).unwrap();
+        assert!(stored(&conn, deck).is_empty(), "{:?}", stored(&conn, deck));
+    }
+
+    /// **One dismissal that cannot be retired costs that token alone** — each is retired inside a
+    /// savepoint of its own, [`convert_legacy_picks`]' shape, and a failure is logged and skipped:
+    /// one transaction over every deck would retire nothing, at every launch, for as long as the
+    /// one kept failing. The next launch retires it.
+    #[test]
+    fn a_dismissal_that_fails_to_retire_is_skipped_and_every_other_is_retired() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        soldier().insert(&conn);
+        seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 2);
+        seed_entry(&conn, deck, "live", &soldier(), "nonfoil", 3);
+        seed_state(&conn, deck, treasure().oracle_id, None, "hidden");
+        seed_state(&conn, deck, soldier().oracle_id, None, "hidden");
+        conn.execute_batch(&format!(
+            "CREATE TEMP TRIGGER refuse_treasure BEFORE UPDATE ON deck_token_printings
+               WHEN OLD.oracle_id = '{}'
+             BEGIN SELECT RAISE(ABORT, 'refused'); END;",
+            treasure().oracle_id
+        ))
+        .unwrap();
+
+        retire_hidden(&conn).expect("a token that fails is skipped, not the pass");
+        assert_eq!(
+            stored(&conn, deck),
+            vec![
+                (
+                    treasure().oracle_id.to_owned(),
+                    None,
+                    None,
+                    "hidden".to_owned()
+                ),
+                (
+                    soldier().oracle_id.to_owned(),
+                    None,
+                    None,
+                    "manual".to_owned()
+                ),
+            ],
+            "the Treasure waits and the Soldier is retired"
+        );
+        assert_eq!(
+            entries(&conn, deck),
+            vec![
+                e("live", treasure().oracle_id, treasure().id, "nonfoil", 2),
+                e("live", soldier().oracle_id, soldier().id, "nonfoil", 0),
+            ],
+            "and the Treasure's count is untouched, not half-written"
+        );
+
+        conn.execute_batch("DROP TRIGGER temp.refuse_treasure")
+            .unwrap();
+        retire_hidden(&conn).unwrap();
+        assert_eq!(entries(&conn, deck)[0].4, 0, "the next launch retires it");
     }
 
     // ── The legacy conversion ────────────────────────────────────────────────────────
@@ -5980,6 +7334,434 @@ mod tests {
         assert_eq!(rows(&conn, deck)[0].state, "manual");
     }
 
+    // ── Every token printing ─────────────────────────────────────────────────────────
+
+    /// **Every paper token and emblem printing, and nothing else — held to
+    /// [`is_listed_token`]**, so the SQL predicate and the Rust one cannot come to disagree
+    /// about which cards the All tokens picker offers. A token, an emblem, a double-faced token, a
+    /// `flip` Role, the `reversible_card` Mechtitan, and two-sided printings whose token or emblem
+    /// is on the back face only are in; a normal card, a Kamigawa-style `flip` card, a reversible
+    /// legend and a digital-only token are out. Ordered by token name, then by `oracle_id`, then
+    /// newest printing first — the picker's grouping.
+    #[test]
+    fn token_printings_answers_every_token_and_nothing_else() {
+        let conn = open();
+        let dfc = Card {
+            id: "c-dfc-token",
+            oracle_id: "o-dfc-token",
+            name: "Human Soldier // Spirit",
+            type_line: "Token Creature — Human Soldier // Token Creature — Spirit",
+            layout: "double_faced_token",
+            ..Card::default()
+        };
+        let role = Card {
+            id: "c-role",
+            oracle_id: "o-role",
+            name: "Royal // Young Hero",
+            type_line: "Token Enchantment — Aura Role // Token Enchantment — Aura Role",
+            layout: "flip",
+            ..Card::default()
+        };
+        // Two synthetic shapes for the back-face arms (`% // Token%`, `% // Emblem%`): no printing
+        // in the corpus is a card on the front and a token or an emblem only on the back, and
+        // these are what hold the SQL's "any face" to the Rust's.
+        let token_back = Card {
+            id: "c-token-back",
+            oracle_id: "o-token-back",
+            name: "Kami of the Back Face // Spirit",
+            type_line: "Creature — Human // Token Creature — Spirit",
+            layout: "flip",
+            ..Card::default()
+        };
+        let emblem_back = Card {
+            id: "c-emblem-back",
+            oracle_id: "o-emblem-back",
+            name: "Planeswalker of the Back Face // Emblem",
+            type_line: "Legendary Planeswalker — Tester // Emblem — Tester",
+            layout: "reversible_card",
+            ..Card::default()
+        };
+        let flip_card = Card {
+            id: "c-flip-card",
+            oracle_id: "o-flip-card",
+            name: "A Flip Card",
+            type_line: "Creature — Human Monk // Legendary Creature — Spirit",
+            layout: "flip",
+            ..Card::default()
+        };
+        let legend = Card {
+            id: "c-reversible-legend",
+            oracle_id: "o-reversible-legend",
+            name: "A Reversible Legend",
+            type_line: "Legendary Creature — Elf Druid",
+            layout: "reversible_card",
+            ..Card::default()
+        };
+        let digital = Card {
+            id: "c-treasure-digital",
+            released_at: "2024-01-01",
+            ..treasure()
+        };
+        let all = [
+            treasure(),
+            treasure_older(),
+            elspeth_emblem(),
+            dfc.clone(),
+            role.clone(),
+            mechtitan(),
+            token_back.clone(),
+            emblem_back.clone(),
+            tithe(),
+            flip_card.clone(),
+            legend.clone(),
+            digital.clone(),
+        ];
+        for card in &all {
+            card.insert(&conn);
+        }
+        conn.execute(
+            "UPDATE cards SET is_paper = 0 WHERE id = ?1",
+            params![digital.id],
+        )
+        .unwrap();
+
+        let got = list_token_printings(&conn, Marketplace::Tcgplayer).unwrap();
+        assert_eq!(
+            got.iter()
+                .map(|p| (p.name.as_str(), p.printing.id.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("Elspeth, Sun's Champion Emblem", elspeth_emblem().id),
+                ("Human Soldier // Spirit", dfc.id),
+                ("Kami of the Back Face // Spirit", token_back.id),
+                ("Mechtitan // Mechtitan", mechtitan().id),
+                ("Planeswalker of the Back Face // Emblem", emblem_back.id),
+                ("Royal // Young Hero", role.id),
+                ("Treasure", treasure().id),
+                ("Treasure", treasure_older().id),
+            ],
+            "by name, then newest printing first"
+        );
+        for card in &all {
+            let answered = got.iter().find(|p| p.printing.id == card.id);
+            assert_eq!(
+                answered.is_some(),
+                card.id != digital.id
+                    && is_listed_token(
+                        card.layout,
+                        Some(card.type_line),
+                        Some(card.oracle_text),
+                        None
+                    ),
+                "`{}` must be answered exactly when the predicate says it is a paper token",
+                card.name
+            );
+            if let Some(p) = answered {
+                assert_eq!(p.oracle_id, card.oracle_id, "{}", card.name);
+            }
+        }
+        let newest_treasure = got.iter().find(|p| p.printing.id == treasure().id).unwrap();
+        assert_eq!(
+            newest_treasure.printing.finish_prices.nonfoil,
+            Some(0.25),
+            "priced the way the printings picker prices one"
+        );
+    }
+
+    /// **All tokens keeps the game helpers and leaves out other games' cards** — the reader's rule
+    /// of 2026-09-28, after a day on which it listed only `Token` and `Emblem` faces and so lost
+    /// The Monarch with the World Championships ads (the live pass had found the wall opening on
+    /// two of those). Each fixture is a shape off the debug corpus, text and set type included:
+    ///
+    /// - **In:** The Monarch (`Card`), Day // Night (`Card // Card`), a face-down Manifest
+    ///   (`Creature`, kept by its reminder text), and a real double-faced token, Treasure, an
+    ///   emblem and Mechtitan beside them.
+    /// - **Out:** a deck ad and a challenge deck's Minotaur (both `memorabilia` sets), a minigame
+    ///   (`minigame`), a set checklist (`Card`, but its text is a proxy's), and a TMNT arena boss (a
+    ///   `token` set, whose `Boss` line is neither a helper face nor a face-down card).
+    ///
+    /// Every fixture is also asked of [`is_listed_token`], so the SQL and the Rust stay one rule.
+    #[test]
+    fn token_printings_keeps_the_game_helpers_and_leaves_out_other_games() {
+        let conn = open();
+        let set_types = [
+            ("wc97", "memorabilia"),
+            ("tbth", "memorabilia"),
+            ("mkhm", "minigame"),
+            ("tcmm", "token"),
+            ("tmid", "token"),
+            ("tc18", "token"),
+            ("tisd", "token"),
+            ("ttmc", "token"),
+        ];
+        for (code, set_type) in set_types {
+            conn.execute(
+                "INSERT INTO sets (code, name, set_type) VALUES (?1, ?1, ?2)",
+                params![code, set_type],
+            )
+            .unwrap();
+        }
+        let set_type_of = |code: &str| set_types.iter().find(|(c, _)| *c == code).map(|(_, t)| *t);
+        let ad = Card {
+            id: "c-wc97-ad",
+            oracle_id: "o-wc97-ad",
+            name: "1997 World Championships Ad",
+            type_line: "Card",
+            layout: "token",
+            set_code: "wc97",
+            collector_number: "0",
+            ..Card::default()
+        };
+        let minotaur = Card {
+            id: "c-minotaur",
+            oracle_id: "o-minotaur",
+            name: "Minotaur Goreseeker",
+            type_line: "Creature — Minotaur",
+            layout: "token",
+            oracle_text: "Haste\nMinotaur Goreseeker attacks each turn if able.",
+            set_code: "tbth",
+            ..Card::default()
+        };
+        let minigame = Card {
+            id: "c-booster-sleuth",
+            oracle_id: "o-booster-sleuth",
+            name: "Booster Sleuth // Booster Sleuth (cont'd)",
+            type_line: "Card // Card",
+            layout: "double_faced_token",
+            set_code: "mkhm",
+            ..Card::default()
+        };
+        let checklist = Card {
+            id: "c-isd-checklist",
+            oracle_id: "o-isd-checklist",
+            name: "Innistrad Checklist",
+            type_line: "Card",
+            layout: "token",
+            oracle_text: "(You can mark this card to represent a double-faced card in your \
+                          library. Put the double-faced card aside until it enters the battlefield.)",
+            set_code: "tisd",
+            ..Card::default()
+        };
+        let boss = Card {
+            id: "c-shredder",
+            oracle_id: "o-shredder",
+            name: "Shredder, Foot Clan Overlord",
+            type_line: "Boss",
+            layout: "token",
+            oracle_text: "Whenever a creature the bosses control dies, the heroes lose 1 life.",
+            set_code: "ttmc",
+            ..Card::default()
+        };
+        let monarch = Card {
+            id: "c-monarch",
+            oracle_id: "o-monarch",
+            name: "The Monarch",
+            type_line: "Card",
+            layout: "token",
+            oracle_text: "At the beginning of your end step, draw a card.\nWhenever a creature \
+                          deals combat damage to you, its controller becomes the monarch.",
+            set_code: "tcmm",
+            ..Card::default()
+        };
+        let day_night = Card {
+            id: "c-day-night",
+            oracle_id: "o-day-night",
+            name: "Day // Night",
+            type_line: "Card // Card",
+            layout: "double_faced_token",
+            set_code: "tmid",
+            ..Card::default()
+        };
+        let manifest = Card {
+            id: "c-manifest",
+            oracle_id: "o-manifest",
+            name: "Manifest",
+            type_line: "Creature",
+            layout: "token",
+            power: Some("2"),
+            toughness: Some("2"),
+            oracle_text: "(You can cover a face-down manifested creature with this reminder \
+                          card. A manifested creature card can be turned face up any time for \
+                          its mana cost.)",
+            set_code: "tc18",
+            ..Card::default()
+        };
+        let dfc = Card {
+            id: "c-dfc-token",
+            oracle_id: "o-dfc-token",
+            name: "Human Soldier // Spirit",
+            type_line: "Token Creature — Human Soldier // Token Creature — Spirit",
+            layout: "double_faced_token",
+            ..Card::default()
+        };
+        let all = [
+            ad.clone(),
+            minotaur.clone(),
+            minigame.clone(),
+            checklist.clone(),
+            boss.clone(),
+            monarch.clone(),
+            day_night.clone(),
+            manifest.clone(),
+            dfc.clone(),
+            treasure(),
+            elspeth_emblem(),
+            mechtitan(),
+        ];
+        for card in &all {
+            card.insert(&conn);
+        }
+
+        let got = list_token_printings(&conn, Marketplace::Tcgplayer).unwrap();
+        let names: Vec<&str> = got.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(
+            names,
+            vec![
+                "Day // Night",
+                "Elspeth, Sun's Champion Emblem",
+                "Human Soldier // Spirit",
+                "Manifest",
+                "Mechtitan // Mechtitan",
+                "The Monarch",
+                "Treasure",
+            ],
+            "the helpers in, and the ad, the Minotaur, the minigame, the checklist and the boss out"
+        );
+        for card in &all {
+            assert_eq!(
+                got.iter().any(|p| p.printing.id == card.id),
+                is_listed_token(
+                    card.layout,
+                    Some(card.type_line),
+                    Some(card.oracle_text),
+                    set_type_of(card.set_code),
+                ),
+                "`{}`: the SQL and the Rust must give one answer",
+                card.name
+            );
+        }
+    }
+
+    /// **A `sets` row with no code leaves out no helper.** `sets.code` is a `TEXT PRIMARY KEY`
+    /// with no `NOT NULL`, so SQLite lets a row hold a NULL one — and against a set holding a
+    /// NULL, `x NOT IN (…)` is never true, only NULL or false. Written as a `NOT IN` over the
+    /// other games' codes, one nameless `minigame` row dropped every helper from All tokens while
+    /// [`is_listed_token`] kept them all. The correlated `NOT EXISTS` asks each card's own set and
+    /// nothing else, so a card whose set `sets` does not list is kept, as it always was.
+    #[test]
+    fn token_printings_keeps_the_helpers_when_a_set_has_no_code() {
+        let conn = open();
+        conn.execute(
+            "INSERT INTO sets (code, name, set_type) VALUES ('tcmm', 'tcmm', 'token'),
+                                                           (NULL, 'Nameless', 'minigame')",
+            [],
+        )
+        .unwrap();
+        let nulls: i64 = conn
+            .query_row("SELECT count(*) FROM sets WHERE code IS NULL", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(nulls, 1, "the fixture really holds a set with no code");
+        let monarch = Card {
+            id: "c-monarch",
+            oracle_id: "o-monarch",
+            name: "The Monarch",
+            type_line: "Card",
+            layout: "token",
+            oracle_text: "At the beginning of your end step, draw a card.",
+            set_code: "tcmm",
+            ..Card::default()
+        };
+        // In a set `sets` does not list at all: a helper in doubt is kept.
+        let unlisted = Card {
+            id: "c-day-night",
+            oracle_id: "o-day-night",
+            name: "Day // Night",
+            type_line: "Card // Card",
+            layout: "double_faced_token",
+            set_code: "zzzz",
+            ..Card::default()
+        };
+        for card in [&monarch, &unlisted] {
+            card.insert(&conn);
+        }
+        treasure().insert(&conn);
+
+        let got = list_token_printings(&conn, Marketplace::Tcgplayer).unwrap();
+        assert_eq!(
+            got.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(),
+            vec!["Day // Night", "The Monarch", "Treasure"],
+            "both helpers listed beside the token"
+        );
+        for card in [&monarch, &unlisted] {
+            let set_type = (card.set_code == "tcmm").then_some("token");
+            assert!(
+                is_listed_token(
+                    card.layout,
+                    Some(card.type_line),
+                    Some(card.oracle_text),
+                    set_type
+                ),
+                "`{}`: the Rust keeps it, so the SQL must",
+                card.name
+            );
+        }
+    }
+
+    /// **A token printing on the wire is the picker's `Printing` with the token's own facts beside
+    /// it** — the subtitle's colours, size and text, and the `oracleId` that groups it. `layout`
+    /// is written **once**, the printing's: a flattened struct beside a field of the same name
+    /// would write the key twice.
+    #[test]
+    fn a_token_printing_is_the_pickers_printing_with_the_tokens_facts_beside_it() {
+        let conn = open();
+        soldier().insert(&conn);
+        let answer = list_token_printings(&conn, Marketplace::Tcgplayer).unwrap();
+        let text = serde_json::to_string(&answer).unwrap();
+        let json: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            json[0]
+                .as_object()
+                .unwrap()
+                .keys()
+                .map(String::as_str)
+                .collect::<Vec<_>>(),
+            vec![
+                "artist",
+                "borderColor",
+                "collectorNumber",
+                "colors",
+                "finishPrices",
+                "finishes",
+                "frameEffects",
+                "fullArt",
+                "id",
+                "illustrationId",
+                "lang",
+                "layout",
+                "name",
+                "oracleId",
+                "oracleText",
+                "power",
+                "promo",
+                "promoTypes",
+                "rarity",
+                "releasedAt",
+                "setCode",
+                "setName",
+                "toughness",
+                "typeLine",
+            ]
+        );
+        assert_eq!(json[0]["oracleId"], json!(soldier().oracle_id));
+        assert_eq!(json[0]["id"], json!(soldier().id));
+        assert_eq!(json[0]["power"], json!("1"), "a string, as on the wall");
+        assert_eq!(json[0]["colors"], json!("W"), "letters, as on the wall");
+        assert_eq!(json[0]["layout"], json!("token"));
+        assert_eq!(text.matches("\"layout\":").count(), 1);
+    }
+
     // ── The wire ─────────────────────────────────────────────────────────────────────
 
     /// The keys `src/lib/ipc.ts` reads, and the two value shapes that cannot be checked by a
@@ -6042,7 +7824,7 @@ mod tests {
         // An implicit entry: a string `cardId`, a finish, a number, and a flag — never nulls.
         assert_eq!(soldier_row["cardId"], json!(soldier().id));
         assert_eq!(soldier_row["finish"], json!("nonfoil"));
-        assert_eq!(soldier_row["quantity"], json!(1));
+        assert_eq!(soldier_row["quantity"], json!(0));
         assert_eq!(soldier_row["implicit"], json!(true));
         assert_eq!(soldier_row["state"], json!("auto"));
         assert_eq!(

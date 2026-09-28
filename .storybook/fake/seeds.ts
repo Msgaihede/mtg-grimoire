@@ -76,6 +76,7 @@ import {
   oracleTagMeta,
   oracleTagRows,
   publishShare,
+  settleManagedWishlist,
   SUPPORTING_SINCE,
 } from "./db";
 import type {
@@ -116,7 +117,8 @@ export type SeedName =
   | "virtualDeck"
   | "paired"
   | "shared"
-  | "waiting";
+  | "waiting"
+  | "tokenPlan";
 
 /* ------------------------------------------------------------------ row builders ------- */
 
@@ -807,10 +809,21 @@ function starterWishes(): FakeWish[] {
       notes: "The reprint is announced; this is the pile that waits for it.",
     }),
     // --- Deck 4's managed wishlist: what its Compare dialog lists, theory less live ------------
-    // Written by the deck and not the reader, so every row here is one Rust would have written
-    // at rest — {@link testbedDeckCards}' plan against its sleeved list. The foil `sld 913` Sol
-    // Ring is the `Different printing` row and keeps its finish; the Black Lotus is short because
-    // the live copy sits in the switched-off Cut list; the other three are plain `Missing`.
+    // Written by the deck and not the reader — {@link testbedDeckCards}' plan against its sleeved
+    // list. The Black Lotus is short because the live copy sits in the switched-off Cut list; it
+    // and the three after it are plain `Missing`, which is the view deck 4 follows.
+    //
+    // ⚠️ **The foil `sld 913` Sol Ring is NOT what a settle leaves here, and it is kept on
+    // purpose.** It is the `Different printing` row — short one, and that one held as the deck's
+    // two `c21 263` copies — so `missing` wants none of it (its quantity less `heldAsOtherPrinting`
+    // is 0), and the first press that settles deck 4's folder in the fake drops it: a token write,
+    // a `deck_update` to the name, the theory switch, the kind or the mode, a delete, an undo or a
+    // redo. It predates issue #512's per-view quantity, when the folder held every row of the diff.
+    // **Kept because the seeded wishlist is counted with it in**: `WishlistValueWidget`'s stories
+    // read *thirteen wishes*, with this row among the copies no marketplace quotes (the corpus's
+    // `sld 913` carries no price), and `db.test.ts`'s Compare-send test names it as the managed
+    // row its own assertion steps around. Settling the seed would move those counts for a row no
+    // story presses; a story that does settle deck 4 sees the folder `missing` really holds.
     pinnedWish(next(), printing("sld", "913"), 1, {
       folderId: MANAGED_TESTBED_FOLDER,
       preferredFinish: "foil",
@@ -1397,13 +1410,15 @@ function starterLabels(): FakeDeckLabel[] {
  *
  * * **A legacy count of zero** (deck 1's Construct). A pre-v52 row that stored a count and no
  *   printing, which the rung leaves alone: the count keeps meaning "the implicit entry's
- *   quantity", so the Construct draws one implicit tile at **0** — the state `stored || 1` reads
- *   as untouched and silently draws as 1.
- * * **A dismissal** (deck 1's lifelink Wurm). `hidden` is still derived and still a row; it is
- *   simply not drawn until a reader asks to see what they put away, which is the whole of the
- *   "show dismissed" control. Its twin is left untouched **on purpose**: two tiles that differ
- *   only in their rules text, one of them dismissed, is the disambiguation case and the
- *   dismissal case in one screen.
+ *   quantity", so the Construct draws one implicit tile at **0**. Every untouched token reads 0
+ *   too since managed tokens (spec §3.1), so this row now differs from its neighbours only in
+ *   being stored — which is what keeps it: a legacy count is still honoured, and a seed that
+ *   dropped it would stop proving that.
+ * * **A dismissal** (deck 1's lifelink Wurm), **as an older peer would sync one in**. Dismiss is
+ *   retired and a launch pass turns `hidden` back into an ordinary token (spec §3.3), but a word
+ *   an older build writes after that pass has run reaches this build first — and until the next
+ *   launch it is drawn like any other token (Review Focus 1). So it stays seeded: the band draws
+ *   it beside its twin, the two Wurms that differ only in their rules text.
  * * **A hand-added token nothing derives** (deck 2's emblem). Deck 2 runs no Jace, so this row
  *   comes back `derived: false` with an empty `sources` — which is also what
  *   `deck_token_add_printing` makes of a token nothing derives. Its printing is an entry now, in
@@ -1455,7 +1470,7 @@ function starterDeckTokens(): FakeDeckToken[] {
  *
  * * **Deck 1's Treasure**, the older `tafr` printing at four — the reader kept it over the one
  *   the resolver names (`thob`), so the tile draws an art and a count that are both the
- *   reader's, and `overridden` gives the reset affordance something to undo.
+ *   reader's, and Remove printing has a stored entry to take away.
  * * **Deck 2's hand-added emblem** at one — a count nobody set, taken at the conversion's `?? 1`.
  *
  * Both lists get both, because the pre-v52 override was shared by both lists and copying it is
@@ -3076,6 +3091,81 @@ function waitingSeed(): FakeDb {
   return db;
 }
 
+/* ------------------------------------------------------------------ tokenPlan ---------- */
+
+/**
+ * `starter`, plus **the two things the managed-tokens stories need** (managed tokens spec, 2026-09-27)
+ * and `starter` cannot carry without moving every story on it:
+ *
+ * - **A plan that counts tokens.** Deck 4's theory list holds three plain and one foil Treasure
+ *   (`thob` 13) and two Constructs, where its live list holds one plain Treasure — so Compare
+ *   answers three token rows (two Treasures and one foil short, two Constructs), `isToken` all,
+ *   under **Tokens & Emblems**. In `starter` the same plan makes the same three tokens and counts
+ *   none of them — every untouched token reads 0 since spec §3.1 — so its Compare has no token row,
+ *   which is what every existing Compare story was written against and why this is a seed.
+ * - **A token the deck does not make, kept by hand on the live list.** Deck 4's live list runs no
+ *   Treasure maker, so that one Treasure is hand-added there (`manual`, `derived: false` in that
+ *   list): its pile card wears the destructive edge and `NOT MADE BY DECK`, and its band tile the
+ *   outline and the badge. Deck 2's emblem is `starter`'s own hand-added token, at one copy in both
+ *   lists; this one sits beside cards that make tokens, which is the case a reader meets.
+ *
+ * **Deck 4's managed wishlist follows `All`**, so it files the plan's missing tokens in a `Tokens`
+ * subfolder inside its folder (user schema v55, spec §3.8) — and the folders are **settled rather
+ * than written**: {@link settleManagedWishlist} is asked for them over the finished world, which is
+ * the answer the crate would have left at rest, where a hand-written list would be a guess at it.
+ *
+ * And **deck 1 counts a second token** — two deathtouch Wurms beside its four Treasures — so its
+ * token pile has more than one card to draw a plan's two marks on.
+ */
+function tokenPlanSeed(): FakeDb {
+  const db = starterSeed();
+  const at = CLOCK_BASE - HOUR;
+  let id = Math.max(0, ...db.deckTokenPrintings.map((e) => e.id));
+  const entry = (
+    deckId: number,
+    variant: DeckVariant,
+    oracleId: string,
+    cardId: string,
+    finish: "nonfoil" | "foil",
+    quantity: number,
+  ) => {
+    id += 1;
+    db.deckTokenPrintings.push({
+      id,
+      deckId,
+      variant,
+      oracleId,
+      cardId,
+      finish,
+      quantity,
+      createdAt: at,
+      updatedAt: at,
+    });
+  };
+  entry(4, "theory", TOKEN_ORACLE.treasure, TOKEN_PRINTING.treasureThob, "nonfoil", 3);
+  entry(4, "theory", TOKEN_ORACLE.treasure, TOKEN_PRINTING.treasureThob, "foil", 1);
+  entry(4, "theory", TOKEN_ORACLE.construct, TOKEN_PRINTING.construct, "nonfoil", 2);
+  entry(4, "live", TOKEN_ORACLE.treasure, TOKEN_PRINTING.treasureThob, "nonfoil", 1);
+  entry(1, "live", TOKEN_ORACLE.wurmDeathtouch, TOKEN_PRINTING.wurmDeathtouch, "nonfoil", 2);
+  // The live Treasure is one nothing on that list makes, so it is kept by hand — the state an
+  // add from the picker leaves. The state is the token's in both lists; the plan still derives
+  // it, which is exactly the case where `manual` and `derived` part company.
+  db.deckTokens.push({
+    id: Math.max(0, ...db.deckTokens.map((t) => t.id)) + 1,
+    deckId: 4,
+    oracleId: TOKEN_ORACLE.treasure,
+    quantity: null,
+    state: "manual",
+    createdAt: at,
+    updatedAt: at,
+  });
+  const testbed = db.decks.find((d) => d.id === 4);
+  if (testbed === undefined) throw new Error("the starter world has no deck 4");
+  testbed.managedWishlist = "all";
+  settleManagedWishlist(db, 4);
+  return db;
+}
+
 /* ------------------------------------------------------------------ the switch --------- */
 
 /**
@@ -3104,6 +3194,8 @@ export function seed(name: SeedName): FakeDb {
       return sharedSeed();
     case "waiting":
       return waitingSeed();
+    case "tokenPlan":
+      return tokenPlanSeed();
     default:
       return starterSeed();
   }

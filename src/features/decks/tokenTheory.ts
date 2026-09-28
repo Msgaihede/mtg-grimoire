@@ -130,8 +130,9 @@ export function tokenTheorySlots(
  * `oracleId`, the name tier's key on both sides, so a token's entries sum into one name.
  *
  * **`categoryActive: true` for every one**: a token is in no category, so there is no switched-off
- * pile for it to be parked in. The one population rule a token does have — a dismissed token is
- * not one the deck brings — is the caller's, applied to both lists before they arrive here.
+ * pile for it to be parked in. **Both lists arrive whole** — every entry the read answered, since
+ * managed tokens took Dismiss away (spec §3.3), so the caller filters nothing — and a plan entry at
+ * 0 is dropped by {@link tokenTheorySlots}, above, as a live one at 0 counts nothing toward a sum.
  */
 export function tokenTheoryPlan(
   plan: readonly DeckTokenView[] | undefined,

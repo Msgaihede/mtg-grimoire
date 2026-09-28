@@ -96,7 +96,7 @@ export const Default: Story = {
     // "Reset" are three buttons a screen reader cannot choose between.
     for (const noun of [
       "matching-printing mark",
-      "different-printing mark",
+      "any-printing mark",
       "unplanned-card mark",
     ]) {
       const swatch = canvas.getByRole("button", { name: SWATCH(noun) });
@@ -113,7 +113,7 @@ export const Default: Story = {
 
     await expect(swatchOf(canvas.getByRole("button", { name: SWATCH("matching-printing mark") })))
       .toHaveStyle({ backgroundColor: MARK_COLOR_DEFAULTS.theoryExact });
-    await expect(swatchOf(canvas.getByRole("button", { name: SWATCH("different-printing mark") })))
+    await expect(swatchOf(canvas.getByRole("button", { name: SWATCH("any-printing mark") })))
       .toHaveStyle({ backgroundColor: MARK_COLOR_DEFAULTS.theoryName });
     await expect(swatchOf(canvas.getByRole("button", { name: SWATCH("unplanned-card mark") })))
       .toHaveStyle({ backgroundColor: MARK_COLOR_DEFAULTS.theoryUnplanned });
@@ -155,7 +155,7 @@ export const Default: Story = {
 export const Customised: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const trigger = canvas.getByRole("button", { name: SWATCH("different-printing mark") });
+    const trigger = canvas.getByRole("button", { name: SWATCH("any-printing mark") });
 
     await userEvent.click(trigger);
     await expect(trigger).toHaveAttribute("aria-expanded", "true");
@@ -165,7 +165,7 @@ export const Customised: Story = {
     // the vocabulary rule is that they never trade places. Left at the default, a screen-reader
     // user recolouring one of these would hear "Label colour" twice with nothing telling the two
     // rows apart.
-    const picker = canvas.getByRole("group", { name: "Different printing colour" });
+    const picker = canvas.getByRole("group", { name: "Any printing colour" });
     await userEvent.click(within(picker).getByRole("button", { name: "Ember" }));
     await userEvent.click(within(picker).getByRole("button", { name: "Done" }));
 
@@ -178,7 +178,7 @@ export const Customised: Story = {
 
     // There is something to put back now, and only on this row.
     await expect(
-      canvas.getByRole("button", { name: RESET("different-printing mark") }),
+      canvas.getByRole("button", { name: RESET("any-printing mark") }),
     ).not.toHaveAttribute("aria-disabled");
     for (const noun of ["matching-printing mark", "unplanned-card mark"]) {
       await expect(canvas.getByRole("button", { name: RESET(noun) })).toHaveAttribute(

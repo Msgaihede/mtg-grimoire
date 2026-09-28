@@ -24,6 +24,7 @@ import type {
   Printing,
   SyncStatus,
   TheorySlot,
+  TokenPrinting,
 } from "@/lib/ipc";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import {
@@ -173,7 +174,13 @@ const deckTokenSwap = vi.hoisted(() => vi.fn());
 const deckTokenAddPrinting = vi.hoisted(() => vi.fn());
 // The stepper's write — hoisted for the one case that watches a token write clear the redo stack.
 const deckTokenSetQuantity = vi.hoisted(() => vi.fn());
+// Remove printing's write (managed tokens spec §3.4) — hoisted for the case that presses it.
+const deckTokenRemove = vi.hoisted(() => vi.fn());
 const cardPrintings = vi.hoisted(() => vi.fn());
+// Every token in the game — the picker's other read, which `Add printing` on a deck that makes
+// nothing opens straight onto (managed tokens spec §3.6). Hoisted for the case that adds a first
+// token by hand there; answered with nothing otherwise.
+const tokenPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -199,18 +206,18 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // its "nothing in this deck makes a token" sentence and, crucially, *no* `role="alert"`.
     // Left off the mock entirely, the read rejects with `ipc.deckTokens is not a function`, the
     // band draws its read-failure alert, and every `getByRole("alert")` in this file fails with
-    // "Found multiple elements" — eight of them did. The five writes are here for the same
+    // "Found multiple elements" — eight of them did. The four writes are here for the same
     // reason: a press that reached an undefined function would fail as a write refusal rather
     // than as the missing double it is.
     deckTokens,
     deckTokenSwap,
     deckTokenAddPrinting,
     deckTokenSetQuantity,
-    deckTokenState: vi.fn().mockResolvedValue(undefined),
-    deckTokenReset: vi.fn().mockResolvedValue(undefined),
+    deckTokenRemove,
     // The printing picker's one read — the card modal's printings command, which is what a
     // token's printings are too. Answered with nothing unless a case says otherwise.
     cardPrintings,
+    tokenPrintings,
     // **The Notes band asks on every open too, for the tokens band's reason exactly** — its
     // header counts the deck's notes whether or not the band is drawn, because that number is
     // the reason to open it. Answered with an empty list: the band then draws its "no notes"
@@ -900,7 +907,9 @@ beforeEach(() => {
   deckTokenSwap.mockReset().mockResolvedValue(undefined);
   deckTokenAddPrinting.mockReset().mockResolvedValue(undefined);
   deckTokenSetQuantity.mockReset().mockResolvedValue(undefined);
+  deckTokenRemove.mockReset().mockResolvedValue(undefined);
   cardPrintings.mockReset().mockResolvedValue({ items: [], total: 0 });
+  tokenPrintings.mockReset().mockResolvedValue([]);
   // No notes unless a test says otherwise — which is what keeps the band silent and, since
   // 2026-09-10, keeps the note glyph off every card in every other case here.
   deckNotes.mockReset().mockResolvedValue([]);
@@ -4678,10 +4687,12 @@ describe("DeckEditor", () => {
     }
     // And in words, which is the other half of the switch reaching the screen: the tier is drawn
     // as a colour, so `deckCardName` is the only place a reader who cannot see one is told which
-    // of the two statements this mark is making.
-    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
-      expect.stringContaining("art mismatch"),
-    );
+    // of the two statements this mark is making. **`match`, not `art mismatch`** (managed tokens
+    // spec §3.10): the reader switched printings off, so the row — the very printing the plan
+    // names — must not be called a mismatch of one.
+    const press = screen.getByRole("button", { name: /^Lightning Bolt/ });
+    expect(press).toHaveAccessibleName(expect.stringMatching(/, match(,|$)/));
+    expect(press).toHaveAccessibleName(expect.not.stringContaining("mismatch"));
   });
 
   /**
@@ -8266,17 +8277,18 @@ describe("DeckEditor multi-select", () => {
 });
 
 /**
- * **Tokens & Emblems as a pile in the deck views** (issue #507), and since token stacks PR 2 the
- * printings and the mode (user schema v52, spec §4).
+ * **Tokens & Emblems as a pile in the deck views** (issue #507), since token stacks PR 2 the
+ * printings (user schema v52, spec §4), and since managed tokens (2026-09-27) the counted tokens
+ * only.
  *
  * The band stays and the pile is an *additional* drawing of the same answer: `DeckEditor` reads
- * the tokens once, hands them to the band and — on a deck whose `tokenMode` is not `hidden` — to
- * the views, and mounts one printing picker both open. What this file holds is what is a fact
- * about the editor rather than about a view: the pile is there only when the deck's mode draws it,
- * a press opens the picker on **that entry** and a pick swaps it, the band's `Add printing` opens
- * the same picker to add one, the band's mode control writes the deck, no deck figure counts a
- * token, a token filed through the search column lands in the pile and points at no deck row, and
- * the two surfaces cost one read.
+ * the tokens once, hands every one to the band and **the ones the reader has counted** to the
+ * views, and mounts one printing picker both open. What this file holds is what is a fact about
+ * the editor rather than about a view: the pile draws on every deck — the mode that could take it
+ * away is retired — and leaves out a token at 0, a press opens the picker on **that entry** and a
+ * pick swaps it, the band's `Add printing` opens the same picker to add one and its Remove printing
+ * deletes one, no deck figure counts a token, a token filed through the search column lands in the
+ * pile and points at no deck row, and the two surfaces cost one read.
  */
 describe("DeckEditor — the token pile (issue #507)", () => {
   /**
@@ -8316,18 +8328,39 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     ...over,
   });
 
-  /** A second token the reader has dismissed — which the pile must never draw. */
-  const dismissedWurm = treasure({
+  /**
+   * A second token the deck makes and the reader has never counted — the **implicit** entry at
+   * `0`, which is every untouched token since managed tokens spec §3.1. The band draws it; the
+   * pile must not.
+   */
+  const zeroWurm = treasure({
     oracleId: "o-wurm",
     name: "Wurm",
     typeLine: "Token Artifact Creature — Wurm",
     defaultCardId: "w-default",
     cardId: "w-default",
-    quantity: 1,
-    state: "hidden",
+    quantity: 0,
     power: "3",
     toughness: "3",
     oracleText: "Deathtouch",
+  });
+
+  /**
+   * A token an older peer dismissed, synced in after the launch pass that retires the word — with
+   * copies, so it is a counted token the pile has to draw (Review Focus 1: nothing may hide it).
+   */
+  const hiddenSoldier = treasure({
+    oracleId: "o-soldier",
+    name: "Soldier",
+    typeLine: "Token Creature — Soldier",
+    defaultCardId: "s-default",
+    cardId: "s-default",
+    quantity: 2,
+    state: "hidden",
+    power: "1",
+    toughness: "1",
+    colors: "W",
+    oracleText: "",
   });
 
   /**
@@ -8397,29 +8430,86 @@ describe("DeckEditor — the token pile (issue #507)", () => {
   }
 
   beforeEach(() => {
-    deckTokens.mockResolvedValue([treasure(), dismissedWurm]);
+    deckTokens.mockResolvedValue([treasure(), zeroWurm]);
   });
 
-  it("draws a Tokens & Emblems pile in the Stacks view on a deck whose tokens are managed", async () => {
-    deckWith({ tokenMode: "managed" });
+  /**
+   * **The pile draws on every deck, and it draws what the reader has counted** (managed tokens
+   * spec §3.2, §3.9). The deck here is stored `hidden` — the retired mode, which a deck set before
+   * this build still carries and nothing reads — so the old gate would have drawn no pile at all.
+   * The Wurm at 0 is on the band and not in the pile: the filter is the pile's alone.
+   */
+  it("draws the pile whatever the retired mode says, and leaves out a token at 0", async () => {
+    deckWith({ tokenMode: "hidden", tokensOpen: true });
     await open();
 
     await waitFor(() => expect(pile()).not.toBeNull());
     const drawn = pile()!;
     expect(within(drawn).getAllByText(TOKENS_HEADING).length).toBeGreaterThan(0);
-    // The kept token, and never the dismissed one — whatever the band's `Show dismissed` says.
     expect(within(drawn).getAllByRole("button", { name: ART }).length).toBeGreaterThan(0);
     expect(within(drawn).queryAllByRole("button", { name: /Wurm/ })).toHaveLength(0);
+    // The band keeps every row, the zero included.
+    expect(
+      within(band()).getByRole("spinbutton", { name: /^Quantity of Wurm/ }),
+    ).toHaveValue(0);
   });
 
-  it("draws no pile on a deck that hides its tokens", async () => {
-    deckWith({ tokenMode: "hidden" });
+  /**
+   * **A `hidden` token with copies is in the pile** (Review Focus 1) — the view layer reads no
+   * dismissal, so a dismissal an older peer synced in after the launch pass ran is drawn as an
+   * ordinary counted token until the next launch retires it.
+   */
+  it("draws a hidden token with copies in the pile like any other", async () => {
+    deckTokens.mockResolvedValue([treasure(), hiddenSoldier]);
+    deckWith({});
     await open();
 
-    // The band has answered — its disclosure is drawn only once there is a token to disclose — so
-    // the read has landed and the pile's absence is a decision rather than a read in flight.
+    await waitFor(() => expect(pile()).not.toBeNull());
+    expect(
+      within(pile()!).getAllByRole("button", { name: /\bart\b.*Soldier/ }).length,
+    ).toBeGreaterThan(0);
+  });
+
+  /** And no pile at all where nothing is counted: a deck whose every token is at 0 draws its band
+   *  and nothing in the views, which is the absence of a pile rather than an empty one. */
+  it("draws no pile on a deck whose every token is at 0", async () => {
+    deckTokens.mockResolvedValue([zeroWurm]);
+    deckWith({});
+    await open();
+
     await within(band()).findByRole("button", { name: TOKENS_HEADING });
     expect(pile()).toBeNull();
+  });
+
+  /** **Remove printing on the band deletes the entry it is drawn on**, on the list on screen —
+   *  `deck_token_remove`'s grain, never a `null` (an implicit entry draws no Remove). */
+  it("removes a printing from the band's tile through deckTokenRemove", async () => {
+    deckTokens.mockResolvedValue(twoEntries());
+    deckWith({ tokensOpen: true });
+    const user = userEvent.setup();
+    await open();
+
+    await user.click(
+      await within(band()).findByRole("button", { name: /^Remove Treasure.*TMH3 · 12, Foil$/ }),
+    );
+    await waitFor(() =>
+      expect(deckTokenRemove).toHaveBeenCalledWith(4, "live", "o-treasure", {
+        cardId: "t-a",
+        finish: "foil",
+      }),
+    );
+  });
+
+  /** **The band has no mode control** (managed tokens spec §3.9): with every token at 0 until the
+   *  reader counts it, there is nothing left for Managed or Hide to decide. */
+  it("draws no mode control on the band", async () => {
+    deckWith({ tokenMode: "managed" });
+    await open();
+
+    await within(band()).findByRole("button", { name: TOKENS_HEADING });
+    expect(within(band()).queryByRole("group", { name: "Tokens" })).toBeNull();
+    expect(within(band()).queryByRole("button", { name: /^Hide/ })).toBeNull();
+    expect(within(band()).queryByRole("button", { name: /^Managed/ })).toBeNull();
   });
 
   /**
@@ -8510,18 +8600,6 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
   });
 
-  /** **The band's mode control is a deck write**, through the deck's own `update` like
-   *  `tokensOpen` beside it — one column (`decks.token_mode`), so the change is undoable and the
-   *  pile follows the re-read. */
-  it("writes the deck's token mode from the band's mode control", async () => {
-    deckWith({ tokenMode: "managed" });
-    const user = userEvent.setup();
-    await open();
-
-    await user.click(await within(band()).findByRole("button", { name: /^Hide/ }));
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { tokenMode: "hidden" }));
-  });
-
   /**
    * **A token write throws the redo stack away, like every other deck write** (token stacks PR 2,
    * spec §4.7). Every token write is journalled now, so a reader who undoes a card write and then
@@ -8593,6 +8671,295 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     const alert = await within(band()).findByRole("alert");
     expect(alert).toHaveTextContent("The database is busy with a sync.");
     expect(screen.getAllByRole("alert")).toHaveLength(1);
+  });
+
+  /**
+   * **A refused first Add printing on a deck that makes nothing is said** (managed tokens, the
+   * fan-in's carried minor). That deck is the one Add printing is offered on precisely to add a
+   * token by hand, and the press opens the band — so the banner, keyed on the band being open,
+   * stood down, while a band with no row draws no wall and so no line of its own. The refusal was
+   * said nowhere. Seeded open because that is the state the press itself leaves: this file's
+   * `deckUpdate` answers the old row, so a press from shut would never reach it.
+   */
+  it("says a refused first Add printing on a deck that makes nothing", async () => {
+    const soldier: TokenPrinting = {
+      ...printing("p-soldier"),
+      oracleId: "o-soldier",
+      name: "Soldier",
+      typeLine: "Token Creature — Soldier",
+      colors: "W",
+      power: "1",
+      toughness: "1",
+      oracleText: null,
+    };
+    deckTokens.mockResolvedValue([]);
+    tokenPrintings.mockResolvedValue([soldier]);
+    deckTokenAddPrinting.mockRejectedValue("The database is busy with a sync.");
+    deckWith({ tokensOpen: true });
+    const user = userEvent.setup();
+    await open();
+
+    await user.click(await within(band()).findByRole("button", { name: /^Add printing/i }));
+    const dialog = await screen.findByRole("dialog");
+    // The picker opens on every token in the game here, `All tokens` already pressed.
+    await user.click(await within(dialog).findByRole("button", { name: /^Soldier — TMH3/ }));
+    await waitFor(() =>
+      expect(calledWithAll(deckTokenAddPrinting, [4, "live", "p-soldier", "nonfoil"])).toBe(true),
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("The database is busy with a sync.");
+    // Said once: the band has no wall to say it above.
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+  });
+
+  /**
+   * **Remove printing, and a pick in the printing picker, hand the caret on** (the live pass of
+   * 2026-09-28 found every one of them leaving it on `<body>`, so the next Tab restarted at the top
+   * of the app). The removed tile unmounts, and the dialog's panel goes with the pick, so the caret
+   * has to be put somewhere — after the write has answered and the re-read has drawn the result,
+   * never before: a target found at the press can be connected then and unmounted by the re-read.
+   *
+   * Every press is a keyboard one — the control focused, then Enter — and every assertion reads
+   * `document.activeElement` itself, never a call. `answers` makes the deck's tokens read one list
+   * until the write lands and the other after it, so the tile really goes.
+   */
+  describe("the caret after a token write", () => {
+    /** A hand-added Soldier — `derived: false` — in one stored entry. Sorts before `Treasure`. */
+    const soldier = (over: Partial<DeckTokenRow> = {}): DeckTokenRow =>
+      treasure({
+        oracleId: "o-soldier",
+        name: "Soldier",
+        typeLine: "Token Creature — Soldier",
+        defaultCardId: "s-a",
+        cardId: "s-a",
+        sources: [],
+        derived: false,
+        state: "manual",
+        implicit: false,
+        quantity: 1,
+        power: "1",
+        toughness: "1",
+        colors: "W",
+        oracleText: "",
+        setCode: "twar",
+        collectorNumber: "3",
+        ...over,
+      });
+
+    /** The deck's tokens read `before` until `write` lands, and `after` from then on. */
+    function answers(
+      write: ReturnType<typeof vi.fn>,
+      before: DeckTokenRow[],
+      after: DeckTokenRow[],
+    ) {
+      let answer = before;
+      deckTokens.mockImplementation(() => Promise.resolve(answer));
+      write.mockImplementation(() => {
+        answer = after;
+        return Promise.resolve(undefined);
+      });
+    }
+
+    /** A keyboard press: the caret on the control, then Enter. */
+    async function press(user: UserEvent, control: HTMLElement) {
+      control.focus();
+      await user.keyboard("{Enter}");
+    }
+
+    const NONFOIL_REMOVE = /^Remove Treasure,.*TMH3 · 12, Nonfoil$/;
+    const FOIL_REMOVE = /^Remove Treasure,.*TMH3 · 12, Foil$/;
+
+    it("band: one of a token's two entries hands the caret to the other entry's Remove", async () => {
+      answers(deckTokenRemove, twoEntries(), [twoEntries()[1]]);
+      deckWith({ tokensOpen: true });
+      const user = userEvent.setup();
+      await open();
+
+      await press(user, await within(band()).findByRole("button", { name: NONFOIL_REMOVE }));
+
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(band()).getByRole("button", { name: FOIL_REMOVE }),
+        ),
+      );
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    it("band: a hand-added token's last entry hands the caret to the next token's control", async () => {
+      const stored = treasure({ cardId: "t-a", implicit: false, quantity: 2 });
+      answers(deckTokenRemove, [soldier(), stored], [stored]);
+      deckWith({ tokensOpen: true });
+      const user = userEvent.setup();
+      await open();
+
+      await press(user, await within(band()).findByRole("button", { name: /^Remove Soldier/ }));
+
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(band()).getByRole("button", { name: NONFOIL_REMOVE }),
+        ),
+      );
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    /** The token stays, drawn by its implicit entry — which is not stored and draws no Remove, so
+     *  the caret takes the same token's picture. */
+    it("band: a derived token's last stored entry hands the caret to its implicit tile", async () => {
+      answers(
+        deckTokenRemove,
+        [treasure({ cardId: "t-a", implicit: false, quantity: 2 })],
+        [treasure({ quantity: 0 })],
+      );
+      deckWith({ tokensOpen: true });
+      const user = userEvent.setup();
+      await open();
+
+      await press(user, await within(band()).findByRole("button", { name: NONFOIL_REMOVE }));
+
+      await waitFor(() =>
+        expect(document.activeElement).toBe(within(band()).getByRole("button", { name: ART })),
+      );
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    it("band: the band's last token hands the caret to Add printing", async () => {
+      answers(deckTokenRemove, [soldier()], []);
+      deckWith({ tokensOpen: true });
+      const user = userEvent.setup();
+      await open();
+
+      await press(user, await within(band()).findByRole("button", { name: /^Remove Soldier/ }));
+
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(band()).getByRole("button", { name: /^Add printing/ }),
+        ),
+      );
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    /** A guard rather than a red-first case: a refused remove unmounts nothing, so the caret was
+     *  already where it belongs — and a hand-off that moved it on a refusal would be the bug. */
+    it("band: a refused remove leaves the caret on the Remove it pressed", async () => {
+      deckTokens.mockResolvedValue(twoEntries());
+      deckTokenRemove.mockRejectedValue("The database is busy with a sync.");
+      deckWith({ tokensOpen: true });
+      const user = userEvent.setup();
+      await open();
+
+      const remove = await within(band()).findByRole("button", { name: NONFOIL_REMOVE });
+      await press(user, remove);
+
+      await within(band()).findByRole("alert");
+      expect(document.activeElement).toBe(remove);
+    });
+
+    it.each(["Stacks", "Grid", "Table", "Text"])(
+      "pile in %s: one of a token's two entries hands the caret to the other entry's Remove",
+      async (label) => {
+        answers(deckTokenRemove, twoEntries(), [twoEntries()[1]]);
+        deckWith({ tokensOpen: false });
+        const user = userEvent.setup();
+        await open();
+        if (label !== "Stacks") await pickOption(user, "View", label);
+        await waitFor(() => expect(pile()).not.toBeNull());
+
+        await press(user, within(pile()!).getByRole("button", { name: NONFOIL_REMOVE }));
+
+        await waitFor(() =>
+          expect(document.activeElement).toBe(
+            within(pile()!).getByRole("button", { name: FOIL_REMOVE }),
+          ),
+        );
+        expect(document.activeElement).not.toBe(document.body);
+      },
+    );
+
+    /** The pile goes with its last token, grip and all — so the caret goes to the band's Add
+     *  printing, the one control left that puts a token back. */
+    it("pile: the pile's last token hands the caret to the band's Add printing", async () => {
+      answers(deckTokenRemove, [soldier()], []);
+      deckWith({ tokensOpen: false });
+      const user = userEvent.setup();
+      await open();
+      await waitFor(() => expect(pile()).not.toBeNull());
+
+      await press(user, within(pile()!).getByRole("button", { name: /^Remove Soldier/ }));
+
+      await waitFor(() => expect(pile()).toBeNull());
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(band()).getByRole("button", { name: /^Add printing/ }),
+        ),
+      );
+    });
+
+    it("picker: an added printing hands the caret to the tile just added", async () => {
+      const held = treasure({ cardId: "t-a", implicit: false, quantity: 2 });
+      const added = treasure({ cardId: "t-new", implicit: false, quantity: 1, collectorNumber: "99" });
+      answers(deckTokenAddPrinting, [held], [held, added]);
+      cardPrintings.mockResolvedValue({ items: [printing("t-new")], total: 1 });
+      deckWith({ tokensOpen: true });
+      const user = userEvent.setup();
+      await open();
+
+      await press(user, await within(band()).findByRole("button", { name: /^Add printing/ }));
+      const dialog = await screen.findByRole("dialog");
+      await press(user, await within(dialog).findByRole("button", { name: NEW_TILE }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(band()).getByRole("button", {
+            name: /^Change the art for Treasure,.*TMH3 · 99, Nonfoil$/,
+          }),
+        ),
+      );
+    });
+
+    it("picker: a swap from the pile hands the caret to the swapped tile", async () => {
+      const [plain] = twoEntries();
+      const swapped = treasure({ cardId: "t-new", implicit: false, quantity: 1, collectorNumber: "99" });
+      answers(deckTokenSwap, twoEntries(), [plain, swapped]);
+      cardPrintings.mockResolvedValue({ items: [printing("t-new")], total: 1 });
+      deckWith({ tokensOpen: false });
+      const user = userEvent.setup();
+      await open();
+      await waitFor(() => expect(pile()).not.toBeNull());
+
+      await press(
+        user,
+        within(pile()!).getByRole("button", { name: /\bart\b.*Treasure.*TMH3 · 12, Foil$/ }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      await press(user, await within(dialog).findByRole("button", { name: NEW_TILE }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(pile()!).getByRole("button", { name: /\bart\b.*Treasure.*TMH3 · 99, Nonfoil$/ }),
+        ),
+      );
+    });
+
+    /** `Dialog`'s own contract — `onDismiss` hands the caret back to what opened it. */
+    it("picker: Escape hands the caret back to the picture that opened it", async () => {
+      deckTokens.mockResolvedValue(twoEntries());
+      cardPrintings.mockResolvedValue({ items: [printing("t-new")], total: 1 });
+      deckWith({ tokensOpen: false });
+      const user = userEvent.setup();
+      await open();
+      await waitFor(() => expect(pile()).not.toBeNull());
+
+      const art = within(pile()!).getByRole("button", { name: /\bart\b.*Treasure.*TMH3 · 12, Foil$/ });
+      await press(user, art);
+      await screen.findByRole("dialog");
+      await user.keyboard("{Escape}");
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(document.activeElement).toBe(art);
+    });
   });
 
   /**
@@ -8890,19 +9257,15 @@ describe("DeckEditor — the token pile (issue #507)", () => {
   });
 
   /**
-   * **And no read of the plan's tokens at all while the deck hides its tokens** — the marks are
-   * drawn on the pile and nowhere else, so a deck that keeps a plan with its token mode on `Hide`
-   * would otherwise pay a second `deck_tokens` on every Live open and after every deck write, for
-   * marks nothing draws. The cards' own plan read landing is what makes the absence a claim: it is
-   * enabled by the same render that would enable this one, so its effects have run by then.
+   * **And the plan's tokens are read whatever the retired mode says** — the gate that skipped the
+   * read on a deck set to `Hide` went with the mode (managed tokens spec §3.9), because that deck
+   * draws its pile again and the pile is where the marks are.
    */
-  it("never reads the plan's tokens on a deck with a plan that hides its tokens", async () => {
+  it("reads the plan's tokens on a deck with a plan stored as hiding its tokens", async () => {
     deckWith({ tokenMode: "hidden", theoryEnabled: true });
     await open();
 
-    await within(band()).findByRole("button", { name: TOKENS_HEADING });
-    await waitFor(() => expect(deckTheorySlots).toHaveBeenCalled());
-    expect(pile()).toBeNull();
-    expect(askedForTheory()).toBe(false);
+    await waitFor(() => expect(pile()).not.toBeNull());
+    await waitFor(() => expect(askedForTheory()).toBe(true));
   });
 });

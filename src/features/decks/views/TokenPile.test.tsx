@@ -15,12 +15,18 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { getMarketplace, marketplaceFeedStatus },
 }));
 
-import { THEORY_MATCH_ATTR, theoryMatchLabel } from "../CardMarks";
+import { THEORY_MATCH_ATTR, theoryMatchLabel, WordMark } from "../CardMarks";
 import { deckCardScale, STACK_OPEN_ATTR, stackHeight } from "../CardStack";
 import { CARD_BODY_ATTR, DECK_GROUP_ATTR } from "../cardControl";
 import { tokenCountWords } from "../CountPill";
 import { TOKENS_HEADING } from "../DeckTokensPanel";
-import { tokenEntryName, type DeckTokenView } from "../deckTokens";
+import {
+  entryRef,
+  pileTokens,
+  tokenArtName,
+  tokenEntryName,
+  type DeckTokenView,
+} from "../deckTokens";
 import { DECK_CARD_ATTR } from "../dnd";
 import {
   TOKEN_PILE_ATTR,
@@ -60,7 +66,6 @@ function token(over: Partial<DeckTokenView> = {}): DeckTokenView {
     sources: [{ cardId: "c-smothering-tithe", name: "Smothering Tithe" }],
     derived: true,
     state: "auto",
-    overridden: false,
     subtitle: "Colorless · {T}, Sacrifice this token: Add one mana of any color.",
     setCode: "tclb",
     collectorNumber: "5",
@@ -104,8 +109,24 @@ const TWO_ENTRIES: DeckTokenView[] = [
 ];
 
 function pileOf(tokens: readonly DeckTokenView[]): TokenPile {
-  return { tokens, setQuantity: vi.fn(), pickArt: vi.fn(), railIndex: -1 };
+  return { tokens, setQuantity: vi.fn(), pickArt: vi.fn(), remove: vi.fn(), railIndex: -1 };
 }
+
+/**
+ * **A token nothing in the deck makes** — added by hand, so `derived: false` and no sources. The
+ * mark is read off `derived` and never off `state` (managed tokens spec §3.5), so the state here
+ * is the one a hand-added token has, and a derived `manual` one elsewhere must wear nothing.
+ */
+const HAND_ADDED = token({
+  oracleId: "o-construct",
+  name: "Construct",
+  printingId: "p-construct",
+  subtitle: "Colorless 4/4 · Flying, haste",
+  sources: [],
+  derived: false,
+  state: "manual",
+  quantity: 2,
+});
 
 /** The two providers every drawing needs: the query client `useMarketplace` reads through, and
  *  the tooltip root the chin's set name and the heading's as-of sentence bind to. */
@@ -366,6 +387,38 @@ describe.each(DRAWINGS)("the $name drawing", ({ draw }) => {
     expect(new Set(names).size).toBe(2);
   });
 
+  /**
+   * **The stacks draw what the reader has counted** (managed tokens spec §3.2): the editor hands
+   * each view `pileTokens` of the band's list, so a token at 0 is not a card in any drawing and a
+   * token at 1 is. The heading's copies are the drawn cards' own, so the zero adds nothing to it
+   * either way.
+   */
+  it("draws a token at one copy and leaves out one at zero", () => {
+    const zero = token({ oracleId: "o-zero", name: "Soldier", printingId: "p-soldier", quantity: 0 });
+    setup(pileTokens([zero, token({ quantity: 1 })]));
+
+    expect(screen.getAllByRole("button", { name: /^Change the art for / })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: /^Change the art for Treasure/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Change the art for Soldier/ })).toBeNull();
+  });
+
+  /**
+   * **The mark's words are in every drawing's name for the art press** — the badge on the two
+   * card drawings and the tag on the two compact ones are both `aria-hidden` or inside a named
+   * button, so the name is the one place a screen reader hears them — and in no derived token's.
+   */
+  it("names a hand-added token's press with the mark's words, and a derived one's without", () => {
+    setup([token(), HAND_ADDED]);
+
+    expect(screen.getByRole("button", { name: tokenArtName(HAND_ADDED) })).toHaveAccessibleName(
+      `${tokenEntryName("Change the art for", HAND_ADDED)}, not made by deck`,
+    );
+    expect(
+      screen.getByRole("button", { name: tokenEntryName("Change the art for", token()) }),
+    ).not.toHaveAccessibleName(/not made by deck/);
+    expect(screen.getAllByText("NOT MADE BY DECK")).toHaveLength(1);
+  });
+
   it("is no deck card: no slot, no body, no pile a card can be filed into", () => {
     const { view } = setup();
     for (const attr of [DECK_CARD_ATTR, CARD_BODY_ATTR, DECK_GROUP_ATTR]) {
@@ -427,15 +480,19 @@ describe("TokenStackPile", () => {
   });
 
   it("wears the plan's mark when the pile is given one", () => {
-    renderStack({ ...pileOf([token()]), theoryMark: () => ({ tier: "exact", delta: 0 }) });
+    renderStack({
+      ...pileOf([token()]),
+      theoryMark: () => ({ tier: "exact", delta: 0, anyPrinting: false }),
+    });
     expect(document.querySelector(`[${THEORY_MATCH_ATTR}]`)).not.toBeNull();
   });
 
   it("says the plan's mark in the art press's own name, since the mark itself is aria-hidden", () => {
-    renderStack({ ...pileOf([token()]), theoryMark: () => ({ tier: "exact", delta: 0 }) });
+    const mark = { tier: "exact", delta: 0, anyPrinting: false } as const;
+    renderStack({ ...pileOf([token()]), theoryMark: () => mark });
     const press = screen.getByRole("button", { name: /^Change the art for Treasure/ });
     expect(press).toHaveAccessibleName(
-      `${tokenEntryName("Change the art for", token())}, ${theoryMatchLabel("exact", 0).toLowerCase()}`,
+      `${tokenEntryName("Change the art for", token())}, ${theoryMatchLabel(mark).toLowerCase()}`,
     );
   });
 
@@ -479,6 +536,138 @@ describe("TokenStackPile", () => {
     expect(source).toContainElement(grip);
     expect(source).toContainElement(within(group).getByText(TOKENS_HEADING));
     expect(source).not.toContainElement(screen.getByRole("list", { name: TOKENS_HEADING }));
+  });
+});
+
+/**
+ * **The two card drawings mark a hand-added token as a rule-break card is marked** — the card's
+ * own edge in the destructive colour, the chin under it in the same tone so the red runs down to
+ * the foot, and the `NOT MADE BY DECK` badge in the rule-break badge's corner (managed tokens spec
+ * §3.5). A derived token keeps the neutral edge. And each card carries **Remove printing** in its
+ * controls column, named for its entry — the one way to take a hand-added token off the deck.
+ */
+describe.each([
+  { name: "stack", draw: (pile: TokenPile) => <TokenStackPile pile={pile} zoom={DEFAULT_ZOOM} /> },
+  {
+    name: "grid",
+    draw: (pile: TokenPile) => (
+      <TokenGridPile pile={pile} zoom={DEFAULT_ZOOM} tileWidth={150} gap={10} />
+    ),
+  },
+] as const)("the $name drawing's card", ({ draw }) => {
+  const cardOf = (view: DeckTokenView) =>
+    screen.getByRole("button", { name: tokenArtName(view) }).closest("li")!;
+
+  it("outlines a hand-added token and badges it, and leaves a derived one alone", () => {
+    renderWith(draw(pileOf([token(), HAND_ADDED])));
+
+    const byHand = cardOf(HAND_ADDED);
+    expect(byHand.classList.contains("border-destructive")).toBe(true);
+    expect(byHand.classList.contains("border-border")).toBe(false);
+    expect(within(byHand).getByText("NOT MADE BY DECK")).toHaveAttribute("aria-hidden", "true");
+    // The chin: the foot whose printing line reads `TCLB · 5` — the bar that holds it.
+    expect(within(byHand).getByText("TCLB · 5").parentElement!.classList.contains("border-destructive")).toBe(true);
+
+    const made = cardOf(token());
+    expect(made.classList.contains("border-destructive")).toBe(false);
+    expect(within(made).queryByText("NOT MADE BY DECK")).toBeNull();
+    expect(within(made).getByText("TCLB · 5").parentElement!.classList.contains("border-destructive")).toBe(false);
+  });
+
+  it("removes the entry its Remove printing is drawn on", () => {
+    const pile = pileOf([token(), HAND_ADDED]);
+    renderWith(draw(pile));
+
+    fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Remove", HAND_ADDED) }));
+    expect(pile.remove).toHaveBeenCalledTimes(1);
+    expect(pile.remove).toHaveBeenCalledWith({
+      oracleId: "o-construct",
+      cardId: "p-construct",
+      finish: "nonfoil",
+      implicit: false,
+    });
+  });
+
+  /** No Remove on an implicit entry — nothing is stored to delete — and none where the host
+   *  wired no remove at all. */
+  it("draws no Remove on an implicit entry, nor without a remove to call", () => {
+    const implicit = token({ implicit: true, quantity: 3 });
+    renderWith(draw(pileOf([implicit])));
+    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
+    cleanup();
+
+    renderWith(draw({ ...pileOf([token()]), remove: undefined }));
+    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
+  });
+});
+
+/**
+ * **The two compact drawings say it in words** — `NOT MADE BY DECK` as a small destructive tag
+ * after the name (managed tokens spec §3.5), since a 22px line and a table row have no corner to
+ * put a badge in and no card edge to colour.
+ */
+describe.each([
+  { name: "text", draw: (pile: TokenPile) => <TokenTextPile pile={pile} /> },
+  { name: "table", draw: (pile: TokenPile) => <TokenTablePile pile={pile} /> },
+] as const)("the $name drawing's line", ({ draw }) => {
+  it("tags a hand-added token after its name, in the destructive colour", () => {
+    renderWith(draw(pileOf([token(), HAND_ADDED])));
+
+    const tag = screen.getByText("NOT MADE BY DECK");
+    expect(tag.classList.contains("text-destructive")).toBe(true);
+    const line = tag.closest("li")!;
+    expect(within(line).getByText("Construct")).toBeInTheDocument();
+    // After the name, in document order.
+    expect(
+      within(line).getByText("Construct").compareDocumentPosition(tag) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getAllByText("NOT MADE BY DECK")).toHaveLength(1);
+  });
+
+  /**
+   * **The tag is `WordMark`'s line recipe, not a copy of it** — so a change to the rule-break
+   * box's shared half reaches this tag too. Compared against the recipe drawn on its own, class
+   * for class, with the two a line's tag adds to stay whole beside a name that truncates.
+   */
+  it("draws the tag through WordMark's line surface", () => {
+    renderWith(draw(pileOf([HAND_ADDED])));
+    const tag = screen.getByText("NOT MADE BY DECK");
+
+    const { container } = renderWith(<WordMark surface="line" word="THE RECIPE" hint="x" />);
+    const recipe = [...within(container).getByText("THE RECIPE").classList];
+    expect([...tag.classList].filter((c) => c !== "shrink-0" && c !== "whitespace-nowrap")).toEqual(
+      recipe,
+    );
+  });
+
+  /**
+   * **Remove printing on every line, as on every card** (managed tokens spec §3.4: every tile, band
+   * and pile — the final review's M3). The same write and the same name as the band's tile and the
+   * two card drawings, so one entry answers to one name on every surface: a token's foil and plain
+   * entries are two presses, each reaching its own entry.
+   */
+  it("removes the entry its Remove printing is drawn on", () => {
+    const [plain, foil] = TWO_ENTRIES;
+    const pile = pileOf([plain, foil, HAND_ADDED]);
+    renderWith(draw(pile));
+
+    fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Remove", foil) }));
+    expect(pile.remove).toHaveBeenCalledTimes(1);
+    expect(pile.remove).toHaveBeenCalledWith(entryRef(foil));
+    fireEvent.click(screen.getByRole("button", { name: tokenEntryName("Remove", HAND_ADDED) }));
+    expect(pile.remove).toHaveBeenLastCalledWith(entryRef(HAND_ADDED));
+    // One name per entry: three entries, three distinct Remove buttons.
+    expect(screen.getAllByRole("button", { name: /^Remove / })).toHaveLength(3);
+  });
+
+  it("draws no Remove on an implicit entry, nor without a remove to call", () => {
+    renderWith(draw(pileOf([token({ implicit: true, quantity: 3 })])));
+    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
+    cleanup();
+
+    renderWith(draw({ ...pileOf([token()]), remove: undefined }));
+    expect(screen.queryByRole("button", { name: /^Remove / })).toBeNull();
   });
 });
 

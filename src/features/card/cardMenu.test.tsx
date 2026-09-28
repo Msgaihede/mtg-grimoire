@@ -164,7 +164,7 @@ const wishFolder = (
   name: string,
   parentId: number | null = null,
   sortOrder = 0,
-): WishlistFolder => ({ id, parentId, name, sortOrder, managedDeckId: null });
+): WishlistFolder => ({ id, parentId, name, sortOrder, managedDeckId: null, managedTokens: false });
 
 /**
  * One collection folder, the reader's own unless a test says otherwise.

@@ -40,6 +40,7 @@ const folder = (id: number, name: string, parentId: number | null = null): Wishl
   name,
   sortOrder: id,
   managedDeckId: null,
+  managedTokens: false,
 });
 
 /**

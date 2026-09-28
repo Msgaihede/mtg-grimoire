@@ -35,7 +35,7 @@ const WISH: WishDrag = { wishId: 7, name: "Lightning Bolt", folderId: null };
 const WISH_DROP: WishDrop = { kind: "wish", wish: WISH };
 
 function folder(over: Partial<WishlistFolder> & { id: number; name: string }): WishlistFolder {
-  return { parentId: null, sortOrder: over.id, managedDeckId: null, ...over };
+  return { parentId: null, sortOrder: over.id, managedDeckId: null, managedTokens: false, ...over };
 }
 
 const EXPENSIVE = folder({ id: 3, name: "Expensive" });

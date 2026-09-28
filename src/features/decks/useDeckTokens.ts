@@ -27,10 +27,10 @@
  * with `useMarketplace()` rather than taken as an argument — `useDeck`'s arrangement — so every
  * caller and every story keeps the signature it had.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { Finish } from "@/lib/finish";
-import { ipc, type DeckTokenState, type DeckVariant, type TokenEntryKey } from "@/lib/ipc";
+import { ipc, type DeckVariant, type TokenEntryKey } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { writeFailure, type Write } from "@/lib/writes";
 import { DEFAULT_VARIANT, opened } from "./useDeck";
@@ -70,23 +70,17 @@ function stored(entry: TokenEntryRef): TokenEntryKey | null {
  *
  * `variant` defaults to {@link DEFAULT_VARIANT}, imported rather than respelled so that every
  * deck hook in this folder means the same list by the same word. **Since v52 the entries are
- * per-list and the state is not**: a step, a swap, an added printing and a reset name this hook's
- * list, while a dismissal and a restore are the token's in both — which is why every write below
- * invalidates the whole root rather than the one list on screen.
+ * per-list and the state is not**: a step, a swap, an added printing and a removed one name this
+ * hook's list, while a removal that takes a hand-added token off the deck ends the token's own
+ * row, which both lists read — which is why every write below invalidates the whole root rather
+ * than the one list on screen.
+ *
+ * **No dismissal, no restore, no reset and no switch revealing either** since managed tokens
+ * (spec §3.3, §3.4): a token at 0 is how a reader says "not this one" now, and **Remove printing**
+ * is what Reset printings did, one entry at a time.
  */
 export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFAULT_VARIANT) {
   const queryClient = useQueryClient();
-
-  /**
-   * Whether dismissed tokens are on the wall.
-   *
-   * **Plain `useState`, with the views a `useMemo` over it — never state synced in an effect.** A
-   * dismissal is a state the reader stored and `showDismissed` is a question about this session's
-   * view of it, so there are two facts and one derivation rather than three facts that have to be
-   * kept in agreement. It is deliberately not persisted: a reader who revealed a dismissed token
-   * in order to put it back has finished with the switch by the time they close the deck.
-   */
-  const [showDismissed, setShowDismissed] = useState(false);
 
   // The marketplace prices every row — see the file header for why it is in the key.
   const { marketplace } = useMarketplace();
@@ -99,12 +93,9 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
 
   const rows = query.data ?? NO_ROWS;
 
-  /** The wall, in order — emblems last, then by name, a token's entries together, dismissals
-   *  dropped unless asked for. */
-  const tokens: DeckTokenView[] = useMemo(
-    () => deckTokenViews(rows, { showDismissed }),
-    [rows, showDismissed],
-  );
+  /** The wall, in order — emblems last, then by name, a token's entries together, and every row:
+   *  a `hidden` one an older peer synced in is drawn like any other (spec §3.3). */
+  const tokens: DeckTokenView[] = useMemo(() => deckTokenViews(rows), [rows]);
 
   /**
    * **The whole `["decks"]` root — `useDeck`'s `invalidate`, matched on purpose.**
@@ -114,13 +105,17 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
    * dialog) and files an undo step (`["decks", "undo", …]`, whose answer **is the Undo button's
    * label** — "Undo — Treasure 1 → 3"). Three narrower keys would be three things to keep in step
    * with a command that grows a fourth effect; the root is what every other deck write fires, and
-   * it also reaches both lists and every marketplace of this deck's tokens, which a dismissal
-   * needs (the state is shared by both lists) and an art change needs (a cached answer for the
-   * marketplace the reader is not on would draw the old printing the moment they switched back).
+   * it also reaches both lists and every marketplace of this deck's tokens, which a removal that
+   * ends a hand-added token needs (its state row is read by both lists) and an art change needs (a
+   * cached answer for the marketplace the reader is not on would draw the old printing the moment
+   * they switched back).
    *
-   * **Not `["wishlist"]`**, which `useDeck` also fires: that one is for a theory deck's managed
-   * wishlist, which Rust rewrites after a change to the deck's *cards*, and no token write
-   * touches a card.
+   * **And `["wishlist"]`, since user schema v55**, which `useDeck` fires after every deck write for
+   * the same reason: a theory deck's managed wishlist files the plan's missing tokens in a
+   * `Tokens` subfolder (managed tokens spec §3.8), and its dirty triggers watch
+   * `deck_token_printings` and `deck_tokens` — so Rust re-settles it after a token step exactly as
+   * after a card step, and the wishlist's reads go stale with it. It was left out until then on
+   * the argument that no token write touches a card, which was true of the folder and is not now.
    *
    * **On success only.** Each command is one transaction, so a refusal leaves the tables exactly
    * as this cache already describes them — there is nothing to re-read, and the sentence
@@ -128,6 +123,7 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
    */
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
+    void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
   };
 
   /** The stepper's write — rules 2 and 3: an implicit entry is materialised, and a step to 0
@@ -156,71 +152,71 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
     onSuccess: invalidate,
   });
 
-  /** Dismiss or restore — the token's state, shared by both lists, so it names no variant. */
-  const stateWrite = useMutation({
-    mutationFn: ({ oracleId, state }: { oracleId: string; state: DeckTokenState }) =>
-      ipc.deckTokenState(opened(deckId), oracleId, state),
+  /**
+   * **Remove printing** — one stored entry, deleted (managed tokens spec §3.4). Always named by
+   * its grain, never `null`: an implicit entry is not stored and draws no Remove, so there is no
+   * materialisation to ask for. A derived token's last entry falls back to its implicit one at 0;
+   * a hand-added token's last entry in both lists takes it off the deck.
+   */
+  const removeWrite = useMutation({
+    mutationFn: (entry: TokenEntryRef) =>
+      ipc.deckTokenRemove(opened(deckId), variant, entry.oracleId, {
+        cardId: entry.cardId,
+        finish: entry.finish,
+      }),
     onSuccess: invalidate,
   });
 
-  /** Back to the implicit entry — this list's entries of one token, deleted. */
-  const resetWrite = useMutation({
-    mutationFn: (oracleId: string) => ipc.deckTokenReset(opened(deckId), variant, oracleId),
-    onSuccess: invalidate,
-  });
-
-  // TanStack's `mutate` is stable per observer, so every callback below is stable too — which
-  // matters because the editor hands them to all four deck views as part of the token pile,
-  // inside a `useMemo`, and a callback minted fresh on every render would rebuild that pile and
-  // re-render four views on every keystroke anywhere in the editor.
+  // TanStack's `mutate` and `mutateAsync` are stable per observer, so every callback below is
+  // stable too — which matters because the editor hands them to all four deck views as part of the
+  // token pile, inside a `useMemo`, and a callback minted fresh on every render would rebuild that
+  // pile and re-render four views on every keystroke anywhere in the editor.
   const mutateQuantity = quantityWrite.mutate;
-  const mutateSwap = swapWrite.mutate;
-  const mutateAdd = addWrite.mutate;
-  const mutateState = stateWrite.mutate;
-  const mutateReset = resetWrite.mutate;
+  const swapAsync = swapWrite.mutateAsync;
+  const addAsync = addWrite.mutateAsync;
+  const removeAsync = removeWrite.mutateAsync;
 
   const setQuantity = useCallback(
     (entry: TokenEntryRef, quantity: number) => mutateQuantity({ entry, quantity }),
     [mutateQuantity],
   );
+  // **The three writes that take a tile away or put one on answer whether they landed** — a
+  // promise that resolves `true` on success and `false` on a refusal, and **never rejects**, so a
+  // caller that ignores it leaves no unhandled rejection behind. The caret hand-off
+  // (`tokenCaret.ts`) is what reads it: it moves the caret only once the write has answered, and
+  // not at all on a refusal. The refusal is still the mutation's own state, so `failure` below
+  // says it exactly as it did through `mutate`. `mutateAsync` rather than `mutate`'s per-call
+  // callbacks, which belong to the observer and would be taken away by the next press
+  // (`DeckEditor`'s `localTokenRail` says the same).
   const swap = useCallback(
-    (entry: TokenEntryRef, to: { cardId: string; finish: Finish }) => mutateSwap({ entry, to }),
-    [mutateSwap],
+    (entry: TokenEntryRef, to: { cardId: string; finish: Finish }): Promise<boolean> =>
+      swapAsync({ entry, to }).then(
+        () => true,
+        () => false,
+      ),
+    [swapAsync],
   );
   const addPrinting = useCallback(
-    (cardId: string, finish: Finish) => mutateAdd({ cardId, finish }),
-    [mutateAdd],
+    (cardId: string, finish: Finish): Promise<boolean> =>
+      addAsync({ cardId, finish }).then(
+        () => true,
+        () => false,
+      ),
+    [addAsync],
   );
-  const dismiss = useCallback(
-    (oracleId: string) => mutateState({ oracleId, state: "hidden" }),
-    [mutateState],
+  const remove = useCallback(
+    (entry: TokenEntryRef): Promise<boolean> =>
+      removeAsync(entry).then(
+        () => true,
+        () => false,
+      ),
+    [removeAsync],
   );
-  /**
-   * Put a dismissed token back — and **which state it goes back to depends on whether the deck
-   * still derives it**, because `state` is one column and `hidden` therefore costs a `manual`
-   * token its manual-ness. A token the deck makes goes back to `auto` and follows the deck again;
-   * a token nothing derives can only be on the wall as `manual`, so restoring it to `auto` would
-   * take it off the wall a second time, in the one press whose whole meaning is the opposite.
-   * Every entry of one token carries the same `derived`, so the first row found answers it.
-   */
-  const restore = useCallback(
-    (oracleId: string) => {
-      const derived = rows.find((r) => r.oracleId === oracleId)?.derived ?? false;
-      mutateState({ oracleId, state: derived ? "auto" : "manual" });
-    },
-    [rows, mutateState],
-  );
-  const reset = useCallback((oracleId: string) => mutateReset(oracleId), [mutateReset]);
 
   /** Every write this hook makes, newest-press-wins through {@link writeFailure}, and handed out
-   *  for a host that folds them into a wider family — the editor's redo-clearing `newestWrite`. */
-  const writes: readonly [Write, ...Write[]] = [
-    quantityWrite,
-    swapWrite,
-    addWrite,
-    stateWrite,
-    resetWrite,
-  ];
+   *  for a host that folds them into a wider family — the editor's redo-clearing `newestWrite`.
+   *  Remove printing is journalled like the other three, so it is one of them. */
+  const writes: readonly [Write, ...Write[]] = [quantityWrite, swapWrite, addWrite, removeWrite];
 
   return {
     /** The query itself, for a caller that needs more than {@link loading} and {@link failure} —
@@ -235,7 +231,7 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
      *  report a spinner. */
     loading: deckId !== null && query.isPending,
     /** The most recently started write's refusal as a sentence, or `null`. `writeFailure`'s rule
-     *  — the newest write owns the banner, whatever its outcome — so a refused dismissal does not
+     *  — the newest write owns the banner, whatever its outcome — so a refused removal does not
      *  leave its sentence up over a printing swap that then worked. */
     failure: writeFailure(writes),
     writes,
@@ -248,17 +244,13 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
     /** Swap one entry to another printing and/or finish — the picker's press on a tile. The
      *  token's other entries are untouched, and landing on one the list holds folds the two. */
     swap,
-    /** Add one copy of a printing in a finish to this list — the band's *Add printing*. */
+    /** Add one copy of a printing in a finish to this list — the band's *Add printing*, from the
+     *  deck's own tokens or, with `All tokens`, from every token in the game. */
     addPrinting,
-    /** Take one token off the wall, in both lists. The state is stored — `hidden`, never a delete
-     *  — so {@link showDismissed} can find it again. */
-    dismiss,
-    restore,
-    /** This list's entries of one token, deleted — back to its implicit entry. The affordance
-     *  `DeckTokenView.overridden` drives. */
-    reset,
-    showDismissed,
-    setShowDismissed,
+    /** **Remove printing**: one stored entry of this list, deleted — drawn on every entry that
+     *  is not `DeckTokenView.implicit`. Like `swap` and `addPrinting`, answers whether it landed
+     *  (`true`) or was refused (`false`), and never rejects. */
+    remove,
   };
 }
 

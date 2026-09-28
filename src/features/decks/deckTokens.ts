@@ -4,18 +4,19 @@
  * **Rust supplies the facts and this file draws every conclusion**, which is the same boundary
  * the rest of the deck builder keeps. Rust resolves each deck card's `all_parts` against the
  * corpus and joins on whatever the reader stored against that token; what it hands over is
- * true whether or not anything is ever rendered. Whether a dismissed token is on screen at all,
- * the order the wall reads in, the key each tile is drawn under and the name each control
- * answers to are all decisions, and they live here — in one function each, with one test file,
- * so that changing a rule is one edit and not four components disagreeing.
+ * true whether or not anything is ever rendered. Which entries the stacks draw, the order the
+ * wall reads in, the key each tile is drawn under and the name each control answers to are all
+ * decisions, and they live here — in one function each, with one test file, so that changing a
+ * rule is one edit and not four components disagreeing.
  *
  * **A wire row is one _entry_ since user schema v52** — one printing, in one finish, of one
  * token, in the list the read named (token stacks spec §4.2) — and Rust resolves it: an
  * untouched token arrives as one **implicit** row at the resolver's default printing and
- * `deck_tokens.quantity ?? 1`, and a token with entries arrives as exactly those. So the
+ * `deck_tokens.quantity ?? 0`, and a token with entries arrives as exactly those. So the
  * fallbacks this file used to draw (`cardId ?? defaultCardId`, `quantity ?? 1`) are Rust's now,
  * and what is left here is the grain the wall keys on ({@link DeckTokenView.entryKey}), the order
- * it reads in, and whether a dismissed token is on screen at all.
+ * it reads in, which entries the deck's stacks draw ({@link pileTokens}) and which tokens nothing
+ * in the deck makes ({@link isHandAdded}).
  *
  * **Nothing here fetches, and nothing here can be unavailable.** The feature reads the corpus
  * the app already has, so unlike the Tagger datasets or the price feeds there is no
@@ -38,20 +39,26 @@ import { tileKeyOf } from "@/lib/tileKey";
 export type { DeckTokenRow, DeckTokenState, TokenSource };
 
 /**
- * How many copies a token the reader has never touched shows — the `1` in Rust's
- * `deck_tokens.quantity ?? 1` for an implicit entry.
+ * How many copies a token the reader has never touched shows — the `0` in Rust's
+ * `deck_tokens.quantity ?? 0` for an implicit entry (`implicit_quantity`).
  *
- * **A floor, deliberately, and never a guess.** Reading *"create two 1/1 white Soldier
- * tokens"* out of oracle text is defeated by `create X`, by *for each*, by copy-tokens and by
- * repeatable makers like Krenko, and a number the reader has to correct is worse than one they
- * raise. **Rust applies it since v52** — a wire row's quantity is already effective — so this is
- * the TypeScript spelling of that fact, kept for the one reader that has to answer it itself:
- * the Storybook fake, which mirrors the resolver.
+ * **Zero since managed tokens spec §3.1, because a token is something the reader starts to
+ * use.** It was `1` — a floor, on the argument that reading *"create two 1/1 white Soldier
+ * tokens"* out of oracle text is defeated by `create X`, by *for each* and by repeatable makers,
+ * so a number the reader raises beats one they correct. That argument still rules out a guess;
+ * what it did not survive is the pile, which drew every token a deck *could* make whether or not
+ * the reader ever sleeved one. At 0 the band still lists them all, and a token reaches the stacks
+ * the moment the reader counts it. **A legacy count is still honoured**: a quantity a reader set
+ * before v52 is the `deck_tokens.quantity` this falls back from, and reads as itself.
  *
- * Typed `number` rather than left as the literal `1`: a consumer that seeds a `useState` from
- * it would otherwise get a state of type `1` and be unable to set anything else.
+ * **Rust applies it** — a wire row's quantity is already effective — so this is the TypeScript
+ * spelling of that fact, kept for the one reader that has to answer it itself: the Storybook
+ * fake, which mirrors the resolver.
+ *
+ * Typed `number` rather than left as the literal `0`: a consumer that seeds a `useState` from
+ * it would otherwise get a state of type `0` and be unable to set anything else.
  */
-export const DEFAULT_TOKEN_QUANTITY: number = 1;
+export const DEFAULT_TOKEN_QUANTITY: number = 0;
 
 /**
  * The three `cards.layout` words that make a printing a token **by themselves** —
@@ -111,10 +118,59 @@ export function isTokenPrinting(
 ): boolean {
   if (isTokenLayout(layout)) return true;
   if (layout === null || layout === undefined || !TWO_SIDED_LAYOUTS.has(layout)) return false;
+  return lineNamesAToken(typeLine);
+}
+
+/** Whether a type line, or any ` // ` face of it, begins `Token` or `Emblem` —
+ *  `deck_tokens::line_names_a_token`. */
+function lineNamesAToken(typeLine: string | null | undefined): boolean {
   if (typeLine === null || typeLine === undefined) return false;
   return typeLine
     .split(" // ")
     .some((face) => face.startsWith("Token") || face.startsWith("Emblem"));
+}
+
+/** `deck_tokens::HELPER_LAYOUTS` — the layouts a game helper is filed under. */
+const HELPER_LAYOUTS: ReadonlySet<string> = new Set(["token", "double_faced_token"]);
+
+/** `deck_tokens::OTHER_GAME_SET_TYPES` — the set types whose helpers belong to another game. */
+const OTHER_GAME_SET_TYPES: ReadonlySet<string> = new Set(["memorabilia", "minigame"]);
+
+/**
+ * **Whether All tokens lists a printing: a real token or emblem, or a game helper** — the
+ * TypeScript twin of `deck_tokens::is_listed_token`, for the one reader that answers
+ * `token_printings` itself: the Storybook fake.
+ *
+ * Two arms, in the crate's order:
+ *
+ * 1. **A token or an emblem** — a token or two-sided layout **and** a type line naming a `Token` or
+ *    `Emblem` face.
+ * 2. **A game helper** — a `token` or `double_faced_token` printing outside a `memorabilia` or
+ *    `minigame` set, with a face whose type line is exactly `Card` (The Monarch, Day // Night,
+ *    Undercity // The Initiative) and no checklist's `this card to represent `, **or** a face-down
+ *    reminder whose text says `face-down` (Manifest, Morph, the Cyberman).
+ *
+ * The reader's rule (2026-09-28): keep what a deck brings to the table in an ordinary game, leave
+ * out advertising, checklists, minigames and other games' cards, and keep anything in doubt. The
+ * crate's doc has the corpus counts and why no name list is needed. Case-sensitive throughout, as
+ * the crate's `instr` is. `setType` is the set's `set_type`, `null` where it is unknown, which
+ * lists a helper. {@link isTokenPrinting} stays the routing question.
+ */
+export function isListedToken(
+  layout: string | null | undefined,
+  typeLine: string | null | undefined,
+  oracleText: string | null | undefined,
+  setType: string | null | undefined,
+): boolean {
+  if (layout === null || layout === undefined) return false;
+  if ((isTokenLayout(layout) || TWO_SIDED_LAYOUTS.has(layout)) && lineNamesAToken(typeLine)) {
+    return true;
+  }
+  if (!HELPER_LAYOUTS.has(layout)) return false;
+  if (setType !== null && setType !== undefined && OTHER_GAME_SET_TYPES.has(setType)) return false;
+  const text = oracleText ?? "";
+  const helperFace = (typeLine ?? "").split(" // ").some((face) => face === "Card");
+  return (helperFace && !text.includes("this card to represent ")) || text.includes("face-down");
 }
 
 /**
@@ -136,8 +192,15 @@ export interface DeckTokenView {
   /** This entry's finish — never `null`, the collection's own three words. What the chin names,
    *  what the sheen is drawn for and what {@link unitPrice} was read at. */
   finish: Finish;
-  /** `true` when this list holds no entry of the token and this is the one Rust drew for it. A
-   *  write aimed at it sends `null` for the entry, and Rust materialises it (spec §4.2 rule 2). */
+  /**
+   * `true` when this list holds no entry of the token and this is the one Rust drew for it. A
+   * write aimed at it sends `null` for the entry, and Rust materialises it (spec §4.2 rule 2).
+   *
+   * **It is also the whole of whether Remove printing is drawn** (managed tokens spec §3.4), on
+   * the band and the pile alike: `deck_token_remove` deletes one stored entry, and an implicit
+   * one is not stored, so a Remove over it would be a press that changes nothing. The token's
+   * state is no part of that.
+   */
   implicit: boolean;
   /**
    * The tile's identity — `tileKeyOf(printingId, finish)`, the collection wall's own spelling,
@@ -149,14 +212,15 @@ export interface DeckTokenView {
   /** What to show in the stepper — Rust's effective quantity. `0` is a value. */
   quantity: number;
   sources: TokenSource[];
+  /** Whether the deck makes this token — `false` is a token added by hand, which the wall marks
+   *  (see {@link isHandAdded}). */
   derived: boolean;
-  state: DeckTokenState;
   /**
-   * True when this list holds the token's entries — which is exactly what `deck_token_reset`
-   * deletes, so it is what drives the "reset" affordance. A dismissal is not one: reset does not
-   * touch the state.
+   * The token's stored state, passed through and **read by nothing that draws**: `hidden` is a
+   * dismissal an older peer can still sync in, and it is drawn like any other token until the
+   * launch pass retires it (managed tokens spec §3.3).
    */
-  overridden: boolean;
+  state: DeckTokenState;
   /** {@link tokenSubtitle}'s line, or `null` where there is nothing to say. */
   subtitle: string | null;
   /**
@@ -275,7 +339,7 @@ function viewOf(row: DeckTokenRow): DeckTokenView {
     typeLine: row.typeLine,
     layout: row.layout,
     // The entry's own printing, finish and quantity, as Rust resolved them — an implicit entry's
-    // are the resolver's default and `deck_tokens.quantity ?? 1` already. No fallback here: a
+    // are the resolver's default and `deck_tokens.quantity ?? 0` already. No fallback here: a
     // second one would be a second, stale copy of spec §4.2's rule 1.
     printingId: row.cardId,
     finish: row.finish,
@@ -287,9 +351,6 @@ function viewOf(row: DeckTokenRow): DeckTokenView {
     sources: row.sources,
     derived: row.derived,
     state: row.state,
-    // "There is something to reset": `deck_token_reset` deletes this list's entries, so an
-    // implicit entry is the one state it has nothing to do to.
-    overridden: !row.implicit,
     subtitle: tokenSubtitle(row),
     // Facts about the effective printing, copied as they came — see `DeckTokenView.setCode`.
     setCode: row.setCode,
@@ -424,24 +485,72 @@ export function tokenEntryName(verb: string, view: DeckTokenView): string {
 }
 
 /**
- * The resolver's rows as the panel's tiles — **one per entry**, a token's entries together.
+ * The resolver's rows as the panel's tiles — **one per entry**, a token's entries together, and
+ * **every row**.
  *
- * `hidden` rows are dropped unless `showDismissed` — a dismissal is the reader saying "not in
- * this deck", so it has to actually leave the wall, and the affordance that brings it back is
- * the only way to undo it. The state is the token's, so a dismissal takes every entry of it at
- * once. `manual` rows stay whether the deck derives them or not; that is the whole of what the
- * word means.
+ * **Nothing is filtered, `hidden` included** (managed tokens spec §3.3). Dismiss is gone and a
+ * launch pass retires the word, but a dismissal an older peer syncs in after that pass has run
+ * reaches this function before the next launch does — and a token that left the wall with no
+ * control anywhere to bring it back would be the one outcome worse than a stale word. So it is
+ * drawn as the ordinary token it is about to become. `manual` rows stay whether the deck derives
+ * them or not; that is the whole of what the word means.
  *
  * Returns a **new** array. The input is `readonly` and untouched, because it is a query
  * cache's own array and sorting it in place would reorder the cache under React.
  */
-export function deckTokenViews(
-  rows: readonly DeckTokenRow[],
-  opts?: { showDismissed?: boolean },
-): DeckTokenView[] {
-  const showDismissed = opts?.showDismissed ?? false;
-  return rows
-    .map(viewOf)
-    .filter((view) => showDismissed || view.state !== "hidden")
-    .sort(byEmblemThenName);
+export function deckTokenViews(rows: readonly DeckTokenRow[]): DeckTokenView[] {
+  return rows.map(viewOf).sort(byEmblemThenName);
+}
+
+/**
+ * The tokens the deck's stacks draw: the ones the reader has counted (managed tokens spec §3.2).
+ *
+ * **Applied to the pile's list and nowhere else** — `DeckEditor`'s `tokenPile.tokens`. The band
+ * lists every token the deck makes and every one added by hand, at whatever count, because it is
+ * where a token is counted in the first place; Add printing and the live side of the plan's marks
+ * read every row for the same reason. A token whose every entry is 0 draws nothing in the stacks,
+ * and the pile's heading, which sums copies, is unchanged by the zeros it no longer lists.
+ *
+ * Entry by entry rather than token by token, so a Treasure kept as three plain copies and a foil
+ * stepped to 0 draws one card. Order is kept, and the answer is a new array.
+ */
+export function pileTokens(views: readonly DeckTokenView[]): DeckTokenView[] {
+  return views.filter((v) => v.quantity > 0);
+}
+
+/**
+ * A token nothing in the deck makes — **`derived`, never `state`** (managed tokens spec §3.5).
+ *
+ * A derived token can be `manual` — kept by hand after a cut, or restored before this build — and
+ * marking it *not made by deck* would be a false sentence about a token a card in the deck is
+ * sitting there making. `derived: false` is the resolver's own answer to the only question the
+ * mark asks.
+ */
+export function isHandAdded(view: Pick<DeckTokenView, "derived">): boolean {
+  return !view.derived;
+}
+
+/**
+ * The words on a hand-added token's badge — **`NOT MADE BY DECK`**, in capitals like the
+ * `RULE BREAK` mark it stands in for, because it is drawn in that mark's place and style.
+ */
+export const NOT_MADE_BY_DECK = "NOT MADE BY DECK";
+
+/** The badge's sentence for the pointer, naming the token — managed tokens spec §3.5's words. */
+export function notMadeByDeckHint(name: string): string {
+  return `Nothing in this deck makes ${name}. It was added by hand.`;
+}
+
+/**
+ * The accessible name of an entry's picture press — the band's tile and the pile's card alike —
+ * with the mark's words folded in for a hand-added token.
+ *
+ * **The badge is `aria-hidden`**, like every other mark on a card, so a mark drawn and not spoken
+ * would be a fact that reaches sighted readers only; the words join the name instead, lower-cased
+ * as a clause the way `deckCardName` folds a rule break. A derived token's name is exactly
+ * {@link tokenEntryName}'s, so `/^Change the art for Treasure/` still finds every entry.
+ */
+export function tokenArtName(view: DeckTokenView): string {
+  const name = tokenEntryName("Change the art for", view);
+  return isHandAdded(view) ? `${name}, ${NOT_MADE_BY_DECK.toLowerCase()}` : name;
 }

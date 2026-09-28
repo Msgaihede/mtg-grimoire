@@ -47,8 +47,9 @@
  * 2. **`list_sets` is derived from the cards**, because there is no `sets` table in the
  *    fixture. The real one reads every set Scryfall knows, so it can answer a set with no
  *    printings at all; this one cannot produce a set with no rows, only one whose rows are
- *    all digital. Its `setType` is therefore always `null` — `FakeCard` has no `set_type`
- *    column, and nothing renders one.
+ *    all digital. Its `setType` is still always `null`. `FakeCard.setType` has carried the
+ *    joined `sets.set_type` since 2026-09-28, for `token_printings` alone; answering it here
+ *    would regroup every set picker in the workbench, so it waits for a story that wants it.
  * 3. **Both lists' `added` key orders by row id alone** — `collection_list`'s and
  *    `wishlist_list`'s — because neither row type carries a `created_at`. `collection.rs` and
  *    `wishlist.rs` write `created_at, id` in whichever direction was asked for; the id is that
@@ -267,6 +268,7 @@ import type {
   TheoryDiffRow,
   TokenEntryKey,
   TokenMode,
+  TokenPrinting,
   TokenSource,
   TheorySlot,
   TransferImportMode,
@@ -304,13 +306,14 @@ import {
 import { BORDERS, type Border } from "@/lib/border";
 import { hasVariableCost } from "@/lib/mana";
 // The token view's own rules, borrowed rather than re-spelled: `DEFAULT_TOKEN_QUANTITY` is the
-// `1` in the resolver's `deck_tokens.quantity ?? 1`, `isTokenPrinting` is
+// `0` in the resolver's `deck_tokens.quantity ?? 0` (managed tokens spec §3.1), `isTokenPrinting` is
 // `deck_tokens::is_token_printing`'s TypeScript twin — the layout, or a two-sided layout whose
 // type line says `Token`, which `deck_add_card`'s reroute, the add's refusal and the resolver
 // all ask — and `tokenSubtitle` is the line a token's history row names it by, which the crate
 // ports term for term (`deck_tokens::subtitle_of`).
 import {
   DEFAULT_TOKEN_QUANTITY,
+  isListedToken,
   isTokenPrinting,
   tokenSubtitle,
 } from "@/features/decks/deckTokens";
@@ -463,6 +466,15 @@ export interface FakeWishlistFolder {
   /** User schema v48's `managed_deck_id` — the deck this folder is the managed wishlist of,
    *  absent or `null` for a folder the reader made. See {@link WishlistFolder.managedDeckId}. */
   managedDeckId?: number | null;
+  /**
+   * User schema v55's `managed_tokens` — **this folder is the deck's `Tokens` subfolder** rather
+   * than the deck's own managed folder (managed tokens spec §3.8). The subfolder's identity is this
+   * column and never its name, and it carries the deck's {@link managedDeckId} too, so every guard
+   * on a managed folder covers it; absent or `false` is every other folder. **On the DTO** as
+   * {@link WishlistFolder.managedTokens} (`toWishlistFolder` answers `false` for absent): a list of
+   * managed folders by name leaves these out, and an empty one says its own sentence.
+   */
+  managedTokens?: boolean;
 }
 
 /**
@@ -1134,7 +1146,7 @@ export interface FakeDeckToken {
   oracleId: string;
   /**
    * **Legacy**: the count a reader set before v52, read only for an **implicit** entry — the
-   * `quantity` in the resolver's `deck_tokens.quantity ?? 1` — and never written again. v52's
+   * `quantity` in the resolver's `deck_tokens.quantity ?? 0` — and never written again. v52's
    * rung cleared it wherever the row also named a printing (that pair became entries), so what
    * survives is a count stored without a printing, which keeps meaning "the implicit entry's
    * quantity".
@@ -1143,7 +1155,13 @@ export interface FakeDeckToken {
    * which is why the resolver reads it with `??`.
    */
   quantity: number | null;
-  /** `auto` | `hidden` | `manual`, closed by a CHECK on the column rather than by convention. */
+  /**
+   * `auto` | `hidden` | `manual`, closed by a CHECK on the column rather than by convention.
+   * **No write here produces `hidden` any more** (managed tokens spec §3.3 — Dismiss is retired);
+   * the word stays in the CHECK because an older peer can still sync one in, and the page draws it
+   * like any other token. The crate's launch pass that retires it (`retire_hidden`) has no twin
+   * here: a world is built rather than launched, and a seed that carried one is a peer's row.
+   */
   state: DeckTokenState;
   createdAt: number;
   updatedAt: number;
@@ -1161,10 +1179,12 @@ export interface FakeDeckToken {
  * printing twice — which is why this spells the regular copy `nonfoil` where a deck card spells
  * it `null`.
  *
- * **A token with no entries in a list draws one implicit entry** (spec §4.2 rule 1); the first
- * write to it materialises it here (rule 2), and **a token's last entry in a list is kept at 0**
- * rather than deleted (rule 3), so the implicit default never reappears under a reader who
- * zeroed the only printing they had.
+ * **A token with no entries in a list draws one implicit entry** (spec §4.2 rule 1) — a derived
+ * one; a token nothing derives draws nothing in a list with none of it (managed tokens spec
+ * §3.4). The first write to an implicit entry materialises it here (rule 2), and **a token's last
+ * entry in a list is kept at 0** by a step (rule 3), so the implicit default never reappears
+ * under a reader who zeroed the only printing they had. `deck_token_remove` is the one write that
+ * deletes a last entry outright.
  */
 export interface FakeDeckTokenPrinting {
   id: number;
@@ -2973,9 +2993,9 @@ const MAX_UPCOMING_DAYS = 365;
  * double-faced token and an emblem. **All five**, `front_card` included, which the widget's spec
  * did not name and the crate's shared list carries.
  *
- * Where `sets` has rows the crate also drops four `set_type`s. **This fake has no `set_type`**
- * ({@link readHandlers.list_sets} answers `null` for it), so here this fence is the whole of the
- * layout rule.
+ * Where `sets` has rows the crate also drops four `set_type`s. **This fake does not read them**
+ * ({@link readHandlers.list_sets} answers `null` for it, and `FakeCard.setType` has one reader,
+ * `token_printings`), so here this fence is the whole of the layout rule.
  */
 const UPCOMING_SKIPPED_LAYOUTS: ReadonlySet<string> = new Set([
   "art_series",
@@ -5831,6 +5851,50 @@ function implicitTokenQuantity(db: FakeDb, deckId: number, oracleId: string): nu
   return storedToken(db, deckId, oracleId)?.quantity ?? DEFAULT_TOKEN_QUANTITY;
 }
 
+/**
+ * `deck_tokens::deck_token_rows` — one list's tokens as the read answers them, **one row per
+ * entry**: every token the list derives (its entries, or its one implicit entry), by name then
+ * oracle id, and after them the stored tokens nothing derives, which answer **only the entries
+ * this list holds** (managed tokens spec §3.4, `a_hand_added_token_is_drawn_only_in_a_list_that_
+ * holds_an_entry_of_it`) — a token nothing makes has no default printing for an implicit row to
+ * stand for, so a list with none of it draws nothing of it.
+ *
+ * **That tail is any state but `auto`** (Task 1's fix round): a `hidden` row an older peer synced
+ * in for a token nothing makes is the reader's as a `manual` one is, and is drawn where it holds an
+ * entry. Otherwise **the state is passed through and filters nothing**: whether a row is drawn is
+ * the page's question, and since managed tokens the page draws every one.
+ */
+function deckTokenRows(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  mp: MarketplaceId,
+): DeckTokenRow[] {
+  const derived = [...derivedTokens(db, deckId, variant)].sort(
+    (a, b) => cmp(a.token.name, b.token.name) || cmp(a.token.oracleId, b.token.oracleId),
+  );
+  const rows = derived.flatMap((d) =>
+    tokenRowsOf(db, deckId, variant, d.token, defaultTokenPrinting(db, d), d.sources, true, mp),
+  );
+  const derivedIds = new Set(derived.map((d) => d.token.oracleId));
+  const manual = db.deckTokens
+    .filter((t) => t.deckId === deckId && t.state !== "auto" && !derivedIds.has(t.oracleId))
+    // A stored row whose oracle id names no token in the corpus is dropped rather than drawn as a
+    // hole — the empty `flatMap` arm is what drops one, and it is the same call the resolver
+    // makes about an `all_parts` id `cards` has no row for.
+    .flatMap((t) => {
+      // Nothing derives it, so there is no reference count to rank by: the tie-break's first
+      // printing is the token's facts — `newest_printing`.
+      const token = tokenPrintings(db, t.oracleId)[0];
+      return token === undefined ? [] : [token];
+    })
+    .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId))
+    // Only a list that holds an entry of it: `tokenRowsOf` would otherwise draw its implicit one.
+    .filter((token) => tokenEntries(db, deckId, variant, token.oracleId).length > 0)
+    .flatMap((token) => tokenRowsOf(db, deckId, variant, token, token.id, [], false, mp));
+  return [...rows, ...manual];
+}
+
 /** One entry of a token, as {@link toDeckTokenRow} draws it — stored or implicit. */
 interface TokenEntryDraw {
   cardId: string;
@@ -7298,8 +7362,9 @@ function wishlistScope(db: FakeDb, q: WishlistQuery): FakeWish[] {
 }
 
 /** `wishlist_folders::folder_row`, copied out for {@link toDeckFolder}'s reason: the DTO has
- *  the same four fields as the table today, and a **copy** is what stops a caller mutating the
- *  store through a value it was handed back. */
+ *  the table's own fields, and a **copy** is what stops a caller mutating the store through a
+ *  value it was handed back. `managedTokens` is `false` for every folder but a managed
+ *  wishlist's Tokens child, which is the only row that stores it. */
 function toWishlistFolder(f: FakeWishlistFolder): WishlistFolder {
   return {
     id: f.id,
@@ -7307,6 +7372,7 @@ function toWishlistFolder(f: FakeWishlistFolder): WishlistFolder {
     name: f.name,
     sortOrder: f.sortOrder,
     managedDeckId: f.managedDeckId ?? null,
+    managedTokens: f.managedTokens ?? false,
   };
 }
 
@@ -9468,7 +9534,7 @@ export function readHandlers(db: FakeDb) {
         const row = found ?? {
           code: c.setCode,
           name: c.setName,
-          // `sets.set_type` has no column in `FakeCard`; nothing renders it today.
+          // `FakeCard.setType` is `token_printings`' alone — simplification 2.
           setType: null,
           releasedAt: c.releasedAt,
           cardCount: 0,
@@ -9646,6 +9712,51 @@ export function readHandlers(db: FakeDb) {
         items: all.slice(0, page).map((c) => toPrinting(db, c, mp)),
         total: all.length,
       };
+    },
+
+    /**
+     * `deck_tokens::token_printings` — **every paper printing that is a token, an emblem or a game
+     * helper**, the read behind Add printing's `All tokens` (managed tokens spec §3.6):
+     * `isListedToken` over {@link FakeDb.cards} — the crate's one statement with
+     * `is_listed_token`'s predicate in SQL — so a `flip` Role token is in by its type line, an
+     * ordinary card is out whatever its line says, a helper a deck brings to the table (The
+     * Monarch, the corpus's `Start Your Engines! // Max Speed`) is in by its `Card` face, and a
+     * deck ad or a minigame is out by its set's type, `FakeCard.setType` standing in for the
+     * crate's `sets` subquery.
+     *
+     * Each row is {@link toPrinting}'s, **the same row `card_printings` answers** — priced per
+     * finish at the marketplace asked — with the token's own facts beside it, flattened as the crate's `#[serde(flatten)]` flattens them, and
+     * **no `layout` of their own**: the printing already carries one, and the crate pins the key
+     * to appearing once. The type line is among them, as it is on a deck's token row. In
+     * the crate's order: name, oracle id, then newest first and the rest of `card_printings`' tail,
+     * so one token's printings sit together in the order its own picker draws them.
+     *
+     * No page and no cap: the corpus holds a few thousand and the picker narrows the answer in
+     * hand. Nothing here refuses, and a corpus with no tokens answers `[]`.
+     */
+    token_printings: (args: { marketplace?: string }): TokenPrinting[] => {
+      const mp = marketplaceOf(args.marketplace);
+      return db.cards
+        .filter((c) => c.isPaper && isListedToken(c.layout, c.typeLine, c.oracleText, c.setType))
+        .sort(
+          (a, b) =>
+            cmp(a.name, b.name) ||
+            cmp(a.oracleId, b.oracleId) ||
+            cmp(b.releasedAt, a.releasedAt) ||
+            cmp(a.setCode, b.setCode) ||
+            cmp(a.collectorNumber, b.collectorNumber) ||
+            cmp(a.id, b.id),
+        )
+        .map((c) => ({
+          ...toPrinting(db, c, mp),
+          oracleId: c.oracleId,
+          name: c.name,
+          typeLine: c.typeLine,
+          colors: c.colors,
+          power: c.power,
+          toughness: c.toughness,
+          oracleText: c.oracleText,
+        }));
     },
 
     /**
@@ -10473,7 +10584,11 @@ export function readHandlers(db: FakeDb) {
      *
      * The **`manual` rows come last**, exactly as the crate appends them: a token the reader
      * added by hand, or one they kept after cutting the card that made it, is drawn whether the
-     * deck derives it or not and carries `derived: false` with an empty `sources`.
+     * deck derives it or not and carries `derived: false` with an empty `sources` — **in a list
+     * that holds an entry of it, and in no other** since managed tokens (spec §3.4): nothing
+     * derives it, so there is no default printing for an implicit row to stand for.
+     *
+     * The walk itself is {@link deckTokenRows}, which the Compare read's token arm reads too.
      *
      * The order within each half is by name then oracle id, which is a *stable* order and not
      * the panel's: emblems-last and the `localeCompare` are `deckTokenViews`' conclusion, in
@@ -10488,44 +10603,8 @@ export function readHandlers(db: FakeDb) {
       deckId: number;
       variant: DeckVariant;
       marketplace?: string;
-    }): DeckTokenRow[] => {
-      const variant = validVariant(args.variant);
-      const mp = marketplaceOf(args.marketplace);
-      const derived = [...derivedTokens(db, args.deckId, variant)].sort(
-        (a, b) => cmp(a.token.name, b.token.name) || cmp(a.token.oracleId, b.token.oracleId),
-      );
-      const rows = derived.flatMap((d) =>
-        tokenRowsOf(
-          db,
-          args.deckId,
-          variant,
-          d.token,
-          defaultTokenPrinting(db, d),
-          d.sources,
-          true,
-          mp,
-        ),
-      );
-      const derivedIds = new Set(derived.map((d) => d.token.oracleId));
-      const manual = db.deckTokens
-        .filter(
-          (t) => t.deckId === args.deckId && t.state === "manual" && !derivedIds.has(t.oracleId),
-        )
-        // A stored row whose oracle id names no token in the corpus is dropped rather than drawn
-        // as a hole — the empty `flatMap` arm is what drops one, and it is the same call the
-        // resolver makes about an `all_parts` id `cards` has no row for.
-        .flatMap((t) => {
-          // Nothing derives it, so there is no reference count to rank by: the tie-break's
-          // first printing is both the token's facts and its implicit entry — `newest_printing`.
-          const token = tokenPrintings(db, t.oracleId)[0];
-          return token === undefined ? [] : [token];
-        })
-        .sort((a, b) => cmp(a.name, b.name) || cmp(a.oracleId, b.oracleId))
-        .flatMap((token) =>
-          tokenRowsOf(db, args.deckId, variant, token, token.id, [], false, mp),
-        );
-      return [...rows, ...manual];
-    },
+    }): DeckTokenRow[] =>
+      deckTokenRows(db, args.deckId, validVariant(args.variant), marketplaceOf(args.marketplace)),
 
     /**
      * `deck_notes::list_notes` — every note on this deck in `sort_order`, each with the cards
@@ -12774,16 +12853,16 @@ const NO_ORACLE_ID = "A note attaches to a card, so it needs one.";
  * not got; `NOT_A_TOKEN` is an add naming a printing the corpus **has** that is not a token or an
  * emblem (`is_token_printing` answers `false` — Lightning Bolt handed to *Add printing*);
  * `NOT_THIS_TOKEN` is a swap onto another token's printing; `ENTRY_GONE` is a write naming an
- * entry this list no longer holds (a stale page); `TOKEN_GONE` is a write aimed at an implicit
- * entry of a token that is not on the wall at all, which has none to materialise; `BAD_STATE` is
- * a state word the column's CHECK would refuse.
+ * entry this list no longer holds (a stale page) — a step, a swap, or a Remove printing of an
+ * entry already gone; `TOKEN_GONE` is a write aimed at an implicit entry of a token that is not
+ * on the wall at all, which has none to materialise. (`BAD_STATE` went with `deck_token_state`,
+ * the one write that took a state word.)
  */
 const TOKEN_NO_SUCH_PRINTING = "That printing is not in the card database any more.";
 const TOKEN_NOT_A_TOKEN = "That card is not a token or an emblem.";
 const TOKEN_NOT_THIS_TOKEN = "That printing is not one of this token's.";
 const TOKEN_ENTRY_GONE = "That printing of the token is not in this list any more.";
 const TOKEN_GONE = "That token is not in this list any more.";
-const TOKEN_BAD_STATE = "That is not something a token can be.";
 /** `deck_meta::FOLDER_GONE` and `FOLDER_CYCLE`. The second is not cosmetic:
  *  `deck_folders.parent_id` is `ON DELETE CASCADE` **on itself**, so a cycle is a graph
  *  SQLite's recursive cascade would walk forever the day one of them is deleted. */
@@ -13382,25 +13461,10 @@ function validVariant(variant: string): DeckVariant {
   throw refuse(`\`${variant}\` is not a deck variant. Use one of: ${VARIANTS.join(", ")}.`);
 }
 
-/** `deck_tokens.state`'s three words. A **CHECK on the column**, unlike a variant's word list
- *  and unlike {@link FakeDeck.lastGroupBy}'s — so an unknown one is refused by the database
- *  itself and this refuses it in the same place. */
-const TOKEN_STATES = ["auto", "hidden", "manual"] as const;
-
-/**
- * The state word `deck_token_state` is handed — one of {@link TOKEN_STATES}, or
- * `deck_tokens::BAD_STATE`. **No absent arm** since user schema v52: the command that took a
- * nullable state (`deck_token_set`, where `null` folded to `auto`) is retired, and the one that
- * replaced it always names the state it writes.
- */
-function validTokenState(state: string): DeckTokenState {
-  const found = TOKEN_STATES.find((s) => s === state);
-  if (found) return found;
-  throw refuse(TOKEN_BAD_STATE);
-}
-
 /** `deck::TOKEN_MODES` and `deck::BAD_TOKEN_MODE` — `decks.token_mode`'s three words (user schema
- *  v52), closed by a CHECK and refused in words before it would fire. */
+ *  v52), closed by a CHECK and refused in words before it would fire. **The column stays and
+ *  nothing reads it** since managed tokens retired its control (spec §3.9); a patch naming it is
+ *  still validated, because the column still has a CHECK and a caller still could. */
 const TOKEN_MODES = ["managed", "collection", "hidden"] as const;
 const BAD_TOKEN_MODE = "A deck's tokens are Managed, Collection or Hidden.";
 
@@ -13511,6 +13575,25 @@ function writeTokenState(
   });
 }
 
+/**
+ * `deck_tokens::settle_hidden` (Task 1's fix round) — **a write to a dismissed token settles its
+ * state**: `auto` where the written list makes the token, `manual` where it does not, which is
+ * {@link addTokenPrinting}'s own rule. Nothing reads `hidden` since managed tokens, and a v55
+ * launch retires every one it holds, but an older peer can still sync one in; the first write
+ * after that puts it right. Called inside the write's {@link journalTokens} closure, so the change
+ * rides that write's history row and undo step. Any other state is left alone.
+ */
+function settleHiddenToken(
+  db: FakeDb,
+  deckId: number,
+  variant: DeckVariant,
+  oracleId: string,
+): void {
+  if (storedToken(db, deckId, oracleId)?.state !== "hidden") return;
+  const here = derivedPrintingOf(db, deckId, variant, oracleId) !== undefined;
+  writeTokenState(db, deckId, oracleId, here ? "auto" : "manual");
+}
+
 /** The printing a list's derivation names for one token, or `undefined` where the list does not
  *  make it — `deck_tokens::derived_printing`. */
 function derivedPrintingOf(
@@ -13526,9 +13609,10 @@ function derivedPrintingOf(
 /**
  * `deck_tokens::implicit_of` — the entry a token draws when this list holds none of it (rule 1),
  * computed as the resolver computes it so a write materialises the entry the reader was looking
- * at: the derived printing where the list makes the token, the newest printing where it is a
- * `manual` token nothing makes, in its {@link defaultTokenFinish}, at
- * {@link implicitTokenQuantity}. `null` for a token that is not on the wall at all.
+ * at: the derived printing where the list makes the token, in its {@link defaultTokenFinish}, at
+ * {@link implicitTokenQuantity}. `null` for a token that is not on this list's wall — which since
+ * managed tokens (spec §3.4) includes a `manual` token nothing makes: it is drawn only in a list
+ * holding an entry of it, so there is no implicit one for a write to name.
  */
 function implicitTokenEntry(
   db: FakeDb,
@@ -13537,11 +13621,7 @@ function implicitTokenEntry(
   oracleId: string,
   best: string | undefined = derivedPrintingOf(db, deckId, variant, oracleId),
 ): TokenEntryRow | null {
-  const cardId =
-    best ??
-    (storedToken(db, deckId, oracleId)?.state === "manual"
-      ? tokenPrintings(db, oracleId)[0]?.id
-      : undefined);
+  const cardId = best;
   if (cardId === undefined) return null;
   return {
     variant,
@@ -13609,7 +13689,7 @@ function tokenEntryFacts(db: FakeDb, row: TokenEntryRow): Record<string, unknown
 
 /** What one token write did — `deck_tokens::Change`, the variable half of its history row. */
 interface TokenChange {
-  action: "quantity" | "swap" | "add" | "state" | "reset";
+  action: "quantity" | "swap" | "add" | "remove";
   cardId: string | null;
   finish: string | null;
   from: unknown;
@@ -13635,7 +13715,7 @@ function tokenChange(
 }
 
 /**
- * `deck_tokens::journal_in` — **the one place a token write records**, so the five cannot differ
+ * `deck_tokens::journal_in` — **the one place a token write records**, so the four cannot differ
  * in how they journal.
  *
  * In order: the deck fence (`deck::GONE` for a stale id); a read of every entry of the token in
@@ -13645,13 +13725,13 @@ function tokenChange(
  * {@link journalled}'s, keyed on that row, so it is filed exactly when the row is.
  *
  * **A write that changed nothing records nothing and touches nothing** — a stepper landing on the
- * count it was at, a reset of a token with no entries, a dismissal of a token already dismissed:
- * no history row, no undo step, and the deck's stamp left where it was, because the crate returns
- * before `touch_deck`. "Nothing" is read as the crate reads it — the entries by
- * {@link entryRowOf}, the state as `state_of`'s `(quantity, state)` — and **never `updatedAt`**,
- * which {@link writeTokenState} moves on every non-`auto` press exactly as the crate's upsert
- * does; a whole-row comparison would file a second *Dismissed Treasure* for a press that
- * dismissed nothing. `list` is `null` for a state write, which is shared by both lists.
+ * count it was at, a swap onto the entry's own printing: no history row, no undo step, and the
+ * deck's stamp left where it was, because the crate returns before `touch_deck`. "Nothing" is read
+ * as the crate reads it — the entries by {@link entryRowOf}, the state as `state_of`'s
+ * `(quantity, state)` — and **never `updatedAt`**, which {@link writeTokenState} moves on every
+ * non-`auto` press exactly as the crate's upsert does, so a whole-row comparison would file a
+ * second row for an add that only re-stated a hand-added token's `manual`. `list` is nullable for
+ * the write that named none — `deck_token_state`, retired with Dismiss; every write left names one.
  *
  * A refusal thrown by `write` leaves the stamp unmoved, which is the crate's rollback: every
  * refusal a write can raise is raised before it changes a row.
@@ -13696,6 +13776,11 @@ function journalTokens(
     },
     0,
   );
+  // **A token write re-settles the deck's managed wishlist** since user schema v55 — the crate's
+  // dirty triggers watch `deck_token_printings` and `deck_tokens`, because the plan's token rows
+  // fill the folder's `Tokens` subfolder (managed tokens spec §3.8). Only where something changed,
+  // as the triggers only fire on a row that moved.
+  settleManagedWishlist(db, deckId);
 }
 
 /**
@@ -14272,11 +14357,211 @@ function wishFolderById(db: FakeDb, id: number): FakeWishlistFolder | undefined 
  *
  * **The fake refuses what the app refuses and no less**, which is the whole rule for this file: a
  * story that could rename a managed folder would be documenting a press the reader never gets.
- * What this fake does *not* do is the other half — Rust rewriting the folder after every deck
- * write. The seeded rows stand in for its answer at rest; a story that edits deck 4 will not see
- * its folder follow.
+ *
+ * **The other half — Rust rewriting the folder — is {@link settleManagedWishlist}, run on part of
+ * what the crate's dirty triggers watch**: a change to the deck row's own four columns (its name,
+ * its theory switch, its kind, its mode — `deck_update`), the deck's delete, an undo or a redo,
+ * and since user schema v55 every token write (managed tokens spec §3.8). **A card write does not
+ * settle here**, which is this fake's standing gap rather than the crate's: the seeded rows stand
+ * in for the folder's answer at rest, and a story that edits a card of deck 4 will not see its
+ * folder follow until one of those presses does.
  */
 const MANAGED_WISHLIST = "A managed wishlist follows its deck, so it can't be edited by hand.";
+
+/**
+ * `managed_wishlist::MODES` — `off`, the Compare dialog's three views, and **`tokens`** since user
+ * schema v55 (managed tokens spec §3.8): the words `decks.managed_wishlist_mode` may hold.
+ */
+const MANAGED_WISHLIST_MODES: readonly ManagedWishlistMode[] = [
+  "off",
+  "all",
+  "missing",
+  "other",
+  "tokens",
+];
+
+/** `managed_wishlist::BAD_MODE`, with v55's fifth word — what a patch naming any other is told. */
+const MANAGED_BAD_MODE =
+  "A managed wishlist follows All, Missing, Different printing, Tokens or nothing.";
+
+/** `managed_wishlist::valid_mode` — read **strictly**: this build naming a word it does not know
+ *  is its own bug. */
+function validManagedMode(mode: string): ManagedWishlistMode {
+  const found = MANAGED_WISHLIST_MODES.find((m) => m === mode);
+  if (found) return found;
+  throw refuse(MANAGED_BAD_MODE);
+}
+
+/** The Tokens subfolder's name. Its identity is {@link FakeWishlistFolder.managedTokens}; this is
+ *  only what the reader reads on it. */
+const MANAGED_TOKENS_FOLDER = "Tokens";
+
+/** One line a managed folder should hold — `deck_theory::Wanted`. */
+interface ManagedWant {
+  oracleId: string;
+  cardId: string;
+  name: string;
+  /** The wish's preferred finish: a card row's own (`null` for the regular copy), a token row's
+   *  spelled out, `nonfoil` included — a token entry's finish is never unsaid. */
+  finish: Finish | null;
+  quantity: number;
+}
+
+/**
+ * `deck_theory::wanted`, split in two for v55 — **what the deck's folder holds, and what its
+ * `Tokens` subfolder holds**, under one mode (managed tokens spec §3.8).
+ *
+ * The card rows are the Compare view's own, **at that view's own quantity** (issue #512's
+ * correction): All is the whole row, Missing is the copies no printing covers, Different printing
+ * is the copies played as another — and **Tokens puts no card in the folder at all**. The token
+ * rows fill the subfolder under **All** and **Tokens**, at their whole quantity, and nowhere under
+ * Missing or Different printing, whose views are card rows only.
+ */
+function managedWants(
+  db: FakeDb,
+  deckId: number,
+  mode: ManagedWishlistMode,
+): { cards: ManagedWant[]; tokens: ManagedWant[] } {
+  const cards: ManagedWant[] = [];
+  const tokens: ManagedWant[] = [];
+  for (const { oracleId, row } of theoryDiff(db, deckId, DEFAULT_MARKETPLACE)) {
+    if (oracleId === null) continue;
+    if (row.isToken) {
+      if (mode !== "all" && mode !== "tokens") continue;
+      tokens.push({
+        oracleId,
+        cardId: row.cardId,
+        name: row.name,
+        finish: row.finish ?? "nonfoil",
+        quantity: row.quantity,
+      });
+      continue;
+    }
+    const quantity =
+      mode === "all"
+        ? row.quantity
+        : mode === "missing"
+          ? row.quantity - row.heldAsOtherPrinting
+          : mode === "other"
+            ? row.heldAsOtherPrinting
+            : 0;
+    if (quantity > 0) {
+      cards.push({ oracleId, cardId: row.cardId, name: row.name, finish: row.finish, quantity });
+    }
+  }
+  return { cards, tokens };
+}
+
+/** A managed folder and every wish in it, gone — the wishes first, so nothing surfaces at the
+ *  root through `folder_id`'s `SET NULL`. Nothing there is a no-op. */
+function dropManagedFolder(db: FakeDb, folder: FakeWishlistFolder | undefined): void {
+  if (folder === undefined) return;
+  db.wishlistEntries = db.wishlistEntries.filter((w) => w.folderId !== folder.id);
+  db.wishlistFolders = db.wishlistFolders.filter((f) => f.id !== folder.id);
+}
+
+/** Bring one managed folder's wishes to `wants`: a line already there takes the wanted count, a
+ *  line no longer wanted goes, and what is left is filed through {@link fileWish}, the quiet door
+ *  — `settle_deck`'s three passes. */
+function syncManagedWishes(db: FakeDb, folderId: number, wants: readonly ManagedWant[]): void {
+  const key = (oracleId: string | null, cardId: string | null, finish: string | null) =>
+    `${oracleId ?? ""}|${cardId ?? ""}|${finish ?? ""}`;
+  const want = new Map(wants.map((w) => [key(w.oracleId, w.cardId, w.finish), w]));
+  const gone = new Set<number>();
+  for (const wish of db.wishlistEntries) {
+    if (wish.folderId !== folderId) continue;
+    const k = key(wish.oracleId, wish.cardId, wish.preferredFinish);
+    const found = want.get(k);
+    if (found === undefined) {
+      gone.add(wish.id);
+      continue;
+    }
+    want.delete(k);
+    if (wish.quantity !== found.quantity) {
+      wish.quantity = found.quantity;
+      wish.updatedAt = stamp(db);
+    }
+  }
+  if (gone.size > 0) db.wishlistEntries = db.wishlistEntries.filter((w) => !gone.has(w.id));
+  const fresh = [...want.values()].sort((a, b) => cmp(a.name, b.name) || cmp(a.cardId, b.cardId));
+  for (const w of fresh) {
+    fileWish(db, {
+      oracleId: w.oracleId,
+      cardId: w.cardId,
+      name: w.name,
+      quantity: w.quantity,
+      preferredFinish: w.finish ?? undefined,
+      folderId,
+    });
+  }
+}
+
+/**
+ * `managed_wishlist::settle_deck` — **bring one deck's managed wishlist to what the deck says**,
+ * `Tokens` subfolder included (user schema v55, managed tokens spec §3.8).
+ *
+ * A deck that is gone, is not a `Theory + Actual` deck, or is `off` keeps no folder: the
+ * subfolder's wishes, then the subfolder, then the folder's wishes, then the folder. An eligible
+ * one keeps a folder at the root named after it (made on demand, renamed with the deck) holding
+ * the card rows its mode wants, and — **where the mode includes tokens and the plan is short of
+ * one** — a subfolder named `Tokens` inside it, marked by `managedTokens` rather than by its name
+ * and carrying the deck's `managedDeckId`, so {@link refuseIfManagedFolder} covers it as it covers
+ * the folder. No token want is no subfolder: a `Tokens` drawer with nothing in it is a folder the
+ * reader has to open to learn nothing.
+ *
+ * Exported for the one seed that stands a managed wishlist up at rest (`tokenPlan`), which asks
+ * this function for the folders rather than writing a guess at them — the answer the crate would
+ * have left there.
+ */
+export function settleManagedWishlist(db: FakeDb, deckId: number): void {
+  const deck = db.decks.find((d) => d.id === deckId);
+  const mode = deck?.managedWishlist ?? "off";
+  const parent = db.wishlistFolders.find(
+    (f) => f.managedDeckId === deckId && f.managedTokens !== true,
+  );
+  const child = db.wishlistFolders.find(
+    (f) => f.managedDeckId === deckId && f.managedTokens === true,
+  );
+  if (deck === undefined || !deck.theoryEnabled || deck.virtualOnly || mode === "off") {
+    dropManagedFolder(db, child);
+    dropManagedFolder(db, parent);
+    return;
+  }
+  const { cards, tokens } = managedWants(db, deckId, mode);
+
+  let folder = parent;
+  if (folder === undefined) {
+    folder = {
+      id: nextId(db.wishlistFolders),
+      parentId: null,
+      name: deck.name,
+      sortOrder: nextWishFolderOrder(db, null),
+      managedDeckId: deckId,
+    };
+    db.wishlistFolders.push(folder);
+  } else if (folder.name !== deck.name) {
+    folder.name = deck.name;
+  }
+  syncManagedWishes(db, folder.id, cards);
+
+  if (tokens.length === 0) {
+    dropManagedFolder(db, child);
+    return;
+  }
+  let drawer = child;
+  if (drawer === undefined) {
+    drawer = {
+      id: nextId(db.wishlistFolders),
+      parentId: folder.id,
+      name: MANAGED_TOKENS_FOLDER,
+      sortOrder: nextWishFolderOrder(db, folder.id),
+      managedDeckId: deckId,
+      managedTokens: true,
+    };
+    db.wishlistFolders.push(drawer);
+  }
+  syncManagedWishes(db, drawer.id, tokens);
+}
 
 /** Refuses a folder id that names a deck's managed wishlist. `null` — the root — never is one. */
 function refuseIfManagedFolder(db: FakeDb, id: number | null | undefined): void {
@@ -15294,6 +15579,8 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
           // Filled by the second pass below, once every exact match is known. Zero is already
           // the right answer for an orphan and for a card the deck plays no other copy of.
           heldAsOtherPrinting: 0,
+          // A deck card; the plan's tokens are {@link tokenDiff}'s rows, after these.
+          isToken: false,
         },
       },
     ]);
@@ -15335,7 +15622,94 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
     grouped.row.heldAsOtherPrinting = take;
     pool.set(oracle, (pool.get(oracle) ?? 0) - take);
   }
-  return diff;
+  // The plan's tokens, after every card row — managed tokens spec §3.7.
+  return [...diff, ...tokenDiff(db, deckId, mp)];
+}
+
+/** The category a Compare row for a token is filed under — the band's own heading. */
+const TOKENS_CATEGORY = "Tokens & Emblems";
+
+/**
+ * **Compare's token rows** — `deck_theory::theory_diff`'s token arm (managed tokens spec §3.7):
+ * for each `(card_id, finish)` of a token entry, the plan's entries **less the deck's**, positive
+ * only — the card rows' own grain and their own subtraction, so a plan asking for a foil Treasure
+ * is not answered by the nonfoil one.
+ *
+ * Each side is its list's {@link deckTokenRows}, **implicit rows included** — an untouched token
+ * reads 0 since spec §3.1, so a plan nobody has counted asks for nothing and adds no row, while a
+ * legacy count still does. **`hidden` is read as not hidden**: a dismissal an older peer synced
+ * in is still a token the plan holds.
+ *
+ * A row is filed under **Tokens & Emblems**, named by the token, priced at the entry's own finish
+ * (the read's `unitPrice`, `printing_price` at that finish), with the finish spelled as a card
+ * row's (`null` for the regular copy). `ownedSpare` is the collection's loose copies of that
+ * printing in that finish ({@link ownedSpare}, whose `collectionFinish` spells the regular copy
+ * `nonfoil`); `heldAsOtherPrinting` is the deck's copies of the same token in other printings or
+ * finishes, **paid out of the pool the card rows use** — the deck's copies of the token less the
+ * ones an exact key already matched, handed down the rows in order — so one live Treasure cannot
+ * excuse two rows, nor the row it already answered.
+ */
+function tokenDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[] {
+  const key = (row: DeckTokenRow) => `${row.cardId}|${row.finish}`;
+  const planned = new Map<string, { row: DeckTokenRow; quantity: number }>();
+  for (const row of deckTokenRows(db, deckId, "theory", mp)) {
+    const held = planned.get(key(row));
+    if (held) held.quantity += row.quantity;
+    else planned.set(key(row), { row, quantity: row.quantity });
+  }
+  const live = new Map<string, number>();
+  const liveByToken = new Map<string, number>();
+  for (const row of deckTokenRows(db, deckId, "live", mp)) {
+    live.set(key(row), (live.get(key(row)) ?? 0) + row.quantity);
+    // **An orphan feeds no pool** — `Tally::hold`'s rule: an entry whose printing has left the
+    // corpus answers no set code, which is the crate's `oracle: None`, so it is not another
+    // printing *of* anything and excuses no row. It still counts toward its own exact key above.
+    if (row.setCode !== null) {
+      liveByToken.set(row.oracleId, (liveByToken.get(row.oracleId) ?? 0) + row.quantity);
+    }
+  }
+  const matched = new Map<string, number>();
+  for (const [k, { row, quantity }] of planned) {
+    // Nor does an orphan plan row speak for any of the pool — `Tally::settle` adds to
+    // `matched_by_oracle` only for a line that names its oracle card.
+    if (row.setCode === null) continue;
+    const exact = Math.min(quantity, live.get(k) ?? 0);
+    matched.set(row.oracleId, (matched.get(row.oracleId) ?? 0) + exact);
+  }
+  const pool = new Map<string, number>();
+  for (const [oracle, held] of liveByToken) {
+    pool.set(oracle, Math.max(0, held - (matched.get(oracle) ?? 0)));
+  }
+  const rows: GroupedDiff[] = [];
+  for (const [k, { row, quantity }] of planned) {
+    const short = quantity - (live.get(k) ?? 0);
+    if (short <= 0) continue;
+    const finish: DeckFinish = row.finish === "nonfoil" ? null : row.finish;
+    // **An entry whose printing has left the corpus** answers no set code, and is the crate's
+    // `oracle_id: None`: still a row — the plan is short of it — but no oracle card to pin a wish
+    // to and no pool to draw from, so the Send press and the managed settle both pass over it
+    // (`oracleId === null`) rather than throwing on a card that is not there.
+    const gone = row.setCode === null;
+    const take = gone ? 0 : Math.min(short, pool.get(row.oracleId) ?? 0);
+    if (!gone) pool.set(row.oracleId, (pool.get(row.oracleId) ?? 0) - take);
+    rows.push({
+      oracleId: gone ? null : row.oracleId,
+      row: {
+        cardId: row.cardId,
+        name: row.name,
+        categoryName: TOKENS_CATEGORY,
+        quantity: short,
+        unitPrice: row.unitPrice,
+        setCode: row.setCode ?? "",
+        collectorNumber: row.collectorNumber ?? "",
+        finish,
+        ownedSpare: ownedSpare(db, row.cardId, finish),
+        heldAsOtherPrinting: take,
+        isToken: true,
+      },
+    });
+  }
+  return rows;
 }
 
 /** `collection::printing_of` — the printing as the entry will remember it. */
@@ -15556,6 +15930,16 @@ function addWish(db: FakeDb, input: WishInput): EntryChange {
   // First, so every add path — the `+`, a drop, a menu, both deck sweeps — refuses a deck's
   // managed wishlist as a destination the one way. {@link MANAGED_WISHLIST}.
   refuseIfManagedFolder(db, input.folderId);
+  return fileWish(db, input);
+}
+
+/**
+ * {@link addWish} **without** the managed-folder refusal — `wishlist::add_wish_silent`, the
+ * wishlist's own quiet door, and the one thing that may file a wish into a deck's managed folder:
+ * {@link settleManagedWishlist}, which is the deck writing its own list. Through here rather than
+ * beside it, so the grain, the name lookup and the fold are this module's and not a second copy.
+ */
+function fileWish(db: FakeDb, input: WishInput): EntryChange {
   if (input.preferredFinish !== undefined) validFinish(input.preferredFinish);
   // A quantity below one is read as one rather than refused: this is the only add in the app
   // that does that, and it is `add_wish`'s own rule.
@@ -17782,6 +18166,9 @@ export function writeHandlers(db: FakeDb) {
       const bracket = patch.bracket === undefined ? undefined : validBracket(patch.bracket);
       const tokenMode =
         patch.tokenMode === undefined ? undefined : validTokenMode(patch.tokenMode);
+      // `managed_wishlist::valid_mode`, strict — v55's `tokens` among its five words.
+      const managedWishlist =
+        patch.managedWishlist === undefined ? undefined : validManagedMode(patch.managedWishlist);
       // **The deck's default pile is one deck setting and names a live pile** (user schema v53).
       // Deck settings offers the live list's piles, and the Theory tab resolves the setting by
       // that pile's *name* among its own — so a theory id stored here would be a setting the
@@ -18123,7 +18510,7 @@ export function writeHandlers(db: FakeDb) {
       deck.theoryMarkExact = patch.theoryMarkExact ?? deck.theoryMarkExact;
       deck.theoryMarkName = patch.theoryMarkName ?? deck.theoryMarkName;
       deck.theoryMarkUnplanned = patch.theoryMarkUnplanned ?? deck.theoryMarkUnplanned;
-      deck.managedWishlist = patch.managedWishlist ?? deck.managedWishlist;
+      deck.managedWishlist = managedWishlist ?? deck.managedWishlist;
       // `coalesce(?n, default_category_id)` again — and **`0` is a value here rather than an
       // absence**, which is the whole reason `??` is right and a truthiness test would be wrong:
       // `patch.defaultCategoryId === 0` is a reader asking to go back to Auto, and `||` would
@@ -18135,6 +18522,19 @@ export function writeHandlers(db: FakeDb) {
       // `patch.bracket`, so a refused number can never reach the row.
       deck.bracket = bracket ?? deck.bracket;
       deck.updatedAt = stamp(db);
+      // **The deck's managed wishlist follows the four columns it is made of** — the crate's
+      // `mw_deck_upd` trigger watches `name`, `theory_enabled`, `virtual_only` and
+      // `managed_wishlist_mode`, and a change to any of them re-settles the folder (and, since
+      // user schema v55, its `Tokens` subfolder). Only on a change, as the trigger only fires on
+      // one, so an untouched patch rewrites nothing.
+      if (
+        deck.name !== before.name ||
+        deck.theoryEnabled !== before.theoryEnabled ||
+        deck.virtualOnly !== before.virtualOnly ||
+        (deck.managedWishlist ?? "off") !== (before.managedWishlist ?? "off")
+      ) {
+        settleManagedWishlist(db, deck.id);
+      }
       return toDeckRow(db, deck);
     },
 
@@ -18252,6 +18652,10 @@ export function writeHandlers(db: FakeDb) {
       // it was first typed in must not take it off the others wearing it. Only `reset_decks`,
       // which is every deck at once, sweeps the table.
       db.deckAudit = db.deckAudit.filter((a) => a.deckId !== args.id);
+      // The deck's managed wishlist goes with it — `mw_deck_del`, then `settle_deck` over a deck
+      // that is not there: the `Tokens` subfolder's wishes, the subfolder, the folder's wishes and
+      // the folder, in that order, so no wish surfaces at the root.
+      settleManagedWishlist(db, args.id);
     },
 
     /**
@@ -19504,6 +19908,7 @@ export function writeHandlers(db: FakeDb) {
         const others = tokenEntries(db, args.deckId, variant, args.oracleId).length - 1;
         if (quantity === 0 && others > 0) dropTokenEntry(db, args.deckId, target);
         else putTokenEntry(db, args.deckId, { ...target, quantity });
+        settleHiddenToken(db, args.deckId, variant, args.oracleId);
         return tokenChange("quantity", target.quantity, quantity, target);
       });
     },
@@ -19556,6 +19961,8 @@ export function writeHandlers(db: FakeDb) {
           quantity: (held?.quantity ?? 0) + source.quantity,
         };
         putTokenEntry(db, args.deckId, landed);
+        // After the real swap only — the no-op above returns before it, as the crate's does.
+        settleHiddenToken(db, args.deckId, variant, args.oracleId);
         return tokenChange(
           "swap",
           tokenEntryFacts(db, source),
@@ -19587,37 +19994,59 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_tokens::set_state` — dismiss, restore or keep a token, **shared by both lists**,
-     * which is why it names no `variant`: a dismissal is "not in this deck" whichever list the
-     * reader is looking at.
+     * `deck_tokens::remove_entry` — **Remove printing** (managed tokens spec §3.4): one stored
+     * entry of one token in one list, deleted unconditionally, which is the one thing no other
+     * write does (a step to 0 keeps a token's last entry — rule 3).
      *
-     * The wire key is **`state`** — the crate names its managed `AppState` `app` on this one
-     * command so the word is free, where the retired `deck_token_set` took `tokenState`. Which of
-     * `auto` and `manual` a restore sends is TypeScript's conclusion; this writes the word it is
-     * handed, deleting a row `auto` would leave empty.
+     * - **A derived token** whose last entry in this list goes falls back to its implicit entry,
+     *   the resolver's printing at 0 — what the retired `deck_token_reset` did, one entry at a
+     *   time.
+     * - **A hand-added token** is drawn only in a list that holds an entry of it
+     *   ({@link deckTokenRows}), so its last entry here takes it off this list's band; when
+     *   **neither** list holds one and this list does not make it, its state goes back to `auto`
+     *   through {@link writeTokenState}, which deletes an otherwise empty row, and it leaves
+     *   every list that does not make it.
+     *
+     * `entry` is never `null`: an implicit entry is not stored, and there is nothing to delete. An
+     * entry this list does not hold is `ENTRY_GONE`, refused before anything is written.
+     * Journalled like every token write: one history row — `from` the count it held, and the
+     * printing's `set_code` and `collector_number` beside it, so the drawer can say *Removed
+     * Treasure's THOB #13 printing* without the corpus — and one undo step, whose snapshot takes
+     * the state row back with the entry.
      */
-    deck_token_state: (args: { deckId: number; oracleId: string; state: string }): void => {
-      refuseIfBusy(db);
-      const state = validTokenState(args.state);
-      journalTokens(db, args.deckId, null, args.oracleId, () => {
-        const before = storedToken(db, args.deckId, args.oracleId)?.state ?? "auto";
-        writeTokenState(db, args.deckId, args.oracleId, state);
-        return tokenChange("state", before, state);
-      });
-    },
-
-    /**
-     * `deck_tokens::reset` — back to the implicit entry: every entry of this token **in this
-     * list** goes, and nothing else does — not the other list's, and not the token's state. A
-     * token with no entries is a success that records nothing.
-     */
-    deck_token_reset: (args: { deckId: number; variant: DeckVariant; oracleId: string }): void => {
+    deck_token_remove: (args: {
+      deckId: number;
+      variant: DeckVariant;
+      oracleId: string;
+      entry: TokenEntryKey;
+    }): void => {
       refuseIfBusy(db);
       const variant = validVariant(args.variant);
       journalTokens(db, args.deckId, variant, args.oracleId, () => {
-        const entries = tokenEntries(db, args.deckId, variant, args.oracleId);
-        for (const entry of entries) dropTokenEntry(db, args.deckId, entryRowOf(entry));
-        return tokenChange("reset", null, null, null, { entries: entries.length });
+        const held = tokenEntries(db, args.deckId, variant, args.oracleId).find(
+          (e) => e.cardId === args.entry.cardId && e.finish === args.entry.finish,
+        );
+        if (held === undefined) throw refuse(TOKEN_ENTRY_GONE);
+        const row = entryRowOf(held);
+        dropTokenEntry(db, args.deckId, row);
+        // A dismissed token settles first, as in the crate — the check below can still send it
+        // on to `auto`.
+        settleHiddenToken(db, args.deckId, variant, args.oracleId);
+        // A token with no entry left in either list, which **this** list does not make, is
+        // nothing of the reader's: back to `auto`, which deletes an otherwise empty row. The
+        // crate asks about this list alone — where the other list makes the token, `auto` draws
+        // there exactly as `manual` did. A token this list makes keeps whatever state it has — it
+        // is still the deck's, and its implicit entry takes over at 0.
+        const derivedHere = derivedPrintingOf(db, args.deckId, variant, args.oracleId) !== undefined;
+        const left = VARIANTS.some(
+          (list) => tokenEntries(db, args.deckId, list, args.oracleId).length > 0,
+        );
+        if (!derivedHere && !left) writeTokenState(db, args.deckId, args.oracleId, "auto");
+        const card = cardById(db, row.cardId);
+        return tokenChange("remove", row.quantity, null, row, {
+          set_code: card?.setCode ?? null,
+          collector_number: card?.collectorNumber ?? null,
+        });
       });
     },
 
@@ -20020,6 +20449,10 @@ export function writeHandlers(db: FakeDb) {
      * An orphan is skipped, and that skip now carries two things rather than one: a wish needs
      * an oracle card, *and* {@link addWish} refuses a `cardId` whose printing has left `cards`.
      * The one row that could make this throw is the one row that never reaches it.
+     *
+     * **Token rows are sent too** since managed tokens (spec §3.7), keyed the same way — a wish
+     * pinned to the token's printing, the entry's finish the preferred one, one wish per row and
+     * folded by the wishlist's own grain.
      */
     deck_theory_missing_to_wishlist: (args: {
       deckId: number;
@@ -20053,7 +20486,12 @@ export function writeHandlers(db: FakeDb) {
           quantity: grouped.row.quantity,
           // `DeckFinish` is `null` for the regular copy and `WishInput.preferredFinish` says
           // "no preference" with `undefined`; the two spellings of the unmarked case meet here.
-          preferredFinish: grouped.row.finish ?? undefined,
+          // **A token row spells its regular copy out** (managed tokens spec §3.7): a token
+          // entry's finish is never unsaid — `deck_token_printings.finish` is `NOT NULL` — so its
+          // wish names the finish the plan's entry holds, `nonfoil` included.
+          preferredFinish: grouped.row.isToken
+            ? (grouped.row.finish ?? "nonfoil")
+            : (grouped.row.finish ?? undefined),
           // The one destination the whole press shares — checked above, written here, and the
           // grain's fourth term either way.
           folderId,
@@ -23318,6 +23756,9 @@ function undoHandlers(db: FakeDb) {
       // Behind the backstop, as the crate's reversal runs behind `with_write`'s: a restore that
       // moved the deck's cards reconciles its tokens, and those deletions sit in no step.
       backstopping(db, () => restoreDeck(db, args.deckId, cursor.before));
+      // And the managed wishlist settles after it, as `with_write`'s settle does after any write
+      // its triggers saw — a step putting a token entry back is one (user schema v55).
+      settleManagedWishlist(db, args.deckId);
       // Strictly increasing within the deck, `deck_undo::apply_reversal`'s rule: `nextRedo` reads
       // it as an ordinal, and two undos inside one tick of `stamp` would otherwise tie.
       const newest = Math.max(
@@ -23345,6 +23786,7 @@ function undoHandlers(db: FakeDb) {
         );
       }
       backstopping(db, () => restoreDeck(db, args.deckId, step.after));
+      settleManagedWishlist(db, args.deckId);
       step.undoneAt = null;
       recordReversal(db, args.deckId, "redo", step.auditId);
     },

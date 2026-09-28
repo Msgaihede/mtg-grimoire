@@ -425,16 +425,15 @@ describe("the create deck dialog", () => {
       "true",
     );
     expect(screen.queryByRole("switch", { name: /matching printing/i })).toBeNull();
-    expect(screen.queryByRole("switch", { name: /different printing/i })).toBeNull();
+    expect(screen.queryByRole("switch", { name: /any printing/i })).toBeNull();
     expect(screen.queryByRole("switch", { name: /not in the theory list/i })).toBeNull();
   });
 
   /**
-   * **No token mode here either, and none is sent** (token stacks spec §4.5). `DeckInput` has no
-   * `tokenMode` and `decks.token_mode` is `DEFAULT 'managed'`, so a control in this dialog would
-   * be a press that reaches nothing — `canSetTheoryMarks`' arrangement, through the form's own
-   * `canSetTokenMode`, which this dialog does not pass. The draft still holds the column's default,
-   * because the value shape is the form's and one shape serves both hosts.
+   * **No token mode here, and none is sent.** `DeckInput` has no `tokenMode` and
+   * `decks.token_mode` is `DEFAULT 'managed'`; since 2026-09-27 the control is gone from both
+   * hosts and the form's value carries no such field (managed tokens spec §3.9), so the create
+   * has nothing to send — which is what this pins, beside the switch the mode once replaced.
    */
   it("offers no token mode control and sends no tokenMode", async () => {
     wrap(<Harness />);

@@ -22,7 +22,6 @@ function view(over: Partial<DeckTokenView>): DeckTokenView {
     sources: [{ cardId: "c-smothering-tithe", name: "Smothering Tithe" }],
     derived: true,
     state: "auto",
-    overridden: false,
     subtitle: "Colorless · {T}, Sacrifice this token: Add one mana of any color.",
     setCode: "tclb",
     collectorNumber: "5",
@@ -51,7 +50,11 @@ describe("tokenTheoryPlan", () => {
 
   it("ticks a token the plan makes in the same printing", () => {
     const t = view({ printingId: "p1", quantity: 1 });
-    expect(tokenTheoryMark(tokenTheoryPlan([t], [t], ON), t)).toEqual({ tier: "exact", delta: 0 });
+    expect(tokenTheoryMark(tokenTheoryPlan([t], [t], ON), t)).toEqual({
+      tier: "exact",
+      delta: 0,
+      anyPrinting: false,
+    });
   });
 
   it("crosses a token only a substitute makes", () => {
@@ -59,6 +62,7 @@ describe("tokenTheoryPlan", () => {
     expect(tokenTheoryMark(tokenTheoryPlan([], [live], ON), live)).toEqual({
       tier: "unplanned",
       delta: 0,
+      anyPrinting: false,
     });
   });
 
@@ -79,6 +83,7 @@ describe("tokenTheoryPlan", () => {
     expect(tokenTheoryMark(tokenTheoryPlan([planned], [live], ON), live)).toEqual({
       tier: "unplanned",
       delta: 0,
+      anyPrinting: false,
     });
   });
 
@@ -91,7 +96,11 @@ describe("tokenTheoryPlan", () => {
    */
   it("ticks a four-copy token the plan makes in the same printing, with no number", () => {
     const t = view({ printingId: "p1", quantity: 4 });
-    expect(tokenTheoryMark(tokenTheoryPlan([t], [t], ON), t)).toEqual({ tier: "exact", delta: 0 });
+    expect(tokenTheoryMark(tokenTheoryPlan([t], [t], ON), t)).toEqual({
+      tier: "exact",
+      delta: 0,
+      anyPrinting: false,
+    });
   });
 
   it("names a four-copy token the plan makes in another printing, with no number", () => {
@@ -100,6 +109,7 @@ describe("tokenTheoryPlan", () => {
     expect(tokenTheoryMark(tokenTheoryPlan([planned], [live], ON), live)).toEqual({
       tier: "name",
       delta: 0,
+      anyPrinting: false,
     });
   });
 
@@ -119,7 +129,11 @@ describe("tokenTheoryPlan", () => {
 describe("tokenTheoryPlan over entries with real finishes", () => {
   it("ticks the foil entry a plan asks for in foil", () => {
     const t = view({ printingId: "p1", finish: "foil" });
-    expect(tokenTheoryMark(tokenTheoryPlan([t], [t], ON), t)).toEqual({ tier: "exact", delta: 0 });
+    expect(tokenTheoryMark(tokenTheoryPlan([t], [t], ON), t)).toEqual({
+      tier: "exact",
+      delta: 0,
+      anyPrinting: false,
+    });
   });
 
   /** The deck card's rule: a plan asking for a foil Treasure is not satisfied by the nonfoil one
@@ -130,6 +144,7 @@ describe("tokenTheoryPlan over entries with real finishes", () => {
     expect(tokenTheoryMark(tokenTheoryPlan([planned], [live], ON), live)).toEqual({
       tier: "name",
       delta: 0,
+      anyPrinting: false,
     });
   });
 
@@ -139,6 +154,7 @@ describe("tokenTheoryPlan over entries with real finishes", () => {
     expect(tokenTheoryMark(tokenTheoryPlan([planned], [live], ON), live)).toEqual({
       tier: "exact",
       delta: 3,
+      anyPrinting: false,
     });
   });
 
@@ -152,8 +168,8 @@ describe("tokenTheoryPlan over entries with real finishes", () => {
     const regular = view({ printingId: "p1", finish: "nonfoil", quantity: 1 });
     const other = view({ printingId: "p2", finish: "foil", quantity: 1 });
     const plan = tokenTheoryPlan([planned], [regular, other], ON);
-    expect(tokenTheoryMark(plan, regular)).toEqual({ tier: "name", delta: 2 });
-    expect(tokenTheoryMark(plan, other)).toEqual({ tier: "name", delta: 2 });
+    expect(tokenTheoryMark(plan, regular)).toEqual({ tier: "name", delta: 2, anyPrinting: false });
+    expect(tokenTheoryMark(plan, other)).toEqual({ tier: "name", delta: 2, anyPrinting: false });
   });
 
   /**
@@ -169,6 +185,7 @@ describe("tokenTheoryPlan over entries with real finishes", () => {
     expect(tokenTheoryMark(tokenTheoryPlan([planned], [live], ON), live)).toEqual({
       tier: "unplanned",
       delta: 0,
+      anyPrinting: false,
     });
   });
 });

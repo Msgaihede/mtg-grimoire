@@ -85,7 +85,7 @@ deliberately**: no screenshots are stored.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
   The seeds
   (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`/
-  `virtualDeck`/`shared`/`waiting`),
+  `virtualDeck`/`shared`/`waiting`/`tokenPlan`),
   **twenty-eight** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`deckNotes`/
   `updateAvailable`/
@@ -192,6 +192,16 @@ deliberately**: no screenshots are stored.
   A seed of its own for `virtualDeck`'s reason — more `cards` rows would move every count in
   every story `needsReview` serves. How many of each it holds is pinned in `db.test.ts` and
   `world.test.ts`, and is not written down here.
+  **`tokenPlan` is `starter` plus a plan that counts tokens and a token kept by hand** (managed
+  tokens, 2026-09-27): deck 4's theory list counts Treasures and Constructs its live list does not
+  hold, so Compare answers token rows, and its live list keeps a Treasure nothing there makes. In
+  `starter` every untouched token reads 0, so the same plan asks for nothing — which is what every
+  Compare story was written against, and why this is a seed. **Its managed wishlist is settled, not
+  written**: the seed asks `db.ts`'s `settleManagedWishlist` for the folders, `Tokens` subfolder
+  included, rather than guessing at the rows the crate would have left. That function is also what
+  the fake runs after a token write, an undo or redo, a deck's delete and a change to its name,
+  kind or mode — a card write still does not settle here, the fake's standing gap (`db.ts`'s
+  `MANAGED_WISHLIST` has it).
   **Re-count the faults when you add one** (the seeds are named and not counted) — it said "four"
   for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only

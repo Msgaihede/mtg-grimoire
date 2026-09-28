@@ -111,11 +111,27 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `useImageRetry` — which only ever reacted to `error` — had no way to know: the frame drew the
   empty box with no fallback text, which is exactly the screenshot.
 
-  So `CardImage` watches for silence: a frame with a layout box that has heard nothing by
+  So `CardImage` watches for silence: a frame **on screen** that has heard nothing by
   `IMAGE_STALL_DEADLINE_MS` re-requests with a `?stall=N` mark, twice, then dispatches `error` on
   the element so the ordinary backoff takes over. The mark is a query string and `images::serve`
   parses only the path, so nothing between the renderer and the handler can answer the second ask
   out of what it made of the first.
+
+  **On screen, not merely laid out, since 2026-09-28 — and the difference emptied a wall.** The
+  clock used to start at mount, gated at each tick on `getBoundingClientRect().width > 0`. A lazy
+  picture below the fold has a box and has never been asked for, so its silence was read as the
+  dropped message: asked twice more and handed to `error`, it drew "No image" for good. The live
+  pass on the All tokens wall (debug build, real data, 4 357 tiles) counted **1 691** frames
+  reading "No image" 40 s after the wall opened — five of six on screen after a scroll to the
+  middle, none recovering in 20 s, every one a picture that loads at once when it is on screen at
+  mount. The same pass found the gate's second cost: a `getBoundingClientRect()` per frame per
+  tick is a forced layout per picture, and the wall ran 100–150 ms frames for ten seconds after
+  each full redraw. Now one shared `IntersectionObserver` watches every frame: entering the
+  viewport (with a box) arms the deadline, leaving it disarms it and the next entry starts a
+  whole one, and a frame that has loaded or been refused is not armed again however it scrolls.
+  Nothing measures the layout; the observer's entry carries the box. Being on screen is also when
+  a lazy picture is requested, so the clock starts when silence can mean something. **jsdom's
+  observer never reports**, so no frame in the suite arms a timer — the old gate's floor, kept.
 
   **The deadline is 5 s against a measured ceiling of 451 ms.** Timed in the shipped window
   (debug build, 1691×911 client, the reporter's own corpus and image cache) over **400** tiles of

@@ -376,10 +376,8 @@ export function TableView({
                   the crown that replaced the badge that used to stand here. */}
               {row.theoryMark !== null && (
                 <>
-                  <TheoryMatchBadge tier={row.theoryMark.tier} delta={row.theoryMark.delta} />
-                  <span className="sr-only">
-                    {theoryMatchLabel(row.theoryMark.tier, row.theoryMark.delta)}
-                  </span>
+                  <TheoryMatchBadge mark={row.theoryMark} />
+                  <span className="sr-only">{theoryMatchLabel(row.theoryMark)}</span>
                 </>
               )}
               {row.ruleBreakText !== null && (
