@@ -501,6 +501,13 @@ pub const TABLES: [Spec; 17] = [
             // reader's answer about the deck; the folder it produces does not — see
             // `crate::managed_wishlist`, which every device runs against its own copy.
             "managed_wishlist_mode",
+            // And v57's tokens switch beside it (issue #617) — the same answer about the deck,
+            // so it travels for the mode's reason. `DEFAULT 0` keeps the old-peer direction
+            // safe: a device on v56 names no such field and the switch stays where it was, and
+            // a v56 device receiving it skips a field its local spec does not name. **The rung
+            // that added it is uncaptured**: every device converts its own copy of the synced
+            // mode the same way, so the conversion is derived and not an edit to send.
+            "managed_wishlist_tokens",
         ],
         counters: &[],
         parents: &[
@@ -1444,6 +1451,36 @@ mod tests {
             fields.get("curve_creatures"),
             Some(&serde_json::json!(1)),
             "a split curve must reach the reader's other devices, in {fields}"
+        );
+    }
+
+    /// **A deck's managed-wishlist tokens switch travels** (user schema v57) — the mode beside it
+    /// already does, and a switch that stayed behind would fill a Tokens subfolder on one device
+    /// and not the next, with nothing on screen saying why.
+    #[test]
+    fn a_decks_managed_wishlist_tokens_switch_is_captured() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        conn.execute(
+            "UPDATE decks SET managed_wishlist_tokens = 1 WHERE id = 1",
+            [],
+        )
+        .unwrap();
+
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 1, "one write, one op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
+        assert_eq!(
+            fields.get("managed_wishlist_tokens"),
+            Some(&serde_json::json!(1)),
+            "the switch must reach the reader's other devices, in {fields}"
         );
     }
 

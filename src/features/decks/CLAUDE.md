@@ -4909,11 +4909,17 @@ already effective, and `viewOf` copies them.
   It is the entry's own grain read from the buying end (a token entry always names its finish) and
   is accepted rather than missed; decks-storage.md's *pinned wish* paragraph is the same wart one
   table over, for cards.
-- **The managed wishlist follows the same four views** (managed tokens spec §3.8): Deck settings'
-  `ManagedWishlistGroup` offers `Off | All | Missing | Different printing | Tokens`
-  (`MANAGED_WISHLIST_MODES`, `tokens` the fifth word), and **All** and **Tokens** file the token
-  rows' wishes in a **`Tokens` subfolder** inside the deck's managed folder — Tokens putting
-  nothing in the parent itself. The subfolder is the deck's too (`isManaged` covers it, since it
+- **The managed wishlist follows the three card views, and files tokens by a switch beside them**
+  (managed tokens spec §3.8; issue #617, user schema v57): Deck settings' `ManagedWishlistGroup`
+  offers `Off | All | Missing | Different printing` (`MANAGED_WISHLIST_MODES`, four words) and,
+  **outside that `role="group"` but in the same row**, an `aria-pressed` **Tokens** toggle
+  (`decks.managed_wishlist_tokens`, `DeckRow.managedWishlistTokens`) that files the token rows'
+  wishes in a **`Tokens` subfolder** inside the deck's managed folder under whichever view is
+  picked. The toggle is **not drawn under `Off`** — this form's rule that a control which cannot
+  take effect is worse than none — and its stored answer is kept, so picking a view again brings
+  it back. From v55 to v56 `tokens` was a fifth mode and All carried tokens too; v57 turned every
+  `all` deck's tokens on and every `tokens` deck into `missing` with them on, and the history
+  still names an old `tokens` row by that word (`managedWishlistHistoryLabel`). The subfolder is the deck's too (`isManaged` covers it, since it
   carries the deck's `managedDeckId`), is left out of `managedWishFolders`' by-name list (every
   deck's child is named `Tokens`), and says its own empty sentence (`MANAGED_TOKENS_EMPTY`). The
   whole record is [wishlist-folders.md](../../../docs/reference/wishlist-folders.md)'s *Managed

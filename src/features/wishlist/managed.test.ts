@@ -53,13 +53,15 @@ describe("a managed wishlist's Tokens child", () => {
     expect([...managedIds(ALL)].sort((a, b) => a - b)).toEqual([9, 10, 11, 12]);
   });
 
-  it("says its own sentence when empty, under either view that fills it", () => {
-    expect(managedEmptySentence("all", true)).toBe(MANAGED_TOKENS_EMPTY);
-    expect(managedEmptySentence("tokens", true)).toBe(MANAGED_TOKENS_EMPTY);
+  /** Under any of the three views, since the tokens switch reaches all three (v57, #617). */
+  it("says its own sentence when empty, under any view its parent follows", () => {
+    for (const mode of ["all", "missing", "other"] as const) {
+      expect(managedEmptySentence(mode, true)).toBe(MANAGED_TOKENS_EMPTY);
+    }
     // Where the view cannot be read, the child claims nothing either.
     expect(managedEmptySentence(undefined, true)).toBe(MANAGED_EMPTY_UNKNOWN);
     // And the parent's sentence is unchanged by the child existing.
-    expect(managedEmptySentence("tokens")).toBe(MANAGED_EMPTY.tokens);
+    expect(managedEmptySentence("missing")).toBe(MANAGED_EMPTY.missing);
     expect(Object.values(MANAGED_EMPTY)).not.toContain(MANAGED_TOKENS_EMPTY);
   });
 });
@@ -73,23 +75,9 @@ describe("a managed wishlist's Tokens child", () => {
 describe("managedEmptySentence", () => {
   it("says a different sentence for each view a deck's folder can follow", () => {
     // An arrow, not the function itself: `map`'s index would arrive as the Tokens-child flag.
-    const said = (["all", "missing", "other", "tokens"] as const).map((mode) =>
-      managedEmptySentence(mode),
-    );
-    expect(said).toEqual([
-      MANAGED_EMPTY.all,
-      MANAGED_EMPTY.missing,
-      MANAGED_EMPTY.other,
-      MANAGED_EMPTY.tokens,
-    ]);
-    expect(new Set(said).size).toBe(4);
-  });
-
-  /** The settle drops the Tokens child when the deck is short of no token, so the parent's
-   *  sentence must not point at *the* folder as though it were always there. */
-  it("names no Tokens folder under `tokens` that may not exist", () => {
-    expect(MANAGED_EMPTY.tokens).not.toMatch(/the Tokens folder/);
-    expect(MANAGED_EMPTY.tokens).toMatch(/a Tokens folder inside it/);
+    const said = (["all", "missing", "other"] as const).map((mode) => managedEmptySentence(mode));
+    expect(said).toEqual([MANAGED_EMPTY.all, MANAGED_EMPTY.missing, MANAGED_EMPTY.other]);
+    expect(new Set(said).size).toBe(3);
   });
 
   it("keeps the words this page already said for `missing`", () => {
@@ -108,7 +96,9 @@ describe("managedEmptySentence", () => {
   /** The type is `ipc.ts`'s hand-written promise, not the wire's: a mode a later schema adds — or
    *  a name `Object.prototype` carries — must still come back as words, never `undefined`. */
   it("says the unknown sentence for a mode this build has never heard of", () => {
-    for (const mode of ["subset", "toString", ""]) {
+    // `tokens` among them since user schema v57 (issue #617): the retired fifth view, which no
+    // deck holds any more and which therefore names no view here either.
+    for (const mode of ["subset", "toString", "", "tokens"]) {
       expect(managedEmptySentence(mode as ManagedWishlistMode)).toBe(MANAGED_EMPTY_UNKNOWN);
     }
   });
