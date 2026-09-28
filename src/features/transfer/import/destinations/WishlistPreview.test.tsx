@@ -81,7 +81,7 @@ describe("WishlistPreview", () => {
     wishlistImportCommit.mockResolvedValue(outcome({ updated: 1, undoId: 8 }));
     const { onDone } = mount("3 Sol Ring\n");
 
-    await user.click(screen.getByRole("radio", { name: /^Set these quantities/ }));
+    await user.click(screen.getByRole("radio", { name: "Set these quantities" }));
 
     expect(screen.getByText("Sets how many you want of 1 card.")).toBeInTheDocument();
     expect(screen.queryByText(/will be added/)).toBeNull();
