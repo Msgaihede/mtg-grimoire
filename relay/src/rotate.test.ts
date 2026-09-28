@@ -1,8 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeEnv } from "./fakeD1";
 import {
   admitDevice,
   authIsCurrent,
+  authIsRecent,
   currentManifest,
   recordRotation,
   seedGroup,
@@ -21,9 +22,10 @@ import worker, { type Env } from "./index";
  *
  * That makes this the one relay suite that drives a fetch handler, against `vite.config.ts`'s
  * note that the I/O here is left to a deploy. The exception is affordable for one reason: these
- * two routes touch D1 and nothing else, so `fakeD1`'s SQL evaluator is the whole of what they
- * need. Every route that reaches the Durable Object still needs workerd, and [`relayEnv`] makes
- * that a loud failure rather than a quiet one.
+ * two routes decide everything in D1, so `fakeD1`'s SQL evaluator is the whole of what they
+ * need. The one thing either sends the Durable Object — an accepted rotation's roster — is a
+ * request whose *path and body* are the question, not anything the object does with them, so
+ * [`relayEnv`] records it rather than needing workerd to run it.
  */
 
 /**
@@ -46,26 +48,59 @@ function hex64(n: number): string {
  */
 const NOW = 1_700_000_000_000;
 
+/** One request the Worker sent a group's Durable Object: where it was aimed, and what it said. */
+interface Reached {
+  path: string;
+  method: string | undefined;
+  body: unknown;
+}
+
 /**
- * `fakeEnv` plus the two bindings the router itself reads.
+ * A `GROUP` namespace that records every request aimed at it and answers each with `status`.
+ *
+ * **The path and the body and not merely a count**, for `claim.test.ts`'s `fakeGroups` reason: the
+ * path carries the group id and the body carries the roster, and a spy that only counted would
+ * pass an implementation that told the wrong group, or told the right one the wrong devices.
+ */
+function recordingGroups(reached: Reached[], status = 204): DurableObjectNamespace {
+  return {
+    idFromName: (name: string) => name,
+    get: () => ({
+      fetch: (url: string, init?: RequestInit) => {
+        reached.push({
+          path: new URL(url).pathname,
+          method: init?.method,
+          body: typeof init?.body === "string" ? JSON.parse(init.body) : null,
+        });
+        return Promise.resolve(new Response(null, { status }));
+      },
+    }),
+  } as unknown as DurableObjectNamespace;
+}
+
+/**
+ * `fakeEnv` plus the two bindings the router itself reads, and `reached`: what the Durable Object
+ * was sent.
  *
  * `RELAY_HMAC_KEY` is set even though these routes stand ahead of the gate that uses it,
  * **because the mutation this task is checked with needs it**: moving the two route lines below
  * the gate has to produce the gate's 401 rather than the 500 an unset binding gives, or the
  * mutation would be caught for the wrong reason.
  *
- * `GROUP` throws on so much as being read. Neither route may reach the Durable Object — that is
- * the metered line, and putting a group's key distribution on it would undo the reason the gate
- * stands where it does — so an implementation that routed one through the object fails here by
- * name rather than as an `undefined is not an object` three frames down.
+ * ⚠️ **`GROUP` used to throw on so much as being read**, because neither route reached the Durable
+ * Object at all. An accepted rotation now sends it one roster, so the binding records instead —
+ * and the question the throw used to answer is asked of `reached` directly: `/keys` and every
+ * refused rotation must leave it empty. A throw would not have kept asking it for `/rotate`
+ * anyway, since the roster is best effort and a thrown binding is exactly the failure it
+ * swallows.
  */
-function relayEnv(...groups: string[]): Env {
+function relayEnv(...groups: string[]): Env & { reached: Reached[] } {
+  const reached: Reached[] = [];
   return {
     ...fakeEnv(...groups),
     RELAY_HMAC_KEY: "test-signing-key",
-    get GROUP(): never {
-      throw new Error("/rotate and /keys must never reach the Durable Object");
-    },
+    GROUP: recordingGroups(reached),
+    reached,
   };
 }
 
@@ -77,8 +112,15 @@ function rotateRequest(group: string, credential: string, body: unknown): Reques
   });
 }
 
-function keysRequest(group: string, credential: string, device: string): Request {
-  return new Request(`https://relay.example/g/${group}/keys?device=${device}`, {
+/** `epoch` is spliced as given, so a test can ask with text no epoch should be read out of. */
+function keysRequest(
+  group: string,
+  credential: string,
+  device: string,
+  epoch?: number | string,
+): Request {
+  const query = epoch === undefined ? `device=${device}` : `device=${device}&epoch=${epoch}`;
+  return new Request(`https://relay.example/g/${group}/keys?${query}`, {
     headers: { authorization: `Bearer ${credential}` },
   });
 }
@@ -242,16 +284,53 @@ describe("POST /rotate", () => {
     expect(await authIsCurrent(env, "g1", hex64(0x1b))).toBe(false);
   });
 
-  it("refuses an epoch that skips past the next one, and records nothing", async () => {
-    // **Advancing is not enough; the epoch has to be the next one.** Every device plans
-    // `epoch + 1` from the epoch it is standing on, and the group auth it presents is only
-    // current if that epoch is the relay's — so no shipped client can send anything else. A
-    // caller that can send `1e9` can instead put the group on an epoch no device will ever plan
-    // from again, with a manifest of its choosing: `{}` reads as a removal notice to every one.
+  it("accepts a removal's step of two as well as a join's step of one", async () => {
+    // **The join/removal marker is the step, and the relay's whole part in it is accepting both.**
+    // A removal or a departure advances the epoch by two and a join by one; the rotator bound the
+    // epoch into every blob, so what the relay stores is what each device reads when it adopts.
+    // Two literal steps from two different starting epochs, so the bound is relative to where the
+    // group stands and not to where it was claimed.
     const env = relayEnv("g1");
     await seedGroup(env, "g1", 0, hex64(0));
 
-    for (const epoch of [2, 1_000_000_000, Number.MAX_SAFE_INTEGER]) {
+    const removal = await worker.fetch(
+      rotateRequest("g1", hex64(0), { epoch: 2, auth: hex64(2), keys: { desk: "blob-desk-2" } }),
+      env,
+    );
+    expect(removal.status).toBe(200);
+    expect(await removal.json()).toEqual({ epoch: 2 });
+
+    const join = await worker.fetch(
+      rotateRequest("g1", hex64(2), {
+        epoch: 3,
+        auth: hex64(3),
+        keys: { desk: "blob-desk-3", tablet: "blob-tablet-3" },
+      }),
+      env,
+    );
+    expect(join.status).toBe(200);
+
+    const another = await worker.fetch(
+      rotateRequest("g1", hex64(3), { epoch: 5, auth: hex64(5), keys: { desk: "blob-desk-5" } }),
+      env,
+    );
+    expect(another.status).toBe(200);
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 5, keys: { desk: "blob-desk-5" } });
+    expect(await authIsCurrent(env, "g1", hex64(5))).toBe(true);
+  });
+
+  it("refuses an epoch that steps past a removal's two, and records nothing", async () => {
+    // **Advancing is not enough; the epoch has to be one or two ahead.** Every device plans
+    // `epoch + 1` for a join or `epoch + 2` for a removal from the epoch it is standing on, and
+    // the group auth it presents is only current if that epoch is the relay's — so no shipped
+    // client can send anything further. A caller that can send `1e9` can instead put the group on
+    // an epoch no device will ever plan from again, with a manifest of its choosing: `{}` reads as
+    // a removal notice to every one. **`3` is the literal that pins the bound**: a `+ 3` in
+    // `recordRotation`'s `WHERE` accepts it and nothing else here would notice.
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+
+    for (const epoch of [3, 1_000_000_000, Number.MAX_SAFE_INTEGER]) {
       const skipping = await worker.fetch(
         rotateRequest("g1", hex64(0), { epoch, auth: hex64(0xa), keys: {} }),
         env,
@@ -442,6 +521,98 @@ describe("POST /rotate", () => {
     expect(response.status).toBe(200);
     expect(await devicesOf(env, "g1")).toEqual(["desk"]);
     expect(await devicesOf(env, "g2")).toEqual(["phone", "tablet"]);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// The roster the Durable Object is told
+// ---------------------------------------------------------------------------------------
+
+describe("POST /rotate — the group's log hears who is left", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("posts the adopted manifest's device list to that group's object, once", async () => {
+    // A departed device's last ack holds the log's compaction floor for as long as the object
+    // thinks it is a member, and the object has no roster but this one. `laptop` is on the roll
+    // and off the manifest, so a roster built from `group_devices` instead of the manifest would
+    // name it — and the path is asserted with the group in it, because a roster sent to the
+    // wrong object is one the right object never hears.
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+    expect(await admitDevice(env, "g1", "laptop", NOW)).toBe(true);
+
+    const response = await worker.fetch(
+      rotateRequest("g1", hex64(0), {
+        epoch: 2,
+        auth: hex64(2),
+        keys: { desk: "blob-desk", phone: "blob-phone" },
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(env.reached).toEqual([
+      { path: "/g/g1/roster", method: "POST", body: { devices: ["desk", "phone"] } },
+    ]);
+  });
+
+  it("sends the object nothing for a rotation it refuses", async () => {
+    // **The reason these routes can stand outside the bearer gate is that no refusal reaches the
+    // metered line**, and a roster sent ahead of `recordRotation` would also tell the log to
+    // forget devices for a manifest the group never adopted. One of each refusal, every one of
+    // which names only `desk` — so a post from any of them would be visible below.
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+    const keys = { desk: "blob-desk" };
+
+    const statuses: number[] = [];
+    for (const request of [
+      rotateRequest("g1", hex64(0xdead), { epoch: 1, auth: hex64(1), keys }),
+      rotateRequest("g1", hex64(0), { epoch: 1, auth: "not-hex", keys }),
+      rotateRequest("g1", hex64(0), { epoch: 0, auth: hex64(0x0b), keys }),
+      rotateRequest("g1", hex64(0), { epoch: 3, auth: hex64(3), keys }),
+    ]) {
+      statuses.push((await worker.fetch(request, env)).status);
+    }
+
+    expect(statuses).toEqual([401, 400, 409, 422]);
+    expect(env.reached).toEqual([]);
+  });
+
+  it("answers 200 when the object cannot be told: the rotation already stands", async () => {
+    // **Best effort, and the direction matters.** The rotation is recorded in D1 before the
+    // roster is sent, so a 500 here would tell the rotator it was refused — and a rotator that
+    // believes that does not commit the epoch every other device is about to adopt. Two ways
+    // the object can fail — an error status, and a fetch that rejects — and both have to leave
+    // the rotation, the retirement and the freed slot exactly as a success would.
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const failing of [
+      recordingGroups([], 500),
+      {
+        idFromName: (name: string) => name,
+        get: () => ({ fetch: () => Promise.reject(new Error("object unreachable")) }),
+      } as unknown as DurableObjectNamespace,
+    ]) {
+      const env = relayEnv("g1");
+      env.GROUP = failing;
+      await seedGroup(env, "g1", 0, hex64(0));
+      await holdSecret(env, "g1", hex64(0xbeef), "phone");
+      expect(await admitDevice(env, "g1", "phone", NOW)).toBe(true);
+
+      const response = await worker.fetch(
+        rotateRequest("g1", hex64(0), { epoch: 2, auth: hex64(2), keys: { desk: "blob-desk" } }),
+        env,
+      );
+
+      expect(response.status).toBe(200);
+      expect(await currentManifest(env, "g1")).toEqual({ epoch: 2, keys: { desk: "blob-desk" } });
+      expect(await secretOf(env, "g1")).toEqual({ refresh_secret: null, refresh_device: null });
+      expect(await devicesOf(env, "g1")).toEqual([]);
+    }
+    // Swallowed, not silenced: each failure is a line in the Worker's log.
+    expect(errors).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -647,11 +818,18 @@ describe("GET /keys", () => {
     const response = await worker.fetch(keysRequest("g1", hex64(1), "desk"), env);
 
     expect(response.status).toBe(200);
+    // `removalStep` is on every 200, and literally `2`: it is what a device latches to learn it
+    // may publish a removal as `+2`, so a relay answering anything else — or nothing — leaves
+    // every device stepping removals by one.
     expect(await response.json()).toEqual({
       epoch: 1,
       blob: "blob-desk",
       devices: ["desk", "phone"],
+      removalStep: 2,
     });
+    // And `/keys` never reaches the Durable Object: it is D1 reads and nothing else, which is
+    // half of why it can stand ahead of the bearer gate.
+    expect(env.reached).toEqual([]);
   });
 
   it("tells a device that is behind apart from one that has been removed", async () => {
@@ -667,11 +845,21 @@ describe("GET /keys", () => {
 
     const behind = await worker.fetch(keysRequest("g1", hex64(1), "desk"), env);
     expect(behind.status).toBe(200);
-    expect(await behind.json()).toEqual({ epoch: 2, blob: "blob-desk-2", devices: ["desk"] });
+    expect(await behind.json()).toEqual({
+      epoch: 2,
+      blob: "blob-desk-2",
+      devices: ["desk"],
+      removalStep: 2,
+    });
 
     const removed = await worker.fetch(keysRequest("g1", hex64(1), "phone"), env);
     expect(removed.status).toBe(200);
-    expect(await removed.json()).toEqual({ epoch: 2, blob: null, devices: ["desk"] });
+    expect(await removed.json()).toEqual({
+      epoch: 2,
+      blob: null,
+      devices: ["desk"],
+      removalStep: 2,
+    });
   });
 
   it("answers a claimed-but-never-rotated group its own epoch and an empty manifest", async () => {
@@ -685,7 +873,7 @@ describe("GET /keys", () => {
     const response = await worker.fetch(keysRequest("g1", hex64(3), "desk"), env);
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ epoch: 3, blob: null, devices: [] });
+    expect(await response.json()).toEqual({ epoch: 3, blob: null, devices: [], removalStep: 2 });
   });
 
   it("accepts an auth seven rotations behind and refuses one eight behind", async () => {
@@ -698,8 +886,9 @@ describe("GET /keys", () => {
       expect(written).toBe(true);
     }
 
-    // `EPOCH_HISTORY` is eight rows kept and the prune runs on every write, so at epoch 9
-    // everything at `epoch <= 1` has gone and 2 through 9 remain. Epoch 2's auth is therefore
+    // `EPOCH_HISTORY` is eight epochs kept — eight rows here, where every step is a join's one —
+    // and the prune runs on every write, so at epoch 9 everything at `epoch <= 1` has gone and 2
+    // through 9 remain. Epoch 2's auth is therefore
     // the oldest one that still opens this route and epoch 1's is the first that does not.
     // **Both boundaries are asserted and that is what lets this fail**: a window one epoch wider
     // keeps epoch 1's row, and only the refusal below would notice.
@@ -707,7 +896,12 @@ describe("GET /keys", () => {
     expect(accepted.status).toBe(200);
     // And it is answered the **newest** key rather than the epoch it presented, which is the
     // whole point of a device that is behind asking.
-    expect(await accepted.json()).toEqual({ epoch: 9, blob: "blob-9", devices: ["desk"] });
+    expect(await accepted.json()).toEqual({
+      epoch: 9,
+      blob: "blob-9",
+      devices: ["desk"],
+      removalStep: 2,
+    });
 
     expect((await worker.fetch(keysRequest("g1", hex64(1), "desk"), env)).status).toBe(401);
     expect((await worker.fetch(keysRequest("g1", hex64(0), "desk"), env)).status).toBe(401);
@@ -744,7 +938,12 @@ describe("GET /keys", () => {
     const response = await worker.fetch(keysRequest("g1", hex64(1), "constructor"), env);
 
     expect(response.status).toBe(200);
-    expect(await response.json()).toEqual({ epoch: 1, blob: null, devices: ["desk"] });
+    expect(await response.json()).toEqual({
+      epoch: 1,
+      blob: null,
+      devices: ["desk"],
+      removalStep: 2,
+    });
   });
 
   it("refuses a group it holds no rows for rather than saying whether one exists", async () => {
@@ -774,6 +973,171 @@ describe("GET /keys", () => {
     await expect(worker.fetch(keysRequest("g1", hex64(1), "desk"), env)).rejects.toThrow(
       /manifest/,
     );
+  });
+
+  it("spans as few as four removals, because a removal spends two of its epochs", async () => {
+    // ⚠️ **The cost of the join/removal marker, pinned where a device pays it.** The prune is
+    // `epoch <= newest - 8`, so eight epochs are eight joins but four removals: a device dark
+    // across three removals still reaches its catch-up key or its removal notice, and one dark
+    // across four is refused with the auth it holds. Both sides of the edge are asked: a prune
+    // that counted rows rather than epochs, or a window one epoch wider, keeps epoch 0's row at
+    // epoch 8 and only the refusal notices; one two epochs narrower loses it at 6.
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+    for (const epoch of [2, 4, 6]) {
+      expect(await recordRotation(env, "g1", epoch, hex64(epoch), { desk: `blob-${epoch}` })).toBe(
+        true,
+      );
+    }
+    const threeBehind = await worker.fetch(keysRequest("g1", hex64(0), "desk"), env);
+    expect(threeBehind.status).toBe(200);
+    expect(await threeBehind.json()).toEqual({
+      epoch: 6,
+      blob: "blob-6",
+      devices: ["desk"],
+      removalStep: 2,
+    });
+
+    expect(await recordRotation(env, "g1", 8, hex64(8), { desk: "blob-8" })).toBe(true);
+    expect((await worker.fetch(keysRequest("g1", hex64(0), "desk"), env)).status).toBe(401);
+    expect((await worker.fetch(keysRequest("g1", hex64(2), "desk"), env)).status).toBe(200);
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// GET /g/{group}/keys?epoch=
+// ---------------------------------------------------------------------------------------
+
+describe("GET /keys?epoch=", () => {
+  /**
+   * A group that went 0 → 1 → 2 by joins and then 2 → 4 by a removal: `phone` was added at 1 and
+   * removed at 4, so every question worth asking has an epoch to ask it at — one with a row that
+   * names the device, one with a row that does not, one a removal stepped over, and one ahead.
+   */
+  async function history(): Promise<Env & { reached: Reached[] }> {
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+    await recordRotation(env, "g1", 1, hex64(1), { desk: "blob-desk-1", phone: "blob-phone-1" });
+    await recordRotation(env, "g1", 2, hex64(2), { desk: "blob-desk-2", phone: "blob-phone-2" });
+    await recordRotation(env, "g1", 4, hex64(4), { desk: "blob-desk-4" });
+    return env;
+  }
+
+  it("answers the manifest stored at exactly the epoch it is asked for", async () => {
+    // **The device that skipped an epoch**, which is the whole reason for the parameter: `desk`
+    // stood on 1 and hears of 4 — and 2's key is the one it never held. Asked for 2 it is
+    // answered 2, not the newest; the auth it presents is 1's, as a device that is behind holds.
+    const env = await history();
+
+    const skipped = await worker.fetch(keysRequest("g1", hex64(1), "desk", 2), env);
+    expect(skipped.status).toBe(200);
+    expect(await skipped.json()).toEqual({
+      epoch: 2,
+      blob: "blob-desk-2",
+      devices: ["desk", "phone"],
+      removalStep: 2,
+    });
+
+    // The claim row is a row like any other: epoch 0, and the empty manifest it was seeded with.
+    const claimed = await worker.fetch(keysRequest("g1", hex64(4), "desk", 0), env);
+    expect(await claimed.json()).toEqual({ epoch: 0, blob: null, devices: [], removalStep: 2 });
+    expect(env.reached).toEqual([]);
+  });
+
+  it("answers null for a device the manifest at that epoch does not name", async () => {
+    // The blob rule is the newest manifest's, epoch by epoch: `phone` held a key at 2 and holds
+    // none at 4, and `constructor` — a device id the character class allows and every object
+    // inherits — is answered `blob: null` rather than a body with no `blob` in it at all.
+    const env = await history();
+
+    const before = await worker.fetch(keysRequest("g1", hex64(2), "phone", 2), env);
+    expect(await before.json()).toMatchObject({ blob: "blob-phone-2" });
+
+    const after = await worker.fetch(keysRequest("g1", hex64(2), "phone", 4), env);
+    expect(await after.json()).toEqual({
+      epoch: 4,
+      blob: null,
+      devices: ["desk"],
+      removalStep: 2,
+    });
+
+    const inherited = await worker.fetch(keysRequest("g1", hex64(2), "constructor", 1), env);
+    expect(await inherited.json()).toEqual({
+      epoch: 1,
+      blob: null,
+      devices: ["desk", "phone"],
+      removalStep: 2,
+    });
+  });
+
+  it("answers no_such_epoch for an epoch the group holds no row at", async () => {
+    // **Three reasons, one answer.** 3 is the epoch the removal stepped over, which is the case a
+    // device most often asks about and the one that tells it there is nothing to open; 9 has not
+    // happened; and the answer is matched on `code`, so the code is what is pinned.
+    const env = await history();
+
+    for (const epoch of [3, 9]) {
+      const missing = await worker.fetch(keysRequest("g1", hex64(4), "desk", epoch), env);
+      expect(missing.status).toBe(404);
+      expect(await missing.json()).toMatchObject({ code: "no_such_epoch" });
+    }
+
+    // And one the prune has taken: eight epochs past 1 leaves nothing at 1, and the auth
+    // presented is the newest so that what refuses is the missing row rather than the window.
+    for (const epoch of [5, 7, 9]) {
+      await recordRotation(env, "g1", epoch, hex64(epoch), { desk: `blob-desk-${epoch}` });
+    }
+    const pruned = await worker.fetch(keysRequest("g1", hex64(9), "desk", 1), env);
+    expect(pruned.status).toBe(404);
+    expect(await pruned.json()).toMatchObject({ code: "no_such_epoch" });
+  });
+
+  it("refuses text that is not an epoch rather than reading one out of it", async () => {
+    // Every one of these is something `Number` would turn into an epoch — `""` into 0, `1e0` into
+    // 1, a digit run past 2^53 into its neighbour — or a sign and a fraction the relay never
+    // stores. Most of them land on a row this group holds, so a looser parse would answer 200.
+    const env = await history();
+
+    for (const epoch of ["", "-1", "1.0", "1e0", "0x1", "+1", " 1", "one", "9007199254740993"]) {
+      const request = keysRequest("g1", hex64(4), "desk", encodeURIComponent(epoch));
+      const response = await worker.fetch(request, env);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "that is not an epoch" });
+    }
+  });
+
+  it("asks for the same recent auth the newest manifest does", async () => {
+    // An old epoch's manifest is served on the same question as the newest one, not a weaker one:
+    // a credential the group never held is refused, one aged out of the window is refused, and
+    // a group with no rows is a 401 rather than a 404 either kind — so this is still not a
+    // directory of which group ids exist.
+    const env = await history();
+    for (const epoch of [5, 7, 9]) {
+      await recordRotation(env, "g1", epoch, hex64(epoch), { desk: `blob-desk-${epoch}` });
+    }
+    expect(await authIsRecent(env, "g1", hex64(1))).toBe(false);
+
+    const status = async (request: Request): Promise<number> =>
+      (await worker.fetch(request, env)).status;
+    expect(await status(keysRequest("g1", hex64(0xdead), "desk", 2))).toBe(401);
+    expect(await status(keysRequest("g1", hex64(1), "desk", 2))).toBe(401);
+    expect(await status(keysRequest("nope", hex64(9), "desk", 2))).toBe(401);
+    expect(await status(keysRequest("g1", hex64(2), "desk", 2))).toBe(200);
+  });
+
+  it("throws on an unreadable manifest at an old epoch, as at the newest", async () => {
+    // `{}` at epoch 1 would be `blob: null` to every device that asked, and a device with no key
+    // for an epoch steps over what was sealed under it for good. A 500 is a call made again.
+    const env = await history();
+    await env.DB.prepare(`UPDATE group_keys SET keys = ? WHERE group_id = ? AND epoch = ?`)
+      .bind("{not json", "g1", 1)
+      .run();
+
+    await expect(worker.fetch(keysRequest("g1", hex64(4), "desk", 1), env)).rejects.toThrow(
+      /manifest/,
+    );
+    // The newest manifest was not the corrupt one and still answers.
+    expect((await worker.fetch(keysRequest("g1", hex64(4), "desk"), env)).status).toBe(200);
   });
 });
 

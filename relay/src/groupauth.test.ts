@@ -9,6 +9,7 @@ import {
   forgetGroup,
   keepOnly,
   liveDeviceCount,
+  manifestAt,
   recordRotation,
   seedGroup,
 } from "./groupauth";
@@ -47,29 +48,68 @@ describe("recordRotation", () => {
     expect(await authIsRecent(env, "g1", "auth-1b")).toBe(false);
   });
 
-  it("refuses a rotation that skips past the next epoch", async () => {
+  it("accepts a join's step of one and a removal's step of two", async () => {
+    // **The join/removal marker is the step the rotator chose**, bound into every blob it sealed;
+    // the relay's part is to take both. From a second starting epoch as well as the claim's, so
+    // the bound is measured from where the group stands rather than from where it began.
     const env = fakeEnv("g1");
     await seedGroup(env, "g1", 0, "auth-0");
 
-    // Strictly higher is not the rule; one higher is. A group moved to `1e9` stands on an epoch
-    // no device will ever plan from, and its manifest — whatever the caller chose — is the one
-    // every device then reads its membership off.
-    expect(await recordRotation(env, "g1", 2, "auth-2", {})).toBe(false);
+    expect(await recordRotation(env, "g1", 2, "auth-2", { d1: "blob-2" })).toBe(true);
+    expect(await recordRotation(env, "g1", 3, "auth-3", { d1: "blob-3" })).toBe(true);
+    expect(await recordRotation(env, "g1", 5, "auth-5", { d1: "blob-5" })).toBe(true);
+
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 5, keys: { d1: "blob-5" } });
+    expect(await authIsCurrent(env, "g1", "auth-5")).toBe(true);
+  });
+
+  it("refuses a rotation that steps past a removal's two", async () => {
+    const env = fakeEnv("g1");
+    await seedGroup(env, "g1", 0, "auth-0");
+
+    // Strictly higher is not the rule; one or two higher is. A group moved to `1e9` stands on an
+    // epoch no device will ever plan from, and its manifest — whatever the caller chose — is the
+    // one every device then reads its membership off. **`3` is the literal that pins the upper
+    // bound**: with `+ 3` in the `WHERE` it would be written, and nothing else here would notice.
+    expect(await recordRotation(env, "g1", 3, "auth-3", {})).toBe(false);
     expect(await recordRotation(env, "g1", 1_000_000_000, "auth-far", {})).toBe(false);
 
     expect(await currentManifest(env, "g1")).toEqual({ epoch: 0, keys: {} });
     expect(await authIsCurrent(env, "g1", "auth-0")).toBe(true);
+    expect(await authIsRecent(env, "g1", "auth-3")).toBe(false);
     expect(await authIsRecent(env, "g1", "auth-far")).toBe(false);
     expect(await recordRotation(env, "g1", 1, "auth-1", { d1: "blob" })).toBe(true);
   });
 
-  it("takes a group with no key rows at all to epoch 0 and nothing else", async () => {
-    // `coalesce(…, -1) + 1` is what makes a first rotation possible on a group with no rows, and
-    // it has to stay exactly that: `/rotate` authenticates first, so no caller reaches here on
-    // an unknown group, but the rule should not depend on the caller to be the rule.
+  it("refuses an epoch behind the group even once the prune has taken its row", async () => {
+    // ⚠️ **The lower bound is a clause of its own now, and this is what it alone refuses.** The
+    // guard used to be one equality — `= newest + 1` — so "behind" and "too far" were the same
+    // clause; split into `>` and `<=`, dropping the `>` would still refuse an epoch whose row
+    // exists, but only because the primary key throws. An epoch whose row has been pruned
+    // conflicts with nothing, and it is precisely the epoch a device removed long ago still holds
+    // the auth for: written, it would re-point the group's current auth at the removed device's
+    // own, and that device would be back in.
+    const env = fakeEnv("g1");
+    await seedGroup(env, "g1", 0, "auth-0");
+    for (let e = 1; e <= 9; e += 1) {
+      expect(await recordRotation(env, "g1", e, `auth-${e}`, {})).toBe(true);
+    }
+
+    expect(await recordRotation(env, "g1", 1, "auth-1-again", { ghost: "blob" })).toBe(false);
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 9, keys: {} });
+    expect(await authIsCurrent(env, "g1", "auth-9")).toBe(true);
+    expect(await authIsRecent(env, "g1", "auth-1-again")).toBe(false);
+  });
+
+  it("takes a group with no key rows at all from epoch -1", async () => {
+    // `coalesce(…, -1)` is what makes a first rotation possible on a group with no rows, and it
+    // has to stay exactly that: `/rotate` authenticates first, so no caller reaches here on an
+    // unknown group, but the rule should not depend on the caller to be the rule. Epoch 0 is the
+    // one a first rotation takes, and 2 — a removal's step past 0 — is past what a group standing
+    // on nothing can reach. (1 is within a step of -1 and is accepted; nothing can ask for it.)
     const env = fakeEnv("g1");
 
-    expect(await recordRotation(env, "g1", 1, "auth-1", {})).toBe(false);
+    expect(await recordRotation(env, "g1", 2, "auth-2", {})).toBe(false);
     expect(await recordRotation(env, "g1", 0, "auth-0", {})).toBe(true);
   });
 
@@ -133,6 +173,12 @@ describe("one group's auth never opens another", () => {
     // And g2 is exactly where it was: still at its claim epoch, still holding nothing.
     expect(await currentManifest(env, "g2")).toEqual({ epoch: 0, keys: {} });
     expect(await currentManifest(env, "g1")).toEqual({ epoch: 1, keys: { d1: "blob" } });
+
+    // An epoch named on its own is no looser: g2 has no row at 1, and g1's there is not its —
+    // a `manifestAt` that lost its `group_id` would hand g2's devices g1's roster.
+    expect(await manifestAt(env, "g2", 1)).toBeNull();
+    expect(await manifestAt(env, "g1", 1)).toEqual({ epoch: 1, keys: { d1: "blob" } });
+    expect(await manifestAt(env, "g2", 0)).toEqual({ epoch: 0, keys: {} });
   });
 });
 
