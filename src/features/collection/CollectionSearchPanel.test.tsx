@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
+import { BUTTON_OVER_ART } from "@/components/QuantityStepper";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
 import { readSearchCardDrag } from "@/features/search/searchCardDrag";
@@ -188,6 +189,16 @@ describe("CollectionSearchPanel", () => {
     expect(
       await screen.findByRole("button", { name: "Add Black Lotus (LEA 232) to Collection" }),
     ).toBeInTheDocument();
+  });
+
+  /** Issue #645, one column over: the `+` stands over the tile's art, so it is backed the way the
+   *  deck's card steppers are. jsdom draws nothing; the classes are pinned. */
+  it("backs its `+` the way the deck's card steppers are backed", async () => {
+    panel(null);
+
+    expect(await screen.findByRole("button", { name: /^Add Black Lotus/ })).toHaveClass(
+      ...BUTTON_OVER_ART.split(" "),
+    );
   });
 
   /**

@@ -207,6 +207,8 @@ function OpenPanel({
     <AddToCollectionButton
       align="start"
       className={cn(REVEAL_ON_HOVER, "static")}
+      // Over the art, so backed — see `AddToCollectionButton`'s `tone`.
+      tone="art"
       lockMode="collection"
       folderId={folderId}
       folderNodes={folderNodes}
