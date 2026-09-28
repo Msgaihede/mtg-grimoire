@@ -15,12 +15,13 @@
  * The *picking* and the *reading* stay two steps because the two failures are two different
  * sentences the reader can act on — a picker that would not open, and a file that would not
  * read. Collapsing them would put "that file is too big" behind "could not open the file
- * picker". The 1 MB cap is `import.rs`'s, and so is the decode: `String::from_utf8_lossy`
- * answers `U+FFFD` for a byte it cannot read, so a Windows-1252 apostrophe costs one card line
- * rather than the other hundred.
+ * picker". The 1 MB cap is `import.rs`'s, and so is the decode (issue #555): a byte-order mark
+ * is honoured, valid UTF-8 is UTF-8, and anything else is read as Windows-1252 rather than
+ * lossily — so an `é` in Excel's Western European "CSV" is an `é` and not `U+FFFD`. The read
+ * answers **which** of those it took, because the last one is a guess only the reader can check.
  */
 import { open as pickNative, save as saveNative } from "@tauri-apps/plugin-dialog";
-import { ipc } from "@/lib/ipc";
+import { ipc, type ImportFile } from "@/lib/ipc";
 
 /**
  * The extensions the picker offers.
@@ -44,8 +45,14 @@ export async function pickDecklist(): Promise<string | null> {
   });
 }
 
-/** The text behind a path {@link pickDecklist} answered. */
-export function readDecklist(path: string): Promise<string> {
+/**
+ * The text behind a path {@link pickDecklist} answered, and the encoding it was read in.
+ *
+ * The encoding rides along rather than being dropped here because `windows-1252` is the one
+ * reading `import.rs` *chose* rather than was told — a file in some other legacy code page reads
+ * as the wrong letters under it — and the dialog says so beside the text it put in the box.
+ */
+export function readDecklist(path: string): Promise<ImportFile> {
   return ipc.importReadFile(path);
 }
 

@@ -25,7 +25,15 @@ describe("useImportCommit", () => {
       () =>
         useImportCommit(
           [["collection"], ["wishlist"], ["cards", "search"], ["decks"]],
-          () => Promise.resolve({ added: 1, updated: 0, removed: 0 }),
+          () =>
+            Promise.resolve({
+              added: 1,
+              updated: 0,
+              removed: 0,
+              copies: 1,
+              leftInFolders: 0,
+              undoId: null,
+            }),
         ),
       { wrapper: wrap(client) },
     );

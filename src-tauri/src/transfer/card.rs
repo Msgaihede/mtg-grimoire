@@ -183,6 +183,34 @@ mod tests {
             deck.cards.iter().any(|c| c.name.contains("//")),
             "the corpus must keep a split card name"
         );
+
+        // Issue #555's two rules are held by the goldens only while the corpus varies what they
+        // rewrite — a golden pins only what the fixture varies — so the two edges are asserted
+        // here as well as rendered there.
+        let cards = || scenarios.values().flat_map(|s| s.cards.iter());
+        assert!(
+            cards().any(|c| c
+                .category_name
+                .as_deref()
+                .is_some_and(|n| n.contains([',', '{', '}', '[', ']']))),
+            "the corpus must keep a pile name the Archidekt sanitiser rewrites"
+        );
+        let cells = || {
+            cards().flat_map(|c| {
+                [&c.notes, &c.tags, &c.acquisition_source]
+                    .into_iter()
+                    .flatten()
+                    .map(String::as_str)
+            })
+        };
+        assert!(
+            cells().any(|v| v.starts_with(['=', '+', '-', '@'])),
+            "the corpus must keep a free-text cell the CSV formula escape rewrites"
+        );
+        assert!(
+            cells().any(|v| v.starts_with("'=")),
+            "the corpus must keep a cell that already starts with an apostrophe and a trigger"
+        );
     }
 
     #[test]

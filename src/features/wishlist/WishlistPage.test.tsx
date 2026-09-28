@@ -76,6 +76,8 @@ const setShelfFolds = vi.hoisted(() => vi.fn());
 // The deck list — read only where a deck keeps a managed folder here, for the Compare view each
 // folder follows (an empty one says that view's sentence).
 const deckList = vi.hoisted(() => vi.fn());
+/** The undo notice's one write (issue #555) — pressed only by the case that is about it. */
+const bulkUndo = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -110,6 +112,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     shelfFolds,
     setShelfFolds,
     deckList,
+    bulkUndo,
   },
 }));
 
@@ -122,6 +125,7 @@ import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
 import { SHELF_FOLDS_KEY } from "@/features/shelves/useShelfFolds";
 import { EMPTY_SHELF_COPY } from "@/features/shelves/EmptyShelf";
 import { FOLD_PAUSED_REASON } from "@/features/shelves/ShelfToolbar";
+import { offerUndo, resetBulkUndo } from "@/lib/bulkUndo";
 import { useAppStore } from "@/lib/store";
 
 /** The one printing `import_resolve` answers with for the import test below —
@@ -679,6 +683,9 @@ beforeEach(() => {
   shelfFolds.mockReset().mockResolvedValue({ collection: {}, wishlist: {} });
   setShelfFolds.mockReset().mockResolvedValue(undefined);
   deckList.mockReset().mockResolvedValue([]);
+  bulkUndo.mockReset().mockResolvedValue({ scope: "wishlist", restored: 1 });
+  // The ticket store is module state: an offer one case made would be drawn over the next.
+  resetBulkUndo();
   searchCards.mockReset().mockResolvedValue({ items: [SEARCH_BOLT], total: 1, totalIsCapped: false });
   // Answered **cold** — `ready: false`, every map empty — so nothing in the panel's filter row
   // greys and every control keeps its name. `DeckSearchPanel.test.tsx`'s fixture.
@@ -1514,6 +1521,62 @@ describe("WishlistPage", () => {
     );
     await user.click(await screen.findByRole("button", { name: /Show decklist/ }));
     expect(await screen.findByText(/150 lines/)).toBeInTheDocument();
+  });
+
+  /**
+   * **The sweep's refusal reaches the dialog, with a way to ask again** (issue #555) — this page
+   * hands `useExportScope`'s `error` and `retry` to `ExportDialog`'s `scope`, as the collection's
+   * does. Without it a refused sweep read as a wishlist with nothing on it.
+   */
+  it("says a refused export sweep in the dialog and sweeps again on Retry", async () => {
+    // Refused only once the page has drawn: the shelf counts read this same mock at `limit: 500`.
+    let refuse = false;
+    wishlistList.mockImplementation(async (query: WishlistQuery) => {
+      if (query.limit === 500 && refuse) throw "The database is busy.";
+      return page([BOLT]);
+    });
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    refuse = true;
+    await user.click(await screen.findByRole("button", { name: "Export wishlist" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Could not read the cards to export — The database is busy.",
+    );
+
+    refuse = false;
+    const sweeps = () =>
+      wishlistList.mock.calls.filter(([q]) => (q as WishlistQuery).limit === 500).length;
+    const before = sweeps();
+    await user.click(within(dialog).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(sweeps()).toBeGreaterThan(before));
+    await waitFor(() => expect(within(dialog).queryByRole("alert")).toBeNull());
+  });
+
+  /**
+   * **The undo notice is this page's, for the wishlist's own tickets** (issue #555) — an import's,
+   * which the import preview publishes. A press takes it back and re-reads the wishlist; the
+   * collection's roots are not this write's to refetch.
+   */
+  it("offers the last wishlist import back, and re-reads the wishlist when it is taken", async () => {
+    const user = userEvent.setup();
+    const { client } = wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+    const notice = screen.getByRole("status", { name: "Undo" });
+    expect(notice).toBeEmptyDOMElement();
+
+    act(() => offerUndo("wishlist", 61, "Imported 40 cards."));
+    expect(notice).toHaveTextContent("Imported 40 cards.");
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await user.click(within(notice).getByRole("button", { name: "Undo" }));
+
+    await waitFor(() => expect(bulkUndo).toHaveBeenCalledWith(61));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] }));
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
+    await waitFor(() => expect(notice).toBeEmptyDOMElement());
   });
 
   /**

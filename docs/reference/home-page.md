@@ -476,6 +476,10 @@ and a grep that cannot see a conflict clause is a census that silently under-rep
 | `collection.rs` · `delete_entry` | 1 | a consequence | `remove_entry` without the feed row; the import's zero arm reaches it so a file does not write a line per zeroed row |
 | `collection.rs` · `set_entry_printing` | 1 | records | `edit` with `fields: ["printing"]` on both paths, the wishlist's word; the fold it can end in is `fold_entry`'s two. Added 2026-09-27 (issue #564), after the count above was taken |
 | `collection.rs` · `fold_entry` | 2 | a consequence | the grain collapsing two rows into one; all four callers record their own event |
+| `collection.rs` · `import_extras` | 1 | a consequence | the tags and tradelist an import line carries, written onto the row the upsert landed on; the file records one row. Added 2026-09-28 (issue #555) |
+| `collection.rs` · `remove_entries` | — | records | `collection_remove_many`, through `delete_entry` (the quiet door): **one** `remove` for the press — `{ entries }` with no card for several, today's per-card line for one. Added 2026-09-28 (issue #555) |
+| `collection_folders.rs` · `set_entries_folder` | — | records | `collection_set_folder_many`, through `file_by_hand` (the shared move `set_entry_folder` uses): **one** `move` — `{ entries, to }` with no card for several, today's `{ from, to }` for one. Added 2026-09-28 (issue #555) |
+| `bulk_undo.rs` · `apply` | 3 | records | `bulk_undo`: one row of the ticket's original kind and payload plus `"undo": true`, delta reversed, on `collection_entries` **or** `wishlist_entries`. Added 2026-09-28 (issue #555) |
 | `collection_folders.rs` · `create_folder` / `rename_folder` / `delete_folder` | 3 | records | one `collection/folder` line each, through `record_folder` |
 | `collection_folders.rs` · `set_folder_locked` | 1 | a consequence | a lock changes what the app offers from a drawer, not what drawers exist or what is in them |
 | `collection_folders.rs` · `move_folder` | 1 | a consequence | re-parenting a drawer changes no card and no folder's existence |
@@ -505,7 +509,12 @@ The payload shapes are the contract between each recording site and `activityTex
 in Rust is a party to them: `add` carries `{ folder, finish }`, `quantity` carries `{ from, to }`,
 `move` carries `{ from, to }`, `edit` carries `{ fields }`, `folder` carries
 `{ action, name, from }`, `import` carries `{ cards, rows }` and `clear` carries `{ cards }`.
-`delta` is signed copies and is `0` wherever the change is not about copies.
+`delta` is signed copies and is `0` wherever the change is not about copies. **Since issue #555 two
+bulk shapes ride the existing kinds rather than new ones** (the kind CHECK cannot be altered): a
+`remove` of several entries is `{ entries }` with no card, a `move` of several is `{ entries, to }`
+with no card, and an undo is the undone row's own kind and payload plus `"undo": true`.
+`activityText.ts` reads a row as bulk only when it names no card and `entries > 0`, so every older
+row reads as it always did.
 
 ### It is not synced, and that is an asymmetry rather than an oversight
 

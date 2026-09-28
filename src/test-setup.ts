@@ -2,6 +2,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup } from "@testing-library/react";
 import { frame, frameData, MotionGlobalConfig } from "motion/react";
 import { afterAll, afterEach } from "vitest";
+import { resetBulkUndo } from "@/lib/bulkUndo";
 
 /**
  * Every `motion` animation lands on its final value in one frame, for the whole suite.
@@ -78,6 +79,11 @@ frame.render = inline(frame.render);
 // `globals: true`, which this project does not. Without it every render stacks up in the
 // same `document.body` and the second test in a file sees two of everything.
 afterEach(cleanup);
+
+// `@/lib/bulkUndo` is module state a test's import or bulk remove writes (issue #555), and one
+// test's offer would otherwise be the next test's Undo button — `store-state-leaks-between-tests`
+// read forward. Tests that assert on offers still reset it themselves before they start.
+afterEach(resetBulkUndo);
 
 /**
  * **A file that scrolled a virtualised list waits out the scroll's trailing timer before its

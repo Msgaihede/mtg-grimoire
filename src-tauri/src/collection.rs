@@ -5,6 +5,9 @@
 //! which connection — these *write*, so they take `AppState.db` with a bound rather than
 //! `db_read`, and a lock they cannot get is an answer rather than a wait.
 
+// Every bulk write here answers an undo ticket, and `bulk_undo` is what captures and keeps it.
+use crate::bulk_undo::{json_list, Capture, Feed, Table};
+
 // The two sentences a folder an add cannot use gets, reached across rather than re-spelled —
 // `collection_folders`' own import of `FOLDER_GONE` makes the argument at length, and this is
 // the fifth write over a `folder_id` column to need it. `FOLDER_NOT_YOURS` and `USER_KIND` come
@@ -17,6 +20,7 @@ use crate::schema::{COLLECTION_GRAIN, FINISHES};
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The NA condition scale, in descending order, with the **not-set sentinel in front of it**.
@@ -80,7 +84,7 @@ pub const ZERO_ADD: &str = "Adding a card needs a quantity of at least one.";
 /// `collector_number` are deliberately *not* here — they are properties of the printing,
 /// read from `cards` at write time, and letting a caller supply them would let a caller
 /// disagree with the card it named.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct EntryInput {
     pub card_id: String,
@@ -158,7 +162,7 @@ pub struct EntryPatch {
 
 /// What a write did. `removed` is the difference between "you now have zero" and "that row
 /// is gone", which the list has to know to drop it.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct EntryChange {
     pub id: i64,
@@ -709,18 +713,46 @@ pub struct CollectionImportItem {
     /// `{"company":"PSA","grade":"9","cert":"12345678"}` as JSON text — see the type doc.
     #[serde(default)]
     pub grading: Option<String>,
+    /// The copies of this line on offer for trade — the export's `Tradelist quantity` read back
+    /// (issue #555). **`None` is the file saying nothing**, and leaves the row's own number
+    /// alone in both modes; `Some` **adds** in `add` mode — the copies came in with their offer,
+    /// so the offer is first clamped to the copies the line brings — and **replaces** in `set`
+    /// mode. Clamped to the row's quantity either way, every other write's rule: a tradelist
+    /// bigger than the pile it is drawn from is not a promise anyone can keep.
+    #[serde(default)]
+    pub tradelist_quantity: Option<i64>,
+    /// `collection_entries.tags` as the column holds it — a JSON array, `["cube"]` (issue #555).
+    /// Refused in words by [`valid_tags`] when it is not JSON at all. **`None` leaves the row's
+    /// tags alone**; `Some` is the new row's tags on an insert, is **unioned** into an existing
+    /// row's in `add` mode (the row's own order first, then what the file adds, no duplicates) and
+    /// **replaces** them in `set` mode. [`import_extras`] says why that is a follow-up statement
+    /// rather than a change to the shared upserts.
+    #[serde(default)]
+    pub tags: Option<String>,
 }
 
-/// What a bulk import did. **`removed` is both lists' since schema v24** — a `set` of 0 deletes
-/// a wish, and now deletes a collection row too ([`set_quantity`] is where that reversal is
-/// argued). It was the wishlist's alone and 0 here, and the one shape covering both commands is
-/// what made the change a count rather than a field.
-#[derive(Debug, Serialize)]
+/// What a bulk import did — or, from [`preview_import`], would do. **`removed` is both lists'
+/// since schema v24** — a `set` of 0 deletes a wish, and now deletes a collection row too
+/// ([`set_quantity`] is where that reversal is argued). It was the wishlist's alone and 0 here, and
+/// the one shape covering both commands is what made the change a count rather than a field.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportCommitOutcome {
     pub added: i64,
     pub updated: i64,
     pub removed: i64,
+    /// The net copies the write gained — negative when a `set` file lowers more than it raises.
+    /// The same number as the feed row's `delta`, which is what the preview's sentence and the
+    /// day header must agree on.
+    pub copies: i64,
+    /// **A collection `set` at the root only**, and `0` everywhere else: copies of a line's grain
+    /// filed in folders beyond what the file's number accounts for, left where they are (issue
+    /// #555) — see [`walk_import`].
+    pub left_in_folders: i64,
+    /// The ticket [`crate::bulk_undo::undo`] takes back, or `None` when nothing changed — and
+    /// always from the preview, the scanner's tray commit and an import into a deck's group (see
+    /// [`commit_import`] for the last).
+    pub undo_id: Option<u64>,
 }
 
 /// [`add_entry`] with one clause changed: the grain's quantity is **written**, not accumulated.
@@ -812,43 +844,452 @@ fn set_entry(
     })
 }
 
+/// Whether a pass over a file writes. [`walk_import`] is one function for the commit and the
+/// preview, and this is the whole of the difference between them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Pass {
+    Write,
+    Preview,
+}
+
+/// The eleven terms of [`COLLECTION_GRAIN`] for one import line, with the index's `coalesce`s
+/// applied — so two lines the unique index would call one grain are one key to the walk.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct ImportGrain {
+    card_id: String,
+    finish: String,
+    condition: String,
+    lang: String,
+    altered: bool,
+    signed: bool,
+    proxy: bool,
+    misprint: bool,
+    serial_number: String,
+    grading: String,
+    folder: i64,
+}
+
+/// The row a grain holds, as far as the walk knows. `id` is `None` only for a row a preview has
+/// planned and never written.
+#[derive(Clone, Copy)]
+struct Landed {
+    id: Option<i64>,
+    quantity: i64,
+}
+
+/// The row at exactly this grain, or `None`.
+///
+/// **All eleven terms, spelled out** — `collection_folders::refile_entry`'s probe and its rule:
+/// every writer that probes for a collided collection row spells every term, because
+/// [`COLLECTION_GRAIN`] is a list of expressions over one row and this compares it against bound
+/// values. A probe short of the folder would plan a fold into a row in another drawer, and the
+/// upsert — which does honour all eleven — would then insert: a preview promising an update over a
+/// write that adds a row. `a_set_line_counts_only_copies_of_its_own_grain_as_filed_elsewhere` pins
+/// the ten-term twin below; the write's own debug check pins this one on every import test.
+fn row_at(conn: &Connection, g: &ImportGrain) -> Result<Option<Landed>, String> {
+    conn.query_row(
+        "SELECT id, quantity FROM collection_entries
+          WHERE card_id = ?1 AND finish = ?2 AND condition = ?3 AND lang = ?4
+            AND altered = ?5 AND signed = ?6 AND proxy = ?7 AND misprint = ?8
+            AND coalesce(serial_number, '') = ?9 AND coalesce(grading, '') = ?10
+            AND coalesce(folder_id, 0) = ?11",
+        params![
+            g.card_id,
+            g.finish,
+            g.condition,
+            g.lang,
+            g.altered,
+            g.signed,
+            g.proxy,
+            g.misprint,
+            g.serial_number,
+            g.grading,
+            g.folder
+        ],
+        |r| {
+            Ok(Landed {
+                id: Some(r.get(0)?),
+                quantity: r.get(1)?,
+            })
+        },
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// Copies of this line's grain **filed in any folder** — the first ten terms of
+/// [`COLLECTION_GRAIN`] and `folder_id IS NOT NULL` for the eleventh. Deck groups and
+/// `Recently removed` count: they are copies the reader has, and a file listing their whole
+/// collection lists those too.
+fn filed_elsewhere(conn: &Connection, g: &ImportGrain) -> Result<i64, String> {
+    conn.query_row(
+        "SELECT coalesce(sum(quantity), 0) FROM collection_entries
+          WHERE card_id = ?1 AND finish = ?2 AND condition = ?3 AND lang = ?4
+            AND altered = ?5 AND signed = ?6 AND proxy = ?7 AND misprint = ?8
+            AND coalesce(serial_number, '') = ?9 AND coalesce(grading, '') = ?10
+            AND folder_id IS NOT NULL",
+        params![
+            g.card_id,
+            g.finish,
+            g.condition,
+            g.lang,
+            g.altered,
+            g.signed,
+            g.proxy,
+            g.misprint,
+            g.serial_number,
+            g.grading
+        ],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// One import line as the shared writes take it.
+fn import_input(item: &CollectionImportItem, folder_id: Option<i64>) -> EntryInput {
+    EntryInput {
+        card_id: item.card_id.clone(),
+        finish: item.finish.clone(),
+        condition: item.condition.clone(),
+        condition_original: item.condition_original.clone(),
+        quantity: item.quantity,
+        // What the upserts do with it is exactly the import's rule on a *new* row — `min(offer,
+        // copies)` — and, in `add` mode, on an existing one too: `add_entry_filed`'s `DO UPDATE`
+        // adds the offers and clamps to the added copies. `set` onto an existing row is the one
+        // case the shared statement answers differently, and [`import_extras`] finishes it.
+        tradelist_quantity: item.tradelist_quantity.unwrap_or(0),
+        purchase_price: item.purchase_price,
+        purchase_currency: item.purchase_currency.clone(),
+        acquired_at: item.acquired_at.clone(),
+        acquisition_source: item.acquisition_source.clone(),
+        // The six grain columns, carried rather than defaulted. Hard-coded here until schema
+        // v24, which is why a re-import could not land on an altered or graded row — see
+        // [`CollectionImportItem`].
+        serial_number: item.serial_number.clone(),
+        altered: item.altered,
+        signed: item.signed,
+        proxy: item.proxy,
+        misprint: item.misprint,
+        grading: item.grading.clone(),
+        // A **new** row's tags, which both upserts' `INSERT` arms write as they stand. Onto an
+        // existing row neither `DO UPDATE` touches the column, deliberately, and
+        // [`import_extras`] is where the file's tags reach it.
+        tags: item.tags.clone(),
+        notes: item.notes.clone(),
+        // The whole file into one folder, and `None` — the root — is what every caller that
+        // names none still gets. **A file says nothing about a reader's filing**, which is why
+        // this is the *command's* argument rather than a column on [`CollectionImportItem`]: the
+        // import dialog's plain arm sends nothing and its rows land at the root exactly as they
+        // always have, and only the deck arm names a destination, because that press wrote the
+        // deck list in the same breath.
+        folder_id,
+    }
+}
+
+/// The two columns an import line carries that the shared upserts leave alone on an existing
+/// row, written onto the row the upsert landed on — `tradelist` as a new offer clamped to the
+/// row's copies, `tags` as the row's whole new list. `None` leaves a column as it is.
+///
+/// **A follow-up statement rather than a change to [`add_entry_filed`] or [`set_entry`]**,
+/// because those statements are not the import's alone: seventy-odd call sites add through the
+/// first, and their `DO UPDATE`s keep `tags` out **on purpose** — a quick-add's empty list folded
+/// into a row would wipe the set the reader curated there. Only an import line can say something
+/// about a row's tags, so only the import writes them, and only when the line carried some.
+fn import_extras(
+    conn: &Connection,
+    id: i64,
+    tradelist: Option<i64>,
+    tags: Option<&str>,
+) -> Result<(), String> {
+    if tradelist.is_none() && tags.is_none() {
+        return Ok(());
+    }
+    conn.execute(
+        "UPDATE collection_entries
+            SET tradelist_quantity =
+                    CASE WHEN ?2 IS NULL THEN tradelist_quantity ELSE min(?2, quantity) END,
+                tags = coalesce(?3, tags),
+                updated_at = unixepoch()
+          WHERE id = ?1",
+        params![id, tradelist, tags],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+/// The row's tags with the file's appended — the row's own order first, then what the file adds,
+/// nothing twice — or `None` when the file adds nothing the row does not already carry, so an
+/// unchanged row is not rewritten (and a sync op is not spent saying so).
+///
+/// Both sides are read as lists: [`valid_tags`] asks for JSON and no more, so a row can hold a
+/// bare `"cube"` or a `null`, and those read as the one tag and as none rather than failing the
+/// file.
+fn tag_union(row: &str, file: &str) -> Result<Option<String>, String> {
+    let list = |text: &str| -> Result<Vec<serde_json::Value>, String> {
+        Ok(
+            match serde_json::from_str::<serde_json::Value>(text).map_err(|e| e.to_string())? {
+                serde_json::Value::Array(tags) => tags,
+                serde_json::Value::Null => Vec::new(),
+                one => vec![one],
+            },
+        )
+    };
+    let mut merged = list(row)?;
+    let had = merged.len();
+    for tag in list(file)? {
+        if !merged.contains(&tag) {
+            merged.push(tag);
+        }
+    }
+    if merged.len() == had {
+        return Ok(None);
+    }
+    serde_json::to_string(&merged)
+        .map(Some)
+        .map_err(|e| e.to_string())
+}
+
+/// Write one line onto its grain, answering the id of the row it landed on. `target` is the
+/// quantity the walk decided the row ends at; `existed` is whether it held a row already.
+fn write_import_line(
+    conn: &Connection,
+    item: &CollectionImportItem,
+    input: &EntryInput,
+    set: bool,
+    target: i64,
+    existed: bool,
+) -> Result<i64, String> {
+    if set {
+        let change = set_entry(
+            conn,
+            &EntryInput {
+                quantity: target,
+                ..input.clone()
+            },
+            DECK_WRITE_FOLDERS,
+        )?;
+        debug_assert_eq!(change.quantity, target, "the walk and the upsert disagree");
+        // `set` replaces: the file's offer (clamped) and the file's tags, where it gave them.
+        // A new row already took both from the `INSERT`.
+        if existed {
+            import_extras(
+                conn,
+                change.id,
+                item.tradelist_quantity,
+                item.tags.as_deref(),
+            )?;
+        }
+        return Ok(change.id);
+    }
+    let change = add_entry_filed(conn, input, DECK_WRITE_FOLDERS)?;
+    debug_assert_eq!(change.quantity, target, "the walk and the upsert disagree");
+    // `add` unions: the row keeps every tag it had, and gains the file's.
+    if let (true, Some(file)) = (existed, item.tags.as_deref()) {
+        let row: String = conn
+            .query_row(
+                "SELECT tags FROM collection_entries WHERE id = ?1",
+                params![change.id],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if let Some(merged) = tag_union(&row, file)? {
+            import_extras(conn, change.id, None, Some(&merged))?;
+        }
+    }
+    Ok(change.id)
+}
+
+/// `add` or `set`, or a refusal — asked before anything is read, by the commit and the preview
+/// alike.
+fn valid_mode(mode: &str) -> Result<(), String> {
+    if mode == "add" || mode == "set" {
+        Ok(())
+    } else {
+        Err(format!(
+            "`{mode}` is not an import mode. Use `add` or `set`."
+        ))
+    }
+}
+
+/// Both halves of an import — [`commit_import`], which writes, and [`preview_import`], which
+/// does not — as **one pass**, so the numbers a preview promises are the numbers the press
+/// answers (issue #555).
+///
+/// **What agrees by construction is the decision, not a recount.** Every line is validated with
+/// its write's own refusals in its write's own order, placed on its grain, and classified here —
+/// *added* (no row held the grain), *updated* (one did), *removed* (a `set` took it to zero) or
+/// nothing at all — and [`Pass`] decides only whether the statements then run. The walk remembers
+/// each grain it has touched, so a second line on one grain meets the row the first one planned
+/// whether or not it was written. The commit also recounts the table in a debug build and
+/// asserts the two agree, which is what holds [`row_at`]'s spelling of the grain to the upsert's.
+///
+/// **Counts are per line now, and that retires two oddities the row-count arithmetic had.** A
+/// `set` of 0 for a grain holding no row used to *insert and delete* one — "1 added, 1 removed"
+/// over a line that changed nothing, with `updated` clamped at zero to stop it going negative. It
+/// writes nothing and counts nothing now; `added + updated + removed` can therefore be less than
+/// the line count, and the feed's `rows` is exactly the lines that reached a row.
+///
+/// # `set` at the root counts what is filed elsewhere
+///
+/// **A `set` with no folder reads the file's number as the total at that grain across every
+/// folder**, because that is what a file listing a collection means: an export writes copies
+/// wherever they are filed, and a re-import says nothing about filing (issue #555). Until this,
+/// the number was written into the root row while copies of the same grain sat in binders — so
+/// importing an export back doubled every filed copy. Now the copies filed elsewhere count toward
+/// it, and the **root row takes the difference**: `max(0, file − elsewhere)`. When the folders
+/// alone already hold more, the root goes to zero and the surplus is reported in
+/// [`ImportCommitOutcome::left_in_folders`] — **left where it is**, because moving or deleting a
+/// reader's filed copies is not something a file can ask for. The grain's other ten terms must all
+/// match; a foil in the binder is not a copy of a plain line.
+///
+/// **A `set` into a named folder is unchanged**: the file's number is that folder's row, which is
+/// the deck arm's meaning — it wrote the list and files exactly the copies behind it.
+fn walk_import(
+    conn: &Connection,
+    items: &[CollectionImportItem],
+    mode: &str,
+    folder_id: Option<i64>,
+    pass: Pass,
+) -> Result<ImportCommitOutcome, String> {
+    let set = mode == "set";
+    let mut slots: HashMap<ImportGrain, Option<Landed>> = HashMap::new();
+    // Per grain rather than summed per line: the planner folds every line of one grain into one
+    // item, and if a hand-made file repeats one the last line is the grain's `set`, so the last
+    // surplus is the one left.
+    let mut surplus: HashMap<ImportGrain, i64> = HashMap::new();
+    let mut out = ImportCommitOutcome {
+        added: 0,
+        updated: 0,
+        removed: 0,
+        copies: 0,
+        left_in_folders: 0,
+        undo_id: None,
+    };
+    for item in items {
+        let input = import_input(item, folder_id);
+        // The refusals of the write this line reaches, in its order — so a preview of a file the
+        // commit would refuse refuses in the commit's words. `folder_named` is the caller's, once.
+        let finish = valid_finish(&input.finish)?;
+        let condition = valid_condition(input.condition.as_deref())?;
+        if set {
+            valid_quantity(input.quantity, "collection quantity")?;
+        } else if input.quantity <= 0 {
+            return Err(ZERO_ADD.to_owned());
+        }
+        valid_quantity(input.tradelist_quantity, "tradelist quantity")?;
+        let grading = canonical_grading(input.grading.as_deref())?;
+        if let Some(tags) = input.tags.as_deref() {
+            valid_tags(tags)?;
+        }
+        let (_, _, lang) = printing_of(conn, &input.card_id)?;
+        let grain = ImportGrain {
+            card_id: input.card_id.clone(),
+            finish: finish.to_owned(),
+            condition: condition.to_owned(),
+            lang,
+            altered: input.altered,
+            signed: input.signed,
+            proxy: input.proxy,
+            misprint: input.misprint,
+            serial_number: input.serial_number.clone().unwrap_or_default(),
+            grading: grading.unwrap_or_default(),
+            folder: folder_id.unwrap_or(0),
+        };
+
+        let landed = match slots.get(&grain) {
+            Some(known) => *known,
+            None => row_at(conn, &grain)?,
+        };
+        let held = landed.map_or(0, |row| row.quantity);
+        let target = if !set {
+            held + input.quantity
+        } else if folder_id.is_some() {
+            input.quantity
+        } else {
+            let elsewhere = filed_elsewhere(conn, &grain)?;
+            surplus.insert(grain.clone(), (elsewhere - input.quantity).max(0));
+            (input.quantity - elsewhere).max(0)
+        };
+
+        let now = match (landed, target) {
+            // Only a `set` reaches zero, and with no row there is nothing to take away.
+            (None, 0) => None,
+            (Some(row), 0) => {
+                out.removed += 1;
+                if let (Pass::Write, Some(id)) = (pass, row.id) {
+                    // [`delete_entry`] and not [`remove_entry`]: the recording door would write
+                    // one feed line per zeroed line of the file, which is the bulk rule broken.
+                    delete_entry(conn, id)?;
+                }
+                None
+            }
+            (row, target) => {
+                if row.is_some() {
+                    out.updated += 1;
+                } else {
+                    out.added += 1;
+                }
+                let id = match pass {
+                    Pass::Preview => row.and_then(|r| r.id),
+                    Pass::Write => Some(write_import_line(
+                        conn,
+                        item,
+                        &input,
+                        set,
+                        target,
+                        row.is_some(),
+                    )?),
+                };
+                Some(Landed {
+                    id,
+                    quantity: target,
+                })
+            }
+        };
+        out.copies += now.map_or(0, |row| row.quantity) - held;
+        slots.insert(grain, now);
+    }
+    out.left_in_folders = surplus.values().sum();
+    Ok(out)
+}
+
+/// Whether `folder_id` names a deck's group — the one destination an import may file into that
+/// its undo may not take back out of (see [`commit_import`]).
+fn is_deck_group(conn: &Connection, folder_id: Option<i64>) -> Result<bool, String> {
+    let Some(folder) = folder_id else {
+        return Ok(false);
+    };
+    conn.query_row(
+        "SELECT coalesce((SELECT kind = ?2 FROM collection_folders WHERE id = ?1), 0)",
+        params![folder, DECK_KIND],
+        |r| r.get(0),
+    )
+    .map_err(|e| e.to_string())
+}
+
 /// **One transaction for the whole file**, which is the whole reason this exists rather than the
 /// page calling `collection_add` per line: a 500-row CSV would otherwise be 500 transactions, and
 /// a failure halfway through would leave a collection nobody can reason about.
 ///
-/// Added and updated are counted by the **row count before and after** rather than by a
-/// grain lookup per item. `COLLECTION_GRAIN` is eleven columns and a hand-written `WHERE`
-/// matching it would be a second copy of the index's definition — the thing this module already
-/// warns against at the `ON CONFLICT` target.
+/// [`walk_import`] decides and writes every line, and is where the counting, the `set` rule at the
+/// root and the tags and tradelist columns are argued. **A `set` of 0 removes the row**, which is
+/// [`set_quantity`]'s reversal reaching the importer: a file that says a printing is at zero is a
+/// file saying the reader does not own it.
 ///
-/// **A `set` of 0 removes the row**, which is [`set_quantity`]'s reversal reaching the importer:
-/// a file that says a printing is at zero is a file saying the reader does not own it. It is
-/// done *after* [`set_entry`] rather than inside it, so that command keeps one shape and the
-/// grain stays the upsert's to find — the row lands at zero and is then deleted by id, inside
-/// this transaction, which is the intermediate zero the column's `CHECK (quantity >= 0)` allows.
-///
-/// The arithmetic follows: `added` is the row-count delta **plus** what was removed, because a
-/// removal is a row that left for a reason that is not "it was never added". The one line this
-/// counts oddly is a `set 0` for a printing the reader does not own — the upsert inserts, the
-/// delete takes it away, and the outcome reads one added and one removed rather than nothing.
-/// Both numbers describe statements that really ran, and the cheaper answer would be a
-/// per-item `count(*)` over a table that can hold tens of thousands of rows.
-///
-/// **`updated` is therefore clamped at zero**, because that same line spends the item twice:
-/// `items.len() - added - removed` is `1 - 1 - 1` for a one-line file of that shape, and a
-/// negative count of rows updated is not a number any dialog can say. It is unreachable from the
-/// shipped importer — both parsers refuse a quantity below 1 (`src/features/transfer/import/
-/// parse.ts`) — so the clamp is a fence rather than a case, and the honest reading of a `0` here
-/// is "nothing was updated", which is exactly what happened. Clamped rather than restructured:
-/// `added` and `removed` each name statements that ran, and making `updated` the subtraction of
-/// two counts that can overlap is what costs the invariant, not the counters themselves.
+/// **It answers an undo ticket** ([`crate::bulk_undo`]), captured over every row of every card the
+/// file names — the only rows a line can fold into, insert or delete — and registered after the
+/// commit. **Except into a deck's group**: that import is one half of `useImport`'s deck arm,
+/// which wrote the deck list in the same press through a command this ticket knows nothing about,
+/// so taking the copies back out would leave the deck listing cards whose copies had walked off —
+/// `set_entry_folder`'s `ENTRY_IN_A_DECK` invariant broken by an undo. Half an undo is worse than
+/// none, which is `deck_to_collection`'s argument about `deck_undo` one boundary over.
 pub(crate) fn commit_import(
     conn: &Connection,
     items: &[CollectionImportItem],
     mode: &str,
     folder_id: Option<i64>,
 ) -> Result<ImportCommitOutcome, String> {
-    commit_import_with(conn, items, mode, folder_id, |_| Ok(()))
+    commit_import_in(conn, items, mode, folder_id, |_| Ok(()), true)
 }
 
 /// [`commit_import`], with one more write inside **its** transaction — run after the last item and
@@ -858,6 +1299,10 @@ pub(crate) fn commit_import(
 /// **One caller, `scanner::scanner_tray_commit`**, which stores what is left of the review tray
 /// here: written by a second command after this one committed, an app closed in between restored
 /// the rows this had already filed and the next commit filed them twice.
+///
+/// **It answers no undo ticket**, and that is the tray's doing: the lines the import filed have
+/// left the stored tray in the same transaction, so an undo that took the copies back would leave
+/// the scanned cards in neither place.
 pub(crate) fn commit_import_with(
     conn: &Connection,
     items: &[CollectionImportItem],
@@ -865,123 +1310,112 @@ pub(crate) fn commit_import_with(
     folder_id: Option<i64>,
     also: impl FnOnce(&Connection) -> Result<(), String>,
 ) -> Result<ImportCommitOutcome, String> {
+    commit_import_in(conn, items, mode, folder_id, also, false)
+}
+
+/// Both doors' body; `undoable` is [`commit_import`]'s `true` and the scanner's `false`.
+fn commit_import_in(
+    conn: &Connection,
+    items: &[CollectionImportItem],
+    mode: &str,
+    folder_id: Option<i64>,
+    also: impl FnOnce(&Connection) -> Result<(), String>,
+    undoable: bool,
+) -> Result<ImportCommitOutcome, String> {
     // Before the transaction opens, not inside it: a refusal that has already begun a write
     // is a rollback the reader pays for.
-    if mode != "add" && mode != "set" {
-        return Err(format!(
-            "`{mode}` is not an import mode. Use `add` or `set`."
-        ));
-    }
+    valid_mode(mode)?;
     // The folder, for the same reason and one line later. [`add_entry_filed`] and [`set_entry`]
     // each ask again per item — that is their own door and it stays theirs — but a stale folder
     // id asked about *here* is a sentence rather than a rollback, which is what the mode check
     // above is buying too.
     folder_named(conn, folder_id, DECK_WRITE_FOLDERS)?;
-    // Both totals in one statement: the row count the outcome is built from, and the copies the
-    // feed's `delta` is. The second is not derivable from the first — a `set` file can lower a
-    // quantity without deleting a row — and a day header that added an import's copies without
-    // subtracting what it wrote away would be arithmetic the reader can check and catch.
-    let (before, copies_before): (i64, i64) = conn
-        .query_row(
+    let undoable = undoable && !is_deck_group(conn, folder_id)?;
+    // The row and copy totals, read on both sides of the walk in a debug build only: the walk's
+    // own per-line counts are the outcome, and this is the check that they describe the table.
+    let totals = |c: &Connection| -> Result<(i64, i64), String> {
+        c.query_row(
             "SELECT count(*), coalesce(sum(quantity), 0) FROM collection_entries",
             [],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| e.to_string())
+    };
+    let before = if cfg!(debug_assertions) {
+        Some(totals(conn)?)
+    } else {
+        None
+    };
 
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let mut removed = 0i64;
-    for item in items {
-        let input = EntryInput {
-            card_id: item.card_id.clone(),
-            finish: item.finish.clone(),
-            condition: item.condition.clone(),
-            condition_original: item.condition_original.clone(),
-            quantity: item.quantity,
-            tradelist_quantity: 0,
-            purchase_price: item.purchase_price,
-            purchase_currency: item.purchase_currency.clone(),
-            acquired_at: item.acquired_at.clone(),
-            acquisition_source: item.acquisition_source.clone(),
-            // The six grain columns, carried rather than defaulted. Hard-coded here until
-            // schema v24, which is why a re-import could not land on an altered or graded
-            // row — see [`CollectionImportItem`].
-            serial_number: item.serial_number.clone(),
-            altered: item.altered,
-            signed: item.signed,
-            proxy: item.proxy,
-            misprint: item.misprint,
-            grading: item.grading.clone(),
-            // Still `None`, and it is not one of the six: `tags` is a set the reader curates on
-            // the row and is deliberately absent from both writes' `DO UPDATE`, so a file has
-            // nothing to say about it.
-            tags: None,
-            notes: item.notes.clone(),
-            // The whole file into one folder, and `None` — the root — is what every caller that
-            // names none still gets. **A file says nothing about a reader's filing**, which is
-            // why this is the *command's* argument rather than a column on
-            // [`CollectionImportItem`]: the import dialog's plain arm sends nothing and its rows
-            // land at the root exactly as they always have, and only the deck arm names a
-            // destination, because that press wrote the deck list in the same breath.
-            folder_id,
-        };
-        if mode == "add" {
-            add_entry_filed(&tx, &input, DECK_WRITE_FOLDERS)?;
-        } else {
-            let change = set_entry(&tx, &input, DECK_WRITE_FOLDERS)?;
-            if change.quantity == 0 {
-                // [`delete_entry`] and not [`remove_entry`]: the recording door would write one
-                // feed line per zeroed line of the file, which is the bulk rule broken by the
-                // one arm of this loop that reaches a public write.
-                delete_entry(&tx, change.id)?;
-                removed += 1;
-            }
-        }
+    let capture = if undoable {
+        let cards: Vec<&str> = items.iter().map(|i| i.card_id.as_str()).collect();
+        Some(Capture::begin(
+            &tx,
+            Table::Collection,
+            "card_id IN (SELECT value FROM json_each(?1))",
+            vec![json_list(&cards)],
+        )?)
+    } else {
+        None
+    };
+    let mut out = walk_import(&tx, items, mode, folder_id, Pass::Write)?;
+    if let Some((rows, copies)) = before {
+        let (rows_after, copies_after) = totals(&tx)?;
+        debug_assert_eq!(
+            (rows_after - rows, copies_after - copies),
+            (out.added - out.removed, out.copies),
+            "the import's per-line counts disagree with the table it wrote"
+        );
     }
-
-    // The counts are read **inside** the transaction rather than after the commit, and the
-    // values are identical — the same connection sees its own uncommitted writes. It is done
-    // here so the arithmetic below exists once: the feed's payload wants the same three numbers
-    // the outcome does, and computing them twice on either side of a `commit` is two answers to
-    // keep in step.
-    let (after, copies_after): (i64, i64) = tx
-        .query_row(
-            "SELECT count(*), coalesce(sum(quantity), 0) FROM collection_entries",
-            [],
-            |r| Ok((r.get(0)?, r.get(1)?)),
-        )
-        .map_err(|e| e.to_string())?;
-    let added = after - before + removed;
-    // `.max(0)` for the one line that is counted in two of the three — see this function's
-    // doc. Every other file shape makes this subtraction exact.
-    let updated = (items.len() as i64 - added - removed).max(0);
 
     // **One row for the whole file**, the feed's second rule: an import of 5 000 cards must not
     // be 5 000 lines. `cards` is what the *file* said — the copies it named, which is the number
     // the reader recognises — and `rows` is the collection lines it landed on, which is the unit
     // somebody who wants to go and find them counts. `delta` is neither: it is the net copies
     // the collection gained, which a `set` file can make negative.
-    crate::activity::record(
-        &tx,
-        crate::activity::COLLECTION,
-        crate::activity::IMPORT,
-        None,
-        None,
-        &serde_json::json!({
+    let feed = Feed {
+        kind: crate::activity::IMPORT,
+        card_id: None,
+        card_name: None,
+        payload: serde_json::json!({
             "cards": items.iter().map(|i| i.quantity).sum::<i64>(),
-            "rows": added + updated + removed,
+            "rows": out.added + out.updated + out.removed,
         }),
-        copies_after - copies_before,
-    )
-    .map_err(|e| e.to_string())?;
+        delta: out.copies,
+    };
+    feed.record(&tx, Table::Collection)?;
+    let changes = capture.map(|c| c.finish(&tx)).transpose()?;
     also(&tx)?;
     tx.commit().map_err(|e| e.to_string())?;
+    // After the commit and never before it — a ticket for a write that rolled back would put
+    // back rows that were never taken away.
+    out.undo_id = changes.and_then(|c| crate::bulk_undo::register(c, feed));
+    Ok(out)
+}
 
-    Ok(ImportCommitOutcome {
-        added,
-        updated,
-        removed,
-    })
+/// What [`commit_import`] would answer for the same arguments, **writing nothing** — the numbers
+/// the import dialog's sentence is built from, so a `set` file stops promising "N cards will be
+/// added" over a press that lowers some quantities and leaves others alone (issue #555).
+///
+/// **The same [`walk_import`] with [`Pass::Preview`]**, on the read connection: every refusal,
+/// every count and the `set` rule at the root are the commit's own code. A rolled-back write was
+/// the other way to get that agreement, and it was refused on measurement of what a rollback does
+/// *not* undo: the write connection's update hook marks the mirror and every other window's
+/// change mask per row, and `rollback_hook` clears only the cross-file fence — so a preview
+/// would have re-rendered the plain-text backup and refetched every open window's collection over
+/// a write that never happened, and queued behind the write lock besides.
+///
+/// `undo_id` is always `None`: nothing was done, so there is nothing to take back.
+pub fn preview_import(
+    conn: &Connection,
+    items: &[CollectionImportItem],
+    mode: &str,
+    folder_id: Option<i64>,
+) -> Result<ImportCommitOutcome, String> {
+    valid_mode(mode)?;
+    folder_named(conn, folder_id, DECK_WRITE_FOLDERS)?;
+    walk_import(conn, items, mode, folder_id, Pass::Preview)
 }
 
 /// Set an absolute quantity. **Zero removes the row**, and the row's whole story with it.
@@ -1648,9 +2082,10 @@ pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
 
 /// [`remove_entry`] with no feed row — the statement, and none of the history.
 ///
-/// **`pub(crate)` and one caller**: [`commit_import`]'s `set` mode deletes a row per line of the
-/// file that named zero copies, and a bulk press records **one** row carrying its count. Going
-/// through the public door there would put a line in the feed per line of a file.
+/// **`pub(crate)` and two callers, both bulk**: [`commit_import`]'s `set` mode deletes a row per
+/// line of the file that named zero copies, and [`remove_entries`] a row per id — and a bulk press
+/// records **one** row carrying its count. Going through the public door there would put a line
+/// in the feed per line of a file, or per card of a selection.
 pub(crate) fn delete_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
     conn.execute("DELETE FROM collection_entries WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
@@ -1658,6 +2093,94 @@ pub(crate) fn delete_entry(conn: &Connection, id: i64) -> Result<EntryChange, St
         id,
         quantity: 0,
         removed: true,
+    })
+}
+
+/// `ids` with every repeat after the first dropped, in the order they were sent — so a selection
+/// that names one row twice is one removal or one move rather than a second pass over a row the
+/// first already took away.
+pub(crate) fn distinct_ids(ids: &[i64]) -> Vec<i64> {
+    let mut seen = std::collections::HashSet::new();
+    ids.iter().copied().filter(|id| seen.insert(*id)).collect()
+}
+
+/// What `Remove from collection` over several entries did (issue #555).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkRemoveOutcome {
+    /// Entries deleted. An id that named nothing is skipped — [`remove_entry`]'s own rule.
+    pub removed: i64,
+    /// The copies those entries held.
+    pub copies: i64,
+    /// See [`ImportCommitOutcome::undo_id`]; `None` when no id named a row.
+    pub undo_id: Option<u64>,
+}
+
+/// Delete several entries in **one transaction with one feed row** (issue #555) — where the page
+/// used to call [`remove_entry`] once per selected row: N transactions, N feed lines, and a
+/// refusal part-way left the press half applied.
+///
+/// **[`remove_entry`]'s rules, per id**: unconditional, and an id that resolves to nothing is
+/// skipped as the success it is there. **Any error rolls the whole press back** — every delete
+/// and the feed row are one transaction.
+///
+/// **The feed row keeps [`remove_entry`]'s shape for a press that removed one entry** — the card,
+/// `{"folder": …}` and minus its copies — because a one-row selection is the same event as the
+/// row menu's Remove and must read as one. Several entries are one line about no one card:
+/// `{"entries": n}` and minus the copies between them, [`crate::activity`]'s bulk rule.
+///
+/// It answers an undo ticket captured over exactly the ids.
+pub fn remove_entries(conn: &Connection, ids: &[i64]) -> Result<BulkRemoveOutcome, String> {
+    let ids = distinct_ids(ids);
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let capture = Capture::begin(
+        &tx,
+        Table::Collection,
+        "id IN (SELECT value FROM json_each(?1))",
+        vec![json_list(&ids)],
+    )?;
+    let mut gone: Vec<EntryFacts> = Vec::new();
+    for &id in &ids {
+        // Read before the delete — it is what makes the facts unanswerable — and a `None` is the
+        // skip, not a refusal.
+        if let Some(facts) = entry_facts(&tx, id)? {
+            delete_entry(&tx, id)?;
+            gone.push(facts);
+        }
+    }
+    let copies: i64 = gone.iter().map(|f| f.quantity).sum();
+    let removed = gone.len() as i64;
+    let feed = match gone.as_slice() {
+        // Nothing was there: no change, no line, no ticket — and nothing written to roll back.
+        [] => {
+            return Ok(BulkRemoveOutcome {
+                removed: 0,
+                copies: 0,
+                undo_id: None,
+            })
+        }
+        [one] => Feed {
+            kind: crate::activity::REMOVE,
+            card_id: one.card_id.clone(),
+            card_name: one.card_name.clone(),
+            payload: serde_json::json!({ "folder": one.folder }),
+            delta: -one.quantity,
+        },
+        _ => Feed {
+            kind: crate::activity::REMOVE,
+            card_id: None,
+            card_name: None,
+            payload: serde_json::json!({ "entries": removed }),
+            delta: -copies,
+        },
+    };
+    feed.record(&tx, Table::Collection)?;
+    let changes = capture.finish(&tx)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(BulkRemoveOutcome {
+        removed,
+        copies,
+        undo_id: crate::bulk_undo::register(changes, feed),
     })
 }
 
@@ -1817,8 +2340,8 @@ pub async fn collection_remove(
     .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
-/// One transaction for a whole imported file — see [`commit_import`] for why added/updated are
-/// counted rather than looked up on the grain.
+/// One transaction for a whole imported file — see [`commit_import`], and [`walk_import`] for how
+/// each line is counted and what a `set` at the root does with copies filed elsewhere.
 ///
 /// **`folder_id` is absent for every import but one.** A file describes cards, not filing, so the
 /// collection's own import step sends nothing and its rows land at the root. The deck arm of the
@@ -1837,6 +2360,40 @@ pub async fn collection_import_commit(
         crate::collection_source::with_write_owned(&state, |c| {
             commit_import(c, &items, &mode, folder_id)
         })
+    })
+    .await
+    .map_err(|e| format!("the collection could not be written: {e}"))?
+}
+
+/// What [`collection_import_commit`] would answer for the same three arguments, without writing —
+/// see [`preview_import`]. **A read, on `db_read`**, like every read in the app: it takes no write
+/// lock, so it never answers `BUSY` behind a sync, and it cannot fire the write connection's
+/// update hook.
+#[tauri::command]
+pub async fn collection_import_preview(
+    state: tauri::State<'_, Arc<AppState>>,
+    items: Vec<CollectionImportItem>,
+    mode: String,
+    folder_id: Option<i64>,
+) -> Result<ImportCommitOutcome, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        preview_import(&crate::sync::lock_db_read(&state), &items, &mode, folder_id)
+    })
+    .await
+    .map_err(|e| format!("the collection could not be read: {e}"))?
+}
+
+/// `Remove from collection` over several entries — see [`remove_entries`]. `with_write_owned`,
+/// because deleting rows changes what the facet index's `owned` dimension counts.
+#[tauri::command]
+pub async fn collection_remove_many(
+    state: tauri::State<'_, Arc<AppState>>,
+    ids: Vec<i64>,
+) -> Result<BulkRemoveOutcome, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::collection_source::with_write_owned(&state, |c| remove_entries(c, &ids))
     })
     .await
     .map_err(|e| format!("the collection could not be written: {e}"))?
@@ -3270,6 +3827,8 @@ mod tests {
             proxy: false,
             misprint: false,
             grading: None,
+            tradelist_quantity: None,
+            tags: None,
         }
     }
 
@@ -7029,26 +7588,28 @@ mod tests {
         assert_eq!(entry_count(&conn), 0);
     }
 
-    /// **The same line for a printing the reader does *not* own spends its item twice**, and
-    /// `updated` is clamped rather than allowed to go negative.
+    /// **The same line for a printing the reader does *not* own writes nothing and counts
+    /// nothing.**
     ///
-    /// The upsert inserts the row and the delete takes it away again inside the one transaction,
-    /// so one item counts as both one `added` and one `removed` — statements that really ran —
-    /// and `items.len() - added - removed` is `-1`. Unreachable from the shipped importer, since
-    /// both parsers refuse a quantity below 1, which is precisely why the counter needs a test of
-    /// its own: nothing a reader can do produces the file that reaches it, so nothing else would
-    /// ever go red.
+    /// It used to insert the row and delete it again inside the one transaction, reading "1
+    /// added, 1 removed" over a line that changed nothing — with `updated` clamped at zero so the
+    /// row-count arithmetic could not go negative. [`walk_import`] counts per line now, and a `set`
+    /// of 0 onto a grain holding no row is a line with nothing to do. It became reachable the day
+    /// a `set` at the root started counting copies filed elsewhere: a file naming exactly what the
+    /// binders hold takes the root to zero, and "1 added, 1 removed" was the preview's sentence
+    /// for every such line.
     #[test]
-    fn a_set_of_zero_for_an_unowned_printing_never_answers_a_negative_updated() {
+    fn a_set_of_zero_for_an_unowned_printing_writes_nothing_and_counts_nothing() {
         let conn = seeded();
 
         let out = commit_import(&conn, &[item("card-1", 0, "nonfoil")], "set", None).unwrap();
 
         assert_eq!(
-            (out.added, out.updated, out.removed),
-            (1, 0, 1),
-            "inserted and deleted inside the transaction, and nothing updated"
+            (out.added, out.updated, out.removed, out.copies),
+            (0, 0, 0, 0),
+            "no row, no statement, no count"
         );
+        assert_eq!(out.undo_id, None, "and nothing to take back");
         assert_eq!(entry_count(&conn), 0);
     }
 
@@ -7157,6 +7718,606 @@ mod tests {
         let binder = folder(&conn, "user", "Binder");
         commit_import(&conn, &line, "add", Some(binder)).unwrap();
         assert_eq!(entry_count(&conn), 1);
+    }
+
+    // -----------------------------------------------------------------------------------
+    // Issue #555 — tags and tradelist, `set` at the root, the preview, and the bulk undo
+    // -----------------------------------------------------------------------------------
+
+    /// One row's tradelist and tags, read back for the assertion.
+    fn extras_of(conn: &Connection, id: i64) -> (i64, i64, String) {
+        conn.query_row(
+            "SELECT quantity, tradelist_quantity, tags FROM collection_entries WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .unwrap()
+    }
+
+    /// The only row of a printing at the root, for the tests that seed it by hand.
+    fn root_id(conn: &Connection, card_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT id FROM collection_entries WHERE card_id = ?1 AND folder_id IS NULL",
+            params![card_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// A line with the extras the export writes, and the grade [`filed_in`] seeds, so a line and
+    /// a hand-filed row share every grain term but the folder.
+    fn line(
+        card_id: &str,
+        quantity: i64,
+        tradelist: Option<i64>,
+        tags: Option<&str>,
+    ) -> CollectionImportItem {
+        CollectionImportItem {
+            condition: Some("NM".to_owned()),
+            tradelist_quantity: tradelist,
+            tags: tags.map(str::to_owned),
+            ..item(card_id, quantity, "nonfoil")
+        }
+    }
+
+    /// **`add` takes the file's tags onto a new row and unions them onto an existing one, and
+    /// the tradelist adds, clamped.** A re-import of an export used to drop both columns on the
+    /// floor — `commit_import` wrote `tags: None` and `tradelist_quantity: 0` for every line.
+    #[test]
+    fn an_add_import_carries_tags_and_the_tradelist_and_unions_tags_onto_an_existing_row() {
+        let conn = seeded();
+        commit_import(
+            &conn,
+            &[line("card-1", 2, Some(1), Some(r#"["cube"]"#))],
+            "add",
+            None,
+        )
+        .unwrap();
+        let id = root_id(&conn, "card-1");
+        assert_eq!(extras_of(&conn, id), (2, 1, r#"["cube"]"#.to_owned()));
+
+        conn.execute(
+            r#"UPDATE collection_entries SET tags = '["trade","cube"]' WHERE id = ?1"#,
+            params![id],
+        )
+        .unwrap();
+        commit_import(
+            &conn,
+            &[line(
+                "card-1",
+                3,
+                Some(9),
+                Some(r#"["cube","foil","foil"]"#),
+            )],
+            "add",
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            extras_of(&conn, id),
+            (5, 4, r#"["trade","cube","foil"]"#.to_owned()),
+            "the row's order first and nothing twice; the 9 offered is clamped to the 3 copies \
+             the line brought, and adds to the 1 already offered"
+        );
+
+        // A line that says nothing about either leaves both alone.
+        commit_import(&conn, &[line("card-1", 1, None, None)], "add", None).unwrap();
+        assert_eq!(
+            extras_of(&conn, id),
+            (6, 4, r#"["trade","cube","foil"]"#.to_owned())
+        );
+    }
+
+    /// **`set` replaces both, clamped, and a silent line leaves them** — beyond the clamp every
+    /// quantity change already applies to the tradelist.
+    #[test]
+    fn a_set_import_replaces_tags_and_the_tradelist_and_leaves_them_when_the_file_is_silent() {
+        let conn = seeded();
+        commit_import(
+            &conn,
+            &[line("card-1", 4, Some(2), Some(r#"["a"]"#))],
+            "add",
+            None,
+        )
+        .unwrap();
+        let id = root_id(&conn, "card-1");
+
+        commit_import(
+            &conn,
+            &[line("card-1", 3, Some(10), Some(r#"["b"]"#))],
+            "set",
+            None,
+        )
+        .unwrap();
+        assert_eq!(extras_of(&conn, id), (3, 3, r#"["b"]"#.to_owned()));
+
+        commit_import(&conn, &[line("card-1", 2, None, None)], "set", None).unwrap();
+        assert_eq!(
+            extras_of(&conn, id),
+            (2, 2, r#"["b"]"#.to_owned()),
+            "clamped, not replaced"
+        );
+
+        // A new row takes both from the line, in `set` as in `add`.
+        commit_import(
+            &conn,
+            &[line("bolt-lea", 2, Some(5), Some(r#"["x"]"#))],
+            "set",
+            None,
+        )
+        .unwrap();
+        let fresh = root_id(&conn, "bolt-lea");
+        assert_eq!(extras_of(&conn, fresh), (2, 2, r#"["x"]"#.to_owned()));
+    }
+
+    /// Tags that are not JSON are refused in words, and the file is not half written.
+    #[test]
+    fn an_import_refuses_tags_that_are_not_json_and_writes_nothing() {
+        let conn = seeded();
+        let err = commit_import(
+            &conn,
+            &[
+                line("card-1", 1, None, None),
+                line("bolt-lea", 1, None, Some("cube, trade")),
+            ],
+            "add",
+            None,
+        )
+        .unwrap_err();
+        assert!(err.contains("is not a tag list"), "{err}");
+        assert_eq!(entry_count(&conn), 0);
+        assert_eq!(
+            crate::bulk_undo::tickets_held(),
+            0,
+            "and a rolled-back write leaves no ticket"
+        );
+    }
+
+    /// **A `set` at the root counts the copies filed in folders toward the file's number**, and
+    /// the root row takes the difference (issue #555). Writing the number into the root while
+    /// the binder held copies of the same grain doubled every filed copy on a re-import.
+    #[test]
+    fn a_set_at_the_root_counts_copies_filed_elsewhere_rather_than_doubling_them() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let filed = filed_in(&conn, "card-1", Some(binder), 3);
+        filed_in(&conn, "card-1", None, 1);
+        let root = root_id(&conn, "card-1");
+
+        // The file names the four the reader has: nothing to change.
+        let out = commit_import(&conn, &[line("card-1", 4, None, None)], "set", None).unwrap();
+        assert_eq!(
+            (
+                out.added,
+                out.updated,
+                out.removed,
+                out.copies,
+                out.left_in_folders
+            ),
+            (0, 1, 0, 0, 0)
+        );
+        assert_eq!(
+            extras_of(&conn, root).0,
+            1,
+            "not 4 at the root beside 3 in the binder"
+        );
+
+        // Six: the root takes the two more.
+        let out = commit_import(&conn, &[line("card-1", 6, None, None)], "set", None).unwrap();
+        assert_eq!((out.copies, out.left_in_folders), (2, 0));
+        assert_eq!(extras_of(&conn, root).0, 3);
+
+        // Two: the root goes, and the binder's one more than the file says is left where it is.
+        let out = commit_import(&conn, &[line("card-1", 2, None, None)], "set", None).unwrap();
+        assert_eq!(
+            (
+                out.added,
+                out.updated,
+                out.removed,
+                out.copies,
+                out.left_in_folders
+            ),
+            (0, 0, 1, -3, 1)
+        );
+        assert_eq!(
+            extras_of(&conn, filed).0,
+            3,
+            "a folder row is never touched"
+        );
+        assert_eq!(entry_count(&conn), 1);
+
+        // Three, with nothing at the root: the binder already holds it, so nothing is written.
+        let out = commit_import(&conn, &[line("card-1", 3, None, None)], "set", None).unwrap();
+        assert_eq!(
+            (
+                out.added,
+                out.updated,
+                out.removed,
+                out.copies,
+                out.left_in_folders
+            ),
+            (0, 0, 0, 0, 0)
+        );
+        assert_eq!(entry_count(&conn), 1, "no empty root row made and deleted");
+    }
+
+    /// Only copies of the line's **own** grain count as filed elsewhere — all ten terms but the
+    /// folder. A foil or an LP copy in the binder is not a copy of a plain NM line.
+    #[test]
+    fn a_set_line_counts_only_copies_of_its_own_grain_as_filed_elsewhere() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        filed_in(&conn, "card-1", Some(binder), 3);
+        conn.execute(
+            "UPDATE collection_entries SET condition = 'LP' WHERE folder_id = ?1",
+            params![binder],
+        )
+        .unwrap();
+
+        let out = commit_import(&conn, &[line("card-1", 2, None, None)], "set", None).unwrap();
+        assert_eq!((out.added, out.copies, out.left_in_folders), (1, 2, 0));
+        assert_eq!(extras_of(&conn, root_id(&conn, "card-1")).0, 2);
+    }
+
+    /// **A `set` into a named folder is unchanged**: the file's number is that folder's row.
+    #[test]
+    fn a_set_into_a_folder_still_writes_the_files_number_into_that_folder() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let filed = filed_in(&conn, "card-1", Some(binder), 3);
+        let root = filed_in(&conn, "card-1", None, 5);
+
+        let out =
+            commit_import(&conn, &[line("card-1", 1, None, None)], "set", Some(binder)).unwrap();
+        assert_eq!((out.updated, out.copies, out.left_in_folders), (1, -2, 0));
+        assert_eq!(extras_of(&conn, filed).0, 1);
+        assert_eq!(
+            extras_of(&conn, root).0,
+            5,
+            "the root is not the file's business here"
+        );
+    }
+
+    /// Everything a preview must not move, read in one place.
+    fn untouched(conn: &Connection) -> (Vec<Vec<rusqlite::types::Value>>, usize) {
+        (
+            crate::bulk_undo::table_image(conn, "collection_entries"),
+            feed(conn).len(),
+        )
+    }
+
+    /// Preview, check it wrote nothing, then commit — and answer both, for the comparison.
+    fn preview_then_commit(
+        conn: &Connection,
+        items: &[CollectionImportItem],
+        mode: &str,
+        folder_id: Option<i64>,
+    ) -> (ImportCommitOutcome, ImportCommitOutcome) {
+        let before = untouched(conn);
+        let preview = preview_import(conn, items, mode, folder_id).unwrap();
+        assert_eq!(
+            untouched(conn),
+            before,
+            "a preview writes nothing, feed included"
+        );
+        assert_eq!(preview.undo_id, None);
+        let commit = commit_import(conn, items, mode, folder_id).unwrap();
+        (preview, commit)
+    }
+
+    /// **The preview answers exactly what the commit then does** — the same walk, so this is a
+    /// fence on [`Pass`] being the only difference — over every shape a file can take: new rows,
+    /// a grain named twice, folds onto existing rows, `set` lowering, raising and zeroing, a
+    /// `set` at the root around filed copies, and a `set` into a folder.
+    #[test]
+    fn the_preview_answers_what_the_commit_then_does_and_writes_nothing() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        filed_in(&conn, "card-1", Some(binder), 3);
+
+        let shapes: Vec<(Vec<CollectionImportItem>, &str, Option<i64>)> = vec![
+            (
+                vec![
+                    line("card-1", 2, Some(1), Some(r#"["a"]"#)),
+                    line("card-1", 1, None, None),
+                ],
+                "add",
+                None,
+            ),
+            (
+                vec![
+                    line("card-1", 1, None, Some(r#"["b"]"#)),
+                    line("bolt-lea", 4, None, None),
+                ],
+                "add",
+                None,
+            ),
+            (
+                vec![
+                    line("card-1", 5, None, None),
+                    line("bolt-lea", 0, None, None),
+                    line("bolt-jp", 2, None, None),
+                    item("card-1", 1, "foil"),
+                ],
+                "set",
+                None,
+            ),
+            (vec![line("card-1", 1, None, None)], "set", None),
+            (vec![line("card-1", 7, None, None)], "set", Some(binder)),
+            (vec![line("bolt-jp", 0, None, None)], "set", None),
+        ];
+        for (items, mode, folder_id) in shapes {
+            let (preview, commit) = preview_then_commit(&conn, &items, mode, folder_id);
+            assert_eq!(
+                ImportCommitOutcome {
+                    undo_id: None,
+                    ..commit.clone()
+                },
+                preview,
+                "{mode} into {folder_id:?}: {commit:?}"
+            );
+        }
+    }
+
+    /// And what the commit refuses, the preview refuses in the same words.
+    #[test]
+    fn a_preview_refuses_what_the_commit_refuses_in_its_words() {
+        let conn = seeded();
+        let removed = folder(&conn, "removed", "Recently removed");
+        let cases: Vec<(Vec<CollectionImportItem>, &str, Option<i64>)> = vec![
+            (vec![item("card-1", 1, "glitter")], "add", None),
+            (vec![item("card-1", 0, "nonfoil")], "add", None),
+            (vec![item("card-1", -1, "nonfoil")], "set", None),
+            (vec![item("nope", 1, "nonfoil")], "add", None),
+            (vec![line("card-1", 1, Some(-2), None)], "add", None),
+            (vec![line("card-1", 1, None, Some("{"))], "add", None),
+            (vec![item("card-1", 1, "nonfoil")], "replace", None),
+            (vec![item("card-1", 1, "nonfoil")], "add", Some(404)),
+            (vec![item("card-1", 1, "nonfoil")], "add", Some(removed)),
+        ];
+        for (items, mode, folder_id) in cases {
+            let previewed = preview_import(&conn, &items, mode, folder_id).unwrap_err();
+            let committed = commit_import(&conn, &items, mode, folder_id).unwrap_err();
+            assert_eq!(previewed, committed);
+        }
+        assert_eq!(entry_count(&conn), 0);
+    }
+
+    /// **An import's undo puts back the exact rows it found** — the row it raised, the row it
+    /// deleted (under its old id) and the row it made, gone again — and records one line saying
+    /// so: the import's own kind and payload, marked, with the copies going the other way.
+    #[test]
+    fn an_import_can_be_undone_back_to_the_exact_rows_it_found() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        commit_import(
+            &conn,
+            &[line("card-1", 2, Some(1), Some(r#"["keep"]"#))],
+            "add",
+            None,
+        )
+        .unwrap();
+        commit_import(&conn, &[line("bolt-lea", 5, None, None)], "add", None).unwrap();
+        filed_in(&conn, "card-1", Some(binder), 1);
+        let found = crate::bulk_undo::table_image(&conn, "collection_entries");
+
+        let out = commit_import(
+            &conn,
+            &[
+                line("card-1", 4, Some(4), Some(r#"["x"]"#)),
+                line("bolt-lea", 0, None, None),
+                line("bolt-jp", 2, None, None),
+            ],
+            "set",
+            None,
+        )
+        .unwrap();
+        assert_eq!((out.added, out.updated, out.removed), (1, 1, 1));
+        let ticket = out
+            .undo_id
+            .expect("an import that changed rows offers an undo");
+
+        let undone = crate::bulk_undo::undo(&conn, ticket).unwrap();
+        assert_eq!((undone.scope, undone.restored), ("collection", 3));
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "collection_entries"),
+            found
+        );
+
+        let line = &feed(&conn)[0];
+        assert_eq!(line.kind, crate::activity::IMPORT);
+        assert_eq!(line.delta, -out.copies);
+        assert_eq!(payload(line)["undo"], true);
+        assert_eq!(payload(line)["cards"], 6);
+    }
+
+    /// An import into a deck's group answers no ticket: the same press wrote the deck's list,
+    /// and an undo that took the copies back would leave the deck listing cards it holds none of.
+    #[test]
+    fn an_import_into_a_decks_group_offers_no_undo() {
+        let conn = seeded();
+        let group = folder(&conn, "deck", "Mono red");
+        let out =
+            commit_import(&conn, &[item("card-1", 2, "nonfoil")], "add", Some(group)).unwrap();
+        assert_eq!(out.added, 1);
+        assert_eq!(out.undo_id, None);
+    }
+
+    /// **Several removals are one transaction and one feed line about no one card**, and an id
+    /// that names nothing is skipped rather than refused.
+    #[test]
+    fn removing_several_entries_is_one_row_of_history_carrying_the_count() {
+        let conn = seeded();
+        let a = add_entry(&conn, &input("bolt-lea", "nonfoil", 2))
+            .unwrap()
+            .id;
+        let b = add_entry(&conn, &input("bolt-jp", "foil", 3)).unwrap().id;
+        let kept = add_entry(&conn, &input("card-1", "nonfoil", 1)).unwrap().id;
+        let history = feed(&conn).len();
+
+        let out = remove_entries(&conn, &[a, 4040, b, a]).unwrap();
+
+        assert_eq!((out.removed, out.copies), (2, 5));
+        assert!(out.undo_id.is_some());
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), history + 1, "one line for the press");
+        assert_eq!(rows[0].kind, crate::activity::REMOVE);
+        assert_eq!((rows[0].card_id.as_deref(), rows[0].delta), (None, -5));
+        assert_eq!(payload(&rows[0]), serde_json::json!({ "entries": 2 }));
+        let left: Vec<i64> = conn
+            .prepare("SELECT id FROM collection_entries")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(left, vec![kept]);
+    }
+
+    /// A one-row selection is the row menu's Remove and reads as one.
+    #[test]
+    fn removing_one_entry_through_the_bulk_door_records_the_single_removal_line() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Trade box");
+        let id = add_entry(
+            &conn,
+            &EntryInput {
+                folder_id: Some(binder),
+                ..input("bolt-lea", "nonfoil", 4)
+            },
+        )
+        .unwrap()
+        .id;
+
+        remove_entries(&conn, &[id]).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::REMOVE);
+        assert_eq!(rows[0].card_name.as_deref(), Some("Lightning Bolt"));
+        assert_eq!(rows[0].delta, -4);
+        assert_eq!(
+            payload(&rows[0]),
+            serde_json::json!({ "folder": "Trade box" })
+        );
+    }
+
+    /// Nothing to remove is no change: no line and no ticket.
+    #[test]
+    fn removing_entries_that_are_not_there_records_nothing_and_offers_no_undo() {
+        let conn = seeded();
+        let out = remove_entries(&conn, &[]).unwrap();
+        assert_eq!((out.removed, out.copies, out.undo_id), (0, 0, None));
+        let out = remove_entries(&conn, &[404]).unwrap();
+        assert_eq!((out.removed, out.copies, out.undo_id), (0, 0, None));
+        assert!(feed(&conn).is_empty());
+    }
+
+    /// **Any failure takes the whole press back** — every delete, and no ticket.
+    #[test]
+    fn a_failed_bulk_removal_rolls_every_row_back_and_leaves_no_ticket() {
+        let conn = seeded();
+        let a = add_entry(&conn, &input("bolt-lea", "nonfoil", 2))
+            .unwrap()
+            .id;
+        let b = add_entry(&conn, &input("bolt-jp", "foil", 3)).unwrap().id;
+        let before = crate::bulk_undo::table_image(&conn, "collection_entries");
+        refuse_activity(&conn);
+
+        assert!(remove_entries(&conn, &[a, b]).is_err());
+
+        allow_activity(&conn);
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "collection_entries"),
+            before
+        );
+        assert_eq!(crate::bulk_undo::tickets_held(), 0);
+    }
+
+    /// A bulk removal's undo brings every row back under its own id, and a second press is told
+    /// the ticket is spent.
+    #[test]
+    fn a_bulk_removal_can_be_undone_under_the_same_ids() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let a = add_entry(&conn, &input("bolt-lea", "nonfoil", 2))
+            .unwrap()
+            .id;
+        let b = add_entry(
+            &conn,
+            &EntryInput {
+                folder_id: Some(binder),
+                tags: Some(r#"["mine"]"#.to_owned()),
+                notes: Some("from the prerelease".to_owned()),
+                ..input("bolt-jp", "foil", 3)
+            },
+        )
+        .unwrap()
+        .id;
+        let found = crate::bulk_undo::table_image(&conn, "collection_entries");
+
+        let out = remove_entries(&conn, &[a, b]).unwrap();
+        let undone = crate::bulk_undo::undo(&conn, out.undo_id.unwrap()).unwrap();
+
+        assert_eq!(undone.restored, 2);
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "collection_entries"),
+            found
+        );
+        let line = &feed(&conn)[0];
+        assert_eq!(
+            (line.kind.as_str(), line.delta),
+            (crate::activity::REMOVE, 5)
+        );
+        assert_eq!(
+            payload(line),
+            serde_json::json!({ "entries": 2, "undo": true })
+        );
+        assert_eq!(
+            crate::bulk_undo::undo(&conn, out.undo_id.unwrap()).unwrap_err(),
+            crate::bulk_undo::UNDO_GONE
+        );
+    }
+
+    /// **An undo over a collection that has moved on is refused, and the ticket retired** — the
+    /// reader added the same printing back after removing it, so putting the old row back would
+    /// collide with the new one.
+    #[test]
+    fn an_undo_the_collection_has_moved_past_is_refused_and_retired() {
+        let conn = seeded();
+        let a = add_entry(&conn, &input("bolt-lea", "nonfoil", 2))
+            .unwrap()
+            .id;
+        let out = remove_entries(&conn, &[a]).unwrap();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        let now = crate::bulk_undo::table_image(&conn, "collection_entries");
+
+        let ticket = out.undo_id.unwrap();
+        assert_eq!(
+            crate::bulk_undo::undo(&conn, ticket).unwrap_err(),
+            crate::bulk_undo::UNDO_STALE
+        );
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "collection_entries"),
+            now
+        );
+        assert_eq!(
+            crate::bulk_undo::undo(&conn, ticket).unwrap_err(),
+            crate::bulk_undo::UNDO_GONE
+        );
+    }
+
+    /// And one the import's own rows changed under: a quantity stepped after an import.
+    #[test]
+    fn an_import_undo_is_refused_once_a_row_it_wrote_has_changed() {
+        let conn = seeded();
+        let out = commit_import(&conn, &[line("card-1", 2, None, None)], "add", None).unwrap();
+        set_quantity(&conn, root_id(&conn, "card-1"), 5).unwrap();
+
+        assert_eq!(
+            crate::bulk_undo::undo(&conn, out.undo_id.unwrap()).unwrap_err(),
+            crate::bulk_undo::UNDO_STALE
+        );
+        assert_eq!(extras_of(&conn, root_id(&conn, "card-1")).0, 5);
     }
 
     // -----------------------------------------------------------------------------------

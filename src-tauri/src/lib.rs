@@ -9,6 +9,10 @@ pub mod activity;
 /// **The `app_meta` key–value store, carved out of [`update`].** Eleven modules keep view state
 /// in that one table and only `update` swaps an `.exe`.
 pub mod app_meta;
+/// **Taking back one bulk collection or wishlist write** (issue #555) — the before/after images of
+/// exactly the rows it changed, held in memory for the session and put back only while nothing
+/// has touched them since.
+pub mod bulk_undo;
 /// **The camera-permission handler for the in-app QR scanner.** `#[cfg(windows)]` inside:
 /// WebView2 needs `webview2-com` COM interop, and everywhere else `camera::install` is a no-op.
 pub mod camera;

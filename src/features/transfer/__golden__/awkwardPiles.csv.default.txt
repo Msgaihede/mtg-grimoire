@@ -1,0 +1,4 @@
+Quantity,Name,Set,Collector number,Category,Finish
+1,"Bruna, Light of Alabaster",AVR,5,Commander,
+1,Sol Ring,C21,263,"Ramp, Fixing {x} [y]",foil
+2,Arcane Signet,C21,236,"Cuts, maybe",

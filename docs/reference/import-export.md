@@ -468,7 +468,77 @@ Once the header is trusted, every later row is read **by column** rather than by
 grammar the rest of the file uses. `extra` on `ParsedLine` carries every recognised column verbatim
 — including the ones no other format has a channel for at all — and the deck planner never reads it;
 the collection's `planCollectionImport` is what reads `condition`, `purchasePrice`,
-`purchaseCurrency`, `acquiredAt`, `acquisitionSource` and `notes` out of it.
+`purchaseCurrency`, `acquiredAt`, `acquisitionSource` and `notes` out of it — and, since issue #555,
+`tags`, `tradelistQuantity` and `lang`.
+
+### A CSV another app wrote — issue #555, 2026-09-28
+
+**Until #555 the header test knew only this app's own spellings**, so a Deckbox or Moxfield export
+passed it on `Name` plus one other column and every row imported as one regular copy with no printing
+hint: `Count` meant nothing, `Foil` meant nothing, and the unknown columns vanished without a word.
+The vocabulary now carries each vendor's spellings, **ranked**, and the reader says what it did not
+read.
+
+| Rank | Spellings | Field |
+| --- | --- | --- |
+| specific | `Set Code`, `Edition Code`, `Set ID`, `Setcode` | setCode |
+| specific | `Simple Name` (TCGplayer — its `Name` carries a treatment suffix on 111 of 1,010 sample rows) | name |
+| alias | `Count`, `Qty` | quantity |
+| alias | `Card Name`, `Card` | name |
+| alias | `Card Number`, `Collector #`, `Number`, `CN` | collectorNumber |
+| alias | `Foil`, `Printing`, `Premium` | finish (value-mapped) |
+| alias | `Lang` | lang |
+| alias | `Tradelist Count`, `Trade Quantity` | tradelistQuantity |
+| alias | `Alter`, `Altered Art` | altered |
+| alias | `Price Bought`, `Acquired price` | purchasePrice |
+| alias | `Date Bought`, `Acquired date` | acquiredAt |
+| alias | `Purchase price currency` | purchaseCurrency |
+| alias | `Edition Name`, `Setname` | setName |
+| fallback | `Edition` | setCode — Moxfield writes a code there and Deckbox a **name** |
+
+The registry's own headers rank between *specific* and *alias*, and the legacy `Tag`/`Tag colour`
+aliases are laid down first, so a vendor spelling can never take a key this app writes. When two
+columns name one field the lower rank wins (leftmost on a tie) and the loser is listed as unread. A
+set-name column is passed as the set hint **only when the file has no code column at all**, and
+`import.rs` resolves a hint that names no set code as a set name (case-folded, exactly one match).
+
+**Checked against real exports**, not memory — the `StepKie/MtgCsvHelper` repository's sample CSVs for
+Deckbox, Moxfield, Dragon Shield, ManaBox, Archidekt, TCGplayer, MTGO, MTGGoldfish, Cardmarket and
+TopDecked (2026-09-28). Moxfield's and Deckbox's own help pages were unreachable (403, and a redirect
+to a contact form). **Deckbox's `My Price` is deliberately unread**: its CSV instructions call it
+"only used for seller accounts" — an asking price, not what the reader paid. Archidekt's `Date Added`
+(the day the row entered Archidekt) and every vendor's `Scryfall ID` are unread too; the id would be
+the most exact column there is and the resolver has no channel for it yet.
+
+- **A finish column is value-mapped**: a regular-copy word (`normal`, `nonfoil`, `no`, `false`,
+  `0`, blank) first, because two of them contain "foil"; then anything containing `etched`; then
+  `foil`, `yes`, `true`, `1`, `x` or anything containing `foil` (`Surge Foil`, `Gilded Foil`).
+- **`ParsedList.csv`** is `{ delimiter, hasQuantity, ignoredColumns }` — the last lists a header
+  that maps to nothing, one whose field no importer reads (`rarity`, `typeLine`, `unitPrice`, and
+  `setName` unless it stood in as the hint), and one that lost its field to a better column.
+  `shared/CsvNotes.tsx` draws "Not read: …" and "This spreadsheet has no quantity column, so every
+  row is read as one copy." on the preview step.
+- **`csv.ts`'s `readCsv` owns four file-level facts**: a BOM and a `sep=` line come off (Dragon
+  Shield writes a quoted `"sep=,"`); the delimiter is measured off the header line — `,`, `;` or tab,
+  counted outside quotes, comma winning ties; every cell goes through `unescapeFormula`; and every
+  row carries the **physical** line it started on, so a multi-line notes cell no longer shifts the
+  line numbers the preview quotes after it.
+- **A quantity cell is a whole number from 1 to 9999** (the text path's four digits) or a
+  `ParseIssue`. `Number.parseInt` used to read `1.5` as 1 and `3 copies` as 3, with no ceiling.
+- **Condition grades read across the vendors**: `near_mint` (ManaBox), `NearMint` (Dragon Shield),
+  and Cardmarket's `Light Played` two grades below Lightly Played. `Played` still reads as MP, which
+  is one grade high for a Dragon Shield or ManaBox file — the same file-level trap as a bare `LP`.
+
+### Formula cells — issue #555
+
+**Every CSV cell a spreadsheet would evaluate is written behind an apostrophe** — `formula.ts`'s
+`escapeFormula`, and `csv::escape_formula` in the mirror: a cell matching `^'*[=+\-@\t\r]` gains one
+leading `'`, and the reader's `unescapeFormula` takes exactly one back off a cell matching
+`^'+[=+\-@\t\r]`. The run of apostrophes is what keeps it a round trip: a note already starting `'=` is
+written `''=`. A note reading `-2 lent` used to open in Excel as `#NAME?`. The header row is not
+escaped, and no non-CSV format is touched — `+2 Mace` stays as written in a decklist. The golden
+`formulaCells` scenario holds both writers to it byte for byte, and `parse.test.ts` reads that golden
+back to the corpus's own words.
 
 ### The narrow fold — **fixed 2026-08-23**, and kept here because the shape is instructive
 
@@ -531,6 +601,39 @@ full grain and the commit carries the six columns.
 releases away that had nothing to do with flags. "Latent" is a note about the present tense, and it
 expires without warning.
 
+### What a fold keeps now, and what the restore reads back — issue #555
+
+**Two lines at one grain used to keep the first line's notes and price and drop the second's.** The
+file can legitimately say that: the export folds on the *chosen fields*, and folders are not a field,
+so two rows filed in two drawers with different notes are two lines at one grain. `planCollectionImport`
+now builds the item after every line is read:
+
+- quantities summed, and tradelists summed over the lines that gave one;
+- notes and acquisition sources combined without repeats, joined with `; `; tags unioned;
+- the purchase price is the **quantity-weighted mean** of the lines that carry one, rounded to the
+  most decimals any of them used and never fewer than two, so a single price comes back exactly;
+- the first priced line sets the currency, and a price in another currency is listed
+  (`droppedPrices`) rather than averaged into a number no reader paid;
+- `acquiredAt` is the earliest (ISO compared as text, anything else through `Date.parse`, else the
+  first line's value); and each merged line is listed (`folded`, `line 7 → line 3 · Lightning Bolt`).
+
+**Tags and the tradelist quantity were exported and never read back; both are now.** `Tags` accepts
+this app's own JSON cell (`["cube","trade"]`, which is what the column holds) or another app's
+`cube, trade` / `cube; trade`, and an explicit `[]` is kept as `"[]"` so a `set` restore clears tags
+the row gained since the backup — a blank cell never touches them. On the write, `add` **unions** the
+file's tags into an existing row's and adds the tradelist; `set` replaces both; a line naming neither
+leaves them alone; the tradelist is clamped to the row's quantity either way. A flag column also
+accepts its own word as true (`signed` in `Signed`, `altered` in `Altered`), which is how Deckbox
+writes them.
+
+**Language is no longer silently ignored — but it is still a fact about the printing.** A row's
+`lang` is copied off `cards`, so a file cannot set it; what a `Language` cell does now is make the
+resolver **prefer** a printing in that language, and when the corpus has none — most of the time,
+since Scryfall's default bulk data carries a non-English printing only where there is no English one —
+the preview lists the line: `the file says Japanese; added as English`. A language this app does not
+recognise is listed separately. `@/lib/languages`' `languageCode` reads the spellings (`Japanese`,
+`JP`, `Chinese Simplified`, `zh-TW`, the code itself).
+
 ## The four import destinations
 
 `import/destination.ts`'s `ImportDestination` is what the dialog's second step draws; four exist,
@@ -540,8 +643,8 @@ one per surface plus the deck's "start a new one":
 | --- | --- | --- | --- |
 | `deck` (existing) | `merge` / `replace` | `deck_id, variant, category_id, card_id, coalesce(finish,'')` (`schema::DECK_CARD_GRAIN`) | `replace` clears one **variant** first, named before it does; the mode radio says how many cards that would cost, and on a `live` list a note under the radios says where the cardboard goes — since 2026-09-01 (issue #336) the commit calls `deck::release_live_copies` before that clear, so every copy the deck's group held lands in `Recently removed` instead of being stranded under a deck that no longer lists it. Since 2026-08-23 it also draws the optional ["Add cards to collection" box](#the-deck-arms-add-cards-to-collection-box), which makes the press two writes. **A [Virtual deck](#a-virtual-deck-moves-two-sentences-and-takes-one-control-away) names no variant, gets no note, and is offered no "Add cards to collection" box** |
 | `newDeck` | `merge` only | same grain, on the deck just created | No mode radios at all — there is nothing to replace one line after `deck_create`, and `merge` is the mode that cannot clear anything if that ever stops being true. Draws the same "Add cards to collection" box, from the **same** exported `OwnCopies` rather than a second one written here |
-| `collection` | `add` / `set` | Every term of the storage grain (`schema::COLLECTION_GRAIN` — `card_id, finish, condition, lang, altered, signed, proxy, misprint, coalesce(serial_number,''), coalesce(grading,''), coalesce(folder_id, 0)`) the importer can vary, so nine of the eleven. `lang` follows `cardId` and `folder_id` is always the root. It was `cardId, finish, condition` alone until 2026-08-23 — see the fold section above for what that cost | No `replace`: the deck's version would empty a multi-thousand-row collection from a 40-line paste with the file that caused it looking ordinary |
-| `wishlist` | `add` / `set` | `oracleId, cardId, finish` (`destinations/wishlist.ts`) — the storage grain is `coalesce(oracle_id,''), coalesce(card_id,''), coalesce(preferred_finish,''), coalesce(folder_id,0)` (`schema::WISHLIST_GRAIN`) | `wishlist_set_quantity(id, 0)` **deletes** the wish — a wish for nothing is not a wish (`CHECK (quantity > 0)`) — but an import can never reach it: `parse.ts` refuses a quantity below 1 before a plan is even built (`:460`, `:671`), so `set` through this dialog never carries a 0 |
+| `collection` | `add` / `set` | Every term of the storage grain (`schema::COLLECTION_GRAIN` — `card_id, finish, condition, lang, altered, signed, proxy, misprint, coalesce(serial_number,''), coalesce(grading,''), coalesce(folder_id, 0)`) the importer can vary, so nine of the eleven. `lang` follows `cardId` and `folder_id` is always the root. It was `cardId, finish, condition` alone until 2026-08-23 — see the fold section above for what that cost | No `replace`: the deck's version would empty a multi-thousand-row collection from a 40-line paste with the file that caused it looking ordinary. **A root `set` treats the file's number as the total at that grain across every folder** (issue #555): it counts the copies filed elsewhere — deck groups and `Recently removed` included — and writes the root row `max(0, file − elsewhere)`, never touching a folder's row, and reports any surplus as `leftInFolders`. It used to write the file's number into a second root row beside the filed copies, doubling them |
+| `wishlist` | `add` / `set` | `oracleId, cardId, finish` (`destinations/wishlist.ts`) — the storage grain is `coalesce(oracle_id,''), coalesce(card_id,''), coalesce(preferred_finish,''), coalesce(folder_id,0)` (`schema::WISHLIST_GRAIN`) | `wishlist_set_quantity(id, 0)` **deletes** the wish — a wish for nothing is not a wish (`CHECK (quantity > 0)`) — but an import can never reach it: `parse.ts` refuses a quantity below 1 before a plan is even built (`csvQuantity` for a CSV row, the per-line reader's own zero check for every other — grep `A count of zero is not an import`), so `set` through this dialog never carries a 0 |
 
 **Every one of the four commits in one transaction for the whole file** — `deck_import_commit`,
 `collection_import_commit`, `wishlist_import_commit` — the same rule `docs/reference/decks-storage.md`
@@ -717,6 +820,53 @@ instead (`WishlistPlanItem`'s doc). A plain `1 Sol Ring` becomes a wish for the 
 un-pinned plain-text lines committed as three rows with `card_id IS NULL` and a populated
 `oracle_id`, both in the database and in the wishlist table's own "Any printing" caption.
 
+## What a `set` will do, said before the press — issue #555
+
+The collection preview's `set` sentence is drawn from `collection_import_preview`, which is the
+commit's own `walk_import` with the statements skipped — **not a write rolled back**, because
+`rollback_hook` clears only the cross-file fence and a rolled-back write on the write connection would
+still dirty the mirror and tell every other window the collection changed. It runs on the read
+connection, so it never waits behind a sync. The sentence counts **rows** (`Sets how many you hold of
+40 cards: 5 new, 20 changed, 2 removed — 12 more copies than now.`), says when every number already
+matches, and adds `7 copies filed in folders are more than the file lists; they stay where they are.`
+when the file's number is below what the folders hold. `add` keeps its own sentence and asks nothing.
+A refused dry run says so in a dim line and leaves Import enabled.
+
+**Import counts are per line since this change**: a `set` of 0 for a printing the reader does not own
+writes nothing and counts nothing, where it used to insert and delete and read `(1 added, 1 removed)`.
+
+## Taking a bulk write back — issue #555
+
+**Collection and wishlist imports had no undo, and a bulk remove or move was one write per entry** —
+N transactions and N feed rows, against `activity.rs`'s one-row-per-bulk rule, with a refusal part-way
+leaving the press half applied. `collection_remove_many` and `collection_set_folder_many` are each one
+transaction and one feed row (`{"entries": n}`, and `{"entries": n, "to": <folder>}`; a single entry
+keeps today's per-card line), and a bulk remove of more than one entry asks first
+(`RemoveCopiesConfirm`, built on `ClearRemovedConfirm`'s recipe).
+
+**Every one of those writes, and both imports, answers an `undoId`**: `bulk_undo.rs` captures the
+before and after images of exactly the rows the write changed, inside its transaction, and files the
+ticket once it commits. `@/lib/bulkUndo` holds the newest offer per list and `components/UndoNotice`
+draws it under the page's banner — a permanently mounted `role="status"` region with Undo and a ✕.
+The rules, each a way to get it wrong:
+
+- **Refused, never applied blindly.** If any row the write left behind has changed since —
+  `updated_at`, `sync_uid` and `needs_review` aside — the undo answers *Some of those cards have
+  changed since, so this can no longer be undone.* and the ticket is retired; an unknown ticket
+  answers *That can no longer be undone.* A newer offer replaces an older one on screen for the same
+  reason: a ticket under a later write is a refusal waiting to happen.
+- **Session only, ten tickets.** Nothing is journalled, so a restart forgets every offer. A
+  5 000-row import's undo that outlived a restart would be a second, unsynced history of rows the
+  other devices had already moved past.
+- **A re-inserted row takes a fresh `sync_uid`** — a put under the deleted row's uid reads as a
+  resurrection on the other devices. It keeps its old id when the id is free.
+- **No ticket for the scanner tray's commit, or for an import into a deck's group**: the deck list
+  was written by a separate command, and taking the copies back would leave the deck listing cards
+  with nothing behind them.
+- **The undo records one feed row** — the original kind and payload with `"undo": true` and the
+  delta reversed — which `activityText.ts` words as `Undid removing 12 cards` / `Undid an import of
+  40 cards into your collection`.
+
 ## The sweep
 
 `export/scope.ts`'s `useExportScope` turns a filtered page into a whole list before the dialog opens
@@ -737,6 +887,21 @@ collection — read directly off `D:/Code/mtg-grimoire/src-tauri/target/debug/da
 sweep against it makes exactly **1** round trip (a first page shorter than 500). That is the honest
 number for the build this page names rather than a guess dressed up as one; the general rule the
 tests above already prove is `ceil(total / 500)` round trips for any other size.
+
+**A sweep that fails is said, and cannot be saved** (issue #555). The hook exposed no error, so after
+`retry: 1` gave up, Copy and Save as… stayed live over an empty `cards` array and the dialog could draw
+"3,000 cards matching your filters" beside `Show decklist (0 lines)`. `useExportScope` now answers
+`error` (through `ipcError`, `null` while any fetch runs) and a stable `retry`, and `loading` is
+`isFetching || (enabled && isPending)` — `isFetching` alone reads false for a query paused offline,
+which armed the buttons over nothing. With an error the count line gives way to a `role="alert"`
+sentence and a Retry; with an error **or** a sweep still running, Copy and Save as… are
+`aria-disabled` and inert, and now look it.
+
+**Archidekt's pile names are rewritten on the way out**, because the format has no way to say `,`
+`{` `}` `[` `]` inside a bracket: `,` → `;`, `{`/`[` → `<`, `}`/`]` → `>`, in the heading and the
+bracket alike. Angle brackets rather than parentheses because a heading ending `(x)` matches the
+parser's `HINT_TAIL` and is read as a card line. The golden `awkwardPiles` scenario opens on a
+commander so its goldens hold a pile heading read back after a `Commander` heading.
 
 ## The live pass — 2026-08-20, `npm run tauri dev` (debug), this worktree
 

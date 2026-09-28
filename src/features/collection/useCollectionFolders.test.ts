@@ -12,6 +12,8 @@ const collectionFolderReorder = vi.hoisted(() => vi.fn());
 const collectionFolderDelete = vi.hoisted(() => vi.fn());
 const collectionFolderSetLocked = vi.hoisted(() => vi.fn());
 const collectionFolderSummary = vi.hoisted(() => vi.fn());
+/** Filing several entries in one write — issue #555's `collection_set_folder_many`. */
+const collectionSetFolderMany = vi.hoisted(() => vi.fn());
 // `useCollectionFolders` reads `useMarketplace()`, which is the real hook here rather than a
 // fake — so its own queries need answers too. `marketplaceFeedStatus` is never asserted on; it
 // only has to resolve so that hook does not sit on a rejected query for the life of the test.
@@ -28,12 +30,18 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionFolderDelete,
     collectionFolderSetLocked,
     collectionFolderSummary,
+    collectionSetFolderMany,
     getMarketplace,
     marketplaceFeedStatus,
   },
 }));
 
-import { useCollectionFolderList, useCollectionFolders } from "./useCollectionFolders";
+import { resetBulkUndo, useBulkUndo } from "@/lib/bulkUndo";
+import {
+  useCollectionFolderList,
+  useCollectionFolders,
+  useSetCollectionFolderMany,
+} from "./useCollectionFolders";
 
 /** Two drawers, one inside the other — flat rows, because the tree is the reader's to build from
  *  `parentId` and `collection_folders` has no notion of depth. */
@@ -91,6 +99,14 @@ beforeEach(() => {
   // observable change from the hook's own initial guess.
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
+  collectionSetFolderMany.mockReset().mockResolvedValue({
+    changes: [
+      { id: 7, quantity: 2, removed: false },
+      { id: 8, quantity: 1, removed: false },
+    ],
+    undoId: 41,
+  });
+  resetBulkUndo();
 });
 
 describe("useCollectionFolderList", () => {
@@ -436,6 +452,78 @@ describe("useCollectionFolders", () => {
       "That folder belongs to the app.",
     );
 
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
+  });
+});
+
+/**
+ * `Move to` over several entries — **one** write (issue #555), where it used to be one
+ * `collection_set_folder` per id. The settle set is the single write's, and the undo offer is the
+ * hook's own so neither of its two callers can forget it.
+ */
+describe("useSetCollectionFolderMany", () => {
+  it("files every entry in one call and offers the press back, in entries", async () => {
+    const { result } = renderHook(() => useSetCollectionFolderMany(), { wrapper });
+
+    await result.current.mutateAsync({ entryIds: [7, 8], folderId: 1, destination: "Trade binder" });
+
+    expect(collectionSetFolderMany).toHaveBeenCalledTimes(1);
+    expect(collectionSetFolderMany).toHaveBeenCalledWith([7, 8], 1);
+    expect(useBulkUndo.getState().offers.collection).toEqual({
+      id: 41,
+      scope: "collection",
+      label: "Moved 2 cards to Trade binder.",
+    });
+  });
+
+  /** The root is a destination, spelled `null` on the wire and named by the caller. */
+  it("sends null for the root", async () => {
+    const { result } = renderHook(() => useSetCollectionFolderMany(), { wrapper });
+    await result.current.mutateAsync({ entryIds: [7, 8], folderId: null, destination: "Collection" });
+    expect(collectionSetFolderMany).toHaveBeenCalledWith([7, 8], null);
+    expect(useBulkUndo.getState().offers.collection?.label).toBe("Moved 2 cards to Collection.");
+  });
+
+  /** `null` is what a press that changed nothing answers, and there is nothing to take back. */
+  it("offers nothing when the write answers no ticket", async () => {
+    collectionSetFolderMany.mockResolvedValue({ changes: [], undoId: null });
+    const { result } = renderHook(() => useSetCollectionFolderMany(), { wrapper });
+    await result.current.mutateAsync({ entryIds: [7, 8], folderId: 1, destination: "Binder" });
+    expect(useBulkUndo.getState().offers.collection).toBeNull();
+  });
+
+  it("settles exactly what the single filing settles", async () => {
+    const { result } = renderHook(() => useSetCollectionFolderMany(), { wrapper });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.mutateAsync({ entryIds: [7, 8], folderId: 1, destination: "Binder" });
+
+    await waitFor(() =>
+      expect(invalidate.mock.calls).toEqual([
+        [{ queryKey: ["collection"] }],
+        [{ queryKey: ["decks"] }],
+        [{ queryKey: ["cards", "search"] }],
+      ]),
+    );
+  });
+
+  /** Any refusal rolls the whole press back in Rust, so there is no offer and the list re-reads. */
+  it("hands a refusal to its caller, offers nothing, and re-reads", async () => {
+    collectionSetFolderMany.mockRejectedValue("That entry is in a deck.");
+    const onError = vi.fn();
+    const onMutate = vi.fn();
+    const { result } = renderHook(() => useSetCollectionFolderMany({ onMutate, onError }), {
+      wrapper,
+    });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await expect(
+      result.current.mutateAsync({ entryIds: [7, 8], folderId: 1, destination: "Binder" }),
+    ).rejects.toBe("That entry is in a deck.");
+
+    expect(onMutate).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith("That entry is in a deck.");
+    expect(useBulkUndo.getState().offers.collection).toBeNull();
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
   });
 });

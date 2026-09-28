@@ -107,6 +107,14 @@ const collectionSetFolder = vi.hoisted(() => vi.fn());
 /** `Clear…` inside `Recently removed` (issue #506): every entry in the holding area, one write. */
 const collectionRemovedClear = vi.hoisted(() => vi.fn());
 /**
+ * Issue #555's three: `Remove N cards…` and a multi-tick `Move to` as **one** write each, and the
+ * ticket either answers taken back. Answered on every mount, because the undo notice is drawn on
+ * every render of this page and a menu press reaches the first two from any case that drives one.
+ */
+const collectionRemoveMany = vi.hoisted(() => vi.fn());
+const collectionSetFolderMany = vi.hoisted(() => vi.fn());
+const bulkUndo = vi.hoisted(() => vi.fn());
+/**
  * The three reads shelves added: the per-shelf counts every heading's figures and every shelf's
  * slot count come from, and the stored folds. Answered on every mount — an `ipc` mock is an object
  * literal, and a command it does not carry is a synchronous `TypeError` inside a hook.
@@ -193,6 +201,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionFolderSetLocked,
     collectionSetFolder,
     collectionRemovedClear,
+    collectionRemoveMany,
+    collectionSetFolderMany,
+    bulkUndo,
     collectionShelfCounts,
     shelfFolds,
     setShelfFolds,
@@ -201,6 +212,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { CollectionPage } from "./CollectionPage";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { resetBulkUndo, useBulkUndo } from "@/lib/bulkUndo";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { useAppStore } from "@/lib/store";
 
@@ -925,6 +937,14 @@ beforeEach(() => {
   collectionFolderSetLocked.mockReset().mockResolvedValue({ ...BINDER, locked: true });
   collectionSetFolder.mockReset().mockResolvedValue({ id: 7, quantity: 2, removed: false });
   collectionRemovedClear.mockReset().mockResolvedValue(0);
+  // One entry removed and a ticket for it — the single press's answer. The bulk cases below say
+  // their own counts.
+  collectionRemoveMany.mockReset().mockResolvedValue({ removed: 1, copies: 2, undoId: 31 });
+  collectionSetFolderMany.mockReset().mockResolvedValue({ changes: [], undoId: 32 });
+  bulkUndo.mockReset().mockResolvedValue({ scope: "collection", restored: 1 });
+  // The ticket store is module state, so an offer one case made would otherwise be drawn over the
+  // next case's page as if a write had been made there.
+  resetBulkUndo();
   // Counts derived from whatever the list answers, over the shelves the query names — see
   // `shelfCountsOf`. `getMockImplementation` reads the list mock without recording a call, so
   // `lastQuery()` still reads the list's own last request.
@@ -2632,6 +2652,37 @@ describe("CollectionPage", () => {
     // out a second time and the previous sweep's cards are served back at the new marketplace.
     await waitFor(() => expect(sweepCallsAt("cardmarket")).toBeGreaterThan(0));
   });
+
+  /**
+   * **The sweep's refusal reaches the dialog, and so does a way to ask again** (issue #555). This
+   * page is what hands `useExportScope`'s `error` and `retry` to `ExportDialog`'s `scope`; the
+   * dialog draws them. Without the wiring a refused sweep read as an empty collection.
+   */
+  it("says a refused export sweep in the dialog and sweeps again on Retry", async () => {
+    // Refused only once the page has drawn: the shelf counts read this same mock at `limit: 500`
+    // (`shelfCountsOf`, above), so a refusal from the start would take the wall down with it.
+    let refuse = false;
+    collectionList.mockImplementation(async (query: CollectionQuery) => {
+      if (query.limit === 500 && refuse) throw "The database is busy.";
+      return page([BOLT]);
+    });
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    refuse = true;
+    await user.click(await screen.findByRole("button", { name: "Export collection" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Could not read the cards to export — The database is busy.",
+    );
+
+    refuse = false;
+    const before = sweepCallsAt("tcgplayer");
+    await user.click(within(dialog).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(sweepCallsAt("tcgplayer")).toBeGreaterThan(before));
+    await waitFor(() => expect(within(dialog).queryByRole("alert")).toBeNull());
+  });
 });
 
 /**
@@ -3102,18 +3153,18 @@ describe("the card menu", () => {
    * behind the target may have their count changed: the stepper's fence, asked of every row.
    */
   describe("Remove from collection", () => {
-    it("removes a Recently removed tile's copies, every entry behind the art", async () => {
+    /** One tile, two entries — a second grade of the same printing and finish — in the holding
+     *  area, where the stepper's fence lets the menu offer a removal at all. */
+    async function rightClickTwoEntryTile(user: ReturnType<typeof userEvent.setup>) {
       useAppStore.setState({ collectionView: "grid" });
       collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
       opened(REMOVED.id);
       collectionList.mockResolvedValue(
         page([
           { ...BOLT, id: 7, folderId: 21, folderName: "Recently removed", quantity: 1 },
-          // A second grade of the same printing and finish: one tile, two entries.
           { ...BOLT, id: 9, condition: "LP", folderId: 21, folderName: "Recently removed", quantity: 2 },
         ]),
       );
-      const user = userEvent.setup();
       wrap(<CollectionPage />);
       const tile = await screen.findByRole("button", { name: "Lightning Bolt" });
       // The census has answered once a stepper is drawn on the tile — before that, the page does
@@ -3122,11 +3173,93 @@ describe("the card menu", () => {
 
       rightClick(tile);
       await screen.findByRole("menu");
-      await user.click(screen.getByRole("menuitem", { name: "Remove 2 cards from collection" }));
+      await user.click(screen.getByRole("menuitem", { name: "Remove 2 cards from collection…" }));
+    }
 
-      await waitFor(() => expect(collectionRemove).toHaveBeenCalledTimes(2));
-      expect(collectionRemove).toHaveBeenCalledWith(7);
-      expect(collectionRemove).toHaveBeenCalledWith(9);
+    /**
+     * **Issue #555, and the gap it named.** The press over several entries asks first, then makes
+     * **one** `collection_remove_many` carrying every id — and `collection_remove` is never called
+     * at all. `cardMenu.test.tsx` asserted "one call" of the menu's dep against a `vi.fn()` and
+     * passed while this page looped that command once per entry; the assertion that could see the
+     * loop is this one, against the ipc the page actually reaches.
+     */
+    it("asks before removing several entries, then removes them in one write", async () => {
+      collectionRemoveMany.mockResolvedValue({ removed: 2, copies: 3, undoId: 44 });
+      const user = userEvent.setup();
+      await rightClickTwoEntryTile(user);
+
+      // The question, with the caret in it and nothing written yet.
+      const question = await screen.findByRole("group", {
+        name: "Remove 2 cards from your collection",
+      });
+      expect(question).toHaveFocus();
+      expect(question).toHaveTextContent("3 copies of Lightning Bolt.");
+      expect(collectionRemoveMany).not.toHaveBeenCalled();
+
+      await user.click(within(question).getByRole("button", { name: "Remove 2 cards" }));
+
+      await waitFor(() => expect(collectionRemoveMany).toHaveBeenCalledTimes(1));
+      expect(collectionRemoveMany).toHaveBeenCalledWith([7, 9]);
+      expect(collectionRemove).not.toHaveBeenCalled();
+      await waitFor(() =>
+        expect(screen.queryByRole("group", { name: /^Remove 2 cards/ })).toBeNull(),
+      );
+      // And the press is offered back, in the menu row's own unit.
+      const notice = screen.getByRole("status", { name: "Undo" });
+      await waitFor(() =>
+        expect(notice).toHaveTextContent("Removed 2 cards from your collection."),
+      );
+      await user.click(within(notice).getByRole("button", { name: "Undo" }));
+      await waitFor(() => expect(bulkUndo).toHaveBeenCalledWith(44));
+    });
+
+    it("writes nothing when the question is cancelled", async () => {
+      const user = userEvent.setup();
+      await rightClickTwoEntryTile(user);
+      const question = await screen.findByRole("group", {
+        name: "Remove 2 cards from your collection",
+      });
+
+      await user.click(within(question).getByRole("button", { name: "Cancel" }));
+
+      await waitFor(() =>
+        expect(screen.queryByRole("group", { name: /^Remove 2 cards/ })).toBeNull(),
+      );
+      expect(collectionRemoveMany).not.toHaveBeenCalled();
+      expect(collectionRemove).not.toHaveBeenCalled();
+    });
+
+    /** Escape is the page's own `"inner"` rung, so the question is one press and writes nothing. */
+    it("closes the question on Escape and writes nothing", async () => {
+      const user = userEvent.setup();
+      await rightClickTwoEntryTile(user);
+      await screen.findByRole("group", { name: "Remove 2 cards from your collection" });
+
+      await user.keyboard("{Escape}");
+
+      await waitFor(() =>
+        expect(screen.queryByRole("group", { name: /^Remove 2 cards/ })).toBeNull(),
+      );
+      expect(collectionRemoveMany).not.toHaveBeenCalled();
+    });
+
+    /** A refusal takes nothing — Rust rolls the press back — and says why in the page's banner,
+     *  with the question left open for a second try. */
+    it("says a refused removal in the banner and leaves the question open", async () => {
+      collectionRemoveMany.mockRejectedValue("That collection entry is not there any more.");
+      const user = userEvent.setup();
+      await rightClickTwoEntryTile(user);
+      const question = await screen.findByRole("group", {
+        name: "Remove 2 cards from your collection",
+      });
+
+      await user.click(within(question).getByRole("button", { name: "Remove 2 cards" }));
+
+      expect(await screen.findByRole("alert")).toHaveTextContent(
+        "Could not change your collection — That collection entry is not there any more.",
+      );
+      expect(screen.getByRole("group", { name: /^Remove 2 cards/ })).toBeInTheDocument();
+      expect(useBulkUndo.getState().offers.collection).toBeNull();
     });
 
     it("offers no removal on a tile a deck's group holds", async () => {
@@ -3159,15 +3292,26 @@ describe("the card menu", () => {
       expect(screen.getByRole("menuitem", { name: /Add to/ })).toBeInTheDocument();
     });
 
-    it("offers it on a table row at the root, one entry", async () => {
+    /**
+     * **One entry is the write, with no question in front of it** — the copy the reader pointed
+     * at — and it goes through the same one-write command, so it too is offered back, by name.
+     */
+    it("removes a table row's one entry at once, without asking, and offers it back", async () => {
       const user = userEvent.setup();
       wrap(<CollectionPage />);
       rightClick(await screen.findByRole("row", { name: /Lightning Bolt/ }));
       await screen.findByRole("menu");
 
       await user.click(screen.getByRole("menuitem", { name: "Remove from collection" }));
-      await waitFor(() => expect(collectionRemove).toHaveBeenCalledWith(7));
-      expect(collectionRemove).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(collectionRemoveMany).toHaveBeenCalledTimes(1));
+      expect(collectionRemoveMany).toHaveBeenCalledWith([7]);
+      expect(collectionRemove).not.toHaveBeenCalled();
+      expect(screen.queryByRole("group", { name: /^Remove/ })).toBeNull();
+      await waitFor(() =>
+        expect(screen.getByRole("status", { name: "Undo" })).toHaveTextContent(
+          "Removed Lightning Bolt from your collection.",
+        ),
+      );
     });
   });
 });
@@ -3822,8 +3966,17 @@ describe("the collection's shelves", () => {
     await screen.findByRole("dialog");
     expect(collectionSetFolder).not.toHaveBeenCalled();
     await user.click(screen.getByRole("button", { name: "Move 4 copies to Trade binder" }));
-    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
-    expect(collectionSetFolder).toHaveBeenCalledWith(8, 3);
+    // **One write for the whole answer** (issue #555) — `collection_set_folder_many` with every
+    // ticked id, and the single-row command not at all, where it used to be one call per tick.
+    await waitFor(() => expect(collectionSetFolderMany).toHaveBeenCalledTimes(1));
+    expect(collectionSetFolderMany).toHaveBeenCalledWith([7, 8], 3);
+    expect(collectionSetFolder).not.toHaveBeenCalled();
+    // Offered back, in entries and by the drawer's own name.
+    await waitFor(() =>
+      expect(screen.getByRole("status", { name: "Undo" })).toHaveTextContent(
+        "Moved 2 cards to Trade binder.",
+      ),
+    );
   });
 
   /**

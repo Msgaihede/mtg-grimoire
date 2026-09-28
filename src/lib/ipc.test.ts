@@ -12,8 +12,10 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 import activityRs from "../../src-tauri/src/activity.rs?raw";
 import cardRs from "../../src-tauri/src/card.rs?raw";
 import changesRs from "../../src-tauri/src/changes.rs?raw";
+import bulkUndoRs from "../../src-tauri/src/bulk_undo.rs?raw";
 import collectionRs from "../../src-tauri/src/collection.rs?raw";
 import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
+import importRs from "../../src-tauri/src/import.rs?raw";
 import combosRs from "../../src-tauri/src/combos.rs?raw";
 import deckRs from "../../src-tauri/src/deck.rs?raw";
 import deckpaneRs from "../../src-tauri/src/deckpane.rs?raw";
@@ -413,7 +415,14 @@ describe("ipc argument names match the Rust command signatures", () => {
    * nothing about a reader's filing, so the plain collection import must go on sending `null`.
    */
   it("carries the import's folder, and sends null when nobody names one", async () => {
-    invoke.mockResolvedValue({ added: 1, updated: 0, removed: 0 });
+    invoke.mockResolvedValue({
+      added: 1,
+      updated: 0,
+      removed: 0,
+      copies: 1,
+      leftInFolders: 0,
+      undoId: null,
+    });
     const items = [{ cardId: "c1", quantity: 1, finish: "nonfoil" as const }];
 
     await ipc.collectionImportCommit(items, "add");
@@ -2347,10 +2356,60 @@ describe("ipc argument names match the Rust command signatures", () => {
     // typed `void` would throw away the whole of what an import has to say for itself.
     expect(outcome).toEqual({ added: 100, removed: 0, categoriesCreated: 2 });
 
-    invoke.mockResolvedValue("1 Sol Ring\n");
-    const text = await ipc.importReadFile("C:\\lists\\edh.txt");
+    // An object since issue #555 — the text and the encoding the backend read it in, which is
+    // what lets the dialog say a file was read as Windows-1252 rather than decoded lossily.
+    invoke.mockResolvedValue({ text: "1 Sol Ring\n", encoding: "utf-8" });
+    const file = await ipc.importReadFile("C:\\lists\\edh.txt");
     expect(invoke).toHaveBeenCalledWith("import_read_file", { path: "C:\\lists\\edh.txt" });
-    expect(text).toBe("1 Sol Ring\n");
+    expect(file).toEqual({ text: "1 Sol Ring\n", encoding: "utf-8" });
+  });
+
+  /**
+   * **Issue #555's four new commands, each spelled the way the crate declares it.** Two of them
+   * carry a `folderId`, and that is the name to watch: the Rust parameter is `folder_id`, Tauri
+   * camel-cases a command's arguments, and a `folder_id` on this side would arrive as nothing — a
+   * preview counted against the wrong folder, and a bulk move that files everything at the root.
+   * `undoId` is the other: the parameter is `undo_id: u64`, and a misspelt key is a Tauri
+   * deserialisation refusal on every Undo press, which the notice would word as the undo failing.
+   */
+  it("spells the preview, the two bulk writes and the undo the way the crate declares them", async () => {
+    const items = [{ cardId: "c1", quantity: 2, finish: "nonfoil" as const }];
+    invoke.mockResolvedValue({
+      added: 0,
+      updated: 1,
+      removed: 0,
+      copies: 2,
+      leftInFolders: 0,
+      undoId: null,
+    });
+    await ipc.collectionImportPreview(items, "set");
+    expect(invoke).toHaveBeenCalledWith("collection_import_preview", {
+      items,
+      mode: "set",
+      folderId: null,
+    });
+    expect(collectionRs).toMatch(
+      /fn collection_import_preview\([^)]*\bitems\s*:\s*Vec<CollectionImportItem>\s*,\s*mode\s*:\s*String\s*,\s*folder_id\s*:\s*Option<i64>/s,
+    );
+
+    invoke.mockResolvedValue({ removed: 2, copies: 5, undoId: 3 });
+    await ipc.collectionRemoveMany([4, 9]);
+    expect(invoke).toHaveBeenCalledWith("collection_remove_many", { ids: [4, 9] });
+    expect(collectionRs).toMatch(/fn collection_remove_many\([^)]*\bids\s*:\s*Vec<i64>/s);
+
+    invoke.mockResolvedValue({ changes: [], undoId: 4 });
+    await ipc.collectionSetFolderMany([4, 9], 7);
+    expect(invoke).toHaveBeenCalledWith("collection_set_folder_many", { ids: [4, 9], folderId: 7 });
+    await ipc.collectionSetFolderMany([4], null);
+    expect(invoke).toHaveBeenCalledWith("collection_set_folder_many", { ids: [4], folderId: null });
+    expect(collectionFoldersRs).toMatch(
+      /fn collection_set_folder_many\([^)]*\bids\s*:\s*Vec<i64>\s*,\s*folder_id\s*:\s*Option<i64>/s,
+    );
+
+    invoke.mockResolvedValue({ scope: "collection", restored: 2 });
+    expect(await ipc.bulkUndo(3)).toEqual({ scope: "collection", restored: 2 });
+    expect(invoke).toHaveBeenCalledWith("bulk_undo", { undoId: 3 });
+    expect(bulkUndoRs).toMatch(/fn bulk_undo\([^)]*\bundo_id\s*:\s*u64/s);
   });
 
   it("asks for a collection pre-warm with no arguments and reads back the queue size", async () => {
@@ -5241,6 +5300,21 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // The theory diff's row: ten fields when its picture left it, one short of `mirrors`' floor,
     // and eleven with `isToken` — kept here, since a Compare line is no card wall either way.
     ["TheoryDiffRow", deckTheoryRs, "TheoryDiffRow"],
+    // **Issue #555's seven.** `CollectionImportItem` is the one the app **sends**, which is where
+    // a drift is loudest and quietest at once — `tradelistQuantity` and `tags` are `serde(default)`
+    // on the Rust side, so a key misspelt here deserialises to `None` and a restore quietly drops
+    // the column again, which is the bug the issue was filed for. `ImportCommitOutcome`'s
+    // `undoId` is the ticket an Undo button presses: renamed, it arrives `undefined`, `offerUndo`
+    // reads that as "nothing changed", and every import stops offering itself back with nothing
+    // red anywhere. `ImportResolveLine` is the other one sent, and its `lang` is the same
+    // `serde(default)` trap one command over.
+    ["CollectionImportItem", collectionRs, "CollectionImportItem"],
+    ["ImportCommitOutcome", collectionRs, "ImportCommitOutcome"],
+    ["BulkRemoveOutcome", collectionRs, "BulkRemoveOutcome"],
+    ["BulkMoveOutcome", collectionFoldersRs, "BulkMoveOutcome"],
+    ["BulkUndoOutcome", bulkUndoRs, "BulkUndoOutcome"],
+    ["ImportFile", importRs, "ImportFile"],
+    ["ImportResolveLine", importRs, "ResolveLine"],
   ];
 
   it.each(plainMirrors)(

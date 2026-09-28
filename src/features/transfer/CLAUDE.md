@@ -23,6 +23,13 @@ and `ExportDialog` call it and know nothing about how a file is picked or writte
   call, "that file is over 1 MB" arrives worded as a broken picker.
 - **The 1 MB cap is `import.rs`'s `MAX_IMPORT_BYTES`**, the same constant the paste path uses, so
   the two cannot disagree about how long a decklist may be.
+- **A file is never decoded lossily, and the read says how it was decoded** (issue #555). A
+  byte-order mark is honoured (UTF-8, UTF-16 LE/BE), valid UTF-8 is read as such, and anything
+  else is **Windows-1252** — Excel's CSV on a Western European Windows — through a hand-written
+  32-entry table rather than `from_utf8_lossy`, which turned every `é` in such a file into
+  `U+FFFD`. `readDecklist` answers `{ text, encoding }` and the dialog draws
+  `LEGACY_ENCODING_NOTICE` under the text box for `windows-1252`, because a file in some *other*
+  legacy code page reads as mojibake under that guess and the reader is the only one who can tell.
 
 ## Import
 
@@ -75,6 +82,24 @@ and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
   `Condition`/`Purchase price`/… cell is what makes the collection's own import a restore rather
   than a dump. Full header vocabulary and the field-count check:
   [import-export.md](../../../docs/reference/import-export.md).
+- **Other apps' CSVs are read, and what was not read is said** (issue #555). Deckbox, Moxfield,
+  ManaBox, Dragon Shield, TCGplayer, MTGO, MTGGoldfish and Archidekt write their own header
+  spellings (`Count`, `Edition Code`, `Card Number`, `Foil`, …); an alias table maps them onto the
+  registry's fields with a **rank**, so when two columns name one field the more specific wins
+  (`Edition Code` over Deckbox's `Edition`, which is a set *name*) and the loser is listed. The
+  registry's own headers and the legacy `Tag` aliases always win a key. A finish-like column is
+  **value-mapped** (`foil`, `Yes`, `Surge Foil` → foil; `etched`; `normal`/blank → regular).
+  `ParsedList.csv` (`CsvShape`) carries the delimiter, `hasQuantity` and `ignoredColumns` — a
+  column that maps to nothing, to a field no importer reads, or that lost its field to a better
+  one — and `shared/CsvNotes.tsx` says both on the preview step. **Deckbox's `My Price` stays
+  unread on purpose**: it is a seller's asking price, not what the reader paid.
+- **The CSV grid is read by `csv.ts`'s `readCsv`, which is where four file-level facts live**: a
+  BOM and a leading `sep=` line (Dragon Shield) come off; the delimiter is measured off the header
+  line (`,` `;` or tab, outside quotes, comma winning ties — Excel in an EU locale writes `;`);
+  every cell is `unescapeFormula`'d; and each row carries the **physical** line it started on, so
+  a notes cell spanning three lines no longer shifts every later line number the preview quotes.
+  A CSV quantity is a whole number from 1 to 9999 or a `ParseIssue` — `1.5` and `3 copies` used
+  to import as 1 and 3.
 - **Four decorations and one heading rule, and the heading rule is the _only_ lookahead in the
   file.** The four are per-line and cost nothing: an **empty `()`** printing hint, an Archidekt
   `^Label,#colour^`, the `[Category]` bracket, and the `*F*`/`*E*` finish markers it always had (a
@@ -476,6 +501,27 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   the guarantee. **The reader still accepts `Tag` and `Tag colour`** as aliases for the two new
   ids, so a CSV an older build wrote reads its labels back. Full record:
   [import-export.md](../../../docs/reference/import-export.md).
+- **Archidekt cannot carry `,` `{` `}` `[` `]` in a pile name, so the writer rewrites them** (issue
+  #555): `,` → `;`, `{` and `[` → `<`, `}` and `]` → `>`, in the heading **and** the bracket so the
+  two agree. The reader takes a bracket's first comma entry and strips `{…}` as flags, so
+  `Ramp, Fixing` used to come back as `Ramp`. **Angle brackets, not parentheses**: `(x)` at the end
+  of a heading matches `HINT_TAIL`, so the heading would be read as a card line — and after a
+  `Commander` heading, every card under it would stay in the command zone. The rewrite is lossy on
+  purpose and **CSV is exempt** (its quoted Category cell carries all five). A pile whose *own*
+  name ends in a one-word parenthesis (`Removal (cheap)`) or starts with a count (`2 Drops`) still
+  trips the heading rule, and that predates this.
+- **Every CSV cell a spreadsheet would read as a formula gets a leading apostrophe** (issue #555,
+  `formula.ts`'s `escapeFormula`): `=`, `+`, `-`, `@`, tab and CR, after any run of apostrophes, so
+  a note already starting `'=` is written `''=` and `unescapeFormula` on read gives it back
+  exactly. `-2 lent` opened in Excel as `#NAME?` before. Every cell rather than a list of free-text
+  columns, because no other field can legitimately start with one of those characters; the Rust
+  mirror's `csv::escape_formula` is the same rule, held by the golden `formulaCells` scenario.
+- **A sweep that failed is an error on the dialog, never an empty file** (issue #555).
+  `useExportScope` answers `error` and `retry`, and `loading` is `isFetching || (enabled &&
+  isPending)` — `isFetching` alone reads false for a query paused offline. With an error the count
+  line is replaced by a `role="alert"` sentence and a Retry, and Copy and Save as… are
+  `aria-disabled` and inert, as they are while the sweep is still loading: `cards` is empty until
+  it finishes, and a Save pressed then wrote `0 lines` beside "3,000 cards matching your filters".
 - **`export/scope.ts` sweeps a filter into a whole list before the dialog opens on it.** The
   collection and the wishlist are paged at 100 rows for their own views, so what is in memory at
   any moment is a scroll position rather than a decision, and exporting that would silently

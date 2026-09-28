@@ -78,6 +78,7 @@ use crate::sync::{lock_db_read, AppState};
 use rusqlite::{params, Connection, OptionalExtension, Params, Row, Statement};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -146,14 +147,23 @@ pub fn fold_name(raw: &str) -> String {
 /// One line of a parsed decklist, as TypeScript hands it over.
 ///
 /// The quantity is deliberately not here: this command answers *which printing*, and how many
-/// of it the list asked for is the caller's arithmetic. Both hints are optional because most
-/// decklist formats carry neither.
+/// of it the list asked for is the caller's arithmetic. Every hint is optional because most
+/// decklist formats carry none of them.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolveLine {
     pub name: String,
+    /// A set **code** — or, since issue #555, a set **name** when the file had no code column
+    /// (Deckbox's `Edition`, Dragon Shield's set column). [`resolve_lines`] tries it as a code
+    /// first; see [`SetHints`] for when it is read as a name instead.
     pub set_code: Option<String>,
     pub collector_number: Option<String>,
+    /// The language the file says its copy is in, as a Scryfall code (`ja`, `zhs`) — issue #555.
+    /// **A preference and never a filter**: see [`preferred_lang`] for what is accepted and
+    /// [`match_order`] for where it ranks. `#[serde(default)]`, so every caller written before
+    /// the field — and a TypeScript `null` — is today's ordering exactly.
+    #[serde(default)]
+    pub lang: Option<String>,
 }
 
 /// The printing a line resolved to, and every fact the preview and the validation engine
@@ -342,8 +352,57 @@ const FROM_CARDS: &str = ",\n        count(*) OVER () AS printing_count\n   FROM
 /// one, and no wider locale notion is invented: English or not.
 ///
 /// [`fold_match`] repeats these keys in Rust and must carry this one in this position too.
+///
+/// A line that says which language its copy is in puts **one more key ahead of all four** —
+/// see [`match_order`]. This constant is the ordering of every line that says nothing, and it is
+/// what [`match_order`] answers, byte for byte, when there is nothing to prefer.
 const MATCH_ORDER: &str = " ORDER BY owned_quantity DESC, (c.lang = 'en') DESC,
         coalesce(c.released_at, '0000-00-00') DESC, c.id DESC";
+
+/// The language a line asked for, if it asked for one this module will put in SQL.
+///
+/// **Two to three ASCII letters, lowercased, or nothing** — the shape of every one of Scryfall's
+/// codes (`en`, `ja`, `zhs`, `grc`, `qya`), and the whole of the fence that makes inlining it as a
+/// literal in [`match_order`] safe: a value that could close a quote cannot pass it. Anything
+/// else — `Japanese`, a stray `ja-JP`, a blank — is **ignored rather than refused**, because this
+/// is a preference and a line whose preference is unreadable still has a name to resolve by.
+/// `@/lib/languages`' `languageCode` is what turns a file's cell into a code before it gets here.
+fn preferred_lang(raw: &Option<String>) -> Option<String> {
+    let code = raw.as_deref()?.trim().to_ascii_lowercase();
+    ((2..=3).contains(&code.len()) && code.bytes().all(|b| b.is_ascii_lowercase())).then_some(code)
+}
+
+/// [`MATCH_ORDER`], with a line's language preference in front of it (issue #555).
+///
+/// **Ahead of `owned_quantity`, and that position is the decision.** [`MATCH_ORDER`] puts the
+/// copy you own first because a line that says nothing about its printing is best answered with
+/// cardboard the reader has. A line that says `Japanese` is not saying nothing: the file is
+/// describing a Japanese copy — usually a collection export describing *that* copy — and an
+/// English printing the reader happens to own is a different object. So the file's word outranks
+/// the binder's, and the binder still breaks the tie among printings in that language.
+///
+/// **A preference and never a filter.** It is an `ORDER BY` key, so a name with no printing in
+/// that language resolves exactly as it would have — which is most names, because Scryfall's
+/// default bulk data carries a non-English printing only where there is no English one — and
+/// `printing_count` (a window over every matched row) does not move with it.
+///
+/// **Inlined as a literal rather than bound**, and [`preferred_lang`] is what makes that safe. A
+/// bound `?N` here would have to take a different position in each of the six arms and be bound
+/// by every one of them, and rusqlite refuses a statement handed fewer values than it has holes.
+/// What the literal costs is one set of six statements per **distinct** language in the list,
+/// prepared the first time a line asks for it and reused by every later line that does — see
+/// [`Arms`] — so a collection export in three languages prepares eighteen statements beside the
+/// six every list prepares, not one per line.
+fn match_order(lang: Option<&str>) -> String {
+    match lang {
+        None => MATCH_ORDER.to_owned(),
+        Some(lang) => MATCH_ORDER.replacen(
+            " ORDER BY ",
+            &format!(" ORDER BY (c.lang = '{lang}') DESC, "),
+            1,
+        ),
+    }
+}
 
 /// The printing hint at full strength: a set code and a collector number name one printing,
 /// and the reader who wrote them down meant them. No name is consulted **in the SQL**, so a
@@ -562,7 +621,16 @@ fn hint_names_the_card(card_name: &str, wanted: &str) -> bool {
 /// this arm's SQL selects a literal `0` for it: a `count(*) OVER ()` would count everything FTS
 /// returned, and the reader is choosing between printings of *their* card rather than between
 /// everything that happened to mention it.
-fn fold_match(stmt: &mut Statement<'_>, name: &str) -> Option<ImportMatch> {
+///
+/// `lang` is the line's [`preferred_lang`], and it takes [`match_order`]'s position here too:
+/// **after the fold rank and ahead of `owned_quantity`**. After the rank, because the rank is
+/// this arm's spelling of the SQL arms' *sequence* — the exact name is asked before the front
+/// face whatever language either is in — and ahead of everything [`MATCH_ORDER`] orders by,
+/// because that is where [`match_order`] puts it. `None` compares every candidate equal on it, so
+/// a line that says nothing is sorted exactly as it was. The statement handed in must be the one
+/// [`Arms::prepare`] built for the same `lang`, or the `LIMIT` would have kept the 200 candidates
+/// a different ordering preferred.
+fn fold_match(stmt: &mut Statement<'_>, name: &str, lang: Option<&str>) -> Option<ImportMatch> {
     let wanted = fold_name(name);
     if wanted.is_empty() {
         return None;
@@ -582,11 +650,14 @@ fn fold_match(stmt: &mut Statement<'_>, name: &str) -> Option<ImportMatch> {
         .filter_map(|(m, rel)| Some((fold_rank(&m.name, &wanted)?, m, rel)))
         .collect();
     let count = i64::try_from(kept.len()).unwrap_or(i64::MAX);
-    // The whole name ahead of a front face, then `MATCH_ORDER`'s four keys in its own order.
-    // `false < true`, so comparing `b` to `a` puts English first exactly as `DESC` does.
+    // The whole name ahead of a front face, then the line's language, then `MATCH_ORDER`'s four
+    // keys in its own order. `false < true`, so comparing `b` to `a` puts a preferred row first
+    // exactly as `DESC` does.
     let english = |m: &ImportMatch| m.lang == "en";
+    let asked = |m: &ImportMatch| lang.is_some_and(|l| m.lang == l);
     kept.sort_by(|a, b| {
         a.0.cmp(&b.0)
+            .then_with(|| asked(&b.1).cmp(&asked(&a.1)))
             .then_with(|| b.1.owned_quantity.cmp(&a.1.owned_quantity))
             .then_with(|| english(&b.1).cmp(&english(&a.1)))
             .then_with(|| b.2.cmp(&a.2))
@@ -597,10 +668,151 @@ fn fold_match(stmt: &mut Statement<'_>, name: &str) -> Option<ImportMatch> {
     Some(winner)
 }
 
+/// The six arms of [`resolve_lines`], prepared at one ordering.
+///
+/// One of these per **distinct** [`preferred_lang`] in a list, plus the one every list prepares
+/// for the lines that name no language — see [`match_order`] for why the language is a literal in
+/// the SQL and therefore a statement of its own. Built once and reused by every line that asks for
+/// the same ordering, which is what keeps "six statements, reused down the list" true of a
+/// collection export in three languages as much as of a pasted decklist in none.
+struct Arms<'c> {
+    by_printing: Statement<'c>,
+    by_set_and_name: Statement<'c>,
+    by_set_and_front: Statement<'c>,
+    by_name: Statement<'c>,
+    by_front: Statement<'c>,
+    by_fold: Statement<'c>,
+}
+
+impl<'c> Arms<'c> {
+    /// `columns` is [`match_columns`]' answer, built once by the caller so every arm of every
+    /// ordering ranks on the same `owned_quantity` expression.
+    fn prepare(conn: &'c Connection, columns: &str, lang: Option<&str>) -> Result<Self, String> {
+        let order = match_order(lang);
+        let scan = format!("{columns}{FROM_CARDS}");
+        let prepare = |sql: String| {
+            conn.prepare(&sql)
+                .map_err(|e| format!("the decklist could not be resolved: {e}"))
+        };
+        Ok(Self {
+            by_printing: prepare(format!("{scan}{BY_SET_AND_NUMBER}{order} LIMIT 1"))?,
+            by_set_and_name: prepare(format!("{scan}{BY_SET_AND_NAME}{order} LIMIT 1"))?,
+            by_set_and_front: prepare(format!("{scan}{BY_SET_AND_FRONT}{order} LIMIT 1"))?,
+            by_name: prepare(format!("{scan}{BY_NAME}{order} LIMIT 1"))?,
+            by_front: prepare(format!("{scan}{BY_FRONT_FACE}{order} LIMIT 1"))?,
+            by_fold: prepare(format!(
+                "{columns}{FOLD_COLUMNS}{FTS_FROM_AND_WHERE}{order} LIMIT {FOLD_CANDIDATES}"
+            ))?,
+        })
+    }
+}
+
+/// What each distinct set hint in one list means, asked once per hint rather than once per line.
+///
+/// **A set hint may be a set _name_** (issue #555). Deckbox's `Edition` column holds
+/// `Commander Legends` and Dragon Shield identifies a printing by set name, so a CSV with no code
+/// column hands its name column over as `set_code`. [`Self::code_for`] tries a hint as a code
+/// first — **a code always wins**, so no file that already worked can resolve differently — and
+/// only when no printing carries that code does it read the hint as a name:
+///
+/// * **Against `sets.name`**, the `/sets` fetch's table: ~1 050 rows keyed on `code`, read whole
+///   once per call and compared in Rust, so the missing index on `name` costs nothing worth
+///   indexing. **`cards.set_name` is the fallback** for a database whose `sets` is empty — that
+///   fetch is a second request an ingest can fail or skip, which is why `sync::sets_need_fetch`
+///   exists — and it is a full scan of `cards`, paid once per call, only on such a database and
+///   only once a hint has already missed as a code.
+/// * **Folded by [`fold_name`]** on both sides, the fold the name arm already trusts: case, runs
+///   of whitespace, a curly apostrophe in `Baldur’s Gate`, a diacritic. Wider than
+///   "case-insensitive", and in exactly the directions a set name drifts — and the case half is
+///   not optional, because an older Deckbox file's `Edition` column reaches here through the
+///   parser's *code* fallback, which upper-cases it: `COMMANDER LEGENDS`, `MAGIC 2011`.
+/// * **Exactly one code, or none.** A name two sets share names no printing, and guessing between
+///   them would be the hint overriding the card's own name arms with a coin toss. Such a hint —
+///   and one naming nothing — goes on as the lowercased text it arrived as, which is today's
+///   behaviour exactly: it misses, `hint_missed` says so, and the name arms answer.
+///
+/// Fails open throughout: a query that errors reads as "this is a code", which is what the hint
+/// was taken for before this existed.
+#[derive(Default)]
+struct SetHints {
+    /// The hint, lowercased, to the code a line carrying it should use.
+    codes: HashMap<String, String>,
+    /// Every set's folded name beside its code, loaded the first time a hint is not a code.
+    names: Option<Vec<(String, String)>>,
+}
+
+impl SetHints {
+    /// The set code a trimmed, non-blank hint stands for. Lowercased either way, because 0 of
+    /// the corpus's rows carry a set code in any other case — see [`BY_SET_AND_NUMBER`].
+    fn code_for(&mut self, conn: &Connection, hint: &str) -> String {
+        let lower = hint.to_lowercase();
+        if let Some(code) = self.codes.get(&lower) {
+            return code.clone();
+        }
+        let code = if Self::is_a_code(conn, &lower) {
+            lower.clone()
+        } else {
+            self.by_name(conn, hint).unwrap_or_else(|| lower.clone())
+        };
+        self.codes.insert(lower, code.clone());
+        code
+    }
+
+    /// Does any printing carry this set code? `idx_cards_set_cn`'s first column, so one index
+    /// probe. Any printing and not only a paper one: a digital-only set's code is still a code,
+    /// and reading it as a name would only find a different set to disagree with.
+    fn is_a_code(conn: &Connection, code: &str) -> bool {
+        conn.query_row(
+            "SELECT EXISTS (SELECT 1 FROM cards WHERE set_code = ?1)",
+            [code],
+            |r| r.get(0),
+        )
+        .unwrap_or(true)
+    }
+
+    /// The one set code whose name folds to this hint's, or `None` for no set or for several.
+    fn by_name(&mut self, conn: &Connection, hint: &str) -> Option<String> {
+        let wanted = fold_name(hint);
+        if wanted.is_empty() {
+            return None;
+        }
+        let names = self.names.get_or_insert_with(|| Self::load_names(conn));
+        let mut codes = names
+            .iter()
+            .filter(|(name, _)| *name == wanted)
+            .map(|(_, code)| code);
+        let first = codes.next()?;
+        codes.all(|code| code == first).then(|| first.clone())
+    }
+
+    /// `(folded name, code)` for every set this database can name — `sets` when it holds any
+    /// row, `cards.set_name` otherwise. An error is an empty list, which names nothing.
+    fn load_names(conn: &Connection) -> Vec<(String, String)> {
+        let pairs = |sql: &str| -> rusqlite::Result<Vec<(String, String)>> {
+            let mut stmt = conn.prepare(sql)?;
+            let mut out = Vec::new();
+            for row in stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?)))? {
+                out.push(row?);
+            }
+            Ok(out)
+        };
+        let mut rows = pairs("SELECT code, name FROM sets").unwrap_or_default();
+        if rows.is_empty() {
+            rows =
+                pairs("SELECT DISTINCT set_code, set_name FROM cards WHERE set_name IS NOT NULL")
+                    .unwrap_or_default();
+        }
+        rows.into_iter()
+            .map(|(code, name)| (fold_name(&name), code))
+            .collect()
+    }
+}
+
 /// Every line of a parsed decklist, resolved to a printing this app has.
 ///
-/// Six statements, prepared once and reused down the list, tried in the order the reader's own
-/// intent runs out — **narrowest first, and the exact name always ahead of a front face**:
+/// Six statements, prepared once per ordering and reused down the list (see [`Arms`]), tried in
+/// the order the reader's own intent runs out — **narrowest first, and the exact name always
+/// ahead of a front face**:
 ///
 /// 1. **A set and a collector number** name one printing, and are taken at their word about
 ///    *which printing* — never about *which card*, which is [`hint_names_the_card`]'s guard:
@@ -621,27 +833,25 @@ fn fold_match(stmt: &mut Statement<'_>, name: &str) -> Option<ImportMatch> {
 /// and a collector number with no set beside it sets it without being tried at all (a
 /// collector number is not unique across sets, so it can only ever narrow one).
 ///
+/// Two things a line may say besides its name and printing, both since issue #555 and both
+/// preferences rather than filters: **a language**, which reorders every arm ([`match_order`]),
+/// and **a set hint that is a set's name** rather than its code ([`SetHints`]), which is turned
+/// into that code before arm 1 and then travels exactly as a code would.
+///
 /// Only `prepare` can fail the call. Everything after it degrades to `matched: None`.
 pub fn resolve_lines(
     conn: &Connection,
     lines: &[ResolveLine],
 ) -> Result<Vec<ImportResolveRow>, String> {
-    // Built once and reused by all six arms below, so every arm ranks on the same
-    // `owned_quantity` expression.
+    // Built once and reused by every arm of every ordering below, so every arm ranks on the
+    // same `owned_quantity` expression.
     let columns = match_columns(conn);
-    let scan = format!("{columns}{FROM_CARDS}");
-    let prepare = |sql: &str| {
-        conn.prepare(sql)
-            .map_err(|e| format!("the decklist could not be resolved: {e}"))
-    };
-    let mut by_printing = prepare(&format!("{scan}{BY_SET_AND_NUMBER}{MATCH_ORDER} LIMIT 1"))?;
-    let mut by_set_and_name = prepare(&format!("{scan}{BY_SET_AND_NAME}{MATCH_ORDER} LIMIT 1"))?;
-    let mut by_set_and_front = prepare(&format!("{scan}{BY_SET_AND_FRONT}{MATCH_ORDER} LIMIT 1"))?;
-    let mut by_name = prepare(&format!("{scan}{BY_NAME}{MATCH_ORDER} LIMIT 1"))?;
-    let mut by_front = prepare(&format!("{scan}{BY_FRONT_FACE}{MATCH_ORDER} LIMIT 1"))?;
-    let mut by_fold = prepare(&format!(
-        "{columns}{FOLD_COLUMNS}{FTS_FROM_AND_WHERE}{MATCH_ORDER} LIMIT {FOLD_CANDIDATES}"
-    ))?;
+    // Keyed by the line's preferred language. The no-language set is prepared up front, before
+    // any line is read, so a broken schema still fails the whole call at once as it always did;
+    // every other set is prepared the first time a line asks for it.
+    let mut by_lang: HashMap<Option<String>, Arms<'_>> = HashMap::new();
+    by_lang.insert(None, Arms::prepare(conn, &columns, None)?);
+    let mut sets = SetHints::default();
 
     let mut out = Vec::with_capacity(lines.len());
     for (index, l) in lines.iter().enumerate() {
@@ -651,31 +861,40 @@ pub fn resolve_lines(
         // printing hint needs no name and is still honoured.
         let name = l.name.trim();
         let front = (!name.is_empty()).then(|| front_face_range(name));
+        let lang = preferred_lang(&l.lang);
+        let arms = match by_lang.entry(lang.clone()) {
+            Entry::Occupied(slot) => slot.into_mut(),
+            Entry::Vacant(slot) => {
+                let arms = Arms::prepare(conn, &columns, slot.key().as_deref())?;
+                slot.insert(arms)
+            }
+        };
         let mut matched = None;
         let mut hint_missed = false;
 
         if let Some(set) = given(&l.set_code) {
             // Binary, so `idx_cards_set_cn` is usable — and lower-case, because 0 of the
             // corpus's 116 695 rows carry a set code in any other case while a parser that
-            // upper-cases `(MH2)` is the ordinary source of one. See `BY_SET_AND_NUMBER`.
-            let set = set.to_lowercase();
+            // upper-cases `(MH2)` is the ordinary source of one. See `BY_SET_AND_NUMBER`. A
+            // hint that is no set's code but exactly one set's *name* comes back as that code.
+            let set = sets.code_for(conn, set);
             let number = given(&l.collector_number);
             if let Some(number) = number {
                 // Taken at its word about the *printing*, never about the *card* — see
                 // `hint_names_the_card`. A row whose name is not this line's is the same event
                 // as a number that named nothing: `hint_missed` below, and fall through to the
                 // arms that do consult the name.
-                matched = one(&mut by_printing, params![&set, number])
+                matched = one(&mut arms.by_printing, params![&set, number])
                     .filter(|m| hint_names_the_card(&m.name, name));
             }
             // Set before the fallbacks below, so a number that named nothing stays reported
             // even when the set and name go on to answer.
             hint_missed = matched.is_none();
             if matched.is_none() && !name.is_empty() {
-                matched = one(&mut by_set_and_name, params![&set, name]).or_else(|| {
+                matched = one(&mut arms.by_set_and_name, params![&set, name]).or_else(|| {
                     front
                         .as_ref()
-                        .and_then(|(lo, hi)| one(&mut by_set_and_front, params![&set, lo, hi]))
+                        .and_then(|(lo, hi)| one(&mut arms.by_set_and_front, params![&set, lo, hi]))
                 });
                 if number.is_none() {
                     hint_missed = matched.is_none();
@@ -686,13 +905,13 @@ pub fn resolve_lines(
         }
 
         if matched.is_none() && !name.is_empty() {
-            matched = one(&mut by_name, params![name])
+            matched = one(&mut arms.by_name, params![name])
                 .or_else(|| {
                     front
                         .as_ref()
-                        .and_then(|(lo, hi)| one(&mut by_front, params![lo, hi]))
+                        .and_then(|(lo, hi)| one(&mut arms.by_front, params![lo, hi]))
                 })
-                .or_else(|| fold_match(&mut by_fold, name));
+                .or_else(|| fold_match(&mut arms.by_fold, name, lang.as_deref()));
         }
         out.push(ImportResolveRow {
             index,
@@ -1225,13 +1444,15 @@ pub async fn deck_import_commit(
 ///   fence rather than a truncation — a 200 MB file the reader pointed at by mistake costs one
 ///   megabyte to refuse rather than two hundred. It is the same constant the paste path uses, so
 ///   the two cannot disagree about how long a decklist may be.
-/// * **Lossy UTF-8 deliberately**: a Windows-1252 apostrophe in one card name should cost that
-///   one name, not the other hundred lines. `from_utf8_lossy` turns the bad byte into `U+FFFD`,
-///   which no card name bears, so the line it damages comes back as an unmatched name in the
-///   preview, quoted — a thing the reader can act on — while every other line resolves. A
-///   `from_utf8` here would answer `Err` for the whole file and tell them nothing about which
-///   line it was.
-fn read_import_file(path: &str) -> Result<String, String> {
+/// * **The bytes are never refused and never decoded lossily** — see [`decode`], and
+///   [`FileEncoding`] for which reading the page is told about. This used to be
+///   `from_utf8_lossy`, on the argument that a Windows-1252 apostrophe should cost one line
+///   rather than the whole file. The first half of that stands; the lossy half was wrong
+///   (issue #555), because the file that carries one cp1252 byte is Excel's "CSV" on a Western
+///   European Windows, and it carries **every** accented name in that code page — `Jötun Grunt`,
+///   `Séance`, `Lim-Dûl's Vault` each turned into `U+FFFD` and each quoted back as unmatched,
+///   while the byte that said which character it was sat one table lookup away.
+fn read_import_file(path: &str) -> Result<ImportFile, String> {
     std::fs::File::open(path)
         .map_err(|e| open_failed(format!("could not open {path}: {e}")))
         .and_then(read_bounded)
@@ -1244,8 +1465,8 @@ fn open_failed(e: String) -> String {
     format!("That file could not be opened — {e}")
 }
 
-/// The cap and the lossy decode, over anything readable.
-fn read_bounded(mut reader: impl std::io::Read) -> Result<String, String> {
+/// The cap and the decode, over anything readable.
+fn read_bounded(mut reader: impl std::io::Read) -> Result<ImportFile, String> {
     use std::io::Read as _;
 
     // **A bounded read rather than a `metadata()` check.** `take(MAX + 1)` then a length test is
@@ -1264,7 +1485,116 @@ fn read_bounded(mut reader: impl std::io::Read) -> Result<String, String> {
             MAX_IMPORT_BYTES / 1_000_000
         ));
     }
-    Ok(String::from_utf8_lossy(&bytes).into_owned())
+    Ok(decode(&bytes))
+}
+
+/// How a picked file's bytes were turned into text — `ImportFile.encoding` in `src/lib/ipc.ts`,
+/// whose four strings are these four `rename`s exactly.
+///
+/// **The page is told, because one of the four is a guess.** A byte-order mark *names* UTF-16
+/// and a file that validates as UTF-8 is UTF-8 beyond reasonable doubt (a legacy code page almost
+/// never produces a valid multi-byte sequence by accident), so three of these are facts about the
+/// file. [`Self::Windows1252`] is the fallback for everything else, and it is only right for a
+/// file saved in *that* code page: a Central European or Cyrillic one decodes without complaint
+/// into the wrong letters, and nothing on this side can tell. The reader can — so the import
+/// dialog says which reading it took, and only for this one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum FileEncoding {
+    #[serde(rename = "utf-8")]
+    Utf8,
+    #[serde(rename = "utf-16le")]
+    Utf16Le,
+    #[serde(rename = "utf-16be")]
+    Utf16Be,
+    #[serde(rename = "windows-1252")]
+    Windows1252,
+}
+
+/// A decklist file, as text, and the reading that produced it (issue #555).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ImportFile {
+    pub text: String,
+    pub encoding: FileEncoding,
+}
+
+/// Windows-1252's `0x80`–`0x9F`, the only 32 bytes where it is not Latin-1.
+///
+/// **Hand-written rather than `encoding_rs`**, for [`fold_name`]'s reason: the table is 32
+/// entries, fixed since 1998, and a crate added for one lookup is a crate to keep. Below `0x80`
+/// the code page is ASCII and from `0xA0` up it is Latin-1, so both are `char::from(byte)` and
+/// need no table at all.
+///
+/// **The five bytes the code page leaves undefined — `0x81`, `0x8D`, `0x8F`, `0x90`, `0x9D` —
+/// map to the C1 control of the same number**, which is WHATWG's rule for `windows-1252` and what
+/// every browser does. The alternative, `U+FFFD`, would make this decode lossy in exactly the
+/// case it exists to stop being lossy in; a C1 control is invisible, matches no card name, and
+/// keeps the byte recoverable.
+const CP1252_HIGH: [char; 32] = [
+    '\u{20AC}', '\u{0081}', '\u{201A}', '\u{0192}', '\u{201E}', '\u{2026}', '\u{2020}', '\u{2021}',
+    '\u{02C6}', '\u{2030}', '\u{0160}', '\u{2039}', '\u{0152}', '\u{008D}', '\u{017D}', '\u{008F}',
+    '\u{0090}', '\u{2018}', '\u{2019}', '\u{201C}', '\u{201D}', '\u{2022}', '\u{2013}', '\u{2014}',
+    '\u{02DC}', '\u{2122}', '\u{0161}', '\u{203A}', '\u{0153}', '\u{009D}', '\u{017E}', '\u{0178}',
+];
+
+/// One byte of Windows-1252, as the character it stands for. Total: every byte has an answer.
+fn cp1252(byte: u8) -> char {
+    match byte {
+        0x80..=0x9F => CP1252_HIGH[usize::from(byte - 0x80)],
+        _ => char::from(byte),
+    }
+}
+
+/// UTF-16 code units out of byte pairs, in the order a byte-order mark named. A trailing odd
+/// byte cannot be half a character and becomes one `U+FFFD`, and so does an unpaired surrogate
+/// (`from_utf16_lossy`'s own rule) — a UTF-16 file that is damaged is the one case here where a
+/// replacement character is the honest answer, because there is no byte to recover.
+fn utf16(body: &[u8], unit: fn([u8; 2]) -> u16) -> String {
+    let (pairs, odd) = body.as_chunks::<2>();
+    let units: Vec<u16> = pairs.iter().copied().map(unit).collect();
+    let mut text = String::from_utf16_lossy(&units);
+    if !odd.is_empty() {
+        text.push(char::REPLACEMENT_CHARACTER);
+    }
+    text
+}
+
+/// A file's bytes as text, **never refused and never lossy for a Western European file** — the
+/// order is the whole of it, and each step is only reached when the one above could not answer:
+///
+/// 1. **A UTF-8 byte-order mark** is stripped and the rest read as UTF-8. Notepad and Excel's
+///    "CSV UTF-8" both write one, and left in it glues `U+FEFF` to the front of the first line —
+///    a CSV header whose first cell no longer says `Quantity`. The mark is a statement, so a
+///    malformed byte *after* it is taken as damage (`U+FFFD`) rather than as a reason to disbelieve
+///    the mark.
+/// 2. **A UTF-16 mark**, `FF FE` or `FE FF`, which is what Windows' "Unicode" save writes. Neither
+///    pair can open valid UTF-8, so this cannot shadow step 3.
+/// 3. **Valid UTF-8** is UTF-8. Every file this app writes lands here.
+/// 4. **Anything else is Windows-1252** — see [`FileEncoding::Windows1252`] for why the page is
+///    told. Every byte decodes to exactly one character, so no line is ever lost to a byte.
+///
+/// A UTF-16 file with **no** mark is not detected: it validates as UTF-8 full of `NUL`s and reads
+/// as a list that matches nothing. Windows' own tools always write the mark, and guessing byte
+/// order from the pattern of zeros is a heuristic this was not asked to carry.
+fn decode(bytes: &[u8]) -> ImportFile {
+    let (text, encoding) = if let Some(body) = bytes.strip_prefix(b"\xEF\xBB\xBF") {
+        (
+            String::from_utf8_lossy(body).into_owned(),
+            FileEncoding::Utf8,
+        )
+    } else if let Some(body) = bytes.strip_prefix(b"\xFF\xFE") {
+        (utf16(body, u16::from_le_bytes), FileEncoding::Utf16Le)
+    } else if let Some(body) = bytes.strip_prefix(b"\xFE\xFF") {
+        (utf16(body, u16::from_be_bytes), FileEncoding::Utf16Be)
+    } else if let Ok(text) = std::str::from_utf8(bytes) {
+        (text.to_owned(), FileEncoding::Utf8)
+    } else {
+        (
+            bytes.iter().copied().map(cp1252).collect(),
+            FileEncoding::Windows1252,
+        )
+    };
+    ImportFile { text, encoding }
 }
 
 /// Read a decklist file the reader picked, and hand the text to the parser.
@@ -1277,8 +1607,11 @@ fn read_bounded(mut reader: impl std::io::Read) -> Result<String, String> {
 ///
 /// On the blocking pool like its two siblings, because a file on a network share or a slow
 /// stick is a disk wait, and the async runtime is not where a disk wait belongs.
+///
+/// It answers the reading beside the text ([`ImportFile::encoding`]) so the dialog can say when
+/// a file was not UTF-8 — which a bare string could never tell it.
 #[tauri::command]
-pub async fn import_read_file(path: String) -> Result<String, String> {
+pub async fn import_read_file(path: String) -> Result<ImportFile, String> {
     tauri::async_runtime::spawn_blocking(move || read_import_file(&path))
         .await
         .map_err(|e| format!("the decklist file could not be read: {e}"))?
@@ -1382,6 +1715,7 @@ mod tests {
             name: name.to_owned(),
             set_code: None,
             collector_number: None,
+            lang: None,
         }
     }
 
@@ -1391,6 +1725,16 @@ mod tests {
             name: name.to_owned(),
             set_code: Some(set_code.to_owned()),
             collector_number: collector_number.map(str::to_owned),
+            lang: None,
+        }
+    }
+
+    /// Any line, saying which language its copy is in — what a collection CSV's `Language`
+    /// column becomes once `languageCode` has read it.
+    fn in_lang(l: ResolveLine, lang: &str) -> ResolveLine {
+        ResolveLine {
+            lang: Some(lang.to_owned()),
+            ..l
         }
     }
 
@@ -1610,6 +1954,7 @@ mod tests {
                 name: String::new(),
                 set_code: Some("c21".to_owned()),
                 collector_number: Some("263".to_owned()),
+                lang: None,
             },
         );
         assert!(!nameless.hint_missed, "there was no name to contradict");
@@ -1750,6 +2095,7 @@ mod tests {
                 name: "Sol Ring".to_owned(),
                 set_code: Some("   ".to_owned()),
                 collector_number: Some(String::new()),
+                lang: None,
             },
         );
         assert!(!row.hint_missed, "there was no hint to miss");
@@ -1770,6 +2116,7 @@ mod tests {
                 name: "Sol Ring".to_owned(),
                 set_code: None,
                 collector_number: Some("263".to_owned()),
+                lang: None,
             },
         );
         assert!(bare.hint_missed);
@@ -1834,6 +2181,314 @@ mod tests {
             "`clb` and `40k` share a release date, so the id decides — and it decides the \
              same way both times"
         );
+    }
+
+    // ------------------------------------------------------------------------------------
+    // the language preference (issue #555)
+    // ------------------------------------------------------------------------------------
+
+    /// The whole feature in two lines: a Sol Ring the file says is Japanese is the Japanese
+    /// printing, and one it says nothing about is the one it always was — `sol-ja` is the newest
+    /// paper Sol Ring and still loses to `sol-clb` without the preference.
+    #[test]
+    fn a_line_that_says_japanese_lands_on_the_japanese_printing() {
+        let conn = seeded();
+        assert_eq!(matched_id(&conn, in_lang(line("Sol Ring"), "ja")), "sol-ja");
+        assert_eq!(
+            matched_id(&conn, line("Sol Ring")),
+            "sol-clb",
+            "and a line that says nothing is today's winner"
+        );
+    }
+
+    /// **The position, which is the half that had to be decided.** The file's word outranks the
+    /// binder's: a Japanese line is a Japanese copy even when the reader owns an English one, and
+    /// an English line is an English copy even when the only one they own is Japanese. Within the
+    /// asked language the owned printing still wins, so the binder breaks the tie it always did.
+    #[test]
+    fn the_language_the_file_names_outranks_the_printing_you_own() {
+        let conn = seeded();
+        own(&conn, "sol-lea", 1);
+        assert_eq!(matched_id(&conn, in_lang(line("Sol Ring"), "ja")), "sol-ja");
+        assert_eq!(
+            matched_id(&conn, in_lang(line("Sol Ring"), "en")),
+            "sol-lea",
+            "both English, so the owned one wins between them"
+        );
+
+        let conn = seeded();
+        own(&conn, "sol-ja", 2);
+        assert_eq!(
+            matched_id(&conn, in_lang(line("Sol Ring"), "en")),
+            "sol-clb",
+            "the owned Japanese copy is not the English copy the file describes"
+        );
+        assert_eq!(
+            matched_id(&conn, line("Sol Ring")),
+            "sol-ja",
+            "and a line that says nothing still takes the copy you own"
+        );
+    }
+
+    /// **A preference, never a filter.** No German Sol Ring exists, so a German line resolves
+    /// exactly as a silent one does — and `printing_count` is a window over every matched row, so
+    /// it does not narrow to the language either.
+    #[test]
+    fn a_language_no_printing_is_in_changes_nothing() {
+        let conn = seeded();
+        let m = resolve_one(&conn, in_lang(line("Sol Ring"), "de"))
+            .matched
+            .expect("a preference cannot cost the card");
+        assert_eq!(m.card_id, "sol-clb");
+        assert_eq!(
+            m.printing_count, 5,
+            "all five paper printings, not the German ones"
+        );
+    }
+
+    /// [`preferred_lang`] is the fence that makes the SQL literal safe, so it is pinned value by
+    /// value: two or three ASCII letters after a trim and a lowercase, and nothing else — and a
+    /// value it refuses is **ignored**, never an error and never a miss.
+    #[test]
+    fn a_language_that_is_not_a_code_is_ignored_rather_than_refused() {
+        let accepted = |raw: &str| preferred_lang(&Some(raw.to_owned()));
+        assert_eq!(accepted("ja"), Some("ja".to_owned()));
+        assert_eq!(accepted(" ZHS "), Some("zhs".to_owned()));
+        assert_eq!(accepted("Japanese"), None);
+        assert_eq!(accepted("ja-JP"), None);
+        assert_eq!(accepted("j"), None);
+        assert_eq!(accepted(""), None);
+        assert_eq!(
+            accepted("ja') DESC, (1"),
+            None,
+            "nothing that can close a quote passes"
+        );
+        assert_eq!(accepted("jé"), None, "ASCII letters only");
+        assert_eq!(preferred_lang(&None), None);
+
+        let conn = seeded();
+        for raw in ["Japanese", "ja' OR '1'='1", "   "] {
+            assert_eq!(
+                matched_id(&conn, in_lang(line("Sol Ring"), raw)),
+                "sol-clb",
+                "`{raw}` is no preference, so the line resolves as a silent one does"
+            );
+        }
+        assert_eq!(matched_id(&conn, in_lang(line("Sol Ring"), "JA")), "sol-ja");
+    }
+
+    /// With nothing to prefer the ordering is **byte for byte** today's — the same string, so the
+    /// same plan and the same winner on every list that carries no language.
+    #[test]
+    fn with_no_language_the_ordering_is_exactly_match_order() {
+        assert_eq!(match_order(None), MATCH_ORDER);
+        let ja = match_order(Some("ja"));
+        assert!(
+            ja.starts_with(" ORDER BY (c.lang = 'ja') DESC, owned_quantity DESC,"),
+            "the preference goes ahead of every key MATCH_ORDER has: {ja}"
+        );
+        assert!(ja.ends_with("c.id DESC"), "{ja}");
+    }
+
+    /// [`fold_match`] orders in Rust and its `LIMIT` in SQL, and both have to carry the key.
+    /// Lower-casing is what routes a line through that arm.
+    #[test]
+    fn the_fold_arm_prefers_the_language_too() {
+        let conn = seeded();
+        assert_eq!(matched_id(&conn, in_lang(line("sol ring"), "ja")), "sol-ja");
+        own(&conn, "sol-lea", 1);
+        assert_eq!(
+            matched_id(&conn, in_lang(line("sol ring"), "ja")),
+            "sol-ja",
+            "ahead of the owned printing there as in the SQL"
+        );
+        assert_eq!(matched_id(&conn, line("sol ring")), "sol-lea");
+    }
+
+    /// The set-scoped arms carry the key too — a set can hold one card in two languages, and a
+    /// line naming the set and the language wants the one it described.
+    #[test]
+    fn a_set_hint_and_a_language_narrow_together() {
+        let conn = seeded();
+        conn.execute_batch(
+            "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang,
+                                released_at, is_paper, layout, rarity, raw)
+             VALUES ('sol-c21-de', 'o-sol', 'Sol Ring', 'c21', '263', 'de', '2021-04-23', 1,
+                     'normal', 'uncommon', '{}');",
+        )
+        .unwrap();
+        assert_eq!(
+            matched_id(&conn, in_lang(hinted("Sol Ring", "c21", None), "de")),
+            "sol-c21-de"
+        );
+        assert_eq!(
+            matched_id(&conn, in_lang(hinted("Sol Ring", "c21", Some("263")), "de")),
+            "sol-c21-de",
+            "a set and a number naming two rows is the language's to settle"
+        );
+        assert_eq!(
+            matched_id(&conn, hinted("Sol Ring", "c21", None)),
+            "sol-c21",
+            "and English first when the line says nothing"
+        );
+    }
+
+    /// One list, several languages: each distinct language gets its own statements and every
+    /// line asking for it reuses them, so neither a line's preference nor its absence can leak
+    /// into the next line's ordering.
+    #[test]
+    fn each_line_is_ordered_by_its_own_language() {
+        let conn = seeded();
+        own(&conn, "sol-ja", 1);
+        let rows = resolve_lines(
+            &conn,
+            &[
+                line("Sol Ring"),
+                in_lang(line("Sol Ring"), "en"),
+                in_lang(line("Sol Ring"), "ja"),
+                line("Sol Ring"),
+                in_lang(line("Sol Ring"), "en"),
+            ],
+        )
+        .unwrap();
+        let ids: Vec<&str> = rows
+            .iter()
+            .map(|r| r.matched.as_ref().unwrap().card_id.as_str())
+            .collect();
+        assert_eq!(ids, ["sol-ja", "sol-clb", "sol-ja", "sol-ja", "sol-clb"]);
+    }
+
+    // ------------------------------------------------------------------------------------
+    // a set hint that is a set's name (issue #555)
+    // ------------------------------------------------------------------------------------
+
+    /// The fixture's `sets` rows — `memory_pair` creates the table empty.
+    fn name_sets(conn: &Connection, rows: &[(&str, &str)]) {
+        for (code, name) in rows {
+            conn.execute(
+                "INSERT INTO sets (code, name) VALUES (?1, ?2)",
+                params![code, name],
+            )
+            .unwrap();
+        }
+    }
+
+    /// Deckbox's `Edition` column, and Dragon Shield's: the set named rather than coded. It is
+    /// read as that set and then travels exactly as a code would — through the set-and-name arm
+    /// alone, and through the set-and-number arm with a number beside it.
+    #[test]
+    fn a_set_hint_that_is_a_set_name_is_read_as_that_set() {
+        let conn = seeded();
+        name_sets(
+            &conn,
+            &[
+                ("c21", "Commander 2021"),
+                ("clb", "Commander Legends: Battle for Baldur's Gate"),
+            ],
+        );
+
+        let by_name = resolve_one(&conn, hinted("Sol Ring", "Commander 2021", None));
+        assert!(
+            !by_name.hint_missed,
+            "the set was found, so nothing was missed"
+        );
+        assert_eq!(by_name.matched.unwrap().card_id, "sol-c21");
+
+        // An older Deckbox file's `Edition` column arrives through the parser's *code* fallback,
+        // and the parser upper-cases a code — so the name comes in shouting, and sometimes
+        // padded. Both are the same set.
+        let shouty = resolve_one(&conn, hinted("Sol Ring", "COMMANDER 2021", Some("263")));
+        assert!(!shouty.hint_missed);
+        assert_eq!(shouty.matched.unwrap().card_id, "sol-c21");
+        let padded = resolve_one(&conn, hinted("Sol Ring", "  COMMANDER   2021 ", None));
+        assert!(!padded.hint_missed);
+        assert_eq!(padded.matched.unwrap().card_id, "sol-c21");
+
+        // Folded, not merely case-blind: a curly apostrophe is how a re-exported name drifts.
+        let curly = resolve_one(
+            &conn,
+            hinted(
+                "Sol Ring",
+                "Commander Legends: Battle for Baldur’s Gate",
+                None,
+            ),
+        );
+        assert!(!curly.hint_missed);
+        assert_eq!(curly.matched.unwrap().card_id, "sol-clb");
+    }
+
+    /// **A code always wins**, so no file that worked before can resolve differently: a hint that
+    /// is some printing's set code is never looked up as a name, even when another set's name is
+    /// spelled that way.
+    #[test]
+    fn a_real_set_code_is_never_read_as_a_name() {
+        let conn = seeded();
+        name_sets(&conn, &[("40k", "c21"), ("c21", "Commander 2021")]);
+        let row = resolve_one(&conn, hinted("Sol Ring", "C21", None));
+        assert!(!row.hint_missed);
+        assert_eq!(row.matched.unwrap().card_id, "sol-c21");
+    }
+
+    /// Exactly one set, or none: a name two sets share is no hint, and neither is a name no set
+    /// has. Both miss **as a hint always missed** — reported, and the name arms answer.
+    #[test]
+    fn a_set_name_shared_or_unknown_is_a_missed_hint_and_nothing_worse() {
+        let conn = seeded();
+        name_sets(&conn, &[("c21", "Shared Name"), ("40k", "Shared Name")]);
+        for hint in ["Shared Name", "Not A Set At All"] {
+            let row = resolve_one(&conn, hinted("Sol Ring", hint, None));
+            assert!(row.hint_missed, "`{hint}` names no one set");
+            assert_eq!(row.matched.unwrap().card_id, "sol-clb", "`{hint}`");
+        }
+    }
+
+    /// MTGO's own codes (`MI` for Mirage, where Scryfall says `mir`) and its `116/350` collector
+    /// numbers name nothing here as a code *or* as a name — a miss, reported, and the card by its
+    /// name, which is exactly what they did before a hint could be a name.
+    #[test]
+    fn an_mtgo_code_and_number_are_still_a_plain_miss() {
+        let conn = seeded();
+        name_sets(&conn, &[("c21", "Commander 2021")]);
+        let row = resolve_one(&conn, hinted("Sol Ring", "MI", Some("116/350")));
+        assert!(row.hint_missed);
+        assert_eq!(row.matched.unwrap().card_id, "sol-clb");
+    }
+
+    /// `sets` is a second request an ingest can fail, so a database without it reads the names
+    /// off `cards.set_name` — every printing carries its set's name, and only this fallback pays
+    /// for the scan.
+    #[test]
+    fn a_database_with_no_sets_reads_set_names_off_its_cards() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET set_name = 'Commander 2021' WHERE set_code = 'c21'",
+            [],
+        )
+        .unwrap();
+        let row = resolve_one(&conn, hinted("Sol Ring", "Commander 2021", None));
+        assert!(!row.hint_missed);
+        assert_eq!(row.matched.unwrap().card_id, "sol-c21");
+    }
+
+    /// Two lines naming one set by name, and a third by code: all three land in it, which is the
+    /// per-hint answer being reused rather than recomputed differently.
+    #[test]
+    fn a_set_name_is_answered_once_for_every_line_that_carries_it() {
+        let conn = seeded();
+        name_sets(&conn, &[("c21", "Commander 2021")]);
+        let rows = resolve_lines(
+            &conn,
+            &[
+                hinted("Sol Ring", "Commander 2021", None),
+                hinted("Sol Ring", "commander 2021", Some("263")),
+                hinted("Sol Ring", "c21", None),
+            ],
+        )
+        .unwrap();
+        for row in &rows {
+            assert!(!row.hint_missed, "line {}", row.index);
+            assert_eq!(row.matched.as_ref().unwrap().card_id, "sol-c21");
+        }
     }
 
     // ------------------------------------------------------------------------------------
@@ -2806,7 +3461,7 @@ mod tests {
     }
 
     /// [`read_import_file`] over a `Path`.
-    fn read_file(path: &std::path::Path) -> Result<String, String> {
+    fn read_file(path: &std::path::Path) -> Result<ImportFile, String> {
         read_import_file(path.to_str().unwrap())
     }
 
@@ -2843,9 +3498,10 @@ mod tests {
         let full = vec![b'x'; usize::try_from(MAX_IMPORT_BYTES).unwrap()];
         let path = scratch("at-the-cap", &full);
 
-        let text = read_file(&path).expect("exactly the cap is under it");
+        let file = read_file(&path).expect("exactly the cap is under it");
 
-        assert_eq!(u64::try_from(text.len()).unwrap(), MAX_IMPORT_BYTES);
+        assert_eq!(u64::try_from(file.text.len()).unwrap(), MAX_IMPORT_BYTES);
+        assert_eq!(file.encoding, FileEncoding::Utf8);
         gone(&path);
     }
 
@@ -2872,37 +3528,170 @@ mod tests {
         );
     }
 
-    /// **The whole reason the read is lossy.** A decklist exported by a Windows tool that never
-    /// left code page 1252 carries `0x92` where a curly apostrophe belongs, and `0x92` is not
-    /// valid UTF-8. A strict read would answer `Err` for the file and the reader would be told
-    /// nothing about which line it was.
+    /// **The file the lossy read used to damage.** A decklist exported by a Windows tool that
+    /// never left code page 1252 carries `0x92` where a curly apostrophe belongs and `0xF6` where
+    /// `ö` does, and neither is valid UTF-8. The lossy read turned both into `U+FFFD` and every
+    /// such line into an unmatched name (issue #555); this reads them as the characters they are.
     ///
-    /// So: 105 lines, one of them damaged. The other 104 must come back exactly as written, and
-    /// the damaged one must come back as a *line* — `U+FFFD` is a character no card name bears,
-    /// so it resolves to nothing and the preview quotes it, which is a thing a reader can fix.
+    /// 105 lines through the real file path, so the cap, the read and [`decode`] are one test:
+    /// nothing is lost, the 103 plain lines are untouched, and the two that carried a cp1252 byte
+    /// come back as the names a reader would have typed.
     #[test]
-    fn invalid_utf8_becomes_a_replacement_character_and_not_a_failure() {
+    fn a_file_that_is_not_utf8_is_read_as_windows_1252() {
         let mut bytes = Vec::new();
-        for _ in 0..104 {
+        for _ in 0..103 {
             bytes.extend_from_slice(b"1 Sol Ring\n");
         }
-        // `Yawgmoth\x92s Will` — the Windows-1252 apostrophe, raw, on one line of 105.
         bytes.extend_from_slice(b"1 Yawgmoth\x92s Will\n");
+        bytes.extend_from_slice(b"1 J\xF6tun Grunt\n");
         let path = scratch("cp1252", &bytes);
 
-        let text = read_file(&path).expect("one bad byte is not a failed import");
+        let file = read_file(&path).expect("a legacy code page is not a failed import");
 
-        assert_eq!(text.lines().count(), 105, "no line was lost");
-        assert_eq!(
-            text.matches("1 Sol Ring").count(),
-            104,
-            "the other 104 lines are untouched"
-        );
-        let damaged = text.lines().last().unwrap();
-        assert_eq!(
-            damaged, "1 Yawgmoth\u{FFFD}s Will",
-            "the bad byte became one replacement character and cost only its own line"
-        );
+        assert_eq!(file.encoding, FileEncoding::Windows1252);
+        assert_eq!(file.text.lines().count(), 105, "no line was lost");
+        assert_eq!(file.text.matches("1 Sol Ring").count(), 103);
+        let tail: Vec<&str> = file.text.lines().skip(103).collect();
+        assert_eq!(tail, ["1 Yawgmoth\u{2019}s Will", "1 Jötun Grunt"]);
+        assert!(!file.text.contains('\u{FFFD}'), "nothing was replaced");
         gone(&path);
+    }
+
+    /// A UTF-16 file through the same path — what Windows' "Unicode" save writes — so the mark
+    /// is read off the real bytes on disk and not only off a slice in a unit test.
+    #[test]
+    fn a_utf16_file_is_read_through_the_command_path() {
+        let mut bytes = vec![0xFF, 0xFE];
+        for unit in "4 Æther Vial\r\n".encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        let path = scratch("utf16", &bytes);
+
+        let file = read_file(&path).expect("a byte-order mark is an answer, not a failure");
+
+        assert_eq!(file.encoding, FileEncoding::Utf16Le);
+        assert_eq!(file.text, "4 Æther Vial\r\n");
+        gone(&path);
+    }
+
+    /// Valid UTF-8 is UTF-8, left exactly as it was — an `é` written as two bytes stays one
+    /// `é` rather than becoming the two Latin-1 characters a code page would read it as.
+    #[test]
+    fn valid_utf8_is_read_as_utf8_and_left_alone() {
+        let file = decode("1 Jötun Grunt\n1 Séance\n".as_bytes());
+        assert_eq!(file.encoding, FileEncoding::Utf8);
+        assert_eq!(file.text, "1 Jötun Grunt\n1 Séance\n");
+    }
+
+    /// Notepad and Excel's "CSV UTF-8" both write a mark, and left in it glues `U+FEFF` to the
+    /// first cell — a header whose `Quantity` no longer says `Quantity`.
+    #[test]
+    fn a_utf8_byte_order_mark_is_stripped() {
+        let file = decode(b"\xEF\xBB\xBFQuantity,Name\n1,S\xC3\xA9ance\n");
+        assert_eq!(file.encoding, FileEncoding::Utf8);
+        assert_eq!(file.text, "Quantity,Name\n1,Séance\n");
+    }
+
+    /// Both byte orders, named by their marks, and the mark itself never reaches the text.
+    #[test]
+    fn a_utf16_byte_order_mark_names_the_byte_order() {
+        let text = "1 Lim-Dûl's Vault\n";
+        let mut le = vec![0xFF, 0xFE];
+        let mut be = vec![0xFE, 0xFF];
+        for unit in text.encode_utf16() {
+            le.extend_from_slice(&unit.to_le_bytes());
+            be.extend_from_slice(&unit.to_be_bytes());
+        }
+        assert_eq!(
+            decode(&le),
+            ImportFile {
+                text: text.to_owned(),
+                encoding: FileEncoding::Utf16Le
+            }
+        );
+        assert_eq!(
+            decode(&be),
+            ImportFile {
+                text: text.to_owned(),
+                encoding: FileEncoding::Utf16Be
+            }
+        );
+    }
+
+    /// A damaged UTF-16 file is the one place a replacement character is honest — there is no
+    /// byte to recover — and it still costs one character rather than the file.
+    #[test]
+    fn a_damaged_utf16_file_costs_one_character_and_not_the_file() {
+        // `A`, an unpaired high surrogate, `B`, then half of a unit.
+        let bytes = [0xFF, 0xFE, b'A', 0, 0x00, 0xD8, b'B', 0, b'C'];
+        let file = decode(&bytes);
+        assert_eq!(file.encoding, FileEncoding::Utf16Le);
+        assert_eq!(file.text, "A\u{FFFD}B\u{FFFD}");
+    }
+
+    /// **The table, pinned where it can be wrong.** `0xE9` is `é` and `0x92` the curly apostrophe
+    /// — the two bytes a Western European Excel CSV is made of — and the C1 block is not Latin-1:
+    /// `0x80` is `€`, `0x96`/`0x97` are the dashes. The five bytes the code page leaves undefined
+    /// map to the C1 control of the same number, WHATWG's rule, rather than to `U+FFFD`. Below
+    /// `0x80` and from `0xA0` up it is Latin-1, and every byte is exactly one character.
+    #[test]
+    fn windows_1252_reads_every_byte_as_one_character() {
+        let file = decode(b"S\xE9ance \x96 Yawgmoth\x92s Will \x80");
+        assert_eq!(file.encoding, FileEncoding::Windows1252);
+        assert_eq!(file.text, "Séance \u{2013} Yawgmoth\u{2019}s Will €");
+
+        for (byte, ch) in [
+            (0x80, '\u{20AC}'),
+            (0x8A, 'Š'),
+            (0x8C, 'Œ'),
+            (0x91, '\u{2018}'),
+            (0x92, '\u{2019}'),
+            (0x93, '\u{201C}'),
+            (0x97, '\u{2014}'),
+            (0x99, '\u{2122}'),
+            (0x9C, 'œ'),
+            (0x9F, 'Ÿ'),
+            (0xA0, '\u{00A0}'),
+            (0xE6, 'æ'),
+            (0xE9, 'é'),
+            (0xF6, 'ö'),
+            (0xFF, 'ÿ'),
+        ] {
+            assert_eq!(cp1252(byte), ch, "{byte:#04x}");
+        }
+        for undefined in [0x81u8, 0x8D, 0x8F, 0x90, 0x9D] {
+            assert_eq!(cp1252(undefined), char::from(undefined), "{undefined:#04x}");
+        }
+
+        let every: Vec<u8> = (0..=255).collect();
+        let file = decode(&every);
+        assert_eq!(file.encoding, FileEncoding::Windows1252);
+        assert_eq!(
+            file.text.chars().count(),
+            256,
+            "one character per byte, none dropped"
+        );
+        assert!(!file.text.contains('\u{FFFD}'));
+    }
+
+    /// The four strings `src/lib/ipc.ts`'s `ImportFile.encoding` union names, exactly — a
+    /// `rename` that drifted would reach the dialog as a value its `=== "windows-1252"` test never
+    /// matches, and the notice would silently stop being drawn.
+    #[test]
+    fn the_encoding_crosses_ipc_as_the_mirror_spells_it() {
+        let wire = |encoding| {
+            serde_json::to_value(ImportFile {
+                text: "x".to_owned(),
+                encoding,
+            })
+            .unwrap()
+        };
+        assert_eq!(
+            wire(FileEncoding::Utf8),
+            json!({ "text": "x", "encoding": "utf-8" })
+        );
+        assert_eq!(wire(FileEncoding::Utf16Le)["encoding"], "utf-16le");
+        assert_eq!(wire(FileEncoding::Utf16Be)["encoding"], "utf-16be");
+        assert_eq!(wire(FileEncoding::Windows1252)["encoding"], "windows-1252");
     }
 }

@@ -16,7 +16,7 @@ import { pickDecklist, readDecklist, saveExport } from "./files";
 beforeEach(() => {
   pickNative.mockReset().mockResolvedValue(null);
   saveNative.mockReset().mockResolvedValue(null);
-  importReadFile.mockReset().mockResolvedValue("");
+  importReadFile.mockReset().mockResolvedValue({ text: "", encoding: "utf-8" });
   exportWriteFile.mockReset().mockResolvedValue(undefined);
 });
 
@@ -44,12 +44,26 @@ describe("a picker answers a name and Rust does the I/O", () => {
   });
 
   it("reads a path through import_read_file and never in the page", async () => {
-    importReadFile.mockResolvedValue("4 Lightning Bolt\n");
+    importReadFile.mockResolvedValue({ text: "4 Lightning Bolt\n", encoding: "utf-8" });
 
-    const text = await readDecklist("C:/lists/burn.txt");
+    const file = await readDecklist("C:/lists/burn.txt");
 
-    expect(text).toBe("4 Lightning Bolt\n");
+    expect(file).toEqual({ text: "4 Lightning Bolt\n", encoding: "utf-8" });
     expect(importReadFile).toHaveBeenCalledWith("C:/lists/burn.txt");
+  });
+
+  /**
+   * **The reading travels with the text** (issue #555). `windows-1252` is the one encoding the
+   * backend guessed rather than was told, and the dialog can only say so if this hands it on —
+   * a wrapper that unwrapped `.text` here would silence the notice with every test still green.
+   */
+  it("hands on which encoding the backend read the file in", async () => {
+    importReadFile.mockResolvedValue({ text: "1 Séance\n", encoding: "windows-1252" });
+
+    expect(await readDecklist("C:/lists/excel.csv")).toEqual({
+      text: "1 Séance\n",
+      encoding: "windows-1252",
+    });
   });
 
   it("names the file in the save dialog and writes the text Rust was given", async () => {

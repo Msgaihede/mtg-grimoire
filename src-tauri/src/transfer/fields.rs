@@ -682,7 +682,7 @@ mod tests {
 
     /// **The registry fence, one level above the rendered bytes.**
     ///
-    /// The 70 golden `.txt` files fence the *writer*, and for six of the seven formats they
+    /// The golden `.txt` files fence the *writer*, and for six of the seven formats they
     /// cannot fence this file: `write_line` renders exactly seven ids, so adding `Lang` to
     /// `Format::Plain`'s `optional` here and nowhere else moves **zero golden bytes** while
     /// changing the fold key — and one printing held in two languages would then export as two

@@ -1,0 +1,3 @@
+Quantity,Name,Set,Collector number,Finish,Condition
+1,'+2 Mace,AFR,1,,NM
+2,Lightning Bolt,2X2,117,foil,LP

@@ -126,7 +126,21 @@ export const CONDITION_LABEL: Record<Condition, string> = {
  * * **`PL` and `played` part company.** `PL` is Cardmarket's abbreviation and lands on `HP`;
  *   the whole word `Played` is Moxfield's, whose scale runs Mint / Near Mint / Good (Lightly
  *   Played) / Played / Heavily Played / Damaged, so it lands on `MP`. Two spellings of what
- *   looks like one word, from two vendors who mean different cards by it.
+ *   looks like one word, from two vendors who mean different cards by it. **Deckbox's scale is
+ *   Moxfield's** (Mint / Near Mint / Good (Lightly Played) / Played / Heavily Played / Poor), which
+ *   is what settles the tie; **Dragon Shield's and ManaBox's are Cardmarket's written out**
+ *   (`NearMint` / `Excellent` / `Good` / `LightPlayed` / `Played` / `Poor`, and ManaBox's
+ *   `near_mint` / `light_played`), where `Played` is `PL` and a grade lower than this reads it.
+ *   That is the bare-`LP` trap again — which scale a file is on is a property of the file — and
+ *   it is left to the same importer.
+ * * **`Light Played` is not `Lightly Played`.** The `-ly` is the whole difference: without it the
+ *   word is Cardmarket's fifth grade spelled out, one below `Good`, and it lands on `MP` beside
+ *   `GD` — two grades under the `LP` its near-twin reads as.
+ *
+ * **Underscores read as spaces and runs of space as one** before the lookup, so ManaBox's
+ * `near_mint` is `near mint` — one rule for a whole vendor's vocabulary rather than a second
+ * spelling of every entry. Dragon Shield's `NearMint` and `LightPlayed`, which run the words
+ * together, have entries of their own.
  *
  * A `Map`, not a `Record`, and here that is not a nicety. The keys are cells from somebody
  * else's CSV — this is the importer's seam — and an object lookup answers for every member
@@ -144,6 +158,7 @@ const SYNONYMS = new Map<string, Condition>([
   ["m", "NM"],
   ["mt", "NM"],
   ["near mint", "NM"],
+  ["nearmint", "NM"],
   ["nm", "NM"],
   ["nm-mint", "NM"],
   ["sp", "LP"],
@@ -156,6 +171,8 @@ const SYNONYMS = new Map<string, Condition>([
   ["moderately played", "MP"],
   ["mp", "MP"],
   ["played", "MP"],
+  ["light played", "MP"],
+  ["lightplayed", "MP"],
   ["good", "MP"],
   ["gd", "MP"],
   ["heavily played", "HP"],
@@ -192,6 +209,7 @@ export function normalizeCondition(raw: string | null | undefined): {
 } {
   const original = raw?.trim() ?? null;
   if (!original) return { condition: CONDITION_NOT_SET, original: null, matched: true };
-  const found = SYNONYMS.get(original.toLowerCase());
+  // The key only: `original` keeps the file's own spelling, underscores and all.
+  const found = SYNONYMS.get(original.toLowerCase().replace(/[\s_]+/g, " ").trim());
   return { condition: found ?? CONDITION_NOT_SET, original, matched: found !== undefined };
 }

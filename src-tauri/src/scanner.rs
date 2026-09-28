@@ -1233,6 +1233,8 @@ mod tests {
             proxy: false,
             misprint: false,
             grading: None,
+            tradelist_quantity: None,
+            tags: None,
         }
     }
 

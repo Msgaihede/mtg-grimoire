@@ -218,4 +218,53 @@ describe("what the mirror writes, the app can read", () => {
     // itself leaves out — which is the number the dialog prints beside it.
     expect(parsed.totalCards).toBe(copies - omittedCount(cards, format));
   });
+
+  /**
+   * Issue #555's pile names, out of the file the mirror writes and back through the app's own
+   * parser — the whole file, not card by card. `Ramp, Fixing {x} [y]` is written
+   * `Ramp; Fixing <x> <y>` in its heading and its bracket alike, and the parse is exactly the
+   * corpus: no issue, no line named after a pile, and each card in the section and pile it left in.
+   *
+   * **The commander ahead of the pile is what makes this a test of the heading**, not just of the
+   * bracket. Were `<x> <y>` a pair of parentheses, the heading would end in a printing hint, the
+   * parser would read it as a card, and Sol Ring would stay in the command zone that `Commander`
+   * opened — a bracket naming a pile does not move a line back into the deck.
+   */
+  it("reads every sanitised pile back out of the Archidekt heading and bracket", () => {
+    const parsed = parseDecklist(GOLDEN[`${DIR}/awkwardPiles.archidekt.all.txt`]);
+    expect(parsed.issues).toEqual([]);
+    expect(
+      parsed.lines.map((l) => [l.name, l.quantity, l.section, l.categoryName, l.excluded]),
+    ).toEqual([
+      ["Bruna, Light of Alabaster", 1, "commander", null, false],
+      ["Sol Ring", 1, "deck", "Ramp; Fixing <x> <y>", false],
+      ["Arcane Signet", 2, "deck", "Cuts; maybe", true],
+    ]);
+    expect(parsed.lines.map((l) => l.name)).toEqual(
+      corpus.scenarios.awkwardPiles.cards.map((c) => c.name),
+    );
+  });
+
+  /**
+   * And issue #555's CSV cells, the other way round: the writer puts an apostrophe in front of a
+   * formula trigger and the reader takes one back off (`formula.ts`), so what a reader wrote in a
+   * note is what comes back — including a note that already started `'=`, which is written `''=`
+   * so that one strip still leaves its own apostrophe on.
+   *
+   * This is the one assertion here that crosses both halves of `formula.ts`, and it goes through
+   * `parseDecklist` rather than any one function so it holds wherever the reader chooses to strip.
+   */
+  it("reads every formula-escaped CSV cell back as the value the reader wrote", () => {
+    const parsed = parseDecklist(GOLDEN[`${DIR}/formulaCells.csv.all.txt`]);
+    expect(parsed.issues).toEqual([]);
+    const cards = corpus.scenarios.formulaCells.cards;
+    expect(parsed.lines.map((l) => l.name)).toEqual(cards.map((c) => c.name));
+    for (const [at, card] of cards.entries()) {
+      const extra = parsed.lines[at].extra;
+      expect(
+        [extra.notes, extra.tags, extra.acquisitionSource],
+        card.name,
+      ).toEqual([card.notes, card.tags, card.acquisitionSource]);
+    }
+  });
 });

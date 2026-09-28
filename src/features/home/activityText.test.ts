@@ -414,6 +414,119 @@ describe("activityLine — counts and agreement", () => {
   });
 });
 
+/**
+ * Issue #555: `Remove from collection` and `Move to` over several entries write **one** row, and
+ * `bulk_undo` writes the original row back with `"undo": true` and the reverse delta.
+ */
+describe("activityLine — bulk writes and their undo", () => {
+  /** No card, `entries` in the payload, `−copies` in the delta. */
+  const bulk = { cardId: null, cardName: null };
+
+  it("says a bulk remove in entries, with the copies they held as the detail", () => {
+    expect(entryLine("collection", "remove", { entries: 12 }, -31, bulk)).toEqual({
+      text: "Removed 12 cards",
+      detail: "31 copies",
+    });
+    expect(entryLine("collection", "remove", { entries: 2 }, -1, bulk)).toEqual({
+      text: "Removed 2 cards",
+      detail: "1 copy",
+    });
+  });
+
+  it("says a bulk move in entries, and names where it landed", () => {
+    expect(entryLine("collection", "move", { entries: 5, to: "Binder" }, 0, bulk)).toEqual({
+      text: "Moved 5 cards to Binder",
+      detail: null,
+    });
+    // `null` is the root, which is a place — the breadcrumb's own word stands in.
+    expect(entryLine("collection", "move", { entries: 5, to: null }, 0, bulk).text).toBe(
+      "Moved 5 cards to Collection",
+    );
+    // No `to` key at all is a row that does not say, and the sentence claims no destination.
+    expect(entryLine("collection", "move", { entries: 5 }, 0, bulk).text).toBe("Moved 5 cards");
+  });
+
+  /**
+   * **An older build's rows read exactly as they did.** None of them carries `entries`, and a
+   * one-card row whose printing lost its name names no card either — so both halves of the fence
+   * are needed, and a named row keeps its own sentence whatever a newer build put beside it.
+   */
+  it("keeps every one-card row's sentence, named or not", () => {
+    expect(entryLine("collection", "remove", { folder: "Binder A" }, -2)).toEqual({
+      text: "Removed 2 × Lightning Bolt",
+      detail: "from Binder A",
+    });
+    expect(entryLine("collection", "remove", {}, -1, bulk).text).toBe("Removed a card");
+    expect(entryLine("collection", "move", { from: "A", to: "B" }, 0, bulk)).toEqual({
+      text: "Moved a card",
+      detail: "A → B",
+    });
+    expect(entryLine("collection", "remove", { entries: 12 }, -3).text).toBe(
+      "Removed 3 × Lightning Bolt",
+    );
+  });
+
+  it("words the undo of a bulk remove and a bulk move around what they did", () => {
+    expect(entryLine("collection", "remove", { entries: 12, undo: true }, 31, bulk)).toEqual({
+      text: "Undid removing 12 cards",
+      detail: "31 copies",
+    });
+    expect(
+      entryLine("collection", "move", { entries: 5, to: "Binder", undo: true }, 0, bulk),
+    ).toEqual({ text: "Undid moving 5 cards to Binder", detail: null });
+  });
+
+  it("words the undo of an import on both cabinets, in copies and in lines", () => {
+    expect(entryLine("collection", "import", { cards: 40, rows: 37, undo: true }, -40)).toEqual({
+      text: "Undid an import of 40 cards into your collection",
+      detail: "across 37 rows",
+    });
+    expect(entryLine("wishlist", "import", { cards: 1, undo: true }, -1)).toEqual({
+      text: "Undid an import of 1 card into your wishlist",
+      detail: null,
+    });
+    expect(entryLine("wishlist", "import", { undo: true }, 0).text).toBe(
+      "Undid an import into your wishlist",
+    );
+  });
+
+  it("words the undo of a one-card row with the card and its own detail", () => {
+    expect(entryLine("collection", "remove", { folder: "Binder A", undo: true }, 2)).toEqual({
+      text: "Undid removing Lightning Bolt",
+      detail: "from Binder A",
+    });
+    expect(entryLine("collection", "move", { from: null, to: "Binder A", undo: true }, 0)).toEqual(
+      { text: "Undid moving Lightning Bolt", detail: "Collection → Binder A" },
+    );
+  });
+
+  /** An undo of a kind this build has no words for is still an undo, and claims no act. */
+  it("says an undo of a kind it cannot word without naming one", () => {
+    expect(entryLine("collection", "edit", { undo: true }, 0)).toEqual({
+      text: "Undid a change to your collection",
+      detail: null,
+    });
+  });
+
+  /** `true` and nothing looser — a flag some build wrote as a string is not an undo this one
+   *  should word as one. */
+  it("reads only a boolean true as an undo", () => {
+    expect(entryLine("collection", "remove", { entries: 3, undo: "yes" }, -3, bulk).text).toBe(
+      "Removed 3 cards",
+    );
+  });
+
+  it("never throws on a bulk or undo row it cannot read", () => {
+    const payloads = ['{"entries":"many"}', '{"entries":3,"to":7}', '{"undo":true,"entries":null}'];
+    for (const p of payloads) {
+      for (const kind of ["remove", "move", "import", "add"]) {
+        expect(() => activityLine(raw("collection", kind, p, bulk))).not.toThrow();
+        expect(() => activityLine(raw("wishlist", kind, p, bulk))).not.toThrow();
+      }
+    }
+  });
+});
+
 describe("activityLine — degrading", () => {
   it("degrades to its shortest honest form on a payload it does not understand", () => {
     expect(activityLine(raw("collection", "quantity", "{}")).text).toBeTruthy();

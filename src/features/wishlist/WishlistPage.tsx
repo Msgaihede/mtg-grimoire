@@ -14,6 +14,7 @@ import { AnimatePresence, motion } from "motion/react";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { Figure, FigureRow } from "@/components/Figure";
+import { UndoNotice } from "@/components/UndoNotice";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
@@ -2531,6 +2532,12 @@ export function WishlistPage() {
             )}
           </AnimatePresence>
 
+          {/* The last bulk write, offered back (issue #555) — on this page, a wishlist import.
+              `CollectionPage`'s placement and its reason: the page's two sentences about something
+              the reader just did, the refusal first; always mounted, so the sentence arriving in
+              it is announced, and `empty:-mt-2` gives back this column's gap while it is silent. */}
+          <UndoNotice scope="wishlist" className="empty:-mt-2" />
+
           {/* A write the right-click menu started and the backend refused, beside the banner
               above rather than folded into it: that one is about this list's own controls — a
               stepper press, a removal — and this one is about a card the reader filed somewhere
@@ -2646,6 +2653,10 @@ export function WishlistPage() {
           loading: exportScope.loading,
           everything: exportScope.everything,
           onEverything: exportScope.setEverything,
+          // A sweep that failed says so in the dialog, with a way to ask again — the collection's
+          // wiring (issue #555), for a wishlist that would otherwise read as shorter than it is.
+          error: exportScope.error,
+          onRetry: exportScope.retry,
         }}
       />
 

@@ -22,12 +22,40 @@
  * never aborts the parse. The only lines that leave no trace are the ones making no claim —
  * blanks and comments.
  */
-// `parseCsv` is a value import — the only non-type one here — and it is still text in, data
+// `readCsv` is a value import — the only non-type one here — and it is still text in, data
 // out: no React, no hook, no IPC, which is what lets `parse.test.ts` drive every rule as a pure
 // function.
 import type { DeckFinish } from "@/lib/ipc";
-import { parseCsv } from "../csv";
+import { readCsv, type CsvDelimiter, type CsvRecord } from "../csv";
 import { TRANSFER_FIELDS, TRANSFER_FIELD_IDS, type TransferFieldId } from "../fields";
+
+/**
+ * How strongly a header claims its field. **Lower wins** when two columns of one file name the
+ * same field, and the loser is read by nothing and listed in {@link CsvShape.ignoredColumns}.
+ *
+ * * `SPECIFIC` — a header that can only mean the one thing, and outranks even this app's own
+ *   spelling because that spelling is the ambiguous one. `Set` is a set **code** in this app's
+ *   CSV and in MTGO's, and a set **name** in TCGplayer's, which writes the code beside it as `Set
+ *   Code`; `Name` is TCGplayer's product title, `Accursed Marauder (Retro Frame)` on 111 of one
+ *   real export's 1,010 rows, where `Simple Name` beside it is the card.
+ * * `REGISTRY` — the registry's own `csvHeader`, and the legacy aliases, which are what an older
+ *   build of this app wrote. A file this app wrote says these words.
+ * * `ALIAS` — a vendor's word for a field it names outright (`Count`, `Card Name`, `Foil`).
+ * * `FALLBACK` — a vendor's word that names the field in one export and something else in the
+ *   next. There is one: `Edition`, a set code in Moxfield's export and a set **name** in
+ *   Deckbox's — which writes the code beside it as `Edition Code`, so the fallback is only ever
+ *   read in a file with no better column.
+ */
+const SPECIFIC = 0;
+const REGISTRY = 1;
+const ALIAS = 2;
+const FALLBACK = 3;
+
+/** One header, read: the field it names and how strongly. */
+interface HeaderCell {
+  field: TransferFieldId;
+  rank: number;
+}
 
 /**
  * What an **older build** called two of these columns. A read path and nothing else.
@@ -52,19 +80,100 @@ const LEGACY_CSV_HEADERS: readonly (readonly [string, TransferFieldId])[] = [
 ];
 
 /**
+ * What **other apps** call the columns this one reads (issue #555) — the reason a Moxfield,
+ * Deckbox or ManaBox export is a restore and not a refusal.
+ *
+ * Every spelling here was read off a real export or the vendor's own list, never guessed from
+ * the field's name: the research doc's verbatim headers
+ * (`docs/superpowers/research/2026-08-04-mtg-domain-rules.md`, "Collection CSV headers"), checked
+ * on 2026-09-28 against real exports of Moxfield, Deckbox, ManaBox, Archidekt, Dragon Shield,
+ * TCGplayer, MTGO, MTGGoldfish and TopDecked. `Qty`, `Number` and `CN` are the three generic
+ * spellings with no vendor behind them — a hand-made sheet's words for the same columns.
+ *
+ * **What is deliberately absent, and why.** A column left out here is not dropped: it is named in
+ * the preview's "Not read" line ({@link CsvShape.ignoredColumns}).
+ *
+ * * **Deckbox's `My Price` is not a purchase price.** Deckbox's own CSV instructions call it
+ *   "only used for seller accounts": it is the asking price a Deckbox Market seller lists a
+ *   tradelist card at, set relative to Deckbox's market price — what the reader wants for the
+ *   card, not what they paid. Filing it under `Purchase price` would put a sale price into the
+ *   one column this app keeps for cost, where it would read as a fact about the past.
+ * * **Archidekt's `Date Added` is not `Acquired`.** It is the day the row entered Archidekt,
+ *   which for anybody who imported a collection is one date on every row.
+ * * **`Scryfall ID`** is the most exact column any of these files carries and the resolver has
+ *   no channel for it yet; it is listed like any other.
+ * * **Cardmarket's export names no card at all** (`idProduct;groupCount;…`) — it is the file the
+ *   "no column names the card" sentence is for.
+ */
+const THIRD_PARTY_CSV_HEADERS: readonly (readonly [string, TransferFieldId, number])[] = [
+  // Moxfield and Deckbox; the generic spelling.
+  ["Count", "quantity", ALIAS],
+  ["Qty", "quantity", ALIAS],
+  // Dragon Shield and MTGO; MTGGoldfish; TCGplayer (see SPECIFIC above).
+  ["Card Name", "name", ALIAS],
+  ["Card", "name", ALIAS],
+  ["Simple Name", "name", SPECIFIC],
+  // ManaBox, Dragon Shield, TCGplayer; Deckbox and Archidekt; MTGGoldfish; TopDecked.
+  ["Set Code", "setCode", SPECIFIC],
+  ["Edition Code", "setCode", SPECIFIC],
+  ["Set ID", "setCode", SPECIFIC],
+  ["Setcode", "setCode", SPECIFIC],
+  ["Edition", "setCode", FALLBACK],
+  // Archidekt; TopDecked. A set name is a set hint only in a file with no code column at all —
+  // see `setHintColumn`.
+  ["Edition Name", "setName", ALIAS],
+  ["Setname", "setName", ALIAS],
+  // Deckbox, Dragon Shield, TCGplayer; MTGO; the two generic spellings.
+  ["Card Number", "collectorNumber", ALIAS],
+  ["Collector #", "collectorNumber", ALIAS],
+  ["Number", "collectorNumber", ALIAS],
+  ["CN", "collectorNumber", ALIAS],
+  // Moxfield, Deckbox, ManaBox, MTGGoldfish; TCGplayer and Dragon Shield; MTGO. Their values are
+  // read by `csvFinish`, which is what makes `Double Rainbow Foil` and MTGO's `Yes` a finish.
+  ["Foil", "finish", ALIAS],
+  ["Printing", "finish", ALIAS],
+  ["Premium", "finish", ALIAS],
+  // TopDecked.
+  ["Lang", "lang", ALIAS],
+  // Moxfield and Deckbox; Dragon Shield.
+  ["Tradelist Count", "tradelistQuantity", ALIAS],
+  ["Trade Quantity", "tradelistQuantity", ALIAS],
+  // Moxfield; Deckbox.
+  ["Alter", "altered", ALIAS],
+  ["Altered Art", "altered", ALIAS],
+  // Dragon Shield; TopDecked.
+  ["Price Bought", "purchasePrice", ALIAS],
+  ["Acquired price", "purchasePrice", ALIAS],
+  ["Date Bought", "acquiredAt", ALIAS],
+  ["Acquired date", "acquiredAt", ALIAS],
+  // ManaBox.
+  ["Purchase price currency", "purchaseCurrency", ALIAS],
+];
+
+/**
  * A CSV header maps to field ids by `csvHeader`, case- and space-insensitively.
  *
  * Built from the registry rather than written out, so a field added there is readable back
  * without a second edit here — which is the whole reason the registry carries a `csvHeader` at
  * all rather than the writer spelling one inline. {@link LEGACY_CSV_HEADERS} is laid over it for
- * the one thing a table derived from today's names cannot say: what yesterday's called a column.
+ * the one thing a table derived from today's names cannot say: what yesterday's called a column,
+ * and {@link THIRD_PARTY_CSV_HEADERS} for what everybody else calls one.
  *
  * **The aliases go in first on purpose.** `Map`'s constructor keeps the *last* entry for a
- * repeated key, so a registry header always beats an alias spelled the same way.
+ * repeated key, so a registry header always beats an alias spelled the same way — a third-party
+ * spelling can add a key and can never take one this app writes.
  */
-const HEADER_TO_FIELD = new Map<string, TransferFieldId>([
-  ...LEGACY_CSV_HEADERS.map(([header, id]) => [normalizeHeader(header), id] as const),
-  ...TRANSFER_FIELD_IDS.map((id) => [normalizeHeader(TRANSFER_FIELDS[id].csvHeader), id] as const),
+const HEADER_TO_FIELD = new Map<string, HeaderCell>([
+  ...THIRD_PARTY_CSV_HEADERS.map(
+    ([header, field, rank]) => [normalizeHeader(header), { field, rank }] as const,
+  ),
+  ...LEGACY_CSV_HEADERS.map(
+    ([header, field]) => [normalizeHeader(header), { field, rank: REGISTRY }] as const,
+  ),
+  ...TRANSFER_FIELD_IDS.map(
+    (field) =>
+      [normalizeHeader(TRANSFER_FIELDS[field].csvHeader), { field, rank: REGISTRY }] as const,
+  ),
 ]);
 
 function normalizeHeader(raw: string): string {
@@ -86,13 +195,169 @@ function normalizeHeader(raw: string): string {
  * CSV, and what tells the two apart is not this function's business — it answers only "does the
  * first row's *content* look like a header", the same question it always asked.
  */
-function csvHeaderOf(row: readonly string[]): (TransferFieldId | null)[] | null {
+function csvHeaderOf(row: readonly string[]): (HeaderCell | null)[] | null {
   if (row.length < 2) return null;
   const mapped = row.map((cell) => HEADER_TO_FIELD.get(normalizeHeader(cell)) ?? null);
-  const known = mapped.filter((id) => id !== null);
+  const known = mapped.filter((cell) => cell !== null).map((cell) => cell.field);
   if (known.length < 2) return null;
   if (!known.includes("name")) return null;
   return mapped;
+}
+
+/**
+ * Fields a column can name that **no importer reads**, so a file carrying one is told so.
+ *
+ * All four are facts about the *card*, which the resolver answers from the corpus rather than
+ * from the file: `Rarity`, `Type line` and `Price` are columns this app writes for a reader's
+ * spreadsheet and never takes back, and `Set name` is read only when it is standing in for a set
+ * code (see {@link setHintColumn}) — beside a code column it says nothing the code does not.
+ * Every other field in the registry is read by at least one of the four destinations.
+ */
+const UNREAD_FIELDS: ReadonlySet<TransferFieldId> = new Set([
+  "rarity",
+  "typeLine",
+  "unitPrice",
+  "setName",
+]);
+
+/**
+ * Which column each field is read from: **the lowest {@link HeaderCell.rank}**, and the leftmost
+ * of equals. A Deckbox export names the set twice — `Edition` (`The Lord of the Rings: Tales of
+ * Middle-earth`) and `Edition Code` (`ltr`) — and reading the first column that happened to map
+ * would hand the resolver a set name where the file had a code two cells over.
+ */
+function columnsOf(header: readonly (HeaderCell | null)[]): Map<TransferFieldId, number> {
+  const at = new Map<TransferFieldId, number>();
+  header.forEach((cell, index) => {
+    if (cell === null) return;
+    const held = at.get(cell.field);
+    if (held === undefined || cell.rank < header[held]!.rank) at.set(cell.field, index);
+  });
+  return at;
+}
+
+/**
+ * The column a row's set hint is read from, and whether it holds a **name** rather than a code.
+ *
+ * A code column wins whenever the file has one, whatever a given row holds in it. Only a file
+ * with **no code column at all** — no `Set`, `Set Code`, `Edition Code`, `Set ID`, `Setcode` or
+ * `Edition` — lends its `Set name` column to the hint, and `import_resolve` answers a hint that
+ * names no set code by reading it as a set's name. A per-row fallback was the alternative and is
+ * not taken: a file that has a code column and leaves a cell of it blank has said "no printing"
+ * for that row, and a name in the next column over is decoration it never meant as a hint.
+ */
+function setHintColumn(
+  at: ReadonlyMap<TransferFieldId, number>,
+): { column: number; isName: boolean } | null {
+  const code = at.get("setCode");
+  if (code !== undefined) return { column: code, isName: false };
+  const name = at.get("setName");
+  return name === undefined ? null : { column: name, isName: true };
+}
+
+/**
+ * What a CSV import did **not** read, for the preview to say so (issue #555).
+ *
+ * `null` or absent on a {@link ParsedList} that was not read as a CSV — optional rather than
+ * required so that every hand-built `ParsedList` in the suite and the workbench is still one.
+ */
+export interface CsvShape {
+  /** What separated the cells — a comma, or Excel's EU semicolon, or a tab. */
+  delimiter: CsvDelimiter;
+  /**
+   * Header cells, **as the file spelled them**, whose columns nothing reads: a column no field
+   * answers to (`Scryfall ID`, `My Price`), a column naming a field no importer reads
+   * ({@link UNREAD_FIELDS}), and a column that lost its field to a more specific one
+   * ({@link columnsOf} — Deckbox's `Edition`, beside `Edition Code`). In file order, each name
+   * once, blanks left out — a column with no header has no name to list it by.
+   */
+  ignoredColumns: string[];
+  /** Whether a column names the count. Without one every row is read as a single copy, which is
+   *  right for a list of cards and wrong for an inventory — so the preview says so. */
+  hasQuantity: boolean;
+}
+
+/** The {@link CsvShape} of a file whose header has been read. */
+function shapeOf(
+  header: readonly string[],
+  mapped: readonly (HeaderCell | null)[],
+  at: ReadonlyMap<TransferFieldId, number>,
+  hint: { column: number; isName: boolean } | null,
+  delimiter: CsvDelimiter,
+): CsvShape {
+  const ignored: string[] = [];
+  header.forEach((raw, index) => {
+    const name = raw.trim();
+    if (name === "" || ignored.includes(name)) return;
+    const cell = mapped[index];
+    const read =
+      cell !== null &&
+      at.get(cell.field) === index &&
+      (!UNREAD_FIELDS.has(cell.field) || (hint !== null && hint.isName && hint.column === index));
+    if (!read) ignored.push(name);
+  });
+  return { delimiter, ignoredColumns: ignored, hasQuantity: at.has("quantity") };
+}
+
+/**
+ * Cells in a finish column that are the **regular** copy — blank among them. Checked before any
+ * foil word, because `nonfoil` and `non-foil` both contain one.
+ */
+const NOT_FOIL = /^(?:|normal|regular|non ?-?foil|not foil|no|n|false|0)$/;
+
+/** Whole cells that mean "foil" in a column that is only asking whether a card is: MTGO's
+ *  `Premium` writes `Yes`, a hand-made sheet a tick. */
+const FOIL_WORDS = /^(?:foil|yes|y|true|1|x)$/;
+
+/**
+ * A finish-like cell — `Finish`, `Foil`, `Printing`, `Premium` — as the finish it names.
+ *
+ * **Anything containing `etched` is etched, and anything else containing `foil` is foil**,
+ * which is the rule every real export agrees with: Dragon Shield's `Printing` writes the
+ * treatment's own name (`Double Rainbow Foil`, `Gilded Foil`, `Rainbow Foil` on a real export),
+ * MTGGoldfish writes `foil_etched`, and a treatment is a *printing* family while the finish is
+ * what the copy is (`src/CLAUDE.md`: a Surge Foil is foil). Etched is asked first because
+ * `Foil Etched` contains both words.
+ *
+ * **A word this reads as neither is the regular copy**, and that is the one cell in a CSV whose
+ * unrecognised value lands as a default rather than an issue: refusing the whole row over a
+ * finish word would cost the reader the card to save them a treatment, and the preview shows
+ * every row's finish before anything is written.
+ */
+function csvFinish(raw: string): DeckFinish {
+  const word = raw.trim().toLowerCase().replace(/[\s_]+/g, " ");
+  if (NOT_FOIL.test(word)) return null;
+  if (word.includes("etched")) return "etched";
+  if (FOIL_WORDS.test(word) || word.includes("foil")) return "foil";
+  return null;
+}
+
+/** The ceiling on one row's count — the per-line reader's own, whose `qty` group is four digits.
+ *  A CSV that could say more than a decklist can would be the one door a typo walks through. */
+const MAX_COPIES = 9999;
+
+/**
+ * A quantity cell, **strictly**: a whole number from 1 to {@link MAX_COPIES}, or the sentence
+ * that says why not.
+ *
+ * `Number.parseInt` was the reader until issue #555 and it reads a prefix — `1.5` was one copy,
+ * `3 copies` three, and neither said anything. A count is the one cell whose misreading changes
+ * how many cards the reader owns, so it is the one cell read this strictly; the price and date
+ * columns are the planner's to read, and each has its own refusal there.
+ *
+ * A **blank** cell is one copy, as a file with no count column at all is — the same silence, in
+ * a narrower place.
+ */
+function csvQuantity(cell: string): number | string {
+  if (cell === "") return 1;
+  if (!/^\d+$/.test(cell)) return `\`${cell}\` is not a whole number of copies`;
+  const quantity = Number(cell);
+  // The per-line reader's own sentence, so one refusal reads one way whichever reader made it.
+  if (quantity === 0) return "A count of zero is not an import.";
+  if (quantity > MAX_COPIES) {
+    return `\`${cell}\` is more than the ${MAX_COPIES} copies one row can hold`;
+  }
+  return quantity;
 }
 
 /**
@@ -133,14 +398,25 @@ export type SectionKind = "deck" | "commander" | "sideboard" | "companion" | "ma
 
 /** One line that named a card. */
 export interface ParsedLine {
-  /** 1-based, counted over **every** line including the blanks — it is what the preview quotes. */
+  /**
+   * 1-based, counted over **every** line including the blanks — it is what the preview quotes.
+   * A CSV row's is the physical line it **starts** on (`csv.ts`' `CsvRecord.line`), so a note
+   * cell written in two paragraphs does not push every later row's number one line short.
+   */
   lineNumber: number;
-  /** The line exactly as it arrived, untrimmed, so a quoted line looks like what was pasted. */
+  /** The line exactly as it arrived, untrimmed, so a quoted line looks like what was pasted. A
+   *  CSV row's is the row's own text, quotes and separators included — every line of it. */
   raw: string;
   /** Always ≥ 1. A count of zero is a {@link ParseIssue}, never a line. */
   quantity: number;
   name: string;
-  /** Uppercased — `(ltc)` and `(LTC)` are the same set and only one of them is a set code. */
+  /**
+   * Uppercased — `(ltc)` and `(LTC)` are the same set and only one of them is a set code.
+   *
+   * **The one exception is a CSV with no code column**, whose `Set name` column is lent to this
+   * hint verbatim (`Throne of Eldraine`): a name is not a code, capitals and all, and the
+   * resolver reads a hint that names no set code as a set's name.
+   */
   setCode: string | null;
   /** Verbatim. Collector numbers are TEXT (`123★`, `A-45`, `285`), so nothing is parsed out. */
   collectorNumber: string | null;
@@ -209,6 +485,12 @@ export interface ParsedList {
   totalCards: number;
   /** Arena's `Name <x>` from under its `About` block, and nothing else names a deck. */
   suggestedName: string | null;
+  /**
+   * How a CSV was read — its separator, the columns nothing read, whether it counted copies —
+   * for `shared/CsvNotes` to say in a line or two. **Absent or `null` means the text was not
+   * read as a CSV**, which is every decklist and every file whose header this did not trust.
+   */
+  csv?: CsvShape | null;
 }
 
 /**
@@ -562,17 +844,25 @@ function namesASection(rows: readonly string[], index: number, trimmed: string):
  * price and the rest out of it. Keeping them on the line rather than in a second return value is
  * what lets one `ParsedList` serve four destinations.
  */
-function parseCsvGrid(grid: string[][], header: readonly (TransferFieldId | null)[]): ParsedList {
+function parseCsvGrid(
+  records: readonly CsvRecord[],
+  header: readonly (HeaderCell | null)[],
+  delimiter: CsvDelimiter,
+): ParsedList {
   const lines: ParsedLine[] = [];
   const issues: ParseIssue[] = [];
+  const at = columnsOf(header);
+  const hint = setHintColumn(at);
 
-  for (let r = 1; r < grid.length; r += 1) {
-    const row = grid[r];
-    const lineNumber = r + 1;
-    const raw = row.join(",");
+  for (let r = 1; r < records.length; r += 1) {
+    const row = records[r].cells;
+    // The line the row *starts* on — `r + 1` until issue #555, which was right for every row
+    // above the first multi-line cell and short, by every extra line that cell spanned, below it.
+    const lineNumber = records[r].line;
+    const raw = records[r].raw;
     const cell = (id: TransferFieldId): string => {
-      const at = header.indexOf(id);
-      return at === -1 ? "" : (row[at] ?? "").trim();
+      const column = at.get(id);
+      return column === undefined ? "" : (row[column] ?? "").trim();
     };
 
     const name = cell("name");
@@ -582,22 +872,21 @@ function parseCsvGrid(grid: string[][], header: readonly (TransferFieldId | null
       issues.push({ lineNumber, raw, reason: "this row names no card" });
       continue;
     }
-    const quantityCell = cell("quantity");
-    const quantity = quantityCell === "" ? 1 : Number.parseInt(quantityCell, 10);
-    if (!Number.isFinite(quantity) || quantity < 1) {
-      issues.push({ lineNumber, raw, reason: `\`${quantityCell}\` is not a count of copies` });
+    const quantity = csvQuantity(cell("quantity"));
+    if (typeof quantity === "string") {
+      issues.push({ lineNumber, raw, reason: quantity });
       continue;
     }
 
+    // One value per field — the column `columnsOf` chose — so a Deckbox row's `extra.setCode`
+    // is its `Edition Code` and not whichever of its two set columns came first.
     const extra: Partial<Record<TransferFieldId, string>> = {};
-    for (const id of header) {
-      if (id === null) continue;
+    for (const id of at.keys()) {
       const value = cell(id);
       if (value !== "") extra[id] = value;
     }
 
-    const setCode = cell("setCode");
-    const finish = cell("finish").toLowerCase();
+    const setHint = hint === null ? "" : (row[hint.column] ?? "").trim();
     const categoryCell = cell("category") === "" ? null : cell("category");
     // **A Category cell goes through the same section vocabulary a bracket does** — parse.ts
     // already does exactly this for a bracket's first entry. `Sideboard` names one of the four
@@ -610,14 +899,14 @@ function parseCsvGrid(grid: string[][], header: readonly (TransferFieldId | null
       raw,
       quantity,
       name,
-      setCode: setCode === "" ? null : setCode.toUpperCase(),
+      setCode: setHint === "" ? null : hint?.isName === true ? setHint : setHint.toUpperCase(),
       collectorNumber: cell("collectorNumber") === "" ? null : cell("collectorNumber"),
       section: knownSection ?? "deck",
       // Null whenever the section is not `deck` — `ParsedLine`'s stated invariant, and what
       // keeps plan.ts's precedence chain three rungs rather than four. Only a word the section
       // vocabulary has never heard of lands here.
       categoryName: knownSection === null ? categoryCell : null,
-      finish: finish === "foil" ? "foil" : finish === "etched" ? "etched" : null,
+      finish: csvFinish(cell("finish")),
       excluded: false,
       // A CSV says a label in two columns where Archidekt says it in one group, because a cell
       // holds one value. Both are read — a column this app writes and cannot read back is a
@@ -628,13 +917,15 @@ function parseCsvGrid(grid: string[][], header: readonly (TransferFieldId | null
       extra,
     });
   }
-  // `ParsedList` carries four fields, not two. `totalCards` is copies rather than rows, and
-  // `suggestedName` is Arena's `About` block — a CSV has no such thing and answers null.
+  // `ParsedList` carries five fields, not two. `totalCards` is copies rather than rows,
+  // `suggestedName` is Arena's `About` block — a CSV has no such thing and answers null — and
+  // `csv` is what the preview says about the columns this read and the ones it did not.
   return {
     lines,
     issues,
     totalCards: lines.reduce((n, l) => n + l.quantity, 0),
     suggestedName: null,
+    csv: shapeOf(records[0].cells, header, at, hint, delimiter),
   };
 }
 
@@ -653,9 +944,14 @@ export function parseDecklist(text: string): ParsedList {
   // a CSV at all: its next row is one field against the header's two, so the shapes disagree and
   // this falls through to the per-line reader below, exactly as if `csvHeaderOf` had found
   // nothing.
-  const grid = parseCsv(text);
+  //
+  // `readCsv` measures the separator off the first line, so a semicolon or tab file reaches this
+  // test already split into its cells — and a decklist, whose first line carries none of the
+  // three or a comma at most, is split on the comma exactly as it always was.
+  const { delimiter, records } = readCsv(text);
+  const grid = records.map((record) => record.cells);
   const header = grid.length > 0 ? csvHeaderOf(grid[0]) : null;
-  if (header !== null && csvShapeAgrees(grid)) return parseCsvGrid(grid, header);
+  if (header !== null && csvShapeAgrees(grid)) return parseCsvGrid(records, header, delimiter);
 
   // A header this app *nearly* recognises — two or more known columns but no name — is a CSV
   // somebody exported from somewhere else, and reading it line by line would produce one issue
@@ -670,8 +966,9 @@ export function parseDecklist(text: string): ParsedList {
       lines: [],
       issues: [
         {
-          lineNumber: 1,
-          raw: grid[0].join(","),
+          // The header's own line — line 2 in a file that opens on `sep=,`.
+          lineNumber: records[0].line,
+          raw: records[0].raw,
           reason: "this looks like a spreadsheet, but no column names the card",
         },
       ],

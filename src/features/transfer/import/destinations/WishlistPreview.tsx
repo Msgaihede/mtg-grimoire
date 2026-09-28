@@ -10,6 +10,8 @@
 import { useMemo, useState, type JSX } from "react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
+import { offerUndo } from "@/lib/bulkUndo";
+import { count } from "@/lib/counts";
 import { ipc, ipcError, type DeckFinish, type TransferImportMode } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import type { DestinationPreviewProps, ImportDestination, ImportModeOption } from "../destination";
@@ -51,7 +53,18 @@ export function WishlistPreview({
   const runImport = () => {
     if (plan.items.length === 0) return;
     commit.mutate(undefined, {
-      onSuccess: (outcome) => onDone(`${outcome.added} added, ${outcome.updated} updated.`),
+      onSuccess: (outcome) => {
+        // The collection preview's offer, over the other list — `WishlistPage` draws it. `?? null`
+        // for the same reason: an outcome that predates the ticket carries no `undoId` at all.
+        offerUndo(
+          "wishlist",
+          outcome.undoId ?? null,
+          mode === "set"
+            ? `Set wishlist quantities from a file of ${cards(plan.items.length)}.`
+            : `Imported ${cards(plan.totalCards)} into your wishlist.`,
+        );
+        onDone(`${outcome.added} added, ${outcome.updated} updated.`);
+      },
     });
   };
 
@@ -72,9 +85,15 @@ export function WishlistPreview({
       className="flex min-h-0 flex-1 flex-col"
     >
       <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        {/* **Not "will be added" under `set`**, which is the collection preview's own bug in
+            this list's words (issue #555): a `set` lowers some wishes and removes others, and a
+            headline promising additions over it is wrong about what the button does. The
+            collection's sentence is counted by a dry run; the wishlist has none, so this one says
+            only what the file is — which is true whatever the rows already hold. */}
         <p className="text-sm">
-          {plan.totalCards === 1 ? "1 card" : `${plan.totalCards} cards`} will be added to your
-          wishlist.
+          {mode === "set"
+            ? `Sets how many you want of ${cards(plan.items.length)}.`
+            : `${cards(plan.totalCards)} will be added to your wishlist.`}
         </p>
 
         <div className="flex flex-wrap items-center gap-4 text-sm">
@@ -130,6 +149,12 @@ export function WishlistPreview({
       />
     </form>
   );
+}
+
+/** `1 card`, `3,000 cards` — the collection preview's own helper, kept local for the reason
+ *  `printingOf` is: one line is not worth an import across destinations. */
+function cards(n: number): string {
+  return `${count(n)} ${n === 1 ? "card" : "cards"}`;
 }
 
 export const wishlistDestination: ImportDestination = {

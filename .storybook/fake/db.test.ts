@@ -7950,7 +7950,14 @@ describe("collection_import_commit", () => {
       { cardId: BOLT.id, finish: "nonfoil", quantity: 3 },
     ];
     const out = writeHandlers(db).collection_import_commit({ items, mode: "add" });
-    expect(out).toEqual({ added: 1, updated: 1, removed: 0 });
+    expect(out).toEqual({
+      added: 1,
+      updated: 1,
+      removed: 0,
+      copies: 5,
+      leftInFolders: 0,
+      undoId: 1,
+    });
     expect(db.collectionEntries).toHaveLength(1);
     expect(db.collectionEntries[0].quantity).toBe(5);
   });
@@ -7967,7 +7974,15 @@ describe("collection_import_commit", () => {
       items: [{ cardId: BOLT.id, finish: "nonfoil", quantity: 0 }],
       mode: "set",
     });
-    expect(out).toEqual({ added: 0, updated: 0, removed: 1 });
+    // `copies` is the net change, so a file that only lowers answers a negative.
+    expect(out).toEqual({
+      added: 0,
+      updated: 0,
+      removed: 1,
+      copies: -4,
+      leftInFolders: 0,
+      undoId: 1,
+    });
     expect(db.collectionEntries).toHaveLength(0);
   });
 
@@ -7991,7 +8006,14 @@ describe("collection_import_commit", () => {
 
     const out = writeHandlers(db).collection_import_commit({ items, mode: "add" });
 
-    expect(out).toEqual({ added: 2, updated: 0, removed: 0 });
+    expect(out).toEqual({
+      added: 2,
+      updated: 0,
+      removed: 0,
+      copies: 3,
+      leftInFolders: 0,
+      undoId: 1,
+    });
     expect(db.collectionEntries.map((e) => [e.altered, e.quantity])).toEqual([
       [false, 1],
       [true, 2],
@@ -8089,7 +8111,14 @@ describe("wishlist_import_commit", () => {
       { oracleId: BOLT.oracleId!, quantity: 1 },
     ];
     const out = writeHandlers(db).wishlist_import_commit({ items, mode: "add" });
-    expect(out).toEqual({ added: 1, updated: 1, removed: 0 });
+    expect(out).toEqual({
+      added: 1,
+      updated: 1,
+      removed: 0,
+      copies: 3,
+      leftInFolders: 0,
+      undoId: 1,
+    });
     expect(db.wishlistEntries).toHaveLength(1);
     expect(db.wishlistEntries[0].quantity).toBe(3);
   });
@@ -8145,11 +8174,625 @@ describe("wishlist_import_commit", () => {
       ],
       mode: "set",
     });
-    expect(out).toEqual({ added: 1, updated: 0, removed: 1 });
+    // Two copies wanted before and five after, so the net is three — the two statements the
+    // counts above keep apart are exactly what `copies` sums over.
+    expect(out).toEqual({
+      added: 1,
+      updated: 0,
+      removed: 1,
+      copies: 3,
+      leftInFolders: 0,
+      undoId: 1,
+    });
     // The any-printing wish is gone and only the pinned one remains — not an id check, because
     // `nextId` derives from the array's current contents and reuses the id the delete freed.
     expect(db.wishlistEntries).toHaveLength(1);
     expect(db.wishlistEntries[0]).toMatchObject({ cardId: BOLT.id, quantity: 5 });
+  });
+});
+
+/**
+ * Issue #555's half of the collection import: a `set` that counts what is already filed, the two
+ * columns the export wrote and the import dropped, and a preview that is the commit run and put
+ * back.
+ */
+describe("the collection import, filed copies and the columns it reads back", () => {
+  /** `Binder`, the reader's own drawer — the one folder every case here files into. */
+  const BINDER: FakeCollectionFolder = {
+    id: 1,
+    parentId: null,
+    name: "Binder",
+    kind: "user",
+    deckId: null,
+    sortOrder: 0,
+    locked: false,
+  };
+  const bolts = (quantity: number): CollectionImportItem[] => [
+    { cardId: BOLT.id, finish: "nonfoil", quantity },
+  ];
+
+  /**
+   * **The file's number is the total at the grain, and the root is what the folders do not
+   * already hold.** Before, `set` wrote the number into the root beside the binder's copies, so a
+   * reader's own export re-imported with "Set these quantities" doubled everything they had
+   * filed. Three binder copies and a file saying four leaves one at the root — the net change is
+   * the one copy the root lost, which is why `copies` is `-1` and not `+4`.
+   */
+  it("counts the copies a root set line finds filed, and writes the root the difference", () => {
+    const db = makeDb({
+      collectionFolders: [BINDER],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 3, folderId: 1 }),
+      ],
+    });
+
+    const out = writeHandlers(db).collection_import_commit({ items: bolts(4), mode: "set" });
+
+    expect(out).toEqual({
+      added: 0,
+      updated: 1,
+      removed: 0,
+      copies: -1,
+      leftInFolders: 0,
+      undoId: 1,
+    });
+    expect(db.collectionEntries.map((e) => [e.folderId, e.quantity])).toEqual([
+      [null, 1],
+      [1, 3],
+    ]);
+  });
+
+  /**
+   * When the folders alone hold more than the file says, **the root goes to zero and the surplus
+   * stays filed** — a file says nothing about a reader's filing, so it never reaches into a
+   * binder — and `leftInFolders` is the number the preview owes the reader a sentence about.
+   */
+  it("takes the root to nothing and reports the surplus a folder keeps", () => {
+    const db = makeDb({
+      collectionFolders: [BINDER],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 3, folderId: 1 }),
+      ],
+    });
+
+    const out = writeHandlers(db).collection_import_commit({ items: bolts(2), mode: "set" });
+
+    expect(out).toMatchObject({ removed: 1, copies: -2, leftInFolders: 1 });
+    expect(db.collectionEntries).toEqual([expect.objectContaining({ id: 2, quantity: 3 })]);
+  });
+
+  /**
+   * **The reader's own export, read straight back, changes nothing** — the whole of the bug in
+   * one line. Four copies filed and none at the root, so the root the file's four would write is
+   * zero once the binder's four count toward it; and a `set 0` for a printing the reader does not
+   * own has nothing to take away. **Neither line reaches a row, so neither is written or
+   * counted** — the crate's per-line count since issue #555, where both used to insert and delete
+   * a row and answer "1 added, 1 removed" apiece over a file that changed nothing.
+   */
+  it("changes nothing, and counts nothing, when no line reaches a row", () => {
+    const db = makeDb({
+      collectionFolders: [BINDER],
+      collectionEntries: [entry({ id: 2, cardId: BOLT.id, quantity: 4, folderId: 1 })],
+    });
+    const before = db.collectionEntries.map((e) => ({ ...e }));
+
+    const out = writeHandlers(db).collection_import_commit({
+      items: [...bolts(4), { cardId: BOLT_2X2.id, finish: "nonfoil", quantity: 0 }],
+      mode: "set",
+    });
+
+    expect(out).toEqual({
+      added: 0,
+      updated: 0,
+      removed: 0,
+      copies: 0,
+      leftInFolders: 0,
+      undoId: null,
+    });
+    expect(db.collectionEntries).toEqual(before);
+  });
+
+  /** A `set` **into** a folder is that folder's number and nothing else: the root is not filed,
+   *  and a named destination counts no copies anywhere but itself. */
+  it("counts nothing elsewhere when the file is set into a named folder", () => {
+    const db = makeDb({
+      collectionFolders: [BINDER],
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2 })],
+    });
+
+    const out = writeHandlers(db).collection_import_commit({
+      items: bolts(3),
+      mode: "set",
+      folderId: 1,
+    });
+
+    expect(out).toMatchObject({ added: 1, copies: 3, leftInFolders: 0 });
+    expect(db.collectionEntries.map((e) => [e.folderId, e.quantity])).toEqual([
+      [null, 2],
+      [1, 3],
+    ]);
+  });
+
+  /**
+   * **The two columns the export wrote and the import dropped** (issue #555). An `add` unions the
+   * file's tags into the row's and adds its tradelist; a `set` replaces both; a line naming
+   * neither leaves both alone — `add` and `set` alike — except that a tradelist is always clamped
+   * to the pile it is drawn from.
+   */
+  it("reads tags and a tradelist back: add unions, set replaces, silence leaves them", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2, tradelistQuantity: 1, tags: '["cube"]' }),
+      ],
+    });
+    const w = writeHandlers(db);
+    const row = () => db.collectionEntries[0];
+
+    w.collection_import_commit({
+      items: [{ ...bolts(1)[0], tags: '["trade", "cube"]', tradelistQuantity: 1 }],
+      mode: "add",
+    });
+    // Written only where something is new, in the row's own order, and `cube` not twice.
+    expect(row()).toMatchObject({ quantity: 3, tradelistQuantity: 2, tags: '["cube","trade"]' });
+
+    w.collection_import_commit({
+      items: [{ ...bolts(2)[0], tags: '["binder"]', tradelistQuantity: 5 }],
+      mode: "set",
+    });
+    // The file's spelling verbatim, and five offered from a pile of two is two.
+    expect(row()).toMatchObject({ quantity: 2, tradelistQuantity: 2, tags: '["binder"]' });
+
+    w.collection_import_commit({ items: bolts(1), mode: "add" });
+    expect(row()).toMatchObject({ quantity: 3, tradelistQuantity: 2, tags: '["binder"]' });
+
+    w.collection_import_commit({ items: bolts(1), mode: "set" });
+    // Silence keeps the row's own tradelist, clamped to the one copy left.
+    expect(row()).toMatchObject({ quantity: 1, tradelistQuantity: 1, tags: '["binder"]' });
+
+    // A **new** row takes the file's tags as they stand — the union's re-spelling is for a row
+    // that already had some.
+    w.collection_import_commit({
+      items: [{ cardId: BOLT_2X2.id, finish: "nonfoil", quantity: 1, tags: '["a", "b"]' }],
+      mode: "add",
+    });
+    expect(db.collectionEntries.find((e) => e.cardId === BOLT_2X2.id)?.tags).toBe('["a", "b"]');
+  });
+
+  /** A tag cell that is not JSON is `valid_tags`' refusal, and it lands **before** the row: the
+   *  whole file is refused, with the copies of the good line ahead of it rolled back too. */
+  it("refuses a tag list that is not JSON, and writes nothing", () => {
+    const db = makeDb();
+    expect(() =>
+      writeHandlers(db).collection_import_commit({
+        items: [bolts(1)[0], { ...bolts(1)[0], tags: "cube, trade" }],
+        mode: "add",
+      }),
+    ).toThrow(/is not a tag list/);
+    expect(db.collectionEntries).toHaveLength(0);
+  });
+
+  /**
+   * **The preview is the commit, run and put back** — so the two answer the same numbers by
+   * construction, and the table after a preview is the table before it, value for value. The
+   * commit that follows is asserted equal on every count, which is the promise the dialog's
+   * sentence rests on.
+   */
+  it("previews the commit's own numbers and writes nothing", () => {
+    const db = makeDb({
+      collectionFolders: [BINDER],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 3, folderId: 1 }),
+      ],
+    });
+    const before = db.collectionEntries.map((e) => ({ ...e }));
+    const args = {
+      items: [...bolts(2), { cardId: BOLT_2X2.id, finish: "nonfoil" as const, quantity: 1 }],
+      mode: "set" as const,
+    };
+
+    const preview = readHandlers(db).collection_import_preview(args);
+
+    expect(preview).toEqual({
+      added: 1,
+      updated: 0,
+      removed: 1,
+      copies: -1,
+      leftInFolders: 1,
+      undoId: null,
+    });
+    expect(db.collectionEntries).toEqual(before);
+    const { undoId, ...committed } = writeHandlers(db).collection_import_commit(args);
+    expect({ ...committed, undoId: null }).toEqual(preview);
+    expect(undoId).toBe(1);
+  });
+
+  /** It refuses what the commit refuses, in the commit's words, and still writes nothing. */
+  it("refuses in the preview what the commit would refuse", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2 })] });
+    const r = readHandlers(db);
+    expect(() =>
+      r.collection_import_preview({ items: bolts(1), mode: "replace" as TransferImportMode }),
+    ).toThrow(/not an import mode/);
+    expect(() =>
+      r.collection_import_preview({ items: bolts(1), mode: "add", folderId: 404 }),
+    ).toThrow(/not there any more/);
+    expect(db.collectionEntries).toEqual([entry({ id: 1, cardId: BOLT.id, quantity: 2 })]);
+  });
+});
+
+describe("collection_remove_many", () => {
+  /**
+   * **One write for the whole selection**, where the page looped `collection_remove`. An id that
+   * names nothing is skipped as the single command skips it, and an id sent twice counts once —
+   * the first took the row — so `removed` and `copies` are what really left.
+   */
+  it("deletes every row it names, skips what is not there, and counts the copies", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        entry({ id: 2, cardId: BOLT_2X2.id, quantity: 3 }),
+        entry({ id: 3, cardId: BOLT_JA.id, quantity: 1 }),
+      ],
+    });
+
+    const out = writeHandlers(db).collection_remove_many({ ids: [1, 3, 404, 1] });
+
+    expect(out).toEqual({ removed: 2, copies: 3, undoId: 1 });
+    expect(db.collectionEntries.map((e) => e.id)).toEqual([2]);
+  });
+
+  /** A selection that had already gone is a success with nothing in it — and no ticket, because
+   *  an Undo offered over nothing would be a button that appears to do nothing. */
+  it("answers no ticket when nothing it named was there", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, quantity: 2 })] });
+    expect(writeHandlers(db).collection_remove_many({ ids: [404] })).toEqual({
+      removed: 0,
+      copies: 0,
+      undoId: null,
+    });
+    expect(db.collectionEntries).toHaveLength(1);
+  });
+});
+
+describe("collection_set_folder_many", () => {
+  /** `Binder` for the reader, and a deck's group for the fence. */
+  const FOLDERS: FakeCollectionFolder[] = [
+    { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+      locked: false },
+    { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1,
+      locked: false },
+  ];
+
+  /**
+   * `collection_set_folder`'s rule per id, in the order sent: a row landing on a grain the
+   * binder already holds **folds into it** and its change names the survivor, and a row with
+   * nothing in the way is simply filed.
+   */
+  it("files every row it names, merging onto a taken grain, one change per id", () => {
+    const db = makeDb({
+      collectionFolders: FOLDERS,
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        entry({ id: 2, cardId: BOLT_2X2.id, quantity: 1 }),
+        entry({ id: 3, cardId: BOLT.id, quantity: 5, folderId: 1 }),
+      ],
+    });
+
+    const out = writeHandlers(db).collection_set_folder_many({ ids: [1, 2], folderId: 1 });
+
+    expect(out).toEqual({
+      changes: [
+        { id: 3, quantity: 7, removed: false },
+        { id: 2, quantity: 1, removed: false },
+      ],
+      undoId: 1,
+    });
+    expect(db.collectionEntries.map((e) => [e.id, e.folderId, e.quantity])).toEqual([
+      [2, 1, 1],
+      [3, 1, 7],
+    ]);
+  });
+
+  /**
+   * **Any refusal leaves nothing moved** — the first row here *was* filed before the second was
+   * refused, and the press is rolled back rather than left half-applied, which is the bug a
+   * per-id loop in the page could not avoid. Each refusal is the single command's own sentence:
+   * a copy in a deck, a destination that is gone, an id that names nothing.
+   */
+  it("rolls the whole press back on a refusal, in that refusal's words", () => {
+    const db = makeDb({
+      collectionFolders: FOLDERS,
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        entry({ id: 2, cardId: BOLT_2X2.id, quantity: 1, folderId: 2 }),
+      ],
+    });
+    const w = writeHandlers(db);
+    const before = db.collectionEntries.map((e) => ({ ...e }));
+
+    expect(() => w.collection_set_folder_many({ ids: [1, 2], folderId: 1 })).toThrow(
+      /are in a deck/,
+    );
+    expect(db.collectionEntries).toEqual(before);
+    expect(() => w.collection_set_folder_many({ ids: [1, 404], folderId: 1 })).toThrow(
+      /collection entry/,
+    );
+    expect(db.collectionEntries).toEqual(before);
+    expect(() => w.collection_set_folder_many({ ids: [1], folderId: 404 })).toThrow(
+      /not there any more/,
+    );
+    expect(db.collectionEntries).toEqual(before);
+  });
+});
+
+/**
+ * The ticket every bulk write answers and `bulk_undo` takes back (issue #555). What these pin is
+ * the command's contract rather than any one write's: the rows go back **exactly** as they were —
+ * made rows deleted, deleted rows re-inserted under their own ids, changed rows reverted — and a
+ * ticket is refused, and spent, the moment putting it back would overwrite something newer.
+ */
+describe("bulk_undo", () => {
+  /** A table with every stamp zeroed: a row put back is stamped *now*, `bulk_undo`'s
+   *  `updated_at = unixepoch()`, and the stamp is the one column an undo does not restore. */
+  function unstamped<T extends { updatedAt: number }>(rows: readonly T[]): T[] {
+    return rows.map((r) => ({ ...r, updatedAt: 0 }));
+  }
+
+  it("takes back a set import: the rows it changed, made and deleted", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        entry({ id: 2, cardId: BOLT_2X2.id, quantity: 3 }),
+      ],
+    });
+    const w = writeHandlers(db);
+    const before = db.collectionEntries.map((e) => ({ ...e }));
+    // The new row is made **before** the delete, so it takes id 3 rather than the id the delete
+    // frees — which `nextId` would hand straight back, and which the ticket would then read as
+    // one row replaced rather than one made and one deleted.
+    const { undoId } = w.collection_import_commit({
+      items: [
+        { cardId: BOLT.id, finish: "nonfoil", quantity: 5 },
+        { cardId: BOLT_JA.id, finish: "nonfoil", quantity: 1 },
+        { cardId: BOLT_2X2.id, finish: "nonfoil", quantity: 0 },
+      ],
+      mode: "set",
+    });
+
+    expect(w.bulk_undo({ undoId: undoId! })).toEqual({ scope: "collection", restored: 3 });
+    expect(unstamped(db.collectionEntries)).toEqual(unstamped(before));
+    // Spent: a second press is the unknown ticket's sentence, not a second restore.
+    expect(() => w.bulk_undo({ undoId: undoId! })).toThrow(/^That can no longer be undone\.$/);
+  });
+
+  it("takes back a bulk remove and a bulk move, merge included", () => {
+    const db = makeDb({
+      collectionFolders: [
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0,
+          locked: false },
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2, notes: "root" }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 5, folderId: 1 }),
+        entry({ id: 3, cardId: BOLT_2X2.id, quantity: 1 }),
+      ],
+    });
+    const w = writeHandlers(db);
+    const before = db.collectionEntries.map((e) => ({ ...e }));
+
+    // The move folds row 1 into row 2 — deleting it and raising the survivor — and the undo
+    // has to put back both halves of that, the deleted row under its own id.
+    const move = w.collection_set_folder_many({ ids: [1], folderId: 1 });
+    expect(db.collectionEntries).toHaveLength(2);
+    expect(w.bulk_undo({ undoId: move.undoId! })).toEqual({ scope: "collection", restored: 2 });
+    expect(unstamped(db.collectionEntries)).toEqual(unstamped(before));
+
+    const remove = w.collection_remove_many({ ids: [1, 3] });
+    expect(w.bulk_undo({ undoId: remove.undoId! })).toEqual({ scope: "collection", restored: 2 });
+    expect(unstamped(db.collectionEntries)).toEqual(unstamped(before));
+  });
+
+  it("takes back a wishlist import, and says which list it was", () => {
+    const db = makeDb({ wishlistEntries: [wish({ id: 1, quantity: 2 })] });
+    const w = writeHandlers(db);
+    const before = db.wishlistEntries.map((x) => ({ ...x }));
+    const { undoId } = w.wishlist_import_commit({
+      items: [
+        { oracleId: BOLT.oracleId!, quantity: 1 },
+        { oracleId: BOLT.oracleId!, cardId: BOLT.id, quantity: 3 },
+      ],
+      mode: "add",
+    });
+
+    expect(w.bulk_undo({ undoId: undoId! })).toEqual({ scope: "wishlist", restored: 2 });
+    expect(unstamped(db.wishlistEntries)).toEqual(unstamped(before));
+  });
+
+  /**
+   * **A row the reader has changed since is never overwritten**: the refusal is the second
+   * sentence, the row keeps what the reader did to it, and the ticket is spent all the same — so
+   * the next press answers the first sentence rather than trying again.
+   */
+  it("refuses a ticket whose rows have changed since, and retires it", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const { undoId } = w.collection_import_commit({
+      items: [{ cardId: BOLT.id, finish: "nonfoil", quantity: 2 }],
+      mode: "add",
+    });
+    const id = db.collectionEntries[0].id;
+    w.collection_set_quantity({ id, quantity: 7 });
+
+    expect(() => w.bulk_undo({ undoId: undoId! })).toThrow(
+      /^Some of those cards have changed since, so this can no longer be undone\.$/,
+    );
+    expect(db.collectionEntries.map((e) => e.quantity)).toEqual([7]);
+    expect(() => w.bulk_undo({ undoId: undoId! })).toThrow(/^That can no longer be undone\.$/);
+  });
+
+  /**
+   * **Putting a removed row back onto a grain another row now holds is a change since too** — the
+   * reader removed a card and then added it again, at the same place. The rows the ticket touched
+   * are untouched (the new one has an id of its own), so it is the grain that has to refuse, as the
+   * crate's unique index would; restoring anyway would stand two rows on one grain.
+   */
+  it("refuses to stand a restored row on a grain another row now holds", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        entry({ id: 5, cardId: BOLT_2X2.id, quantity: 1 }),
+      ],
+    });
+    const w = writeHandlers(db);
+    const { undoId } = w.collection_remove_many({ ids: [1] });
+    const added = w.collection_add({ entry: { cardId: BOLT.id, finish: "nonfoil", quantity: 1 } });
+    expect(added.id).toBe(6);
+
+    expect(() => w.bulk_undo({ undoId: undoId! })).toThrow(/have changed since/);
+    expect(db.collectionEntries.map((e) => e.id)).toEqual([5, 6]);
+  });
+
+  it("refuses a ticket it never gave out", () => {
+    expect(() => writeHandlers(makeDb()).bulk_undo({ undoId: 99 })).toThrow(
+      /^That can no longer be undone\.$/,
+    );
+  });
+
+  /** A ticket is the world's, not the module's: a second world starts its own count at 1 and
+   *  cannot spend the first world's ticket. */
+  it("keeps each world's tickets to itself", () => {
+    const one = makeDb();
+    const two = makeDb();
+    const add = {
+      items: [{ cardId: BOLT.id, finish: "nonfoil" as const, quantity: 1 }],
+      mode: "add" as const,
+    };
+    expect(writeHandlers(one).collection_import_commit(add).undoId).toBe(1);
+    expect(writeHandlers(two).collection_import_commit(add).undoId).toBe(1);
+    expect(writeHandlers(two).bulk_undo({ undoId: 1 })).toEqual({
+      scope: "collection",
+      restored: 1,
+    });
+    expect(one.collectionEntries).toHaveLength(1);
+    expect(two.collectionEntries).toHaveLength(0);
+  });
+
+  /**
+   * **A deleted row comes back under its own id where nothing has taken it, and a fresh one where
+   * something has** — and an id reused since is not a change to anything the ticket describes, so
+   * it is no reason to refuse. `nextId` hands a freed largest id straight back, as SQLite's rowid
+   * does, which is what makes the case reachable at all.
+   */
+  it("re-inserts a removed row under a fresh id when its own has been taken", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2 }),
+        entry({ id: 2, cardId: BOLT_2X2.id, quantity: 3 }),
+      ],
+    });
+    const w = writeHandlers(db);
+    const { undoId } = w.collection_remove_many({ ids: [2] });
+    const added = { cardId: BOLT_JA.id, finish: "nonfoil" as const, quantity: 1 };
+    expect(w.collection_add({ entry: added }).id).toBe(2);
+
+    expect(w.bulk_undo({ undoId: undoId! })).toEqual({ scope: "collection", restored: 1 });
+    expect(db.collectionEntries.map((e) => [e.id, e.cardId, e.quantity])).toEqual([
+      [1, BOLT.id, 2],
+      [2, BOLT_JA.id, 1],
+      [3, BOLT_2X2.id, 3],
+    ]);
+  });
+
+  /**
+   * **The app's own bookkeeping is neither compared nor put back** — `bulk_undo::IGNORED`. A row
+   * the reconciler flagged since the write is still the row the write left, so the undo goes
+   * ahead and the flag stays; and a press that moved nothing but a stamp files no ticket at all,
+   * although it counts as the update it is.
+   */
+  it("ignores the stamp and the review note, in the ticket and in the check", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2 })] });
+    const w = writeHandlers(db);
+    const same = w.collection_import_commit({
+      items: [{ cardId: BOLT.id, finish: "nonfoil", quantity: 2 }],
+      mode: "set",
+    });
+    expect(same).toMatchObject({ updated: 1, copies: 0, undoId: null });
+
+    const { undoId } = w.collection_import_commit({
+      items: [{ cardId: BOLT.id, finish: "nonfoil", quantity: 1 }],
+      mode: "add",
+    });
+    const note = "Scryfall merged this printing into another.";
+    db.collectionEntries[0].needsReview = note;
+    expect(w.bulk_undo({ undoId: undoId! })).toEqual({ scope: "collection", restored: 1 });
+    expect(db.collectionEntries[0]).toMatchObject({ quantity: 2, needsReview: note });
+  });
+
+  /**
+   * **The store is asked before the lock**, `bulk_undo`'s own order: a ticket it does not hold is
+   * the first sentence even behind a sync, while one it holds answers BUSY — and is still there
+   * afterwards, because the lock refused before the undo took it.
+   */
+  it("answers BUSY for a ticket it holds and keeps it, and refuses one it lacks unlocked", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const { undoId } = w.collection_import_commit({
+      items: [{ cardId: BOLT.id, finish: "nonfoil", quantity: 1 }],
+      mode: "add",
+    });
+    db.fault = "busy";
+    expect(() => w.bulk_undo({ undoId: undoId! })).toThrow(/busy/i);
+    expect(() => w.bulk_undo({ undoId: 99 })).toThrow(/^That can no longer be undone\.$/);
+    db.fault = null;
+    expect(w.bulk_undo({ undoId: undoId! })).toEqual({ scope: "collection", restored: 1 });
+  });
+
+  /** `bulk_undo::CAPACITY`: the newest ten tickets, the oldest evicted — and ids only grow, so an
+   *  evicted one is never handed to a different write. */
+  it("keeps the session's newest ten tickets and never reuses an id", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const add = {
+      items: [{ cardId: BOLT.id, finish: "nonfoil" as const, quantity: 1 }],
+      mode: "add" as const,
+    };
+    const ids = Array.from({ length: 11 }, () => w.collection_import_commit(add).undoId);
+    expect(ids).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+
+    expect(() => w.bulk_undo({ undoId: 1 })).toThrow(/^That can no longer be undone\.$/);
+    expect(w.bulk_undo({ undoId: 11 })).toEqual({ scope: "collection", restored: 1 });
+    expect(w.collection_import_commit(add).undoId).toBe(12);
+  });
+
+  /**
+   * **Two imports answer no ticket, and each for a reason about half an undo.** Into a deck's group
+   * the press also wrote the decklist, which the ticket cannot take back, so undoing the copies
+   * would strand the deck's rows; and the scanner tray's commit removed the lines it filed from the
+   * tray in the same write, so undoing it would leave the scanned cards in neither place.
+   */
+  it("files no ticket for an import into a deck's group, nor for the scanner tray's", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, name: "Deck A" })] });
+    const line: CollectionImportItem[] = [{ cardId: BOLT.id, finish: "nonfoil", quantity: 2 }];
+
+    const deckArm = writeHandlers(db).collection_import_commit({
+      items: line,
+      mode: "add",
+      folderId: groupId(1),
+    });
+    const tray = allHandlers(db).scanner_tray_commit({
+      items: line,
+      folderId: null,
+      remaining: [],
+    });
+
+    expect([deckArm.undoId, tray.undoId]).toEqual([null, null]);
+    expect(db.collectionEntries.map((e) => [e.folderId, e.quantity])).toEqual([
+      [groupId(1), 2],
+      [null, 2],
+    ]);
   });
 });
 
@@ -10283,6 +10926,49 @@ describe("the decklist import", () => {
     });
   });
 
+  /**
+   * **A line's language is a preference, never a filter** (issue #555) — and it outranks even
+   * the printing the reader owns, which is the order `ImportResolveLine.lang` promises: an owned
+   * English Bolt is what an unmarked line lands on, and a `ja` line lands on the corpus's one
+   * Japanese printing instead. A language the fixture holds no printing in changes nothing, the
+   * code is compared lower-cased, and a cell that is not a code at all (`Japanese`) is ignored —
+   * `preferred_lang`'s two-or-three-letter fence, which is also what keeps it out of the SQL.
+   */
+  it("prefers a printing in the line's language, and resolves as usual without one", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT_2X2.id, quantity: 1 })] });
+    const rows = resolve(db, [
+      { name: "Lightning Bolt" },
+      { name: "Lightning Bolt", lang: "ja" },
+      { name: "Lightning Bolt", lang: " JA " },
+      { name: "Lightning Bolt", lang: "de" },
+      { name: "Lightning Bolt", lang: "Japanese" },
+    ]);
+    expect(rows.map((r) => r.matched?.cardId)).toEqual([
+      BOLT_2X2.id,
+      BOLT_JA.id,
+      BOLT_JA.id,
+      BOLT_2X2.id,
+      BOLT_2X2.id,
+    ]);
+  });
+
+  /**
+   * **A set hint that is no set's code is read as a set's name** (issue #555) — Deckbox's
+   * `Edition` column, which a CSV with no code column hands over as `setCode`. Folded, so the
+   * case a re-export changed does not matter, and honoured exactly as the code would have been:
+   * the hint is not reported missed. A name no set has is the missed hint it always was, and the
+   * card still resolves by its name.
+   */
+  it("reads a set hint that is no set's code as that set's name", () => {
+    const rows = resolve(makeDb(), [
+      { name: "Lightning Bolt", setCode: BOLT_2X2.setName.toUpperCase() },
+      { name: "Lightning Bolt", setCode: "Nonesuch Edition" },
+    ]);
+    expect(rows[0]).toMatchObject({ hintMissed: false, matched: { cardId: BOLT_2X2.id } });
+    expect(rows[1].hintMissed).toBe(true);
+    expect(rows[1].matched?.name).toBe("Lightning Bolt");
+  });
+
   it("answers a name it does not know with a null match", () => {
     const rows = resolve(makeDb(), [
       { name: "Nonesuch Card" },
@@ -10694,6 +11380,13 @@ describe("the busy fault", () => {
       // read, and sits in `readHandlers` here only because this fake mints its identity in
       // `makeDb`.
       "sync_pairing_cancel",
+      // Unlocked for a reason none of the others has: `bulk_undo` asks its
+      // in-memory ticket store **before** the write lock, so a ticket it does not hold is "That
+      // can no longer be undone." without touching the database — and a busy world here holds no
+      // ticket, since every write that mints one refuses under the fault. It does take the lock
+      // for a ticket it holds; `bulk_undo`'s own describe proves that, with a ticket minted
+      // before the fault is set.
+      "bulk_undo",
     ];
     const args: Record<string, unknown> = {
       id: 1,
@@ -11378,7 +12071,13 @@ describe("the busy fault", () => {
     // `sync::with_write`, whose read half `hidden_stacks` is not in this table. Count again after
     // a merge rather than adding to the other side's figure.
     // 124 when the two met the same day — read from `left` after the merge, never added to.
-    expect(names).toHaveLength(124);
+    // 123 → 125 on 2026-09-28 with issue #555's two bulk writes, `collection_remove_many` and
+    // `collection_set_folder_many` — both reach `refuseIfBusy` first, and take `ids` and
+    // `folderId`, which this record already names. The issue's other two commands are not in the
+    // loop: `bulk_undo` joined `unlocked` above, and `collection_import_preview` is a read on
+    // `db_read` in the crate and sits in `readHandlers`. Read from `left` on this tree, never
+    // added to. 126 when #555 met the 124 above — read from `left` after the merge.
+    expect(names).toHaveLength(126);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

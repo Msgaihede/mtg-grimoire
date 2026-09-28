@@ -360,6 +360,14 @@ pub fn run() {
             // dimension at a time. A read like its neighbour, so it sits with it.
             collection::collection_breakdown,
             collection::collection_import_commit,
+            // Issue #555's four: the import's numbers without the write (a read, on
+            // `db_read`), the two bulk presses as one transaction each, and the session undo
+            // every bulk collection or wishlist write answers a ticket for. `bulk_undo` by its
+            // full path, so the module list above stays as it was.
+            collection::collection_import_preview,
+            collection::collection_remove_many,
+            collection_folders::collection_set_folder_many,
+            crate::bulk_undo::bulk_undo,
             collection_folders::collection_folder_list,
             collection_folders::collection_folder_create,
             collection_folders::collection_folder_rename,

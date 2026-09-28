@@ -25,21 +25,33 @@
  * nothing else changes. It is registered before the modules load, which is why they arrive by
  * `await import()` rather than by a static import: a static one is hoisted above this file's
  * body and would be resolved before the hook exists.
+ *
+ * **The hook also reads `@/`, and it has to** (2026-09-28, issue #555). `fields.ts` took a
+ * *value* import from `@/lib/prices` when purchase prices got one parser, and `tsconfig.json`'s
+ * `paths` alias means nothing to Node — so `npm run golden` failed on `Cannot find package '@/lib'`
+ * from that commit until this one, with nothing red anywhere, because `npm run verify` does not
+ * run this script. `@/x` becomes `src/x` and then takes the same `.ts` retry a relative path does.
+ * A type-only `@/` import never reaches the hook: Node strips it with the rest of the types.
  */
 import { readFileSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
 import { registerHooks } from "node:module";
 import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+
+/** `tsconfig.json`'s `"@/*": ["./src/*"]`, as a URL the resolver can take. */
+const SRC = `${pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "..", "src")).href}/`;
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
+    const aliased = specifier.startsWith("@/");
+    const spec = aliased ? SRC + specifier.slice(2) : specifier;
     try {
-      return nextResolve(specifier, context);
+      return nextResolve(spec, context);
     } catch (err) {
-      // Only a relative specifier, and only after the plain resolution failed: a bare package
-      // name that is genuinely missing must still fail as itself rather than as `foo.ts`.
-      if (err?.code === "ERR_MODULE_NOT_FOUND" && /^\.\.?\//.test(specifier)) {
-        return nextResolve(`${specifier}.ts`, context);
+      // Only a relative or aliased specifier, and only after the plain resolution failed: a bare
+      // package name that is genuinely missing must still fail as itself rather than as `foo.ts`.
+      if (err?.code === "ERR_MODULE_NOT_FOUND" && (aliased || /^\.\.?\//.test(spec))) {
+        return nextResolve(`${spec}.ts`, context);
       }
       throw err;
     }

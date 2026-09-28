@@ -788,9 +788,60 @@ describe("buildCardMenu", () => {
       expect(pickCopies).not.toHaveBeenCalled();
     });
 
-    it("loops the write where the surface wired no dialog", () => {
-      // Today's behaviour for a multi-picked set, kept: falling through to nothing would take a
-      // working row off a surface that never had a question to ask.
+    /**
+     * **Issue #555: one write, not a loop**, where the surface wired no dialog. The bulk dep takes
+     * every id in one call — `collection_set_folder_many`, one transaction and one feed row — and
+     * the single-row write is never called at all, which is the half a loop would fail.
+     */
+    it("files several in one write where the surface wired no dialog", () => {
+      const moveToFolder = vi.fn();
+      const moveCopies = vi.fn();
+      const items = buildCardMenu(
+        { ...BOLT, entryIds: [4, 9] },
+        deps({ moveToFolder, moveCopies, collectionFolders: [binder(1, "Binder")] }),
+      );
+      const move = find(items, "Move 2 cards to") as MenuSubmenu;
+
+      (find(move.items, "Binder") as MenuAction).onSelect();
+      expect(moveCopies).toHaveBeenCalledTimes(1);
+      expect(moveCopies).toHaveBeenCalledWith([4, 9], 1);
+      expect(moveToFolder).not.toHaveBeenCalled();
+    });
+
+    /** The dialog still wins where both are wired — a *which* question comes before any write. */
+    it("asks which copies before the bulk write where both are wired", () => {
+      const moveCopies = vi.fn();
+      const pickCopies = vi.fn();
+      const items = buildCardMenu(
+        { ...BOLT, entryIds: [4, 9] },
+        deps({
+          moveToFolder: vi.fn(),
+          moveCopies,
+          pickCopies,
+          collectionFolders: [binder(1, "Binder")],
+        }),
+      );
+      (find((find(items, "Move 2 cards to") as MenuSubmenu).items, "Binder") as MenuAction).onSelect();
+      expect(pickCopies).toHaveBeenCalledWith([4, 9], 1);
+      expect(moveCopies).not.toHaveBeenCalled();
+    });
+
+    /** One entry is the single write whatever else is wired — there is nothing to batch. */
+    it("files one entry through the single write even with the bulk dep wired", () => {
+      const moveToFolder = vi.fn();
+      const moveCopies = vi.fn();
+      const items = buildCardMenu(
+        { ...BOLT, entryIds: [4] },
+        deps({ moveToFolder, moveCopies, collectionFolders: [binder(1, "Binder")] }),
+      );
+      (find((find(items, "Move to") as MenuSubmenu).items, "Binder") as MenuAction).onSelect();
+      expect(moveToFolder).toHaveBeenCalledWith(4, 1);
+      expect(moveCopies).not.toHaveBeenCalled();
+    });
+
+    it("loops the write only where the surface wired neither", () => {
+      // The fallback kept: falling through to nothing would take a working row off a surface
+      // that never had a question to ask or a bulk write to make.
       const moveToFolder = vi.fn();
       const items = buildCardMenu(
         { ...BOLT, entryIds: [4, 9] },
@@ -933,19 +984,28 @@ describe("buildCardMenu", () => {
       expect(removeCopies).toHaveBeenCalledWith([42]);
     });
 
+    /**
+     * **The ellipsis is the page's question, said on the row** (issue #555): the collection page
+     * confirms a removal reaching more than one entry, and a row that opens a question wears the
+     * app's `…`. The one call is still the menu's whole contract — whether the page then loops or
+     * makes one write is `CollectionPage.test.tsx`'s to pin, against the real ipc.
+     */
     it("removes every entry a wall tile stands for, in one call, counted on the label", () => {
       const removeCopies = vi.fn();
       const items = buildCardMenu({ ...BOLT, entryIds: [4, 9] }, deps({ removeCopies }));
       expect(labels(items)).not.toContain(REMOVE);
+      expect(labels(items)).not.toContain("Remove 2 cards from collection");
 
-      (find(items, "Remove 2 cards from collection") as MenuAction).onSelect();
+      (find(items, "Remove 2 cards from collection…") as MenuAction).onSelect();
       expect(removeCopies).toHaveBeenCalledTimes(1);
       expect(removeCopies).toHaveBeenCalledWith([4, 9]);
     });
 
-    it("stays singular for a tile that stands for exactly one entry", () => {
+    /** One entry's press is the write, so its label promises no question. */
+    it("stays singular, with no ellipsis, for a tile that stands for exactly one entry", () => {
       const removeCopies = vi.fn();
       const items = buildCardMenu({ ...BOLT, entryIds: [4] }, deps({ removeCopies }));
+      expect(labels(items)).not.toContain(`${REMOVE}…`);
       (find(items, REMOVE) as MenuAction).onSelect();
       expect(removeCopies).toHaveBeenCalledWith([4]);
     });
@@ -2094,7 +2154,7 @@ describe("buildCardMenu with a picked set", () => {
         removeCopies,
       }),
     );
-    (find(items, "Remove 3 cards from collection") as MenuAction).onSelect();
+    (find(items, "Remove 3 cards from collection…") as MenuAction).onSelect();
 
     expect(removeCopies).toHaveBeenCalledTimes(1);
     expect(removeCopies).toHaveBeenCalledWith([3, 7, 11]);

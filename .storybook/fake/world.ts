@@ -49,6 +49,7 @@ import type { FakeScope } from "./scope";
 import { seed } from "./seeds";
 import type { SeedName } from "./seeds";
 import { resetWindow } from "./window";
+import { resetBulkUndo } from "@/lib/bulkUndo";
 import { useAppStore } from "@/lib/store";
 
 /**
@@ -239,6 +240,11 @@ export function installWorld(
   // A partial `setState` would leave whatever a story had set on any key the snapshot happens
   // not to mention, and there is no key it does not mention.
   if (options.resetStore !== false) useAppStore.setState(PRISTINE_STORE, true);
+  // `@/lib/bulkUndo` is the other module-scope store a story can write (issue #555): an offer a
+  // story's import or bulk remove published names a ticket in *that* world's undo map, so left
+  // standing it would draw an Undo on the next story whose press answers "That can no longer be
+  // undone." Cleared under the same gate as `useAppStore` and for its reason.
+  if (options.resetStore !== false) resetBulkUndo();
 
   const removeCorpus = installCorpus(db.cards);
   const client = worldQueryClient(scope);

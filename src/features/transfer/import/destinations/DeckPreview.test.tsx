@@ -221,7 +221,14 @@ const HOLDING: DeckDetail = {
 };
 
 const OUTCOME: ImportOutcome = { added: 3, removed: 0, categoriesCreated: 1, labelsCreated: 0 };
-const OWNED: ImportCommitOutcome = { added: 2, updated: 0, removed: 0 };
+const OWNED: ImportCommitOutcome = {
+  added: 2,
+  updated: 0,
+  removed: 0,
+  copies: 2,
+  leftInFolders: 0,
+  undoId: null,
+};
 
 const IDLE: SyncStatus = {
   cardCount: 116_695,
