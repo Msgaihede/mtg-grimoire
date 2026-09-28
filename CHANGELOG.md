@@ -30,6 +30,13 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.32.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.32.0...v0.32.1) (2026-09-28)
+
+
+### Bug Fixes
+
+* **decks:** align TokenArtPicker empty text with test expectations ([66ee750](https://github.com/Msgaihede/mtg-grimoire/commit/66ee750877001fd666207fa09207f8cbeaf9adc6))
+
 ## [0.32.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.31.0...v0.32.0) (2026-09-28)
 
 
