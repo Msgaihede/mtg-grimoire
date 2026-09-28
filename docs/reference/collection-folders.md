@@ -2024,8 +2024,15 @@ the only shelf that is not a folder. The button is **Add folder**, never "New fo
 
 `buildShelves` (`src/lib/shelves.ts`) decides the whole order, and it is TypeScript's:
 
-- **At the root, Not sorted comes first**, and is drawn only once the counts say it holds
-  something (`visibleShelves`). **Then the reader's folders, depth-first** — a shelf
+- **At the root, Not sorted comes first, and it is drawn empty too** (`visibleShelves`, issue
+  #597, 2026-09-28). The spec drew it only once the counts said it held something, and that made
+  it vanish exactly when a reader had filed everything — the moment its heading was the only drop
+  target that files a card back to the root, which is #283's one-way drawer come back with the
+  shelves. **The one exception is a wall with no other shelf on it** — no folder of any kind, so
+  nowhere a card could be dragged *from*; there an empty Not sorted would be the whole wall, and
+  the page's own empty sentence stands instead. That cannot arise on this page, since `Recently
+  removed` always exists; it is the wishlist's first run. A filter still hides it with no match,
+  like any shelf. **Then the reader's folders, depth-first** — a shelf
   before its subfolders' shelves, siblings in `buildFolderTree`'s `sortOrder, name, id`. **Then, at
   the root only, the app's own under a `Decks` label**: every deck group by name, then `Recently
   removed`.
@@ -2050,10 +2057,12 @@ the only shelf that is not a folder. The button is **Add folder**, never "New fo
 - **Indentation stops at three levels** (`MAX_SHELF_INDENT`); a deeper heading keeps the
   third level's indent and names its path from the ancestor on the cap. `SHELF_INDENT_PX` is 32 per
   level on the grid and the table alike (`SHELF_INDENT_PX`, `src/lib/shelfLayout.ts`).
-- **An empty folder is a heading over a dashed drop box, and only a reader's folder with nothing
-  drawn inside it gets one** (`layoutShelves`). A folder whose cards are
-  all in its subfolders draws its heading and no box; Not sorted, a deck group and `Recently
-  removed` never draw one.
+- **An empty folder is a heading over a dashed drop box, and only a reader's folder or Not sorted
+  with nothing drawn inside it gets one** (`layoutShelves`). A folder whose cards are
+  all in its subfolders draws its heading and no box; a deck group and `Recently removed` never
+  draw one. Not sorted's box files at the root, as its heading does, and it joined with issue #597:
+  an open heading with nothing under it reads as a shelf that failed to load, and the box is what
+  says a card can be dropped there.
 
 **The path row** is the breadcrumb on the left and `ShelfToolbar` on the right — **Add folder**,
 **Expand all**, **Collapse all** — with Add folder gated by

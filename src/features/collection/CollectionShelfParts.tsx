@@ -8,6 +8,7 @@
  * | `Not sorted`'s heading | a card | un-files it to the root |
  * | an app-owned heading (deck group, Recently removed) | nothing | — |
  * | an empty folder's dashed box | a card | files it there |
+ * | an empty `Not sorted`'s dashed box | a card | un-files it to the root |
  * | the sticky bar | a card | files it into the shelf the reader is scrolled inside |
  *
  * **Only the path row's segments take a folder besides a heading** (`CollectionBreadcrumb`); a

@@ -274,7 +274,8 @@ export const Default: Story = {
 /**
  * **The headline case** (spec §1): every loose copy filed. The old root asked for the copies filed
  * nowhere and drew `Cards 0` over a full binder; now every card is on the wall under its folder's
- * heading, there is no Not sorted shelf, and the header counts the whole collection.
+ * heading, Not sorted is still drawn — empty, over its dashed drop box, as the way back out of a
+ * folder (issue #597) — and the header counts the whole collection.
  */
 export const EverythingFiled: Story = {
   args: { view: "grid" },
@@ -284,7 +285,7 @@ export const EverythingFiled: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const binder = await waitFor(() => headingNamed(canvas, "Binder"), SETTLED);
-    await expect(canvasElement.querySelector('[data-shelf-heading="0"]')).toBeNull();
+    await expect(headingNamed(canvas, "Not sorted")).toBeInTheDocument();
     // A copy that was loose a moment ago, on the wall under the drawer it was filed into — named
     // by its stepper, because a tile's button says only "Lightning Bolt" and this seed has four.
     // `Binder` is the first shelf now, so its first tiles are inside the runner's window (see

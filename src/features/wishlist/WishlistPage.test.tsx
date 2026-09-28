@@ -2070,8 +2070,9 @@ describe("the shelves", () => {
     expect(screen.getByText("Filed 4")).toBeInTheDocument();
     expect(follows(heading(ORDERED.id), screen.getByText("Filed 1"))).toBe(true);
     expect(follows(heading(BACKORDERED.id), screen.getByText("Filed 4"))).toBe(true);
-    // Nothing is loose, so there is no Not sorted shelf — and no empty-page sentence either.
-    expect(queryHeading(0)).toBeNull();
+    // Nothing is loose, and Not sorted is still drawn as the way back out (issue #597) — with no
+    // empty-page sentence over the wall.
+    expect(heading(0)).toBeInTheDocument();
     expect(screen.queryByText(/Nothing on your wishlist yet/)).toBeNull();
     expect(lastQuery().shelves).toEqual([0, ORDERED.id, BACKORDERED.id, SOMEDAY.id]);
   });
@@ -2112,12 +2113,36 @@ describe("the shelves", () => {
     ).toBe(false);
   });
 
-  it("draws no Not sorted shelf when nothing is loose", async () => {
+  /**
+   * **Issue #597**: nothing is loose, and Not sorted is still drawn — first, open, over the dashed
+   * box an empty folder draws — because it is where a wish is dragged to leave every folder.
+   */
+  it("draws an empty Not sorted over its drop box when nothing is loose", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
     wishlistList.mockImplementation(listByShelves([FILED]));
     wrap(<WishlistPage />);
 
-    await screen.findByText("Rhystic Study");
+    await screen.findByAltText("Rhystic Study");
+    const loose = await findHeading(0);
+    expect(follows(loose, heading(ORDERED.id))).toBe(true);
+    expect(chevronOf(0, "Not sorted")).toHaveAttribute("aria-expanded", "true");
+    const box = emptyBoxes()[0];
+    expect(box).toHaveTextContent(EMPTY_SHELF_COPY);
+    expect(follows(loose, box)).toBe(true);
+    expect(follows(box, heading(ORDERED.id))).toBe(true);
+  });
+
+  /** With no folder at all there is nothing to drag a wish out of, so an empty Not sorted is not
+   *  drawn and the page's own empty sentence stands where the wall would be. */
+  it("draws no Not sorted and says the wishlist is empty when there are no wishes and no folders", async () => {
+    wishlistFolderList.mockResolvedValue([]);
+    wishlistList.mockReset().mockResolvedValue(page([], 0));
+    wishlistShelfCounts.mockResolvedValue([]);
+    wrap(<WishlistPage />);
+
+    expect(await screen.findByText(/Nothing on your wishlist yet/)).toBeInTheDocument();
     expect(queryHeading(0)).toBeNull();
+    expect(emptyBoxes()).toEqual([]);
   });
 
   /**
@@ -2177,8 +2202,13 @@ describe("the shelves", () => {
 
     await screen.findByAltText("Scalding Tarn");
     await waitFor(() => expect(heading(MANA.id)).toHaveTextContent("3 wishes · $55.00"));
-    // No dashed box anywhere on this wall: Mana base holds folders, and both of those hold cards.
-    expect(emptyBoxes()).toEqual([]);
+    // One dashed box on this wall, and it is Not sorted's — nothing is loose, and an empty Not
+    // sorted is drawn as a drop target (issue #597). None under Mana base: it holds folders, and
+    // both of those hold cards.
+    const boxes = emptyBoxes();
+    expect(boxes).toHaveLength(1);
+    expect(follows(heading(0), boxes[0])).toBe(true);
+    expect(follows(boxes[0], heading(MANA.id))).toBe(true);
     expect(follows(heading(MANA.id), heading(FETCH.id))).toBe(true);
     expect(follows(heading(FETCH.id), screen.getByAltText("Scalding Tarn"))).toBe(true);
     expect(heading(SHOCK.id)).toBeInTheDocument();
@@ -4017,6 +4047,26 @@ describe("the folders", () => {
     expect(source).toBeDefined();
 
     await wishOnto(source!, heading(0));
+
+    expect(wishlistSetFolder).toHaveBeenCalledWith(FILED.id, null);
+  });
+
+  /**
+   * **Issue #597**: with nothing loose, Not sorted is still drawn, and its dashed box is a way out of
+   * every folder — a wish let go on it is filed at the root, exactly as on the heading above it.
+   */
+  it("un-files a wish dropped on an empty Not sorted's dashed box", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    wishlistList.mockImplementation(listByShelves([FILED]));
+    const { container } = wrap(<WishlistPage />);
+    const filed = await screen.findByAltText("Rhystic Study");
+    const source = cardSources(container).find((tile) => tile.contains(filed));
+    expect(source).toBeDefined();
+    const loose = await findHeading(0);
+    const box = emptyBoxes().find((each) => follows(loose, each) && follows(each, heading(ORDERED.id)));
+    expect(box).toBeDefined();
+
+    await wishOnto(source!, box!);
 
     expect(wishlistSetFolder).toHaveBeenCalledWith(FILED.id, null);
   });

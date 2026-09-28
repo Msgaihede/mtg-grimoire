@@ -345,8 +345,8 @@ export const Shelves: Story = {
 /**
  * **The headline case** (spec §1): every loose wish filed. The old root asked for the wishes filed
  * nowhere and drew a band of folder cards over nothing, with **Wishes 0** in the header. Every wish
- * is on the wall now under its folder's heading, there is no Not sorted shelf, and the header
- * counts all of them.
+ * is on the wall now under its folder's heading, Not sorted is still drawn — empty, over its dashed
+ * drop box, as the way back out of a folder (issue #597) — and the header counts all of them.
  *
  * **Twelve, not thirteen, and the missing one is the grain working.** The loose Rhystic Study and
  * the one already filed in `Ordered` are the same printing with no finish, so filing the loose one
@@ -364,7 +364,7 @@ export const EverythingFiled: Story = {
     await waitFor(async () => {
       await expect(figureValue(canvas, "Wishes")).toHaveTextContent("12");
     });
-    await expect(canvasElement.querySelector('[data-shelf-heading="0"]')).toBeNull();
+    await expect(headingNamed(canvas, "Not sorted")).toBeInTheDocument();
     await waitFor(async () => {
       await expect(ordered).toHaveTextContent(/7 wishes/);
     });
