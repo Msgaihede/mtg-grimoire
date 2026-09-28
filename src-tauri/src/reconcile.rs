@@ -372,7 +372,8 @@ fn merge(
     // A deck list is user data by the same argument as the collection: the user typed it,
     // and an upstream id change is not a reason for a card to leave a deck. Same three
     // arms, this table's grain (`schema::DECK_CARD_GRAIN` — `deck_id, variant, category_id,
-    // card_id` since schema v8 replaced the fixed zone word with a category the user owns).
+    // card_id` since schema v8 replaced the fixed zone word with a category the user owns, and
+    // `coalesce(finish, '')` beside them since v19).
     //
     // A repoint here is the module's rule applied to this table: it moves the deck row onto
     // the `cards` row that survived the merge, so a list the reader built keeps naming a card
@@ -549,6 +550,18 @@ fn fold_wish_into_existing(
 /// in the Maybeboard is two intentions, and one tried out in Theory against the Live copy is
 /// two more. A merge is not a reason to collapse any of them into one.
 ///
+/// **Every term is here, and `finish` is the one that is easy to leave out.** It joined the
+/// grain at schema v19, and this query has to match the grain the `UPDATE OR IGNORE` in
+/// [`merge`] collided on or the two disagree about what a duplicate is. The repoint leaves
+/// `finish` alone, so the source's own finish *is* the grain after it, compared through
+/// `coalesce` for the grain's reason — NULL is the regular copy, and `NULL = NULL` is not
+/// true. Left out, which row answered was the planner's choice: it walks `t` through
+/// `idx_deck_cards_grain`, whose last key puts the regular row first, so a foil source summed
+/// its copies into the regular row, deleted itself, and left the foil row that actually
+/// blocked the repoint standing — a deck quietly playing different cardboard, with nothing
+/// red and nothing in `error_log`. [`collision_target`] makes the same argument about the
+/// folder, and [`fold_wish_into_existing`] about the wishlist's.
+///
 /// `label_id` does not move: the row that survives keeps its own label, `deck::move_card`'s fold
 /// rule and `deck_category_delete`'s. Nothing else moves either, because a deck card holds
 /// nothing else the user typed — no price, no acquisition story. The quantities add, exactly
@@ -562,11 +575,13 @@ fn fold_deck_card_into_existing(
     let target: Option<i64> = tx
         .query_row(
             // `?2` rather than `s.card_id` for the same reason [`collision_target`] takes
-            // the new language: this is the grain of the row **after** the repoint.
+            // the new language: this is the grain of the row **after** the repoint. `finish`
+            // stays `s.finish`, because the repoint does not rewrite it.
             "SELECT t.id FROM deck_cards t, deck_cards s
               WHERE s.id = ?1 AND t.id <> s.id
                 AND t.deck_id = s.deck_id AND t.card_id = ?2
-                AND t.category_id = s.category_id AND t.variant = s.variant",
+                AND t.category_id = s.category_id AND t.variant = s.variant
+                AND coalesce(t.finish, '') = coalesce(s.finish, '')",
             params![source, new_id],
             |r| r.get(0),
         )
@@ -1807,6 +1822,63 @@ mod tests {
         assert_eq!(
             name, "Lightning Bolt",
             "a merge says two ids are one printing, not that the card is called something else"
+        );
+    }
+
+    /// `finish` is the grain's fifth term since schema v19, so the fold's target is the row
+    /// in the *source's* finish — the one the `UPDATE OR IGNORE` actually collided with — and
+    /// never the same printing in another finish beside it. A pile that runs the new printing
+    /// both regular and foil, and the old one both ways too, is the case that tells them apart.
+    ///
+    /// **Which wrong row a finish-blind query answers is the planner's choice, not the ids'.**
+    /// It walks `t` through `idx_deck_cards_grain`, whose last key is `coalesce(finish, '')`,
+    /// so the regular row comes first whatever order the rows went in: the *foil* source is the
+    /// one that folded wrong, its copies summed into the regular row and the deck silently
+    /// playing different cardboard. The regular source is here too — it landed right only by
+    /// that index order, and the foil target goes in first so an id-ordered plan would miss it.
+    #[test]
+    fn a_merge_folds_each_deck_card_into_the_row_of_its_own_finish() {
+        let mut conn = seeded();
+        let burn = deck(&conn, "Burn");
+        let main = category(&conn, burn, "main", "Main deck");
+        // `deck_card` writes a NULL finish, which is the regular copy; foil is set by hand.
+        let foil = |id: i64| {
+            conn.execute("UPDATE deck_cards SET finish = 'foil' WHERE id = ?1", [id])
+                .unwrap();
+            id
+        };
+        let new_foil = foil(deck_card(&conn, burn, "new-id", main, 1));
+        let new_regular = deck_card(&conn, burn, "new-id", main, 2);
+        // The two rows the merge moves, one in each finish — foil first, because a row goes in
+        // regular and only then turns foil, and two regular rows would collide on the grain.
+        foil(deck_card(&conn, burn, "old-id", main, 4));
+        deck_card(&conn, burn, "old-id", main, 3);
+
+        let stats = apply(
+            &mut conn,
+            &[migration("m1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        assert_eq!(
+            (stats.repointed, stats.folded, stats.flagged),
+            (0, 2, 0),
+            "both old rows collided in their own finish and folded"
+        );
+        let rows: Vec<(i64, Option<String>, i64)> = conn
+            .prepare("SELECT id, finish, quantity FROM deck_cards ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (new_foil, Some("foil".to_owned()), 1 + 4),
+                (new_regular, None, 2 + 3),
+            ],
+            "each finish's copies joined that finish's row, and both folded rows are gone"
         );
     }
 
