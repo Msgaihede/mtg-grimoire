@@ -162,6 +162,7 @@ import { GridView } from "./views/GridView";
 import { StackView } from "./views/StackView";
 import { TableView } from "./views/TableView";
 import { TextView } from "./views/TextView";
+import { needleMatches, useDeckCardQuery } from "./useDeckCardQuery";
 
 /**
  * Two of the toolbar's three option lists, as the toolbar draws them: alphabetically by label.
@@ -1147,6 +1148,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const [groupBy, setGroupBy] = useState<GroupBy>(DEFAULT_GROUP_BY);
   const [sortBy, setSortBy] = useState<SortBy>(DEFAULT_SORT_BY);
   const [filter, setFilter] = useState("");
+  /**
+   * The box read as a search box reads it — Scryfall's syntax and the app's (issue #621): the
+   * free text stays a substring of the name or type line, answered here per keystroke, and every
+   * typed term (`t:`, `cmc>=`, `kw:`, `otag:`…) is answered by `deck_query_cards` through the
+   * search's own SQL. `useDeckCardQuery` carries the split and its reasons.
+   */
+  const cardQuery = useDeckCardQuery(deckId, filter);
   const [labelIds, setLabelIds] = useState<readonly number[]>(NO_LABELS);
   /**
    * Whether the ledger's `Game Changers` chip is pressed — **the thing that answers _which cards
@@ -3867,6 +3875,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    */
   const gcFilter = gcOnly && hasGameChangers;
 
+  const { needle, matching } = cardQuery;
+
   /**
    * The rows on screen: the deck, narrowed by the two filters the toolbar carries.
    *
@@ -3894,23 +3904,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * reaching for, and **emptying a pile by hand and emptying it with the box are the same answer
    * again**. The shape of the deck still changes as they type — that is what a filter is — but
    * an empty pile of theirs stays on screen and stays a drop target while it does.
+   *
+   * **The text box is two filters since issue #621, ANDed**: its free text (`needleMatches`, the
+   * substring test it always was) and its typed terms (`matching`, a set of printings Rust
+   * answered, or `null` while no term narrows). See {@link useDeckCardQuery}.
    */
   const shown = useMemo(() => {
-    const needle = filter.trim().toLowerCase();
     // Whether *any* chip in that row is pressed, which is the one thing the OR needs to know:
     // no chip is no chip filter, exactly as an empty `labelIds` was on its own.
     const chips = labelIds.length > 0 || gcFilter;
-    if (!needle && !chips) return deck.cards;
+    if (!needle && !chips && matching === null) return deck.cards;
     return deck.cards.filter(
       (card) =>
         (!chips ||
           (gcFilter && card.gameChanger === true) ||
           (card.labelId !== null && labelIds.includes(card.labelId))) &&
-        (!needle ||
-          card.name.toLowerCase().includes(needle) ||
-          (card.typeLine ?? "").toLowerCase().includes(needle)),
+        needleMatches(card, needle) &&
+        // The typed terms, answered per printing — so a foil and a regular copy of one card,
+        // or one card in two piles, always stand or fall together.
+        (matching === null || matching.has(card.cardId)),
     );
-  }, [deck.cards, filter, labelIds, gcFilter]);
+  }, [deck.cards, needle, matching, labelIds, gcFilter]);
 
   /**
    * Whether the `{X}` spells get a heading of their own — **the deck's, not this editor's.**
