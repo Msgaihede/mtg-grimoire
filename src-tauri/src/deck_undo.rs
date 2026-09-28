@@ -3208,7 +3208,59 @@ mod tests {
                     .unwrap();
                 },
             ),
+            (
+                // The card menu's `Add to actual` (issue #592): the plan's card into the live
+                // pile of the same name, which [`fresh`] already has.
+                "deck_add_card_to_other_list",
+                with_a_plan,
+                |c, id| {
+                    crate::deck::add_card_to_other_list(
+                        c,
+                        id,
+                        "bolt-m10",
+                        plan_ramp(c, id),
+                        "live",
+                        None,
+                        1,
+                    )
+                    .unwrap();
+                },
+            ),
+            (
+                // `Add to theory` out of a pile the plan lacks, which **makes** it. Undo has to
+                // take the plan's new `Draw` away with the card — the name arm's case above, one
+                // entrance over.
+                "deck_add_card_to_other_list (inventing the other list's pile)",
+                with_a_plan,
+                |c, id| {
+                    crate::deck::add_card_to_other_list(
+                        c,
+                        id,
+                        "serra-lea",
+                        draw(c, id),
+                        "theory",
+                        None,
+                        1,
+                    )
+                    .unwrap();
+                },
+            ),
         ]
+    }
+
+    /// [`fresh`]'s deck with its plan switched on — the only kind of deck the card menu offers
+    /// `Add to actual` / `Add to theory` on. [`fresh`] has started the plan already, so the switch
+    /// moves nothing and only seeds the plan's four zones.
+    fn with_a_plan(conn: &Connection, deck_id: i64) {
+        crate::deck::update_deck(
+            conn,
+            deck_id,
+            &crate::deck::DeckPatch {
+                theory_enabled: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
     }
 
     /// The deck-row, import and theory writes.

@@ -656,6 +656,41 @@ mod tests {
                 }),
             ),
             (
+                // A deck of its own with its plan on, so the case owes nothing to whether an
+                // earlier case left `id`'s plan switched on (issue #592).
+                "deck_add_card_to_other_list",
+                1,
+                Box::new(|| {
+                    let planned = deck(&conn, "Planned");
+                    crate::deck::update_deck(
+                        &conn,
+                        planned,
+                        &DeckPatch {
+                            theory_enabled: Some(true),
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap();
+                    let live_main = category(&conn, planned, "Main deck");
+                    crate::deck::add_card(
+                        &conn,
+                        planned,
+                        "bolt-lea",
+                        Some(live_main),
+                        None,
+                        "live",
+                        None,
+                        1,
+                    )
+                    .unwrap();
+                    clear(&conn);
+                    crate::deck::add_card_to_other_list(
+                        &conn, planned, "bolt-lea", live_main, "theory", None, 1,
+                    )
+                    .unwrap();
+                }),
+            ),
+            (
                 "deck_set_card_quantity",
                 1,
                 Box::new(|| {
