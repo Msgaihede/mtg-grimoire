@@ -189,9 +189,11 @@ describe("foldedForDrag", () => {
     ]);
   });
 
-  it("drops the opened folder's own headless shelf and an empty Not sorted", () => {
+  /** An empty Not sorted is on the wall before the drag (issue #597), so it stays as a heading
+   *  during one rather than making every heading below it jump up by a shelf. */
+  it("drops the opened folder's own headless shelf, and keeps an empty Not sorted's heading", () => {
     const all = [shelf({ id: 4, headless: true }), shelf({ id: 0 }), shelf({ id: 5 })];
-    expect(foldedForDrag(all, counts(count(4, 3)), false).map((s) => s.shelf.id)).toEqual([5]);
+    expect(foldedForDrag(all, counts(count(4, 3)), false).map((s) => s.shelf.id)).toEqual([0, 5]);
   });
 });
 

@@ -1905,9 +1905,10 @@ export function WishlistPage() {
 
   /**
    * An empty folder's box, in whichever view draws it — `layoutShelves` decides *which* shelves get
-   * one, for the wall and the table alike. A reader's folder is the dashed drawer and a card target;
-   * a deck's managed folder is the sentence for the Compare view its deck follows, in words and
-   * never a target, since the folder takes no hand write.
+   * one, for the wall and the table alike. A reader's folder is the dashed drawer and a card target,
+   * and so is an empty Not sorted (issue #597), which files at the root through `cardDrops`; a
+   * deck's managed folder is the sentence for the Compare view its deck follows, in words and never
+   * a target, since the folder takes no hand write.
    */
   const renderEmpty = useCallback(
     (shelf: Shelf) =>

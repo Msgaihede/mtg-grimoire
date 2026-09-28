@@ -3450,9 +3450,12 @@ describe("the collection's shelves", () => {
 
     const binder = await findHeading("Trade binder");
     await waitFor(() => expect(within(binder).getByText("4 cards · $88.00")).toBeInTheDocument());
-    expect(container.querySelector(`[${EMPTY_SHELF_ATTR}]`)).toBeNull();
-    // Filed everywhere, loose nowhere: no Not sorted heading at all.
-    expect(queryHeading("Not sorted")).toBeNull();
+    // Filed everywhere, loose nowhere: the wall's one box is Not sorted's, drawn empty as the way
+    // back to the root (issue #597) — and none sits under the container.
+    const boxes = [...container.querySelectorAll(`[${EMPTY_SHELF_ATTR}]`)];
+    expect(boxes).toHaveLength(1);
+    expect(follows(heading("Not sorted"), boxes[0])).toBe(true);
+    expect(follows(boxes[0], binder)).toBe(true);
   });
 
   it("climbs back out through the breadcrumb", async () => {
@@ -4048,7 +4051,8 @@ describe("the wall at the root", () => {
 
     expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
     expect(screen.getByText("Counterspell")).toBeInTheDocument();
-    expect(queryHeading("Not sorted")).toBeNull();
+    // Nothing is loose, and Not sorted is still drawn — the way back out of a folder (issue #597).
+    expect(await findHeading("Not sorted")).toBeInTheDocument();
     await waitFor(() => expect(lastSummary().shelves).toEqual([UNFILED_SHELF, 3, 9, 20, 21]));
     expect(await screen.findByText("$12.00")).toBeInTheDocument();
     // The headings say the same thing per shelf: Trade binder's covers its child.
@@ -6315,7 +6319,11 @@ describe("folding while filtering, a drawer deleted elsewhere, and the loaded ed
       await findHeading("Trade binder");
       await within(heading("Trade binder")).findByRole("button", { name: "Expand Trade binder" });
       await user.type(screen.getByRole("searchbox", { name: "Search your collection" }), "bolt");
-      await within(heading("Trade binder")).findByRole("button", { name: "Collapse Trade binder" });
+      // Re-asked each try: the filter takes the empty Not sorted off the top of the wall, so the
+      // heading found before it is not the element drawn after it.
+      await waitFor(() =>
+        within(heading("Trade binder")).getByRole("button", { name: "Collapse Trade binder" }),
+      );
       return user;
     }
     const refused = (control: HTMLElement) => {

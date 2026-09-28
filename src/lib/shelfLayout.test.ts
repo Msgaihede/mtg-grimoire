@@ -130,7 +130,18 @@ describe("layoutShelves", () => {
       [section(parent, 1), section(inside(parent, 2), 0), section(shelf(3), 1)],
       ["heading:1", "tiles:1:0-1", "heading:2", "empty:2", "heading:3", "tiles:3:1-2"],
     ],
-    ["an empty Not sorted gets no box", [section(NOT_SORTED, 0)], ["heading:0"]],
+    [
+      // Issue #597: an empty Not sorted is drawn so a card can be dragged back to the root, and
+      // the dashed box is what says so — the same drop box an empty folder draws.
+      "an open, empty Not sorted gets the box",
+      [section(NOT_SORTED, 0), section(shelf(1), 2)],
+      ["heading:0", "empty:0", "heading:1", "tiles:1:0-2"],
+    ],
+    [
+      "a collapsed, empty Not sorted is its heading alone",
+      [section({ ...NOT_SORTED, collapsed: true }, 0)],
+      ["heading:0"],
+    ],
     [
       "an empty deck group gets no box",
       [section(shelf(20, { kind: "deck", group: "decks" }), 0)],
@@ -246,7 +257,10 @@ describe("layoutShelves", () => {
     const sections = visibleShelves(shelves, counts, false).map((s) =>
       section(s, counts.get(s.id)?.tiles ?? 0),
     );
+    // Nothing is loose, so Not sorted is its drop box (issue #597); the container gets none.
     expect(spell(layoutShelves(sections, 4))).toEqual([
+      "heading:0",
+      "empty:0",
       "heading:1",
       "heading:2",
       "tiles:2:0-4",

@@ -251,9 +251,10 @@ export function keepShelf(
  * Built with every shelf opened first, because "every shelf folds to its heading" means every
  * heading is drawn — a nested one under a parent the reader had shut included — where running the
  * stored folds through `visibleShelves` would hide that parent's subtree and its targets with it.
- * The opened folder's own headless shelf goes (it has no heading to fold to); an empty Not sorted
- * stays hidden. **A render-time override that writes nothing**: the stored folds come back on the
- * drop. The wishlist's twin has the same name and the same rule.
+ * The opened folder's own headless shelf goes (it has no heading to fold to); Not sorted stays
+ * wherever `visibleShelves` draws it, empty included (issue #597), so the headings below it do not
+ * jump up by a shelf as the drag starts. **A render-time override that writes nothing**: the stored
+ * folds come back on the drop. The wishlist's twin has the same name and the same rule.
  */
 export function foldedForDrag(
   shelves: readonly Shelf[],
