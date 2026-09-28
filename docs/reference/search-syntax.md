@@ -138,15 +138,17 @@ token or a predicate token — and the token kinds that reach the backend from t
 
 ## Where each term is answered
 
-### One function, three searches
+### One function, four searches
 
-All three card searches already called one function, with the same alias, before any of this:
+All three card searches already called one function, with the same alias, before any of this —
+and the deck editor's filter box became the fourth caller on 2026-09-28 (issue #621):
 
 | caller | call |
 | --- | --- |
 | `search_cards` | `push_card_filters(&mut p, …, "c", None)` |
 | `collection_list` | `… , "c", Some("e")` |
 | `wishlist_list` | `… , "c", Some("w")` |
+| `deck_query_cards` | `… , "c", Some("dc")` — see *Where it is typed* |
 
 **The wishlist joins `cards` too**; only its *free text* is the outlier — a `LIKE` over the
 denormalised `wishlist_entries.name`, deliberately, so a wish whose printing has left the corpus
@@ -526,6 +528,20 @@ silently widen the search.
 
 **Two call sites had it added** — `QuickAdd.tsx` and `DeckCoverPicker.tsx` call `ipc.searchCards`
 with raw text, so `t:creature` would otherwise reach FTS as two words.
+
+**The deck editor's `Filter this deck` box had it added on 2026-09-28 (issue #621), and not as
+a client-side dialect.** It filters rows the editor already holds, which is the case the next
+paragraph keeps out — but a deck row carries no keywords, no artist and no tags, so an `.includes()`
+filter could not have answered `kw:`, `a:` or `otag:` at all and would have been a fifth dialect
+for the rest. So the box is split in two, in `useDeckCardQuery`: **its free text stays the
+webview's substring test over the name and type line**, per keystroke, exactly as it always was
+(`oblin` still finds the goblins, which an FTS prefix would not); **every typed term and resolved
+tag goes to `deck_query_cards`**, which runs them through `fts_match` and `push_card_filters` over
+`deck_cards LEFT JOIN cards` and answers the matching printings — the collection's `scope`, down to
+the `c.rowid IN (…)` subquery that keeps an orphan out. The terms are debounced by the search's own
+300 ms, tags fail closed exactly as `useCardSearch`'s do, and the read sits under the `["decks"]`
+root so every deck write re-asks it. An orphan row answers the free text and its own set code, and
+no other term.
 
 **Four filters are explicitly out of it** — `printingFilters.ts`, `deckFilter.ts`,
 `NoteCardsDialog.tsx` and the shared-collection web viewer all filter an already-fetched array

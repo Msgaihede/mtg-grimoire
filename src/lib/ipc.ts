@@ -8818,6 +8818,21 @@ export const ipc = {
    */
   deckTheorySlots: (deckId: number) => invoke<TheorySlot[]>("deck_theory_slots", { deckId }),
   /**
+   * The printings of one deck, in either list, that answer every typed term of the editor's
+   * `Filter this deck` box — `t:goblin`, `cmc>=3`, `-kw:flying`, a resolved `otag:` slug
+   * (issue #621). Sorted, deduplicated card ids; a deck that is not there answers `[]`.
+   *
+   * **The terms and nothing else**: the box's free text is matched in the webview as it always
+   * was, so there is deliberately no `text` here and Rust would ignore one. The filters are the
+   * search's own (`filters::push_card_filters`, `filters::fts_match`), which is the whole reason
+   * this is a round trip rather than a test over `DeckCard` — a deck row carries no keywords, no
+   * artist and no tags, and a second implementation of the thirteen fields would drift.
+   */
+  deckQueryCards: (
+    deckId: number,
+    filters: Pick<CardFilters, "predicates" | "oracleTags" | "artTags">,
+  ) => invoke<string[]>("deck_query_cards", { deckId, filters }),
+  /**
    * Everything the **plan** is short of, onto the wishlist. Answers how many wishes were
    * touched, like its live twin.
    *

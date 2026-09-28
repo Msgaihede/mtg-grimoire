@@ -15,12 +15,12 @@
 use crate::sync::AppState;
 use crate::{
     activity, camera, card, collection, collection_alloc, collection_folders, combos, db, deck,
-    deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_quick_add,
-    deck_theory, deck_tokens, deck_undo, deckpane, decksort, errors, export, home, images, import,
-    index, listview, markcolors, marketplace, marketplace_feed, mirror, nav, new_printings, paths,
-    price_history, recent_cards, reset, scanner, schema, scryfall, search, searchopen,
-    set_completion, share, shelffolds, stackhide, startup, startview, sticky_notes, sync,
-    sync_engine, sync_pair, tags, upcoming_sets, update, value_history, window, wishlist,
+    deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_query,
+    deck_quick_add, deck_theory, deck_tokens, deck_undo, deckpane, decksort, errors, export, home,
+    images, import, index, listview, markcolors, marketplace, marketplace_feed, mirror, nav,
+    new_printings, paths, price_history, recent_cards, reset, scanner, schema, scryfall, search,
+    searchopen, set_completion, share, shelffolds, stackhide, startup, startview, sticky_notes,
+    sync, sync_engine, sync_pair, tags, upcoming_sets, update, value_history, window, wishlist,
     wishlist_folders, wishlist_optimize, zoom,
 };
 use std::path::Path;
@@ -493,6 +493,7 @@ pub fn run() {
             deck_undo::deck_redo_apply,
             deck_theory::deck_theory_diff,
             deck_theory::deck_theory_slots,
+            deck_query::deck_query_cards,
             deck_theory::deck_theory_missing_to_wishlist,
             // The tokens and emblems a deck needs, one row per entry, the four writes over their
             // entries (user schema v52, which retired `deck_token_set`, `deck_token_clear` and

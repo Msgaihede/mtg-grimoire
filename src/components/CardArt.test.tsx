@@ -91,6 +91,32 @@ describe("CardArt", () => {
     expect(container.querySelector("[data-foil-sheen]")).not.toBeInTheDocument();
   });
 
+  /**
+   * **`nonfoil` is the regular copy and draws what `null` draws** — issue #616. A managed wish
+   * stores the word in `preferred_finish`, a collection row in `finish`, and every caller that
+   * handed it through raw drew a holo sheen over plain cardboard (#566 was the same bug one tab
+   * over). The overlay maps it itself now, so no caller can reopen it.
+   */
+  it("draws neither a sheen nor a chip for a copy stated nonfoil", () => {
+    const { container } = render(<CardArt cardId="tok" name="Treasure" finish="nonfoil" />);
+    expect(container.querySelector("[data-foil-sheen]")).not.toBeInTheDocument();
+    expect(container.querySelector("[data-card-marks]")).not.toBeInTheDocument();
+  });
+
+  /** The word takes the sheen away and nothing else: a named nonfoil copy keeps its chip. */
+  it("keeps a treatment's chip on a nonfoil copy, with no sheen under it", () => {
+    const { container } = render(
+      <CardArt
+        cardId="ser"
+        name="Serialized"
+        finish="nonfoil"
+        treatments={[{ id: "serialized", label: "Serialized", foil: false }]}
+      />,
+    );
+    expect(container.querySelector("[data-foil-sheen]")).not.toBeInTheDocument();
+    expect(container.querySelector("[data-card-marks]")).toBeInTheDocument();
+  });
+
   it("draws no marks at all for a card with nothing to mark", () => {
     const { container } = render(<CardArt cardId="bolt" name="Lightning Bolt" />);
     expect(container.querySelector("[data-card-marks]")).not.toBeInTheDocument();

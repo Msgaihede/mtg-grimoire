@@ -10941,6 +10941,61 @@ export function readHandlers(db: FakeDb) {
       return [...wanted].map(([key, { nameKey, quantity }]) => ({ key, nameKey, quantity }));
     },
 
+    /**
+     * `deck_query::query_cards` — the printings of one deck, in either list, that answer the
+     * editor filter box's typed terms (issue #621). Sorted and deduplicated, like the crate's.
+     *
+     * **A partial reading, and the one simplification is stated rather than hidden**: this fake
+     * answers `search_cards` without reading its predicates at all, so there is no second
+     * evaluator here to share. What it reads is enough for a story to watch the deck narrow —
+     * the three text fields as a case-folded substring and `cmc` as a number — and every other
+     * term, and every tag, passes. The crate's `filters` SQL is the one implementation; the
+     * answer here only has to be the right *shape*, and it never narrows away a card the real
+     * one would keep for a field it does not read.
+     */
+    deck_query_cards: (args: {
+      deckId: number;
+      filters: Pick<CardFilters, "predicates" | "oracleTags" | "artTags">;
+    }): string[] => {
+      const holds = (card: FakeCard | null, row: FakeDeckCard): boolean =>
+        (args.filters.predicates ?? []).every((p) => {
+          const text = (s: string | null | undefined) =>
+            (s ?? "").toLowerCase().includes(p.value.toLowerCase());
+          let hit: boolean;
+          switch (p.field) {
+            case "name":
+              hit = text(card?.name ?? row.name);
+              break;
+            case "typeLine":
+              hit = card !== null && text(card.typeLine);
+              break;
+            case "oracleText":
+              hit = card !== null && text(card.oracleText);
+              break;
+            case "cmc": {
+              const want = Number(p.value);
+              const have = card?.cmc ?? null;
+              if (have === null || Number.isNaN(want)) hit = false;
+              else if (p.op === "gt") hit = have > want;
+              else if (p.op === "gte") hit = have >= want;
+              else if (p.op === "lt") hit = have < want;
+              else if (p.op === "lte") hit = have <= want;
+              else if (p.op === "ne") hit = have !== want;
+              else hit = have === want;
+              break;
+            }
+            default:
+              return true;
+          }
+          return p.negated ? !hit : hit;
+        });
+      const ids = new Set<string>();
+      for (const dc of db.deckCards) {
+        if (dc.deckId === args.deckId && holds(cardById(db, dc.cardId), dc)) ids.add(dc.cardId);
+      }
+      return [...ids].sort();
+    },
+
     /** `deck_theory::theory_diff` — what the plan wants and the deck does not have. See
      *  {@link theoryDiff} for the direction, the grouping and the two exclusions. */
     deck_theory_diff: (args: { deckId: number; marketplace?: string }): TheoryDiffRow[] => {

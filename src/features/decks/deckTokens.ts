@@ -542,8 +542,10 @@ export function notMadeByDeckHint(name: string): string {
 }
 
 /**
- * The accessible name of an entry's picture press — the band's tile and the pile's card alike —
- * with the mark's words folded in for a hand-added token.
+ * The accessible name of an entry's **Change the art** press — the band's tile picture, and the
+ * pile's own art button in all four views — with the mark's words folded in for a hand-added
+ * token. (The pile's card face opens the card details since issue #619, named by
+ * {@link tokenCardName}.)
  *
  * **The badge is `aria-hidden`**, like every other mark on a card, so a mark drawn and not spoken
  * would be a fact that reaches sighted readers only; the words join the name instead, lower-cased
@@ -552,5 +554,21 @@ export function notMadeByDeckHint(name: string): string {
  */
 export function tokenArtName(view: DeckTokenView): string {
   const name = tokenEntryName("Change the art for", view);
+  return isHandAdded(view) ? `${name}, ${NOT_MADE_BY_DECK.toLowerCase()}` : name;
+}
+
+/**
+ * The accessible name of the press that opens an entry's **card details** — the pile's card face
+ * in Stacks and Grid, the line in Text, the name in Table (issue #619: a token in the stack opens
+ * the card modal, as every deck card does).
+ *
+ * `Show details for …` rather than the bare token: the pile's card is a control beside the
+ * entry's other three (the stepper, **Change the art**, Remove printing), and each of those is
+ * named `<verb> <entry>` through {@link tokenEntryName} too, so the four read as four things one
+ * entry can be asked. The badge's words are folded in exactly as {@link tokenArtName} folds them,
+ * because this is the press drawn *over* the badge on the two card drawings.
+ */
+export function tokenCardName(view: DeckTokenView): string {
+  const name = tokenEntryName("Show details for", view);
   return isHandAdded(view) ? `${name}, ${NOT_MADE_BY_DECK.toLowerCase()}` : name;
 }

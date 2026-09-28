@@ -1780,6 +1780,29 @@ describe("ipc argument names match the Rust command signatures", () => {
    * **nothing else** — nothing in it is priced, so there is no `marketplace` beside the id as
    * there is on the diff.
    */
+  /**
+   * `deck_query_cards` takes the deck and **one** `filters` object — `CardFilters` rather than
+   * flattened fields, because the command declares it as one argument and Tauri names an argument
+   * after the Rust parameter. A mirror that spread the terms beside `deckId` would reach Rust as
+   * an empty filter and answer every card of the deck, which reads as a filter that does nothing.
+   */
+  it("sends the deck filter's typed terms as one filters argument", async () => {
+    invoke.mockResolvedValue(["bolt-lea"]);
+    const read = await ipc.deckQueryCards(4, {
+      predicates: [{ field: "typeLine", op: "colon", value: "goblin", negated: false }],
+      oracleTags: { include: ["removal"] },
+    });
+    expect(invoke).toHaveBeenCalledWith("deck_query_cards", {
+      deckId: 4,
+      filters: {
+        predicates: [{ field: "typeLine", op: "colon", value: "goblin", negated: false }],
+        oracleTags: { include: ["removal"] },
+      },
+    });
+    expect(read).toEqual(["bolt-lea"]);
+    expect(desktopRs).toContain("deck_query::deck_query_cards");
+  });
+
   it("sends the history and theory commands under the names their commands declare", async () => {
     invoke.mockResolvedValue([]);
     await ipc.deckAuditList(4, 200);

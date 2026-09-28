@@ -1602,6 +1602,19 @@ layer.
     closes it by accident in one surface: the counting argument above is an argument about a
     number, and the chart is a number, so whether the curve should drop the commander too is a
     question somebody has to ask the reader rather than infer from this rule.
+- **`Filter this deck` reads search syntax since 2026-09-28** ([issue
+  #621](https://github.com/Msgaihede/mtg-grimoire/issues/621)), and `useDeckCardQuery.ts` is the
+  whole of it. Two filters ANDed: **the free text** is `needleMatches`, the substring of the name
+  or type line the box always was, answered in the webview per keystroke; **every typed term and
+  resolved tag** (`t:`, `cmc>=`, `kw:`, `a:`, `f:`, `otag:`, `-bolt`…) is answered by
+  `deck_query_cards` as the set of this deck's printings that match, through the search's own
+  `filters` SQL. Never a client-side evaluator over `DeckCard`: it carries no keywords, no artist
+  and no tags, and the other ten fields would be a second dialect of `c:`/`id:`, rarity order and
+  star powers. The terms wait out the search's 300 ms debounce and narrow by nothing until their
+  first answer; clearing them stops narrowing at once; an unknown tag empties the deck (fail
+  closed, `useCardSearch`'s rule). The answer is keyed on the printing, so a foil and a regular
+  copy, or one card in two piles, stand or fall together. Both filter boxes — the toolbar's and
+  the undocked bar's — write the one `filter` state, so the hook is called once.
 - **At `TIGHT_HEADER_PX` the toolbar reads as two sentences rather than one long run**
   (2026-08-24): the three pickers that decide how the deck is *drawn*, then the tools that
   *change* it — quick add, undo/redo and the filter. `order` does the regrouping and a
@@ -1788,7 +1801,9 @@ layer.
     `DeckTokensPanel` made the same call first and the two bands draw one grammar between them.
   - **`shrink-0` is unchanged and is still the whole of why this editor scrolls** — it rides on
     the component's own root now. So is the placement: below the price strip, below Tokens &
-    emblems, last on the page.
+    emblems — and above `DeckNotesPanel`, which renders after it in `DeckEditor.tsx` since user
+    schema v43 and is the band that is last on the page. (This read "last on the page" until
+    2026-09-28, long after the notes band landed under it.)
   - **No bar in the band is a control.** The design it was built from makes every bar a button
     that narrows the deck list; that is a cross-component feature reaching into all four views and
     is deliberately out of this pass, which is why there is no filter chip beside the heading. What
@@ -1805,8 +1820,9 @@ layer.
   **(1)** the band sits **below the price strip**, because that strip is where the remove tray is
   drawn for the length of a drag (`-top-3` over the gap under the deck) and a band between them
   would put four charts between a card and the one drop that takes it out — and since 2026-09-08
-  it is also below the **Tokens & Emblems** band, so this is the last band on the page rather than
-  the last thing under the deck. **The figures in (2) and (3) below predate that band entirely**
+  it is also below the **Tokens & Emblems** band, so it no longer sits directly under the price
+  strip — and since user schema v43 it is not the last band on the page either:
+  `DeckNotesPanel` renders after it. **The figures in (2) and (3) below predate that band entirely**
   (2026-08-14 against 2026-09-07), so read them as the arithmetic of the deck, the strip and this
   band alone; nothing has been re-measured with a token wall open above it, and an open one is
   another `stackCardHeight`-and-change of column;
@@ -3271,10 +3287,12 @@ layer.
   inline `backgroundColor: var(--color-mana-…)` — so this is the app's existing arrangement at a
   new size, not a new one. The table stays a `Record` with `var(…)` spelled out per key: an
   interpolated `bg-mana-${key}` emits no rule at all.
-  **It is no longer keyed alongside `DeckStats`' `PIP_COLOR`, and that is not drift.** A pie slice
-  is a colour with nothing printed on it and a band segment is a field with a symbol on it — two
-  demands, two answers from one palette. A third surface filling by colour key is the point at
-  which all of them want one home in `mana.ts`.
+  **A third surface filling by colour key was the point at which all of them would want one home
+  in `mana.ts`, and the deck stats redesign was that surface.** Its charts fill from `mana.ts`'s
+  `MANA_FILL` — the same `--color-mana-*` family as this band — and the pie-deep table the old
+  stats band kept for its pips is gone, surviving only in historical comments. This table is still
+  a private keying of those six properties rather than an import of `MANA_FILL`; the tokens are
+  the shared fact.
   **Four numbers, and each answers its own question.** 20px of height, because that is what a 12px
   printed glyph needs with air either side — the symbol sets the floor, the band is not a thickness
   anybody chose. **26px of minimum width per segment**, because a 3%-of-the-pips splash is a
@@ -4730,8 +4748,22 @@ already effective, and `viewOf` copies them.
   - **Token prices never reach the deck's totals** — they are summed in this heading and nowhere
     else. **What a token still is not** is unchanged from #507, and the reader confirmed it
     (*"tokens should not act as 'real' cards"*): no drag source, no drop target, no deck card
-    menu, no card modal, no selection ring, not in the arrow walk. A press on the face opens the
-    one art picker. The *pile* may move along the rail; the cards in it never do.
+    menu, no selection ring, not in the arrow walk. The *pile* may move along the rail; the cards
+    in it never do.
+  - **A press on a token opens its card details, as a press on a deck card does** (2026-09-28,
+    [issue #619](https://github.com/Msgaihede/mtg-grimoire/issues/619)) — the card face in Stacks
+    and Grid, the line in Text, the name in Table, through `TokenPile.openCard`. Until then the
+    face opened the art picker, so a token was the one card on the desk a reader could not click
+    to read. `DeckEditor` opens it with **`setSelectedCardId`, never `openCardFromDeck`**: a token
+    is no `deck_cards` row, so the modal is handed no deck context and can offer no swap or
+    finish write against a row that does not exist — which is why this is not the "no card
+    modal" rule broken, only its reason honoured another way. **Change the art** moved to a button
+    of its own: the controls column's picture glyph between the stepper and Remove printing on the
+    two card drawings, a 20px glyph beside the stepper on a Text line, and Table's existing art
+    column. The face's name is `tokenCardName` (`Show details for …`) and carries the plan's
+    clause; the art button keeps `tokenArtName` and `TOKEN_ART_MARK`, so the caret hand-offs in
+    `tokenCaret.ts` are unchanged. **The band's tile is untouched** — its picture still opens the
+    picker, since the band is where a token is found and counted rather than read.
 - **The pile's place in the rail is the reader's since 2026-09-26, and it is stored as a count**
   (token stacks spec §3.4; the reader, twice: *"the tokens stack should be draggable to reorder in
   the right hand rail"*). `decks.token_rail_index`, user schema **v51**, is **the number of rail
@@ -5063,7 +5095,8 @@ already effective, and `viewOf` copies them.
   included — `Treasure — TMOM · 12 · 2023, Foil, art by …`. A printing that lists no finish this
   app knows draws once, as nonfoil, rather than vanishing. A press hands the host
   `{ cardId, finish }` and nothing else; `mode` is the job:
-  - **`{ kind: "swap", entry }`** — a press on one entry's picture, from the band or the pile. The
+  - **`{ kind: "swap", entry }`** — a press on one entry's picture on the band, or on its
+    **Change the art** button in the pile (the pile's card opens the card details, issue #619). The
     current tile is marked by the pair `(printingId, finish)`, with `aria-pressed` and a gold ring
     around the art and its foot, and the pick swaps **that entry and no other** (rule 4) — a
     Treasure kept in two printings changes one of them.
