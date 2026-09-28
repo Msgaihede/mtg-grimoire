@@ -821,28 +821,18 @@ mod tests {
     /// the connection end to end would simply make the probe wait and then collect its locks
     /// from an idle mutex.
     ///
-    /// **Each attempt is a command arriving at a moment of its own** (2026-09-28). `lock_for`
-    /// polls every 20 ms, and this fixture's batches are as regular as a clock — one every
-    /// ~10 ms — so one long attempt samples that cycle at a single fixed phase for nearly the
-    /// whole counting window, and at the wrong phase misses every release in the run. The
-    /// 200 ms attempt this used went red that way in a full parallel `cargo test`, and scored
-    /// below 3 in 6 idle runs of 100 (min 1). A short bound and a staggered pause after each
-    /// miss give every attempt a phase of its own; the lowest count since is 6 idle (80 runs),
-    /// 14 beside a full `cargo test` and 30 under eight CPU burners.
-    ///
-    /// **The bar is 4 because the count is also the fence on
-    /// [`crate::tags::YIELD_BETWEEN_BATCHES`]**, the pause that makes a release visible to a
-    /// 20 ms poller at all. Set it to zero and a probe that samples well finds the narrow
-    /// gaps the closure loop leaves between batches more often — one win each, where a real
-    /// yield gives several a millisecond apart — so at 3 this probe caught that regression in
-    /// 72% of runs against the old one's 83%. At 4 it is 86% idle and 97% beside a full suite.
-    /// All on a Linux debug build; Windows is unmeasured. Nothing waits inside the progress
-    /// callback instead, because that runs in the released window and would widen the very
-    /// gap under test — `maintenance`'s lesson.
+    /// **It used to flake, and [`crate::db::lock_background`] is why it no longer can**
+    /// (2026-09-28, Linux debug build). Before issue #551 the probe's `lock_for` polled every
+    /// 20 ms against this fixture's clock-regular ~10 ms batches, and at the wrong phase missed
+    /// every release in the run: 6 idle runs in 100 scored below 3, and a full parallel
+    /// `cargo test` went red on it. An ask that has waited once now holds off the next batch
+    /// until it is served, and the same probe left to run the whole ingest won at least 80
+    /// times in each of 100 runs — **and in each of 100 more with
+    /// [`crate::tags::YIELD_BETWEEN_BATCHES`] at zero**, so this count fences that deference
+    /// and not that pause.
     #[test]
     fn a_writer_gets_the_connection_between_batches() {
         use std::sync::atomic::AtomicUsize;
-        const BAR: usize = 4;
 
         // A file-backed database, as the app has: an in-memory one writes far faster than
         // the probe below can ask, which would make the count a measure of the fixture
@@ -869,23 +859,13 @@ mod tests {
         let done = AtomicBool::new(false);
         std::thread::scope(|scope| {
             scope.spawn(|| {
-                // After a miss, the next command arrives this many milliseconds later: no two
-                // alike and none a multiple of the poll, so no phase is held for long.
-                const PAUSES_MS: [u64; 8] = [1, 7, 3, 11, 5, 13, 2, 9];
-                let mut misses = 0;
-                while taken.load(Ordering::SeqCst) < BAR && !done.load(Ordering::SeqCst) {
+                while taken.load(Ordering::SeqCst) < 3 && !done.load(Ordering::SeqCst) {
                     let won =
-                        crate::db::lock_for(&db, std::time::Duration::from_millis(40)).is_some();
+                        crate::db::lock_for(&db, std::time::Duration::from_millis(200)).is_some();
                     if won && ingesting.load(Ordering::SeqCst) && !done.load(Ordering::SeqCst) {
                         taken.fetch_add(1, Ordering::SeqCst);
                     }
-                    let pause = if won {
-                        1
-                    } else {
-                        misses += 1;
-                        PAUSES_MS[misses % PAUSES_MS.len()]
-                    };
-                    std::thread::sleep(std::time::Duration::from_millis(pause));
+                    std::thread::sleep(std::time::Duration::from_millis(1));
                 }
             });
             let stats = ingest_gz(
@@ -903,7 +883,7 @@ mod tests {
         });
 
         assert!(
-            taken.load(Ordering::SeqCst) >= BAR,
+            taken.load(Ordering::SeqCst) >= 3,
             "a writer must be able to take the connection while the ingest is running, \
              and took it {} times",
             taken.load(Ordering::SeqCst)
