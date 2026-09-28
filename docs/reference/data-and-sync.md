@@ -1275,8 +1275,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `duplicate_deck`**, so a copy takes the default. **`DEFAULT 0` is v43's `notes_open` answer
   rather than v42's**: the split is new, so off is exactly the chart every deck already drew and
   the upgrade changes nothing on screen. One `ADD COLUMN`, no index, so neither figure at the top
-  of this page moves. It owes **`UNDO_V56`**, for `UNDO_V13`'s loud reason, at the head of every
-  chain — and ⚠️ **that rewind drops the three `decks` capture triggers before the column**, v43's
+  of this page moves. It owes **`UNDO_V56`**, for `UNDO_V13`'s loud reason, in every chain
+  — and ⚠️ **that rewind drops the three `decks` capture triggers before the column**, v43's
   move in the rewind direction: on a fixture that ran `capture::install` (the v54 rung's test,
   which rewinds to 53), `sync_ins_decks` and `sync_upd_decks` read `NEW.curve_creatures` and SQLite
   refuses the `DROP COLUMN` with `error in trigger sync_ins_decks after drop column`. `IF EXISTS`,
