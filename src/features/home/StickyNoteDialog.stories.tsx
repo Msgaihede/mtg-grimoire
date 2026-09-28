@@ -146,7 +146,7 @@ export const EmptyNote: Story = {
 
     const name = await canvas.findByRole("textbox", { name: "Name" });
     await expect(name).toHaveValue("");
-    await expect(name).toHaveAttribute("placeholder", "Untitled — the first line stands in");
+    await expect(name).toHaveAttribute("placeholder", "Untitled");
 
     await expect(canvas.getByRole("button", { name: "Slate" })).toHaveAttribute(
       "aria-pressed",

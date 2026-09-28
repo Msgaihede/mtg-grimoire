@@ -353,15 +353,15 @@ describe("ToReviewWidget", () => {
       ).toBeInTheDocument();
       expect(drawnNames()).toEqual([
         "Scanned cards",
-        "Binder entries",
-        "Wishes",
+        "Collection entries",
+        "Wishlist items",
         "Deck cards",
         "Recently removed",
       ]);
       expect(
-        screen.getByRole("button", { name: "Binder entries · Flagged for review · 2" }),
+        screen.getByRole("button", { name: "Collection entries · Flagged for review · 2" }),
       ).toBeInTheDocument();
-      expect(screen.getByRole("button", { name: "Wishes · Flagged for review · 1" })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Wishlist items · Flagged for review · 1" })).toBeInTheDocument();
       expect(
         screen.getByRole("button", { name: "Deck cards · Flagged for review · 3" }),
       ).toBeInTheDocument();
@@ -374,7 +374,7 @@ describe("ToReviewWidget", () => {
 
       draw();
 
-      await screen.findByText("Binder entries");
+      await screen.findByText("Collection entries");
       expect(collectionSummary).toHaveBeenCalledWith({
         limit: 0,
         offset: 0,
@@ -393,8 +393,8 @@ describe("ToReviewWidget", () => {
 
       draw();
 
-      expect(await screen.findByText("Binder entries")).toBeInTheDocument();
-      expect(drawnNames()).toEqual(["Binder entries"]);
+      expect(await screen.findByText("Collection entries")).toBeInTheDocument();
+      expect(drawnNames()).toEqual(["Collection entries"]);
     });
 
     it("leaves Recently removed out when the reader switched it off", async () => {
@@ -437,8 +437,8 @@ describe("ToReviewWidget", () => {
 
       const names = [
         "Scanned cards · 6 copies · 1 to pick",
-        "Binder entries · 2 flagged",
-        "Wishes · 1 flagged",
+        "Collection entries · 2 flagged",
+        "Wishlist items · 1 flagged",
         "Deck cards · 3 flagged",
         "Recently removed · 5 copies",
       ];
@@ -458,7 +458,7 @@ describe("ToReviewWidget", () => {
       draw(null, { fit: fitFor(3, 3, "compact") });
 
       expect(
-        await screen.findByRole("button", { name: "Binder entries · 2" }),
+        await screen.findByRole("button", { name: "Collection entries · 2" }),
       ).toBeInTheDocument();
       expect(screen.getByRole("button", { name: "Recently removed · 5 copies" })).toBeInTheDocument();
     });
@@ -468,7 +468,7 @@ describe("ToReviewWidget", () => {
 
       draw(null, { fit: fitFor(3, 3, "compact") });
 
-      expect(await screen.findByText("Binder entries")).toBeInTheDocument();
+      expect(await screen.findByText("Collection entries")).toBeInTheDocument();
       expect(screen.queryByText("Flagged for review")).toBeNull();
       expect(screen.getByText("2")).toBeInTheDocument();
       // The removed row has no second figure, so its caption becomes the figure.
@@ -482,7 +482,7 @@ describe("ToReviewWidget", () => {
 
       draw();
 
-      expect(screen.getByText("Looking for anything waiting on you…")).toBeInTheDocument();
+      expect(screen.getByText("Loading review items…")).toBeInTheDocument();
     });
 
     it("says a refusal in the backend's words", async () => {
@@ -491,7 +491,7 @@ describe("ToReviewWidget", () => {
       draw();
 
       expect(
-        await screen.findByText("Could not read what is waiting — The database is busy."),
+        await screen.findByText("Couldn't load review items — The database is busy."),
       ).toBeInTheDocument();
     });
 
@@ -499,15 +499,15 @@ describe("ToReviewWidget", () => {
       draw();
 
       expect(await screen.findByText(EMPTY)).toBeInTheDocument();
-      expect(EMPTY).toBe("Nothing waiting for you.");
+      expect(EMPTY).toBe("Nothing to review.");
     });
   });
 
   describe("pressing a row", () => {
     it.each([
       ["Scanned cards", ["view:scanner"]],
-      ["Binder entries", ["view:collection", "review:collection"]],
-      ["Wishes", ["view:wishlist", "review:wishlist"]],
+      ["Collection entries", ["view:collection", "review:collection"]],
+      ["Wishlist items", ["view:wishlist", "review:wishlist"]],
       ["Deck cards", ["view:settings", "panel:review"]],
       ["Recently removed", ["view:collection", `folder:collection:${REMOVED_FOLDER}`]],
     ])("%s opens its place, the view first", async (name, expected) => {
@@ -527,7 +527,7 @@ describe("ToReviewWidget", () => {
       world(EVERYTHING);
       draw();
 
-      await user.click(await screen.findByRole("button", { name: /^Wishes · / }));
+      await user.click(await screen.findByRole("button", { name: /^Wishlist items · / }));
       expect(useAppStore.getState().activeView).toBe("wishlist");
       expect(useAppStore.getState().pendingReviewFilter).toEqual({ scope: "wishlist" });
 
@@ -549,7 +549,7 @@ describe("ToReviewWidget", () => {
 
       draw(null, { still: true });
 
-      expect(await screen.findByText("Binder entries")).toBeInTheDocument();
+      expect(await screen.findByText("Collection entries")).toBeInTheDocument();
       expect(screen.queryByRole("button")).toBeNull();
     });
   });

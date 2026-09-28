@@ -15529,7 +15529,7 @@ pub(crate) mod tests {
     /// A real file rather than `:memory:`, because the residue this is about is disk.
     #[test]
     fn startup_drops_the_staging_table_a_killed_ingest_left_behind() {
-        let dir = std::env::temp_dir().join("mtgtest-schema-residue");
+        let dir = crate::scratch::path("schema-residue");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();

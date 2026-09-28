@@ -642,7 +642,7 @@ mod tests {
     /// A scratch directory of its own per test — these all touch real files, and the
     /// suite runs them in parallel.
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("mtgtest-db-{name}"));
+        let dir = crate::scratch::path(&format!("db-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir

@@ -239,7 +239,7 @@ export const NothingYet: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const feed = within(await canvas.findByRole("region", { name: "Activity" }));
-    await expect(await feed.findByText("Nothing has happened yet.")).toBeInTheDocument();
+    await expect(await feed.findByText("No activity yet.")).toBeInTheDocument();
     await expect(feed.queryByText("Today")).not.toBeInTheDocument();
   },
 };
@@ -257,7 +257,7 @@ export const StillReading: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const feed = within(await canvas.findByRole("region", { name: "Activity" }));
-    await expect(feed.getByText("Reading recent activity…")).toBeInTheDocument();
-    await expect(feed.queryByText("Nothing has happened yet.")).not.toBeInTheDocument();
+    await expect(feed.getByText("Loading activity…")).toBeInTheDocument();
+    await expect(feed.queryByText("No activity yet.")).not.toBeInTheDocument();
   },
 };

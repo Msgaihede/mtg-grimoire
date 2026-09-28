@@ -388,12 +388,12 @@ function StickyNoteBody({
           // Blank is a legal name: a note with a body reads its first line instead, computed at
           // render and never stored. The sentence is `DeckNotesPanel`'s, because it is the same
           // rule — `stickyTitle` delegates to the same function.
-          placeholder="Untitled — the first line stands in"
+          placeholder="Untitled"
           className={NAME_FIELD}
         />
       </div>
 
-      <div role="group" aria-label="Note colour" className="flex shrink-0 items-center gap-2">
+      <div role="group" aria-label="Note color" className="flex shrink-0 items-center gap-2">
         {NOTE_COLORS.map((color) => {
           const picked = color === shownColor;
           return (

@@ -918,7 +918,7 @@ mod tests {
             conn.execute("INSERT INTO cards_staging (id,name,set_code,collector_number,lang,layout,raw) VALUES ('half','Half','x','1','en','normal','{}')", []).unwrap();
         }
 
-        let missing = std::env::temp_dir().join("mtgtest-does-not-exist.jsonl.gz");
+        let missing = crate::scratch::path("does-not-exist.jsonl.gz");
         let _ = std::fs::remove_file(&missing);
         let err = ingest_gz(&db, &missing, &mut |_| {}).unwrap_err();
         assert!(
@@ -970,7 +970,7 @@ mod tests {
         let rows: Vec<String> = (0..3000).map(card_line).collect();
         let lines: Vec<&str> = rows.iter().map(String::as_str).collect();
         let good = gz_fixture(&lines);
-        let truncated = std::env::temp_dir().join("mtgtest-truncated.jsonl.gz");
+        let truncated = crate::scratch::path("truncated.jsonl.gz");
         let bytes = std::fs::read(&good).unwrap();
         std::fs::write(&truncated, &bytes[..bytes.len() * 9 / 10]).unwrap();
 
@@ -1047,7 +1047,7 @@ mod tests {
     fn a_writer_gets_the_connection_between_batches_of_an_ingest() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
-        let dir = std::env::temp_dir().join("mtgtest-ingest-chunked");
+        let dir = crate::scratch::path("ingest-chunked");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();

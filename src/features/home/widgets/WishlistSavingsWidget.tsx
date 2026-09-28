@@ -136,17 +136,17 @@ const ROW_BARE = 36;
 const FIGURES_PX = 74;
 const FIGURES_COMPACT_PX = 62;
 
-const PENDING = "Pricing your pinned wishes…";
+const PENDING = "Checking prices…";
 export const NO_WISHES =
   "No wishlist items found. Pin a wishlist card to track cheaper printings.";
 export const ALL_CHEAPEST =
-  "All pinned wishes are already on their cheapest printings.";
+  "All pinned cards are already on their cheapest printing.";
 /** `Chosen` with nothing chosen — `DecksWidget`'s `NOTHING_PINNED`, one widget over. */
 export const NOTHING_CHOSEN =
   "No wishlists chosen. Choose them in this widget's settings.";
 /** Every chosen folder has been deleted or renamed away since — a race another surface won, and
  *  never a reason to count the whole wishlist in their place. */
-export const CHOSEN_GONE = "The chosen wishlists are no longer on your wishlist.";
+export const CHOSEN_GONE = "The chosen wishlist folders no longer exist.";
 
 /** The id the checklist gives the root — `WishlistQuery.shelves`' own `0`, wishes filed in no
  *  folder. No folder has it: `wishlist_folders.id` is an `INTEGER PRIMARY KEY`. */
@@ -244,7 +244,7 @@ export function cutFooter(cut: readonly WishOptimizeMove[], currency: Currency):
   const n = priced.length;
   return {
     line: `${count(n)} more ${n === 1 ? "saves" : "save"} ${sum}`,
-    said: `${count(n)} more ${n === 1 ? "wish saves" : "wishes save"} ${sum}`,
+    said: `${count(n)} more ${n === 1 ? "card saves" : "cards save"} ${sum}`,
   };
 }
 
@@ -262,22 +262,22 @@ export function unpricedFooter(n: number): FooterWords {
 export function skippedFooter(n: number, marketplace: Marketplace): FooterWords {
   return {
     line: `${count(n)} more: no ${marketplace.label} price`,
-    said: `${count(n)} more ${n === 1 ? "has" : "have"} no price at ${marketplace.label} to compare against`,
+    said: `${count(n)} more ${n === 1 ? "has" : "have"} no ${marketplace.label} price`,
   };
 }
 
 /** No move, and pinned wishes the plan could not compare — a sentence, never *already cheapest*. */
 export function skippedOnly(n: number, marketplace: Marketplace): string {
-  return `${plural(n, "pinned wish", "pinned wishes")} ${
+  return `${plural(n, "pinned card")} ${
     n === 1 ? "has" : "have"
-  } no price at ${marketplace.label} to compare against — so there is no saving to count.`;
+  } no ${marketplace.label} price, so savings can't be calculated.`;
 }
 
 /** Moves exist and none of them can be priced — a sentence, never `Could save $0.00`. */
 export function unpricedOnly(n: number, marketplace: Marketplace): string {
-  return `${plural(n, "pinned wish", "pinned wishes")} could move to a cheaper printing, but ${
+  return `${plural(n, "pinned card")} ${n === 1 ? "has" : "have"} a cheaper printing, but ${
     n === 1 ? "its current printing has" : "their current printings have"
-  } no price at ${marketplace.label} — so there is no saving to count.`;
+  } no ${marketplace.label} price, so savings can't be calculated.`;
 }
 
 /** What a body this size draws of a card with moves to show. */
@@ -360,7 +360,7 @@ export function WishlistSavingsWidget({ widget, fit, still }: WidgetBodyProps): 
   if (needsFolders && folderList.query.isError) {
     return (
       <WidgetMessage tone="destructive">
-        Could not read your wishlists — {ipcError(folderList.query.error)}
+        Couldn't load your wishlists — {ipcError(folderList.query.error)}
       </WidgetMessage>
     );
   }
@@ -372,7 +372,7 @@ export function WishlistSavingsWidget({ widget, fit, still }: WidgetBodyProps): 
   if (query.isError) {
     return (
       <WidgetMessage tone="destructive">
-        Could not price your wishlist — {ipcError(query.error)}
+        Couldn't load wishlist prices — {ipcError(query.error)}
       </WidgetMessage>
     );
   }
@@ -420,7 +420,7 @@ export function WishlistSavingsWidget({ widget, fit, still }: WidgetBodyProps): 
         setPendingOptimize(scope);
       };
   const totalText = formatPrice(total, currency);
-  const wishes = plural(priced.length, "wish", "wishes");
+  const wishes = plural(priced.length, "card");
 
   return (
     <>
@@ -440,13 +440,13 @@ export function WishlistSavingsWidget({ widget, fit, still }: WidgetBodyProps): 
             pressLabel:
               openOptimise === undefined
                 ? undefined
-                : `Could save ${totalText} on ${wishes} · Optimise prices`,
+                : `Could save ${totalText} on ${wishes} · Optimize prices`,
           },
         ]}
       />
       {/* No list at all when no row fits: an empty one would still take the body's gap. */}
       {shown.length > 0 && (
-        <WidgetRowList fit={fit} label="Wishes that could cost less">
+        <WidgetRowList fit={fit} label="Wishlist cards that could be cheaper">
           {shown.map((move) => {
             const saved = formatPrice(move.saved, currency);
             const caption = moveCaption(move, currency);
@@ -521,7 +521,7 @@ export function WishlistSavingsWidgetSettings({
     const words = scopeWords();
     return (
       <p className="m-0 text-xs text-dim">
-        Choose {words.chosen} under {words.row} to pick the wishlists this card counts.
+        Choose {words.chosen} under {words.row} to pick the wishlists this widget counts.
       </p>
     );
   }
@@ -567,7 +567,7 @@ export function WishlistSavingsWidgetSettings({
       />
       {query.isError && (
         <p className="m-0 text-xs text-destructive">
-          Could not read your wishlists — {ipcError(query.error)}
+          Couldn't load your wishlists — {ipcError(query.error)}
         </p>
       )}
     </div>

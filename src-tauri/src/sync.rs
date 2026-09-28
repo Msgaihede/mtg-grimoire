@@ -480,7 +480,60 @@ pub(crate) fn with_write<T>(
     state: &AppState,
     f: impl FnOnce(&Connection) -> Result<T, String>,
 ) -> Result<T, String> {
-    let out = match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+    written(
+        state,
+        crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT),
+        f,
+    )
+}
+
+/// [`with_write`] that **waits for the write connection as long as it takes** instead of
+/// answering [`crate::db::BUSY`]. ⚠️ **The one sanctioned unbounded wait on `AppState.db`, and a
+/// departure is the only press that earns it.**
+///
+/// Every other press is optional: the reader can press again, and a five-second "busy" is kinder
+/// than a button that freezes for as long as whatever holds the connection. **Leaving a group is
+/// not optional in that sense** — `pairing::sync_group_leave` is the reader's instruction that
+/// this device be out of its group, the design promises that press always works (and
+/// `SyncPanel`'s `LEAVE_WARNING` names an unreachable relay as its only cost), and a sync trip
+/// (`sync_now`, `sync_engine::live`'s `trip`) holds this connection across its whole network round
+/// trip — so under [`with_write`] a Leave pressed during a slow trip failed with "the database is
+/// busy" (issue #546, item 7), which is a promise with a condition nobody wrote down.
+///
+/// **What makes the wait safe to have is that a trip always ends**: every relay request carries a
+/// 10 s connect and 30 s read timeout (`sync_engine::client`'s client, and `entitlement`'s at
+/// 10 s/10 s), so the holder gives the connection back in bounded time even with the network gone.
+/// **What makes it safe to *call*** is [`with_write`]'s reentrancy rule, which is sharper here:
+/// that one spends five seconds and answers BUSY against its own thread, where a same-thread call
+/// to this one **deadlocks** (std's `Mutex` may also panic on it). Nothing may call it holding a
+/// guard on `state.db`.
+///
+/// **Everything else is [`with_write`]'s, because it is [`with_write`]'s body** — the managed
+/// wishlists armed and settled, the token reconcile, and the cross-file fence — and the lock is
+/// [`crate::db::lock_blocking`], which recovers a poisoned mutex exactly as
+/// [`crate::db::lock_for`] does.
+///
+/// ⚠️ **`pairing::sync_device_revoke` deliberately stays on [`with_write`].** A removal must
+/// reach the relay to mean anything and is refused without it, and its first step is a round trip
+/// of its own — so waiting out one trip to start another buys a reader nothing a second press
+/// would not, and freezes the button for the length of both.
+pub(crate) fn with_write_waiting<T>(
+    state: &AppState,
+    f: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    written(state, Some(crate::db::lock_blocking(&state.db)), f)
+}
+
+/// [`with_write`] and [`with_write_waiting`]'s shared body: `guard` is the write connection, or
+/// `None` when the bounded wait gave up. **One body so the two cannot drift** — a waiting write
+/// that skipped the managed-wishlist settle or the fence would be a second definition of "a
+/// user-facing write", which is the thing [`with_write`] exists to have exactly one of.
+fn written<T>(
+    state: &AppState,
+    guard: Option<MutexGuard<'_, Connection>>,
+    f: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let out = match guard {
         Some(conn) => {
             // **The managed wishlists ride every write, before and after** (issue #512). Armed
             // first so the write's own changes to a deck are marked, and settled after — outside
@@ -1339,7 +1392,7 @@ mod tests {
     /// points somewhere else. (An in-memory pair cannot stand in: two in-memory
     /// connections are two different databases.)
     fn file_state(name: &str, syncing: bool) -> (AppState, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!("mtgtest-sync-{name}"));
+        let dir = crate::scratch::path(&format!("sync-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();
@@ -1916,6 +1969,53 @@ mod tests {
                 .map_err(|e| e.to_string())
         });
         assert_eq!(answer.unwrap(), 1);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **The waiting write outlasts the bound [`with_write`] gives up at, and runs `f` once the
+    /// connection comes back** — issue #546, item 7: a Leave pressed during a sync trip that held
+    /// the connection for longer than five seconds answered BUSY, and "leaving is always possible"
+    /// had a condition.
+    ///
+    /// The holder is **another thread**, because that is the real shape (a trip on the blocking
+    /// pool) and because a same-thread call would never return — see the helper's doc. It holds
+    /// for the bound plus half a second, so an implementation that quietly kept the bound fails
+    /// with BUSY rather than passing on timing luck.
+    #[test]
+    fn with_write_waiting_outlasts_the_bound_and_runs_once_the_connection_is_free() {
+        let (state, dir) = file_state("with-write-waiting", false);
+        let hold = crate::db::WRITE_LOCK_WAIT + std::time::Duration::from_millis(500);
+        let (taken_tx, taken_rx) = std::sync::mpsc::channel();
+
+        let (answer, waited) = std::thread::scope(|scope| {
+            let holder = scope.spawn(|| {
+                let held = crate::db::lock_blocking(&state.db);
+                taken_tx.send(()).expect("signal");
+                std::thread::sleep(hold);
+                drop(held);
+            });
+            taken_rx.recv().expect("the holder took the connection");
+
+            let start = std::time::Instant::now();
+            let answer = with_write_waiting(&state, |c| {
+                c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))
+                    .map_err(|e| e.to_string())
+            });
+            let waited = start.elapsed();
+            holder.join().expect("the holder");
+            (answer, waited)
+        });
+
+        assert_eq!(
+            answer.expect("the waiting write gave up, which is the bug"),
+            1
+        );
+        assert!(
+            waited > crate::db::WRITE_LOCK_WAIT,
+            "it ran before the holder let go, so nothing was held: waited {waited:?}"
+        );
 
         drop(state);
         let _ = std::fs::remove_dir_all(dir);

@@ -1,4 +1,17 @@
-import { compact, deviceTag, headFrame, notifyTargets, since, type Row } from "./log";
+import { admitToLog, isEnvelope } from "./admit";
+import {
+  compact,
+  departures,
+  deviceTag,
+  HEARD_REFRESH_MS,
+  headFrame,
+  notifyTargets,
+  isNewerRoster,
+  parseRoster,
+  since,
+  type Ack,
+  type Row,
+} from "./log";
 
 /**
  * One Durable Object per pairing group. It stores sealed envelopes, hands them back in the
@@ -6,9 +19,10 @@ import { compact, deviceTag, headFrame, notifyTargets, since, type Row } from ".
  * nothing it holds, because the group key never leaves the paired devices.
  *
  * **This class is deliberately thin.** Every decision it makes about *which* rows — the pull
- * window, the ordering, the compaction floor, the thirty-day tail — is delegated to `log.ts`,
- * where it is a pure function the root vitest can test without workerd. What is left here is
- * SQL and routing. See `log.ts`'s module doc for why the split is drawn there.
+ * window, the ordering, the compaction floor, the thirty-day tail, who has left — is delegated to
+ * `log.ts`, and the one refusal it makes itself, the quota, to `admit.ts`; both are pure functions
+ * the root vitest can test without workerd. What is left here is SQL and routing. See `log.ts`'s
+ * module doc for why the split is drawn there.
  */
 
 /**
@@ -40,7 +54,12 @@ type LogRow = {
   stored_at: number;
 };
 
-type AckRow = { device: string; cursor: number };
+/**
+ * `heard_at` is nullable in the type because it is nullable in the column — `ALTER TABLE` cannot
+ * add a `NOT NULL` without a default, see the constructor. Nothing writes a NULL, and the one
+ * reader maps one to "heard now", the direction that keeps rows.
+ */
+type AckRow = { device: string; cursor: number; heard_at: number | null };
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -87,12 +106,77 @@ export class Group implements DurableObject {
          stored_at INTEGER NOT NULL
        );`,
     );
+    // `heard_at` is when the relay last heard from the device — every ack sets it, a pull
+    // refreshes it daily — and it is how a device that is never coming back stops holding the
+    // compaction floor (`log.compact`, `ACK_TTL_MS`). **Nullable in a fresh table too**, so
+    // every object has one shape whether it was created with the column or migrated to it.
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS acks (
-         device TEXT    PRIMARY KEY,
-         cursor INTEGER NOT NULL
+         device   TEXT    PRIMARY KEY,
+         cursor   INTEGER NOT NULL,
+         heard_at INTEGER
        );`,
     );
+    // **An object created before `heard_at` existed gets it here, on its first wake after the
+    // deploy.** There is no migration step for a Durable Object — each one's schema is whatever
+    // its own constructor last made it — and `CREATE TABLE IF NOT EXISTS` does nothing to a table
+    // that is already there, so the column is added when missing and not otherwise.
+    //
+    // **Backfilled with the migration's own time, not left NULL and not zero.** Zero would be
+    // "last heard in 1970": every device of every existing group would be ninety days stale at
+    // once, drop out of the floor, and the next ack would compact the inbox of a device that is
+    // merely asleep. "Heard at the deploy" is conservative in the other direction — a device that
+    // was already gone keeps its pin for one more window, or until a rotation's roster names it
+    // gone, which is the cost the old behaviour charged for ever.
+    const ackColumns = this.sql.exec<{ name: string }>(`PRAGMA table_info(acks)`).toArray();
+    if (!ackColumns.some((column) => column.name === "heard_at")) {
+      this.sql.exec(`ALTER TABLE acks ADD COLUMN heard_at INTEGER`);
+      this.sql.exec(`UPDATE acks SET heard_at = ?`, Date.now());
+    }
+
+    // The devices a rotation's manifest has omitted (`roster`). `at` is when the object learned
+    // it, and is written and not read — the same "when did this happen" a support conversation
+    // asks of `group_devices.first_seen`, and nothing else could answer once it had passed.
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS departed (
+         device TEXT    PRIMARY KEY,
+         at     INTEGER NOT NULL
+       );`,
+    );
+
+    // The epoch of the last roster applied, one row — what lets a roster post that lost a race to a
+    // newer rotation's be told apart and ignored (`log.isNewerRoster`).
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS roster_epoch (
+         id    INTEGER PRIMARY KEY CHECK (id = 1),
+         epoch INTEGER NOT NULL
+       );`,
+    );
+
+    // **The log's size as a running total, one row, and not a `sum()` read per push.** A sum
+    // over `sealed` reads every row in the log on every push, and Durable Object SQL bills rows
+    // read — so the cost of the check would grow with exactly the size the quota exists to bound,
+    // and a group at the cap would pay a read of its whole 128 MiB to be told it is full.
+    // `databaseSize` is not an answer either: it is the file's high-water mark and does not
+    // shrink when compaction deletes, so a group that once met the cap would meet it for ever.
+    //
+    // The total costs a point read and a row written per push instead, and **its risk is drift**:
+    // a path that deleted from `log` without adjusting it would leave it wrong for good. So
+    // compaction, which already reads every row in full, recomputes it exactly and writes it back
+    // — any drift lasts until the next ack that moves a cursor.
+    this.sql.exec(
+      `CREATE TABLE IF NOT EXISTS log_size (
+         id    INTEGER PRIMARY KEY CHECK (id = 1),
+         chars INTEGER NOT NULL
+       );`,
+    );
+    // Once per object, on the first wake that finds no row: an object that held a log before
+    // this table existed pays one full read to seed it, and every later wake pays a point read.
+    if (this.sql.exec(`SELECT 1 FROM log_size WHERE id = 1`).toArray().length === 0) {
+      this.sql.exec(
+        `INSERT INTO log_size (id, chars) SELECT 1, coalesce(sum(length(sealed)), 0) FROM log`,
+      );
+    }
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -115,6 +199,8 @@ export class Group implements DurableObject {
         return this.ws(request, url);
       case "drop":
         return this.drop();
+      case "roster":
+        return this.roster(request);
       default:
         return json({ error: "not found" }, 404);
     }
@@ -140,26 +226,34 @@ export class Group implements DurableObject {
   }
 
   private async push(request: Request, group: string): Promise<Response> {
-    let envelope: Envelope;
+    let envelope: unknown;
     try {
-      envelope = (await request.json()) as Envelope;
+      envelope = await request.json();
     } catch {
       return json({ error: "unreadable body" }, 400);
     }
-
-    if (
-      typeof envelope?.group !== "string" ||
-      typeof envelope.device !== "string" ||
-      typeof envelope.sealed !== "string" ||
-      !Number.isFinite(envelope.epoch) ||
-      !Number.isFinite(envelope.hlcMs) ||
-      !Number.isFinite(envelope.hlcCtr)
-    ) {
-      return json({ error: "malformed envelope" }, 400);
-    }
+    if (!isEnvelope(envelope)) return json({ error: "malformed envelope" }, 400);
 
     const mismatch = this.assertGroup(group, envelope.group);
     if (mismatch) return mismatch;
+
+    // The size, the epoch and the clock were refused in the Worker, before this request cost a
+    // Durable Object request (`admit.ts`). The quota is the one check that needs this object's
+    // own state. Nothing awaits between the read and the two writes, so no other request can
+    // land in between and both be admitted against the same total.
+    const size = () =>
+      this.sql.exec<{ chars: number }>(`SELECT chars FROM log_size WHERE id = 1`).one().chars;
+    let full = admitToLog(size(), envelope.sealed.length);
+    // **Compact before refusing, and this is what makes the quota "not now" rather than "never".**
+    // Compaction otherwise runs only when an ack moves a cursor or a roster arrives — and a group
+    // at its cap refuses every push, so no device's head moves, no ack advances, and rows that
+    // aged past the thirty-day tail behind every device's ack would never be deleted: the group
+    // would stay full for good. A full scan, paid only by a push that is about to be refused.
+    if (full) {
+      this.compactNow();
+      full = admitToLog(size(), envelope.sealed.length);
+    }
+    if (full) return json({ error: full.error, code: full.code }, full.status);
 
     const stored = this.sql
       .exec<{ seq: number }>(
@@ -174,6 +268,7 @@ export class Group implements DurableObject {
         Date.now(),
       )
       .one();
+    this.sql.exec(`UPDATE log_size SET chars = chars + ? WHERE id = 1`, envelope.sealed.length);
 
     this.notify(stored.seq, envelope.device);
 
@@ -187,6 +282,20 @@ export class Group implements DurableObject {
     if (!Number.isFinite(cursor) || cursor < 0) return json({ error: "bad cursor" }, 400);
 
     const rows = this.rowsSince(cursor);
+
+    // **A pull is the relay hearing from a device**, and a device whose cursor is held pulls on
+    // every trip without ever acking — see `HEARD_REFRESH_MS` for why that has to count. The
+    // `heard_at < ?` makes it a write at most once a day per device, and a device with no ack
+    // row — never acked, departed, or aged out — matches nothing: its next ack is what enrols it.
+    if (device !== "") {
+      const now = Date.now();
+      this.sql.exec(
+        `UPDATE acks SET heard_at = ? WHERE device = ? AND heard_at < ?`,
+        now,
+        device,
+        now - HEARD_REFRESH_MS,
+      );
+    }
 
     // **The cursor handed back is the head of the whole log, not of the returned slice.**
     // The slice has the puller's own rows filtered out of it, and a cursor taken from the
@@ -222,17 +331,32 @@ export class Group implements DurableObject {
     // possibly change anything. `-1` and not `0`: a device whose stored cursor is genuinely
     // `0` must still be told apart from one that has never acked.
     const prior = this.sql
-      .exec<{ cursor: number }>(`SELECT cursor FROM acks WHERE device = ?`, body.device)
-      .toArray();
-    const before = prior.length > 0 ? prior[0].cursor : -1;
+      .exec<{ cursor: number | null; departed: number }>(
+        `SELECT (SELECT cursor FROM acks WHERE device = ?) AS cursor,
+                EXISTS (SELECT 1 FROM departed WHERE device = ?) AS departed`,
+        body.device,
+        body.device,
+      )
+      .one();
+
+    // **A departed device's ack is answered and not stored.** A removed device holds a token for
+    // up to a day after the rotation that removed it, and storing its ack would enrol it back on
+    // the floor it was just taken off — with a cursor it will never advance, because it can no
+    // longer open anything new. Only a roster that names it again un-departs it. 204 rather than a
+    // refusal: the device learns it is out from `/keys`, which is the one answer it acts on.
+    if (prior.departed) return new Response(null, { status: 204 });
+    const before = prior.cursor ?? -1;
 
     // `max(...)` and not a plain assignment: an ack is a watermark, and a retry that arrives
     // out of order must not walk a device's cursor backwards into rows it has already folded.
+    // `heard_at` is plain: any ack at all is the device being heard.
     this.sql.exec(
-      `INSERT INTO acks (device, cursor) VALUES (?, ?)
-         ON CONFLICT (device) DO UPDATE SET cursor = max(acks.cursor, excluded.cursor)`,
+      `INSERT INTO acks (device, cursor, heard_at) VALUES (?, ?, ?)
+         ON CONFLICT (device) DO UPDATE
+           SET cursor = max(acks.cursor, excluded.cursor), heard_at = excluded.heard_at`,
       body.device,
       body.cursor,
+      Date.now(),
     );
 
     // A re-ack of a value already stored cannot move the floor, and `compactNow` is two full
@@ -246,18 +370,101 @@ export class Group implements DurableObject {
    * is delete what it did not return. Row-at-a-time because the set is tiny — three devices
    * at fifty edits a day produce a few stored rows a day, and only rows past the thirty-day
    * tail are ever candidates.
+   *
+   * It also deletes the acks `compact` says to forget — a departed device's, or one unheard for
+   * `ACK_TTL_MS` — and writes back the log's exact size, which is what keeps `log_size` honest
+   * (see the constructor). The rows were read in full to decide what to keep, so the size costs
+   * no read of its own.
    */
   private compactNow(): void {
+    const now = Date.now();
     const rows = this.rows();
-    const acks = new Map<string, number>();
-    for (const ack of this.sql.exec<AckRow>(`SELECT device, cursor FROM acks`)) {
-      acks.set(ack.device, ack.cursor);
+    const acks = new Map<string, Ack>();
+    for (const ack of this.sql.exec<AckRow>(`SELECT device, cursor, heard_at FROM acks`)) {
+      acks.set(ack.device, { cursor: ack.cursor, heardAt: ack.heard_at ?? now });
+    }
+    const departed = new Set<string>();
+    for (const mark of this.sql.exec<{ device: string }>(`SELECT device FROM departed`)) {
+      departed.add(mark.device);
     }
 
-    const keep = new Set(compact(rows, acks, Date.now()).map((row) => row.seq));
+    const { keep, forget } = compact(rows, acks, departed, now);
+    const kept = new Set(keep.map((row) => row.seq));
     for (const row of rows) {
-      if (!keep.has(row.seq)) this.sql.exec(`DELETE FROM log WHERE seq = ?`, row.seq);
+      if (!kept.has(row.seq)) this.sql.exec(`DELETE FROM log WHERE seq = ?`, row.seq);
     }
+    for (const device of forget) this.sql.exec(`DELETE FROM acks WHERE device = ?`, device);
+
+    const chars = keep.reduce((sum, row) => sum + row.sealed.length, 0);
+    this.sql.exec(`UPDATE log_size SET chars = ? WHERE id = 1`, chars);
+  }
+
+  /**
+   * A rotation's manifest, as the object hears of it: `{ devices }` is the key set the group just
+   * adopted, and every device this object knows of that it omits has left the group.
+   *
+   * **Called only by the Worker, after `/rotate` has recorded the rotation in D1** — never by a
+   * device, which is why, like `drop`, it is not on the router's public `ROUTE` regex. Without it
+   * nothing ever told this object of a removal: `/rotate` is answered out of D1 ahead of the
+   * bearer gate and, before this post, never reached here, so a removed device's ack stayed the
+   * slowest reader the group had, for good.
+   *
+   * Each omitted device is marked departed and its ack deleted; each named one loses any mark it
+   * had, which is how a device that left and was paired back in holds the floor again. Then a
+   * compaction, because the floor has just moved. **The caller is best effort** — a roster that
+   * never arrives leaves the old pin in place until `log.ts`'s `ACK_TTL_MS` ages it out, which is
+   * the direction that keeps rows.
+   *
+   * **Posts are applied in epoch order, not arrival order.** The body carries the rotation's
+   * epoch, and a roster no newer than the last one applied is answered 204 and changes nothing
+   * (`log.isNewerRoster`): each is sent from inside the `/rotate` request that recorded it, so two
+   * rotations accepted back to back post two rosters that nothing else orders, and the older one
+   * arriving second would otherwise put back a device the newer one removed.
+   *
+   * `SELECT … UNION` reads the whole log for the senders in it, and the compaction after reads it
+   * again. A rotation is a handful of events in a group's life, so the second scan is not worth a
+   * shared read to save.
+   */
+  private async roster(request: Request): Promise<Response> {
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return json({ error: "unreadable body" }, 400);
+    }
+    const roster = parseRoster(body);
+    if (roster === null) return json({ error: "malformed roster" }, 400);
+    const applied = this.sql
+      .exec<{ epoch: number }>(`SELECT epoch FROM roster_epoch WHERE id = 1`)
+      .toArray();
+    if (!isNewerRoster(applied.length > 0 ? applied[0].epoch : null, roster.epoch)) {
+      return new Response(null, { status: 204 });
+    }
+    const named = roster.devices;
+
+    const known = this.sql
+      .exec<{ device: string }>(`SELECT device FROM acks UNION SELECT device FROM log`)
+      .toArray()
+      .map((row) => row.device);
+    const now = Date.now();
+    for (const device of departures(known, named)) {
+      // `DO NOTHING`: a device omitted by two rosters left at the first, and `at` says when.
+      this.sql.exec(
+        `INSERT INTO departed (device, at) VALUES (?, ?) ON CONFLICT (device) DO NOTHING`,
+        device,
+        now,
+      );
+      this.sql.exec(`DELETE FROM acks WHERE device = ?`, device);
+    }
+    for (const device of named) this.sql.exec(`DELETE FROM departed WHERE device = ?`, device);
+    this.sql.exec(
+      `INSERT INTO roster_epoch (id, epoch) VALUES (1, ?)
+         ON CONFLICT (id) DO UPDATE SET epoch = excluded.epoch`,
+      roster.epoch,
+    );
+
+    this.compactNow();
+    return new Response(null, { status: 204 });
   }
 
   /**
@@ -354,11 +561,17 @@ export class Group implements DurableObject {
    * `ROUTE` regex but on an internal path the Worker builds itself.
    *
    * `acks` is emptied too. Leaving it would mean a reader who resubscribes has a compaction
-   * floor derived from cursors into a log that no longer exists.
+   * floor derived from cursors into a log that no longer exists. `log_size` goes to zero with the
+   * log it measures.
+   *
+   * **`departed` is kept, and that is the one table the drop leaves.** A membership ending does
+   * not un-pair anybody: the devices that left the group are still gone from it, and a reader who
+   * resubscribes is resubscribing the same group with the same devices missing.
    */
   private drop(): Response {
     this.sql.exec(`DELETE FROM log`);
     this.sql.exec(`DELETE FROM acks`);
+    this.sql.exec(`UPDATE log_size SET chars = 0 WHERE id = 1`);
     // 4001 is in the private range, so the Rust client can tell "you were removed" from any
     // transport-level close. There is no close-all API; the loop is it. `state.abort()` would
     // also do it and is the wrong tool — it logs an error application code cannot catch.

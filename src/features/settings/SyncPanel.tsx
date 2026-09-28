@@ -641,6 +641,27 @@ export const PULL_HELD_NEWER_NOTICE =
   "its changes.";
 
 /**
+ * The line drawn from `RelayStatus.pullHeld === "clock"` — {@link PULL_HELD_NEWER_NOTICE}'s
+ * neighbour, and a paragraph for the same reason: news about a peer, not a failure this window
+ * suffered.
+ *
+ * **A peer stamped its ops more than a day past this device's wall clock** (`hlc::MAX_AHEAD_MS`),
+ * and applying one would move this device's hybrid logical clock to that stamp — for good, since
+ * the clock never runs backwards, so every change written here afterwards would carry the
+ * future's time too. The pull holds them instead, until this device's own clock comes within a
+ * day of them: time passing does that, and so does correcting this device if it is the one that
+ * is behind. **Correcting the peer does not release what it has already stamped**, which is why
+ * the sentence says *catches up* and asks for both devices to be checked, rather than promising
+ * that fixing one date delivers the changes.
+ *
+ * Persistent for `"newer"`'s reason: no retry clears it, so it has to outlast every pull until
+ * the hold itself does.
+ */
+export const PULL_HELD_CLOCK_NOTICE =
+  "A device in your group has its clock set more than a day ahead of this one. Its changes " +
+  "wait until this device's clock catches up — check the date and time on both.";
+
+/**
  * The membership, the relay it pays for, and the one press that makes a round trip.
  *
  * **The relay is one hosted server now and its address is compiled into the crate**, which
@@ -894,9 +915,14 @@ function SupporterSection({ live }: { live: LiveState }): JSX.Element {
           one sentence per settled state and this is orthogonal to all seven of them — a device
           can be `synced` from its last round trip and still be holding a newer peer's change at
           once, exactly as `liveNote`'s socket line is. A plain paragraph, not a `PanelAlert`: it
-          is news about a peer's build rather than a failure this window suffered. */}
+          is news about a peer's build rather than a failure this window suffered. The clock hold
+          under it is the same kind of news about a peer's date, and a hold has one kind at a
+          time, so at most one of the two is ever drawn. */}
       {on && status?.pullHeld === "newer" && (
         <p className="text-sm">{PULL_HELD_NEWER_NOTICE}</p>
+      )}
+      {on && status?.pullHeld === "clock" && (
+        <p className="text-sm">{PULL_HELD_CLOCK_NOTICE}</p>
       )}
 
       {/* **`liveText !== null` on top of `on`, not `on` alone.** `liveNote` says nothing for

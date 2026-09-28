@@ -6586,9 +6586,13 @@ export interface RelayStatus {
    * ordering — an op arrived before the parent it names, which a later pull carrying that parent
    * clears on its own, or is skipped after the bound (three pulls and ten minutes on the same
    * blocks) when that parent never comes — and `null` is the ordinary case, where nothing is held
-   * at all, and always the answer on a device in no group.
+   * at all, and always the answer on a device in no group. `"clock"` is a peer whose clock runs
+   * ahead: it stamped ops more than a day (`hlc::MAX_AHEAD_MS`) past this device's wall clock, and
+   * applying them would drag this device's hybrid logical clock into that future for good — so
+   * they wait, with the cursor, until this device's own clock comes within a day of them. Like
+   * `"newer"` it is the reader's to fix, on whichever device has the wrong date.
    */
-  pullHeld: "newer" | "waiting" | null;
+  pullHeld: "newer" | "waiting" | "clock" | null;
 }
 
 /**
@@ -6687,6 +6691,19 @@ export interface RelayOutcome {
    * consumed too but neither counted here nor recorded: the delete took it.
    */
   dropped: number;
+  /**
+   * Ops consumed because they name a parent a delete has already taken — and a row this device
+   * held under such an op's uid is deleted with it, so a trip can change what a screen shows while
+   * {@link RelayOutcome.applied} stays at nought.
+   */
+  moot: number;
+  /**
+   * Whether this trip changed a row a screen reads: it applied or mooted an op, brought a row back,
+   * broke a folder cycle, or one of the conversions that run behind a pull wrote a row. `false` for
+   * a trip that only pushed, skipped, held or dropped. `useDeviceSyncInvalidation` gates its wide
+   * refresh on this and not on `pulled`, which missed the moot arm's deletes and the conversions.
+   */
+  changed: boolean;
   /**
    * Rows handed to a device that had not heard from this one before.
    *

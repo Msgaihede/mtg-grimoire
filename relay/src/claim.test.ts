@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   codeFrom,
   DEVICE_ID,
@@ -6,6 +6,9 @@ import {
   handleClaim,
   handleToken,
   normaliseCode,
+  RECONCILE_BUDGET,
+  RECONCILE_INTERVAL_MS,
+  reconcile,
   RELAY_AUTH,
   settle,
   unixSeconds,
@@ -360,7 +363,10 @@ interface Overshared {
   status?: string;
   since?: number;
   error?: string;
-  /** The machine-readable half of a refusal. Only the device cap sets one. */
+  /**
+   * The machine-readable half of a refusal. Two set one: the device cap, and the group door's
+   * lapse on a current auth. Every other refusal leaves it off.
+   */
   code?: string;
 }
 
@@ -656,8 +662,92 @@ describe("/token — a grace window settles the same on both doors", () => {
     expect(viaRefresh.status).toBe(401);
     expect(viaGroup.status).toBe(401);
     expect(viaGroup.body.access).toBeUndefined();
+    // A window closing is a lapse like any other, so the group door names it — and the refresh
+    // door stays bare, as it always was; see the suite below.
+    expect(viaGroup.body.code).toBe("membership_ended");
+    expect(viaRefresh.body.code).toBeUndefined();
     // Each door revoked its own subject's group, and only that one.
     expect(env.dropped).toEqual(["/g/g1/drop", "/g/g2/drop"]);
+  });
+});
+
+/**
+ * Issue #546, item 6: a device on the group door never saw a lapse.
+ *
+ * **Every device but the one that pressed Connect reaches the relay through this door alone**, and
+ * every 401 it could answer was bare — which the app has to read as a stale auth, because a device
+ * behind a rotation is refused in exactly those words. So a lapse looked like a rotation for ever
+ * and the panel kept saying *Supporting since …*. The code separates the one 401 that is a verdict
+ * from the ones that are only doubts, and each test below pins one side of that line.
+ */
+describe("/token — the group door names a lapse, and nothing else", () => {
+  /** `g1` on epoch 0 under `AUTH_ONE`, its membership settled dead. */
+  async function lapsed(): Promise<Env & { dropped: string[] }> {
+    const env = tokenEnv("g1");
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+    await env.DB.prepare(`UPDATE entitlements SET status = ? WHERE subject = ?`)
+      .bind("dead", "sub-0")
+      .run();
+    return env;
+  }
+
+  it("tells a device holding the current auth that the membership ended", async () => {
+    const env = await lapsed();
+
+    const request = post("/token", { group: "g1", auth: AUTH_ONE, device: DEVICE });
+    const { status, body } = await answer(await handleToken(request, env));
+
+    // Still a 401 — the grant is over — but one the app can tell from a stale auth.
+    // `sync_engine::entitlement::MEMBERSHIP_ENDED` is the other half of this literal.
+    expect(status).toBe(401);
+    expect(body.code).toBe("membership_ended");
+    expect(body.error).toBe("unauthorized");
+    expect(body.access).toBeUndefined();
+    // And §7.1 ran on the way, exactly as it did before the code existed.
+    expect(env.dropped).toEqual(["/g/g1/drop"]);
+  });
+
+  it("keeps a stale auth bare, dead membership or not", async () => {
+    // ⚠️ **The line the code must not cross.** A device rotated out of the group still knows the
+    // epoch-0 auth; answering it `membership_ended` would tell a removed device something about
+    // the group that removed it, and would tell a device merely *behind* a rotation — whose
+    // membership may be fine — that it had lapsed. The relay cannot tell those two apart, so
+    // neither gets a code, and the refusal happens before the row is read at all: no drop.
+    const env = await lapsed();
+    expect(await recordRotation(env, "g1", 1, AUTH_TWO, { desk: "blob" })).toBe(true);
+
+    const stale = post("/token", { group: "g1", auth: AUTH_ONE, device: DEVICE });
+    const { status, body } = await answer(await handleToken(stale, env));
+
+    expect(status).toBe(401);
+    expect(body.code).toBeUndefined();
+    expect(env.dropped).toEqual([]);
+  });
+
+  it("keeps a wrong auth bare while the membership is live", async () => {
+    // The ordinary doubt: nothing has lapsed and the caller is simply not holding this group's
+    // key. A code here would be the relay volunteering a verdict to a stranger.
+    const env = tokenEnv("g1");
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+
+    const request = post("/token", { group: "g1", auth: AUTH_TWO, device: DEVICE });
+    const { status, body } = await answer(await handleToken(request, env));
+
+    expect(status).toBe(401);
+    expect(body.code).toBeUndefined();
+  });
+
+  it("leaves the refresh door's lapse bare, as it always was", async () => {
+    // That door's 401 has always meant the membership is over to the app, and a lapse's revoked
+    // secret is refused by the lookup in the same words — so the change is the group door's alone.
+    const env = await lapsed();
+
+    const request = post("/token", { refresh: "secret-0", device: DEVICE });
+    const { status, body } = await answer(await handleToken(request, env));
+
+    expect(status).toBe(401);
+    expect(body.code).toBeUndefined();
+    expect(env.dropped).toEqual(["/g/g1/drop"]);
   });
 });
 
@@ -1144,5 +1234,275 @@ describe("/claim — the refresh secret", () => {
     withCode(tables);
     await handleClaim(post("/claim", { ...WELL_FORMED, device: "desk" }), env);
     expect(tables.entitlements[0].refresh_device).toBe("desk");
+  });
+});
+
+// ---------------------------------------------------------------------------------------
+// The reconciliation — an hourly cron, a budget per pass
+// ---------------------------------------------------------------------------------------
+
+/** What `PATREON_CAMPAIGN_ID` is set to below, so a membership has a campaign to match. */
+const CAMPAIGN = "campaign-for-tests";
+
+/**
+ * The free plan's ceiling on **external** subrequests per Worker invocation, spelled here rather
+ * than imported: it is the platform's number, and a test that read it off `claim.ts` would be the
+ * budget agreeing with itself.
+ */
+const FREE_PLAN_EXTERNAL_SUBREQUESTS = 50;
+
+/** What a stubbed Patreon was asked, for assertions about which subjects a pass reached. */
+interface Patreon {
+  /** The stored refresh token each attempt presented to the token endpoint, in order. */
+  asked: string[];
+  /** Every `fetch` of any kind — the number the free plan's ceiling is on. */
+  fetches: number;
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+/**
+ * Patreon, as the two endpoints `reconcileOne` calls: the token endpoint trades a refresh token for
+ * `access-for-<token>`, and the identity endpoint answers a membership of `CAMPAIGN` whose
+ * `patron_status` is `statusOf[token]`, or `active_patron`.
+ *
+ * `refusing` is a set of refresh tokens the token endpoint answers `400` to — **a reader who
+ * revoked the app's access on Patreon's side**, which throws on every attempt for ever and is the
+ * row a queue ordered by success would starve behind.
+ */
+function fakePatreon(
+  options: { refusing?: Set<string>; statusOf?: Record<string, string> } = {},
+): Patreon {
+  const refusing = options.refusing ?? new Set<string>();
+  const statusOf = options.statusOf ?? {};
+  const patreon: Patreon = { asked: [], fetches: 0 };
+  vi.stubGlobal(
+    "fetch",
+    (input: unknown, init?: { body?: unknown; headers?: Record<string, string> }) => {
+      patreon.fetches += 1;
+      if (String(input).endsWith("/oauth2/token")) {
+        const presented = new URLSearchParams(String(init?.body)).get("refresh_token") ?? "";
+        patreon.asked.push(presented);
+        if (refusing.has(presented)) return Promise.resolve(jsonResponse({}, 400));
+        return Promise.resolve(
+          jsonResponse({ access_token: `access-for-${presented}`, refresh_token: `${presented}+` }),
+        );
+      }
+      const token = (init?.headers?.authorization ?? "").replace("Bearer access-for-", "");
+      return Promise.resolve(
+        jsonResponse({
+          data: { id: `user-${token}` },
+          included: [
+            {
+              type: "member",
+              attributes: { patron_status: statusOf[token] ?? "active_patron" },
+              relationships: { campaign: { data: { id: CAMPAIGN } } },
+            },
+          ],
+        }),
+      );
+    },
+  );
+  return patreon;
+}
+
+/**
+ * `count` live subjects, each bound to a group of its own and holding the Patreon token
+ * `token-<subject>`, none ever reconciled — the table on the day `reconciled_at` is added.
+ */
+function queue(count: number): Harness {
+  const groups = Array.from({ length: count }, (_, index) => `g${index}`);
+  const { tables, env, dropped } = harness({ groups });
+  for (const row of tables.entitlements) row.patreon_refresh = `token-${String(row.subject)}`;
+  Object.assign(env, {
+    PATREON_CLIENT_ID: "client-for-tests",
+    PATREON_CLIENT_SECRET: "secret-for-tests",
+    PATREON_CAMPAIGN_ID: CAMPAIGN,
+  });
+  return { tables, env, dropped };
+}
+
+/** The token each of these rows was seeded with, which is what a pass reaching it presents. */
+function tokensOf(tables: Tables, indexes: number[]): string[] {
+  return indexes.map((index) => `token-${String(tables.entitlements[index].subject)}`).sort();
+}
+
+/** The row indexes `from … to - 1`. */
+function range(from: number, to: number): number[] {
+  return Array.from({ length: to - from }, (_, offset) => from + offset);
+}
+
+/**
+ * Issue #546, item 5. The pass walked `subject` from `""` on every run, so a relay with more rows
+ * than one pass could reach re-asked the same first subjects every day — and the free plan's fifty
+ * external subrequests ran out about twenty-five rows in. **A cancellation whose webhook was
+ * missed, anywhere past those rows, kept syncing.** What is pinned here is the queue that replaced
+ * it: every due subject reached in turn, a budget at a time, least recently reconciled first.
+ */
+describe("reconcile — an hourly pass on a budget", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("reaches every due subject across successive passes, one budget at a time", async () => {
+    // Three budgets' worth: the shape that exposes a pass which restarts from the same place. The
+    // old walk, or a queue that forgot to stamp, reaches the same twenty on every pass below.
+    const { tables, env } = queue(3 * RECONCILE_BUDGET);
+    const everyone = tokensOf(tables, range(0, 3 * RECONCILE_BUDGET));
+    const patreon = fakePatreon();
+
+    const passes: string[][] = [];
+    for (let pass = 0; pass < 3; pass += 1) {
+      const before = patreon.asked.length;
+      await reconcile(env);
+      passes.push(patreon.asked.slice(before));
+    }
+
+    expect(passes.map((reached) => reached.length)).toEqual([
+      RECONCILE_BUDGET,
+      RECONCILE_BUDGET,
+      RECONCILE_BUDGET,
+    ]);
+    // Every subject exactly once — no pass re-asked one an earlier pass had reached.
+    expect(passes.flat().sort()).toEqual(everyone);
+    expect(tables.entitlements.every((row) => typeof row.reconciled_at === "number")).toBe(true);
+
+    // And a fourth pass, inside the interval, finds nobody due and asks Patreon nothing: hourly
+    // must not mean asking about one subject twenty-four times a day.
+    await reconcile(env);
+    expect(patreon.asked).toHaveLength(3 * RECONCILE_BUDGET);
+  });
+
+  it("stays inside the free plan's fifty external subrequests however long the queue", async () => {
+    const { env } = queue(3 * RECONCILE_BUDGET);
+    const patreon = fakePatreon();
+
+    await reconcile(env);
+
+    // Two a subject — the refresh and the identity read — and never a subject past the budget.
+    expect(patreon.fetches).toBe(2 * RECONCILE_BUDGET);
+    expect(patreon.fetches).toBeLessThan(FREE_PLAN_EXTERNAL_SUBREQUESTS);
+  });
+
+  it("asks about the never-reconciled first, then the longest-rested", async () => {
+    const count = RECONCILE_BUDGET + 2;
+    const { tables, env } = queue(count);
+    const now = Date.now();
+    // Every row is due. Rows 0 and 1 are the most recently reconciled of them, just past the
+    // interval; the two last rows have never been asked; the rest rested for days. `sub-0` and
+    // `sub-1` also sort first by subject — so a pass ordered by `subject`, or one that put NULL
+    // last, reaches them and fails below.
+    tables.entitlements[0].reconciled_at = now - RECONCILE_INTERVAL_MS - 60_000;
+    tables.entitlements[1].reconciled_at = now - RECONCILE_INTERVAL_MS - 60_000;
+    for (const index of range(2, count - 2)) {
+      tables.entitlements[index].reconciled_at = now - 3 * 24 * 60 * 60 * 1000 - index * 60_000;
+    }
+    const patreon = fakePatreon();
+
+    await reconcile(env);
+
+    expect([...patreon.asked].sort()).toEqual(tokensOf(tables, range(2, count)));
+  });
+
+  it("skips a subject reconciled within the interval, and one already dead", async () => {
+    const { tables, env } = queue(3);
+    const rested = Date.now() - 60 * 60 * 1000;
+    tables.entitlements[0].reconciled_at = rested;
+    tables.entitlements[1].reconciled_at = Date.now() - RECONCILE_INTERVAL_MS - 60_000;
+    tables.entitlements[2].status = "dead";
+    const patreon = fakePatreon();
+
+    await reconcile(env);
+
+    expect(patreon.asked).toEqual(["token-sub-1"]);
+    // The rested row is not re-stamped either — its next turn stays where its last one put it.
+    expect(tables.entitlements[0].reconciled_at).toBe(rested);
+    expect(tables.entitlements[2].reconciled_at).toBeNull();
+  });
+
+  it("stamps a row whose attempt throws, so it cannot starve the rest", async () => {
+    // A whole budget of readers who revoked the app on Patreon's side, at the head of the queue,
+    // and a budget of healthy ones behind them. Stamped only on success, the refused rows would
+    // head every pass for ever and nobody behind them would be asked again.
+    const count = 2 * RECONCILE_BUDGET;
+    const { tables, env, dropped } = queue(count);
+    const longAgo = Date.now() - 3 * 24 * 60 * 60 * 1000;
+    for (const index of range(RECONCILE_BUDGET, count)) {
+      tables.entitlements[index].reconciled_at = longAgo;
+    }
+    const refused = tokensOf(tables, range(0, RECONCILE_BUDGET));
+    const patreon = fakePatreon({ refusing: new Set(refused) });
+
+    await reconcile(env);
+    expect([...patreon.asked].sort()).toEqual(refused);
+
+    const before = patreon.asked.length;
+    await reconcile(env);
+    expect(patreon.asked.slice(before).sort()).toEqual(
+      tokensOf(tables, range(RECONCILE_BUDGET, count)),
+    );
+
+    for (const index of range(0, RECONCILE_BUDGET)) {
+      const row = tables.entitlements[index];
+      expect(typeof row.reconciled_at).toBe("number");
+      // **A failure decides nothing.** An unanswered question is not a cancellation: the row is
+      // still serving, still holds its token, and its group's log is untouched.
+      expect(row.status).toBe("active");
+      expect(row.patreon_refresh).toBe(`token-${String(row.subject)}`);
+    }
+    expect(dropped).toEqual([]);
+  });
+
+  it("revokes a cancellation the webhook missed, and never asks about it again", async () => {
+    // The failure the whole backstop exists for, end to end: Patreon says `former_patron`, the
+    // row goes dead, the log is dropped — and `status <> 'dead'` keeps it out of every later pass.
+    const { tables, env, dropped } = queue(2);
+    const patreon = fakePatreon({ statusOf: { "token-sub-1": "former_patron" } });
+
+    await reconcile(env);
+
+    expect(tables.entitlements[1].status).toBe("dead");
+    expect(tables.entitlements[1].refresh_secret).toBeNull();
+    expect(dropped).toEqual(["/g/g1/drop"]);
+    // The healthy row stored the refresh token Patreon rotated, which the next pass will need.
+    expect(tables.entitlements[0].status).toBe("active");
+    expect(tables.entitlements[0].patreon_refresh).toBe("token-sub-0+");
+
+    for (const row of tables.entitlements) row.reconciled_at = null;
+    const before = patreon.asked.length;
+    await reconcile(env);
+    expect(patreon.asked.slice(before)).toEqual(["token-sub-0+"]);
+  });
+
+  it("counts a row with no Patreon token against the budget, and settles it locally", async () => {
+    // A whole budget of token-less rows whose grace windows have closed, ahead of one row that
+    // holds a token. They ask Patreon nothing, but each still costs a revocation and a drop, so
+    // they fill the pass — and the tokened row waits for the next one rather than widening this.
+    const count = RECONCILE_BUDGET + 1;
+    const { tables, env, dropped } = queue(count);
+    for (const index of range(0, RECONCILE_BUDGET)) {
+      const row = tables.entitlements[index];
+      row.patreon_refresh = null;
+      row.status = "grace";
+      row.grace_until = Date.now() - 1;
+    }
+    tables.entitlements[RECONCILE_BUDGET].reconciled_at = Date.now() - 3 * 24 * 60 * 60 * 1000;
+    const patreon = fakePatreon();
+
+    await reconcile(env);
+
+    expect(patreon.fetches).toBe(0);
+    expect(dropped).toHaveLength(RECONCILE_BUDGET);
+    for (const index of range(0, RECONCILE_BUDGET)) {
+      expect(tables.entitlements[index].status).toBe("dead");
+    }
+
+    await reconcile(env);
+    expect(patreon.asked).toEqual(tokensOf(tables, [RECONCILE_BUDGET]));
   });
 });
