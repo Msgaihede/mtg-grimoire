@@ -19,8 +19,8 @@ use crate::{
     deck_quick_add, deck_theory, deck_tokens, deck_undo, deckpane, decksort, errors, export, home,
     images, import, index, listview, markcolors, marketplace, marketplace_feed, mirror, nav,
     new_printings, paths, price_history, recent_cards, reset, scanner, schema, scryfall, search,
-    searchopen, set_completion, share, shelffolds, startup, startview, sticky_notes, sync,
-    sync_engine, sync_pair, tags, upcoming_sets, update, value_history, window, wishlist,
+    searchopen, set_completion, share, shelffolds, stackhide, startup, startview, sticky_notes,
+    sync, sync_engine, sync_pair, tags, upcoming_sets, update, value_history, window, wishlist,
     wishlist_folders, wishlist_optimize, zoom,
 };
 use std::path::Path;
@@ -538,6 +538,9 @@ pub fn run() {
             // Which shelves the reader folded — `search_open`'s pair, one level deeper.
             shelffolds::shelf_folds,
             shelffolds::set_shelf_folds,
+            // Which stacks the reader hid in a deck — `shelf_folds`' pair, keyed by deck.
+            stackhide::hidden_stacks,
+            stackhide::set_stack_hidden,
             markcolors::mark_colors,
             markcolors::set_mark_color,
             decksort::deck_sort,

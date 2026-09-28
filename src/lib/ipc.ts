@@ -9637,6 +9637,23 @@ export const ipc = {
   setShelfFolds: (page: ShelfFoldPage, changes: Record<string, boolean | null>) =>
     invoke<void>("set_shelf_folds", { page, changes }),
   /**
+   * The category ids of the stacks the reader hid in one deck's Stacks view, ascending (issue
+   * #618). {@link shelfFolds}' contract keyed by deck: **infallible by signature** — an
+   * unreadable row answers `[]`, which is every stack drawn. `app_meta` is not synced, so a stack
+   * hidden here is this device's alone, which was the reader's call.
+   *
+   * **A stale id is answered, not pruned**: a pile deleted since stays in the list until it is
+   * shown again, and the editor ignores an id no pile of the deck carries.
+   */
+  hiddenStacks: (deckId: number) => invoke<number[]>("hidden_stacks", { deckId }),
+  /**
+   * Hide or show one stack, leaving every other stack and deck alone. Refuses an id that is not
+   * positive; answers `collection::BUSY` under a running sync, which the caller swallows —
+   * {@link setShelfFolds}' trade: the stack stays as the reader left it for this session.
+   */
+  setStackHidden: (deckId: number, categoryId: number, hidden: boolean) =>
+    invoke<void>("set_stack_hidden", { deckId, categoryId, hidden }),
+  /**
    * How the decks page's folder tree was last left — how wide the reader dragged it, and whether
    * it is folded to its rail.
    *

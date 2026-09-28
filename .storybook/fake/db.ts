@@ -1877,6 +1877,13 @@ export interface FakeDb {
    */
   shelfFolds: ShelfFolds;
   /**
+   * `app_meta.hidden_stacks` — the stacks the reader hid in each deck's Stacks view (issue #618),
+   * as deck id (decimal) → category ids. **Empty to begin with**, which is every stack drawn: a
+   * seeded hide would be a story about a press nobody made. See {@link readHandlers.hidden_stacks}
+   * and {@link writeHandlers.set_stack_hidden}.
+   */
+  hiddenStacks: Record<string, number[]>;
+  /**
    * `app_meta.deck_sort` — how the deck gallery was last ordered, as `"<key>:<direction>"`.
    *
    * A **stored string** and `null` for the row not being there, which is
@@ -3287,6 +3294,8 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     searchOpen: {},
     // Every shelf at its default on both pages — `shelf_folds`' answer for a row never written.
     shelfFolds: { collection: {}, wishlist: {} },
+    // Every stack drawn in every deck — `hidden_stacks`' answer for a row never written.
+    hiddenStacks: {},
     // The gallery's order, and a `null` rather than a value again: `deck_sort` answers
     // `updated:desc` for a wall nobody has re-ordered, so every deck story that says nothing
     // about the picker is standing in the order the app ships — most recently touched first,
@@ -11530,6 +11539,13 @@ export function readHandlers(db: FakeDb) {
       collection: { ...db.shelfFolds.collection },
       wishlist: { ...db.shelfFolds.wishlist },
     }),
+
+    /**
+     * `stackhide::hidden_stacks` — the category ids hidden in one deck, ascending. A copy, so a
+     * caller mutating the answer cannot reach the store. A read, so it answers through a sync.
+     */
+    hidden_stacks: (args: { deckId: number }): number[] =>
+      [...(db.hiddenStacks[String(args.deckId)] ?? [])].sort((a, b) => a - b),
 
     /**
      * `decksort::deck_sort` — how the deck gallery was last ordered, or the default.
@@ -20964,6 +20980,25 @@ export function writeHandlers(db: FakeDb) {
         ),
       );
       db.shelfFolds = { ...db.shelfFolds, [page]: next };
+    },
+
+    /**
+     * `stackhide::set_stack_hidden` — hide or show one stack of one deck. The lock first, like
+     * every write here; then the refusal of an id that is not positive, `stackhide::NOT_AN_ID`
+     * verbatim. Showing a deck's last hidden stack takes the deck's entry out, as the crate does.
+     */
+    set_stack_hidden: (args: { deckId: number; categoryId: number; hidden: boolean }): void => {
+      refuseIfBusy(db);
+      if (!(args.deckId > 0) || !(args.categoryId > 0)) {
+        throw refuse("A hidden stack is named by a deck id and a category id.");
+      }
+      const key = String(args.deckId);
+      const ids = (db.hiddenStacks[key] ?? []).filter((id) => id !== args.categoryId);
+      if (args.hidden) ids.push(args.categoryId);
+      const next = { ...db.hiddenStacks };
+      if (ids.length === 0) delete next[key];
+      else next[key] = ids;
+      db.hiddenStacks = next;
     },
 
     /**

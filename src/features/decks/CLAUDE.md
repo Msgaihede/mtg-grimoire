@@ -3899,7 +3899,16 @@ layer.
 - **A pile's heading is one row since 2026-09-26, and its count is a pill** (token stacks spec
   §3.1 — the reader's ask, made while the token pile was being redrawn). `GroupHeader` is drawn by
   all four views and by `CategoriesDialog`, so the change is in every one of them rather than a
-  fork of the stacked layout: `[grip] name [rule][switched off] ········ [pill] price`.
+  fork of the stacked layout: `[grip] name [pill] [rule][switched off] ········ price [eye]`.
+  **The pill moved to the left, straight after the name, on 2026-09-28**
+  ([issue #618](https://github.com/Msgaihede/mtg-grimoire/issues/618)) — it was
+  `········ [pill] price` on the right until then — and is set in `text-text` rather than
+  `text-dim`, the reader finding the count too faint. The stacked floor went `min-w-16` →
+  `min-w-24` with it (the pill's ~20–32px left the figures for the name's block, so the sum the
+  row wraps on is unchanged); **nothing below was re-measured after the move**, so read the figures
+  as the 2026-09-26 layout's. A name computed over a heading reads
+  `Sideboard 3 cards Rules pile Switched off $4.97` now. `[eye]` is `GroupHeader`'s `trailing`,
+  drawn only on a hidden stack — see *Hidden stacks* below.
   - **The count is `CountPill` (`CountPill.tsx`), and the `N cards` line is gone.** A bare number
     with its visible digits `aria-hidden` and **one** `sr-only` phrase the caller spells through
     `words` — `cardCountWords` (`3 cards`) by default, `tokenCountWords` (`3 tokens and emblems`)
@@ -3926,8 +3935,9 @@ layer.
     at 0.8×, 5px at 0.9×. As chips the chrome is 54px. The rule mark is `Gavel` (not `Scale`,
     which the header's `Compare` already draws) and the switched-off mark `PowerOff` (the category
     menu's `Deactivate` glyph); each spells its words in an `sr-only` span — `MARKER_WORDS`,
-    `Rules pile` and `Switched off` — so a heading's name reads
-    `Sideboard Rules pile Switched off 3 cards $4.97`, and each keeps its tooltip through
+    `Rules pile` and `Switched off` — so a heading's name read
+    `Sideboard Rules pile Switched off 3 cards $4.97` (the count comes second since issue #618),
+    and each keeps its tooltip through
     `useTooltip()` on the chip. The meaning of the two marks did not move; `RULE_KINDS` still has no
     `maybe`, and `GroupHeader.tsx` says why.
   All of it measured in a Chromium class-rewrite harness over these classes (a `file://` page,
@@ -3942,6 +3952,28 @@ layer.
   row at 0.8×, 0.9×, 1×, 1.1× and 2×, every heading two rows at 0.5×, and at all six stops no chip
   over the pill, nothing past the heading's box and `document.scrollWidth === clientWidth`.
   [decks-live-findings.md](../../../docs/reference/decks-live-findings.md) has the rest.
+- **Hidden stacks: a stack can be hidden in the Stacks view, and it draws its heading and none of
+  its cards** (2026-09-28, [issue #618](https://github.com/Msgaihede/mtg-grimoire/issues/618)).
+  - **The pile's right-click offers `Hide` / `Unhide`**, above the transfers beside Rename — a view
+    preference, not a write to the deck, so it sits above the rule. **Only in the Stacks view**:
+    `categoryMenu`'s `stackVisibility` dep is handed while `view === "stacks"` and never
+    otherwise, because the other three views draw every card of a hidden stack and a row that
+    changed nothing on screen would read as broken.
+  - **A hidden stack wears an eye** — `EyeOff`, the state drawn — at the far right of its heading,
+    after the price (`GroupHeader`'s `trailing`). It is a real button named `Show <pile>`, and its
+    press shows the stack and hands the caret to the pile (`DeckEditor`'s `showStack`), because the
+    button goes with the press.
+  - **A hidden stack is still a drop target, still reorders and still carries its menu.** What it
+    loses is its cards: no `CardStack`, no "Nothing here yet.", no lift room reserved at the foot
+    of the view, and the arrow walk steps over it as if it were empty. `HIDDEN_STACK_ATTR`
+    (`data-stack-hidden`) marks the section for a test or a live pass.
+  - **Stored per device, never synced — the reader's call.** One `app_meta` row, `hidden_stacks`
+    (`src-tauri/src/stackhide.rs`, `shelffolds.rs`' shape keyed by deck): deck id → hidden
+    category ids. `useHiddenStacks` reads it under `["hiddenStacks", deckId]` — **not under
+    `["decks"]`**, which every deck write invalidates — writes optimistically and never rolls back,
+    and the key is on `crossWindow.ts`' `PER_WINDOW_KEYS`. Keyed by category id, which is already
+    one list's pile since user schema v53, so hiding the Theory tab's Sideboard leaves the Actual
+    tab's drawn. A stale id (a deleted pile) is answered rather than pruned and matches nothing.
 - **A pile at rest has no edge, and the box that edge was drawn in is still there** (changed
   2026-08-14). `StackGroup`'s `<section>` is `border border-transparent` in **both** states, with
   a `bg-surface/60` wash under the inactive one; it used to be `border-border` active and

@@ -11162,7 +11162,10 @@ describe("the busy fault", () => {
     // 122 → 123 on `main` when `collection_set_printing` (issue #564) met that removal — the
     // parse's answer over the merged table, not either side's literal plus one. 122 when managed
     // tokens met it, read from `left` after that merge.
-    expect(names).toHaveLength(122);
+    // 122 → 123 on 2026-09-28 with `set_stack_hidden` (issue #618) — an `app_meta` write through
+    // `sync::with_write`, whose read half `hidden_stacks` is not in this table. Count again after
+    // a merge rather than adding to the other side's figure.
+    expect(names).toHaveLength(123);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -20157,6 +20160,30 @@ describe("shelves", () => {
     const busy = makeDb({ fault: "busy" });
     expect(() =>
       writeHandlers(busy).set_shelf_folds({ page: "collection", changes: { "11": true } }),
+    ).toThrow(/busy/i);
+  });
+
+  it("round-trips hidden_stacks through set_stack_hidden, per deck, and showing the last removes the entry", () => {
+    const db = makeDb();
+    const r = readHandlers(db);
+    const w = writeHandlers(db);
+    expect(r.hidden_stacks({ deckId: 4 })).toEqual([]);
+
+    w.set_stack_hidden({ deckId: 4, categoryId: 12, hidden: true });
+    w.set_stack_hidden({ deckId: 4, categoryId: 9, hidden: true });
+    w.set_stack_hidden({ deckId: 4, categoryId: 9, hidden: true });
+    w.set_stack_hidden({ deckId: 5, categoryId: 3, hidden: true });
+    expect(r.hidden_stacks({ deckId: 4 })).toEqual([9, 12]);
+    expect(r.hidden_stacks({ deckId: 5 })).toEqual([3]);
+
+    w.set_stack_hidden({ deckId: 5, categoryId: 3, hidden: false });
+    expect(r.hidden_stacks({ deckId: 5 })).toEqual([]);
+    expect(db.hiddenStacks).toEqual({ "4": [12, 9] });
+
+    expect(() => w.set_stack_hidden({ deckId: 0, categoryId: 3, hidden: true })).toThrow(/deck id/);
+    const busy = makeDb({ fault: "busy" });
+    expect(() =>
+      writeHandlers(busy).set_stack_hidden({ deckId: 4, categoryId: 12, hidden: true }),
     ).toThrow(/busy/i);
   });
 });

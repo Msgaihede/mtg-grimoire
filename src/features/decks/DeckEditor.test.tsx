@@ -93,6 +93,10 @@ const listSets = vi.hoisted(() => vi.fn());
 // as it is on a fresh install — which is what `openSearchPanel` below is idempotent about.
 const searchOpen = vi.hoisted(() => vi.fn());
 const setSearchOpen = vi.hoisted(() => vi.fn());
+// The Stacks view's hidden stacks (issue #618) — the read every open makes, and the write a
+// heading's `Hide` / `Unhide` and a hidden stack's eye make. Hoisted for the cases that press them.
+const hiddenStacks = vi.hoisted(() => vi.fn());
+const setStackHidden = vi.hoisted(() => vi.fn());
 // The five consulted overlays' own reads — categories, labels, history, the theory difference and
 // deck settings. Each is unmounted while closed, so these answer only for the tests that open
 // one — but the whole `ipc` object is replaced here, so a command left out is a `TypeError`
@@ -238,6 +242,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     searchCards,
     searchOpen,
     setSearchOpen,
+    hiddenStacks,
+    setStackHidden,
     // The docked search panel's filter row asks for facet counts beside the page. Answered
     // **cold** — `ready: false`, every map empty — so nothing greys and every control keeps
     // its name.
@@ -961,6 +967,8 @@ beforeEach(() => {
   listSets.mockReset().mockResolvedValue([]);
   searchOpen.mockReset().mockResolvedValue({ deck: true });
   setSearchOpen.mockReset().mockResolvedValue(undefined);
+  hiddenStacks.mockReset().mockResolvedValue([]);
+  setStackHidden.mockReset().mockResolvedValue(undefined);
   deckCategoryList.mockReset().mockResolvedValue(CATEGORIES);
   deckLabelList.mockReset().mockResolvedValue([]);
   deckLabelAll.mockReset().mockResolvedValue([]);
@@ -7343,6 +7351,59 @@ describe("DeckEditor — a category's menu", () => {
     // greying itself is asserted below, where a pile with cards is seeded to sit beside it.
     expect(screen.getByRole("menuitem", { name: /Clear stack…/ })).toBeInTheDocument();
     expect(screen.getByRole("menuitem", { name: "Delete…" })).toBeInTheDocument();
+    // Hide is the Stacks view's row and nobody else's (issue #618): the other three draw every
+    // card of a hidden stack, so the row would change nothing there.
+    if (view === "stacks") {
+      expect(screen.getByRole("menuitem", { name: "Hide" })).toBeInTheDocument();
+    } else {
+      expect(screen.queryByRole("menuitem", { name: "Hide" })).toBeNull();
+    }
+  });
+
+  /**
+   * **Hide takes a stack's cards off the desk and leaves its heading; the eye puts them back**
+   * (issue #618). The write is `set_stack_hidden` with the deck and the pile, and the cards go at
+   * the press — the optimistic half — not when the write answers.
+   */
+  it("hides a stack from its menu and shows it again from the eye on its heading", async () => {
+    withCardsInMain();
+    await open();
+    const mainPile = () => document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${MAIN}"]`)!;
+    const cardsIn = () => mainPile().querySelectorAll(`[${DECK_CARD_ATTR}]`).length;
+    await waitFor(() => expect(cardsIn()).toBeGreaterThan(0));
+
+    await rightClickGroup(MAIN);
+    await userEvent.click(screen.getByRole("menuitem", { name: "Hide" }));
+    expect(setStackHidden).toHaveBeenLastCalledWith(DECK.id, MAIN, true);
+    await waitFor(() => expect(cardsIn()).toBe(0));
+    expect(within(mainPile()).getByText("Main deck")).toBeInTheDocument();
+
+    // The menu now offers the way back too.
+    await rightClickGroup(MAIN);
+    expect(screen.getByRole("menuitem", { name: "Unhide" })).toBeInTheDocument();
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: "Escape" });
+
+    await userEvent.click(within(mainPile()).getByRole("button", { name: "Show Main deck" }));
+    expect(setStackHidden).toHaveBeenLastCalledWith(DECK.id, MAIN, false);
+    await waitFor(() => expect(cardsIn()).toBeGreaterThan(0));
+    // The eye went with the press, and the caret went to the pile rather than to nothing.
+    expect(within(mainPile()).queryByRole("button", { name: "Show Main deck" })).toBeNull();
+    expect(mainPile()).toHaveFocus();
+  });
+
+  /** A stack stored as hidden opens hidden: the read is what the desk is drawn from. */
+  it("opens a deck with its stored hidden stacks already hidden", async () => {
+    withCardsInMain();
+    hiddenStacks.mockResolvedValue([MAIN]);
+    await open();
+    await waitFor(() =>
+      expect(
+        within(
+          document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${MAIN}"]`)!,
+        ).getByRole("button", { name: "Show Main deck" }),
+      ).toBeInTheDocument(),
+    );
+    expect(hiddenStacks).toHaveBeenCalledWith(DECK.id);
   });
 
   /**
