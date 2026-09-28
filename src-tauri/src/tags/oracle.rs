@@ -743,7 +743,7 @@ mod tests {
         let db = mem_db();
         ingest(&db, &[&tag("a1", "ramp", &[], &["oid-1"])]).unwrap();
 
-        let missing = std::env::temp_dir().join("mtgtest-tags-does-not-exist.jsonl.gz");
+        let missing = crate::scratch::path("tags-does-not-exist.jsonl.gz");
         let _ = std::fs::remove_file(&missing);
         let err = ingest_gz(
             &ORACLE,
@@ -777,7 +777,7 @@ mod tests {
         // A file-backed database, as the app has: an in-memory one writes far faster than
         // the probe below can ask, which would make the count a measure of the fixture
         // rather than of the locking.
-        let dir = std::env::temp_dir().join("mtgtest-oracle-tags-chunked");
+        let dir = crate::scratch::path("oracle-tags-chunked");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();
@@ -1305,11 +1305,7 @@ mod tests {
     /// that is really a mock server — [`crate::marketplace_feed`]'s `test_state`, with the
     /// base URL injected, which is what lets the whole refresh be driven here.
     fn test_state(base_url: String) -> (Arc<AppState>, std::path::PathBuf) {
-        let dir = std::env::temp_dir().join(format!(
-            "mtgtest-tags-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
+        let dir = crate::scratch::path("tags-state");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::schema::prepare_data_dir(&dir).unwrap();

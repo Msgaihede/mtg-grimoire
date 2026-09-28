@@ -3437,19 +3437,14 @@ mod tests {
     // read_import_file
     // ------------------------------------------------------------------------------------
 
-    /// A file in the system temp directory, written and handed back with its path.
-    ///
-    /// **There is no `tempfile` dev-dependency and this must not add one**, so the collision
-    /// fence is the name: `maintenance.rs`'s scratch directories are `mtgtest-maint-<what>` and
-    /// have a known race between tests that share a word, so every caller here passes a word no
-    /// other test in the crate uses. `cargo test` runs a thread per test by default and the
-    /// temp directory is shared by every crate on the machine — a fixed name like
-    /// `mtgtest-import.txt` would be two tests writing one file.
+    /// A file of this test's own, written and handed back with its path — under
+    /// [`crate::scratch::path`], which keeps it apart from every other test and every other
+    /// `cargo test` process on the machine.
     ///
     /// The caller cleans up with [`gone`]. A leaked file is a stale fixture the *next* run
     /// would read, which is the one failure mode worth spending two lines on.
     fn scratch(name: &str, bytes: &[u8]) -> std::path::PathBuf {
-        let path = std::env::temp_dir().join(format!("mtgtest-import-{name}.txt"));
+        let path = crate::scratch::path(&format!("import-{name}.txt"));
         let _ = std::fs::remove_file(&path);
         std::fs::write(&path, bytes).unwrap();
         path
@@ -3512,7 +3507,7 @@ mod tests {
     /// carries no such file at all.
     #[test]
     fn a_missing_file_is_refused_in_words() {
-        let path = std::env::temp_dir().join("mtgtest-import-no-such-decklist.txt");
+        let path = crate::scratch::path("import-no-such-decklist.txt");
         let _ = std::fs::remove_file(&path);
 
         let refused = read_file(&path).unwrap_err();

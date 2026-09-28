@@ -141,6 +141,10 @@ pub mod reset;
 /// the request body and the asset load order. Its commands are registered in `desktop.rs`.
 pub mod scanner;
 pub mod schema;
+/// **Where a test puts a real file** — one directory per `cargo test` process and one per test
+/// below it, so two worktrees' runs at once never share a database. Test builds only.
+#[cfg(test)]
+mod scratch;
 pub mod scryfall;
 pub mod search;
 pub mod searchopen;

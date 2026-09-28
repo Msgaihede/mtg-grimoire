@@ -9,6 +9,13 @@ both, `cargo fmt --check` and the frontend. (It ran neither `clippy` nor `fmt` u
 while this line said it ran the first.) The toolchain is `rust-toolchain.toml`'s pin — rustup
 picks it up from any directory under the root.
 
+**A test that needs a real file takes its path from `crate::scratch::path`, never from
+`std::env::temp_dir()` directly.** The temp directory is one folder for every worktree's
+`cargo test`, so a fixed name there is one database written by two runs at once — measured
+2026-09-28 at 11 failing runs of 12 for two concurrent `ingest::tests`, and 0 of 12 through the
+helper. `scratch.rs` has the layout and why a run's files are deleted by the next run rather
+than by the test.
+
 ## Hard rules — database
 
 - **`cards` is dropped and recreated on every sync** (`schema::swap_staging`, with

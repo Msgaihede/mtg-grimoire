@@ -1458,7 +1458,7 @@ mod tests {
     /// goes wrong.
     #[test]
     fn the_swap_moves_the_old_build_aside_and_puts_the_new_one_in_place() {
-        let dir = std::env::temp_dir().join("mtgtest-update-swap");
+        let dir = crate::scratch::path("update-swap");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("mtg-grimoire.exe");
@@ -1522,7 +1522,7 @@ mod tests {
     #[cfg(windows)]
     #[test]
     fn deleting_a_file_that_is_still_open_succeeds_on_windows() {
-        let dir = std::env::temp_dir().join("mtgtest-update-posix-delete");
+        let dir = crate::scratch::path("update-posix-delete");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("held.bin");
@@ -1543,7 +1543,7 @@ mod tests {
     /// which is nearly every launch.
     #[test]
     fn cleanup_removes_a_stale_staged_build_and_does_nothing_when_there_is_none() {
-        let dir = std::env::temp_dir().join("mtgtest-update-clean");
+        let dir = crate::scratch::path("update-clean");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let exe = dir.join("mtg-grimoire.exe");
@@ -1873,7 +1873,7 @@ mod tests {
     /// arrangement, for its reason.
     fn file_state(name: &str) -> (Arc<AppState>, std::path::PathBuf) {
         use std::sync::atomic::AtomicBool;
-        let dir = std::env::temp_dir().join(format!("mtgtest-update-{name}"));
+        let dir = crate::scratch::path(&format!("update-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         crate::split::convert(&dir).unwrap();

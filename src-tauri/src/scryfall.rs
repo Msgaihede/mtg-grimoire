@@ -983,7 +983,7 @@ mod tests {
             then.status(200).body(body.clone());
         });
         let c = Client::new(server.base_url());
-        let dest = std::env::temp_dir().join("mtgtest-dl.gz");
+        let dest = crate::scratch::path("dl.gz");
         let _ = std::fs::remove_file(&dest);
         let mut seen = 0u64;
         c.download(
@@ -1006,7 +1006,7 @@ mod tests {
             then.status(200).body("short");
         });
         let c = Client::new(server.base_url());
-        let dest = std::env::temp_dir().join("mtgtest-dl2.gz");
+        let dest = crate::scratch::path("dl2.gz");
         let _ = std::fs::remove_file(&dest);
         let err = c
             .download(
@@ -1036,7 +1036,7 @@ mod tests {
                 .body(vec![9u8; 600]);
         });
         let c = Client::new(server.base_url());
-        let dest = std::env::temp_dir().join("mtgtest-dl-resume.gz");
+        let dest = crate::scratch::path("dl-resume.gz");
         std::fs::write(&dest, vec![7u8; 400]).unwrap();
 
         let mut reports: Vec<(u64, u64)> = Vec::new();
@@ -1071,7 +1071,7 @@ mod tests {
             then.status(200).body(vec![1u8; 1000]);
         });
         let c = Client::new(server.base_url());
-        let dest = std::env::temp_dir().join("mtgtest-dl-restart.gz");
+        let dest = crate::scratch::path("dl-restart.gz");
         std::fs::write(&dest, vec![7u8; 2500]).unwrap();
 
         c.download(
@@ -1096,7 +1096,7 @@ mod tests {
             then.status(503);
         });
         let c = Client::new(server.base_url());
-        let dest = std::env::temp_dir().join("mtgtest-dl-boom.gz");
+        let dest = crate::scratch::path("dl-boom.gz");
         std::fs::write(&dest, vec![7u8; 400]).unwrap();
 
         let err = c
@@ -1128,7 +1128,7 @@ mod tests {
                 .body(vec![9u8; 600]);
         });
         let c = Client::new(server.base_url());
-        let dest = std::env::temp_dir().join("mtgtest-dl-liar.gz");
+        let dest = crate::scratch::path("dl-liar.gz");
         std::fs::write(&dest, vec![7u8; 400]).unwrap();
 
         let err = c
@@ -1160,7 +1160,7 @@ mod tests {
             then.status(200).body(vec![1u8; 1000]);
         });
         let c = Client::new(server.base_url());
-        let dest = std::env::temp_dir().join("mtgtest-dl-416.gz");
+        let dest = crate::scratch::path("dl-416.gz");
         std::fs::write(&dest, vec![7u8; 400]).unwrap();
 
         c.download(
