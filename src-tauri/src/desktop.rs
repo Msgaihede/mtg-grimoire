@@ -317,8 +317,8 @@ pub fn run() {
     // `withGlobalTauri` puts `window.__TAURI__` in reach of that script, every command in the
     // handler below is one `invoke` away from anyone who can open the socket. The plugin's
     // default is for driving a phone across your LAN; this app is a single local user, so it
-    // takes the narrow bind for the same reason `capabilities/desktop.json` takes
-    // `dialog:allow-open` over `dialog:default`.
+    // takes the narrow bind for the same reason `capabilities/desktop.json` names each
+    // permission it grants rather than any plugin's `:default`.
     //
     // Port 9223 (the plugin counts upward from it if it is busy), deliberately clear of the
     // three ports this repo hardcodes: 1420 Vite, 6006 Storybook, 9222 CDP.
@@ -331,7 +331,7 @@ pub fn run() {
     // out and keeps nothing on this machine out: the plugin's `accept_async` never reads the
     // handshake's `Origin` and has no auth option, and browsers apply no CORS to a WebSocket, so
     // a page open in the developer's own browser could scan 9223–9322 and send `execute_js` —
-    // and with `withGlobalTauri` on, that script is one `invoke` from `export_write_file`.
+    // and with `withGlobalTauri` on, that script is one `invoke` from every command below.
     // Whether a page can reach the loopback at all is the browser's local-network policy, which
     // is not a fence this app controls. So the port stays shut on every dev launch that did not
     // ask for an agent, which is most of them. Vendoring the plugin to refuse any handshake that
