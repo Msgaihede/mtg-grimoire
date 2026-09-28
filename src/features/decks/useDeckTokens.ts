@@ -167,28 +167,51 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
     onSuccess: invalidate,
   });
 
-  // TanStack's `mutate` is stable per observer, so every callback below is stable too — which
-  // matters because the editor hands them to all four deck views as part of the token pile,
-  // inside a `useMemo`, and a callback minted fresh on every render would rebuild that pile and
-  // re-render four views on every keystroke anywhere in the editor.
+  // TanStack's `mutate` and `mutateAsync` are stable per observer, so every callback below is
+  // stable too — which matters because the editor hands them to all four deck views as part of the
+  // token pile, inside a `useMemo`, and a callback minted fresh on every render would rebuild that
+  // pile and re-render four views on every keystroke anywhere in the editor.
   const mutateQuantity = quantityWrite.mutate;
-  const mutateSwap = swapWrite.mutate;
-  const mutateAdd = addWrite.mutate;
-  const mutateRemove = removeWrite.mutate;
+  const swapAsync = swapWrite.mutateAsync;
+  const addAsync = addWrite.mutateAsync;
+  const removeAsync = removeWrite.mutateAsync;
 
   const setQuantity = useCallback(
     (entry: TokenEntryRef, quantity: number) => mutateQuantity({ entry, quantity }),
     [mutateQuantity],
   );
+  // **The three writes that take a tile away or put one on answer whether they landed** — a
+  // promise that resolves `true` on success and `false` on a refusal, and **never rejects**, so a
+  // caller that ignores it leaves no unhandled rejection behind. The caret hand-off
+  // (`tokenCaret.ts`) is what reads it: it moves the caret only once the write has answered, and
+  // not at all on a refusal. The refusal is still the mutation's own state, so `failure` below
+  // says it exactly as it did through `mutate`. `mutateAsync` rather than `mutate`'s per-call
+  // callbacks, which belong to the observer and would be taken away by the next press
+  // (`DeckEditor`'s `localTokenRail` says the same).
   const swap = useCallback(
-    (entry: TokenEntryRef, to: { cardId: string; finish: Finish }) => mutateSwap({ entry, to }),
-    [mutateSwap],
+    (entry: TokenEntryRef, to: { cardId: string; finish: Finish }): Promise<boolean> =>
+      swapAsync({ entry, to }).then(
+        () => true,
+        () => false,
+      ),
+    [swapAsync],
   );
   const addPrinting = useCallback(
-    (cardId: string, finish: Finish) => mutateAdd({ cardId, finish }),
-    [mutateAdd],
+    (cardId: string, finish: Finish): Promise<boolean> =>
+      addAsync({ cardId, finish }).then(
+        () => true,
+        () => false,
+      ),
+    [addAsync],
   );
-  const remove = useCallback((entry: TokenEntryRef) => mutateRemove(entry), [mutateRemove]);
+  const remove = useCallback(
+    (entry: TokenEntryRef): Promise<boolean> =>
+      removeAsync(entry).then(
+        () => true,
+        () => false,
+      ),
+    [removeAsync],
+  );
 
   /** Every write this hook makes, newest-press-wins through {@link writeFailure}, and handed out
    *  for a host that folds them into a wider family — the editor's redo-clearing `newestWrite`.
@@ -225,7 +248,8 @@ export function useDeckTokens(deckId: number | null, variant: DeckVariant = DEFA
      *  deck's own tokens or, with `All tokens`, from every token in the game. */
     addPrinting,
     /** **Remove printing**: one stored entry of this list, deleted — drawn on every entry that
-     *  is not `DeckTokenView.implicit`. */
+     *  is not `DeckTokenView.implicit`. Like `swap` and `addPrinting`, answers whether it landed
+     *  (`true`) or was refused (`false`), and never rejects. */
     remove,
   };
 }

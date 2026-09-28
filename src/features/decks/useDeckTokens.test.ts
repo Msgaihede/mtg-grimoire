@@ -121,7 +121,7 @@ describe("useDeckTokens", () => {
       ),
     );
 
-    act(() => result.current.swap(entryRef(treasure), { cardId: "c-b", finish: "foil" }));
+    act(() => void result.current.swap(entryRef(treasure), { cardId: "c-b", finish: "foil" }));
     await waitFor(() =>
       expect(deckTokenSwap).toHaveBeenLastCalledWith(7, "theory", "o-treasure", null, {
         cardId: "c-b",
@@ -129,7 +129,7 @@ describe("useDeckTokens", () => {
       }),
     );
 
-    act(() => result.current.addPrinting("c-b", "etched"));
+    act(() => void result.current.addPrinting("c-b", "etched"));
     await waitFor(() =>
       expect(deckTokenAddPrinting).toHaveBeenLastCalledWith(7, "theory", "c-b", "etched"),
     );
@@ -137,7 +137,7 @@ describe("useDeckTokens", () => {
     // **Remove printing names the entry by its grain, always** (managed tokens spec §3.4): the
     // command deletes one stored entry, so there is no `null` arm — an implicit entry draws no
     // Remove button, and a stored one is sent as the two fields the command reads.
-    act(() => result.current.remove(entryRef(wurm)));
+    act(() => void result.current.remove(entryRef(wurm)));
     await waitFor(() =>
       expect(deckTokenRemove).toHaveBeenLastCalledWith(7, "theory", "o-wurm", {
         cardId: "c-wurm",
@@ -176,7 +176,7 @@ describe("useDeckTokens", () => {
     const { result } = mount();
     await waitFor(() => expect(result.current.tokens).toHaveLength(1));
 
-    act(() => result.current.remove(entryRef(result.current.tokens[0])));
+    act(() => void result.current.remove(entryRef(result.current.tokens[0])));
     await waitFor(() =>
       expect(result.current.failure).toBe("That printing of the token is not in this list any more."),
     );

@@ -114,6 +114,7 @@ import {
   type TokenEntryRef,
 } from "../deckTokens";
 import type { TheoryMark } from "../theoryMatch";
+import { TOKEN_ART_MARK, TOKEN_REMOVE_MARK, tokenEntryProps } from "../tokenCaret";
 import { tokenDeckFinish } from "../tokenTheory";
 import { GroupHeader, type GroupHeading } from "./GroupHeader";
 
@@ -130,6 +131,11 @@ export interface TokenPile {
    * views on every entry that is stored — the two card drawings' controls column and the two compact
    * drawings' lines alike. Absent draws no button, which is a host that has not wired the write —
    * never a statement about the token.
+   *
+   * **The host hands the caret on, not the pile** (`tokenCaret.ts`): the pile unmounts with its
+   * last entry, so a hand-off kept in here would unmount with the very press it was owed by. Every
+   * entry's box carries its key and its two presses their marks, which is what the host's lookup
+   * reads after the re-read.
    */
   remove?: (entry: TokenEntryRef) => void;
   /** Open the one printing picker the editor mounts, to swap this entry. The whole view, so the
@@ -239,6 +245,7 @@ function CardRemove({ view, pile }: { view: DeckTokenView; pile: TokenPile }) {
         PRESS,
         FOCUS_INSET,
       )}
+      {...TOKEN_REMOVE_MARK}
     >
       <Trash2 aria-hidden="true" className={QUANTITY_STEPPER_CARD_ICON} />
     </button>
@@ -279,6 +286,7 @@ function LineRemove({
         PRESS,
         FOCUS,
       )}
+      {...TOKEN_REMOVE_MARK}
     >
       <Trash2 aria-hidden="true" className="size-3.5" />
     </button>
@@ -422,6 +430,7 @@ export function TokenStackPile({
         {pile.tokens.map((view, index) => (
           <motion.li
             key={view.entryKey}
+            {...tokenEntryProps(view)}
             onPointerEnter={() => arm(index)}
             onFocus={() => openNow(index)}
             onBlur={release}
@@ -532,6 +541,7 @@ function TokenFace({
         // Inset, for the stacked card's reason: the button *is* the card face, so an outline
         // standing off it would be drawn over the chin and read as a thicker card.
         className={cn("block w-full cursor-pointer text-left", FOCUS_INSET)}
+        {...TOKEN_ART_MARK}
       >
         <DeckCardFace
           card={tokenFaceFacts(view)}
@@ -611,6 +621,7 @@ export function TokenGridPile({
         {pile.tokens.map((view) => (
           <li
             key={view.entryKey}
+            {...tokenEntryProps(view)}
             style={{ width: tileWidth, ...cardScaleVars(scale) }}
             // `group` is the one thing here that is not the stack's, for `GridView`'s tile's
             // reason: nothing overlaps a tile, so the pointer is the honest question and
@@ -677,7 +688,7 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
       />
       <ul aria-label={TOKENS_HEADING}>
         {pile.tokens.map((view) => (
-          <li key={view.entryKey} className="group relative rounded">
+          <li key={view.entryKey} {...tokenEntryProps(view)} className="group relative rounded">
             <button
               type="button"
               onClick={() => pile.pickArt(view)}
@@ -689,6 +700,7 @@ export function TokenTextPile({ pile }: { pile: TokenPile }) {
                 "transition-colors duration-150 hover:bg-surface motion-reduce:transition-none",
                 FOCUS,
               )}
+              {...TOKEN_ART_MARK}
             >
               {/* The crown's gutter on a deck line — reserved here too, so the numbers of the two
                   groups sit in one column down the view. */}
@@ -764,6 +776,7 @@ export function TokenTablePile({ pile }: { pile: TokenPile }) {
         {pile.tokens.map((view) => (
           <li
             key={view.entryKey}
+            {...tokenEntryProps(view)}
             className="grid min-h-9 grid-cols-[6.5rem_minmax(12rem,3fr)_minmax(0,2fr)_auto_1.75rem] items-center gap-x-3 px-2 py-1 text-sm"
           >
             <span className="flex justify-center">
@@ -804,6 +817,7 @@ export function TokenTablePile({ pile }: { pile: TokenPile }) {
                 PRESS,
                 FOCUS,
               )}
+              {...TOKEN_ART_MARK}
             >
               <ImageIcon aria-hidden="true" className="size-3.5" />
             </button>

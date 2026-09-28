@@ -91,8 +91,15 @@ import { DeckTokensPanel, tokenWallDrawn } from "./DeckTokensPanel";
 import { TokenArtPicker } from "./TokenArtPicker";
 import { entryRef, pileTokens, type DeckTokenView } from "./deckTokens";
 import { useDeckTokens } from "./useDeckTokens";
+import {
+  focusable,
+  TOKEN_ADD_ATTR,
+  TOKEN_BAND_ATTR,
+  usePickCaret,
+  useRemoveCaret,
+} from "./tokenCaret";
 import { tokenTheoryMark, tokenTheoryPlan } from "./tokenTheory";
-import type { TokenPile } from "./views/TokenPile";
+import { TOKEN_PILE_ATTR, type TokenPile } from "./views/TokenPile";
 import { useDeckUndo } from "./useDeckUndo";
 import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
@@ -4220,12 +4227,47 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     if (pickingToken.kind === "add") return { kind: "add" as const, tokens: tokenList };
     return pickedEntry === undefined ? null : { kind: "swap" as const, entry: pickedEntry };
   }, [pickingToken, tokenList, pickedEntry]);
+  /**
+   * **The control that opened the picker** — read off `document.activeElement` at the press, which
+   * is {@link openPull}'s answer for its reason: the press is a picture on a tile or a line, or the
+   * band's Add printing, none of which hands a ref up, and a press focuses what it presses. It is
+   * where Escape and the ✕ hand the caret back (`Dialog`'s `onDismiss` contract), where a refused
+   * pick leaves it, and — by the surface it sits in, the band or the pile — where a landed pick
+   * looks for the tile it made ({@link pickCaret}).
+   */
+  const tokenPickerOpener = useRef<HTMLElement | null>(null);
   /** A press on an entry, from the pile or the band — stable, because the pile's memo holds it. */
-  const pickTokenEntry = useCallback(
-    (view: DeckTokenView) => setPickingToken({ kind: "swap", entryKey: view.entryKey }),
+  const pickTokenEntry = useCallback((view: DeckTokenView) => {
+    tokenPickerOpener.current = focusable(document.activeElement);
+    setPickingToken({ kind: "swap", entryKey: view.entryKey });
+  }, []);
+  /** The band's Add printing. */
+  const addTokenEntry = useCallback(() => {
+    tokenPickerOpener.current = focusable(document.activeElement);
+    setPickingToken({ kind: "add" });
+  }, []);
+  /**
+   * Where a pick's caret goes when the tile it made cannot be found, where the pick was refused,
+   * and where Escape sends it: the opener, **if it can still take it** — a swap takes its own
+   * entry's tile away, opener and all — and otherwise the band's Add printing, the floor
+   * `tokenCaret.ts` names for both surfaces.
+   */
+  const tokenPickerHandBack = useCallback(
+    () =>
+      focusable(tokenPickerOpener.current) ??
+      focusable(editorRef.current?.querySelector(`[${TOKEN_ADD_ATTR}]`)) ??
+      editorRef.current,
     [],
   );
+  /** Escape and the ✕ — `Dialog`'s contract: hand the caret back to the opener, then close. */
+  const dismissTokenPicker = useCallback(() => {
+    tokenPickerHandBack()?.focus();
+    setPickingToken(null);
+  }, [tokenPickerHandBack]);
   const closeTokenPicker = useCallback(() => setPickingToken(null), []);
+  /** The caret owed by a pick — see {@link tokenPickerOpener}. Every entry, the band's list: a
+   *  swapped or added printing is on it whether or not the pile draws it. */
+  const pickCaret = usePickCaret(tokenList);
 
   /**
    * The **theory** list's tokens — the plan's half of the token pile's marks (token stacks, spec
@@ -4369,18 +4411,44 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *   to ask — a deck without one, the Theory tab, or a plan still loading. Absent draws no marks,
    *   which is the same statement `theoryPlan` being `undefined` makes about the deck's cards.
    *
-   * Memoised on the tokens, a `setQuantity` and a `remove` that `useDeckTokens` keeps stable, a
+   * Memoised on the tokens, a `setQuantity` that `useDeckTokens` keeps stable, a `remove` that
+   * changes only with the tokens ({@link removePileToken} reads them as the list before), a
    * stable press, the drawn index (the in-flight move, else the stored column), a stable move and
    * the plan, so a keystroke anywhere in the editor does not hand four views a new pile.
    */
   const tokenRailIndex = localTokenRail?.index ?? row?.tokenRailIndex ?? -1;
+
+  /**
+   * **The pile's Remove printing, handing the caret on** (`tokenCaret.ts`) — kept here rather than
+   * in the pile, because the pile unmounts with its last entry and would take an owed caret with
+   * it. The target is looked up in the pile by attribute after the re-read has drawn it: the same
+   * token's next entry, else the next token. **The floor is the band's Add printing, not the
+   * pile's grip**, and that is not a shortcut: the floor is only reached when the pile has no
+   * entry left, and a pile with no entry is not drawn, grip and all (`hasTokenPile`). The editor's
+   * own box is under that, for a band whose read was refused and draws no Add printing.
+   */
+  const pileRoot = useCallback(
+    () => editorRef.current?.querySelector(`[${TOKEN_PILE_ATTR}]`) ?? null,
+    [],
+  );
+  const pileFloor = useCallback(
+    () => focusable(editorRef.current?.querySelector(`[${TOKEN_ADD_ATTR}]`)) ?? editorRef.current,
+    [],
+  );
+  const removePileToken = useRemoveCaret({
+    views: pileTokenList,
+    remove: removeToken,
+    root: pileRoot,
+    fallback: pileFloor,
+  });
+
   const tokenPile = useMemo<TokenPile | undefined>(
     () =>
       tokenPileDrawn
         ? {
             tokens: pileTokenList,
             setQuantity: setTokenQuantity,
-            remove: removeToken,
+            remove: removePileToken,
             pickArt: pickTokenEntry,
             railIndex: tokenRailIndex,
             moveTo: moveTokenPile,
@@ -4392,7 +4460,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       tokenPileDrawn,
       pileTokenList,
       setTokenQuantity,
-      removeToken,
+      removePileToken,
       pickTokenEntry,
       tokenRailIndex,
       moveTokenPile,
@@ -5436,13 +5504,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // nothing here reads it. The band draws every token; the views draw the counted ones.
         // `Add printing` opens the one picker below in `add` mode; a press on a tile opens it on
         // that entry, as the pile's does; its Remove printing is `deckTokens.remove`, the write
-        // the pile's own button makes.
+        // the pile's own button makes, and the band hands its own caret on after it
+        // (`tokenCaret.ts`), since it is always drawn and the pile is not.
         <DeckTokensPanel
           tokens={deckTokens}
           open={row.tokensOpen}
           onToggle={(next) => deck.update.mutate({ tokensOpen: next })}
           onPick={pickTokenEntry}
-          onAddPrinting={() => setPickingToken({ kind: "add" })}
+          onAddPrinting={addTokenEntry}
         />
       )}
 
@@ -5452,6 +5521,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           printing and finish the list already holds folds the two in Rust); a pick in `add` mode
           is rule 5, one copy of that printing and finish on the list on screen. Either way the
           picker shuts on the pick, before the write answers — the refusal is the band's to draw.
+
+          **The caret is owed on both exits** (`tokenCaret.ts`). The panel it was on unmounts with
+          the pick, so once the write has answered and the re-read draws the picked printing, the
+          caret goes to that tile's picture on the surface the picker was opened from — the band
+          or the pile — and back to the opener where the tile cannot be found or the write was
+          refused. Escape and the ✕ hand it back to the opener before closing, `Dialog`'s own
+          `onDismiss` contract; an outside click moves nothing, since the reader is elsewhere.
 
           **Mounted in this column, and the check that makes that legal is written down rather
           than assumed.** `Dialog`'s scrim is a bare `fixed inset-0` and corrects for nothing, so
@@ -5464,11 +5540,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         mode={tokenPicker}
         zoom={tokenZoom}
         onPick={(to) => {
-          if (tokenPicker?.kind === "swap") swapToken(entryRef(tokenPicker.entry), to);
-          else if (tokenPicker?.kind === "add") addTokenPrinting(to.cardId, to.finish);
+          const written =
+            tokenPicker?.kind === "swap"
+              ? swapToken(entryRef(tokenPicker.entry), to)
+              : tokenPicker?.kind === "add"
+                ? addTokenPrinting(to.cardId, to.finish)
+                : undefined;
           setPickingToken(null);
+          if (written === undefined) return;
+          // The surface by its attribute, asked when the caret is placed — never the element the
+          // opener sat in, which a view switch in the meantime could have replaced.
+          const surface = tokenPickerOpener.current?.closest(`[${TOKEN_PILE_ATTR}]`)
+            ? TOKEN_PILE_ATTR
+            : TOKEN_BAND_ATTR;
+          pickCaret(
+            written,
+            to,
+            () => editorRef.current?.querySelector(`[${surface}]`) ?? null,
+            tokenPickerHandBack,
+          );
         }}
-        onDismiss={closeTokenPicker}
+        onDismiss={dismissTokenPicker}
         onClose={closeTokenPicker}
       />
 

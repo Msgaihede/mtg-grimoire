@@ -8517,6 +8517,255 @@ describe("DeckEditor — the token pile (issue #507)", () => {
   });
 
   /**
+   * **Remove printing, and a pick in the printing picker, hand the caret on** (the live pass of
+   * 2026-09-28 found every one of them leaving it on `<body>`, so the next Tab restarted at the top
+   * of the app). The removed tile unmounts, and the dialog's panel goes with the pick, so the caret
+   * has to be put somewhere — after the write has answered and the re-read has drawn the result,
+   * never before: a target found at the press can be connected then and unmounted by the re-read.
+   *
+   * Every press is a keyboard one — the control focused, then Enter — and every assertion reads
+   * `document.activeElement` itself, never a call. `answers` makes the deck's tokens read one list
+   * until the write lands and the other after it, so the tile really goes.
+   */
+  describe("the caret after a token write", () => {
+    /** A hand-added Soldier — `derived: false` — in one stored entry. Sorts before `Treasure`. */
+    const soldier = (over: Partial<DeckTokenRow> = {}): DeckTokenRow =>
+      treasure({
+        oracleId: "o-soldier",
+        name: "Soldier",
+        typeLine: "Token Creature — Soldier",
+        defaultCardId: "s-a",
+        cardId: "s-a",
+        sources: [],
+        derived: false,
+        state: "manual",
+        implicit: false,
+        quantity: 1,
+        power: "1",
+        toughness: "1",
+        colors: "W",
+        oracleText: "",
+        setCode: "twar",
+        collectorNumber: "3",
+        ...over,
+      });
+
+    /** The deck's tokens read `before` until `write` lands, and `after` from then on. */
+    function answers(
+      write: ReturnType<typeof vi.fn>,
+      before: DeckTokenRow[],
+      after: DeckTokenRow[],
+    ) {
+      let answer = before;
+      deckTokens.mockImplementation(() => Promise.resolve(answer));
+      write.mockImplementation(() => {
+        answer = after;
+        return Promise.resolve(undefined);
+      });
+    }
+
+    /** A keyboard press: the caret on the control, then Enter. */
+    async function press(user: UserEvent, control: HTMLElement) {
+      control.focus();
+      await user.keyboard("{Enter}");
+    }
+
+    const NONFOIL_REMOVE = /^Remove Treasure,.*TMH3 · 12, Nonfoil$/;
+    const FOIL_REMOVE = /^Remove Treasure,.*TMH3 · 12, Foil$/;
+
+    it("band: one of a token's two entries hands the caret to the other entry's Remove", async () => {
+      answers(deckTokenRemove, twoEntries(), [twoEntries()[1]]);
+      deckWith({ tokensOpen: true });
+      const user = userEvent.setup();
+      await open();
+
+      await press(user, await within(band()).findByRole("button", { name: NONFOIL_REMOVE }));
+
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(band()).getByRole("button", { name: FOIL_REMOVE }),
+        ),
+      );
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    it("band: a hand-added token's last entry hands the caret to the next token's control", async () => {
+      const stored = treasure({ cardId: "t-a", implicit: false, quantity: 2 });
+      answers(deckTokenRemove, [soldier(), stored], [stored]);
+      deckWith({ tokensOpen: true });
+      const user = userEvent.setup();
+      await open();
+
+      await press(user, await within(band()).findByRole("button", { name: /^Remove Soldier/ }));
+
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(band()).getByRole("button", { name: NONFOIL_REMOVE }),
+        ),
+      );
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    /** The token stays, drawn by its implicit entry — which is not stored and draws no Remove, so
+     *  the caret takes the same token's picture. */
+    it("band: a derived token's last stored entry hands the caret to its implicit tile", async () => {
+      answers(
+        deckTokenRemove,
+        [treasure({ cardId: "t-a", implicit: false, quantity: 2 })],
+        [treasure({ quantity: 0 })],
+      );
+      deckWith({ tokensOpen: true });
+      const user = userEvent.setup();
+      await open();
+
+      await press(user, await within(band()).findByRole("button", { name: NONFOIL_REMOVE }));
+
+      await waitFor(() =>
+        expect(document.activeElement).toBe(within(band()).getByRole("button", { name: ART })),
+      );
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    it("band: the band's last token hands the caret to Add printing", async () => {
+      answers(deckTokenRemove, [soldier()], []);
+      deckWith({ tokensOpen: true });
+      const user = userEvent.setup();
+      await open();
+
+      await press(user, await within(band()).findByRole("button", { name: /^Remove Soldier/ }));
+
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(band()).getByRole("button", { name: /^Add printing/ }),
+        ),
+      );
+      expect(document.activeElement).not.toBe(document.body);
+    });
+
+    /** A guard rather than a red-first case: a refused remove unmounts nothing, so the caret was
+     *  already where it belongs — and a hand-off that moved it on a refusal would be the bug. */
+    it("band: a refused remove leaves the caret on the Remove it pressed", async () => {
+      deckTokens.mockResolvedValue(twoEntries());
+      deckTokenRemove.mockRejectedValue("The database is busy with a sync.");
+      deckWith({ tokensOpen: true });
+      const user = userEvent.setup();
+      await open();
+
+      const remove = await within(band()).findByRole("button", { name: NONFOIL_REMOVE });
+      await press(user, remove);
+
+      await within(band()).findByRole("alert");
+      expect(document.activeElement).toBe(remove);
+    });
+
+    it.each(["Stacks", "Grid", "Table", "Text"])(
+      "pile in %s: one of a token's two entries hands the caret to the other entry's Remove",
+      async (label) => {
+        answers(deckTokenRemove, twoEntries(), [twoEntries()[1]]);
+        deckWith({ tokensOpen: false });
+        const user = userEvent.setup();
+        await open();
+        if (label !== "Stacks") await pickOption(user, "View", label);
+        await waitFor(() => expect(pile()).not.toBeNull());
+
+        await press(user, within(pile()!).getByRole("button", { name: NONFOIL_REMOVE }));
+
+        await waitFor(() =>
+          expect(document.activeElement).toBe(
+            within(pile()!).getByRole("button", { name: FOIL_REMOVE }),
+          ),
+        );
+        expect(document.activeElement).not.toBe(document.body);
+      },
+    );
+
+    /** The pile goes with its last token, grip and all — so the caret goes to the band's Add
+     *  printing, the one control left that puts a token back. */
+    it("pile: the pile's last token hands the caret to the band's Add printing", async () => {
+      answers(deckTokenRemove, [soldier()], []);
+      deckWith({ tokensOpen: false });
+      const user = userEvent.setup();
+      await open();
+      await waitFor(() => expect(pile()).not.toBeNull());
+
+      await press(user, within(pile()!).getByRole("button", { name: /^Remove Soldier/ }));
+
+      await waitFor(() => expect(pile()).toBeNull());
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(band()).getByRole("button", { name: /^Add printing/ }),
+        ),
+      );
+    });
+
+    it("picker: an added printing hands the caret to the tile just added", async () => {
+      const held = treasure({ cardId: "t-a", implicit: false, quantity: 2 });
+      const added = treasure({ cardId: "t-new", implicit: false, quantity: 1, collectorNumber: "99" });
+      answers(deckTokenAddPrinting, [held], [held, added]);
+      cardPrintings.mockResolvedValue({ items: [printing("t-new")], total: 1 });
+      deckWith({ tokensOpen: true });
+      const user = userEvent.setup();
+      await open();
+
+      await press(user, await within(band()).findByRole("button", { name: /^Add printing/ }));
+      const dialog = await screen.findByRole("dialog");
+      await press(user, await within(dialog).findByRole("button", { name: NEW_TILE }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(band()).getByRole("button", {
+            name: /^Change the art for Treasure,.*TMH3 · 99, Nonfoil$/,
+          }),
+        ),
+      );
+    });
+
+    it("picker: a swap from the pile hands the caret to the swapped tile", async () => {
+      const [plain] = twoEntries();
+      const swapped = treasure({ cardId: "t-new", implicit: false, quantity: 1, collectorNumber: "99" });
+      answers(deckTokenSwap, twoEntries(), [plain, swapped]);
+      cardPrintings.mockResolvedValue({ items: [printing("t-new")], total: 1 });
+      deckWith({ tokensOpen: false });
+      const user = userEvent.setup();
+      await open();
+      await waitFor(() => expect(pile()).not.toBeNull());
+
+      await press(
+        user,
+        within(pile()!).getByRole("button", { name: /\bart\b.*Treasure.*TMH3 · 12, Foil$/ }),
+      );
+      const dialog = await screen.findByRole("dialog");
+      await press(user, await within(dialog).findByRole("button", { name: NEW_TILE }));
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      await waitFor(() =>
+        expect(document.activeElement).toBe(
+          within(pile()!).getByRole("button", { name: /\bart\b.*Treasure.*TMH3 · 99, Nonfoil$/ }),
+        ),
+      );
+    });
+
+    /** `Dialog`'s own contract — `onDismiss` hands the caret back to what opened it. */
+    it("picker: Escape hands the caret back to the picture that opened it", async () => {
+      deckTokens.mockResolvedValue(twoEntries());
+      cardPrintings.mockResolvedValue({ items: [printing("t-new")], total: 1 });
+      deckWith({ tokensOpen: false });
+      const user = userEvent.setup();
+      await open();
+      await waitFor(() => expect(pile()).not.toBeNull());
+
+      const art = within(pile()!).getByRole("button", { name: /\bart\b.*Treasure.*TMH3 · 12, Foil$/ });
+      await press(user, art);
+      await screen.findByRole("dialog");
+      await user.keyboard("{Escape}");
+
+      await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+      expect(document.activeElement).toBe(art);
+    });
+  });
+
+  /**
    * **A picker whose entry has gone stays shut when the entry comes back** (fix round 2). The
    * picker is held by the entry's key and looked up on every render, so an entry an undo takes
    * away shuts it — and the key has to go with it, or the redo that brings the entry back reopens

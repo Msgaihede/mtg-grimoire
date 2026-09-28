@@ -126,7 +126,7 @@
  * that separates the two Wurms, so a truncation short enough to fit a 150px tile would fold them
  * back together in exactly the case this exists for.
  */
-import { useId, type JSX } from "react";
+import { useCallback, useId, useRef, type JSX } from "react";
 import { ChevronRight, Plus, Trash2 } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { CardChin } from "@/components/CardChin";
@@ -150,9 +150,20 @@ import {
   tokenArtName,
   tokenEntryName,
   type DeckTokenView,
+  type TokenEntryRef,
 } from "./deckTokens";
 import { META_SUBMIT } from "./metaRows";
 import { NotMadeByDeckMark } from "./NotMadeByDeckMark";
+import {
+  focusable,
+  TOKEN_ADD_ATTR,
+  TOKEN_ADD_MARK,
+  TOKEN_ART_MARK,
+  TOKEN_BAND_ATTR,
+  TOKEN_REMOVE_MARK,
+  tokenEntryProps,
+  useRemoveCaret,
+} from "./tokenCaret";
 import type { DeckTokens } from "./useDeckTokens";
 
 /**
@@ -328,11 +339,38 @@ export function DeckTokensPanel({
    */
   const canAdd = answered && readFailure === null;
 
+  /**
+   * **Remove printing that hands the caret on** (`tokenCaret.ts`): the removed tile unmounts with
+   * the button the caret was on, so once the re-read has drawn the wall without it the caret goes
+   * to the same token's next entry, else the next token, else this band's Add printing — and on a
+   * refusal nowhere, since nothing unmounted. Looked up in this band and never the pile, which
+   * draws the same entries a second time.
+   */
+  const sectionRef = useRef<HTMLElement>(null);
+  const bandRoot = useCallback(() => sectionRef.current, []);
+  const bandFloor = useCallback(
+    () =>
+      focusable(sectionRef.current?.querySelector(`[${TOKEN_ADD_ATTR}]`)) ??
+      focusable(sectionRef.current?.querySelector("button")),
+    [],
+  );
+  const removeAt = useRemoveCaret({
+    views: tokens.tokens,
+    remove: tokens.remove,
+    root: bandRoot,
+    fallback: bandFloor,
+  });
+
   return (
     // The Deck stats band's own grammar, character for character: a rule and the content under
     // it. That is the shape the toolbar above the deck is in too — a rule and its controls — and
     // a surface, a border and a radius here would say *a panel you opened*, which this is not.
-    <section aria-label={TOKENS_HEADING} className="shrink-0 border-t border-border pt-3">
+    <section
+      ref={sectionRef}
+      aria-label={TOKENS_HEADING}
+      {...{ [TOKEN_BAND_ATTR]: "" }}
+      className="shrink-0 border-t border-border pt-3"
+    >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
         {canOpen ? (
           <button
@@ -411,6 +449,8 @@ export function DeckTokensPanel({
             // geometry and colour only and names no `display` — the Notes band's own note.
             // `ml-auto` puts it at the far end of the row, where the header's controls stand.
             className={cn("ml-auto inline-flex items-center gap-1.5", META_SUBMIT)}
+            // The caret's floor after a removal takes the last token — `tokenCaret.ts`.
+            {...TOKEN_ADD_MARK}
           >
             <Plus aria-hidden="true" className="size-3.5 shrink-0" />
             Add printing
@@ -429,6 +469,7 @@ export function DeckTokensPanel({
             zoom={zoom}
             currency={marketplace.currency}
             onPick={onPick}
+            onRemove={removeAt ?? tokens.remove}
           />
         )}
       </div>
@@ -442,6 +483,7 @@ function TokenWall({
   zoom,
   currency,
   onPick,
+  onRemove,
 }: {
   tokens: DeckTokens;
   /** `cardZoom.deck`, read once by the band above. See this file's header. */
@@ -449,6 +491,8 @@ function TokenWall({
   /** How every tile's foot writes its entry's one unit price — read once by the band above. */
   currency: Currency;
   onPick: (view: DeckTokenView) => void;
+  /** Remove printing, with the caret's hand-off — the band's `removeAt`. */
+  onRemove: (entry: TokenEntryRef) => void;
 }) {
   return (
     <div className="mt-3">
@@ -475,13 +519,19 @@ function TokenWall({
             it has printings-in-a-finish, and two children sharing an oracle id as their key
             would be one React child drawn twice. */}
         {tokens.tokens.map((view) => (
-          <li key={view.entryKey} style={{ width: stackCardWidth(zoom) }}>
+          <li
+            key={view.entryKey}
+            style={{ width: stackCardWidth(zoom) }}
+            // The entry's key, which is how the caret finds this tile after a write (`tokenCaret`).
+            {...tokenEntryProps(view)}
+          >
             <TokenTile
               view={view}
               tokens={tokens}
               zoom={zoom}
               currency={currency}
               onPick={() => onPick(view)}
+              onRemove={() => onRemove(entryRef(view))}
             />
           </li>
         ))}
@@ -508,6 +558,7 @@ function TokenTile({
   zoom,
   currency,
   onPick,
+  onRemove,
 }: {
   view: DeckTokenView;
   tokens: DeckTokens;
@@ -516,6 +567,8 @@ function TokenTile({
   /** How the foot writes this entry's one unit price. */
   currency: Currency;
   onPick: () => void;
+  /** Remove printing on this entry, the caret handed on once it lands. */
+  onRemove: () => void;
 }) {
   const tip = useTooltip();
   const handAdded = isHandAdded(view);
@@ -556,6 +609,7 @@ function TokenTile({
           aria-label={tokenArtName(view)}
           // `relative` for the badge: it is laid over the picture's bottom-left corner.
           className={cn("relative block w-full rounded-lg", FOCUS_INSET)}
+          {...TOKEN_ART_MARK}
         >
           <CardArt
             cardId={view.printingId}
@@ -648,10 +702,11 @@ function TokenTile({
         {!view.implicit && (
           <button
             type="button"
-            onClick={() => tokens.remove(entryRef(view))}
+            onClick={onRemove}
             aria-label={tokenEntryName("Remove", view)}
             {...tip("Remove printing", { describes: false })}
             className={cn(TILE_BUTTON, "hover:text-destructive")}
+            {...TOKEN_REMOVE_MARK}
           >
             <Trash2 aria-hidden="true" className={TILE_ICON} />
           </button>
