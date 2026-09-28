@@ -2587,7 +2587,7 @@ dependencies = [
 
 [[package]]
 name = "mtg-grimoire"
-version = "0.32.1"
+version = "0.33.0"
 dependencies = [
  "base64 0.22.1",
  "card-scanner",
