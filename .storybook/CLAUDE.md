@@ -281,17 +281,26 @@ deliberately**: no screenshots are stored.
   fourth printing is left out of Mana Pool's on purpose — a card one feed lists and another does
   not is the state no amount of currency arithmetic could produce, and it is the one the em-dash
   rule exists for.
-- **Three of the fake's commands are Tauri _plugins_, not this app's** — `pluginHandlers()` in
+- **Two of the fake's commands are Tauri _plugins_, not this app's** — `pluginHandlers()` in
   `db.ts`, merged into `allHandlers` beside the two mirrored tables:
-  `plugin:clipboard-manager|write_text`, `plugin:opener|open_url` and `plugin:dialog|save`. The
-  fake `invoke` is the whole IPC layer here, so without them a Copy, an Open on or a Save as… is
-  answered `No fake handler registered` — a rejection about the workbench drawn in a `role="alert"`
-  the app wrote about the reader's disk. It takes **no store**: they mirror no table and no crate
-  module, and `db.test.ts`'s busy sweep walks `writeHandlers` asserting everything there can be
-  refused by a running sync, which none of these can. **`save` answering a path is not the same
-  decision as `import_read_file` throwing**: the picker there would invent the *decklist*,
-  which is the screen's whole subject, while this one invents only a file name over text the
-  reader is already looking at.
+  `plugin:clipboard-manager|write_text` and `plugin:opener|open_url`. The fake `invoke` is the
+  whole IPC layer here, so without them a Copy or an Open on is answered `No fake handler
+  registered` — a rejection about the workbench drawn in a `role="alert"` the app wrote about the
+  reader's clipboard or browser. It takes **no store**: they mirror no table and no crate module,
+  and `db.test.ts`'s busy sweep walks `writeHandlers` asserting everything there can be refused by
+  a running sync, which neither of these can. **`plugin:dialog|save` was a third until
+  2026-09-28** and is gone with the page's last dialog call: every file dialog is opened by Rust
+  now (issue #545), so the three file commands are ordinary handlers — and `db.test.ts` asserts no
+  `plugin:dialog|…` is answered, since the capability grants the page none.
+- **Of the three file commands, one answers and two refuse as the picker, and the split is what
+  would be invented.** `export_save_file` answers `true` with the file under `D:\Storybook\`,
+  named by the suggestion — it invents only *a place to put text the reader is already looking
+  at*, and `exportWriteError` makes its refusal name a plausible file. `import_pick_file` and
+  `mirror_pick_root` refuse with the crate's own sentence for a picker that could not be shown
+  (`The file picker could not be opened — …`, `The folder picker …`), because what they would
+  invent is the *decklist* and the *folder* — each the whole subject of the screen it feeds.
+  `mirror_pick_root` is on the busy sweep's `unlocked` list for it: the crate opens the picker
+  before it asks for the write lock, and there is no picker here to get past.
 - **Undo is a wrapper over `writeHandlers`, not a line in each of them.** `journalled()` snapshots
   the deck either side of every deck write and files a step under the **last** history row that
   write produced, so a new deck write is covered by construction rather than by somebody

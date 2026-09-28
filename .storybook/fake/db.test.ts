@@ -1733,25 +1733,40 @@ describe("one printing's image URL", () => {
 });
 
 /**
- * The export's one command. It writes a file and touches no database, so there is nothing to
- * read back — what a story can observe is that it was accepted, or the sentence it was refused
- * with, which is exactly what `ExportDialog` can observe too.
+ * The export's one command — the save dialog and the write, both the crate's (issue #545). It
+ * touches no database, so there is nothing to read back — what a story can observe is that it was
+ * accepted, or the sentence it was refused with, which is exactly what `ExportDialog` can observe
+ * too.
  */
-describe("writing an export", () => {
-  it("accepts a path and contents, and is not refusable by a running sync", () => {
+describe("saving an export", () => {
+  it("accepts a name and contents, answers that it saved, and is not refusable by a sync", () => {
     // `busy` deliberately: this command takes no `AppState`, so a sync holding the write lock
     // cannot reach it. See the `unlocked` list in the busy-fault sweep.
     const w = writeHandlers(makeDb({ fault: "busy" }));
-    expect(() =>
-      w.export_write_file({ path: "C:\\decks\\removal.txt", contents: "1 Lightning Bolt\n" }),
-    ).not.toThrow();
+    expect(w.export_save_file({ fileName: "removal.txt", contents: "1 Lightning Bolt\n" })).toBe(
+      true,
+    );
   });
 
-  it("names the path it could not write, because that is the half the reader chose", () => {
+  /**
+   * The name really does travel: `ExportDialog` suggests `${suggestedFileName}.${extension}`, so
+   * switching format changes the file a refusal names, exactly as it does in the window — under
+   * the invented folder the dialog stands in for, since the page never names one.
+   */
+  it("names the file it could not write, because that is the half the reader chose", () => {
     const w = writeHandlers(makeDb({ fault: "exportWriteError" }));
-    expect(() => w.export_write_file({ path: "E:\\removal.txt", contents: "1 Shock\n" })).toThrow(
-      /could not write E:\\removal\.txt/,
+    expect(() => w.export_save_file({ fileName: "Ramp.csv", contents: "1 Shock\n" })).toThrow(
+      /could not write D:\\Storybook\\Ramp\.csv/,
     );
+  });
+
+  /** `export::suggested_name`'s rule: the page suggests a name and never a place, so anything
+   *  before the last separator is gone before the dialog — and so before the refusal. */
+  it("keeps only the last component of the name it was given", () => {
+    const w = writeHandlers(makeDb({ fault: "exportWriteError" }));
+    expect(() =>
+      w.export_save_file({ fileName: "..\\..\\Startup\\x.txt", contents: "1 Shock\n" }),
+    ).toThrow(/could not write D:\\Storybook\\x\.txt:/);
   });
 });
 
@@ -1788,26 +1803,33 @@ describe("the plain-text mirror", () => {
     }
   });
 
-  it("stores an absolute root verbatim and answers it back", () => {
-    const db = makeDb();
-    writeHandlers(db).mirror_set_root({ root: "E:\\Backups\\MTG" });
-    expect(readHandlers(db).mirror_status().root).toBe("E:\\Backups\\MTG");
-    // A UNC share is absolute too, and is what a reader mirroring to a NAS picks.
-    writeHandlers(db).mirror_set_root({ root: "\\\\nas\\cards" });
-    expect(readHandlers(db).mirror_status().root).toBe("\\\\nas\\cards");
+  /** A stored absolute root is answered back verbatim — a UNC share too, which is what a reader
+   *  mirroring to a NAS picks. Set on the world, because no press in a story can choose one. */
+  it("answers an absolute stored root back verbatim", () => {
+    for (const root of ["E:\\Backups\\MTG", "\\\\nas\\cards"]) {
+      const db = makeDb();
+      db.mirror.root = root;
+      expect(readHandlers(db).mirror_status().root).toBe(root);
+    }
   });
 
-  /** A refused write must leave the previous choice alone: the read discards junk silently, so
-   *  a write that half-landed would look like a save and read back as the default. */
-  it("refuses a relative root in words and keeps the one it had", () => {
-    const db = makeDb();
-    writeHandlers(db).mirror_set_root({ root: "E:\\Backups\\MTG" });
+  /**
+   * **Change folder… refuses as the picker, and moves nothing.** The crate opens the folder picker
+   * itself (issue #545) and there is none in a browser, so the press reaches the one branch the
+   * crate has for a picker that could not be shown — before the write lock, which is why a
+   * running sync does not change the answer.
+   */
+  it("has no folder picker, says so as the picker, and keeps the root it had", () => {
+    for (const fault of [undefined, "busy"] as const) {
+      const db = makeDb({ fault });
+      db.mirror.root = "E:\\Backups\\MTG";
 
-    expect(() => writeHandlers(db).mirror_set_root({ root: "export" })).toThrow(
-      /not an absolute path/,
-    );
+      expect(() => writeHandlers(db).mirror_pick_root()).toThrow(
+        /^The folder picker could not be opened — /,
+      );
 
-    expect(readHandlers(db).mirror_status().root).toBe("E:\\Backups\\MTG");
+      expect(readHandlers(db).mirror_status().root).toBe("E:\\Backups\\MTG");
+    }
   });
 
   it("switches off and on again", () => {
@@ -1911,35 +1933,17 @@ describe("the plain-text mirror", () => {
 });
 
 /**
- * The three Tauri **plugin** commands, which mirror no module in the crate and belong to neither
+ * The two Tauri **plugin** commands, which mirror no module in the crate and belong to neither
  * table above.
  *
- * They exist because the fake `invoke` is the whole IPC layer in Storybook, so a Copy, an Open on
- * or a Save as… reaches one of them or is answered `No fake handler registered` — a rejection
- * about the workbench, drawn in a `role="alert"` the app wrote about the reader's disk. The path
- * `save` builds is asserted here rather than only through the export dialog's story, because a
- * story that goes green on the wrong file name is a story about nothing.
+ * They exist because the fake `invoke` is the whole IPC layer in Storybook, so a Copy or an Open
+ * on reaches one of them or is answered `No fake handler registered` — a rejection about the
+ * workbench, drawn in a `role="alert"` the app wrote about the reader's clipboard or browser.
+ * **The dialog's `save` was a third until 2026-09-28**, and its absence is asserted below: the
+ * page opens no dialog now (issue #545), so a fake that still answered one would be a workbench
+ * where the page could do something the app's capability refuses.
  */
 describe("the plugin commands", () => {
-  it("builds the save path from the dialog's own defaultPath", () => {
-    // The name really does travel: `ExportDialog` seeds `defaultPath` with
-    // `${suggestedFileName}.${extension}`, so switching format changes the file this answers with,
-    // exactly as it does in the window.
-    const p = pluginHandlers();
-    expect(p["plugin:dialog|save"]({ options: { defaultPath: "Ramp.txt" } })).toBe(
-      "D:\\Storybook\\Ramp.txt",
-    );
-    expect(p["plugin:dialog|save"]({ options: { defaultPath: "Ramp.csv" } })).toBe(
-      "D:\\Storybook\\Ramp.csv",
-    );
-  });
-
-  it("still answers a path when the caller named no default", () => {
-    // `save()` takes `options = {}`, so `defaultPath` really is optional on the wire. Answering
-    // `undefined` here would put the literal string "undefined" through `export_write_file`.
-    expect(pluginHandlers()["plugin:dialog|save"]({})).toBe("D:\\Storybook\\export.txt");
-  });
-
   it("accepts a clipboard write and an opened URL, and stores neither", () => {
     const p = pluginHandlers();
     // `write_text` only — this app grants `clipboard-manager:allow-write-text` and never the
@@ -1949,14 +1953,18 @@ describe("the plugin commands", () => {
     expect(p["plugin:opener|open_url"]()).toBeUndefined();
   });
 
-  it("is reachable through the dispatch table a story registers", async () => {
-    // Through `invoke`, by the name and the argument name the plugin wrapper really sends —
-    // `{ options }`, which is the half only a dispatcher can check.
+  it("is reachable through the dispatch table a story registers, and no dialog is", async () => {
+    // Through `invoke`, by the name and the argument names the plugin wrapper really sends —
+    // `{ url, with }`, which is the half only a dispatcher can check.
     resetCommands();
     registerCommands(allHandlers(makeDb()));
     await expect(
-      invoke<string>("plugin:dialog|save", { options: { defaultPath: "Sideboard.txt" } }),
-    ).resolves.toBe("D:\\Storybook\\Sideboard.txt");
+      invoke("plugin:opener|open_url", { url: "https://scryfall.com", with: undefined }),
+    ).resolves.toBeUndefined();
+    // No `dialog:` permission is granted, so no dialog command is answered here either.
+    for (const cmd of ["plugin:dialog|open", "plugin:dialog|save"]) {
+      await expect(invoke(cmd, { options: {} })).rejects.toThrow(/No fake handler registered/);
+    }
   });
 });
 
@@ -11390,8 +11398,10 @@ describe("the decklist import", () => {
     expect(db.deckCategories.some((c) => c.name === "Ramp")).toBe(false);
   });
 
-  it("has no file to read, and says so rather than inventing a decklist", () => {
-    expect(() => readHandlers(makeDb()).import_read_file()).toThrow(/no file picker/i);
+  it("has no file picker, and says so as the picker rather than inventing a decklist", () => {
+    expect(() => readHandlers(makeDb()).import_pick_file()).toThrow(
+      /^The file picker could not be opened — /,
+    );
   });
 });
 
@@ -11443,18 +11453,23 @@ describe("the busy fault", () => {
       // away over a lock it would have got a moment later.
       "combos_refresh",
       // The only one here that touches **no database at all**:
-      // `export::export_write_file` takes no `AppState`, so there is no connection for a sync
-      // to be holding and no `BUSY` it could ever answer. It writes a file at a path the OS
-      // save dialog produced and nothing else.
-      "export_write_file",
+      // `export::export_save_file` takes no `AppState`, so there is no connection for a sync
+      // to be holding and no `BUSY` it could ever answer. It opens the OS save dialog and writes
+      // a file where the reader chose, and nothing else. (`export_write_file` until issue #545.)
+      "export_save_file",
       // Unlocked for the first reason on this list rather than a new one:
       // `mirror::settings::mirror_rebuild` runs on the blocking pool against `db_read`, like
       // every other read-shaped command, because a pass reads the whole collection and writes a
       // few hundred small files — far too much to do while holding the write connection, and
       // forbidden from touching it at all. It is in `writeHandlers` because it *writes*, just
-      // not to the database. Its two neighbours (`mirror_set_enabled`, `mirror_set_root`) take
-      // `sync::with_write` and are in the loop below with everything else.
+      // not to the database. `mirror_set_enabled` takes `sync::with_write` and is in the loop
+      // below with everything else; `mirror_pick_root` is the next entry.
       "mirror_rebuild",
+      // Unlocked for an order rather than a connection (issue #545): the crate opens the folder
+      // picker **before** it asks for the write lock, and this fake has no picker to get past —
+      // every press here is refused as the picker, busy or not. Where it took a path, as
+      // `mirror_set_root`, it was in the loop below.
+      "mirror_pick_root",
       // The eleventh, and the first that touches **no connection of any kind**: pairing's
       // cancel clears `AppState.pairing`, a mutex of its own that has nothing to do with
       // the database, so there is no `BUSY` for it to answer. Its seven neighbours all take
@@ -11559,13 +11574,16 @@ describe("the busy fault", () => {
       // command's own refusal, so a handler that counted the picks before taking the lock would
       // fail the loop by answering "There is nothing to pull" instead of BUSY.
       picks: [{ entryId: 1, quantity: 1 }],
-      // The mirror's pair. `enabled` is the **fourth** one-line boolean write here and is never
-      // read on this path — `refuseIfBusy` comes first, as it does for every write in the loop
-      // — while `root` *is* validated, and is absolute here on purpose: a relative one would
-      // fail this loop by answering "not an absolute path" instead of BUSY, which is exactly
-      // the ordering mistake the loop is looking for.
+      // The mirror's switch. `enabled` is the **fourth** one-line boolean write here and is never
+      // read on this path — `refuseIfBusy` comes first, as it does for every write in the loop.
+      // **"`root`'s reason"**, which entries above and below cite, is the rule this record's
+      // `root` stood for: `mirror_set_root` *validated* its argument, so the value here was
+      // absolute on purpose — a relative one would have failed this loop by answering "not an
+      // absolute path" instead of BUSY, which is exactly the ordering mistake the loop is looking
+      // for. The command and the key went on 2026-09-28 (issue #545: `mirror_pick_root` opens the
+      // picker itself and takes no argument); the rule is still the one every valid value here is
+      // valid for.
       enabled: true,
-      root: "D:\\Backups\\MTG",
       // `collection_folder_set_locked`'s own argument (user schema v33). Never read on
       // this path — `refuseIfBusy` comes first, as it does for every write in the loop —
       // and here for `collapsed`'s reason: `invoke` matches by name, and a boolean has no
@@ -12170,7 +12188,11 @@ describe("the busy fault", () => {
     // added to. 126 when #555 met the 124 above — read from `left` after the merge.
     // 126 → 125 on 2026-09-28 when `share_open` joined `unlocked` (issue #545: it fetches with no
     // connection held) — read from `left` on this tree.
-    expect(names).toHaveLength(125);
+    // 126 → 125 on 2026-09-28 with issue #545: `mirror_set_root` gave way to `mirror_pick_root`,
+    // which joined `unlocked` above, and `export_write_file`'s rename to `export_save_file` moved
+    // nothing because it was already there. Read from `left` on this tree, never subtracted to.
+    // 124 when the two met — read from `left` after the merge, never subtracted to.
+    expect(names).toHaveLength(124);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

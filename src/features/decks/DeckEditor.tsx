@@ -401,8 +401,8 @@ const UNNAMED_DECK = "this deck";
  *
  * Exported for its test, and still exported now that the header has an `Export deck` to open the
  * dialog with: what this answers is only ever *seen* inside the native save picker, which
- * `dialog:allow-save` opens outside the page — no test and no CDP pass can read the name in that
- * box. The dialog has a rendered path; this string does not.
+ * `export_save_file` opens from Rust, outside the page — no test and no CDP pass can read the
+ * name in that box. The dialog has a rendered path; this string does not.
  */
 export function exportFileName(deck: string, category: string): string {
   const name = [deck, category]

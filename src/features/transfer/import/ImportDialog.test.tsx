@@ -19,7 +19,7 @@ import { ARENA_LIST } from "./fixtures";
 
 const importResolve = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
-const importReadFile = vi.hoisted(() => vi.fn());
+const importPickFile = vi.hoisted(() => vi.fn());
 const deckCreate = vi.hoisted(() => vi.fn());
 const deckDelete = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
@@ -37,7 +37,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: {
     importResolve,
     deckImportCommit,
-    importReadFile,
+    importPickFile,
     deckCreate,
     deckDelete,
     deckGet,
@@ -48,11 +48,6 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     wishlistImportCommit,
   },
 }));
-
-/** The system file picker. It opens a native window nothing in a test or a browser can reach,
- *  so this is the one entry point that has to be stubbed rather than driven. */
-const pickFile = vi.hoisted(() => vi.fn());
-vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFile }));
 
 import type { ImportDestination } from "./destination";
 import { collectionDestination } from "./destinations/CollectionPreview";
@@ -380,7 +375,11 @@ beforeEach(() => {
     ),
   );
   deckImportCommit.mockReset().mockResolvedValue(OUTCOME);
-  importReadFile.mockReset().mockResolvedValue({ text: "", encoding: "utf-8" });
+  // **The system file picker and the read are one command**, and the only entry point here that
+  // has to be stubbed rather than driven: Rust opens a native window nothing in a test or a
+  // browser can reach (issue #545). `null` is Cancel, which is what a reader who never presses
+  // Choose file… would have got had they pressed it.
+  importPickFile.mockReset().mockResolvedValue(null);
   deckCreate.mockReset().mockResolvedValue(MADE);
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckGet.mockReset().mockResolvedValue(DETAIL);
@@ -392,7 +391,6 @@ beforeEach(() => {
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   collectionImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
   wishlistImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
-  pickFile.mockReset().mockResolvedValue(null);
   onDismiss.mockReset();
   onClose.mockReset();
   onImported.mockReset();
@@ -1003,18 +1001,18 @@ describe("the import dialog", () => {
   });
 
   /**
-   * The picker answers a **path** and Rust opens the file — the contract that makes
-   * `dialog:allow-open` sufficient and is why this app grants no `fs:` permission at all.
+   * Rust opens the dialog **and** the file, and the page hears back text — no path crosses in
+   * either direction, which is why this app grants no `dialog:` and no `fs:` permission at all
+   * (issue #545).
    */
   it("reads a file the reader picked", async () => {
-    pickFile.mockResolvedValue("C:/lists/burn.txt");
-    importReadFile.mockResolvedValue({ text: "4 Lightning Bolt\n2 Sol Ring", encoding: "utf-8" });
+    importPickFile.mockResolvedValue({ text: "4 Lightning Bolt\n2 Sol Ring", encoding: "utf-8" });
     wrap(<Harness />);
     await panel();
 
     await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
 
-    await waitFor(() => expect(importReadFile).toHaveBeenCalledWith("C:/lists/burn.txt"));
+    await waitFor(() => expect(importPickFile).toHaveBeenCalledWith());
     await waitFor(() =>
       expect(screen.getByLabelText("Decklist")).toHaveValue("4 Lightning Bolt\n2 Sol Ring"),
     );
@@ -1023,29 +1021,42 @@ describe("the import dialog", () => {
   });
 
   /** A cancelled picker is not a failure — it is the most ordinary way to use a file dialog
-   *  after changing your mind — so nothing is said and nothing is read. */
+   *  after changing your mind — so nothing is said and the box is left as it was. */
   it("says nothing when the picker is cancelled", async () => {
-    pickFile.mockResolvedValue(null);
+    importPickFile.mockResolvedValue(null);
     wrap(<Harness />);
     await panel();
 
     await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
 
-    await waitFor(() => expect(pickFile).toHaveBeenCalled());
-    expect(importReadFile).not.toHaveBeenCalled();
+    await waitFor(() => expect(importPickFile).toHaveBeenCalled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Choose file…" })).toBeEnabled());
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Decklist")).toHaveValue("");
   });
 
-  it("shows the file reader's refusal beside the button", async () => {
-    pickFile.mockResolvedValue("C:/lists/burn.txt");
-    importReadFile.mockRejectedValue("That file is larger than 1 MB.");
+  /**
+   * **Two failures, two sentences, one frame.** The picker and the read are one command now, so
+   * the page cannot frame them apart — the backend's sentence says which, and the frame is true
+   * of both. What this pins is that neither is ever worded as the other: a file over the cap
+   * does not arrive as a broken picker, and a picker that would not open does not arrive as a
+   * file that would not read. Both sentences are the crate's own.
+   */
+  it.each([
+    [
+      "the file",
+      "That file is over 1 MB. A decklist is text; this reads at most 1 MB.",
+    ],
+    ["the picker", "The file picker could not be opened — task 7 panicked"],
+  ])("shows %s refusing, in the backend's words, beside the button", async (_, refusal) => {
+    importPickFile.mockRejectedValue(refusal);
     wrap(<Harness />);
     await panel();
 
     await userEvent.click(screen.getByRole("button", { name: "Choose file…" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
-      "Could not read that file — That file is larger than 1 MB.",
+      `Could not read a decklist from a file — ${refusal}`,
     );
     expect(screen.getByLabelText("Decklist")).toHaveValue("");
   });
@@ -1061,8 +1072,7 @@ describe("the import dialog", () => {
    * sentence about how a file was decoded would then describe something no longer on screen.
    */
   it("says a file was read as Windows-1252, until the reader changes the text", async () => {
-    pickFile.mockResolvedValue("C:/lists/excel.csv");
-    importReadFile.mockResolvedValue({ text: "1 Séance", encoding: "windows-1252" });
+    importPickFile.mockResolvedValue({ text: "1 Séance", encoding: "windows-1252" });
     wrap(<Harness />);
     await panel();
 
@@ -1091,8 +1101,7 @@ describe("the import dialog", () => {
    * read replaces both, and a UTF-8 one has nothing to say.
    */
   it("keeps the notice through a cancelled pick and drops it for a UTF-8 file", async () => {
-    pickFile.mockResolvedValue("C:/lists/excel.csv");
-    importReadFile.mockResolvedValue({ text: "1 Séance", encoding: "windows-1252" });
+    importPickFile.mockResolvedValue({ text: "1 Séance", encoding: "windows-1252" });
     wrap(<Harness />);
     await panel();
     const choose = screen.getByRole("button", { name: "Choose file…" });
@@ -1100,14 +1109,15 @@ describe("the import dialog", () => {
     await userEvent.click(choose);
     expect(await screen.findByText(LEGACY_ENCODING_NOTICE)).toBeInTheDocument();
 
-    pickFile.mockResolvedValue(null);
+    importPickFile.mockResolvedValue(null);
     await waitFor(() => expect(choose).toBeEnabled());
     await userEvent.click(choose);
-    await waitFor(() => expect(pickFile).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(importPickFile).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(choose).toBeEnabled());
     expect(screen.getByText(LEGACY_ENCODING_NOTICE)).toBeInTheDocument();
+    expect(screen.getByLabelText("Decklist")).toHaveValue("1 Séance");
 
-    pickFile.mockResolvedValue("C:/lists/burn.txt");
-    importReadFile.mockResolvedValue({ text: "4 Lightning Bolt", encoding: "utf-8" });
+    importPickFile.mockResolvedValue({ text: "4 Lightning Bolt", encoding: "utf-8" });
     await waitFor(() => expect(choose).toBeEnabled());
     await userEvent.click(choose);
 

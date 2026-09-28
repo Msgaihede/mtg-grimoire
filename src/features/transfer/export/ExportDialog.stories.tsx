@@ -289,17 +289,17 @@ const WISHLIST_CARDS: TransferCard[] = [
  *
  * ## What a story can drive here, and what it cannot
  *
- * The **file picker's own half is unverifiable in a browser** — `dialog:allow-save` opens a native
- * window CDP cannot reach — so what the workbench stands in for is the *answer*: the fake's
- * command table carries `plugin:dialog|save`, which hands back a path under `D:\Storybook\` built
- * from the dialog's own `defaultPath`. That is not the same decision as the importer's picker,
- * which throws: there the invented thing would be the **decklist**, and here it is a file name
- * over text the reader is already looking at. So {@link SaveRefused} really does travel
- * press → path → `export_write_file` → the refusal drawn in the app's own words.
+ * The **save dialog's own half is unverifiable in a browser** — `export_save_file` opens a native
+ * window from Rust (issue #545), and CDP cannot reach it — so what the workbench stands in for is
+ * the *answer*: the fake's `export_save_file` puts the file under `D:\Storybook\`, named by the
+ * suggestion this dialog sends. That is not the same decision as the importer's picker, which
+ * refuses: there the invented thing would be the **decklist**, and here it is a place to put text
+ * the reader is already looking at. So {@link SaveRefused} really does travel
+ * press → the suggested name → the refusal drawn in the app's own words.
  *
- * The one arm still out of reach is **Cancel**, which resolves `null` — writing *that* string to
- * disk is the trap this dialog's guard exists for, and `ExportDialog.test.tsx` pins it by mocking
- * `save` directly. A `null` from the fake would make every save story a story about Cancel.
+ * The one arm still out of reach is **Cancel**, which answers `false` and draws nothing — a
+ * `false` from the fake would make every save story a story about Cancel, and
+ * `ExportDialog.test.tsx` pins it by mocking `ipc.exportSaveFile` directly.
  *
  * **Its own frame per docs story**, like every dialog here: the shell's scrim is `fixed inset-0`,
  * so rendered inline it would cover the whole docs page rather than its own block. The iframe
@@ -994,11 +994,10 @@ export const Copied: Story = {
 };
 
 /**
- * **Save as…**, all the way through: the picker's answer, then Rust writing at it.
+ * **Save as…**, all the way through: one command, the save dialog and the write.
  *
- * Rust writes the file because `dialog:allow-save` answers a *path* and nothing more, and writing
- * bytes at that path from the page would need an `fs:` permission this app grants nowhere — the
- * same shape `deck_set_cover_image` established in the other direction.
+ * Rust opens the dialog *and* writes the file (issue #545), so no path crosses IPC and the page
+ * needs neither a `dialog:` nor an `fs:` permission — and this app grants neither anywhere.
  *
  * Nothing is drawn on success, deliberately: the file is on disk and the dialog stays where it
  * was. So the whole of the happy path is that **no alert appeared**, which is exactly what a
@@ -1017,7 +1016,7 @@ export const Saved: Story = {
     await userEvent.click(button);
 
     // **Wait for something positive first.** `queryByRole("alert")` is null on the tick after the
-    // press — before `save()`'s promise, the write and the `catch` have run — so a `waitFor` on
+    // press — before `export_save_file`'s promise and the `catch` have run — so a `waitFor` on
     // the absence alone is satisfied by the very first poll and would stay green over a save that
     // failed a moment later. `aria-busy` is set synchronously by the press and cleared in the
     // `finally`, so waiting for it to go is waiting for the whole round trip to have finished.

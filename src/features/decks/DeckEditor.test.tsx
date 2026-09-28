@@ -150,7 +150,7 @@ const deckFolderList = vi.hoisted(() => vi.fn());
 // "the card database is not filled in yet".
 const importResolve = vi.hoisted(() => vi.fn());
 const deckImportCommit = vi.hoisted(() => vi.fn());
-const importReadFile = vi.hoisted(() => vi.fn());
+const importPickFile = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
 // The editor warms the `art` its own views draw — the variant the deck builder renders, and
 // a different URL on the CDN from the `grid` the search wall warms. Fire-and-forget, so the
@@ -284,7 +284,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckFolderList,
     importResolve,
     deckImportCommit,
-    importReadFile,
+    importPickFile,
     syncStatus,
     cardDetail,
     collectionList,
@@ -1031,7 +1031,7 @@ beforeEach(() => {
     .mockReset()
     .mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   deckImportCommit.mockReset().mockResolvedValue({ added: 1, removed: 0, categoriesCreated: 0 });
-  importReadFile.mockReset().mockResolvedValue("");
+  importPickFile.mockReset().mockResolvedValue(null);
   syncStatus.mockReset().mockResolvedValue(SYNCED);
   prefetchImages.mockClear();
 });

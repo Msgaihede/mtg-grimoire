@@ -139,12 +139,10 @@ const meta = {
           "`deck_folder_list`, `search_cards` and `card_detail` all really answer, so " +
           "**Default** writes a configured deck, **A cover from the search** credits the art " +
           "it picked, and **Refused** shows what a busy database says about it.\n\n" +
-          "**Two states are unit tests rather than stories, and the reason is the file " +
-          "picker.** `open()` from `@tauri-apps/plugin-dialog` reaches Tauri's `invoke`, and " +
-          "outside the app window there is nothing behind it — so no story can produce a path, " +
-          "and neither the upload that follows a create nor the state after it is refused (the " +
-          "deck exists, the line says so, and the control becomes **Open deck**) can be " +
-          "reached from here. Both are in `CreateDeckDialog.test.tsx`.",
+          "**Two states used to be unit tests rather than stories, and the reason was the file " +
+          "picker** an image upload after the create needed, which no story could drive. The " +
+          "upload went with custom deck covers on 2026-08-31, and the page opens no file " +
+          "dialog at all now (issue #545), so there is no state here a story cannot reach.",
       },
     },
   },
