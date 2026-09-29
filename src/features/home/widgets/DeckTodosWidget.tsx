@@ -47,10 +47,14 @@
  *
  * ## Rows are whole, and a heading never closes the list
  *
- * Every row is cut in {@link LINE_PX} lines — a heading is one, a to-do is as many as its text is
- * estimated to wrap to — against `fit.fitCount`, with a footer line reserved only when something is
- * left over. A heading whose to-dos all fell past the cut is dropped with them, `ActivityWidget`'s
- * rule for a day with no line left: it would read as a deck with nothing to do.
+ * Every row costs its own drawn height — a heading {@link LINE_PX}, a to-do its padding and one
+ * {@link TEXT_LINE_PX} per line its text is estimated to wrap to — and rows are taken, with the
+ * body's gap between each, until the next would not fit: `fit.fitCount`'s arithmetic, over rows of
+ * more than one height. A footer line is reserved only when something is left over. **The to-do
+ * the cut lands on is drawn clamped to the lines left** rather than dropped, so a to-do taller than
+ * the whole card still shows its first lines instead of leaving the card empty but for `+N more`.
+ * A heading whose to-dos all fell past the cut is dropped with them, `ActivityWidget`'s rule for a
+ * day with no line left: it would read as a deck with nothing to do.
  *
  * **No `@container` here or on the page that draws this**, and no z-index that is not from
  * `LAYER` — `fit.ts`' module doc has the argument.
@@ -100,13 +104,42 @@ export type TodoScope = "all" | "chosen";
 const TODOS_ROOT: QueryKey = deckTodoListsKey.slice(0, 2);
 
 /**
- * The height of one line of this body, in pixels — the unit it is cut in. `ActivityWidget`'s
- * figure: 14px type on a 19px leading with 4px above and below. **The classes on
- * {@link DeckHeading} (`h-[27px]`) and {@link TodoLine} (`py-1` over `leading-[19px]`) spell this
- * out and must stay in step with it.** A to-do that wraps to a second line is 19px taller, not 27,
- * so counting it as two lines errs on the side of room.
+ * One line of a to-do's text: 14px type on a 19px leading — {@link TodoLine}'s `leading-[19px]`.
+ * **Each line a to-do wraps to adds this and nothing else**, since the row's padding is paid once.
  */
-const LINE_PX = 27;
+const TEXT_LINE_PX = 19;
+
+/** A to-do row's padding, above and below its text — {@link TodoLine}'s `py-1`. */
+const ROW_PAD_PX = 8;
+
+/**
+ * A one-line row, in pixels: a heading ({@link DeckHeading}'s `h-[27px]`) and a to-do of one line
+ * are both this tall — `ActivityWidget`'s figure. **The classes named on the two constants above
+ * and on the heading spell this out and must stay in step with it.**
+ */
+const LINE_PX = TEXT_LINE_PX + ROW_PAD_PX;
+
+/**
+ * The line clamps a to-do the cut lands on may be drawn at, **as whole class names** — Tailwind
+ * emits a rule only for a class it finds written out, so a count interpolated into `line-clamp-…`
+ * would clamp nothing. Index `n - 1` clamps to `n` lines. Twelve is past any to-do worth reading
+ * on a card; one the cut lands on with more room than that is clamped at twelve and leaves the
+ * rest of the room empty. The widget's test compiles every entry against the real Tailwind.
+ */
+export const CLAMP_CLASSES = [
+  "line-clamp-1",
+  "line-clamp-2",
+  "line-clamp-3",
+  "line-clamp-4",
+  "line-clamp-5",
+  "line-clamp-6",
+  "line-clamp-7",
+  "line-clamp-8",
+  "line-clamp-9",
+  "line-clamp-10",
+  "line-clamp-11",
+  "line-clamp-12",
+] as const;
 
 /** How far each level of sub-to-do is pushed in: the box (14px) and the gap after it (8px), so a
  *  sub-to-do's box sits under its parent's first word. */
@@ -140,6 +173,14 @@ function toggleWord(key: string): string {
  * `ALL_COMPLETE`, for the same reason and in its words.
  */
 export const ALL_DONE = `Every to-do here is done. Enable ${toggleWord("done")} in settings to view them.`;
+
+/**
+ * Nothing is drawn, yet a to-do in scope is still open — which only `Show sub-to-dos` off can do:
+ * `visibleTodos` drops a done parent over an open child once children are not drawn, so a deck
+ * whose only open work is nested draws nothing. {@link ALL_DONE} there would be false and would
+ * name the wrong switch.
+ */
+export const NESTED_ONLY = `Open to-dos are nested under finished ones. Enable ${toggleWord("nested")} in settings to view them.`;
 
 /** A pick's row label and one option's label, read off the registry — `DeckCompletionWidget`'s
  *  `pickWords`, so the checklist's hint names the control this card really has. */
@@ -183,8 +224,9 @@ export interface TodoFilter {
  *
  * `inScope` is every deck the scope and the archived switch leave **that holds a to-do at all**;
  * `drawn` is those with something left once completed ones and sub-to-dos are hidden. The two are
- * kept apart because the card's two empty sentences are about them: nothing in scope is
- * {@link NO_TODOS}, and nothing drawn over a non-empty scope is {@link ALL_DONE}.
+ * kept apart because the card's empty sentences are about them: nothing in scope is
+ * {@link NO_TODOS}, and nothing drawn over a non-empty scope is {@link ALL_DONE} when nothing in
+ * scope is open and {@link NESTED_ONLY} when something is.
  *
  * **The archived switch holds in both scopes**, so it always means what its label says; the
  * checklist offers an archived deck only while it is on, and a choice made while it was on is
@@ -235,10 +277,26 @@ export function sortTodoDecks(decks: readonly TodoDeck[], order: TodoOrder): Tod
   }
 }
 
-/** One drawn row: a deck's heading, or one to-do at a depth. `lines` is what it costs the box. */
+/**
+ * One drawn row: a deck's heading, or one to-do at a depth. A to-do's `lines` is its text's
+ * estimated line count; `clamp` is set only on the to-do the cut landed on, and is the number of
+ * lines it is drawn at.
+ */
 export type TodoRow =
-  | { kind: "deck"; deck: TodoDeck; lines: number }
-  | { kind: "item"; deck: TodoDeck; item: TodoItem; depth: number; lines: number };
+  | { kind: "deck"; deck: TodoDeck }
+  | {
+      kind: "item";
+      deck: TodoDeck;
+      item: TodoItem;
+      depth: number;
+      lines: number;
+      clamp?: number;
+    };
+
+/** A row's drawn height, in pixels — a to-do at `lines` lines. */
+function rowPx(row: TodoRow, lines = row.kind === "item" ? row.lines : 1): number {
+  return row.kind === "deck" ? LINE_PX : ROW_PAD_PX + lines * TEXT_LINE_PX;
+}
 
 /**
  * How many lines a to-do's text is guessed to take at this width: each hard-broken line on its own,
@@ -263,39 +321,64 @@ export function todoRows(decks: readonly TodoDeck[], bodyWidthPx: number): TodoR
     }
   };
   for (const deck of decks) {
-    rows.push({ kind: "deck", deck, lines: 1 });
+    rows.push({ kind: "deck", deck });
     walk(deck, deck.visible, 0);
   }
   return rows;
 }
 
+/** How many of these rows are to-dos — what the footer counts. */
+function itemCount(rows: readonly TodoRow[]): number {
+  return rows.filter((row) => row.kind === "item").length;
+}
+
 /**
- * The rows the box holds, whole — and how many to-dos it had no room for.
+ * The rows `budget` pixels hold, in order, with `gap` between each: every row that fits whole,
+ * then — if the row the cut lands on is a to-do with at least one line of room left — that to-do
+ * clamped to those lines. A heading left last is dropped.
+ */
+function cutTo(
+  rows: readonly TodoRow[],
+  budget: number,
+  gap: number,
+): { shown: TodoRow[]; hidden: number } {
+  const shown: TodoRow[] = [];
+  let used = 0;
+  for (const row of rows) {
+    const before = shown.length === 0 ? 0 : gap;
+    if (used + before + rowPx(row) <= budget) {
+      shown.push(row);
+      used += before + rowPx(row);
+      continue;
+    }
+    if (row.kind === "item") {
+      const room = Math.floor((budget - used - before - ROW_PAD_PX) / TEXT_LINE_PX);
+      const clamp = Math.min(room, CLAMP_CLASSES.length);
+      if (clamp >= 1) shown.push({ ...row, clamp });
+    }
+    break;
+  }
+  if (shown[shown.length - 1]?.kind === "deck") shown.pop();
+  return { shown, hidden: itemCount(rows) - itemCount(shown) };
+}
+
+/**
+ * The rows the box holds — and how many to-dos it had no room for.
  *
- * Everything, when everything fits in the lines `reserved` leaves. Otherwise a footer line is
- * reserved as well and rows are taken in order until the next would not fit; a heading left last is
- * dropped with the to-dos that fell past it. `hidden` counts **to-dos**, never headings, since it is
- * what the footer says.
+ * Cut against the body less `reserved` first; only when that leaves a to-do out is a footer line
+ * reserved as well and the cut made again, so a card with nothing left over spends no room on a
+ * footer it does not draw. `hidden` counts **to-dos**, never headings, since it is what the footer
+ * says — and a clamped to-do is drawn, so it is not among them.
  */
 export function cutRows(
   rows: readonly TodoRow[],
   fit: WidgetFit,
   reserved: number,
 ): { shown: TodoRow[]; hidden: number } {
-  const total = rows.reduce((sum, row) => sum + row.lines, 0);
-  if (total <= fit.fitCount(LINE_PX, reserved)) return { shown: [...rows], hidden: 0 };
-
-  const slots = fit.fitCount(LINE_PX, reserved + footerLinePx(fit));
-  const shown: TodoRow[] = [];
-  let used = 0;
-  for (const row of rows) {
-    if (used + row.lines > slots) break;
-    shown.push(row);
-    used += row.lines;
-  }
-  if (shown[shown.length - 1]?.kind === "deck") shown.pop();
-  const items = (list: readonly TodoRow[]) => list.filter((row) => row.kind === "item").length;
-  return { shown, hidden: items(rows) - items(shown) };
+  const budget = fit.bodyHeightPx - reserved;
+  const whole = cutTo(rows, budget, fit.rowGap);
+  if (whole.hidden === 0) return whole;
+  return cutTo(rows, budget - footerLinePx(fit), fit.rowGap);
 }
 
 /** A to-do's checkbox name — the band's editor's words, so a reader driving by voice says one
@@ -367,7 +450,10 @@ export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactE
 
   const { inScope, drawn } = todoDecks(listsQuery.data, filter);
   if (inScope.length === 0) return <NoTodos />;
-  if (drawn.length === 0) return <WidgetMessage>{ALL_DONE}</WidgetMessage>;
+  if (drawn.length === 0) {
+    const open = inScope.some((deck) => deck.open > 0);
+    return <WidgetMessage>{open ? NESTED_ONLY : ALL_DONE}</WidgetMessage>;
+  }
 
   const failure = tick.error === null ? null : ipcError(tick.error);
   const rows = todoRows(sortTodoDecks(drawn, order), fit.bodyWidthPx);
@@ -421,7 +507,7 @@ export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactE
               onOpen={still ? undefined : () => void openDeck(deck.list)}
             />
             <ul className="m-0 flex list-none flex-col p-0" style={{ gap: fit.rowGap }}>
-              {items.map(({ item, depth }) => {
+              {items.map(({ item, depth, clamp }) => {
                 const next = toggleTodo(deck.list.body, item.line);
                 const pending =
                   busy &&
@@ -432,6 +518,8 @@ export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactE
                     key={item.line}
                     item={item}
                     depth={depth}
+                    clamp={clamp}
+                    boxless={next === null}
                     refused={busy || next === null}
                     pending={pending}
                     onTick={still ? undefined : () => onTick(deck, item, next)}
@@ -525,29 +613,38 @@ function DeckHeading({
  * ({@link tickLabel}), so the words are as easy to hit as the box. A link inside is therefore drawn
  * as a link and never followed: nothing pressable may sit inside a press, and the deck's band is
  * where a link is opened. `refused` is `aria-disabled` and blocks the press — a write already out,
- * or a line with no box to flip — and its box no longer warms under the pointer; `pending` is the
- * row the write in flight is about, and is the one drawn faint.
+ * or a line with no box to flip — and it neither dips under the press (`PRESS_SOFT`'s `:active`
+ * scale, cancelled by `aria-disabled:active:scale-100`, `src/CLAUDE.md`'s spelling) nor warms its
+ * box under the pointer. `boxless` is the second of those two, and is drawn as such: a dashed box,
+ * so a line that can never be ticked does not look like one that can. `pending` is the row the
+ * write in flight is about, and is the one drawn faint. `clamp` is set on the to-do the cut landed
+ * on ({@link cutTo}), and draws its text at that many lines with an ellipsis.
  */
 function TodoLine({
   item,
   depth,
+  clamp,
+  boxless,
   refused,
   pending,
   onTick,
 }: {
   item: TodoItem;
   depth: number;
+  clamp: number | undefined;
+  boxless: boolean;
   refused: boolean;
   pending: boolean;
   onTick: (() => void) | undefined;
 }): ReactElement {
   const inner = (
     <>
-      <TickBox done={item.done} warms={onTick !== undefined && !refused} />
+      <TickBox done={item.done} boxless={boxless} warms={onTick !== undefined && !refused} />
       <span
         className={cn(
           "min-w-0 flex-1 whitespace-pre-line break-words text-sm leading-[19px]",
           item.done ? "text-dim line-through" : "text-text",
+          clamp !== undefined && CLAMP_CLASSES[clamp - 1],
         )}
       >
         <Inlines inlines={item.inlines} />
@@ -571,6 +668,7 @@ function TodoLine({
             "group rounded-sm",
             row,
             PRESS_SOFT,
+            "aria-disabled:active:scale-100",
             FOCUS,
             refused && "cursor-default",
             pending && "opacity-50",
@@ -584,8 +682,16 @@ function TodoLine({
 }
 
 /** The drawn box: gold and ticked when done, a dim outline when not — which warms to the accent
- *  under the pointer only on a row a press would tick. */
-function TickBox({ done, warms }: { done: boolean; warms: boolean }): ReactElement {
+ *  under the pointer only on a row a press would tick — and dashed on a line with no box to flip. */
+function TickBox({
+  done,
+  boxless,
+  warms,
+}: {
+  done: boolean;
+  boxless: boolean;
+  warms: boolean;
+}): ReactElement {
   return (
     <span
       aria-hidden="true"
@@ -593,7 +699,7 @@ function TickBox({ done, warms }: { done: boolean; warms: boolean }): ReactEleme
         "mt-[2.5px] flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border",
         done
           ? "border-accent bg-accent text-accent-fg"
-          : cn("border-dim", warms && "group-hover:border-accent"),
+          : cn("border-dim", boxless && "border-dashed", warms && "group-hover:border-accent"),
       )}
     >
       {done && <Check className="size-2.5" strokeWidth={3.5} />}

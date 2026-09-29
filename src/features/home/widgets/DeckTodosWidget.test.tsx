@@ -2,6 +2,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
+import { compile } from "tailwindcss";
+import twEntry from "tailwindcss/index.css?raw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { DeckPatch, DeckRow, DeckTodoList, HomeWidget } from "@/lib/ipc";
@@ -36,8 +38,10 @@ import { makeFit, spanPx, type WidgetFit } from "../fit";
 import { deckListKey, deckTodoListsKey } from "../keys";
 import {
   ALL_DONE,
+  CLAMP_CLASSES,
   DeckTodosWidget,
   DeckTodosWidgetSettings,
+  NESTED_ONLY,
   NO_TODOS,
   NO_TODOS_HINT,
   NOTHING_CHOSEN,
@@ -337,6 +341,20 @@ describe("DeckTodosWidget", () => {
       expect(screen.queryByText(NO_TODOS)).toBeNull();
     });
 
+    /**
+     * With sub-to-dos off, a done parent over an open child is hidden — so a deck whose only open
+     * work is nested draws nothing, and "every to-do is done" would be false and name the wrong
+     * switch.
+     */
+    it("names Show sub-to-dos when the only open to-dos are nested under finished ones", () => {
+      seed([list({ deckId: 1, name: "Burn", body: "- [x] P\n  - [ ] c" })]);
+      draw({ nested: false });
+
+      expect(screen.getByText(NESTED_ONLY)).toBeInTheDocument();
+      expect(NESTED_ONLY).toContain("Show sub-to-dos");
+      expect(screen.queryByText(ALL_DONE)).toBeNull();
+    });
+
     it("says it is loading while the read is out, and why when it is refused", async () => {
       deckTodoLists.mockReturnValue(new Promise(() => {}));
       const { unmount } = draw();
@@ -405,6 +423,21 @@ describe("DeckTodosWidget", () => {
 
       await user.click(plain);
       expect(deckTodosSet).not.toHaveBeenCalled();
+      // Drawn as not tickable, too: a dashed box, where a tickable to-do's is solid.
+      const boxOf = (el: HTMLElement) => el.querySelector('[aria-hidden="true"]');
+      expect(boxOf(plain)?.classList.contains("border-dashed")).toBe(true);
+      const tickable = screen.getByRole("checkbox", { name: 'Mark "a" done' });
+      expect(boxOf(tickable)?.classList.contains("border-dashed")).toBe(false);
+    });
+
+    /** `PRESS_SOFT` dips on `:active`; a row that refuses the press must not look pressed. */
+    it("keeps a refused row from dipping under the press", () => {
+      seed([BURN]);
+      draw();
+
+      for (const box of screen.getAllByRole("checkbox")) {
+        expect(box.classList.contains("aria-disabled:active:scale-100")).toBe(true);
+      }
     });
   });
 
@@ -494,8 +527,9 @@ describe("DeckTodosWidget", () => {
 
     /**
      * A heading with none of its to-dos under it would read as a deck with nothing to do. Eight
-     * rows (a heading, five items, a heading, one item) in a body 253px tall: seven 27px rows fit
-     * with the footer reserved, so the cut lands exactly on the second heading — which goes too.
+     * 27px rows (a heading, five items, a heading, one item) in a body 253px tall: with the footer
+     * reserved, seven rows and their 6px gaps fit, so the cut lands exactly on the second heading —
+     * which goes too.
      */
     it("never ends on a heading with nothing under it", () => {
       const first = list({
@@ -514,6 +548,60 @@ describe("DeckTodosWidget", () => {
       expect(boxes()).toHaveLength(5);
       expect(screen.getByText("+1 more")).toBeInTheDocument();
     });
+
+    /**
+     * A to-do taller than the box used to stop the cut at the first row and take its heading with
+     * it, leaving a card that drew nothing but "+2 more". It is drawn instead, clamped to the lines
+     * left, and the rest are counted.
+     */
+    it("draws a to-do too tall for the box clamped to the lines left, not an empty card", () => {
+      const long = "Swap the whole mana base for fetches and shocks ".repeat(6).trim();
+      seed([list({ deckId: 1, name: "Burn", body: `- [ ] ${long}\n- [ ] Next` })]);
+      draw(null, { fit: fitFor(2, 2) });
+
+      expect(headings()).toEqual(["Burn · 2 open"]);
+      const box = screen.getByRole("checkbox", { name: `Mark "${long}" done` });
+      const text = box.querySelector(".whitespace-pre-line");
+      const clamp = Array.from(text?.classList ?? []).find((name) => name.startsWith("line-clamp-"));
+      expect(clamp).toBeDefined();
+      expect(screen.getByText("+1 more")).toBeInTheDocument();
+    });
+
+    it("clamps nothing that fits", () => {
+      seed([BURN]);
+      draw();
+
+      for (const box of screen.getAllByRole("checkbox")) {
+        const text = box.querySelector(".whitespace-pre-line");
+        const names = Array.from(text?.classList ?? []);
+        expect(names.some((name) => name.startsWith("line-clamp-"))).toBe(false);
+      }
+    });
+  });
+
+  /**
+   * **A class Tailwind cannot parse emits nothing, silently**, and jsdom loads no stylesheet — so
+   * the classes this body picks at run time are compiled here against the real Tailwind.
+   */
+  it("uses clamp and press classes the real Tailwind emits", async () => {
+    const compiler = await compile(`@import "tailwindcss";\n`, {
+      base: "/",
+      loadStylesheet: (id: string) => {
+        if (id !== "tailwindcss") throw new Error(`unexpected stylesheet import: ${id}`);
+        return Promise.resolve({
+          path: "/tailwindcss/index.css",
+          base: "/tailwindcss",
+          content: twEntry,
+        });
+      },
+      loadModule: () => Promise.reject(new Error("no JS modules expected")),
+    });
+    const css = compiler.build([...CLAMP_CLASSES, "aria-disabled:active:scale-100"]);
+    CLAMP_CLASSES.forEach((name, i) => {
+      expect(css, name).toContain(`-webkit-line-clamp: ${i + 1}`);
+    });
+    // v4 writes the scale through its custom properties: `--tw-scale-x: 100%` and friends.
+    expect(css).toMatch(/\[aria-disabled="true"\]:active \{[^}]*--tw-scale-x: 100%/);
   });
 });
 

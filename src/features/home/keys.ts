@@ -326,8 +326,9 @@ export const deckCompletionKey = (
  * (a rename, an archive, the band's `todosOpen`) and the `decks` change mask a sync or a second
  * window fires already refresh it, with no bridge. **And under `["decks", "todos"]`**, beside the
  * band's own `["decks", "todos", deckId]` — so the band's autosave invalidates this key by name
- * and the widget's tick refreshes the band, each through that one prefix. The band (`DeckTodosPanel`)
- * imports this constant rather than spelling it again.
+ * and the widget's tick refreshes the band, each through that one prefix. The band's hook
+ * (`features/decks/useDeckTodos.ts`, beside its own `deckTodosKey`) imports this constant rather
+ * than spelling it again.
  */
 export const deckTodoListsKey: QueryKey = ["decks", "todos", "lists"];
 
