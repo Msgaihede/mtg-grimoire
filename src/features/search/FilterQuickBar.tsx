@@ -396,7 +396,14 @@ export function FilterQuickBar<SortKey extends string>({
                   triggerContent={
                     <>
                       <span>Mana value</span>
-                      {mvSummary && <span className="font-mono tabular-nums">{mvSummary}</span>}
+                      {/* Capped at 64px: every chip picked is a list of nearly thirty characters,
+                          and on a bar that must stay one row an unbounded summary takes its width
+                          from the search field. The trigger's `aria-label` keeps the whole list. */}
+                      {mvSummary && (
+                        <span className="max-w-16 truncate font-mono tabular-nums">
+                          {mvSummary}
+                        </span>
+                      )}
                       <ChevronDown aria-hidden="true" className="size-3.5" />
                     </>
                   }
