@@ -30,6 +30,13 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.34.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.34.0...v0.34.1) (2026-09-29)
+
+
+### Bug Fixes
+
+* **update:** remove update signing ([#674](https://github.com/Msgaihede/mtg-grimoire/issues/674)) ([c0e4578](https://github.com/Msgaihede/mtg-grimoire/commit/c0e45783de242b4a4afbb177e4afd8875fcfe313))
+
 ## [0.34.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.33.0...v0.34.0) (2026-09-28)
 
 
