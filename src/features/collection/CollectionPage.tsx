@@ -878,8 +878,8 @@ export function CollectionPage() {
    * `sticky` on the dock (at `quick.dockTop`) does the pinning and this does only the height. The
    * hook finds the scroller itself, which is what lets one hook serve this page (scrolling in
    * `AppShell`'s `main`) and the deck editor (an `overflow-y-auto` section of its own) without
-   * either site knowing which. `useDockHeight` carries the whole of it, including why it re-checks its wiring
-   * after every commit.
+   * either site knowing which. `useDockHeight` carries the whole of it, including why it re-checks
+   * its wiring after every commit.
    *
    * **`quick.dockTop` is the third argument, and the dock's own `top` is the same number** — 41px
    * while the filter quick bar is down (the bar's 53px, less `main`'s 20px padding the sticky

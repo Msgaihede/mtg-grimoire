@@ -2244,9 +2244,9 @@ export function WishlistPage() {
           **The section's first child, and it has to be.** Its wrapper is `sticky top-0 h-0`, and a
           sticky box travels only within its containing block — this section, which under the
           wall's `grow` is as tall as the wishes — so the bar stays pinned for the whole length of
-          the wall — and first, above the figures band, where the spec places it: a sticky box pins
-          only once its static position reaches the scroller's top, and at the head of the section
-          that has always happened by the time the page row has scrolled away.
+          the wall. And it is first, above the figures band, where the spec places it: a sticky box
+          pins only once its static position reaches the scroller's top, and at the head of the
+          section that has always happened by the time the page row has scrolled away.
           `-mb-3` cancels this section's `gap-3`: the wrapper is zero height, so without it the bar
           would cost the page 12px of gap whether it is drawn or not, and every line under it
           would move the moment it mounts.

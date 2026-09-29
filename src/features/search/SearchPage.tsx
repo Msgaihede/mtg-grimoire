@@ -412,9 +412,10 @@ export function SearchPage() {
       {/* **First child, before the heading**: the wrapper is `sticky top-0 h-0`, so it has to
           sit at the section's top edge for its sticky range to be the whole section, and it is
           the first thing a caret meets when it is down. `-mb-4` is the section's `gap-4`
-          cancelled: the wrapper is zero-height and mounts only while the bar is shown, so
-          without the margin the gap it brings would shove the whole page 16px down at the
-          moment the bar appears — the layout jump the `h-0` box exists to avoid. */}
+          cancelled: the wrapper is zero-height and mounts only while the bar is shown or the
+          caret holds it, so without the margin the gap it brings would shove the whole page
+          16px down at the moment the bar appears — the layout jump the `h-0` box exists to
+          avoid. */}
       <FilterQuickBar search={search} shown={quick.shown} className="-mb-4" />
 
       {/* Not shown: the filter bar says what this view is far better than a title would,
@@ -618,7 +619,8 @@ function Results({ search }: { search: CardSearch }) {
             listKey={searchKey}
             // **This wall grows and `main` scrolls it — the page is one long page.** The first of
             // the four page-width walls to say so, on 2026-09-03; the collection's and the
-            // wishlist's followed on 2026-09-08, so the Tags page is the one left. The two bounded
+            // wishlist's followed on 2026-09-08, and the Tags page's grid view on 2026-09-29 with
+            // the filter quick bar, so all four grow in grid view now. The two bounded
             // surfaces that must keep a scroller of their own are untouched — see `CardGrid`'s
             // `grow`, which carries why the deck editor's 206px docked panel and
             // `AllPrintingsDialog` are not this.
