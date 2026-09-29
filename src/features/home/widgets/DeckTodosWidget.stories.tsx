@@ -68,14 +68,16 @@ const meta = {
     docs: {
       description: {
         component:
-          "Every deck's **To-do band**, gathered: a heading per deck — its name and how many of " +
-          "its to-dos are open, at every depth — and its to-dos beneath, sub-to-dos indented one " +
-          "step per level. **A to-do list is not a note**: one list to a deck, a column on the " +
-          "deck's row, and a to-do is a line of it.\n\n" +
-          "**The checkbox ticks in place**, as a compare-and-set: the tick sends the body it read, " +
-          "and a list that moved since is refused with its own sentence in the card's one-line " +
-          "failure slot and read again. **A heading opens the deck on its To-do band**, opening " +
-          "the band first when it is shut.\n\n" +
+          "Every deck's **to-do lists**, gathered: a heading per deck — its name and how many of " +
+          "its to-dos are open across all its lists, at every depth — then each list's title " +
+          "(`Untitled list` when it has none) and that list's to-dos beneath it, sub-to-dos " +
+          "indented one step per level. **A to-do list is not a note**: a deck holds any number " +
+          "of titled lists, and a to-do is a line of one. A list's headings and paragraphs are " +
+          "the band's to read; this card draws the to-dos alone.\n\n" +
+          "**The checkbox ticks in place**, as a compare-and-set on that one list: the tick sends " +
+          "the body it read, and a list that moved since is refused with its own sentence in the " +
+          "card's one-line failure slot and read again. **A deck's heading opens the deck on its " +
+          "To-do band**, opening the band first when it is shut.\n\n" +
           "Completed to-dos are hidden until `Show completed` is on — **except a done to-do over " +
           "an open sub-to-do**, which stays, drawn done, so the open one keeps its parent. Rows " +
           "are whole; what does not fit is counted in a `+N more` footer.",
@@ -88,17 +90,18 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
- * The default panel over `starter`'s two lists — `Rhystic Testbed`, edited last, over
- * `Kenrith Two-Drops` — with the done sub-to-do and the done top-level to-do hidden.
+ * The default panel over `starter`'s three lists — `Rhystic Testbed`'s two, edited last, then
+ * `Kenrith Two-Drops`' one — with the done sub-to-dos and the done top-level to-do hidden. Three
+ * cells tall is room for the first deck and its two lists; the rest is counted in the footer.
  */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "To-dos" }));
     await expect(
-      await card.findByRole("button", { name: "Rhystic Testbed · 2 open" }),
+      await card.findByRole("button", { name: "Rhystic Testbed · 4 open" }),
     ).toBeInTheDocument();
-    await expect(card.getByRole("button", { name: "Kenrith Two-Drops · 1 open" })).toBeInTheDocument();
+    await expect(card.getByRole("heading", { level: 5, name: "To-do" })).toBeInTheDocument();
     await expect(
       card.getByRole("checkbox", { name: 'Mark "Add a Treasure maker" done' }),
     ).toBeInTheDocument();
@@ -108,14 +111,36 @@ export const Default: Story = {
   },
 };
 
-/** The widest card the kind allows, three cells tall: the same list with room to read each line. */
+/**
+ * The tallest card the kind allows: both decks whole. `Rhystic Testbed` draws its two lists under
+ * one heading, each under its own title — and `Mana`'s body is a document, a heading and a paragraph
+ * among its to-dos, of which the card draws the to-dos alone.
+ */
+export const Lists: Story = {
+  args: { widget: todos(3, 6) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const card = within(await canvas.findByRole("region", { name: "To-dos" }));
+    await expect(
+      await card.findByRole("button", { name: "Rhystic Testbed · 4 open" }),
+    ).toBeInTheDocument();
+    await expect(card.getByRole("button", { name: "Kenrith Two-Drops · 1 open" })).toBeInTheDocument();
+    await expect(
+      card.getAllByRole("heading", { level: 5 }).map((el) => el.textContent),
+    ).toEqual(["To-do", "Mana", "To-do"]);
+    await expect(card.getByRole("checkbox", { name: 'Mark "Cut a land" done' })).toBeInTheDocument();
+    await expect(card.queryByText(/Some notes about/)).not.toBeInTheDocument();
+  },
+};
+
+/** The widest card the kind allows, three cells tall: the same lists with room to read each line. */
 export const Wide: Story = {
   args: { widget: todos(6, 3) },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "To-dos" }));
     await expect(
-      await card.findByRole("checkbox", { name: 'Mark "Revise tokens" done' }),
+      await card.findByRole("checkbox", { name: 'Mark "Add a Treasure maker" done' }),
     ).toBeInTheDocument();
   },
 };
@@ -151,7 +176,7 @@ export const Still: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const card = within(await canvas.findByRole("region", { name: "To-dos" }));
-    await expect(await card.findByText("Revise tokens")).toBeInTheDocument();
+    await expect(await card.findByText("Add a Treasure maker")).toBeInTheDocument();
     await expect(card.queryByRole("checkbox")).toBeNull();
     await expect(card.queryByRole("button", { name: /^Rhystic Testbed/ })).toBeNull();
   },

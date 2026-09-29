@@ -1,10 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
   countTodos,
+  isBlankList,
+  listTitle,
+  parseTodoBody,
   parseTodos,
   sameTodos,
-  todosText,
   toggleTodo,
+  UNTITLED_LIST,
   visibleTodos,
 } from "./todoMarkdown";
 
@@ -17,7 +20,12 @@ import {
  * and a reader that divided by a constant would hold for exactly one of them.
  *
  * The case that matters most is the one about a line with no rule. Everything else asserts that a
- * shape is *read*; that one asserts that a shape this file cannot read is still **shown**.
+ * shape is *read*; that one asserts that a shape this file cannot read is still **shown** — as an
+ * open to-do under #672, and as text since a list became a document (#688).
+ *
+ * **Every #672 body below is read exactly as it was.** A list written before headings and text
+ * existed is one `todos` block, and `parseTodos` answers the tree it always answered — the stray
+ * line is the only case whose expectation moved, and it moved on purpose.
  */
 const TWO = "- [ ] Revise tokens\n  - [ ] Add a Treasure maker\n  - [x] Cut Clue tokens\n- [x] Sleeve the deck";
 const FOUR = "- [ ] Revise tokens\n    - [ ] Add a Treasure maker\n        - [x] Deeper\n- [ ] Next";
@@ -130,11 +138,17 @@ describe("parseTodos", () => {
     expect(item.children[0].text).toBe("child");
   });
 
-  it("reads a line it does not understand as an open to-do — nothing is dropped", () => {
-    expect(parseTodos("just words").map((i) => [i.text, i.done])).toEqual([["just words", false]]);
+  it("reads a line with no bullet as text, not as a to-do — and still drops nothing", () => {
+    expect(parseTodos("just words")).toEqual([]);
+    expect(parseTodoBody("just words")).toEqual([
+      { kind: "text", inlines: [{ kind: "text", text: "just words" }], text: "just words", line: 0 },
+    ]);
+    expect(parseTodoBody("---")).toMatchObject([{ kind: "text", text: "---", line: 0 }]);
+  });
+
+  it("still reads a bullet as a to-do, box or no box", () => {
     expect(parseTodos("- plain bullet")[0]).toMatchObject({ text: "plain bullet", done: false });
     expect(parseTodos("- [x]glued")[0]).toMatchObject({ text: "[x]glued", done: false });
-    expect(parseTodos("---")[0].text).toBe("---");
   });
 
   it("ignores blank lines and CRLF", () => {
@@ -277,15 +291,225 @@ describe("sameTodos", () => {
   });
 });
 
-describe("todosText", () => {
-  it("stores an empty checklist as nothing", () => {
-    expect(todosText("- [ ] ")).toBe("");
-    expect(todosText("")).toBe("");
-    expect(todosText("- [ ] a")).toBe("- [ ] a");
+/**
+ * A to-do list as a document (#688): headings and text between any number of task lists.
+ *
+ * `DOC` is the plan's body, and the one `NoteEditor.test.tsx`'s corpus pins from the writing side.
+ */
+const DOC = [
+  "## Mana",
+  "",
+  "- [ ] Cut a land",
+  "  - [x] Check curve",
+  "",
+  "Some notes about **why**.",
+  "",
+  "- [ ] Revise tokens",
+].join("\n");
+
+describe("parseTodoBody", () => {
+  it("reads headings, text and two lists in the order they were written", () => {
+    expect(parseTodoBody(DOC)).toEqual([
+      { kind: "heading", level: 2, inlines: [{ kind: "text", text: "Mana" }], text: "Mana", line: 0 },
+      {
+        kind: "todos",
+        items: [
+          {
+            done: false,
+            inlines: [{ kind: "text", text: "Cut a land" }],
+            text: "Cut a land",
+            line: 2,
+            children: [
+              {
+                done: true,
+                inlines: [{ kind: "text", text: "Check curve" }],
+                text: "Check curve",
+                line: 3,
+                children: [],
+              },
+            ],
+          },
+        ],
+      },
+      {
+        kind: "text",
+        inlines: [
+          { kind: "text", text: "Some notes about " },
+          { kind: "strong", text: "why" },
+          { kind: "text", text: "." },
+        ],
+        text: "Some notes about why.",
+        line: 5,
+      },
+      {
+        kind: "todos",
+        items: [
+          {
+            done: false,
+            inlines: [{ kind: "text", text: "Revise tokens" }],
+            text: "Revise tokens",
+            line: 7,
+            children: [],
+          },
+        ],
+      },
+    ]);
   });
 
-  it("leaves a body with anything in it byte for byte", () => {
-    const body = "- [ ] a  \r\n  b\r\n- [ ] ";
-    expect(todosText(body)).toBe(body);
+  it("reads a #672 body as one list, the tree parseTodos always answered", () => {
+    expect(parseTodoBody(TWO)).toEqual([{ kind: "todos", items: parseTodos(TWO) }]);
+    expect(parseTodoBody(FOUR)).toEqual([{ kind: "todos", items: parseTodos(FOUR) }]);
+  });
+
+  it("reads #, ## and ### as headings, and draws a deeper one as the third", () => {
+    expect(
+      parseTodoBody("# one\n\n## two\n\n### three\n\n#### four\n\n###### six\n\n####### seven"),
+    ).toMatchObject([
+      { kind: "heading", level: 1, text: "one", line: 0 },
+      { kind: "heading", level: 2, text: "two", line: 2 },
+      { kind: "heading", level: 3, text: "three", line: 4 },
+      { kind: "heading", level: 3, text: "four", line: 6 },
+      { kind: "heading", level: 3, text: "six", line: 8 },
+      { kind: "text", text: "####### seven", line: 10 },
+    ]);
+  });
+
+  it("treats an empty paragraph as no change, and leaves a paragraph with words as one", () => {
+    expect(sameTodos("- [ ] a\n\n&nbsp;", "- [ ] a")).toBe(true);
+    expect(sameTodos("- [ ] a\n\n&nbsp;\n\n- [ ] b", "- [ ] a\n\n- [ ] b")).toBe(true);
+    expect(sameTodos("- [ ] a\n\nwords", "- [ ] a")).toBe(false);
+  });
+
+  it("keeps #hashtag as text, since a heading needs the space after its hashes", () => {
+    expect(parseTodoBody("#hashtag")).toMatchObject([{ kind: "text", text: "#hashtag" }]);
+  });
+
+  it("reads two text lines with no blank between as one paragraph", () => {
+    expect(parseTodoBody("first line\nsecond line")).toEqual([
+      {
+        kind: "text",
+        inlines: [{ kind: "text", text: "first line second line" }],
+        text: "first line second line",
+        line: 0,
+      },
+    ]);
+  });
+
+  it("carries a hard break inside a paragraph as a newline, and a blank line ends it", () => {
+    expect(parseTodoBody("first  \nsecond\n\nthird")).toMatchObject([
+      { kind: "text", text: "first\nsecond", line: 0 },
+      { kind: "text", text: "third", line: 3 },
+    ]);
+  });
+
+  it("lets a heading interrupt a paragraph, as CommonMark does", () => {
+    expect(parseTodoBody("words\n## Head").map((b) => b.kind)).toEqual(["text", "heading"]);
+  });
+
+  it("reads the escape the editor writes for a paragraph that starts like a to-do as text", () => {
+    expect(parseTodoBody("\\- [ ] not a box")).toEqual([
+      {
+        kind: "text",
+        inlines: [{ kind: "text", text: "- [ ] not a box" }],
+        text: "- [ ] not a box",
+        line: 0,
+      },
+    ]);
+    expect(parseTodos("\\- [ ] not a box")).toEqual([]);
+    // The spelling the editor actually writes escapes the brackets as well.
+    expect(parseTodoBody("\\- \\[ \\] not a box")).toMatchObject([
+      { kind: "text", text: "- [ ] not a box" },
+    ]);
+    expect(toggleTodo("\\- \\[ \\] not a box", 0)).toBeNull();
+    const escaped = parseTodoBody("\\* star\n\n\\+ plus\n\n\\# hash");
+    expect(escaped.map((b) => (b.kind === "todos" ? b.kind : b.text))).toEqual([
+      "* star",
+      "+ plus",
+      "# hash",
+    ]);
+  });
+
+  it("still lets a line indented under an open to-do continue it rather than become text", () => {
+    const body = "- [ ] first\n  more words";
+    expect(parseTodoBody(body)).toEqual([{ kind: "todos", items: parseTodos(body) }]);
+    expect(parseTodos(body)[0].text).toBe("first more words");
+  });
+
+  it("still lets the unindented rest of a hard-broken top-level to-do continue it", () => {
+    expect(parseTodoBody("- [ ] first  \nsecond").map((b) => b.kind)).toEqual(["todos"]);
+  });
+
+  it("reads an unindented line after a to-do as text, where #672 read an open to-do", () => {
+    const body = "- [ ] a\nwords\n- [ ] b";
+    expect(parseTodoBody(body).map((b) => b.kind)).toEqual(["todos", "text", "todos"]);
+    expect(parseTodos(body).map((i) => i.text)).toEqual(["a", "b"]);
+  });
+
+  it("lets a heading close every open to-do, so an indented item after it is a root", () => {
+    const body = "- [ ] a\n  - [ ] b\n## Next\n  - [ ] c";
+    expect(parseTodoBody(body).map((b) => b.kind)).toEqual(["todos", "heading", "todos"]);
+    expect(parseTodos(body).map((i) => i.text)).toEqual(["a", "c"]);
+  });
+
+  it("keeps one list across a blank line between its to-dos", () => {
+    expect(parseTodoBody("- [ ] a\n\n- [ ] b").map((b) => b.kind)).toEqual(["todos"]);
+  });
+
+  it("drops a list with nothing left in it, an empty paragraph and an empty heading", () => {
+    expect(parseTodoBody("- [ ] ")).toEqual([]);
+    expect(parseTodoBody("# Title\n\n- [ ] \n\nwords").map((b) => b.kind)).toEqual([
+      "heading",
+      "text",
+    ]);
+    expect(parseTodoBody("&nbsp;")).toEqual([]);
+    expect(parseTodoBody("## ")).toEqual([]);
+  });
+
+  it("answers nothing for an empty body", () => {
+    expect(parseTodoBody("")).toEqual([]);
+    expect(parseTodoBody("  \r\n\n\t")).toEqual([]);
+  });
+
+  it("concatenates every list's roots for parseTodos", () => {
+    expect(parseTodos(DOC).map((i) => [i.text, i.line])).toEqual([
+      ["Cut a land", 2],
+      ["Revise tokens", 7],
+    ]);
+    expect(countTodos(parseTodos(DOC))).toEqual({ open: 2, done: 1 });
+  });
+
+  it("ticks a to-do in a document and refuses the text and the headings", () => {
+    expect(toggleTodo(DOC, 3)).toBe(DOC.replace("- [x] Check", "- [ ] Check"));
+    expect(toggleTodo(DOC, 0)).toBeNull();
+    expect(toggleTodo(DOC, 5)).toBeNull();
+    expect(toggleTodo("\\- [ ] not a box", 0)).toBeNull();
+  });
+});
+
+describe("sameTodos over a document", () => {
+  it("lets an empty to-do come and go beside text, and tells text apart", () => {
+    expect(sameTodos(DOC, `${DOC}\n- [ ] `)).toBe(true);
+    expect(sameTodos("words", "other words")).toBe(false);
+    expect(sameTodos("## a", "### a")).toBe(false);
+    expect(sameTodos("words", "- [ ] words")).toBe(false);
+  });
+});
+
+describe("isBlankList", () => {
+  it("is blank only with no title and no block", () => {
+    expect(isBlankList("", "- [ ] ")).toBe(true);
+    expect(isBlankList("  ", "")).toBe(true);
+    expect(isBlankList("Groceries", "")).toBe(false);
+    expect(isBlankList("", "hello")).toBe(false);
+    expect(isBlankList("", "# Heading")).toBe(false);
+  });
+});
+
+describe("listTitle", () => {
+  it("answers the trimmed title, or Untitled list", () => {
+    expect(UNTITLED_LIST).toBe("Untitled list");
+    expect(listTitle("  ")).toBe("Untitled list");
+    expect(listTitle("")).toBe("Untitled list");
+    expect(listTitle("  Groceries ")).toBe("Groceries");
   });
 });

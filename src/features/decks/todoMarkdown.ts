@@ -1,39 +1,62 @@
 /**
- * A deck's to-do list, read into a tree the home widget can draw and tick.
+ * A deck to-do list's body, read into the blocks a card draws and the tree the home widget ticks.
  *
- * **A to-do is not a note**, and the root `CLAUDE.md`'s four notes are why that sentence is worth
- * writing. A deck's to-do list is one column on the deck (`decks.todos`), edited as one document in
- * the checklist mode of the same editor the deck notes use, and a *to-do* is one line of it — not a
- * row anywhere, with no id, no date and no sync uid. It shares the notes' editor and their inline
- * dialect and nothing else.
+ * **A to-do is not a note**, and the root `CLAUDE.md`'s notes are why that sentence is worth
+ * writing — more so since a list grew a title and a card of its own (#688), which is exactly the
+ * shape a deck note has. A deck to-do list is a row of `deck_todo_lists` with a title and a body,
+ * edited in the checklist mode of the same editor the deck notes use, and a *to-do* is one line of
+ * that body — not a row anywhere, with no id, no date and no sync uid. It shares the notes' editor,
+ * their inline dialect and their card's look, and nothing else.
+ *
+ * **A body is a document now, not a checklist.** #672 made every line a to-do: a list was one task
+ * list, and a line with no box was read as an open to-do with its words, because nothing the
+ * editor wrote could be anything else. #688 reversed that — the editor holds headings and
+ * paragraphs beside any number of task lists — so {@link parseTodoBody} answers three kinds of
+ * {@link TodoBlock}: a `heading` (`#` to `###`), `text` (a paragraph), and `todos` (one task list,
+ * as the tree #672 read). **A #672 body reads exactly as it did**: every line of it is an item, so
+ * it is one `todos` block holding the same tree, and {@link parseTodos} — every list's items
+ * concatenated — answers it byte for byte what it always answered. The one expectation that moved
+ * is the stray line: an unindented line that is neither an item nor the rest of one is **text**
+ * now, where #672 drew it as an open to-do.
  *
  * **This is a reader for Tiptap's own serialization, not a markdown parser**, and the narrow name
- * is `noteMarkdown.ts`' reason carried over. The body is what the task item extension writes:
- * `- [ ] text` and `- [x] text`, each sub-to-do indented under its parent, a hard break as two
- * trailing spaces and the rest of the line on the next. `NoteEditor.test.tsx`'s checklist corpus
- * pins the writing side byte for byte; this file pins the reading side against the same shapes.
- * The inline text goes through `noteMarkdown.ts`' own `parseInlines`, so a to-do and a note are
- * one inline dialect rather than two that agree today.
+ * is `noteMarkdown.ts`' reason carried over. The body is what the editor writes: blocks separated
+ * by one blank line, `# `/`## `/`### ` headings, paragraphs, and task lists of `- [ ] text` and
+ * `- [x] text` with each sub-to-do indented under its parent. `NoteEditor.test.tsx`'s checklist
+ * corpus pins the writing side byte for byte; this file pins the reading side against the same
+ * shapes. The inline text goes through `noteMarkdown.ts`' own `parseInlines`, so a to-do, a line
+ * of text and a note are one inline dialect rather than three that agree today — and that is also
+ * where the **escape** is read: a paragraph the reader typed as `- [ ] literal` is written
+ * `\- \[ \] literal` (the brackets escaped too — measured, `NoteEditor.test.tsx` pins it), which no
+ * item rule matches, and whose backslashes `parseInlines` takes off. The
+ * same goes for a leading `\*`, `\+` and `\#`, so a paragraph that only *looks* like a to-do or a
+ * heading is drawn as the words the reader typed.
+ *
+ * **Continuation still wins over text.** A line that is not an item continues the open item above
+ * it when it is indented past that item's marker, or when the line before it ended in a hard
+ * break — the second is how the editor writes a break in a top-level to-do, whose rest of line is
+ * not indented at all. Only a line that does neither is text. A heading or a line of text closes
+ * every open item, so an item after it starts a new list, however deep it is indented.
  *
  * **Depth is compared by width against a stack, never divided out of a constant.** The editor's
  * nesting indent is a setting of the markdown extension (two spaces by default, a tab if anybody
- * changes it) and the implementation task measures it rather than assuming it. A reader that
- * computed `indent / 2` would hold for exactly one answer to that measurement; one that asks "is
- * this line deeper than the open item above it" holds for all of them, and for a body pasted from
- * anywhere else. A tab is measured to its next four-column stop, so a tab and four spaces are one
- * depth.
+ * changes it). A reader that computed `indent / 2` would hold for exactly one answer to that
+ * question; one that asks "is this line deeper than the open item above it" holds for all of them,
+ * and for a body pasted from anywhere else. A tab is measured to its next four-column stop, so a
+ * tab and four spaces are one depth.
  *
  * **Nothing is ever dropped for not being understood** — `noteMarkdown.ts`' rule, and the one this
- * file is arranged around. A line with no box reads as an open to-do with its words; a stray
- * paragraph, a thematic break, a bullet somebody typed by hand are all still on screen. No path
- * writes such a line today; the rule exists so that a body from a future build, a sync peer or a
- * paste still shows every line. The one thing that is left out is an **empty** to-do with nothing
- * under it — the editor's placeholder line, which is a place to type rather than a thing to do.
+ * file is arranged around. It held under #672 by reading an unknown line as a to-do; it holds now
+ * by reading it as text, so a thematic break, a `#hashtag` or a line pasted from anywhere is still
+ * on the card. What *is* left out is only what the editor writes for **nothing**:
+ * an empty to-do with nothing under it (a place to type rather than a thing to do), a list with no
+ * to-do left in it, and an empty paragraph or heading.
  *
- * **What a to-do is called is its source line.** The widget ticks one by flipping the marker on
- * line `n` of the body it read, and the compare-and-set write is what makes that name safe: a body
- * that moved since is refused rather than guessed at. So {@link toggleTodo} touches that one
- * character and no other byte, and it refuses every line this reader does not draw as a box.
+ * **What a to-do is called is its source line.** The widget and the card tick one by flipping the
+ * marker on line `n` of the body they read, and the compare-and-set write is what makes that name
+ * safe: a body that moved since is refused rather than guessed at. So {@link toggleTodo} touches
+ * that one character and no other byte, and it refuses every line this reader does not draw as a
+ * box — a heading, a line of text and an escaped `\- [ ]` among them.
  */
 import { HARD_BREAK, inlineText, parseInlines, type Inline } from "./noteMarkdown";
 
@@ -52,6 +75,28 @@ export interface TodoItem {
   line: number;
   children: TodoItem[];
 }
+
+/**
+ * One block of a to-do list's body, in the order it was written.
+ *
+ * `heading` and `text` carry the 0-based source line they start on, for a key and nothing else —
+ * neither can be ticked. `todos` is one task list, and its items carry their own lines. **Three
+ * kinds because the editor writes three** (`(paragraph | heading | taskList)+`); a construct
+ * outside them reads as `text`, which is the *nothing dropped* rule rather than a fourth kind.
+ */
+export type TodoBlock =
+  | { kind: "heading"; level: 1 | 2 | 3; inlines: Inline[]; text: string; line: number }
+  | { kind: "text"; inlines: Inline[]; text: string; line: number }
+  | { kind: "todos"; items: TodoItem[] };
+
+/**
+ * What a list with no title is drawn as — the band's card, the dialog, the widget's subheading.
+ *
+ * One constant so that three surfaces cannot come to say it three ways. It is a **display**
+ * answer and never stored: an untitled list is `title = ''` in `deck_todo_lists`, and a reader who
+ * later types a title replaces nothing.
+ */
+export const UNTITLED_LIST = "Untitled list";
 
 /**
  * A bullet, optionally a box, then the item's text. Group 1 the indent, 2 the box's mark, 3 the
@@ -74,6 +119,20 @@ const ITEM = /^([ \t]*)[-*+](?:[ \t]+|$)(?:\[( |x|X)\](?:[ \t]+|$))?([\s\S]*)$/;
  */
 const BOXED = /^([ \t]*[-*+][ \t]+\[)( |x|X)(\](?:[ \t][\s\S]*)?)$/;
 
+/**
+ * `#` to `######`, then whitespace and the heading's words — or nothing, CommonMark's empty
+ * heading. Group 1 the hashes, 2 the words. **Everything past the third is drawn as the third.**
+ *
+ * `noteMarkdown.ts`' rule and its reason, which the plan for this dialect first got wrong (it read
+ * `#### x` as text): the toolbar offers `H1`–`H3`, but a heading's `levels` bound Tiptap's input
+ * rules and not its schema, so a pasted `#### four` survives in the body and the editor draws it as
+ * a third-level heading. Reading it as text would put `#### four`, hashes and all, on the card
+ * beside an editor drawing a heading — the revision `noteMarkdown.ts` records trying and undoing.
+ * The space after the hashes is what keeps `#hashtag` text, and ` {0,3}` is CommonMark's indent
+ * allowance: four spaces in is not a heading.
+ */
+const HEADING = /^ {0,3}(#{1,6})(?:[ \t]+([\s\S]*))?$/;
+
 /** The leading whitespace a depth is measured from. Always matches, if only the empty string. */
 const LEAD = /^[ \t]*/;
 
@@ -83,9 +142,11 @@ const TAB_STOP = 4;
 /**
  * What the editor writes for a paragraph with nothing in it, which its own reader reads back as
  * empty — the paragraph extension's marker, entity and character both. Read the same way here, or
- * an emptied to-do would draw as the six characters of an entity and keep a list alive in storage.
+ * an emptied to-do or paragraph would draw as the six characters of an entity and keep a list
+ * alive in storage. The character is spelled as an escape because a literal no-break space is
+ * invisible in source and one rewrite of this file already turned it into a plain space.
  */
-const EMPTY_PARAGRAPH = ["&nbsp;", " "];
+const EMPTY_PARAGRAPH = ["&nbsp;", "\u00a0"];
 
 /** How many columns a run of spaces and tabs occupies, with each tab stopping on a multiple of four. */
 function width(indent: string): number {
@@ -95,7 +156,7 @@ function width(indent: string): number {
 }
 
 /**
- * One source line of an item, and whether the line after it starts on a new row.
+ * One source line of an item or a paragraph, and whether the line after it starts on a new row.
  *
  * The break travels with the line before it, `noteMarkdown.ts`' arrangement: consecutive lines are
  * one wrapped sentence unless the reader asked otherwise.
@@ -113,20 +174,43 @@ interface Draft {
   children: Draft[];
 }
 
+/** A block as it is being read — a paragraph can still grow, a list can still take items. */
+type DraftBlock =
+  | { kind: "heading"; level: 1 | 2 | 3; source: string; line: number }
+  | { kind: "text"; runs: Run[]; line: number }
+  | { kind: "todos"; roots: Draft[] };
+
 /**
- * A body → the tree of its to-dos. An empty body answers an empty list.
+ * A body → its blocks, in the order they were written. An empty body answers an empty list.
  *
- * Line-based, with a stack of the items still open for children. A line deeper than the item on
- * top of it is that item's child; a line at the same depth or shallower closes items until one is
- * shallower than it. A line that is not an item continues the item above it when it is indented
- * past that item's marker or when the line before ended in a hard break — the second is how the
- * editor writes a break in a top-level to-do, whose rest of line is not indented at all.
+ * Line-based, with a stack of the items still open for children and at most one paragraph still
+ * open for lines. Each non-blank line is tried in this order, and the order is the rule:
  *
- * @param body the list exactly as `decks.todos` holds it. CRLF is read as LF; nothing is rewritten.
+ * 1. **An item** (#672's {@link ITEM}) joins the list the last block is, or starts a new one if the
+ *    last block is a heading or text. A line deeper than the item on top of the stack is that
+ *    item's child; one at the same depth or shallower closes items until one is shallower than it.
+ * 2. **The rest of an open item** — indented past its marker, or after a hard break. #672's rule,
+ *    unchanged, which is why it is tried before anything that could read the line as text.
+ * 3. **The rest of a paragraph after a hard break**, whatever it starts with — the same rule one
+ *    block over, so a broken line of text is not split into a paragraph and a heading.
+ * 4. **A heading**, which closes the stack and the paragraph. It interrupts a paragraph, as
+ *    CommonMark's does.
+ * 5. **Text**, which closes the stack and extends the open paragraph or starts one. Consecutive
+ *    lines are one paragraph, joined with a space; a blank line ends it.
+ *
+ * A blank line ends a paragraph and nothing else: inside an item it is a second paragraph (drawn
+ * as the line break it looks like), and between two items it leaves them one list — the editor
+ * joins adjacent task lists, so a blank between items is not two lists' worth of anything.
+ *
+ * @param body the list exactly as `deck_todo_lists.body` holds it. CRLF is read as LF; nothing is
+ *   rewritten.
  */
-export function parseTodos(body: string): TodoItem[] {
-  const roots: Draft[] = [];
+export function parseTodoBody(body: string): TodoBlock[] {
+  const blocks: DraftBlock[] = [];
   const stack: { indent: number; draft: Draft }[] = [];
+  // The paragraph a text line would join, or undefined once a blank line or another block has
+  // closed it. The same array as the `runs` of the block it belongs to, so pushing here grows it.
+  let paragraph: Run[] | undefined;
   // The line before ended in a hard break, so this one is the rest of it whatever its indent.
   let broke = false;
   // A blank line stands between this line and the last, which inside an item is a second
@@ -138,6 +222,7 @@ export function parseTodos(body: string): TodoItem[] {
     if (src.trim() === "") {
       broke = false;
       blank = true;
+      paragraph = undefined;
       return;
     }
     // Read before anything trims, because two trailing spaces are a hard break and a trim eats
@@ -147,27 +232,85 @@ export function parseTodos(body: string): TodoItem[] {
     const item = ITEM.exec(src);
     const open = stack.length > 0 ? stack[stack.length - 1] : undefined;
 
-    if (!item && open && (indent > open.indent || broke)) {
-      const runs = open.draft.runs;
-      if (blank) runs[runs.length - 1].br = true;
-      runs.push({ text: src, br });
-    } else {
+    if (item) {
+      paragraph = undefined;
+      const last = blocks.length > 0 ? blocks[blocks.length - 1] : undefined;
+      let list: { kind: "todos"; roots: Draft[] };
+      if (last?.kind === "todos") {
+        list = last;
+      } else {
+        list = { kind: "todos", roots: [] };
+        blocks.push(list);
+      }
       const draft: Draft = {
-        done: item?.[2] === "x" || item?.[2] === "X",
-        runs: [{ text: item ? item[3] : src, br }],
+        done: item[2] === "x" || item[2] === "X",
+        runs: [{ text: item[3], br }],
         line,
         children: [],
       };
       while (stack.length > 0 && stack[stack.length - 1].indent >= indent) stack.pop();
       const parent = stack.length > 0 ? stack[stack.length - 1] : undefined;
-      (parent ? parent.draft.children : roots).push(draft);
+      (parent ? parent.draft.children : list.roots).push(draft);
       stack.push({ indent, draft });
+    } else if (open && (indent > open.indent || broke)) {
+      const runs = open.draft.runs;
+      if (blank) runs[runs.length - 1].br = true;
+      runs.push({ text: src, br });
+    } else if (paragraph && broke) {
+      paragraph.push({ text: src, br });
+    } else {
+      // Anything past the two continuation rules closes every open item: an item after this
+      // block starts a list of its own, however deep it is indented.
+      stack.length = 0;
+      const heading = HEADING.exec(src);
+      if (heading) {
+        paragraph = undefined;
+        const level = Math.min(heading[1].length, 3) as 1 | 2 | 3;
+        blocks.push({ kind: "heading", level, source: heading[2] ?? "", line });
+      } else if (paragraph) {
+        paragraph.push({ text: src, br });
+      } else {
+        paragraph = [{ text: src, br }];
+        blocks.push({ kind: "text", runs: paragraph, line });
+      }
     }
     broke = br;
     blank = false;
   });
 
-  return finish(roots);
+  return finishBlocks(blocks);
+}
+
+/**
+ * A body → the tree of its to-dos: every list's top-level items, in order, concatenated.
+ *
+ * The widget, the band's count and {@link countTodos} read this and not the blocks, because a
+ * to-do's text around it changes nothing about how much is left to do. For a #672 body — one
+ * list, no text — it is the tree it always was.
+ */
+export function parseTodos(body: string): TodoItem[] {
+  const items: TodoItem[] = [];
+  for (const block of parseTodoBody(body)) {
+    if (block.kind === "todos") items.push(...block.items);
+  }
+  return items;
+}
+
+/**
+ * Whether a list says nothing at all: no title once trimmed, and no block in its body.
+ *
+ * **The dialog's _closed untouched creates nothing_ test**, and the two halves are why it takes
+ * both arguments: a list with only a title is a list (the reader named it and will fill it later),
+ * and so is a list with only text. A body of the editor's lone empty to-do — what an untouched
+ * dialog holds — has no block, so it is blank.
+ */
+export function isBlankList(title: string, body: string): boolean {
+  return title.trim() === "" && parseTodoBody(body).length === 0;
+}
+
+/** A list's title as it is drawn: trimmed, or {@link UNTITLED_LIST} when nothing is left. */
+export function listTitle(title: string): string {
+  return title.trim() || UNTITLED_LIST;
 }
 
 /** A run's words: the hard break's marker off its end, the indent off its front. */
@@ -177,7 +320,7 @@ function runText(text: string): string {
 }
 
 /**
- * An item's runs as one string — a space between them, or a newline after a break.
+ * Runs as one string — a space between them, or a newline after a break.
  *
  * Joined **before** the inlines are read, which is `noteMarkdown.ts`' order and for the same
  * reason: a bold run the reader broke in the middle is one bold run, and reading each line on its
@@ -190,6 +333,35 @@ function joinRuns(runs: Run[]): string {
     text += runText(runs[i].text);
   }
   return text.trim();
+}
+
+/**
+ * Draft blocks → blocks, each emptied block dropped.
+ *
+ * **Emptiness is asked of the words, after the marks are read** — a paragraph of `&nbsp;` is the
+ * editor's empty line and a heading of nothing is a place a heading was started, and neither says
+ * anything a card could draw. A list is dropped only when {@link finish} leaves no item in it,
+ * which is the editor's lone empty to-do and nothing else.
+ */
+function finishBlocks(drafts: DraftBlock[]): TodoBlock[] {
+  const out: TodoBlock[] = [];
+  for (const draft of drafts) {
+    if (draft.kind === "todos") {
+      const items = finish(draft.roots);
+      if (items.length > 0) out.push({ kind: "todos", items });
+      continue;
+    }
+    const source = draft.kind === "heading" ? runText(draft.source) : joinRuns(draft.runs);
+    const inlines = parseInlines(source);
+    const text = inlineText(inlines);
+    if (text.trim() === "") continue;
+    out.push(
+      draft.kind === "heading"
+        ? { kind: "heading", level: draft.level, inlines, text, line: draft.line }
+        : { kind: "text", inlines, text, line: draft.line },
+    );
+  }
+  return out;
 }
 
 /**
@@ -213,8 +385,8 @@ function finish(drafts: Draft[]): TodoItem[] {
 /**
  * How many to-dos are open and how many done, at every depth.
  *
- * A sub-to-do is a to-do: the count in the band's header and the widget's heading say how much is
- * left to do, and a parent ticked with two open children under it has not got nothing left.
+ * A sub-to-do is a to-do: the count on a card and the widget's heading say how much is left to
+ * do, and a parent ticked with two open children under it has not got nothing left.
  */
 export function countTodos(items: TodoItem[]): { open: number; done: number } {
   let open = 0;
@@ -237,7 +409,8 @@ export function countTodos(items: TodoItem[]): { open: number; done: number } {
  * An open box is ticked with a lowercase `x`, which is what the editor writes; a ticked one of
  * either case is opened. A line ending is kept exactly as it was, a trailing `\r` included, so a
  * body written on another platform is not rewritten by a tick. `null` for a line past either end,
- * a line that is not an integer, and every line {@link parseTodos} does not read as a boxed to-do.
+ * a line that is not an integer, and every line {@link parseTodoBody} does not read as a boxed
+ * to-do — a heading, a line of text and the escaped `\- [ ]` of a paragraph among them.
  */
 export function toggleTodo(body: string, line: number): string | null {
   const lines = body.split("\n");
@@ -290,8 +463,13 @@ function emptyItem(line: string): boolean {
  * whitespace at the end of each line, the blank lines at the end of the body, and **every empty
  * to-do with nothing under it** — an item line with no words ({@link emptyItem}) whose next
  * non-blank line is not indented deeper. Read from the end, so the line tested against is the next
- * one *kept*: an emptied parent whose only sub-to-do was itself empty goes too, as `parseTodos`
- * drops it. Everything else is the body's own text, character for character.
+ * one *kept*: an emptied parent whose only sub-to-do was itself empty goes too, as `parseTodoBody`
+ * drops it. **An empty paragraph goes too** — a line that is only the editor's `&nbsp;` marker,
+ * which is what Enter on an empty top-level to-do leaves behind — and so a run of blank lines reads
+ * as one, since the marker's own line leaves two blanks where there was one: neither changes a word
+ * the reader sees, and both would otherwise move the list's `updated_at` over a caret that merely
+ * passed through. **Text and headings with words are left exactly as written.** Everything else is
+ * the body's own text, character for character.
  */
 function normalised(body: string): string {
   const lines = body.replace(/\r/g, "").split("\n").map((line) => line.trimEnd());
@@ -300,8 +478,8 @@ function normalised(body: string): string {
   let below: number | null = null;
   for (let i = lines.length - 1; i >= 0; i -= 1) {
     const line = lines[i];
-    if (line === "") {
-      kept.push(line);
+    if (line === "" || (!ITEM.test(line) && EMPTY_PARAGRAPH.includes(line.trim()))) {
+      if (kept[kept.length - 1] !== "") kept.push("");
       continue;
     }
     const indent = width(LEAD.exec(line)?.[0] ?? "");
@@ -317,32 +495,18 @@ function normalised(body: string): string {
  * comparison, and lossless everywhere but the handful of differences that function names**.
  *
  * **The one that matters is an empty to-do with nothing under it**: the line New to-do appends and
- * Enter after the last line makes, which is a place to type rather than a thing to do. The band
+ * Enter after the last line makes, which is a place to type rather than a thing to do. The autosave
  * asks this rather than comparing bytes before it writes, because a write for that line alone
- * would move the deck's `updated_at` — and with it *Last edited* in the widget and the gallery —
- * over a change nothing reads. The rest it lets differ is as invisible: line endings, trailing
- * whitespace, trailing blank lines.
+ * would move the list's and the deck's `updated_at` — and with them *Last edited* in the widget
+ * and the gallery — over a change nothing reads. The rest it lets differ is as invisible: line
+ * endings, trailing whitespace, trailing blank lines.
  *
- * ⚠️ **Never compare what {@link parseTodos} reads instead**, which this did for one review round.
- * Its inlines are lossy on purpose — `noteMarkdown.ts`' reader drops a mark nested inside another
- * and reads a link with no scheme as plain text — so `**a *b***` against `**a b**`, or two links
- * that differ only in their address, read as one body, and the band never sent the edit: it
+ * ⚠️ **Never compare what {@link parseTodoBody} reads instead**, which this did for one review
+ * round. Its inlines are lossy on purpose — `noteMarkdown.ts`' reader drops a mark nested inside
+ * another and reads a link with no scheme as plain text — so `**a *b***` against `**a b**`, or two
+ * links that differ only in their address, read as one body, and the edit was never sent: it
  * vanished at the next remount. The editor writes exactly those shapes.
  */
 export function sameTodos(a: string, b: string): boolean {
   return a === b || normalised(a) === normalised(b);
-}
-
-/**
- * The body as it should be stored: `""` when it holds no to-do, and otherwise exactly as written.
- *
- * An emptied checklist is still one empty item in the editor, and storing that line would keep a
- * deck in the widget's list for ever with nothing to show under it. Anything with a to-do in it is
- * stored byte for byte — the reader's own spacing is theirs, and a normaliser here would be a third
- * place deciding what the dialect looks like. So an empty to-do beside real ones is stored as it
- * stands when a real change is written with it; what keeps it from being written *on its own* is
- * {@link sameTodos}, at the band's write.
- */
-export function todosText(body: string): string {
-  return parseTodos(body).length === 0 ? "" : body;
 }

@@ -91,6 +91,7 @@ import type {
   FakeDeckLabel,
   FakeDeckNote,
   FakeDeckNoteCard,
+  FakeDeckTodoList,
   FakeDeckToken,
   FakeDeckTokenPrinting,
   FakeEntry,
@@ -932,12 +933,9 @@ function starterDecks(): FakeDeck[] {
       // finds filed under another deck, so the confirmation that takes a card off *this* deck's
       // list has something to take. Its own Sol Ring row therefore reads owned 1 of 1.
       archived: false,
-      // **The smaller of the two to-do lists** (user schema v58): one open item and nothing
-      // nested, so the home widget has a second deck to group under — and one whose `updatedAt`
-      // is older than deck 4's, so `deck_todo_lists`' newest-first order has two answers to put
-      // in order. The band stays shut (`todosOpen` absent reads `false`), which is what every
-      // editor story written before the band existed was drawn against.
-      todos: "- [ ] Cut three creatures",
+      // Carries one to-do list — see {@link starterDeckTodoLists}. The band stays shut
+      // (`todosOpen` absent reads `false`), which is what every editor story written before the
+      // band existed was drawn against.
       updatedAt: CLOCK_BASE - DAY,
     }),
     deck({
@@ -1004,18 +1002,8 @@ function starterDecks(): FakeDeck[] {
       lastVariant: "theory",
       lastGroupBy: "type",
       lastSortBy: "manaCost",
-      // **The larger to-do list** (user schema v58): an open item with two sub-to-dos, one done
-      // and one not, and a done item beside it — so a done to-do sits at both depths, the
-      // widget's `Show completed` switch has something to hide at each, and `Show sub-to-dos`
-      // has something to fold away. The indent is two spaces, and nothing here depends on the
-      // number: `todoMarkdown.ts` compares indent widths against a stack rather than dividing by
-      // a constant. The band stays shut, deck 2's reason.
-      todos: [
-        "- [ ] Revise tokens",
-        "  - [ ] Add a Treasure maker",
-        "  - [x] Cut Clue tokens",
-        "- [x] Sleeve the deck",
-      ].join("\n"),
+      // Carries two to-do lists — see {@link starterDeckTodoLists}. The band stays shut, deck
+      // 2's reason.
       updatedAt: CLOCK_BASE - 2 * HOUR,
     },
   ];
@@ -1383,6 +1371,75 @@ function starterDeckNoteCards(): FakeDeckNoteCard[] {
   return [
     { id: 1, noteId: TESTBED_NOTE, oracleId: printing("pcy", "45").oracleId },
     { id: 2, noteId: TESTBED_NOTE, oracleId: printing("mp2", "8").oracleId },
+  ];
+}
+
+/**
+ * The seeded `deck_todo_lists` rows (user schema v59) — three lists on two decks.
+ *
+ * **The first two are v58's two `decks.todos` bodies, converted the way the rung converts
+ * them**: one row each, titled `To-do`, stamped with the deck's own `updatedAt`. They keep what
+ * they were seeded for — deck 2's is one open item and nothing nested, and deck 4's has an open
+ * item with two sub-to-dos, one done and one not, beside a done item, so a done to-do sits at
+ * both depths, the widget's `Show completed` switch has something to hide at each and
+ * `Show sub-to-dos` has something to fold away. The indent is two spaces, and nothing depends on
+ * the number: `todoMarkdown.ts` compares indent widths against a stack rather than dividing by a
+ * constant. Every body there is a #672 body — every line a to-do — which is the shape the reader
+ * must keep reading exactly as before.
+ *
+ * **The third makes deck 4 the deck with two lists**, and it is the one written in v59's wider
+ * dialect: a heading, to-dos under it, a paragraph between two runs of to-dos. So the band has
+ * two cards to lay out, the widget has two lists to group under one deck, and the reader has
+ * every block kind to draw without a story typing one. Deck 4 and not a fifth deck, for
+ * {@link virtualDeckSeed}'s reason: a new deck in `starter` would move every count every story
+ * was written against.
+ *
+ * Stamped under {@link CLOCK_BASE} and no later than their deck, so `every_deck_todo_list`'s
+ * newest-first order reads deck 4's `To-do`, deck 4's `Mana`, then deck 2's.
+ */
+function starterDeckTodoLists(): FakeDeckTodoList[] {
+  return [
+    {
+      id: 1,
+      deckId: 2,
+      title: "To-do",
+      body: "- [ ] Cut three creatures",
+      sortOrder: 0,
+      createdAt: CLOCK_BASE - DAY,
+      updatedAt: CLOCK_BASE - DAY,
+    },
+    {
+      id: 2,
+      deckId: 4,
+      title: "To-do",
+      body: [
+        "- [ ] Revise tokens",
+        "  - [ ] Add a Treasure maker",
+        "  - [x] Cut Clue tokens",
+        "- [x] Sleeve the deck",
+      ].join("\n"),
+      sortOrder: 0,
+      createdAt: CLOCK_BASE - 2 * HOUR,
+      updatedAt: CLOCK_BASE - 2 * HOUR,
+    },
+    {
+      id: 3,
+      deckId: 4,
+      title: "Mana",
+      body: [
+        "## Mana",
+        "",
+        "- [ ] Cut a land",
+        "  - [x] Check curve",
+        "",
+        "Some notes about **why**.",
+        "",
+        "- [ ] Revise tokens",
+      ].join("\n"),
+      sortOrder: 1,
+      createdAt: CLOCK_BASE - 3 * HOUR,
+      updatedAt: CLOCK_BASE - 3 * HOUR,
+    },
   ];
 }
 
@@ -2083,6 +2140,7 @@ function starterSeed(): FakeDb {
     deckTokenPrintings: starterDeckTokenPrintings(),
     deckNotes: starterDeckNotes(),
     deckNoteCards: starterDeckNoteCards(),
+    deckTodoLists: starterDeckTodoLists(),
     deckAudit: starterAudit(),
     // The feed's other half. Its ids restart at 1 alongside `deckAudit`'s and that is what the
     // real tables do — two `INTEGER PRIMARY KEY`s counting independently — so the union holds

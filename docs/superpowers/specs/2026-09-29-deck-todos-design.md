@@ -32,6 +32,17 @@ Everything measured here was measured on Windows.
 > [home-page.md](../../reference/home-page.md) §16 and `src/features/decks/CLAUDE.md`'s *The To-do
 > band*.
 
+> **Amended 2026-09-29 again, by [issue #688](https://github.com/Msgaihede/mtg-grimoire/issues/688)
+> and [the titled to-do lists spec](2026-09-29-titled-todo-lists-design.md).** The owner reversed two
+> of the decisions settled above: **one checklist per deck** became several titled lists per deck,
+> rows of `deck_todo_lists` at user schema v59 that `decks.todos` was converted into and then
+> dropped; and **every line a to-do** became a to-do document, headings and paragraphs beside any
+> number of task lists, where a line that is not a to-do reads as text rather than as §5's open
+> to-do. §2's table, §4's `todos` column (`todos_open` stands), §5's three commands and §6's
+> editor open in the band describe v58 and no longer the tree — the editor and its autosave moved
+> into a dialog per list; everything here that the newer spec does not contradict still holds. The same three records above
+> carry what replaced it.
+
 ---
 
 ## 1. What is already true

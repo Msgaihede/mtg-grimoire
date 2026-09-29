@@ -5428,113 +5428,181 @@ Two things that fix carries, both easy to undo by accident:
 
 ## The To-do band
 
-User schema **v58**, 2026-09-29, [issue #672](https://github.com/Msgaihede/mtg-grimoire/issues/672).
-The storage side, the three commands and the compare-and-set are
+User schema **v59**, 2026-09-29, [issue #688](https://github.com/Msgaihede/mtg-grimoire/issues/688),
+which amends the band [issue #672](https://github.com/Msgaihede/mtg-grimoire/issues/672) shipped at
+v58 the same day. The storage side, the five commands and the compare-and-set are
 [decks-storage.md](../../../docs/reference/decks-storage.md)'s *Deck to-dos*; the home widget that
-gathers every deck's list is [home-page.md](../../../docs/reference/home-page.md) §16; the design is
-[the spec](../../../docs/superpowers/specs/2026-09-29-deck-todos-design.md).
+gathers every deck's lists is [home-page.md](../../../docs/reference/home-page.md) §16; the design is
+[the titled to-do lists spec](../../../docs/superpowers/specs/2026-09-29-titled-todo-lists-design.md),
+over [the deck to-dos spec](../../../docs/superpowers/specs/2026-09-29-deck-todos-design.md) wherever
+the newer one is silent.
 
-- **⚠️ A to-do list is not a note.** A deck has exactly one, stored whole in `decks.todos` and
-  edited as one document; a *to-do* is one line of it, with no id. It borrows the Notes band's
-  header and the notes' editor and nothing else — no cards, no dialog, no masonry, no Save.
-  `DeckTodosPanel.tsx` is the wiring and `TodosBand` the drawing over plain props (the Notes band's
-  split), `useDeckTodos.ts` owns the query and the one write, and `todoMarkdown.ts` draws every
-  conclusion about the text.
+**What #688 replaced.** #672's band was **one checklist per deck**, stored whole in `decks.todos`
+and edited in place as one always-open document in which **every line was a to-do**. The owner
+reversed both on 2026-09-29: a deck now holds **several titled lists**, rows of `deck_todo_lists`,
+drawn as cards the way deck notes are; and a list's body is **a to-do document**, headings and
+paragraphs beside any number of task lists. The editor moved out of the band into a dialog, and the
+band's autosave moved with it intact.
+
+- **⚠️ A to-do list is not a note — and it now looks exactly like one.** It has a title, a body and
+  a card, and it borrows the Notes band's header, the notes' editor and `NoteCard`'s frame. It has
+  no card attachments, no masonry drag, no Save button, no history row and no row in `deck_notes`.
+  A *to-do* is one checkbox line of a list's body, with no id; *text* is a heading or paragraph of
+  that body and is not a to-do. `DeckTodosPanel.tsx` is the wiring and `TodosBand` the drawing over
+  plain props (the Notes band's split); `TodoListCard.tsx` draws one list; `TodoListDialog.tsx`
+  edits one; `useDeckTodos.ts` owns the read, the tick, the delete and the save; and
+  `todoMarkdown.ts` draws every conclusion about the text.
 - **The last band on the page**: `DeckEditor` mounts it directly after `DeckNotesPanel`, gated on
   `row`. A `<section aria-label="To-do">`, never an `<aside>`, and `shrink-0` on its own root, both
   for the Notes band's reasons. **Shut by default**, through `decks.todos_open` and the ordinary
   `deck.update`. The header is the Notes band's grammar: the disclosure with `aria-expanded` and a
-  turning chevron, a mono `N open · M done` read off the **draft** so it moves as the reader ticks
-  (nothing for an empty list), and **New to-do** at the far end in `META_SUBMIT`, which opens a
-  shut band and asks the editor for a fresh item at the end. The read runs whether or not the band
-  is open, because the count is the reason to open it. One `role="alert"` line sits outside the
-  collapsible region, and a refused save outranks a refused read on it.
+  turning chevron, a mono `N open · M done` summed over **every list** (nothing when there is no
+  to-do), and **New to-do list** at the far end in `META_SUBMIT` — #672's *New to-do*, renamed —
+  which opens a shut band and opens the dialog on a list that does not exist yet. The read runs
+  whether or not the band is open, because the count is the reason to open it. One `role="alert"`
+  line sits outside the collapsible region.
+
+### The cards
+
+- **The open body is a grid of cards**, one per list in `sort_order`: a single column at narrow
+  widths, two tracks when the band is wide. Each is drawn in `NoteCard`'s frame — the surface box,
+  the title in its weight, `Edit` and `Delete` as `RowAction`s — and is **not `NoteCard` itself**,
+  which draws card art and a drag handle a list does not have. An empty title draws as **Untitled
+  list** (`listTitle`). No lists at all is one dim line, *No to-do lists yet. New to-do list starts
+  one.*
+- **A card loads no editor.** It renders `parseTodoBody`'s blocks — headings and text in `PROSE`'s
+  steps, to-dos as the widget draws them (a box, the words, one indent per level, done struck
+  through). The same rule as a read-only note: nothing on the read path may import `NoteEditor`
+  statically.
+- **A box ticks in place** — new in #688; #672's only tick outside the editor was the home widget's.
+  `toggleTodo(body, line)` → `deck_todo_list_update(deckId, id, null, next, body)`, **with the body
+  the card drew as `expected`**, so a card that is stale against its own dialog open in another
+  window, the widget's tick or a sync is refused rather than flipping whatever now sits on that
+  line. A success writes the new body into the cache at once; `TODOS_CHANGED` refetches and prints
+  its sentence on the band's alert line. While one tick is out, **every box on that card** is
+  `aria-disabled`, the widget's reason. A line with no box — a plain bullet — draws a dashed, inert
+  box, as in the widget.
+- **`Edit`, or a press on the card anywhere outside a box, opens the dialog on that list.**
+- **`Delete` asks first** — `CONFIRM_DESTRUCTIVE`, *Delete "<title>"? Its to-dos go with it.* — and
+  then deletes. It asks because nothing else can bring the list back: a list write files no undo
+  step.
+- **A failed read draws no cards and no empty sentence.** The grid is gated on the first read that
+  landed: a refused **first** read draws the alert and nothing else, because *No to-do lists yet*
+  over a reader who has some would be false — which is why `deck_todo_lists` is fallible in Rust. A
+  refused **refetch** later keeps the cards, since TanStack keeps the last good answer.
+- **A test that mounts `DeckEditor` mocks `deckTodoLists`**, or the band's refused read puts a
+  second `role="alert"` on the page and every `getByRole("alert")` in the file finds two — the Notes
+  band's trap, one band down. Under #672 the two mocks were `deckTodos` and `deckTodosSet`; both
+  methods are gone.
+
+### The dialog, and the autosave it took over
+
+`TodoListDialog` is a `Dialog` holding a title `<input>` (placeholder `Title`) and the lazy
+`NoteEditor` in checklist mode under it, with **Delete list** (behind the same confirm) and **Done**
+in its footer.
+
 - **The editor is reached through `React.lazy` and by nothing else.** `DeckNotesPanel.test.tsx`
   sweeps `src/` for a static import of `NoteEditor`, a type-only one included, so the checklist
-  mode's props are named at the call site and nowhere else in the file. A deck whose band stays
-  shut never fetches the chunk.
-- **The body is `select-text`**, because the editor's root is `select-none` (issue #473) and a
-  to-do is written to be read. The editor's `contenteditable` edits its own text whatever an
-  ancestor says; the class is for the rest of the region.
-- **The editor is `NoteEditor`'s checklist mode**, described here at the level of what it does:
-  - The document is one task list and every line is a to-do. An empty list shows the placeholder
-    *Add a to-do — Enter for the next, Tab to nest.*
-  - Enter on a to-do with words makes the next one, and so does Shift-Enter. Tab nests a to-do
-    under the one above it and Shift-Tab lifts it out. Enter on an **empty nested** to-do lifts
-    it; Enter on an **empty top-level** to-do does nothing. Backspace in an empty to-do removes
-    it.
-  - A to-do holds one paragraph and at most one nested list. A body holding more than one
-    top-level list is joined into one as it loads.
-  - The toolbar is the marks, a link, **Outdent** and **Indent**. Every row has a delete button,
-    which takes the to-do's sub-to-dos with it; deleting the only to-do leaves one empty one. The
-    editor's Ctrl+Z is the only undo a deleted to-do has, because a to-do write files no undo
-    step.
-  - A checkbox is named `Mark "<text>" done` or `Mark "<text>" not done`, after the to-do's **own**
-    line and never its sub-to-dos' words. The widget names its rows the same way.
-  - ⚠️ **Hard breaks are off, against the spec.** Tiptap's task-list markdown reader reads a task
-    item one line at a time, so the second half of a broken to-do came back as a line outside the
-    list — an invalid document — and no spelling of a break survived the round trip (measured
-    against `@tiptap/extension-list` 3.31.3). So Shift-Enter starts a new to-do rather than
-    breaking one. `todoMarkdown.ts` still reads a break, for a body written elsewhere; the editor
-    never writes one.
-  - The body is `- [ ] ` / `- [x] ` lines, each sub-to-do indented **two spaces per level** under
-    its parent — measured, and pinned byte for byte by `NoteEditor.test.tsx`'s to-do corpus.
-    `todoMarkdown.ts` compares indent widths against a stack rather than dividing by two, so it
-    holds whatever the editor writes.
-- **Autosave is `StickyNoteDialog`'s mechanism and its 600 ms**: a timer restarted on every change,
-  a flush when the caret leaves the editor, and a flush on unmount. Focus is tracked on a wrapper
-  around the editor, its toolbar and link field included, so moving the caret to New to-do or to
-  the disclosure counts as leaving and writes at once. **The band writes with no `expected`** — it
-  is the author's surface, and its draft is the truth of what the reader typed.
-- **One save at a time, in the order they were made.** The save mutation has a TanStack `scope`
-  per deck, because `deck_todos_set` waits for the write lock and the wait is not fair: without it
-  a newer save could land first, the older one last, and the band would adopt the older text over
-  the reader's newer words. A queued save still reads as pending, which holds the band still while
-  it waits. **The save cancels in-flight reads of its key before it caches its answer**, in
-  `onSuccess` and deliberately not in `onMutate`: `onMutate` runs when a save is *queued*, so a
-  read that began while it waited would still land stale after it. The save invalidates the
-  widget's key by name and **not `["decks"]`**, which would re-read the whole deck once per phrase
-  typed for the sake of one timestamp. ⚠️ **That holds in a single window only**: with two or more
-  open, the commit's `db:changed` (`changes.rs`) reaches the writing window too, and
-  `crossWindow.ts`' `refreshForTables` maps `decks` to `["decks"]` — so every window, the writer
+  mode's props are named at the call site and nowhere else in the file. A deck whose lists are never
+  opened never fetches the chunk.
+- **The editor surface is `select-text`**, because the editor's root is `select-none` (issue #473)
+  and a list is written to be read.
+- **It owns #672's autosave, moved out of the band intact.** `StickyNoteDialog`'s mechanism and its
+  600 ms: a timer restarted on every change, a flush when the caret leaves the editor, and a flush on
+  close and on unmount. Focus is tracked on a wrapper around the editor, its toolbar and link field
+  included. **The title rides the same save as the body**, so the two never write apart. **The
+  dialog writes with no `expected`** — it is the author's surface, and its draft is the truth of
+  what the reader typed.
+- **A new list has no id until its first save, and that save is the create.** `useTodoListSave`
+  reads the id **when it runs, not when it is queued**: `null` creates and stores the answered id,
+  and every later save updates that id. Saves run one at a time under a TanStack `scope` keyed **per
+  dialog instance** (`useId`), so an update queued behind the create waits for the id rather than
+  making a second list. **A dialog closed untouched creates nothing** — `isBlankList(title, body)`,
+  true when the title trims to nothing and `parseTodoBody` finds no block. A dialog closed after only
+  a title is not blank, and creates a list with the body `""`.
+- **One save at a time, in the order they were made** — #672's reason, kept: the write waits for
+  the database's write lock and the wait is not fair, so without the scope a newer save could land
+  first and the older one last, and the dialog would adopt the older text over the reader's newer
+  words. A queued save still reads as pending, which holds the dialog still while it waits. **The
+  save cancels in-flight reads of its key before it caches its answer**, in `onSuccess` and
+  deliberately not in `onMutate`: `onMutate` runs when a save is *queued*, so a read that began
+  while it waited would still land stale after it. The save invalidates the widget's key by name and
+  **not `["decks"]`**, which would re-read the whole deck once per phrase typed for the sake of one
+  timestamp. ⚠️ **That holds in a single window only**: with two or more open, the commit's
+  `db:changed` (`changes.rs`) reaches the writing window too, and `crossWindow.ts`'
+  `refreshForTables` maps `decks` and `deck_todo_lists` to `["decks"]` — so every window, the writer
   included, re-reads the deck once per autosave.
-- **Nothing is sent when the draft says the same thing as a body the band already agrees
+- **Nothing is sent when the draft says the same thing as a body the dialog already agrees
   with** — `todoMarkdown.ts`' `sameTodos`, a **string** comparison of the two bodies after taking
-  out only `\r`, trailing whitespace, trailing blank lines and every empty to-do with nothing
-  under it. So an empty to-do the reader has not typed in (New to-do, or Enter after the last
-  line, then a click away) is not a write, and does not move `updated_at` and *Last edited* over
-  nothing; a real change beside it is still stored byte for byte, empty line included. ⚠️ **It
-  must never compare what `parseTodos` reads**: those inlines drop a mark nested in another and
-  read a scheme-less link as words, so a nested italic or a changed link address was never sent
-  and vanished at the next remount — it shipped that way for one review round. **The
-  stored body counts only while no save is out**: while one is, the cache holds the body *before*
-  it, and a draft that came back to that body (delete a line, pause, Ctrl+Z) is a change from
-  what the disk is about to hold — skipping it once lost the revert, on screen and on disk, when
-  the stale save landed and the idle band adopted it. The band records the body it matched as
-  agreed, never the draft, so an unsent empty to-do stays on screen rather than reading as a body
-  from elsewhere and remounting the editor.
-- **A list changed elsewhere is taken only when the band is idle.** The widget ticking, another
-  window typing into the same deck's band and a sync apply all reach the query, because it sits
-  under `["decks"]`. The editor takes the new body only when the caret is not in it, nothing typed
-  is unsaved and no save is pending or queued — and takes it as a **remount** seeded with it (the
-  editor's `key`), never as text pushed into an editor the reader may be about to type in.
-  Otherwise the reader's typing wins and the next autosave overwrites what arrived: a tick lost
-  from the widget is recoverable at a glance, a sentence lost mid-type is not. **All of it is
-  decided during render or in an event, never with a `setState` in an effect.** A band closed from
-  elsewhere unmounts the editor without a blur React hears, so the caret flag is cleared during
-  render whenever no editor is drawn.
-- **A failed read mounts no editor.** The editor is gated on the first read that landed, not on the
-  query's current state. A refused **first** read draws the alert and no editor, because an editor
-  over a body nobody read is an empty checklist whose first keystroke would autosave `""` over the
-  deck's real list — which is also why `deck_todos` is fallible in Rust. A refused **refetch** later
-  keeps the editor the reader is typing in, since TanStack keeps the last good answer.
-- **An empty checklist is not a to-do.** The editor draws an emptied list as one empty to-do and
-  writes it as `- [ ] `. The band stores through `todosText`, which answers `""` whenever
-  `parseTodos` finds no to-do, so an emptied list takes the deck out of the widget rather than
-  leaving a heading over nothing. `parseTodos` drops an empty to-do only when nothing is under it,
-  because an emptied parent is still the line its sub-to-dos hang from.
-- **A refused save leaves the draft on screen and still owed.** The next change, blur or unmount
-  tries again — `StickyNoteDialog`'s rule, with no retry timer — and the alert says why meanwhile.
-- **A test that mounts `DeckEditor` mocks `deckTodos` and `deckTodosSet`**, or the band's refused
-  read puts a second `role="alert"` on the page and every `getByRole("alert")` in the file finds
-  two — the Notes band's trap, one band down.
+  out only `\r`, trailing whitespace, trailing blank lines and every empty to-do with nothing under
+  it; text is left alone. So an empty to-do the reader has not typed in is not a write, and does not
+  move `updated_at` and the widget's *Last edited* over nothing; a real change beside it is still
+  stored byte for byte, empty line included. ⚠️ **It must never compare what `parseTodos` reads**:
+  those inlines drop a mark nested in another and read a scheme-less link as words, so a nested
+  italic or a changed link address was never sent and vanished at the next remount — it shipped that
+  way for one review round. **The stored body counts only while no save is out**: while one is, the
+  cache holds the body *before* it, and a draft that came back to that body (delete a line, pause,
+  Ctrl+Z) is a change from what the disk is about to hold — skipping it once lost the revert when
+  the stale save landed and the idle editor adopted it. The dialog records the body it matched as
+  agreed, never the draft.
+- **`todosText` is gone.** #672's band stored an emptied checklist as `""` so the deck left the
+  widget. A list that holds only text, or only a title, is a list now; what keeps an empty list out
+  of the widget is that `parseTodos` finds nothing in it to draw.
+- **A list changed elsewhere is taken only when the dialog is idle.** A card's tick, the widget's
+  tick, another window's dialog on the same list and a sync apply all reach the query, because it
+  sits under `["decks"]`. The editor takes the new body only when the caret is not in it, nothing
+  typed is unsaved and no save is pending or queued — and takes it as a **remount** seeded with it
+  (the editor's `key`), never as text pushed into an editor the reader may be about to type in.
+  Otherwise the reader's typing wins and the next autosave overwrites what arrived: a tick lost is
+  recoverable at a glance, a sentence lost mid-type is not. **All of it is decided during render or
+  in an event, never with a `setState` in an effect.**
+- **A refused save leaves the draft on screen and still owed.** The next change, blur or close tries
+  again — `StickyNoteDialog`'s rule, with no retry timer — and the dialog says why meanwhile.
+
+### The editor: `NoteEditor`'s checklist mode, as a to-do document
+
+The mode kept its name and changed its document, from *one task list* to **a to-do document** —
+`(paragraph | heading | taskList)+`. Described here at the level of what it does:
+
+- **A line is text or a to-do, and the toolbar says which.** The toolbar is the marks and a link,
+  then **Heading 1**, **Heading 2**, **Heading 3**, **Paragraph** and **To-do** — each a toggle
+  with `aria-pressed` lit for the caret's block — then **Outdent** and **Indent**. `Heading n` or
+  `Paragraph` on a to-do's line first lifts that line out of every list, leaving its sub-to-dos a
+  list below it, and then sets the block; pressing the lit heading turns it back into a paragraph.
+  `To-do` wraps a paragraph or heading in a task list, joined to a list directly above or below it.
+  **Bold, italic, strike, code and link never change the block**, so none of them makes a to-do.
+- **Keys.** Enter on a to-do with words makes the next one, and so does Shift-Enter; Tab nests a
+  to-do under the one above it and Shift-Tab lifts it out; Enter on an **empty nested** to-do lifts
+  it; Backspace in an empty to-do removes it. **Enter on an empty top-level to-do lifts it out as a
+  paragraph**, so the list ends where the reader stopped — under #672 it did nothing, because
+  nothing but a to-do could exist. Enter on a paragraph or heading is ordinary (a heading's Enter
+  makes a paragraph).
+- **The placeholder** reads *Write, or add a to-do — Enter for the next, Tab to nest.* #672's was
+  *Add a to-do — Enter for the next, Tab to nest.*
+- **A body is repaired as it loads, keeping text.** Paragraphs and headings pass through; a stray
+  block the schema cannot hold (a bullet list, a quote) becomes a paragraph of its words; adjacent
+  task lists are joined into one; an empty document is one empty to-do. A to-do still holds one
+  paragraph and at most one nested list. #672's repair joined every top-level list into one, which a
+  document with text between two lists must not do.
+- **Every to-do row has a delete button**, which takes the to-do's sub-to-dos with it. The editor's
+  Ctrl+Z is the only undo a deleted to-do has, because a list write files no undo step.
+- A checkbox is named `Mark "<text>" done` or `Mark "<text>" not done`, after the to-do's **own**
+  line and never its sub-to-dos' words — in the editor, on a card and in the widget alike.
+- **`appendRequest`** appends an empty to-do at the end and focuses it; after a trailing paragraph
+  or heading it starts a new list.
+- ⚠️ **Hard breaks are off, against #672's spec, and still are.** Tiptap's task-list markdown reader
+  reads a task item one line at a time, so the second half of a broken to-do came back as a line
+  outside the list, and no spelling of a break survived the round trip (measured against
+  `@tiptap/extension-list` 3.31.3). So Shift-Enter starts a new to-do rather than breaking one.
+  `todoMarkdown.ts` still reads a break, for a body written elsewhere; the editor never writes one.
+- **The body is blocks separated by one blank line**: `# ` / `## ` / `### ` headings, paragraphs,
+  and `- [ ] ` / `- [x] ` lines with each sub-to-do indented **two spaces per level** under its
+  parent — measured, and pinned byte for byte by `NoteEditor.test.tsx`'s to-do corpus, which kept
+  every #672 body and gained bodies with text in them. `todoMarkdown.ts` compares indent widths
+  against a stack rather than dividing by two, so it holds whatever the editor writes. A paragraph
+  whose words *begin* like a to-do is written escaped (`\- [ ]`), and the reader reads the escaped
+  line as text.
+- **A line that is not a to-do is text now, where #672 read it as an open to-do.** That was the
+  nothing-dropped rule's answer when every line had to be a to-do; it holds still — nothing is
+  dropped — but the thing a line falls back to is a paragraph. A line indented deeper than an open
+  to-do, or one after a hard break, still continues that to-do rather than becoming text.

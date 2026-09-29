@@ -43,10 +43,12 @@
  * Tiptap's markdown out is byte-identical to the markdown in for each of them.
  *
  * **There is a second dialect since 2026-09-29, and it has a second reader.** `mode="checklist"`
- * edits a deck's to-do list with {@link CHECKLIST_EXTENSIONS} — one task list and nothing else —
- * and `todoMarkdown.ts` reads those bodies for the home widget without an editor either. So the
- * test file holds a second committed corpus, and asserts both halves against it: the editor's
- * round trip byte for byte, and that reader's tree for the same body.
+ * edits a deck's to-do list with {@link CHECKLIST_EXTENSIONS} — a **to-do document**: paragraphs
+ * and headings beside any number of task lists (issue #688; it was one task list and nothing else
+ * under #672) — and `todoMarkdown.ts` reads those bodies for the band's cards and the home widget
+ * without an editor either. So the test file holds a second committed corpus, and asserts both
+ * halves against it: the editor's round trip byte for byte, and that reader's tree for the same
+ * body.
  *
  * ## Two things the CSP decides, and both fail silently if you get them wrong
  *
@@ -74,7 +76,7 @@ import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Placeholder } from "@tiptap/extensions";
 import { Markdown } from "@tiptap/markdown";
 import { Fragment, type Node as ProseMirrorNode, type ResolvedPos } from "@tiptap/pm/model";
-import { Selection, TextSelection, type Transaction } from "@tiptap/pm/state";
+import { Plugin, Selection, TextSelection, type Transaction } from "@tiptap/pm/state";
 import {
   EditorContent,
   Extension,
@@ -84,6 +86,7 @@ import {
   Node as TiptapNode,
   useEditor,
   useEditorState,
+  type ChainedCommands,
   type Editor,
   type JSONContent,
 } from "@tiptap/react";
@@ -100,6 +103,8 @@ import {
   ListIndentDecrease,
   ListIndentIncrease,
   ListOrdered,
+  ListTodo,
+  Pilcrow,
   Strikethrough,
   TextQuote,
   Unlink,
@@ -241,24 +246,125 @@ export const NOTE_EXTENSIONS = [
 ];
 
 /**
- * What an empty to-do list says. It teaches the two keys, because the list has no other way in:
- * no toolbar button makes a to-do, and nesting is a keystroke nothing on screen draws.
+ * What an empty to-do list says. It teaches both halves of the document — text is written, a
+ * to-do is added — and the two keys, because nesting is a keystroke nothing on screen draws.
  */
-export const TODO_PLACEHOLDER = "Add a to-do — Enter for the next, Tab to nest.";
+export const TODO_PLACEHOLDER = "Write, or add a to-do — Enter for the next, Tab to nest.";
 
 /**
- * A document that is one task list and nothing else — so every line is a to-do, and there is no
- * place to type a paragraph outside one.
+ * A **to-do document**: paragraphs and headings beside any number of task lists (issue #688).
+ *
+ * It was `content: "taskList"` under #672 — one list and nothing else, so every line was a to-do
+ * and a heading button over it would have been a press that did nothing. A reader asked for text
+ * between their to-dos, so the heading buttons, a **Paragraph** button and a **To-do** button now
+ * decide what a line is, and none of the marks do.
+ *
+ * **`paragraph` is written first, and the order is load-bearing**: ProseMirror's split takes the
+ * first textblock the parent's content allows as the block a split makes, so this is what makes
+ * Enter at the end of a heading a paragraph rather than a second heading.
+ *
+ * Two lists side by side are a shape this expression allows and the dialect never writes — the
+ * reader would read them back as one — so {@link JoinTodoLists} joins them after every edit and
+ * {@link ChecklistMarkdown} on every load.
  *
  * `renderMarkdown` is not optional and its absence is silent: the stock `Document` carries one,
  * and a top node without it serialises **every** body as `""` — measured, on every entry of the
- * corpus at once. One child means the separator is never used; it is `Document`'s own.
+ * corpus at once. The `"\n\n"` is the blank line between blocks, and `Document`'s own separator.
+ * Each child is rendered on its own rather than through `renderChildren` so a paragraph's line can
+ * be escaped ({@link escapeLineStart}); for blocks, which carry no marks, the two are the same
+ * call — `renderChildren` over block nodes is `renderChild` joined.
  */
 const ChecklistDocument = TiptapNode.create({
   name: "doc",
   topNode: true,
-  content: "taskList",
-  renderMarkdown: (node, h) => (node.content ? h.renderChildren(node.content, "\n\n") : ""),
+  content: "(paragraph | heading | taskList)+",
+  renderMarkdown: (node, h) =>
+    (node.content ?? [])
+      .map((child, index) => {
+        // Typed optional; the manager always passes it (measured), and `renderChildren` over one
+        // node is the same call if a later version stops.
+        const written = h.renderChild ? h.renderChild(child, index) : h.renderChildren([child]);
+        return child.type === "paragraph" ? escapeLineStart(written) : written;
+      })
+      .join("\n\n"),
+});
+
+/**
+ * A top-level paragraph's line, escaped where CommonMark would read it as the start of **another
+ * block** — so it reads back as the paragraph it is.
+ *
+ * ⚠️ **Measured before it was written, and the failure was loss rather than a reshape** (2026-09-29,
+ * `@tiptap/markdown` 3.31.3). The paragraph renderer escapes `` \ ` * _ [ ] ~ `` anywhere in a line
+ * and nothing at its start, so a paragraph whose words begin `- ` was written as a bullet list —
+ * and this dialect has no bullet list, so the parse **dropped the line outright**: `"- plain dash"`,
+ * `"+ plus"` and a typed `"- [ ] literal"` (written `"- \[ \] literal"`) each came back as nothing,
+ * `"# not a heading"` came back a heading, and `"1. not a list"` a list. Under #672 no line of text
+ * could exist to be written this way; #688's paragraphs are what made each of these reachable.
+ *
+ * The escapes are CommonMark's own backslash escapes, which the parse reads back as the character,
+ * and which `todoMarkdown.ts` has to take off in the same place:
+ *
+ * * **`#` to `######` then a space or the end** — an ATX heading — becomes `\#…`.
+ * * **`-` or `+` then a space or the end** — a bullet — becomes `\-…` / `\+…`; so does a line of
+ *   three or more `-` — a thematic break. (`*`, `_`, `` ` ``, `~`, `[` and `]` are escaped
+ *   anywhere in a line already, so `- [ ] literal` is written `\- \[ \] literal`.)
+ * * **one to nine digits, then `.` or `)`, then a space or the end** — an ordered list — keeps its
+ *   digits and escapes the delimiter: `1\. …`.
+ * * **Leading spaces are taken off**: CommonMark takes up to three off a paragraph anyway, and four
+ *   or more would open an indented code block, which this dialect would drop the same way.
+ *
+ * `>` needs nothing here: the manager writes `<`, `>` and `&` as entities wherever they fall, so a
+ * quote cannot be spelt by accident. Every case above was measured round-tripping after this, in
+ * `NoteEditor.test.tsx`. Only a top-level paragraph: a to-do's line is read as the item's inline
+ * content, where `- [ ] # a` and `- [ ] - a` already round-trip unescaped (measured), and a
+ * heading has its `#`s.
+ */
+function escapeLineStart(line: string): string {
+  const text = line.replace(/^[ \t]+/, "");
+  if (/^(?:#{1,6}(?=[ \t]|$)|[-+](?=[ \t]|$)|-[ \t]*-[ \t]*-[- \t]*$)/.test(text)) {
+    return `\\${text}`;
+  }
+  const ordered = /^\d{1,9}(?=[.)](?:[ \t]|$))/.exec(text);
+  return ordered ? `${ordered[0]}\\${text.slice(ordered[0].length)}` : text;
+}
+
+/**
+ * Two task lists side by side, joined into one after every transaction that changed the document.
+ *
+ * **Behaviour, not schema**, and it exists because a list can come to sit beside another in more
+ * ways than any key below owns: a paragraph between two lists deleted by a selection, a line
+ * lifted out of the middle of a list (the to-dos after it split off and land next to the lifted
+ * line's own sub-to-dos), a Backspace joining a paragraph's words into the list above it. The
+ * dialect has no spelling for two adjacent lists — a blank line between two task lists reads back
+ * as one list — so leaving them apart would be a document that changes shape on its next load.
+ *
+ * `appendTransaction`, so the join rides the edit that caused it: one undo step, one `onUpdate`.
+ */
+const JoinTodoLists = Extension.create({
+  name: "joinTodoLists",
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        appendTransaction(transactions, _before, state) {
+          if (!transactions.some((transaction) => transaction.docChanged)) return null;
+          const seams: number[] = [];
+          let previous: ProseMirrorNode | null = null;
+          state.doc.forEach((node, offset) => {
+            if (previous?.type.name === "taskList" && node.type.name === "taskList") {
+              seams.push(offset);
+            }
+            previous = node;
+          });
+          if (seams.length === 0) return null;
+          const tr = state.tr;
+          // Last seam first, so each join leaves the positions before it where they were.
+          for (const seam of seams.reverse()) tr.join(seam);
+          return tr;
+        },
+      }),
+    ];
+  },
 });
 
 /** The words a row's controls are named after: the to-do's own line, and nothing under it. */
@@ -328,11 +434,12 @@ function removeGlyph(): SVGSVGElement {
  * to its parent, so deleting the parent and orphaning the children would leave them indented
  * under a line that is gone.
  *
- * Two cases are not a plain delete, because a task list may not be empty. **A sub-to-do that is
- * its list's only item takes the list with it** — the parent keeps its words and loses an empty
- * indent. **The document's only to-do is cleared instead**, to one empty item: a document with no
- * task list is one this schema cannot hold, and one empty to-do is exactly the list's resting
- * state, which `todoMarkdown.ts` reads as nothing at all. Ctrl+Z brings any of the three back.
+ * Two cases are not a plain delete, because a task list may not be empty. **A to-do that is its
+ * list's only item takes the list with it** — a sub-to-do's parent keeps its words and loses an
+ * empty indent, and a top-level list goes from between the text around it. **The document's only
+ * block is cleared instead**, to one empty item: a document with nothing in it is one this schema
+ * cannot hold, and one empty to-do is exactly the list's resting state, which `todoMarkdown.ts`
+ * reads as nothing at all. Ctrl+Z brings any of them back.
  *
  * The positions are read off the transaction's own document, so a press racing a keystroke acts
  * on the row as it is now rather than as it was drawn.
@@ -343,7 +450,7 @@ function removeTodoAt(tr: Transaction, pos: number): boolean {
   const $pos = tr.doc.resolve(pos);
   if ($pos.parent.childCount > 1) {
     tr.delete(pos, pos + item.nodeSize);
-  } else if ($pos.depth > 1) {
+  } else if ($pos.depth > 1 || tr.doc.childCount > 1) {
     tr.delete($pos.before(), $pos.after());
   } else {
     const { taskItem, paragraph } = tr.doc.type.schema.nodes;
@@ -376,67 +483,156 @@ function todoAt($pos: ResolvedPos) {
   const itemDepth = $pos.depth - 1;
   const item = $pos.node(itemDepth);
   if (item.type.name !== "taskItem") return null;
+  const listDepth = itemDepth - 1;
   return {
     item,
     itemPos: $pos.before(itemDepth),
-    listDepth: itemDepth - 1,
-    // The top list is the document's only child, at depth 1; anything deeper is a sub-list.
-    nested: itemDepth - 1 > 1,
+    listDepth,
+    // ⚠️ **Asked of the list's parent, never of a depth.** #672's test was `listDepth > 1`, true
+    // while the list was the document's only child; a list is still a child of the document when
+    // text sits beside it, so the depth happens to agree, but what the keys mean is "is there a
+    // to-do above this list", and that is what this says.
+    nested: $pos.node(listDepth - 1).type.name !== "doc",
     empty: $pos.parent.content.size === 0,
   };
 }
 
+/** The top-level text block — a paragraph or a heading, never a to-do's line — the caret is in. */
+function textAt($pos: ResolvedPos) {
+  if ($pos.depth !== 1 || !$pos.parent.isTextblock) return null;
+  return { block: $pos.parent, blockPos: $pos.before(1), index: $pos.index(0) };
+}
+
 /**
- * Lift the to-do the caret is in (or the run a selection spans) one level — Shift-Tab, Outdent,
- * and an Enter or a Backspace that means *out*.
+ * Before a lift: the to-dos after the lifted run, moved into its last to-do's own sub-list.
  *
  * ⚠️ **Never ProseMirror's `liftListItem` alone.** When the lifted to-do has sub-to-dos *and*
  * siblings after it, `liftToOuterList` first wraps those siblings as a second list inside it and
  * joins the two afterwards — and a to-do here holds at most one list, so that intermediate step
  * throws out of the key handler (`TransformError: Invalid content for node taskItem`, measured with
- * this wrapper taken out). The siblings are moved into the to-do's own
- * sub-list first, which is exactly where ProseMirror would have put them, so the lift that follows
- * has nothing after it to wrap and never builds the shape.
+ * this step taken out). The siblings are moved into the to-do's own sub-list first, which is
+ * exactly where ProseMirror would have put them, so the lift that follows has nothing after it to
+ * wrap and never builds the shape.
+ *
+ * At the top list there is nothing to move: the lift there is `liftOutOfList`, which splits the
+ * list around the line instead, and {@link JoinTodoLists} puts the halves that end up side by side
+ * back together.
  */
-function liftTodo(editor: Editor): boolean {
-  return editor
-    .chain()
-    .command(({ tr }) => {
-      const { $from, $to } = tr.selection;
-      const range = $from.blockRange(
-        $to,
-        (node) => node.childCount > 0 && node.firstChild?.type.name === "taskItem",
-      );
-      // The top list, or no list: nothing to lift into, and `liftListItem` below says so.
-      if (!range || range.depth < 2 || range.endIndex >= range.parent.childCount) return true;
-      const last = range.parent.child(range.endIndex - 1);
-      const followers = tr.doc.slice(range.end, range.$to.end(range.depth)).content;
-      tr.delete(range.end, range.$to.end(range.depth));
-      if (last.childCount > 1) {
-        // Inside the sub-list it already has, at its end.
-        tr.insert(range.end - 2, followers);
-      } else {
-        tr.insert(range.end - 1, tr.doc.type.schema.nodes.taskList.create(null, followers));
-      }
-      return true;
-    })
-    .liftListItem("taskItem")
-    .run();
+function moveFollowersIn({ tr }: { tr: Transaction }): boolean {
+  const { $from, $to } = tr.selection;
+  const range = $from.blockRange(
+    $to,
+    (node) => node.childCount > 0 && node.firstChild?.type.name === "taskItem",
+  );
+  if (!range || range.depth < 2 || range.endIndex >= range.parent.childCount) return true;
+  const last = range.parent.child(range.endIndex - 1);
+  const followers = tr.doc.slice(range.end, range.$to.end(range.depth)).content;
+  tr.delete(range.end, range.$to.end(range.depth));
+  if (last.childCount > 1) {
+    // Inside the sub-list it already has, at its end.
+    tr.insert(range.end - 2, followers);
+  } else {
+    tr.insert(range.end - 1, tr.doc.type.schema.nodes.taskList.create(null, followers));
+  }
+  return true;
 }
 
 /**
- * Enter and Shift-Enter. **A to-do with words splits into the next one; an empty one never makes
- * a line that is not a to-do.** An empty sub-to-do lifts one level, which is how a reader walks
- * back out of a nest; an empty top-level to-do does nothing, because out of the list is nowhere —
- * the document holds nothing else. Always handled, so the browser's own Enter never reaches the
- * surface.
+ * Lift the to-do the caret is in (or the run a selection spans) one level — Shift-Tab, Outdent,
+ * and a Backspace or an Enter that means *out*.
+ *
+ * **A top-level to-do is not lifted, and answers `false`.** Out of the top list is text now — a
+ * lift there would make the line a paragraph — and #672's Shift-Tab and Outdent over a top-level
+ * to-do do nothing, which stands: turning a to-do into text is the Paragraph button's job, and
+ * Enter's on an empty one. `false` rather than `true` so Shift-Tab still walks the caret out of
+ * the editor, the key's own meaning when it has nothing to do.
+ */
+function liftTodo(editor: Editor): boolean {
+  const { $from, $to } = editor.state.selection;
+  const range = $from.blockRange(
+    $to,
+    (node) => node.childCount > 0 && node.firstChild?.type.name === "taskItem",
+  );
+  if (!range || range.depth < 2) return false;
+  return editor.chain().command(moveFollowersIn).liftListItem("taskItem").run();
+}
+
+/** How many task lists the position is inside — how many lifts take its line out of all of them. */
+function listsAround($pos: ResolvedPos): number {
+  let lists = 0;
+  for (let depth = $pos.depth; depth > 0; depth--) {
+    if ($pos.node(depth).type.name === "taskList") lists += 1;
+  }
+  return lists;
+}
+
+/**
+ * The chain that takes the caret's to-do line out of **every** list, leaving it a top-level
+ * paragraph at the place it was read — or the chain untouched when the caret is not on a to-do.
+ *
+ * **Its sub-to-dos stay a list, after it**, and so does everything the list held after it: each
+ * lift moves the followers into the line's own sub-list ({@link moveFollowersIn}), so by the last
+ * one they are all under it, and `liftOutOfList` then leaves them as the list that follows the
+ * line — every one of them at the top level, which is the only level a list after a paragraph has.
+ * The to-dos before the line stay where they were.
+ *
+ * A selection running past the line is set down on it first: a lift over two lines at two depths
+ * is not a thing one press can mean, and the buttons that call this are about a line.
+ */
+function liftLineOut(chain: ChainedCommands, $from: ResolvedPos, $to: ResolvedPos): ChainedCommands {
+  if (!todoAt($from)) return chain;
+  let lifted = $to.sameParent($from) ? chain : chain.setTextSelection($from.pos);
+  for (let lift = listsAround($from); lift > 0; lift--) {
+    lifted = lifted.command(moveFollowersIn).liftListItem("taskItem");
+  }
+  return lifted;
+}
+
+/**
+ * **Heading *n*** and **Paragraph**: the caret's line becomes that text block. On a to-do's line it
+ * is lifted out of every list first ({@link liftLineOut}), so a heading or a paragraph is never
+ * made inside a to-do — a to-do is one line of words, and the schema refuses anything else there.
+ */
+function lineToText(editor: Editor, level: Level | null): boolean {
+  const { $from, $to } = editor.state.selection;
+  const chain = liftLineOut(editor.chain().focus(), $from, $to);
+  return (level === null ? chain.setParagraph() : chain.setHeading({ level })).run();
+}
+
+/**
+ * **To-do**: a paragraph or a heading becomes a to-do, joined to a list directly above or below it
+ * (`toggleList` joins both ways, and {@link JoinTodoLists} would anyway). A heading is made a
+ * paragraph first, because a to-do's line is a paragraph. Pressed on a to-do — the button is lit
+ * there — it is the Paragraph button, since a toggle that is on turns off.
+ */
+function lineToTodo(editor: Editor): boolean {
+  if (todoAt(editor.state.selection.$from)) return lineToText(editor, null);
+  return editor.chain().focus().setParagraph().toggleList("taskList", "taskItem").run();
+}
+
+/**
+ * Enter on a to-do's line. **A to-do with words splits into the next one; an empty one never makes
+ * a line that is not a to-do — until it is at the top.** An empty sub-to-do lifts one level, which
+ * is how a reader walks back out of a nest; an empty top-level to-do **lifts out of the list as a
+ * paragraph**, so the list ends where the reader stopped and what they type next is text. It did
+ * nothing under #672, when out of the list was nowhere.
+ *
+ * Not on a to-do's line, it answers `false` and the Enter is the ordinary one: a paragraph splits,
+ * and a heading's Enter makes a paragraph ({@link ChecklistDocument} says why).
  */
 function enterTodo(editor: Editor): boolean {
-  if (!editor.state.selection.empty) editor.commands.deleteSelection();
+  const { selection } = editor.state;
+  if (!todoAt(selection.$from)) return false;
+  if (!selection.empty) editor.commands.deleteSelection();
   const at = todoAt(editor.state.selection.$from);
-  if (!at) return true;
+  // The deletion took the caret out of every to-do: an ordinary Enter from here.
+  if (!at) return false;
   if (at.empty) {
     if (at.nested) liftTodo(editor);
+    else {
+      const { $from, $to } = editor.state.selection;
+      liftLineOut(editor.chain(), $from, $to).setParagraph().run();
+    }
     return true;
   }
   editor.commands.splitListItem("taskItem");
@@ -444,19 +640,36 @@ function enterTodo(editor: Editor): boolean {
 }
 
 /**
+ * Shift-Enter on a text line. There is no hard break in this dialect ({@link CHECKLIST_EXTENSIONS}),
+ * so the key does what Enter does rather than leave the browser to invent a `<br>` the schema has
+ * no node for: the core keymap's own Enter, spelled out.
+ */
+function enterText(editor: Editor): boolean {
+  return editor.commands.first(({ commands }) => [
+    () => commands.createParagraphNear(),
+    () => commands.liftEmptyBlock(),
+    () => commands.splitBlock(),
+  ]);
+}
+
+/**
  * Backspace at the start of a to-do's line. Anywhere else it is an ordinary Backspace and this
  * answers `false`.
  *
  * * **An empty to-do with nothing under it is removed**, and the caret goes to the end of the line
- *   above — the previous to-do in reading order, which for a first sub-to-do is its parent — or,
- *   for the list's first line, to the start of the one below. The document's only to-do stays: it
- *   is the empty list.
+ *   above — the previous to-do in reading order, which for a first sub-to-do is its parent, or the
+ *   text over a list — or, for the document's first line, to the start of the one below. The
+ *   document's only block stays: it is the empty list.
  * * **A sub-to-do lifts one level**, the way out of a nest a reader expects from the key.
  * * **A top-level to-do joins its words onto the end of the line above**, and **its sub-to-dos go
  *   with them**, becoming the sub-to-dos of the to-do that took the words. That is always valid:
  *   the line above is the last line of everything before, so the to-do it belongs to has no
- *   sub-list of its own for them to collide with. The list's first line has nothing above it and
- *   stays where it is.
+ *   sub-list of its own for them to collide with.
+ * * **The first to-do of a list has no to-do above it.** At the top of the document it stays where
+ *   it is. **Under a paragraph or a heading it becomes a paragraph** (issue #688) — the Paragraph
+ *   button's lift, its sub-to-dos staying a list after it — rather than joining its words onto
+ *   text that cannot hold its sub-to-dos. A second Backspace is then the ordinary join of two
+ *   paragraphs, so the key still walks the line up one step at a time.
  *
  * Handled at all, rather than left to `listKeymap` and the core keymap, because their fallbacks
  * are the ones the review found: a join that leaves a second paragraph inside a to-do, and a lift
@@ -472,7 +685,7 @@ function backspaceTodo(editor: Editor): boolean {
   const list = selection.$from.node(at.listDepth);
 
   if (at.empty && item.childCount === 1) {
-    if (!at.nested && list.childCount === 1) return true;
+    if (!at.nested && list.childCount === 1 && selection.$from.doc.childCount === 1) return true;
     return editor
       .chain()
       .command(({ tr }) => {
@@ -492,7 +705,10 @@ function backspaceTodo(editor: Editor): boolean {
   }
 
   if (at.nested) return liftTodo(editor) || true;
-  if (selection.$from.index(at.listDepth) === 0) return true;
+  if (selection.$from.index(at.listDepth) === 0) {
+    if (selection.$from.index(0) === 0) return true;
+    return liftLineOut(editor.chain(), selection.$from, selection.$to).setParagraph().run() || true;
+  }
 
   return editor
     .chain()
@@ -523,11 +739,44 @@ function backspaceTodo(editor: Editor): boolean {
 }
 
 /**
+ * Backspace at the start of a paragraph or a heading **directly under a list**: the ordinary join
+ * — the block's words go onto the end of the line above, which is the list's last line in reading
+ * order, and the block goes. Its words take that to-do's line; nothing else about the to-do moves.
+ *
+ * Handled here because `listKeymap`'s answer to exactly this case cuts the block into the last
+ * to-do *as a second paragraph* and joins from there, which is the shape {@link ChecklistItem}
+ * refuses. Under text, or at the top of the document, it answers `false` and the key is the
+ * ordinary one.
+ */
+function backspaceText(editor: Editor): boolean {
+  const { selection } = editor.state;
+  if (!selection.empty || selection.$from.parentOffset !== 0) return false;
+  const text = textAt(selection.$from);
+  if (!text || text.index === 0) return false;
+  if (selection.$from.doc.child(text.index - 1).type.name !== "taskList") return false;
+  return editor
+    .chain()
+    .command(({ tr }) => {
+      const above = Selection.findFrom(tr.doc.resolve(text.blockPos), -1, true);
+      if (!above) return false;
+      const joinAt = above.$head.pos;
+      tr.delete(text.blockPos, text.blockPos + text.block.nodeSize);
+      tr.insert(joinAt, text.block.content);
+      tr.setSelection(TextSelection.create(tr.doc, joinAt));
+      tr.scrollIntoView();
+      return true;
+    })
+    .run();
+}
+
+/**
  * Delete at the end of a to-do's line: **the next line joins onto this one**, the mirror of a
  * Backspace at its start. The to-do that line belonged to goes, and its sub-to-dos stay in the
  * list they were in: when it was this to-do's own first sub-to-do, its sub-to-dos take its place
  * in that list; otherwise this to-do has no sub-list of its own (the next line would be in it)
- * and they become that. Nothing after the last line: nothing happens.
+ * and they become that. **A paragraph or a heading after the list's last line joins the same
+ * way**, its words onto this line and the block gone — the mirror of {@link backspaceText}.
+ * Nothing after the last line: nothing happens.
  *
  * Handled rather than left upstream because `listKeymap`'s join builds a second paragraph inside
  * a to-do, which {@link ChecklistItem} refuses — and what ProseMirror fits in its place instead is
@@ -546,6 +795,14 @@ function deleteTodoForward(editor: Editor): boolean {
       const next = Selection.findFrom(tr.doc.resolve($from.after()), 1, true);
       if (!next) return true;
       const $next = next.$head;
+      const text = textAt($next);
+      if (text) {
+        tr.delete(text.blockPos, text.blockPos + text.block.nodeSize);
+        tr.insert(joinAt, text.block.content);
+        tr.setSelection(TextSelection.create(tr.doc, joinAt));
+        tr.scrollIntoView();
+        return true;
+      }
       const nextItem = $next.node($next.depth - 1);
       if ($next.parent.type.name !== "paragraph" || nextItem.type.name !== "taskItem") return true;
       const words = nextItem.firstChild?.content ?? Fragment.empty;
@@ -576,6 +833,44 @@ function deleteTodoForward(editor: Editor): boolean {
 }
 
 /**
+ * Delete at the end of a paragraph or a heading **directly over a list**: the list's first to-do
+ * joins its words onto this line and goes, and its sub-to-dos take its place at the head of the
+ * list — the mirror of a Backspace at the start of that to-do, and of {@link deleteTodoForward}'s
+ * own rule one level up. Over text, or at the end of the document, it answers `false` and the key
+ * is the ordinary one — which here would lift the to-do's line out from under its checkbox.
+ */
+function deleteTextForward(editor: Editor): boolean {
+  const { selection } = editor.state;
+  const { $from } = selection;
+  if (!selection.empty || $from.parentOffset !== $from.parent.content.size) return false;
+  const text = textAt($from);
+  if (!text || text.index + 1 >= $from.doc.childCount) return false;
+  const list = $from.doc.child(text.index + 1);
+  if (list.type.name !== "taskList") return false;
+  return editor
+    .chain()
+    .command(({ tr }) => {
+      const joinAt = $from.pos;
+      const listPos = $from.after(1);
+      const first = list.firstChild;
+      if (!first) return false;
+      const words = first.firstChild?.content ?? Fragment.empty;
+      const under = first.childCount > 1 ? first.child(1) : null;
+      const items = (under?.content ?? Fragment.empty).append(list.content.cut(first.nodeSize));
+      if (items.childCount > 0) {
+        tr.replaceWith(listPos, listPos + list.nodeSize, list.type.create(null, items));
+      } else {
+        tr.delete(listPos, listPos + list.nodeSize);
+      }
+      tr.insert(joinAt, words);
+      tr.setSelection(TextSelection.create(tr.doc, joinAt));
+      tr.scrollIntoView();
+      return true;
+    })
+    .run();
+}
+
+/**
  * The checklist's keys, ahead of everything upstream.
  *
  * **An extension of their own, at priority 102, rather than bindings on {@link ChecklistItem}.**
@@ -585,8 +880,10 @@ function deleteTodoForward(editor: Editor): boolean {
  * priority also orders the schema, so raising the item's to get ahead of it would move more than
  * keys; an extension that holds nothing but keys moves nothing else.
  *
- * Tab is not here: `TaskItem`'s `sinkListItem` already nests a to-do under the one above and
- * joins the sub-list it has, which is a shape this schema holds.
+ * **Each key asks about a to-do's line first and then about text beside a list**, and answers
+ * `false` for everything else, which is the ordinary key: two paragraphs join and split as they do
+ * anywhere. Tab is not here: `TaskItem`'s `sinkListItem` already nests a to-do under the one above
+ * and joins the sub-list it has, which is a shape this schema holds.
  */
 const ChecklistKeys = Extension.create({
   name: "checklistKeys",
@@ -594,13 +891,13 @@ const ChecklistKeys = Extension.create({
 
   addKeyboardShortcuts() {
     const enter = () => enterTodo(this.editor);
-    const backspace = () => backspaceTodo(this.editor);
-    const forward = () => deleteTodoForward(this.editor);
+    const backspace = () => backspaceTodo(this.editor) || backspaceText(this.editor);
+    const forward = () => deleteTodoForward(this.editor) || deleteTextForward(this.editor);
     return {
       Enter: enter,
       // There is no hard break in this dialect (see {@link CHECKLIST_EXTENSIONS}), so the key
       // does what Enter does rather than nothing.
-      "Shift-Enter": enter,
+      "Shift-Enter": () => enter() || enterText(this.editor),
       "Shift-Tab": () => liftTodo(this.editor),
       Backspace: backspace,
       "Mod-Backspace": backspace,
@@ -628,10 +925,19 @@ const ChecklistKeys = Extension.create({
  * view already answered — its `stopEvent`, its `ignoreMutation` — is still asked first-hand for
  * anything that is not the button.
  *
- * Its keys are {@link ChecklistKeys}', which says why they are not bindings here.
+ * Its keys are {@link ChecklistKeys}', which says why they are not bindings here — **all but Tab**,
+ * which is `TaskItem`'s `sinkListItem` kept as it was. `TaskItem`'s Enter and Shift-Tab are
+ * dropped rather than left behind ours: since text can stand beside a list, its Shift-Tab on a
+ * top-level to-do is a `liftListItem` that *succeeds* — out of the list and into a paragraph —
+ * which is exactly the press {@link liftTodo} declines, and a binding that ran whenever ours
+ * answered `false` would do it anyway.
  */
 const ChecklistItem = TaskItem.extend({
   content: "paragraph taskList?",
+
+  addKeyboardShortcuts() {
+    return { Tab: () => this.editor.commands.sinkListItem(this.name) };
+  },
 
   addNodeView() {
     const parent = this.parent?.();
@@ -679,16 +985,18 @@ const ChecklistItem = TaskItem.extend({
   },
 });
 
-/** A node's words, marks and all taken off — what a stray block becomes a to-do with. */
+/** A node's words, marks and all taken off — what a stray block becomes a line with. */
 function plainWords(node: JSONContent): string {
   return node.text ?? (node.content ?? []).map(plainWords).join("");
 }
 
 /**
- * Every node of a parsed body as to-dos, in reading order and at the level they were found:
- * a list gives its items, an item is squared up by {@link oneTodo}, and any other block with
- * words in it becomes one open to-do holding them. A block with no words — a blank line, the
- * `&nbsp;` an emptied paragraph is written as — is dropped rather than drawn as an empty to-do.
+ * Every node of a parsed body **inside a to-do** as to-dos, in reading order and at the level they
+ * were found: a list gives its items, an item is squared up by {@link oneTodo}, and any other block
+ * with words in it becomes one open to-do holding them — a second paragraph in a to-do becomes its
+ * sub-to-do, which is #672's repair and still the only shape a to-do can hold. A block with no
+ * words — a blank line, the `&nbsp;` an emptied paragraph is written as — is dropped rather than
+ * drawn as an empty to-do.
  */
 function todosOf(nodes: readonly JSONContent[]): JSONContent[] {
   return nodes.flatMap((node): JSONContent[] => {
@@ -711,28 +1019,84 @@ function oneTodo(item: JSONContent): JSONContent {
   return { ...item, content: under.length > 0 ? [line, { type: "taskList", content: under }] : [line] };
 }
 
-/**
- * A parsed body as the one document this schema can hold: a single task list of to-dos.
- *
- * **The second line of defence, and it exists because the first one can be late.** Tiptap loads
- * a parsed body without checking it against the schema, so a body already written in a shape the
- * keys can no longer make — two lists, a line outside every to-do, a second paragraph inside one —
- * would open as an invalid document and break the next keystroke. Written bodies in that shape
- * exist: the review found this editor saving `"- [ ] a\n\n  \n- [ ] b"` before its keys were
- * bound, which reads back as two top-level lists. Repaired here, before the editor draws it, it
- * opens as one list — and a valid body passes through unchanged, which the round-trip corpus pins.
- */
-function oneListBody(doc: JSONContent): JSONContent {
-  const todos = todosOf(doc.content ?? []);
-  const content =
-    todos.length > 0
-      ? todos
-      : [{ type: "taskItem", attrs: { checked: false }, content: [{ type: "paragraph" }] }];
-  return { ...doc, content: [{ type: "taskList", content }] };
+/** Whether a block has any words at all — a blank line and an `&nbsp;` have none. */
+function hasWords(node: JSONContent): boolean {
+  return plainWords(node).trim() !== "";
 }
 
 /**
- * `Markdown`, with every parse this editor makes squared up by {@link oneListBody}.
+ * A block {@link ChecklistDocument} cannot hold, as the top-level paragraphs it reads as: one per
+ * line of words inside it, marks kept, so a quote keeps its lines and its emphasis and loses only
+ * the construct. A block whose words sit in no line of their own is one paragraph of those words.
+ *
+ * ⚠️ **A bullet or numbered list never gets this far**: this dialect has no node for either, and
+ * the parse drops such a list before the repair sees it — measured, `"- plain dash"` parses to
+ * nothing at all. Nothing this editor writes is one ({@link escapeLineStart} is why), so the loss
+ * is confined to a body some other writer made.
+ */
+function linesOf(node: JSONContent): JSONContent[] {
+  if (node.type === "paragraph" || node.type === "heading") {
+    return hasWords(node) ? [{ type: "paragraph", content: node.content }] : [];
+  }
+  const inner = (node.content ?? []).flatMap((child) => (child.type === "text" ? [] : linesOf(child)));
+  if (inner.length > 0) return inner;
+  const words = plainWords(node);
+  return words.trim() === "" ? [] : [{ type: "paragraph", content: [{ type: "text", text: words }] }];
+}
+
+/**
+ * A parsed body as a document this schema can hold: **text and task lists, in the order written**.
+ *
+ * **The second line of defence, and it exists because the first one can be late.** Tiptap loads
+ * a parsed body without checking it against the schema, so a body already written in a shape the
+ * keys can no longer make would open as an invalid document and break the next keystroke. Written
+ * bodies in such shapes exist: the review found #672's editor saving `"- [ ] a\n\n  \n- [ ] b"`
+ * before its keys were bound, which reads back as two top-level lists. So, block by block:
+ *
+ * * **Paragraphs and headings pass through** — the text beside the to-dos, which #672 turned into
+ *   to-dos of their own and #688 is what stopped that. A heading deeper than the dialect's three
+ *   keeps its level, `NoteHeading`'s rule: drawn at three, never rewritten.
+ * * **A task list's to-dos are squared up** ({@link oneTodo}), and **a list directly after another
+ *   joins it**, so the two-list body opens as the one list it was meant to be.
+ * * **Any other block becomes paragraphs of its words** ({@link linesOf}) — a quote, say — where
+ *   #672 made it a to-do.
+ * * **A block with no words is dropped** — a blank line, the `&nbsp;` an emptied paragraph is
+ *   written as — which is #672's rule for a blank line, kept: a reader cannot see one, and a body
+ *   that kept them would grow a line at the end every time Enter left the list.
+ * * **A document left with nothing is one empty to-do**, the list's resting state — what a new
+ *   list opens on, and what the reader reads as nothing at all.
+ *
+ * A valid body passes through unchanged, which the round-trip corpus pins.
+ */
+function todoDocBody(doc: JSONContent): JSONContent {
+  const blocks: JSONContent[] = [];
+  const pushTodos = (todos: JSONContent[]) => {
+    if (todos.length === 0) return;
+    const last = blocks[blocks.length - 1];
+    if (last?.type === "taskList") last.content = [...(last.content ?? []), ...todos];
+    else blocks.push({ type: "taskList", content: todos });
+  };
+  for (const node of doc.content ?? []) {
+    if (node.type === "taskList") pushTodos(todosOf(node.content ?? []));
+    else if (node.type === "taskItem") pushTodos([oneTodo(node)]);
+    else if (node.type === "paragraph" || node.type === "heading") {
+      if (hasWords(node)) blocks.push(node);
+    } else blocks.push(...linesOf(node));
+  }
+  const content =
+    blocks.length > 0
+      ? blocks
+      : [
+          {
+            type: "taskList",
+            content: [{ type: "taskItem", attrs: { checked: false }, content: [{ type: "paragraph" }] }],
+          },
+        ];
+  return { ...doc, content };
+}
+
+/**
+ * `Markdown`, with every parse this editor makes squared up by {@link todoDocBody}.
  *
  * Both roads a body takes into the editor go through the manager's `parse` — the first paint (its
  * `onBeforeCreate` converts `content` before the document exists) and every later `setContent` —
@@ -746,10 +1110,16 @@ const ChecklistMarkdown = Markdown.extend({
     const manager = this.editor.markdown;
     if (!manager) return;
     const parse = manager.parse.bind(manager);
-    manager.parse = (markdown: string) => oneListBody(parse(markdown));
+    manager.parse = (markdown: string) => todoDocBody(parse(markdown));
     const initial = this.editor.options.content;
     if (initial !== null && typeof initial === "object" && !Array.isArray(initial)) {
-      this.editor.options.content = oneListBody(initial as JSONContent);
+      this.editor.options.content = todoDocBody(initial as JSONContent);
+    } else if (typeof initial === "string" && this.editor.options.contentType === "markdown") {
+      // ⚠️ The parent leaves a body that parses to nothing — `""` — as the string it was, and the
+      // editor then fills the document from the schema: one empty **paragraph**, since the top
+      // node's content expression names it first. Under #672 that fill was one empty to-do by
+      // construction; now it has to be asked for, or a new list opens on a line of text.
+      this.editor.options.content = manager.parse(initial);
     }
   },
 });
@@ -758,41 +1128,55 @@ const ChecklistMarkdown = Markdown.extend({
  * The checklist's whole dialect, spelled out — `NOTE_EXTENSIONS`' rule, every option that is off
  * written out, for its reason.
  *
- * **The dialect is a task list of paragraphs with the inline marks**: document (one task list),
- * task list, task item (nested), paragraph, text, bold, italic, strike, code, link. That is what
- * the to-do corpus in `NoteEditor.test.tsx` pins and what `todoMarkdown.ts` reads, and nothing
- * else — so headings, both other lists, list items and blockquote are off: a document that can
- * hold none of them has no button for them either.
+ * **The dialect is a to-do document with the inline marks**: document (paragraphs, headings and
+ * task lists), heading (levels 1–3, the note's {@link NoteHeading}), task list, task item (nested),
+ * paragraph, text, bold, italic, strike, code, link. That is what the to-do corpus in
+ * `NoteEditor.test.tsx` pins and what `todoMarkdown.ts` reads, and nothing else — so both other
+ * lists, list items, blockquote, code block and rule are off, for #672's reasons: a document that
+ * can hold none of them has no button for them either, and the reader has no rule for them.
+ *
+ * **Headings came in with #688, and only at the top level.** A to-do's line is a paragraph
+ * ({@link ChecklistItem}), so the heading buttons lift a to-do's line out of every list before
+ * they make it a heading, and the `#` input rule does nothing inside a to-do — `setBlockType`
+ * cannot put a heading where the item's content expression wants a paragraph.
  *
  * ⚠️ **`hardBreak` is off, which is where this list departs from the spec** (§3 keeps it), and
  * the reason is a measurement rather than a preference. Its markdown is `"  \n"` with the rest of
  * the line unindented, and `TaskList`'s tokenizer reads a task item **one line at a time** — so
  * the second half of a broken to-do comes back as a line *outside* the list, which
- * {@link ChecklistMarkdown} can only turn into a to-do of its own. A construct only one side of the
+ * {@link ChecklistMarkdown} can only turn into a line of its own. A construct only one side of the
  * round trip can spell is exactly what the module header says must not enter a dialect.
  * `NoteEditor.test.tsx` pins the split, and goes red the day the tokenizer learns continuation
- * lines.
+ * lines. A paragraph has no break either, for the same dialect's sake: Shift-Enter starts the
+ * next line, on text and on a to-do alike.
  *
- * **Three layers keep every line a to-do**, and each covers what the one before cannot.
+ * **Four layers keep a to-do one line of words**, and each covers what the one before cannot.
  * {@link ChecklistItem} narrows a to-do to one line and at most one sub-list, so no command can
- * build a second paragraph inside one; {@link ChecklistKeys} gives Enter, Backspace, Delete and
- * Shift-Tab answers that never need the shapes the schema now refuses; and
- * {@link ChecklistMarkdown} squares up a body already written in one of them before it is drawn.
+ * build a second paragraph or a heading inside one; {@link ChecklistKeys} gives Enter, Backspace,
+ * Delete and Shift-Tab answers that never need the shapes the schema now refuses;
+ * {@link JoinTodoLists} puts back together two lists an edit left side by side; and
+ * {@link ChecklistMarkdown} squares up a body already written in one of those shapes before it is
+ * drawn. **What a line _is_ is decided by the block buttons and by nothing else** — Heading 1–3,
+ * Paragraph and To-do — so a mark, a link or a keystroke never turns text into a to-do or back.
  *
  * Three behaviours stay, each as in `NOTE_EXTENSIONS`: `undoRedo` is Ctrl+Z, which is the only
  * undo a deleted to-do has; `listKeymap`, whose default list types include `taskItem` and which
  * skips the `listItem` type this schema does not have rather than failing on it — kept for what it
  * does that {@link ChecklistKeys} does not claim, though the keys that key off a to-do's line
  * boundaries are all answered before it; and `gapcursor` by absence, the one StarterKit type that
- * can only be said as "off". `trailingNode` stays off for the stronger of its two reasons here:
- * the paragraph it pins to the end of a document is one this top node cannot hold at all.
+ * can only be said as "off". `trailingNode` stays off for the note's reason, and a second one: the
+ * blank paragraph it pins to the end of a document comes back out as a blank line, and
+ * {@link ChecklistMarkdown} drops a blank line on the next load — so the two would take it in turns
+ * to add it and remove it, and every list would end under a line of text nobody wrote.
  *
  * **`document: false`, and {@link ChecklistDocument} in its place** — StarterKit builds its own
  * `doc` with `block+` and hands out no handle to change it, the same reason `NoteHeading` exists.
+ * **`heading: false`, and `NoteHeading` in its place** — the note's own arrangement, for its
+ * reason.
  *
  * **The placeholder takes `includeChildren`**, which the note's does not: it looks for an empty
- * *top-level* textblock by default, and the top level here is the list — so without it an empty
- * checklist would teach nothing at all.
+ * *top-level* textblock by default, and an empty to-do list is one empty to-do — a textblock two
+ * levels down — so without it an empty checklist would teach nothing at all.
  */
 export const CHECKLIST_EXTENSIONS = [
   StarterKit.configure({
@@ -804,11 +1188,11 @@ export const CHECKLIST_EXTENSIONS = [
     code: {},
     link: { openOnClick: false },
 
-    // Replaced below by the one-list document.
+    // Replaced below by the to-do document, and by the note's clamped heading.
     document: false,
+    heading: false,
 
     // Out of the dialect: every block a to-do list cannot hold, and the break it cannot read.
-    heading: false,
     bulletList: false,
     orderedList: false,
     listItem: false,
@@ -825,6 +1209,7 @@ export const CHECKLIST_EXTENSIONS = [
     dropcursor: false,
   }),
   ChecklistDocument,
+  NoteHeading.configure({ levels: HEADING_LEVELS }),
   TaskList,
   ChecklistItem.configure({
     nested: true,
@@ -834,9 +1219,21 @@ export const CHECKLIST_EXTENSIONS = [
     },
   }),
   ChecklistKeys,
+  JoinTodoLists,
   Placeholder.configure({ placeholder: TODO_PLACEHOLDER, includeChildren: true }),
   ChecklistMarkdown,
 ];
+
+/**
+ * How a heading is drawn, on both surfaces — a to-do list's headings are the note's
+ * {@link NoteHeading}, so the three levels read at the same weights one band apart. Every bracketed
+ * class here is compiled in `NoteEditor.test.tsx`, beside the checklist's own.
+ */
+const HEADING_PROSE = cn(
+  "[&_h1]:mt-3 [&_h1]:mb-1 [&_h1]:text-base [&_h1]:font-semibold [&_h1]:text-text",
+  "[&_h2]:mt-3 [&_h2]:mb-1 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-text",
+  "[&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-medium [&_h3]:text-dim",
+);
 
 /**
  * How the body is drawn inside the box.
@@ -851,9 +1248,7 @@ export const CHECKLIST_EXTENSIONS = [
  * "quoted", "aside" and "somewhere to go".
  */
 const PROSE = cn(
-  "[&_h1]:mt-3 [&_h1]:mb-1 [&_h1]:text-base [&_h1]:font-semibold [&_h1]:text-text",
-  "[&_h2]:mt-3 [&_h2]:mb-1 [&_h2]:text-sm [&_h2]:font-semibold [&_h2]:text-text",
-  "[&_h3]:mt-3 [&_h3]:mb-1 [&_h3]:text-sm [&_h3]:font-medium [&_h3]:text-dim",
+  HEADING_PROSE,
   "[&_p]:my-1",
   "[&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5",
   "[&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5",
@@ -891,14 +1286,23 @@ const INLINE_PROSE = cn(
  * paragraph and never a sub-to-do's, which sits one list further down — a done parent over an open
  * child is a thing a reader writes, and striking the child would say it was done too. A link in a
  * done line goes dim with the words around it rather than staying the one lit thing in the row.
+ *
+ * **The text between the lists is spaced as the note's is** (issue #688): a top-level paragraph
+ * and a top-level list each take `my-1`, the headings take {@link HEADING_PROSE}, and the first and
+ * last blocks give their outer margin back — `PROSE`'s own recipe. A to-do's line and a sub-list
+ * stay flush (`[&_li_p]`, `[&_li_ul]`), which is why neither selector is the bare element any more:
+ * a bare `[&_p]:m-0` and `[&>p]:my-1` would both match a top-level paragraph at one specificity,
+ * and which won would be the stylesheet's order rather than anything written here.
  */
 const CHECKLIST_PROSE = cn(
-  "[&_ul]:m-0 [&_ul]:list-none [&_ul]:p-0",
+  "[&_ul]:list-none [&_ul]:p-0 [&_li_ul]:m-0",
   "[&_li]:flex [&_li]:items-start [&_li]:gap-2 [&_li]:py-0.5",
   "[&_li>label]:relative [&_li>label]:flex [&_li>label]:h-5 [&_li>label]:shrink-0",
-  "[&_li>label]:items-center [&_li>div]:min-w-0 [&_li>div]:flex-1 [&_p]:m-0",
+  "[&_li>label]:items-center [&_li>div]:min-w-0 [&_li>div]:flex-1 [&_li_p]:m-0",
   "[&_li[data-checked=true]>div>p]:text-dim [&_li[data-checked=true]>div>p]:line-through",
   "[&_li[data-checked=true]>div>p_a]:text-dim",
+  "[&>p]:my-1 [&>ul]:my-1 [&>:first-child]:mt-0 [&>:last-child]:mb-0",
+  HEADING_PROSE,
   INLINE_PROSE,
 );
 
@@ -1026,6 +1430,44 @@ function ToolGroup({ children }: { children: ReactNode }) {
   return <div className="flex items-center gap-0.5">{children}</div>;
 }
 
+/**
+ * A fresh, empty to-do at the **end of the document**, at the top level — the New to-do press.
+ *
+ * * **After a list, it joins that list**, under whatever its last to-do holds — **unless the last
+ *   to-do is already empty**, which is reused rather than doubled: that is what makes the press
+ *   safe to repeat, since a reader who presses it twice without typing gets one blank line, not
+ *   two.
+ * * **After text, it starts a new list** — the document ends on a paragraph or a heading, and the
+ *   to-do goes under it rather than into a list further up the page.
+ * * **A blank paragraph at the end is where the to-do goes**, not a line under it: it is what an
+ *   Enter on an empty to-do leaves, and a to-do pressed for straight after would otherwise sit
+ *   under a gap nobody meant. The list before it, if there is one, is then the one appended to.
+ *
+ * The end of the document rather than the end of the first list, which is what #672 appended to:
+ * a list then was the whole document, and a to-do list with text in it is read top to bottom.
+ */
+function appendTodo(tr: Transaction): boolean {
+  const { taskList, taskItem, paragraph } = tr.doc.type.schema.nodes;
+  const item = taskItem.create({ checked: false }, paragraph.create());
+  const end = () => tr.doc.content.size;
+  let last = tr.doc.lastChild;
+  if (last?.type === paragraph && last.content.size === 0) {
+    if (tr.doc.childCount === 1) {
+      tr.replaceWith(0, end(), taskList.create(null, item));
+      return true;
+    }
+    tr.delete(end() - last.nodeSize, end());
+    last = tr.doc.lastChild;
+  }
+  if (last?.type === taskList) {
+    const tail = last.lastChild;
+    if (!(tail && tail.childCount === 1 && tail.textContent === "")) tr.insert(end() - 1, item);
+  } else {
+    tr.insert(end(), taskList.create(null, item));
+  }
+  return true;
+}
+
 /** What the toolbar reads off the document, recomputed only when one of these answers changes. */
 interface Marks {
   bold: boolean;
@@ -1038,11 +1480,17 @@ interface Marks {
   bullet: boolean;
   ordered: boolean;
   quote: boolean;
+  /** The caret is in a **top-level** paragraph — the checklist's Paragraph button. A to-do's own
+   *  line is a paragraph too, and is not this: it is {@link Marks.todo}. */
+  paragraph: boolean;
+  /** The caret is on a to-do's line — the checklist's To-do button. */
+  todo: boolean;
   link: boolean;
   href: string;
 }
 
 function readMarks(editor: Editor): Marks {
+  const { $from } = editor.state.selection;
   return {
     bold: editor.isActive("bold"),
     italic: editor.isActive("italic"),
@@ -1054,6 +1502,8 @@ function readMarks(editor: Editor): Marks {
     bullet: editor.isActive("bulletList"),
     ordered: editor.isActive("orderedList"),
     quote: editor.isActive("blockquote"),
+    paragraph: $from.depth === 1 && $from.parent.type.name === "paragraph",
+    todo: todoAt($from) !== null,
     link: editor.isActive("link"),
     href: String(editor.getAttributes("link").href ?? ""),
   };
@@ -1067,7 +1517,7 @@ export default function NoteEditor({
   appendRequest,
   onAppendHandled,
 }: {
-  /** The note's body, as CommonMark in the dialect above — or, in checklist mode, a to-do list. */
+  /** The note's body, as CommonMark in the dialect above — or, in checklist mode, a to-do list's. */
   value: string;
   /** Called with **markdown** on every edit — never HTML and never ProseMirror JSON. */
   onChange: (markdown: string) => void;
@@ -1079,16 +1529,16 @@ export default function NoteEditor({
   ariaLabel: string;
   /**
    * `"checklist"` edits a deck's to-do list: {@link CHECKLIST_EXTENSIONS}, a toolbar of the marks,
-   * a link, Outdent and Indent, and a delete button on every row. Omitted, this is the note
-   * editor it has always been. **Read once, at mount** — the schema is built from it, and a
-   * schema cannot change under a live document.
+   * a link, Heading 1–3, Paragraph, To-do, Outdent and Indent, and a delete button on every
+   * to-do's row. Omitted, this is the note editor it has always been. **Read once, at mount** —
+   * the schema is built from it, and a schema cannot change under a live document.
    */
   mode?: "note" | "checklist";
   /**
-   * Checklist mode only: a counter the host bumps to ask for a fresh to-do at the end of the list
-   * with the caret in it — the band's **New to-do**. A counter rather than a flag, so a second
-   * press is a second request; `0` and absent ask for nothing, and a mount that already carries a
-   * request honours it, because the band opens and asks in one press.
+   * Checklist mode only: a counter the host bumps to ask for a fresh to-do at the end of the
+   * document with the caret in it — a **New to-do** press. A counter rather than a flag, so a
+   * second press is a second request; `0` and absent ask for nothing, and a mount that already
+   * carries a request honours it, because a host can open and ask in one press.
    */
   appendRequest?: number;
   /** Called once each request has been honoured — including one that appended nothing. */
@@ -1165,34 +1615,13 @@ export default function NoteEditor({
   }, [editor, ariaLabel, surface]);
 
   /**
-   * Honour a request for a fresh to-do: append an empty one at the end of the list — at the top
-   * level, under whatever the last to-do holds — unless the last one is already empty, then put
-   * the caret there. Either way the request is answered, so the host can stop asking.
-   *
-   * **An empty last to-do is reused rather than doubled**, which is what makes the press safe to
-   * repeat: a reader who presses New to-do twice without typing gets one blank line, not two.
-   *
-   * The position is the end of the first task list's own content rather than the document's, so
-   * a body some other writer left with a stray line after the list still appends into the list.
-   * The destroyed guard is the value effect's, for its reason.
+   * Honour a request for a fresh to-do — {@link appendTodo} — then put the caret at the end of the
+   * document, which is that to-do's line. Either way the request is answered, so the host can stop
+   * asking. The destroyed guard is the value effect's, for its reason.
    */
   useEffect(() => {
     if (!checklist || !appendRequest || editor.isDestroyed) return;
-    const list = editor.state.doc.firstChild;
-    if (list?.type.name === "taskList") {
-      const last = list.lastChild;
-      const lastEmpty = last !== null && last.childCount === 1 && last.textContent === "";
-      if (!lastEmpty) {
-        editor
-          .chain()
-          .insertContentAt(list.content.size + 1, {
-            type: "taskItem",
-            attrs: { checked: false },
-            content: [{ type: "paragraph" }],
-          })
-          .run();
-      }
-    }
+    editor.chain().command(({ tr }) => appendTodo(tr)).run();
     editor.commands.focus("end");
     onAppendHandledRef.current?.();
   }, [editor, appendRequest, checklist]);
@@ -1264,9 +1693,9 @@ export default function NoteEditor({
           />
         </ToolGroup>
 
-        {/* The note's blocks. A to-do list can hold none of them, so it draws none of them — a
-            heading button over a document that cannot have a heading would be a press that does
-            nothing. */}
+        {/* The note's blocks. A to-do list draws its own heading buttons after the link — they lift
+            a to-do's line out of its list first, which the note's toggle has no reason to — and
+            none of the others, because it can hold no list but its own and no quote. */}
         {!checklist && (
           <>
             <ToolGroup>
@@ -1327,6 +1756,46 @@ export default function NoteEditor({
             <ToolButton icon={LinkIcon} name="Add a link" onPress={openLink} />
           )}
         </ToolGroup>
+
+        {/* What the caret's line **is** — the only buttons in the checklist that change it, so a
+            mark pressed on a line of text never makes a to-do (issue #688). Five toggles, each lit
+            for the block the caret stands in: a heading of that level, a top-level paragraph, a
+            to-do's line. A lit heading or To-do pressed again turns the line back into a
+            paragraph; a lit Paragraph has nothing to turn back into. */}
+        {checklist && (
+          <ToolGroup>
+            <ToolButton
+              icon={Heading1}
+              name="Heading 1"
+              pressed={marks.h1}
+              onPress={() => lineToText(editor, marks.h1 ? null : 1)}
+            />
+            <ToolButton
+              icon={Heading2}
+              name="Heading 2"
+              pressed={marks.h2}
+              onPress={() => lineToText(editor, marks.h2 ? null : 2)}
+            />
+            <ToolButton
+              icon={Heading3}
+              name="Heading 3"
+              pressed={marks.h3}
+              onPress={() => lineToText(editor, marks.h3 ? null : 3)}
+            />
+            <ToolButton
+              icon={Pilcrow}
+              name="Paragraph"
+              pressed={marks.paragraph}
+              onPress={() => lineToText(editor, null)}
+            />
+            <ToolButton
+              icon={ListTodo}
+              name="To-do"
+              pressed={marks.todo}
+              onPress={() => lineToTodo(editor)}
+            />
+          </ToolGroup>
+        )}
 
         {/* Tab and Shift-Tab, for a pointer. Not toggles — nothing is "on" about a level — so no
             `aria-pressed`; each is one press that moves the to-do the caret is in one level. */}

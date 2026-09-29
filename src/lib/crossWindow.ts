@@ -180,6 +180,10 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   deck_labels: DECKS,
   deck_note_cards: DECKS,
   deck_notes: DECKS,
+  // A deck's titled to-do lists (user schema v59), read by `useDeckTodoLists` under
+  // `["decks", "todos", deckId]` and by the home widget under `["decks", "todos", "lists"]` — both
+  // under the `["decks"]` root on purpose, so another window's tick or save reaches both.
+  deck_todo_lists: DECKS,
   // A token's entries (user schema v52), read by `useDeckTokens` under `["decks", "tokens", …]`
   // exactly as `deck_tokens` beside it is — so `["decks"]` is what another window's step makes
   // stale.

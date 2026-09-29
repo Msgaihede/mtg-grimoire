@@ -3663,11 +3663,13 @@ export interface DeckPatch {
    * **It rides this patch and not {@link ipc.deckSetViewState}**, for the argument spelled out
    * on {@link tokensOpen}, and it takes {@link notesOpen}'s answer one band down.
    *
-   * **Opening the band is not writing the list, and writing the list is not opening the band.**
-   * The checklist is `decks.todos`, written by {@link ipc.deckTodosSet} and never by a patch — a
-   * caller that reached for this to save a to-do is reaching for that. The home widget's deck
-   * heading is the one caller that sends this from outside the editor: it opens a deck with its
-   * band expanded, and sends `true` only when {@link DeckTodoList.todosOpen} says it is shut.
+   * **Opening the band is not writing a list, and writing a list is not opening the band.** The
+   * lists are rows of `deck_todo_lists` (user schema v59, which replaced #672's single
+   * `decks.todos` column), written by {@link ipc.deckTodoListCreate} and
+   * {@link ipc.deckTodoListUpdate} and never by a patch — a caller that reached for this to save a
+   * to-do is reaching for those. The home widget's deck heading is the one caller that sends this
+   * from outside the editor: it opens a deck with its band expanded, and sends `true` only when
+   * {@link DeckTodoListEntry.todosOpen} says it is shut.
    */
   todosOpen?: boolean;
   /**
@@ -4102,12 +4104,13 @@ export interface DeckRow {
    * Read on the row as well as written through {@link DeckPatch}: a setting the app can write
    * and never see is a setting nothing can draw.
    *
-   * **The checklist itself is not on this row, and that is the point of the split.** It is
-   * `decks.todos`, one column over, and `DECK_SELECT` never reads it: every deck list in the app
-   * fetches `DeckRow`s, and a gallery tile or a deck menu has no use for a body it would carry on
-   * every read. The list travels only through {@link ipc.deckTodos} and
-   * {@link ipc.deckTodoLists} — which is {@link notesOpen}'s arrangement for the notes, where the
-   * row says whether the band is open and never what is written in it.
+   * **The lists themselves are not on this row, and that is the point of the split.** They are
+   * rows of `deck_todo_lists`, many to a deck since user schema v59 — #672's single `decks.todos`
+   * column was converted into one row titled `To-do` and dropped — and a gallery tile or a deck
+   * menu has no use for bodies it would carry on every read. They travel only through
+   * {@link ipc.deckTodoLists} and {@link ipc.everyDeckTodoList} — which is {@link notesOpen}'s
+   * arrangement for the notes, where the row says whether the band is open and never what is
+   * written in it.
    */
   todosOpen: boolean;
   /**
@@ -5016,45 +5019,83 @@ export interface CardNote {
 }
 
 /**
- * One deck's **to-do checklist**, as the home page's `deckTodos` widget reads it — what
- * {@link ipc.deckTodoLists} answers, one per deck whose list is not empty.
+ * One of a deck's **to-do lists** — a row of `deck_todo_lists` (user schema v59, issue #688), as
+ * {@link ipc.deckTodoLists} answers them for the editor's To-do band and
+ * {@link ipc.deckTodoListCreate} answers the one it made.
  *
- * ⚠️ **A to-do list is not a note**, and the two share an editor and an inline dialect and
- * nothing else. A {@link DeckNote} is a row, many to a deck, with cards attached; a deck's to-do
- * list is **one column on the deck** (`decks.todos`, user schema v58), one list to a deck — so it
- * has no id, no sort order and no attachments, and `deckId` is the whole of its address. A single
- * to-do is a line of that list and not a row anywhere: the widget names one by its source line in
- * the `body` it read, and the compare-and-set on {@link ipc.deckTodosSet} is what makes that name
- * safe to act on.
+ * ⚠️ **A to-do list is still not a note**, and it now has exactly the shape a deck note has — a
+ * title, a body, a card in a grid of cards — which makes the warning sharper rather than weaker.
+ * A {@link DeckNote} attaches cards, is drag-reordered and is saved by a button; a to-do list
+ * attaches nothing, autosaves, and its boxes tick in place on the band. They share `NoteEditor`,
+ * the inline dialect and a card's *look*, and no table.
  *
- * The deck's `name`, `archived` and `todosOpen` travel beside the body so the widget needs no
- * second read to head a list, to leave an archived deck's out, or to decide whether pressing a
- * heading must open the band first.
+ * **What it replaced.** #672 (user schema v58) kept one checklist per deck in one column,
+ * `decks.todos`, with no id and no title — `deckId` was the whole of its address. v59 converted
+ * every non-empty column into one row titled `To-do` and dropped the column, so a deck has many
+ * lists now and a list is addressed by its own `id`. A single **to-do** is still a line of a
+ * body and not a row anywhere: a tick names one by its source line in the `body` it read, and the
+ * compare-and-set on {@link ipc.deckTodoListUpdate} is what makes that name safe to act on.
  */
 export interface DeckTodoList {
+  id: number;
   deckId: number;
-  /** The deck's name at the time of the read — the widget's heading for the list. */
-  name: string;
+  /** The reader's heading, stored as typed — `""` included, which draws as `Untitled list`
+   *  (`todoMarkdown.ts`' `listTitle`) and is never stored as those words. */
+  title: string;
+  /**
+   * The to-do document — headings, paragraphs and `- [ ]` / `- [x]` task lists, blocks separated
+   * by one blank line, in the dialect `features/decks/todoMarkdown.ts` reads. `""` is a list with
+   * nothing in it yet, which a list created with only a title is.
+   *
+   * It arrives as **source**, for {@link DeckNote.body}'s reason, and it is also the `expected` a
+   * tick hands back to {@link ipc.deckTodoListUpdate} — so it must travel untouched: a caller that
+   * trimmed it would be refused on every press.
+   */
+  body: string;
+  /** Where the list sits among the deck's own, ascending — `max + 1` for a new one, so new lists
+   *  go at the end. Nothing reorders lists yet; the column exists so a later reorder is a command
+   *  rather than a rung. */
+  sortOrder: number;
+  /** Unix seconds. */
+  createdAt: number;
+  /** Unix seconds — the list's own, moved by a write that changed its title or body. */
+  updatedAt: number;
+}
+
+/**
+ * One deck to-do list as the home page's `deckTodos` widget reads it — what
+ * {@link ipc.everyDeckTodoList} answers: **every list in every deck whose body is not empty**,
+ * most recently edited first.
+ *
+ * A second shape rather than {@link DeckTodoList} with a deck attached, `CardNote`'s reason: the
+ * widget draws deck → list → to-dos across every deck at once, so it needs the deck's `name`,
+ * `archived` and `todosOpen` beside each list and has no use for `sortOrder` or `createdAt`. With
+ * them here it needs no second read to head a deck, to leave an archived deck's lists out, or to
+ * decide whether pressing a heading must open the band first.
+ */
+export interface DeckTodoListEntry {
+  /** The list's own id — what a tick from the widget writes through. */
+  id: number;
+  deckId: number;
+  /** The deck's name at the time of the read — the widget's heading for the deck. */
+  deckName: string;
   /** Whether the deck is archived. **Answered, not filtered**: an archived deck's to-dos are still
    *  the reader's, and whether the widget draws them is its own `Include archived decks` switch. */
   archived: boolean;
   /** {@link DeckRow.todosOpen}, carried here so the widget's heading press writes the disclosure
    *  only when it is shut — a deck whose band is already open costs no `deckUpdate` at all. */
   todosOpen: boolean;
-  /** Unix seconds — the deck's own `updated_at`, which a to-do write moves and so does every other
-   *  deck write, so it dates the deck rather than the list. The lists arrive most recently edited
-   *  first, so the widget's `Last edited` order sorts nothing. */
-  updatedAt: number;
-  /**
-   * The checklist — `- [ ] text` and `- [x] text` lines, sub-to-dos indented under their parent,
-   * in the dialect `features/decks/todoMarkdown.ts` reads. **Never empty here**: a deck with no
-   * list is absent from the answer rather than present with `""`.
-   *
-   * It arrives as **source**, for {@link DeckNote.body}'s reason, and it is also the `expected`
-   * the widget hands back to {@link ipc.deckTodosSet} with a tick — so it must travel untouched:
-   * a caller that trimmed it would be refused on every press.
-   */
+  /** {@link DeckTodoList.title}, stored as typed. */
+  title: string;
+  /** {@link DeckTodoList.body} — **never empty here**, and the `expected` a widget tick sends back,
+   *  so it must travel untouched. */
   body: string;
+  /** {@link DeckTodoList.sortOrder} — the band's order, so the widget draws a deck's lists in the
+   *  order the reader sees them on the deck rather than in the order they were last edited. */
+  sortOrder: number;
+  /** Unix seconds — the list's own `updated_at`. The widget's `Last edited` order dates a deck by
+   *  its newest list. */
+  updatedAt: number;
 }
 
 /**
@@ -8731,20 +8772,49 @@ export const ipc = {
    */
   cardNotes: (oracleId: string) => invoke<CardNote[]>("card_notes", { oracleId }),
   /**
-   * One deck's to-do checklist, in `todoMarkdown.ts`' dialect. `""` for a deck with none — and for
-   * a deck that is not there, which the band draws the same way. **Refuses rather than answering
-   * `""` when the read fails**, because the band autosaves and must never save over a list it could
-   * not read.
+   * One deck's to-do lists, in `sort_order, id` — the To-do band's read. `[]` for a deck with none,
+   * and for a deck that is not there, which the band draws the same way. **Refuses rather than
+   * answering `[]` when the read fails**, because the band's dialogs autosave and must never write
+   * over lists nobody could read.
    */
-  deckTodos: (deckId: number): Promise<string> => invoke("deck_todos", { deckId }),
+  deckTodoLists: (deckId: number): Promise<DeckTodoList[]> =>
+    invoke("deck_todo_lists", { deckId }),
   /**
-   * Write one deck's checklist. `expected` is a compare-and-set: the widget passes the body it read
-   * and a moved list is refused with `deck_todos::TODOS_CHANGED`; the band passes `null`.
+   * Make a list at the end of the deck's own (`max(sort_order) + 1`) and answer it — the dialog's
+   * first real change on a **New to-do list**, which is why a list opened and closed untouched is
+   * never made. Refused with `deck::DECK_GONE` for a deck that is not there.
    */
-  deckTodosSet: (deckId: number, body: string, expected: string | null): Promise<void> =>
-    invoke("deck_todos_set", { deckId, body, expected }),
-  /** Every deck with a non-empty checklist, most recently edited first. */
-  deckTodoLists: (): Promise<DeckTodoList[]> => invoke("deck_todo_lists"),
+  deckTodoListCreate: (deckId: number, title: string, body: string): Promise<DeckTodoList> =>
+    invoke("deck_todo_list_create", { deckId, title, body }),
+  /**
+   * Change one list's title, body or both. **Every key is sent, `null` meaning _leave it_**, so a
+   * change that names only the body is `title: null` on the wire — `??` and never `||`, or a blank
+   * title the reader typed would travel as "leave it" and the old heading would come back.
+   *
+   * `expected` is a compare-and-set on the **body**: a tick passes the body it read and a moved
+   * list is refused with `deck_todos::TODOS_CHANGED`; the dialog's autosave passes `null`. The
+   * other refusals are `TODO_LIST_GONE` and `TODO_LIST_WRONG_DECK`, in that order, and a change
+   * equal to what is stored writes nothing at all.
+   */
+  deckTodoListUpdate: (
+    deckId: number,
+    id: number,
+    change: { title?: string | null; body?: string | null; expected?: string | null },
+  ): Promise<void> =>
+    invoke("deck_todo_list_update", {
+      deckId,
+      id,
+      title: change.title ?? null,
+      body: change.body ?? null,
+      expected: change.expected ?? null,
+    }),
+  /** Delete one list, its to-dos with it. Idempotent: a list already gone is a success, since the
+   *  caller wanted it gone. */
+  deckTodoListDelete: (deckId: number, id: number): Promise<void> =>
+    invoke("deck_todo_list_delete", { deckId, id }),
+  /** Every list in every deck whose body is not empty, most recently edited first — the home
+   *  widget's one read. Takes **no arguments at all**: see the case in `ipc.test.ts`. */
+  everyDeckTodoList: (): Promise<DeckTodoListEntry[]> => invoke("every_deck_todo_list"),
   /**
    * The format the last deck made on this install was given — or `null` where no deck has ever
    * been made.

@@ -106,7 +106,7 @@ impl Spec {
 }
 
 /// One spec per synced table. `schema::SYNCED_TABLES` is the census this is held to.
-pub const TABLES: [Spec; 17] = [
+pub const TABLES: [Spec; 18] = [
     Spec {
         table: "collection_entries",
         keys: &["id"],
@@ -301,6 +301,26 @@ pub const TABLES: [Spec; 17] = [
     Spec {
         table: "deck_notes",
         keys: &["id"],
+        fields: &["title", "body", "sort_order"],
+        counters: &[],
+        parents: &[Parent {
+            key: "deck",
+            col: "deck_id",
+            table: "decks",
+            absent: Absent::Null,
+            soft: false,
+        }],
+        append_only: false,
+    },
+    Spec {
+        table: "deck_todo_lists",
+        keys: &["id"],
+        // A deck's titled to-do lists (user schema v59) — `deck_notes`' spec field for field,
+        // because the two are one shape: a title, a body the page parses and Rust never does, and
+        // a place in the deck's order. **The body travels whole, per field**: a tick on one device
+        // and a rename on another touch two fields and both survive, and two devices editing one
+        // list's body while apart keep the later write whole — which is what `decks.todos` did
+        // before this table, and what a note's body does beside it.
         fields: &["title", "body", "sort_order"],
         counters: &[],
         parents: &[Parent {
@@ -508,17 +528,16 @@ pub const TABLES: [Spec; 17] = [
             // that added it is uncaptured**: every device converts its own copy of the synced
             // mode the same way, so the conversion is derived and not an edit to send.
             "managed_wishlist_tokens",
-            // User schema v58's to-do list — the reader's own checklist, one document to a deck
-            // — and it travels **per field** like everything on this list: a to-do edit on one
-            // device and a rename on another touch two fields and both survive. What it cannot
-            // do is merge *within* the text, so two devices editing one deck's list while apart
-            // keep the later write whole; a deck note's body behaves exactly the same way.
-            "todos",
-            // And whether the To-do band is open, which travels for `tokens_open`'s reason: a
-            // reader who opened the band on one device meant it about the deck. Both `DEFAULT`
-            // safely for an old peer — `''` and `0`, no list and a shut band — and adding is the
-            // safe direction, `theory_mark_*`'s note above: a v57 device neither names nor reads
-            // either key.
+            // **User schema v58's `todos` was here for one rung and came off at v59** — the second
+            // field ever removed from this spec, after `notes` above, and for the same kind of
+            // move: one document to a deck became `deck_todo_lists`, several titled lists with a
+            // spec of their own. A v58 peer goes on sending the key and a v59 device skips it,
+            // `a_field_this_build_no_longer_syncs_is_skipped_rather_than_stalling`'s rule.
+            //
+            // Whether the To-do band is open stays, and travels for `tokens_open`'s reason: a
+            // reader who opened the band on one device meant it about the deck. It `DEFAULT`s
+            // safely for an old peer — `0`, a shut band — and adding was the safe direction,
+            // `theory_mark_*`'s note above: a v57 device neither names nor reads the key.
             "todos_open",
         ],
         counters: &[],
@@ -1496,13 +1515,14 @@ mod tests {
         );
     }
 
-    /// **A deck's to-do list and its band's disclosure both travel** (user schema v58) — the
-    /// same missing-fence argument twice over. A list written on one device and absent on the
-    /// next is the reader's own words gone missing, with nothing on screen saying why; the
-    /// disclosure is `tokens_open`'s. Two statements, so each column is shown to ride an op of
-    /// its own rather than the second one's `fields` carrying the first by accident.
+    /// **A deck's to-do lists and its band's disclosure both travel** (user schema v59, which
+    /// turned v58's one `decks.todos` column into rows) — the same missing-fence argument twice
+    /// over. A list written on one device and absent on the next is the reader's own words gone
+    /// missing, with nothing on screen saying why; the disclosure is `tokens_open`'s. The list is
+    /// an op on its own table naming its deck by uid, the title and body ride a later edit as
+    /// fields, and the disclosure an op of its own on `decks`.
     #[test]
-    fn a_decks_todo_list_and_its_disclosure_are_captured() {
+    fn a_decks_todo_lists_and_its_disclosure_are_captured() {
         let conn = db();
         conn.execute(
             "INSERT INTO decks (id, name, format_key, created_at, updated_at)
@@ -1510,24 +1530,58 @@ mod tests {
             [],
         )
         .unwrap();
+        let deck_uid: String = conn
+            .query_row("SELECT sync_uid FROM decks WHERE id = 1", [], |r| r.get(0))
+            .unwrap();
         conn.execute("DELETE FROM sync_ops", []).unwrap();
 
-        conn.execute("UPDATE decks SET todos = '- [ ] a' WHERE id = 1", [])
-            .unwrap();
+        conn.execute(
+            "INSERT INTO deck_todo_lists (id, deck_id, title, body, created_at, updated_at)
+             VALUES (1, 1, 'Mana', '- [ ] a', 0, 0)",
+            [],
+        )
+        .unwrap();
         let rows = ops(&conn);
         assert_eq!(rows.len(), 1, "one write, one op");
+        assert_eq!(
+            (rows[0].0.as_str(), rows[0].1.as_str()),
+            ("deck_todo_lists", "put")
+        );
         let fields: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
         assert_eq!(
-            fields.get("todos"),
+            fields.get("body"),
             Some(&serde_json::json!("- [ ] a")),
             "the list must reach the reader's other devices, in {fields}"
         );
+        let parents: String = conn
+            .query_row(
+                "SELECT parents FROM sync_ops ORDER BY seq DESC LIMIT 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let parents: serde_json::Value = serde_json::from_str(&parents).unwrap();
+        assert_eq!(
+            parents.get("deck"),
+            Some(&serde_json::json!(deck_uid)),
+            "and names its deck by uid, never by a local id, in {parents}"
+        );
+
+        conn.execute(
+            "UPDATE deck_todo_lists SET body = '- [x] a' WHERE id = 1",
+            [],
+        )
+        .unwrap();
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 2, "a tick is an op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[1].2).unwrap();
+        assert_eq!(fields.get("body"), Some(&serde_json::json!("- [x] a")));
 
         conn.execute("UPDATE decks SET todos_open = 1 WHERE id = 1", [])
             .unwrap();
         let rows = ops(&conn);
-        assert_eq!(rows.len(), 2, "a second write, a second op");
-        let fields: serde_json::Value = serde_json::from_str(&rows[1].2).unwrap();
+        assert_eq!(rows.len(), 3, "a third write, a third op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[2].2).unwrap();
         assert_eq!(
             fields.get("todos_open"),
             Some(&serde_json::json!(1)),

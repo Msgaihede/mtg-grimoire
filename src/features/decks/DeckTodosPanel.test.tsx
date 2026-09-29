@@ -1,48 +1,29 @@
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import type { DeckTodoList } from "@/lib/ipc";
 
-const deckTodos = vi.hoisted(() => vi.fn());
-const deckTodosSet = vi.hoisted(() => vi.fn());
-// The two commands are what the band *is* — every assertion below is about what one of them was
-// asked or answered. `importOriginal` keeps `ipcError`, which the refusal line renders through.
+const deckTodoLists = vi.hoisted(() => vi.fn());
+const deckTodoListCreate = vi.hoisted(() => vi.fn());
+const deckTodoListUpdate = vi.hoisted(() => vi.fn());
+const deckTodoListDelete = vi.hoisted(() => vi.fn());
+// `importOriginal` keeps `ipcError`, which the refusal line renders through.
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckTodos, deckTodosSet },
+  ipc: { deckTodoLists, deckTodoListCreate, deckTodoListUpdate, deckTodoListDelete },
 }));
 
-/** What the stand-in below was handed, one call per render — how a test reads `appendRequest`,
- *  `mode` and the label without the real editor drawing any of them. */
-const editorRenders = vi.hoisted(() => vi.fn());
-
-/** The props the band hands the lazy editor — the real component's three and checklist mode's
- *  three, so a rename on either side fails here rather than rendering nothing. */
-interface StandInProps {
-  value: string;
-  onChange: (markdown: string) => void;
-  ariaLabel: string;
-  mode?: "note" | "checklist";
-  appendRequest?: number;
-  onAppendHandled?: () => void;
-}
-
-/**
- * The lazy editor, stood in for by a textarea — `DeckNotesPanel.test.tsx`'s mock, with one
- * difference that is the point of half this file.
- *
- * **It seeds its text once, at mount, and ignores `value` after that.** The real `NoteEditor`
- * does follow a changed `value`, so this is stricter than the thing it stands in for, on
- * purpose: the band promises that a body arriving from elsewhere *remounts* the editor (a new
- * `key`) rather than being pushed into one the reader may be typing in, and a controlled
- * textarea would show the new text either way and prove nothing about which of the two happened.
- * Element identity is the other half — a remount is a new `<textarea>`, an edit is the same one.
- */
+/** The lazy editor, as a textarea — the dialog's autosave is `TodoListDialog.test.tsx`'s; the
+ *  band only needs to see that the dialog opened, and on which list. */
 vi.mock("./NoteEditor", async () => {
   const { useState } = await import("react");
   return {
-    default: function NoteEditorStandIn(props: StandInProps) {
-      editorRenders(props);
+    default: function NoteEditorStandIn(props: {
+      value: string;
+      onChange: (markdown: string) => void;
+      ariaLabel: string;
+    }) {
       const [text, setText] = useState(props.value);
       return (
         <textarea
@@ -58,17 +39,38 @@ vi.mock("./NoteEditor", async () => {
   };
 });
 
-import { DeckTodosPanel, TODOS_HEADING } from "./DeckTodosPanel";
+import { DeckTodosPanel, NEW_LIST_LABEL, NO_LISTS, TODOS_HEADING } from "./DeckTodosPanel";
 
 /* --------------------------------------------------------------------- fixtures ------- */
 
-/** Two open and one done, one of them a sub-to-do — `countTodos` counts every depth. */
-const NEST = "- [ ] Revise tokens\n  - [x] Cut Clue tokens\n- [ ] Sleeve the deck";
+function list(over: Partial<DeckTodoList> & { id: number }): DeckTodoList {
+  return {
+    deckId: 4,
+    title: "",
+    body: "",
+    sortOrder: 0,
+    createdAt: 1,
+    updatedAt: 1,
+    ...over,
+  };
+}
 
-/** The key the band's read sits under — how "the widget ticked something" is spelled below. */
-const KEY = ["decks", "todos", 4];
+/** Two open and one done, one of them a sub-to-do, under a heading and beside a paragraph. */
+const MANA = list({
+  id: 7,
+  title: "Mana",
+  sortOrder: 1,
+  body: "## Lands\n\n- [ ] Cut a land\n  - [x] Check curve\n\nSome notes about **why**.",
+});
+/** One open, and drawn first although its id is higher — the band orders by `sortOrder`. */
+const TOKENS = list({ id: 9, title: "Tokens", sortOrder: 0, body: "- [ ] Revise tokens" });
+/** An untitled list, drawn under the placeholder name. */
+const UNTITLED = list({ id: 11, title: "  ", sortOrder: 2, body: "- [x] Sleeve the deck" });
 
-function renderBand(props: { open?: boolean } = {}) {
+const TODOS_CHANGED = "That to-do list changed since it was read. Try again.";
+
+function renderBand(props: { open?: boolean; lists?: DeckTodoList[] } = {}) {
+  deckTodoLists.mockResolvedValue(props.lists ?? [MANA, TOKENS, UNTITLED]);
   const onToggle = vi.fn();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const band = (open: boolean) => (
@@ -77,82 +79,44 @@ function renderBand(props: { open?: boolean } = {}) {
     </QueryClientProvider>
   );
   const view = render(band(props.open ?? true));
-  return {
-    ...view,
-    onToggle,
-    client,
-    /** What the host does when it writes `decks.todos_open` and hands the answer back — under
-     *  the same client, because `rerender` replaces the root. */
-    setOpen: (open: boolean) => view.rerender(band(open)),
-  };
+  return { ...view, onToggle, client, setOpen: (open: boolean) => view.rerender(band(open)) };
 }
 
 const region = () => screen.findByRole("region", { name: TODOS_HEADING });
-const editor = () => screen.findByRole("textbox", { name: "To-do list" });
-const textbox = () => screen.getByRole("textbox", { name: "To-do list" });
-
-/** Let TanStack's notifications land. They are delivered on a `setTimeout(0)`, so a microtask
- *  flush alone leaves the DOM on the old value (memory: *Fake timers and query notifications*). */
-const settle = () => act(() => new Promise<void>((resolve) => setTimeout(resolve, 0)));
-
-/**
- * Run a faked clock forward **and let every promise waiting on it settle**, inside `act`.
- *
- * The async variant rather than `advanceTimersByTime`, because a save is a mutation: the timer
- * fires, `mutate` awaits its way to the command, the command's promise settles, and the cache
- * write it makes is announced on another `setTimeout(0)`. Only the async clock walks that whole
- * chain in one call.
- */
-async function tick(ms: number) {
-  await act(async () => {
-    await vi.advanceTimersByTimeAsync(ms);
-  });
-}
-
-/**
- * Fake the two timer functions and nothing else — the repo's shape (memory: *Fake timers and
- * query notifications*). **Only ever called after the editor is on screen**: every `findBy*`
- * above polls on the real clock, and `userEvent` hangs outright under a fake one, so no test
- * below that fakes the clock presses anything through `userEvent` afterwards.
- */
-const fakeClock = () => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+/** Every card's `Edit`, in the order they are drawn — the cards' order, read off their names. */
+const editButtons = () => screen.getAllByRole("button", { name: /^Edit / });
 
 beforeEach(() => {
   vi.clearAllMocks();
-  deckTodos.mockResolvedValue("");
-  deckTodosSet.mockResolvedValue(undefined);
-});
-
-afterEach(() => {
-  vi.useRealTimers();
+  deckTodoListUpdate.mockResolvedValue(undefined);
+  deckTodoListDelete.mockResolvedValue(undefined);
+  deckTodoListCreate.mockImplementation((deckId: number, title: string, body: string) =>
+    Promise.resolve(list({ id: 20, deckId, title, body, sortOrder: 3 })),
+  );
 });
 
 /* --------------------------------------------------------------------- the header ----- */
 
-describe("the band, shut", () => {
-  it("is named To-do, says how many are open and done, and mounts no editor", async () => {
-    deckTodos.mockResolvedValue(NEST);
+describe("the band's header", () => {
+  it("sums every list's to-dos, and draws no card while shut", async () => {
     renderBand({ open: false });
-
     const band = await region();
-    const disclosure = within(band).getByRole("button", { name: TODOS_HEADING });
-    expect(disclosure).toHaveAttribute("aria-expanded", "false");
-    expect(await within(band).findByText("2 open · 1 done")).toBeInTheDocument();
 
-    // Shut is nothing mounted — not a hidden editor: Tiptap is 141.5 kB behind a `lazy`, and a
-    // band nobody opened must not be what fetches it.
-    expect(screen.queryByRole("textbox")).toBeNull();
-    expect(editorRenders).not.toHaveBeenCalled();
+    expect(within(band).getByRole("button", { name: TODOS_HEADING })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+    // Mana: 1 open, 1 done. Tokens: 1 open. Untitled: 1 done.
+    expect(await within(band).findByText("2 open · 2 done")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Edit / })).toBeNull();
   });
 
-  it("draws no count for a deck with no list", async () => {
-    deckTodos.mockResolvedValue("");
-    renderBand({ open: true });
+  it("draws no count for a deck with no to-do in any list", async () => {
+    renderBand({ lists: [list({ id: 3, title: "Empty" })] });
+    const band = await region();
 
-    // The editor is on screen, which is what proves the read has landed — a count missing
-    // *before* the read answers would prove nothing.
-    await editor();
-    expect(within(await region()).queryByText(/open ·/)).toBeNull();
+    await within(band).findByRole("button", { name: "Edit Empty" });
+    expect(within(band).queryByText(/open ·/)).toBeNull();
   });
 
   it("asks the host to open it when the disclosure is pressed", async () => {
@@ -163,603 +127,255 @@ describe("the band, shut", () => {
     expect(onToggle).toHaveBeenCalledWith(true);
   });
 
-  it("follows a list changed elsewhere while it is shut", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    const { client } = renderBand({ open: false });
+  it("follows a list changed elsewhere", async () => {
+    const { client } = renderBand({ open: false, lists: [TOKENS] });
     const band = await region();
     expect(await within(band).findByText("1 open · 0 done")).toBeInTheDocument();
 
-    act(() => client.setQueryData(KEY, "- [x] Revise tokens"));
+    act(() =>
+      client.setQueryData(["decks", "todos", 4], [{ ...TOKENS, body: "- [x] Revise tokens" }]),
+    );
 
     expect(await within(band).findByText("0 open · 1 done")).toBeInTheDocument();
   });
 });
 
-/* --------------------------------------------------------------------- the editor ----- */
+/* --------------------------------------------------------------------- the cards ------ */
 
-describe("the band, open", () => {
-  it("mounts the checklist editor over the stored body", async () => {
-    deckTodos.mockResolvedValue(NEST);
+describe("the cards", () => {
+  it("draws one card per list, in sortOrder, an untitled one as Untitled list", async () => {
     renderBand();
+    await screen.findByRole("button", { name: "Edit Tokens" });
 
-    expect(await editor()).toHaveValue(NEST);
-    expect(deckTodos).toHaveBeenCalledWith(4);
-    expect(editorRenders).toHaveBeenLastCalledWith(
-      expect.objectContaining({ mode: "checklist", ariaLabel: "To-do list" }),
-    );
+    expect(editButtons().map((b) => b.textContent)).toEqual([
+      "Edit Tokens",
+      "Edit Mana",
+      "Edit Untitled list",
+    ]);
   });
 
-  it("saves once, 600 ms after the last change, as the whole list with no expected body", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    const { client } = renderBand();
-    const box = await editor();
-    const invalidate = vi.spyOn(client, "invalidateQueries");
-    fakeClock();
-
-    fireEvent.change(box, { target: { value: "- [ ] Revise tokens\n- [ ] C" } });
-    await tick(400);
-    fireEvent.change(box, { target: { value: "- [ ] Revise tokens\n- [ ] Cut" } });
-    await tick(599);
-    expect(deckTodosSet).not.toHaveBeenCalled();
-
-    await tick(1);
-    expect(deckTodosSet).toHaveBeenCalledTimes(1);
-    expect(deckTodosSet).toHaveBeenCalledWith(4, "- [ ] Revise tokens\n- [ ] Cut", null);
-
-    // The widget's read is told by name; the deck's root is not, because an autosave per pause
-    // re-reading the whole deck is the cost the hook's doc refuses.
-    await tick(0);
-    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks", "todos", "lists"] });
-    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["decks"] });
-
-    // **The band's own answer coming back is not a body from elsewhere**: the editor that wrote
-    // it is still the one on screen, not a remount seeded with its own words.
-    expect(textbox()).toBe(box);
-    expect(box).toHaveValue("- [ ] Revise tokens\n- [ ] Cut");
-  });
-
-  /**
-   * **The half-second after every autosave, held open.** The band records the text it sent as
-   * agreed the moment it sends it, while the cache still holds the body *before* it until the
-   * command answers — so for the length of the round trip the two disagree, and a band that took
-   * that as "a body from elsewhere" would seed the editor back to the reader's previous words and
-   * then forward again. An answer that resolves at once never leaves a render in that gap, which
-   * is why this one waits to be told.
-   */
-  it("holds the editor still while its own save is on the wire", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    let answer: () => void = () => {};
-    deckTodosSet.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          answer = resolve;
-        }),
-    );
-    renderBand();
-    const box = await editor();
-    fakeClock();
-
-    fireEvent.change(box, { target: { value: "- [ ] Revise tokens\n- [ ] Mine" } });
-    await tick(600);
-    expect(deckTodosSet).toHaveBeenCalledTimes(1);
-
-    expect(textbox()).toBe(box);
-    expect(box).toHaveValue("- [ ] Revise tokens\n- [ ] Mine");
-
-    await act(async () => answer());
-    await tick(0);
-    expect(textbox()).toBe(box);
-    expect(box).toHaveValue("- [ ] Revise tokens\n- [ ] Mine");
-  });
-
-  /**
-   * **Two pauses, two saves — and the database's write lock is not fair.** `deck_todos_set` waits
-   * up to five seconds for it, so under a busy lock two saves 600 ms apart can both be waiting and
-   * the newer can win: disk ends on the older text, the older answer is cached last, and an idle
-   * band adopts it over the newer words. The saves are answered here **newest first**, which is the
-   * order that loses them; the band must have made the newer one wait its turn rather than race.
-   */
-  it("lands two saves in the order they were typed, whichever order their answers come in", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    const answers: Array<() => void> = [];
-    deckTodosSet.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          answers.push(resolve);
-        }),
-    );
-    const { client } = renderBand();
-    const box = await editor();
-    fakeClock();
-
-    const older = "- [ ] Revise tokens\n- [ ] Cut";
-    const newer = "- [ ] Revise tokens\n- [ ] Cut three creatures";
-    fireEvent.change(box, { target: { value: older } });
-    await tick(600);
-    fireEvent.change(box, { target: { value: newer } });
-    await tick(600);
-
-    // The newer save waits behind the older one rather than racing it for the lock.
-    expect(deckTodosSet).toHaveBeenCalledTimes(1);
-
-    // Answer whatever is on the wire, newest first — the order an unfair lock can hand them out.
-    while (answers.length > 0) {
-      const next = answers.pop()!;
-      await act(async () => next());
-      await tick(0);
-    }
-
-    expect(deckTodosSet.mock.calls.map(([, body]) => body)).toEqual([older, newer]);
-    expect(client.getQueryData(KEY)).toBe(newer);
-    expect(textbox()).toBe(box);
-    expect(box).toHaveValue(newer);
-  });
-
-  /**
-   * **A revert made while the band's own save is on the wire** — delete a line, pause, Ctrl+Z,
-   * click away, under a lock that holds the save. While the save is out the store still holds the
-   * body *before* it, which is exactly the body the revert returns to, so a band that asked the
-   * store whether anything changed would send nothing — and the save of the deleted line would
-   * land after it, be adopted by the idle band, and take the reverted line off the screen and the
-   * disk. The last body sent is what a revert has to be measured against.
-   */
-  it("sends a revert made while its own save is on the wire, and ends on it", async () => {
-    const before = "- [ ] Revise tokens\n- [ ] Cut Clue tokens";
-    const deleted = "- [ ] Revise tokens";
-    deckTodos.mockResolvedValue(before);
-    const answers: Array<() => void> = [];
-    deckTodosSet.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          answers.push(resolve);
-        }),
-    );
-    const { client } = renderBand();
-    const box = await editor();
-    fakeClock();
-
-    act(() => box.focus());
-    fireEvent.change(box, { target: { value: deleted } });
-    await tick(600);
-    expect(deckTodosSet).toHaveBeenCalledTimes(1);
-
-    fireEvent.change(box, { target: { value: before } });
-    act(() => box.blur());
-    await tick(0);
-
-    // Answer each save as it reaches the wire; the second waits behind the first (the scope).
-    while (answers.length > 0) {
-      const next = answers.shift()!;
-      await act(async () => next());
-      await tick(0);
-    }
-
-    expect(deckTodosSet.mock.calls.map(([, body]) => body)).toEqual([deleted, before]);
-    expect(client.getQueryData(KEY)).toBe(before);
-    expect(textbox()).toHaveValue(before);
-  });
-
-  /**
-   * **A re-read that began before the save, answering after it.** Every deck write invalidates
-   * `["decks"]`, so a background read of this list can be in flight when the band saves — and it
-   * holds the body from before the write. Landing after the band has cached its own answer, it
-   * would put the old text back and an idle band would adopt it.
-   */
-  it("keeps its saved body when a read that began before the save answers after it", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    const { client } = renderBand();
-    const box = await editor();
-
-    let stale: (body: string) => void = () => {};
-    deckTodos.mockImplementation(
-      () =>
-        new Promise<string>((resolve) => {
-          stale = resolve;
-        }),
-    );
-    act(() => {
-      void client.invalidateQueries({ queryKey: KEY });
-    });
-    await waitFor(() => expect(deckTodos).toHaveBeenCalledTimes(2));
-    fakeClock();
-
-    const mine = "- [ ] Revise tokens\n- [ ] Mine";
-    fireEvent.change(box, { target: { value: mine } });
-    await tick(600);
-    await tick(0);
-    expect(deckTodosSet).toHaveBeenCalledWith(4, mine, null);
-
-    await act(async () => stale("- [ ] Revise tokens"));
-    await tick(0);
-
-    expect(client.getQueryData(KEY)).toBe(mine);
-    expect(textbox()).toBe(box);
-    expect(box).toHaveValue(mine);
-  });
-
-  /**
-   * **The same race with the read starting while the save is on the wire** — the case a cancel in
-   * `onMutate` cannot see, because it has already run by then. Holding the save open is what puts
-   * the read inside the round trip.
-   */
-  it("keeps its saved body when a read that began during the save answers after it", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    let answer: () => void = () => {};
-    deckTodosSet.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          answer = resolve;
-        }),
-    );
-    const { client } = renderBand();
-    const box = await editor();
-    fakeClock();
-
-    const mine = "- [ ] Revise tokens\n- [ ] Mine";
-    fireEvent.change(box, { target: { value: mine } });
-    await tick(600);
-    expect(deckTodosSet).toHaveBeenCalledTimes(1);
-
-    let stale: (body: string) => void = () => {};
-    deckTodos.mockImplementation(
-      () =>
-        new Promise<string>((resolve) => {
-          stale = resolve;
-        }),
-    );
-    await act(async () => {
-      void client.invalidateQueries({ queryKey: KEY });
-    });
-    await tick(0);
-    expect(deckTodos).toHaveBeenCalledTimes(2);
-
-    await act(async () => answer());
-    await tick(0);
-    await act(async () => stale("- [ ] Revise tokens"));
-    await tick(0);
-
-    expect(client.getQueryData(KEY)).toBe(mine);
-    expect(textbox()).toBe(box);
-    expect(box).toHaveValue(mine);
-  });
-
-  it("writes the pending draft when it unmounts before the delay is up", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    const view = renderBand();
-    const box = await editor();
-    fakeClock();
-
-    fireEvent.change(box, { target: { value: "- [ ] Revise tokens\n- [ ] Last words" } });
-    await tick(100);
-    expect(deckTodosSet).not.toHaveBeenCalled();
-
-    view.unmount();
-    await tick(0);
-
-    expect(deckTodosSet).toHaveBeenCalledTimes(1);
-    expect(deckTodosSet).toHaveBeenCalledWith(4, "- [ ] Revise tokens\n- [ ] Last words", null);
-  });
-
-  it("writes the pending draft the moment the caret leaves the editor, and not again", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    renderBand();
-    const box = await editor();
-    fakeClock();
-
-    act(() => box.focus());
-    fireEvent.change(box, { target: { value: "- [x] Revise tokens" } });
-    act(() => box.blur());
-    await tick(0);
-
-    expect(deckTodosSet).toHaveBeenCalledTimes(1);
-    expect(deckTodosSet).toHaveBeenCalledWith(4, "- [x] Revise tokens", null);
-
-    // The flush took the timer with it, so the delay running out writes nothing a second time.
-    await tick(600);
-    expect(deckTodosSet).toHaveBeenCalledTimes(1);
-  });
-
-  it("stores a checklist with no to-do in it as no list at all", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    renderBand();
-    const box = await editor();
-    fakeClock();
-
-    // What the editor emits when the reader deletes the last word: one empty item, which is a
-    // shape of the document and not a to-do. Stored as it stands, the widget would count a
-    // deck with nothing to do as a deck with a list.
-    fireEvent.change(box, { target: { value: "- [ ] " } });
-    await tick(600);
-
-    expect(deckTodosSet).toHaveBeenCalledWith(4, "", null);
-  });
-
-  it("writes nothing when the draft comes back to what is stored", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    renderBand();
-    const box = await editor();
-    fakeClock();
-
-    fireEvent.change(box, { target: { value: "- [ ] Revise tokensX" } });
-    fireEvent.change(box, { target: { value: "- [ ] Revise tokens" } });
-    await tick(600);
-
-    expect(deckTodosSet).not.toHaveBeenCalled();
-  });
-
-  /**
-   * **An empty to-do is a place to type, and writing one would be a write about nothing.** New
-   * to-do, or Enter after the last line, then a click away: the draft now ends in `- [ ] `, a line
-   * `parseTodos` drops. Sent, it would move the deck's `updated_at` — reordering *Last edited* in
-   * the widget and the gallery — over a change nothing reads. And the editor keeps the empty line
-   * while the reader is there: nothing is adopted over it.
-   */
-  it("writes nothing for an empty to-do the reader has not typed in, and keeps it on screen", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    renderBand();
-    const box = await editor();
-    fakeClock();
-
-    act(() => box.focus());
-    fireEvent.change(box, { target: { value: "- [ ] Revise tokens\n- [ ] " } });
-    act(() => box.blur());
-    await tick(600);
-    await tick(0);
-
-    expect(deckTodosSet).not.toHaveBeenCalled();
-    expect(textbox()).toBe(box);
-    expect(box).toHaveValue("- [ ] Revise tokens\n- [ ] ");
-  });
-
-  it("writes nothing for an empty to-do added while its own save is on the wire", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    let answer: () => void = () => {};
-    deckTodosSet.mockImplementation(
-      () =>
-        new Promise<void>((resolve) => {
-          answer = resolve;
-        }),
-    );
-    const { client } = renderBand();
-    const box = await editor();
-    fakeClock();
-
-    const mine = "- [ ] Revise tokens\n- [ ] Mine";
-    act(() => box.focus());
-    fireEvent.change(box, { target: { value: mine } });
-    await tick(600);
-    expect(deckTodosSet).toHaveBeenCalledTimes(1);
-
-    // The empty line is measured against the body on the wire, not the store's older one.
-    fireEvent.change(box, { target: { value: `${mine}\n- [ ] ` } });
-    act(() => box.blur());
-    await tick(0);
-    await act(async () => answer());
-    await tick(0);
-
-    expect(deckTodosSet).toHaveBeenCalledTimes(1);
-    expect(client.getQueryData(KEY)).toBe(mine);
-    expect(textbox()).toBe(box);
-    expect(box).toHaveValue(`${mine}\n- [ ] `);
-  });
-
-  it("writes nothing for an empty to-do taken away, and does not put it back", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens\n- [ ] ");
-    renderBand();
-    const box = await editor();
-    fakeClock();
-
-    act(() => box.focus());
-    fireEvent.change(box, { target: { value: "- [ ] Revise tokens" } });
-    act(() => box.blur());
-    await tick(600);
-    await tick(0);
-
-    expect(deckTodosSet).not.toHaveBeenCalled();
-    expect(textbox()).toBe(box);
-    expect(box).toHaveValue("- [ ] Revise tokens");
-  });
-
-  /**
-   * **An edit a lossy reading would miss is still an edit.** `parseTodos`' inlines drop a mark
-   * nested inside another, so a band that asked them whether anything changed would see nothing
-   * here, send nothing, and lose the italic at the next remount. The comparison is the text's.
-   */
-  it("sends an edit that only nests one mark inside another", async () => {
-    deckTodos.mockResolvedValue("- [ ] **bold nested italic**");
-    renderBand();
-    const box = await editor();
-    fakeClock();
-
-    act(() => box.focus());
-    fireEvent.change(box, { target: { value: "- [ ] **bold *nested italic***" } });
-    act(() => box.blur());
-    await tick(0);
-
-    expect(deckTodosSet).toHaveBeenCalledTimes(1);
-    expect(deckTodosSet).toHaveBeenCalledWith(4, "- [ ] **bold *nested italic***", null);
-  });
-
-  it("writes a real change beside an empty to-do byte for byte", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    renderBand();
-    const box = await editor();
-    fakeClock();
-
-    act(() => box.focus());
-    fireEvent.change(box, { target: { value: "- [x] Revise tokens\n- [ ] " } });
-    act(() => box.blur());
-    await tick(0);
-
-    expect(deckTodosSet).toHaveBeenCalledTimes(1);
-    expect(deckTodosSet).toHaveBeenCalledWith(4, "- [x] Revise tokens\n- [ ] ", null);
-  });
-
-  it("moves the header count with the draft, before anything is saved", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens\n- [ ] Cut Clue tokens");
-    renderBand();
-    const box = await editor();
+  it("draws a list's headings, text and to-dos with no editor", async () => {
+    renderBand({ lists: [MANA] });
     const band = await region();
-    expect(within(band).getByText("2 open · 0 done")).toBeInTheDocument();
 
-    fireEvent.change(box, { target: { value: "- [x] Revise tokens\n- [ ] Cut Clue tokens" } });
-
-    expect(within(band).getByText("1 open · 1 done")).toBeInTheDocument();
-    expect(deckTodosSet).not.toHaveBeenCalled();
+    expect(await within(band).findByText("Lands")).toBeInTheDocument();
+    expect(within(band).getByText("why")).toBeInTheDocument();
+    expect(
+      within(band).getByRole("checkbox", { name: 'Mark "Cut a land" done' }),
+    ).not.toBeChecked();
+    expect(
+      within(band).getByRole("checkbox", { name: 'Mark "Check curve" not done' }),
+    ).toBeChecked();
+    // Reading a list loads no editor.
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("keeps the draft on screen when a save is refused, and says why", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    deckTodosSet.mockRejectedValue("The collection is busy syncing. Try again in a moment.");
-    renderBand();
-    const box = await editor();
-    const band = await region();
-    fakeClock();
+  it("says so in one line when the deck has no list", async () => {
+    renderBand({ lists: [] });
 
-    fireEvent.change(box, { target: { value: "- [ ] Revise tokens\n- [ ] Mine" } });
-    await tick(600);
-    await tick(0);
+    expect(await within(await region()).findByText(NO_LISTS)).toBeInTheDocument();
+  });
+});
 
-    expect(within(band).getByRole("alert")).toHaveTextContent(
-      "The collection is busy syncing. Try again in a moment.",
+/* --------------------------------------------------------------------- ticking -------- */
+
+describe("a tick", () => {
+  it("writes the list's body with the box flipped, against the body the card drew", async () => {
+    renderBand({ lists: [MANA] });
+    const box = await screen.findByRole("checkbox", { name: 'Mark "Cut a land" done' });
+
+    await userEvent.click(box);
+
+    expect(deckTodoListUpdate).toHaveBeenCalledTimes(1);
+    expect(deckTodoListUpdate).toHaveBeenCalledWith(4, 7, {
+      body: MANA.body.replace("- [ ] Cut a land", "- [x] Cut a land"),
+      expected: MANA.body,
+    });
+    // A success writes the new body into the cache, so the box is ticked at once.
+    expect(
+      await screen.findByRole("checkbox", { name: 'Mark "Cut a land" not done' }),
+    ).toBeChecked();
+    // Ticking in place opens nothing.
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("refuses every box on the card while its tick is on the wire", async () => {
+    deckTodoListUpdate.mockImplementation(() => new Promise<void>(() => {}));
+    renderBand({ lists: [MANA, TOKENS] });
+    const box = await screen.findByRole("checkbox", { name: 'Mark "Cut a land" done' });
+
+    await userEvent.click(box);
+
+    expect(box).toHaveAttribute("aria-disabled", "true");
+    expect(screen.getByRole("checkbox", { name: 'Mark "Check curve" not done' })).toHaveAttribute(
+      "aria-disabled",
+      "true",
     );
-    // The stored body is still the old one, and a band that adopted it now would take the
-    // reader's words away at the one moment they were not saved.
-    expect(textbox()).toBe(box);
-    expect(box).toHaveValue("- [ ] Revise tokens\n- [ ] Mine");
+    // Another card's boxes are not this tick's business.
+    expect(screen.getByRole("checkbox", { name: 'Mark "Revise tokens" done' })).not.toHaveAttribute(
+      "aria-disabled",
+    );
 
-    // …and the draft is still owed, so the next way out tries again.
-    deckTodosSet.mockResolvedValue(undefined);
-    act(() => box.focus());
-    act(() => box.blur());
-    await tick(0);
-    expect(deckTodosSet).toHaveBeenCalledTimes(2);
-    expect(deckTodosSet).toHaveBeenLastCalledWith(4, "- [ ] Revise tokens\n- [ ] Mine", null);
+    await userEvent.click(screen.getByRole("checkbox", { name: 'Mark "Check curve" not done' }));
+    expect(deckTodoListUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * **Review focus 3** — a card ticked while its dialog is open in another window: the body moved,
+   * the compare-and-set refuses, and the band re-reads rather than overwriting what was typed.
+   */
+  it("re-reads the lists and says why when the list changed since the card drew it", async () => {
+    deckTodoListUpdate.mockRejectedValue(TODOS_CHANGED);
+    renderBand({ lists: [MANA] });
+    const band = await region();
+    const box = await within(band).findByRole("checkbox", { name: 'Mark "Cut a land" done' });
+    expect(deckTodoLists).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(box);
+
+    expect(await within(band).findByRole("alert")).toHaveTextContent(TODOS_CHANGED);
+    await waitFor(() => expect(deckTodoLists).toHaveBeenCalledTimes(2));
+    expect(deckTodoListUpdate).toHaveBeenCalledTimes(1);
+  });
+});
+
+/* --------------------------------------------------------------------- editing -------- */
+
+describe("editing a list", () => {
+  it("opens the dialog on that list from Edit", async () => {
+    renderBand();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Edit Mana" }));
+
+    const dialog = await screen.findByRole("dialog", { name: "Edit to-do list" });
+    expect(within(dialog).getByRole("textbox", { name: "Title" })).toHaveValue("Mana");
+    expect(await within(dialog).findByRole("textbox", { name: "To-do list" })).toHaveValue(
+      MANA.body,
+    );
+  });
+
+  it("opens the dialog from a press on the card outside its controls", async () => {
+    renderBand({ lists: [TOKENS] });
+
+    await userEvent.click(await screen.findByText("Revise tokens"));
+
+    const dialog = await screen.findByRole("dialog", { name: "Edit to-do list" });
+    expect(within(dialog).getByRole("textbox", { name: "Title" })).toHaveValue("Tokens");
+  });
+
+  it("hands the caret back to Edit when the dialog is closed", async () => {
+    renderBand({ lists: [TOKENS] });
+    const edit = await screen.findByRole("button", { name: "Edit Tokens" });
+
+    await userEvent.click(edit);
+    const dialog = await screen.findByRole("dialog", { name: "Edit to-do list" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(edit).toHaveFocus();
+  });
+});
+
+/* --------------------------------------------------------------------- deleting ------- */
+
+describe("deleting a list", () => {
+  it("asks first, then deletes", async () => {
+    renderBand();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Delete Mana" }));
+
+    const question = await screen.findByRole("dialog", { name: "Delete “Mana”?" });
+    expect(question).toHaveTextContent("Its to-dos go with it.");
+    expect(deckTodoListDelete).not.toHaveBeenCalled();
+
+    await userEvent.click(within(question).getByRole("button", { name: "Delete list" }));
+
+    expect(deckTodoListDelete).toHaveBeenCalledWith(4, 7);
+  });
+
+  it("deletes nothing when the question is cancelled", async () => {
+    renderBand();
+
+    await userEvent.click(await screen.findByRole("button", { name: "Delete Tokens" }));
+    const question = await screen.findByRole("dialog", { name: "Delete “Tokens”?" });
+    await userEvent.click(within(question).getByRole("button", { name: "Cancel" }));
+
+    expect(deckTodoListDelete).not.toHaveBeenCalled();
+  });
+});
+
+/* --------------------------------------------------------------------- New to-do list - */
+
+describe("New to-do list", () => {
+  it("opens a shut band and a dialog on a list not made yet", async () => {
+    const { onToggle } = renderBand({ open: false });
+    const band = await region();
+
+    await userEvent.click(within(band).getByRole("button", { name: NEW_LIST_LABEL }));
+
+    expect(onToggle).toHaveBeenCalledWith(true);
+    const dialog = await screen.findByRole("dialog", { name: "New to-do list" });
+    expect(within(dialog).getByRole("textbox", { name: "Title" })).toHaveValue("");
+    expect(await within(dialog).findByRole("textbox", { name: "To-do list" })).toHaveValue("");
+    // Opening the dialog is not a write.
+    expect(deckTodoListCreate).not.toHaveBeenCalled();
+  });
+
+  it("creates nothing when the new list is closed untouched", async () => {
+    renderBand();
+
+    await userEvent.click(await screen.findByRole("button", { name: NEW_LIST_LABEL }));
+    const dialog = await screen.findByRole("dialog", { name: "New to-do list" });
+    await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(deckTodoListCreate).not.toHaveBeenCalled();
+  });
+
+  /** **Review focus 4** — a title and nothing else is not blank. */
+  it("creates a list with an empty body when only a title was typed", async () => {
+    renderBand();
+
+    await userEvent.click(await screen.findByRole("button", { name: NEW_LIST_LABEL }));
+    const dialog = await screen.findByRole("dialog", { name: "New to-do list" });
+    await userEvent.type(within(dialog).getByRole("textbox", { name: "Title" }), "Groceries");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Done" }));
+
+    await waitFor(() => expect(deckTodoListCreate).toHaveBeenCalledTimes(1));
+    expect(deckTodoListCreate).toHaveBeenCalledWith(4, "Groceries", "");
+    expect(await screen.findByRole("button", { name: "Edit Groceries" })).toBeInTheDocument();
   });
 });
 
 /* --------------------------------------------------------------------- refusal -------- */
 
 describe("a refused read", () => {
-  it("mounts no editor, says so in one line, and never saves", async () => {
-    deckTodos.mockRejectedValue("That deck is not there any more.");
-    renderBand({ open: true });
+  it("draws no card and no count, and says so in one line", async () => {
+    deckTodoLists.mockRejectedValue("That deck is not there any more.");
+    const onToggle = vi.fn();
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={client}>
+        <DeckTodosPanel deckId={4} open onToggle={onToggle} />
+      </QueryClientProvider>,
+    );
     const band = await region();
 
     expect(await within(band).findByRole("alert")).toHaveTextContent(
       "That deck is not there any more.",
     );
     expect(within(band).getAllByRole("alert")).toHaveLength(1);
-
-    // **No editor over a body nobody read.** One mounted over `""` would be an empty checklist,
-    // and the first keystroke would autosave it over whatever the deck really holds.
-    expect(screen.queryByRole("textbox")).toBeNull();
-    expect(editorRenders).not.toHaveBeenCalled();
-    // And no "loading" either: the alert has said what happened.
     expect(within(band).queryByText(/loading/i)).toBeNull();
-    // No count: a `0 open` beside a refusal is a number the app does not have.
     expect(within(band).queryByText(/open ·/)).toBeNull();
-
-    await userEvent.click(within(band).getByRole("button", { name: "New to-do" }));
-    expect(screen.queryByRole("textbox")).toBeNull();
-    expect(deckTodosSet).not.toHaveBeenCalled();
-  });
-});
-
-/* --------------------------------------------------------------------- New to-do ------ */
-
-describe("New to-do", () => {
-  it("opens a shut band and asks the editor for a fresh item, once per press", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    const { onToggle, setOpen } = renderBand({ open: false });
-    const band = await region();
-
-    await userEvent.click(within(band).getByRole("button", { name: "New to-do" }));
-    expect(onToggle).toHaveBeenCalledWith(true);
-
-    // The host writes `todos_open` and hands the answer back; the editor that mounts is asked.
-    setOpen(true);
-    await editor();
-    expect(editorRenders).toHaveBeenLastCalledWith(expect.objectContaining({ appendRequest: 1 }));
-
-    // Taking the request clears it, so a remount later does not append a second time.
-    const handled = editorRenders.mock.lastCall![0] as StandInProps;
-    act(() => handled.onAppendHandled!());
-    expect(editorRenders).toHaveBeenLastCalledWith(expect.objectContaining({ appendRequest: 0 }));
-
-    // A second press is a second request — and the band is open now, so it asks nobody to open it.
-    await userEvent.click(within(band).getByRole("button", { name: "New to-do" }));
-    expect(editorRenders).toHaveBeenLastCalledWith(expect.objectContaining({ appendRequest: 1 }));
-    expect(onToggle).toHaveBeenCalledTimes(1);
-  });
-});
-
-/* --------------------------------------------------------------------- adopting ------- */
-
-describe("a list changed elsewhere", () => {
-  it("replaces the editor when nobody is in it and nothing is unsaved", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    const { client } = renderBand();
-    const box = await editor();
-
-    act(() => client.setQueryData(KEY, "- [x] Revise tokens"));
-
-    await waitFor(() => expect(textbox()).toHaveValue("- [x] Revise tokens"));
-    // A remount, not an edit pushed into the old one — see the stand-in's doc.
-    expect(textbox()).not.toBe(box);
-    // Taking somebody else's write is not a write.
-    expect(deckTodosSet).not.toHaveBeenCalled();
-  });
-
-  it("waits while the caret is in the editor, and takes it once the caret leaves", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    const { client } = renderBand();
-    const box = await editor();
-
-    act(() => box.focus());
-    act(() => client.setQueryData(KEY, "- [x] Revise tokens"));
-    await settle();
-
-    expect(textbox()).toBe(box);
-    expect(box).toHaveValue("- [ ] Revise tokens");
-
-    act(() => box.blur());
-
-    await waitFor(() => expect(textbox()).toHaveValue("- [x] Revise tokens"));
-    expect(deckTodosSet).not.toHaveBeenCalled();
-  });
-
-  it("loses to an unsaved draft, which the next autosave writes over it", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens");
-    const { client } = renderBand();
-    const box = await editor();
-    fakeClock();
-
-    fireEvent.change(box, { target: { value: "- [ ] Revise tokens\n- [ ] Mine" } });
-    act(() => client.setQueryData(KEY, "- [x] Revise tokens"));
-    await tick(0);
-
-    expect(textbox()).toBe(box);
-    expect(box).toHaveValue("- [ ] Revise tokens\n- [ ] Mine");
-
-    // The one-document cost, stated at its sharpest (spec §6): the reader's typing wins.
-    await tick(600);
-    expect(deckTodosSet).toHaveBeenCalledWith(4, "- [ ] Revise tokens\n- [ ] Mine", null);
-    await tick(0);
-    expect(textbox()).toBe(box);
+    expect(within(band).queryByText(NO_LISTS)).toBeNull();
   });
 });
 
 /* --------------------------------------------------------------------- placement ------ */
 
 describe("the band's shell", () => {
-  /**
-   * The four placement constraints the notes band's header spells out, the two of them that live
-   * on this component's own root. **A `<section>`, never an `<aside>`** — a second complementary
-   * landmark broke five of `App.test.tsx`'s pane assertions — and **`shrink-0`**, without which
-   * the band is squeezed to nothing on every deck taller than the window. `classList` because
-   * jsdom applies no stylesheet; the live pass is what measures the computed values.
-   */
+  /** The two placement constraints on this component's own root: a `<section>`, never an
+   *  `<aside>`, and `shrink-0`. `classList` because jsdom applies no stylesheet. */
   it("is a shrink-0 section whose body can be selected as text", async () => {
     renderBand({ open: false });
     const band = await region();

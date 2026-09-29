@@ -319,16 +319,18 @@ export const deckCompletionKey = (
 ): QueryKey => [...deckCompletionRoot, marketplace, compare];
 
 /**
- * Every deck whose To-do band holds anything — `ipc.deckTodoLists`, the To-dos widget's read (issue
- * #672).
+ * Every non-empty to-do list in every deck — `ipc.everyDeckTodoList`, the To-dos widget's read
+ * (issue #672; titled lists, many to a deck, since issue #688 and user schema v59).
  *
- * **Under `["decks"]` on purpose**: a checklist is a column on the `decks` row, so every deck write
- * (a rename, an archive, the band's `todosOpen`) and the `decks` change mask a sync or a second
- * window fires already refresh it, with no bridge. **And under `["decks", "todos"]`**, beside the
- * band's own `["decks", "todos", deckId]` — so the band's autosave invalidates this key by name
- * and the widget's tick refreshes the band, each through that one prefix. The band's hook
- * (`features/decks/useDeckTodos.ts`, beside its own `deckTodosKey`) imports this constant rather
- * than spelling it again.
+ * **Under `["decks"]` on purpose**: the widget draws each list under its deck's name, archive
+ * state and `todosOpen`, so every deck write (a rename, an archive, the band's disclosure) moves
+ * it, and `crossWindow.ts` maps both `decks` and `deck_todo_lists` to that root — a sync or a
+ * second window refreshes it with no bridge. **And under `["decks", "todos"]`**, beside the
+ * band's own `["decks", "todos", deckId]` — so a dialog save or a band tick invalidates this key
+ * by name and the widget's tick refreshes the band, each through that one prefix. The value did
+ * not move when one checklist per deck became many lists: it names the widget's question, which
+ * is still *every deck's to-dos*. The band's hook (`features/decks/useDeckTodos.ts`, beside its
+ * own `deckTodosKey`) imports this constant rather than spelling it again.
  */
 export const deckTodoListsKey: QueryKey = ["decks", "todos", "lists"];
 

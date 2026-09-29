@@ -192,6 +192,7 @@ import type {
   DeckQuickAddWish,
   DeckRow,
   DeckTodoList,
+  DeckTodoListEntry,
   DeckTokenRow,
   DeckTokenState,
   DecksCleared,
@@ -741,21 +742,10 @@ export interface FakeDeck {
    * {@link statsOpen}'s reason.
    */
   todosOpen?: boolean;
-  /**
-   * `decks.todos` (user schema v58): the deck's **to-do checklist**, in the dialect
-   * `features/decks/todoMarkdown.ts` reads. `NOT NULL DEFAULT ''`, and **empty means the deck has
-   * no list** — which is what an absence here reads as, through `?? ""` at every reader.
-   *
-   * ⚠️ **Stored here and never on {@link toDeckRow}'s answer**, which is the crate's split and
-   * the reason the field is worth a paragraph: `DECK_SELECT` does not read `todos`, because every
-   * deck list fetches `DeckRow`s and not one of them draws a checklist. The body leaves this
-   * record through {@link readHandlers.deck_todos} and {@link readHandlers.deck_todo_lists} alone,
-   * and is written by {@link writeHandlers.deck_todos_set} alone — never by a `deck_update`
-   * patch. **`deck_duplicate` does not carry it**, nor `todosOpen` beside it: a copy that brought
-   * its original's list would put every open to-do in the widget twice, and ticking one would
-   * leave its twin open.
-   */
-  todos?: string;
+  // **There is no `todos` field here any more.** User schema v58's `decks.todos` column — one
+  // checklist to a deck — was converted by v59 into rows of `deck_todo_lists` and dropped, so a
+  // deck's to-do lists are {@link FakeDb.deckTodoLists}, found by `deckId` and never through
+  // this record. `todosOpen` above stays: it is the band's disclosure, not a list.
   /**
    * `decks.token_mode` (user schema v52): how the deck keeps its tokens — `managed`,
    * `collection` or `hidden` — which replaced v47's `token_stack` switch in the same rung.
@@ -851,6 +841,33 @@ export interface FakeDeckNote {
   /** CommonMark, in the narrowed dialect `features/decks/noteMarkdown.ts` pins. Never HTML and
    *  never ProseMirror JSON — a body that is plain text is what keeps a renderer out of the
    *  crate, and out of `src-tauri/src/transfer/`'s golden fence with it. */
+  body: string;
+  sortOrder: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * One row of `deck_todo_lists` (user schema v59): one titled to-do list on one deck.
+ *
+ * **Not a note**, whatever the shape says. It is {@link FakeDeckNote}'s columns where the two
+ * mean the same thing — title, body, `sort_order`, the two stamps — and no more: nothing hangs
+ * off a list (no card table beside it), no write of one records a history row or files an undo
+ * step, and `deck_duplicate` copies none, because a copy's open to-dos would draw twice in the
+ * home widget and ticking one would leave its twin open.
+ *
+ * v59 converted each deck's v58 `decks.todos` column into one row titled `To-do`, which is what
+ * the seeds do with every body they used to carry.
+ */
+export interface FakeDeckTodoList {
+  id: number;
+  /** `ON DELETE CASCADE`: deleting the deck takes its lists, and its undo brings none back. */
+  deckId: number;
+  /** `TEXT NOT NULL DEFAULT ''`. A blank title is a state (`Untitled list` at render), stored
+   *  blank — the derivation is `todoMarkdown.ts`' `listTitle`, never a stored copy. */
+  title: string;
+  /** The to-do document in the dialect `features/decks/todoMarkdown.ts` reads: task lines,
+   *  headings and paragraphs. Empty means a list with nothing in it, which the widget skips. */
   body: string;
   sortOrder: number;
   createdAt: number;
@@ -1723,6 +1740,12 @@ export interface FakeDb {
   /** `deck_note_cards` — which cards each note names, by `oracle_id`. Keyed to the **note**,
    *  so a row here is found through {@link FakeDb.deckNotes} and never through the deck. */
   deckNoteCards: FakeDeckNoteCard[];
+  /**
+   * `deck_todo_lists` (user schema v59) — every deck's titled to-do lists, and **the complete
+   * list of them**: a deck's lists are found here by `deckId`, never through the deck, which has
+   * held no checklist since v59 dropped `decks.todos`. See {@link FakeDeckTodoList}.
+   */
+  deckTodoLists: FakeDeckTodoList[];
   deckAudit: FakeDeckAudit[];
   /** `deck_undo` — one step per deck write, keyed to the history row it reverses. */
   deckUndo: FakeDeckUndo[];
@@ -3272,6 +3295,9 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // The seeds that want one say so — `starter`'s deck 4 carries two.
     deckNotes: [],
     deckNoteCards: [],
+    // Empty for the notes' reason: a to-do list is something a reader wrote. `starter`'s decks 2
+    // and 4 carry some.
+    deckTodoLists: [],
     deckAudit: [],
     // Never seeded, always earned: a step exists only where a *write* made one, so a story's
     // Undo button is about the edit that story made rather than about a fixture.
@@ -7725,8 +7751,8 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // not `statsOpen`'s: the split is new, so an unsaid seed draws the one-colour curve.
     curveCreatures: d.curveCreatures ?? false,
     // v58's, `?? false` for `todos_open INTEGER NOT NULL DEFAULT 0` — `notesOpen`'s twin one band
-    // down and its shape exactly: the To-do band is new, so an unsaid seed draws it shut. **The
-    // list itself is not read here**, `DECK_SELECT`'s own omission — see {@link FakeDeck.todos}.
+    // down and its shape exactly: the To-do band is new, so an unsaid seed draws it shut. **No
+    // list is read here** — they are rows of {@link FakeDb.deckTodoLists} since user schema v59.
     todosOpen: d.todosOpen ?? false,
     // v52's, `?? "managed"` for `token_mode TEXT NOT NULL DEFAULT 'managed'` — every deck starts
     // there, the ones whose v47 stack was off included, so a seed that never says draws its pile.
@@ -10898,40 +10924,53 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_todos::read_todos` (user schema v58) — one deck's to-do checklist, in the dialect
-     * `features/decks/todoMarkdown.ts` reads.
+     * `deck_todos::lists_for` (user schema v59) — one deck's titled to-do lists, in
+     * `sort_order, id`.
      *
-     * **`""` for a deck with no list, and for a deck that is not there** — {@link deck_notes}'
+     * **`[]` for a deck with no list, and for a deck that is not there** — {@link deck_notes}'
      * standing one band up: a read that refused over a stale id would be a band able to stop a
-     * deck screen from drawing, and an empty list is drawn exactly as a missing one is. The body
-     * is read off {@link FakeDeck.todos} and nowhere else — never off {@link toDeckRow}'s answer,
-     * which does not carry it.
+     * deck screen from drawing, and an empty band is drawn exactly as a missing deck's is. The id
+     * is the second term for the notes' reason: every create lands at `max(sort_order) + 1`, so
+     * a tie is only reachable through a sync apply, and the id is what orders it then.
      */
-    deck_todos: (args: { deckId: number }): string =>
-      db.decks.find((d) => d.id === args.deckId)?.todos ?? "",
+    deck_todo_lists: (args: { deckId: number }): DeckTodoList[] =>
+      db.deckTodoLists
+        .filter((l) => l.deckId === args.deckId)
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
+        .map(toDeckTodoList),
 
     /**
-     * `deck_todos::list_lists` — every deck whose checklist is not empty, **most recently edited
-     * first**: `ORDER BY updated_at DESC, id`, the id second so two decks stamped alike still
-     * answer in one order.
+     * `deck_todos::every_list` — every list in every deck **whose body is not empty**, with its
+     * deck's name, `archived` and `todosOpen`, **most recently edited first**:
+     * `ORDER BY updated_at DESC, id`, the list's own stamp and the list's own id.
      *
-     * **Archived decks are answered, not filtered** — the home widget's `Include archived decks`
-     * switch is the page's conclusion, and a read that dropped them would leave the switch
-     * nothing to include. `updatedAt` is the deck's own stamp, which
-     * {@link writeHandlers.deck_todos_set} moves and so does every other deck write, so the order
-     * is the decks' and not the lists'.
+     * **An empty body is left out and an empty title is not**: a list with nothing in it has
+     * nothing for the home widget to draw, while a list with no title still has to-dos under
+     * `Untitled list`. **Archived decks are answered, not filtered** — the widget's
+     * `Include archived decks` switch is the page's conclusion, and a read that dropped them
+     * would leave the switch nothing to include. The deck's fields are joined at read time, so a
+     * deck renamed while the widget is shut reads its new name on the next fetch.
      */
-    deck_todo_lists: (): DeckTodoList[] =>
-      db.decks
-        .filter((d) => (d.todos ?? "") !== "")
-        .sort((a, b) => b.updatedAt - a.updatedAt || a.id - b.id)
-        .map((d) => ({
-          deckId: d.id,
-          name: d.name,
-          archived: d.archived,
-          todosOpen: d.todosOpen ?? false,
-          updatedAt: d.updatedAt,
-          body: d.todos ?? "",
+    every_deck_todo_list: (): DeckTodoListEntry[] =>
+      db.deckTodoLists
+        .filter((l) => l.body !== "")
+        // A list whose deck has gone cannot survive the cascade; this drops nothing in a world the
+        // writes made, and stops a hand-written orphan drawing under a blank deck name.
+        .flatMap((list) => {
+          const deck = db.decks.find((d) => d.id === list.deckId);
+          return deck === undefined ? [] : [{ list, deck }];
+        })
+        .sort((a, b) => b.list.updatedAt - a.list.updatedAt || a.list.id - b.list.id)
+        .map(({ list, deck }) => ({
+          id: list.id,
+          deckId: deck.id,
+          deckName: deck.name,
+          archived: deck.archived,
+          todosOpen: deck.todosOpen ?? false,
+          title: list.title,
+          body: list.body,
+          sortOrder: list.sortOrder,
+          updatedAt: list.updatedAt,
         })),
 
     /**
@@ -13244,21 +13283,38 @@ const NOTE_WRONG_DECK = "That note belongs to a different deck.";
  */
 const STICKY_NOTE_GONE = "That note is not there any more.";
 /**
- * `deck_todos::TODOS_CHANGED` (user schema v58) — what a **compare-and-set** write of a deck's
- * checklist answers when the stored list is no longer the one the caller read.
+ * `deck_todos::TODOS_CHANGED` (user schema v58, kept by v59) — what a **compare-and-set** write
+ * of one to-do list's body answers when the stored body is no longer the one the caller read.
  *
- * **Only the home widget can hear it.** It always sends `expected` — the body it parsed — because
- * a tick is "flip the marker on line *n* of **this** text", and the text may have moved since:
- * the band autosaving in another window, a sync apply. The band sends `null` and is never
- * refused, because it is the author's surface and its autosave is the truth of what was typed.
- * The widget prints this sentence in its one-line failure slot and refetches, so it is copied
- * verbatim, {@link STICKY_NOTE_GONE}'s rule: a story renders it.
+ * **Only a tick can hear it** — the band's card or the home widget. A tick always sends
+ * `expected`, the body it parsed, because it is "flip the marker on line *n* of **this** text",
+ * and the text may have moved since: the list's dialog autosaving in another window, a sync
+ * apply. The dialog sends `null` and is never refused, because it is the author's surface and
+ * its autosave is the truth of what was typed. The caller prints this sentence and refetches, so
+ * it is copied verbatim, {@link STICKY_NOTE_GONE}'s rule: a story renders it.
  *
- * A deck that is not there answers {@link DECK_GONE} rather than this, and first: "that deck has
- * gone" and "that list moved" are different things to be told, and the crate asks which before
- * it compares anything.
+ * It is the **third** refusal `deck_todo_list_update` asks, after {@link TODO_LIST_GONE} and
+ * {@link TODO_LIST_WRONG_DECK}: "that list has gone" and "that list moved" are different things
+ * to be told, and the crate asks which before it compares anything.
  */
 const TODOS_CHANGED = "That to-do list changed since it was read. Try again.";
+/**
+ * `deck_todos::TODO_LIST_GONE` (user schema v59) — an update aimed at a list id no row holds: a
+ * list deleted in another window, or by a sync apply, or taken by its deck's cascade. Asked
+ * **first**, so a stale tick on a list that has gone says so rather than claiming it moved.
+ *
+ * The delete does **not** answer it — deleting a list that is already gone is the state the
+ * caller asked for, and answers `null` like any other delete.
+ */
+const TODO_LIST_GONE = "That to-do list is not there any more.";
+/**
+ * `deck_todos::TODO_LIST_WRONG_DECK` (user schema v59) — an update naming a list that exists but
+ * hangs off a different deck than the `deckId` it was sent with. Asked **second**, after
+ * {@link TODO_LIST_GONE}: the row has to exist before whose it is means anything. The deck is
+ * named on every write so a caller holding one deck's cache cannot write through it into
+ * another deck's list.
+ */
+const TODO_LIST_WRONG_DECK = "That to-do list belongs to a different deck.";
 /**
  * `deck_notes::NO_ORACLE_ID` — the module's third refusal, and the only one about an *argument*
  * rather than about a row.
@@ -13625,6 +13681,23 @@ function nextId(rows: { id: number }[]): number {
  */
 function stickyStamp(db: FakeDb): number {
   return db.stickyNotes.reduce((n, r) => Math.max(n, r.updatedAt), stamp(db)) + 1;
+}
+
+/**
+ * {@link stamp} for a `deck_todo_lists` write (user schema v59) — past every deck **and every
+ * list**, and the deck the write bumps takes the same instant.
+ *
+ * `every_deck_todo_list` sorts by the *list's* `updated_at`, so a list write has to land above
+ * every other list or the tick does not surface in the widget — and {@link stamp} alone would
+ * not see a list stamped after its deck's last write. {@link stickyStamp}'s shape, one table
+ * over; the deck scan inside `stamp` is kept, since the same instant moves the deck up the
+ * gallery.
+ */
+function todoListStamp(db: FakeDb): number {
+  return Math.max(
+    stamp(db),
+    db.deckTodoLists.reduce((n, r) => Math.max(n, r.updatedAt + 1), 0),
+  );
 }
 
 /**
@@ -14747,6 +14820,40 @@ function nextNoteSortOrder(db: FakeDb, deckId: number): number {
   return db.deckNotes
     .filter((n) => n.deckId === deckId)
     .reduce((n, r) => Math.max(n, r.sortOrder + 1), 0);
+}
+
+/**
+ * The to-do list an update is about — **checked for existing, then for belonging to this deck**,
+ * {@link requireNote}'s two fences in `deck_todos::update_list`'s order: {@link TODO_LIST_GONE}
+ * first, {@link TODO_LIST_WRONG_DECK} second, and the compare-and-set after both, in the caller.
+ */
+function requireTodoList(db: FakeDb, deckId: number, id: number): FakeDeckTodoList {
+  const list = db.deckTodoLists.find((l) => l.id === id);
+  if (!list) throw refuse(TODO_LIST_GONE);
+  if (list.deckId !== deckId) throw refuse(TODO_LIST_WRONG_DECK);
+  return list;
+}
+
+/** `coalesce(max(sort_order), -1) + 1` over one deck's to-do lists — a new list goes at the
+ *  **end**, {@link nextNoteSortOrder}'s rule one table over. */
+function nextTodoListSortOrder(db: FakeDb, deckId: number): number {
+  return db.deckTodoLists
+    .filter((l) => l.deckId === deckId)
+    .reduce((n, r) => Math.max(n, r.sortOrder + 1), 0);
+}
+
+/** A stored row as `DeckTodoList` answers it — a copy, so a caller holding the answer cannot
+ *  write through it into the store. */
+function toDeckTodoList(l: FakeDeckTodoList): DeckTodoList {
+  return {
+    id: l.id,
+    deckId: l.deckId,
+    title: l.title,
+    body: l.body,
+    sortOrder: l.sortOrder,
+    createdAt: l.createdAt,
+    updatedAt: l.updatedAt,
+  };
 }
 
 /** `deck_meta::rename_category`/`delete_category`'s kind check. Never reached by
@@ -19047,11 +19154,10 @@ export function writeHandlers(db: FakeDb) {
         // `curve_creatures INTEGER NOT NULL DEFAULT 0` (user schema v56): a deck being born
         // draws the one-colour Mana curve, and `DeckInput` does not ask.
         curveCreatures: false,
-        // User schema v58's pair: `todos_open INTEGER NOT NULL DEFAULT 0` and `todos TEXT NOT NULL
-        // DEFAULT ''`. A deck being born has its To-do band shut and no list to draw in it —
-        // `notesOpen`'s answer, and `DeckInput` carries no checklist any more than it carries prose.
+        // `todos_open INTEGER NOT NULL DEFAULT 0` (user schema v58): a deck being born has its
+        // To-do band shut, and no row in `deck_todo_lists` to draw in it — `notesOpen`'s answer,
+        // and `DeckInput` carries no to-do list any more than it carries prose.
         todosOpen: false,
-        todos: "",
         // `managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0` (user schema v57, issue #617): a
         // deck being born files no tokens, and its mode is `off` besides — `DeckInput` asks
         // about neither.
@@ -19486,10 +19592,10 @@ export function writeHandlers(db: FakeDb) {
       // against the stored value, the line above's reason.
       deck.curveCreatures = patch.curveCreatures ?? deck.curveCreatures;
       // `coalesce(?n, todos_open)` (user schema v58), and **nothing else happens** for
-      // `notesOpen`'s reason: the checklist the band draws is read by a command of its own, so
-      // opening or closing it writes one column. **The list is not a patch key at all** —
-      // `decks.todos` is written by `deck_todos_set` alone. `??` against the stored value, the
-      // lines above' reason.
+      // `notesOpen`'s reason: the lists the band draws are read by a command of their own, so
+      // opening or closing it writes one column. **No list is a patch key at all** — they are
+      // rows of `deck_todo_lists`, written by its own three commands. `??` against the stored
+      // value, the lines above' reason.
       deck.todosOpen = patch.todosOpen ?? deck.todosOpen;
       // `coalesce(?n, token_mode)`, and in PR 2 **nothing else happens**: the pile is drawn — or,
       // under `hidden`, not drawn — in the view layer from the tokens answer on every read, and
@@ -19651,6 +19757,9 @@ export function writeHandlers(db: FakeDb) {
       );
       db.deckNotes = db.deckNotes.filter((n) => n.deckId !== args.id);
       db.deckNoteCards = db.deckNoteCards.filter((c) => !orphanedNotes.has(c.noteId));
+      // `deck_todo_lists.deck_id` is `ON DELETE CASCADE` too (user schema v59), one hop. The
+      // deck's undo brings none of them back — {@link deckState} does not record them.
+      db.deckTodoLists = db.deckTodoLists.filter((l) => l.deckId !== args.id);
       // **The labels stay**, since schema v21: a label belongs to no deck, so deleting the deck
       // it was first typed in must not take it off the others wearing it. Only `reset_decks`,
       // which is every deck at once, sweeps the table.
@@ -19708,13 +19817,12 @@ export function writeHandlers(db: FakeDb) {
         lastVariant: "live",
         lastGroupBy: DEFAULT_GROUP_BY,
         lastSortBy: DEFAULT_SORT_BY,
-        // **User schema v58's pair is reset, not inherited**, and the spread is precisely what
-        // would have inherited both — `duplicate_deck`'s INSERT names neither column, so the copy
-        // takes both `DEFAULT`s. A copy that brought its original's checklist would put every
-        // open to-do in the home widget twice, and ticking one would leave its twin open; and a
-        // copy with no list starts with its band shut.
+        // **`todosOpen` is reset, not inherited**, and the spread is precisely what would have
+        // inherited it — `duplicate_deck`'s INSERT does not name `todos_open`, so the copy takes
+        // the `DEFAULT`. **And no `deck_todo_lists` row is copied** (user schema v59): a copy that
+        // brought its original's lists would put every open to-do in the home widget twice, and
+        // ticking one would leave its twin open; a copy with no list starts with its band shut.
         todosOpen: false,
-        todos: "",
         updatedAt: stamp(db),
       };
       db.decks.push(copy);
@@ -21375,38 +21483,105 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_todos::set_todos` (user schema v58) — write one deck's checklist whole.
+     * `deck_todos::create_list` (user schema v59) — a new titled to-do list, **at the end** of
+     * the deck's lists (`max(sort_order) + 1`), answered whole so the dialog learns its id.
      *
-     * **A compare-and-set when `expected` is a string.** The home widget always sends the body it
-     * read, so a tick lands only on the list it was made against, and a list that moved since is
-     * refused with {@link TODOS_CHANGED} and written not at all. The band sends `null` and is
-     * never compared: it is the author's surface, and its autosave is the truth of what was typed.
-     * {@link DECK_GONE} is asked first, the crate's order.
+     * {@link DECK_GONE} for a deck that is not there — the one refusal, because a list must hang
+     * off something. **Nothing refuses an empty title or an empty body**: a list with only a title
+     * is what closing a New to-do list dialog after typing a title makes, and a blank title reads
+     * `Untitled list` at render. The row's two stamps and the deck's bump are one instant, the
+     * crate's one transaction.
      *
-     * **A body equal to the stored one writes nothing** — not the column, not `updatedAt` — so an
-     * autosave that fires over an unchanged draft does not move the deck up the gallery or the
-     * widget's `Last edited` order. Anything else bumps `updatedAt`, `touch_deck`'s answer: a deck
-     * the reader just worked through reads as recently edited.
-     *
-     * **No history row and no undo step, and {@link journalled} needs no telling.** An autosave
-     * every 600 ms of typing would flood the history drawer with one line per pause, and the
-     * editor's own Ctrl+Z is the list's undo; the wrapper files a step only under a history row
-     * the call wrote, and this writes none. It is not on {@link NO_UNDO_STEP} for exactly that
-     * reason — `deck_set_view_state`'s standing. {@link restoreDeck} is the other half: an undo of
-     * some *other* write never puts an older copy of the list back.
+     * **No history row and no undo step, and {@link journalled} needs no telling** — for every
+     * write of this table: an autosave every 600 ms of typing would flood the history drawer with
+     * one line per pause, and the editor's own Ctrl+Z is the list's undo. The wrapper files a
+     * step only under a history row the call wrote, and these write none, so none of the three is
+     * on {@link NO_UNDO_STEP} — `deck_set_view_state`'s standing.
      */
-    deck_todos_set: (args: { deckId: number; body: string; expected: string | null }): void => {
+    deck_todo_list_create: (args: {
+      deckId: number;
+      title: string;
+      body: string;
+    }): DeckTodoList => {
       refuseIfBusy(db);
       const deck = requireDeck(db, args.deckId);
-      const stored = deck.todos ?? "";
+      const at = todoListStamp(db);
+      const list: FakeDeckTodoList = {
+        id: nextId(db.deckTodoLists),
+        deckId: deck.id,
+        title: args.title,
+        body: args.body,
+        sortOrder: nextTodoListSortOrder(db, deck.id),
+        createdAt: at,
+        updatedAt: at,
+      };
+      db.deckTodoLists.push(list);
+      deck.updatedAt = at;
+      return toDeckTodoList(list);
+    },
+
+    /**
+     * `deck_todos::update_list` (user schema v59) — the title, the body, or both; `null` leaves a
+     * field as it is, and `""` really does empty it (`??`, never `||`).
+     *
+     * **Refuses in the crate's order**: {@link TODO_LIST_GONE}, then {@link TODO_LIST_WRONG_DECK},
+     * then — only when `expected` is a string — {@link TODOS_CHANGED} if it is not the stored
+     * body. A tick always sends `expected`, so it lands only on the text it was made against; the
+     * dialog sends `null` and is never compared, because its autosave is the truth of what was
+     * typed.
+     *
+     * **A title and body both equal to the stored ones write nothing at all** — not the row, not
+     * the list's stamp, not the deck's — so an autosave over an unchanged draft moves neither the
+     * gallery nor the widget's newest-first order. Anything else writes both columns, stamps the
+     * list, and bumps the deck in the same instant.
+     */
+    deck_todo_list_update: (args: {
+      deckId: number;
+      id: number;
+      title?: string | null;
+      body?: string | null;
+      expected?: string | null;
+    }): null => {
+      refuseIfBusy(db);
+      const list = requireTodoList(db, args.deckId, args.id);
       // `typeof` rather than `!== null`, so an absent key reads as the crate's `Option` reads it —
       // `None`, no compare — rather than as a string nothing stored could ever equal.
-      if (typeof args.expected === "string" && args.expected !== stored) {
+      if (typeof args.expected === "string" && args.expected !== list.body) {
         throw refuse(TODOS_CHANGED);
       }
-      if (args.body === stored) return;
-      deck.todos = args.body;
-      deck.updatedAt = stamp(db);
+      const title = args.title ?? list.title;
+      const body = args.body ?? list.body;
+      if (title === list.title && body === list.body) return null;
+      const at = todoListStamp(db);
+      list.title = title;
+      list.body = body;
+      list.updatedAt = at;
+      const deck = db.decks.find((d) => d.id === list.deckId);
+      if (deck) deck.updatedAt = at;
+      return null;
+    },
+
+    /**
+     * `deck_todos::delete_list` (user schema v59) — one list, gone.
+     *
+     * **Idempotent**: a list already gone answers `null` and writes nothing, because the state the
+     * caller asked for is the state there is — a delete pressed in two windows is not an error in
+     * the second. The delete is scoped to `deckId` as well as the id (`WHERE id = ? AND deck_id =
+     * ?`), so an id sent against the wrong deck matches no row and takes nothing from the deck it
+     * does belong to. A delete that took a row bumps the deck's `updatedAt`; one that took none
+     * does not.
+     */
+    deck_todo_list_delete: (args: { deckId: number; id: number }): null => {
+      refuseIfBusy(db);
+      // `deck_todos::delete_list`: a list already gone is done, a list on another deck is refused
+      // — the one refusal the crate answers here, so a stale id cannot pass as a delete.
+      const list = db.deckTodoLists.find((l) => l.id === args.id);
+      if (!list) return null;
+      if (list.deckId !== args.deckId) throw refuse(TODO_LIST_WRONG_DECK);
+      db.deckTodoLists = db.deckTodoLists.filter((l) => l !== list);
+      const deck = db.decks.find((d) => d.id === args.deckId);
+      if (deck) deck.updatedAt = todoListStamp(db);
+      return null;
     },
 
     /**
@@ -21764,6 +21939,8 @@ export function writeHandlers(db: FakeDb) {
       // {@link writeHandlers.deck_delete} has to do is only needed when *some* decks survive.
       db.deckNotes = [];
       db.deckNoteCards = [];
+      // `deck_todo_lists.deck_id` CASCADEs from the decks above (user schema v59).
+      db.deckTodoLists = [];
       db.deckAudit = [];
       db.deckUndo = [];
       return { decks, folders };
@@ -24831,13 +25008,13 @@ function deckState(db: FakeDb, deckId: number): FakeDeckState | null {
 function restoreDeck(db: FakeDb, deckId: number, state: FakeDeckState): void {
   const at = db.decks.findIndex((d) => d.id === deckId);
   if (at >= 0) {
-    // **User schema v58's pair is kept as it stands, never put back.** `Op::Deck` writes only
-    // `deck_undo::DECK_FIELDS`, and neither `todos` nor `todos_open` is on it — a to-do write
-    // files no step of its own, so a snapshot's copy of the list is simply whatever it held when
-    // some *other* write was made. Restoring it whole would let a Ctrl+Z on a rename quietly take
-    // back every to-do typed since, which the crate cannot do.
-    const { todos, todosOpen } = db.decks[at];
-    db.decks[at] = { ...state.deck, todos, todosOpen };
+    // **`todosOpen` is kept as it stands, never put back.** `Op::Deck` writes only
+    // `deck_undo::DECK_FIELDS`, and `todos_open` is not on it. The lists themselves are rows of
+    // `deck_todo_lists` that {@link deckState} never records, so no undo touches them: a to-do
+    // write files no step of its own, and restoring a snapshot's copy would let a Ctrl+Z on a
+    // rename quietly take back every to-do typed since, which the crate cannot do.
+    const { todosOpen } = db.decks[at];
+    db.decks[at] = { ...state.deck, todosOpen };
   }
   db.deckCards = [
     ...db.deckCards.filter((c) => c.deckId !== deckId),

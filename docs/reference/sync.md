@@ -459,11 +459,11 @@ else holds — confusion rather than injection: the blob is this device's own an
 the roster at that epoch**. A device that adopts *N+1* deletes every `sync_devices` row the
 manifest does not name.
 
-**That is deliberately not a synced table** — it would be the **eighteenth** now, and this line
+**That is deliberately not a synced table** — it would be the **nineteenth** now, and this line
 read *thirteenth* until `deck_tokens` took that number at user schema v37, *fourteenth* until
-v43's two note tables and v46's `sticky_notes` moved it twice more, and *seventeenth* until v52's
-`deck_token_printings` moved it again, which is the argument against writing a count into prose
-at all. A manifest that *is* the key distribution
+v43's two note tables and v46's `sticky_notes` moved it twice more, *seventeenth* until v52's
+`deck_token_printings` moved it again, and *eighteenth* until v59's `deck_todo_lists` did, which
+is the argument against writing a count into prose at all. A manifest that *is* the key distribution
 cannot disagree with it, where a synced `device_removals` table could arrive late, arrive out of
 order, or arrive at a device that cannot decrypt it — which is precisely the state a rotation puts
 every peer in.
@@ -922,16 +922,16 @@ Spec §7.2 (what syncs), §7.3 (conflict semantics), §7.4 (what the reader sees
 
 ---
 
-## What syncs: seventeen tables, and the spec's twelfth still does not exist
+## What syncs: eighteen tables, and the spec's twelfth still does not exist
 
 `schema::SYNCED_TABLES`:
 
 `collection_entries` · `collection_folders` · `deck_audit` · `deck_cards` · `deck_categories` ·
-`deck_folders` · `deck_labels` · `deck_note_cards` · `deck_notes` · `deck_token_printings` ·
-`deck_tokens` · `decks` · `device_names` · `muted_tags` · `sticky_notes` · `wishlist_entries` ·
-`wishlist_folders`
+`deck_folders` · `deck_labels` · `deck_note_cards` · `deck_notes` · `deck_todo_lists` ·
+`deck_token_printings` · `deck_tokens` · `decks` · `device_names` · `muted_tags` · `sticky_notes` ·
+`wishlist_entries` · `wishlist_folders`
 
-**Seventeen, and not for the reason the spec's own count would suggest.** The spec's list names
+**Eighteen, and not for the reason the spec's own count would suggest.** The spec's list names
 `deck_allocations`, which **schema v25 dropped** — which deck holds a card is now which folder
 its row sits in, so the work that table did is inside `collection_folders`, which is on the
 list. A table that does not exist cannot be synced, and that argument has not changed: it is
@@ -966,7 +966,7 @@ while proving nothing.
 `deck_folders`, `wishlist_folders` and `deck_audit` — **not all three folder tables**, which this
 line said until it was re-read against `apply::META` on 2026-09-20: `collection_folders` carries
 two partial grains, for the `Recently removed` row every database seeds itself and the group
-folder a deck brings. `sticky_notes` made it six at v46. Two devices each typing a note about the mana base must
+folder a deck brings. `sticky_notes` made it six at v46, and `deck_todo_lists` seven at v59. Two devices each typing a note about the mana base must
 stay two notes, and there is no column pair that could tell an accidental duplicate from a
 deliberate one — a title grain would silently fold two readers' separate thoughts into whichever
 arrived second. **`deck_note_cards` needs one for the opposite reason**: two devices attaching
@@ -1049,6 +1049,34 @@ and could carry a delta, and a count of Treasures is still a setting. Its grain 
 far device may not hold the printing to derive it from. `decks.token_mode` replaced
 `decks.token_stack` on the `decks` spec under a **new name**, v49's precedent: a v51 peer skips a
 field it does not know, where a word landing in its INTEGER column would fail its deck read.
+
+**The eighteenth is `deck_todo_lists`, at user schema v59** (2026-09-29, issue #688) — a deck's
+titled to-do lists, several to a deck, and **the first table on this census that a rung before it
+argued its way off**. v58 (issue #672, the same day) stored one checklist per deck in
+`decks.todos` precisely so that it would owe none of this page's sites: one list to a deck was a
+column's shape, and the `decks` spec carried it per field. The owner then asked for several titled
+lists drawn as cards, and several of a thing is a table's shape — so v59 paid the census after all
+and took `todos` back off the `decks` spec, the second field ever removed from a spec after v43's
+`notes`, costing nothing on the wire for that rung's reason: a v58 peer goes on sending the key and
+a v59 device's `apply::updates()` never visits it. What does not flow is the other direction — a
+v58 device holds a v59 sender's stream on the unknown table until it upgrades — and every edit a
+v58 device makes to its column after its peer climbed is lost to that peer. The groups this app
+has are one reader's devices, and the cost ends at the update.
+
+It is `deck_notes`' twin on this page: **uid-only, no grain** — two devices each starting a list
+while apart must stay two lists, and two readers' `To-do` titles are the ordinary case rather
+than a collision — `title`, `body` and `sort_order` as fields, the deck as an `Absent::Null`
+parent, and `apply::Meta` rank 17, appended. **The rows v59 converts need no grain to meet
+either, and that is the design rather than luck**: the rung converts each device's own
+`decks.todos` with capture off, as v53 cloned its theory piles, and names each row
+`schema::todo_list_uid(<deck uid>)` — SHA-256 over `deck_todo_lists/legacy/<deck uid>`, cut to 32
+hex. `decks.todos` synced, so every device in a group converts the same text under the same deck
+uid into the same row under the same name, and the next tick on any of them lands on that row
+everywhere with nothing announced. A deck with no uid gives a row with none, and the mint names it
+later. This is the v53 shape and deliberately not v52's captured launch pass: v52's rows were
+derived from picks a v51 peer could go on changing, which is what made a rung-time conversion
+stall; here the source column is simply no longer read, and a v58 edit made after the climb is the
+mixed-version cost above rather than a stall.
 
 **v51's art picks become entries in a captured launch pass, and until 2026-09-26 the rung did it
 uncaptured.** The rung copied each picked override into one entry per list, named
@@ -1409,9 +1437,9 @@ would fail **the reader's own write**.
 `sync_engine::capture` installs its triggers from one census, and the shape is the number rather
 than the other way round: **an insert trigger for every table, an update and a delete for every
 table but `deck_audit`** — the one `Spec` with `append_only: true`, since a log that is only ever
-appended to needs no other arm — **plus one that advances the clock.** At seventeen tables that
-is 17 + 16 + 16 + 1 = **50**, re-derived off `capture::TABLES` when v52 landed; it read 47 at
-sixteen, and before that said 31 and named ten non-append-only tables, which had been wrong since
+appended to needs no other arm — **plus one that advances the clock.** At eighteen tables that
+is 18 + 17 + 17 + 1 = **53**, re-derived off `capture::TABLES` when v59 landed; it read 50 at
+seventeen and 47 at sixteen, and before that said 31 and named ten non-append-only tables, which had been wrong since
 before `deck_tokens`. Count the array, never add to the figure above.
 They are `DROP` + `CREATE` at every open and never `CREATE … IF NOT EXISTS`: a trigger is stored
 SQL, and a build that changed the generator would otherwise leave every existing database

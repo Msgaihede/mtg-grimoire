@@ -669,9 +669,11 @@ pub struct DeckPatch {
     /// [`record_deck_edit`]**. `DEFAULT 0` for the same reason: the band is new, so shut takes
     /// nothing from anybody.
     ///
-    /// **The list itself is not on this patch, and must not join it**: `decks.todos` is written
-    /// only by [`crate::deck_todos::set_todos`], whose compare-and-set a `coalesce` here could not
-    /// honour, and whose write records no history row where this command's writes can.
+    /// **The lists themselves are not on this patch, and never were**: v58's `decks.todos` was
+    /// written only by `crate::deck_todos`, whose compare-and-set a `coalesce` here could not
+    /// honour, and since user schema v59 the lists are rows of `deck_todo_lists` with commands of
+    /// their own ([`crate::deck_todos::update_list`]). This column is the band's disclosure and
+    /// nothing else.
     pub todos_open: Option<bool>,
     /// How this deck treats its tokens — one of [`TOKEN_MODES`], user schema v52, replacing
     /// v47's `token_stack` switch. `hidden` takes the Tokens & Emblems pile out of all four
@@ -996,9 +998,10 @@ pub struct DeckRow {
     /// switch the app can set and never see is a switch nothing can draw. **[`duplicate_deck`]
     /// deliberately does not carry it**, the disclosures' note — a copy starts collapsed.
     ///
-    /// **The list itself is deliberately not on this row.** Every deck list the app draws fetches
-    /// `DeckRow`s, and a checklist body riding each of them would be text nobody on those pages
-    /// reads; `decks.todos` travels only through [`crate::deck_todos`]' two reads.
+    /// **The lists themselves are deliberately not on this row.** Every deck list the app draws
+    /// fetches `DeckRow`s, and checklist bodies riding each of them would be text nobody on those
+    /// pages reads; since user schema v59 they are `deck_todo_lists` rows, which travel only
+    /// through [`crate::deck_todos`]' two reads.
     pub todos_open: bool,
     /// How this deck treats its tokens — `managed`, `collection` or `hidden` (user schema v52,
     /// `DEFAULT 'managed'`, replacing v47's `token_stack`). **Every deck on every disk reads
@@ -2526,8 +2529,8 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- `?26`, the next number at the **end**, same rule one rung later. User schema
                 -- v58's To-do band disclosure is the fourth `Option<bool>` that opens a band,
                 -- beside `?14`, `?19` and `?20`, so a crossed number is an UPDATE that succeeds
-                -- and opens a band the reader did not press. `todos` itself has no hole here:
-                -- `deck_todos::set_todos` is its only writer.
+                -- and opens a band the reader did not press. The lists have no hole here: they
+                -- are `deck_todo_lists` rows since v59, and `deck_todos` is their only writer.
                 todos_open = coalesce(?26, todos_open),
                 updated_at = unixepoch()
               WHERE id = ?1",
@@ -3650,11 +3653,12 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
             // schema v57) travels with `managed_wishlist_mode`**, which was already here: the
             // two together are one answer about what the deck's folder holds.
             //
-            // **User schema v58's `todos` and `todos_open` are absent, both on purpose.** A copy
-            // that carried its original's list would draw every open to-do in the home widget
-            // twice, and ticking one would leave its twin open; the disclosure is a band the
-            // reader happened to have open, left behind for the other three disclosures' reason.
-            // The copy takes both `DEFAULT`s — no list, and the band shut.
+            // **User schema v58's `todos_open` is absent on purpose, and no `deck_todo_lists` row
+            // is copied either** (v59 turned v58's `todos` column into those rows). A copy that
+            // carried its original's lists would draw every open to-do in the home widget twice,
+            // and ticking one would leave its twin open; the disclosure is a band the reader
+            // happened to have open, left behind for the other three disclosures' reason. The
+            // copy starts with no list and the band shut.
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 folder_id, theory_enabled,
                                 separate_x_group, bracket, theory_mark_exact, theory_mark_name,
