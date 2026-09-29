@@ -510,7 +510,7 @@ export const ManagedWishlistTokens: Story = {
     await expect(args.onChange).toHaveBeenLastCalledWith({ managedWishlistTokens: true });
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
     await expect(
-      canvas.getByText(`${MANAGED_WISHLIST_HINT.missing} ${MANAGED_WISHLIST_TOKENS_HINT}`),
+      canvas.getByText(`${MANAGED_WISHLIST_HINT.missing} ${MANAGED_WISHLIST_TOKENS_HINT.missing}`),
     ).toBeVisible();
     // A press settles in one act, so nothing commits beside it.
     await expect(args.onCommit).not.toHaveBeenCalled();

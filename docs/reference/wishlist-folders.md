@@ -1451,8 +1451,15 @@ wishlist folder, named after the deck, holding **that view's own copies** —
 | `other` | Different printing | `held_as_other_printing` — copies to swap for the planned printing |
 
 **And `decks.managed_wishlist_tokens`** ([issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617),
-user schema v57): on, the token rows the plan is short of go in the **Tokens** subfolder, at their
-whole shortfall, under whichever of the three modes the deck follows. Until v57 that was a fact
+user schema v57): on, the token rows the plan is short of go in the **Tokens** subfolder, under
+whichever of the three modes the deck follows. **The mode decides how a token is compared**
+([issue #675](https://github.com/Msgaihede/mtg-grimoire/issues/675), 2026-09-29): `missing`
+compares the **name** only — a token row wants `quantity − held_as_other_printing` out of a pool
+keyed on the token's name (`deck_theory::TokenPool::Name`), so any Treasure the deck holds, in any
+printing, finish or oracle card of that name, answers a planned one — while `all` and `other`
+compare the exact printing and finish and want the row's whole shortfall, the Compare dialog's
+Tokens view. The wish is pinned to the planned printing and finish either way; the name decides
+only how many. Until v57 that was a fact
 about the mode — `all` filed tokens, `missing` and `other` did not, and a fifth word, `tokens`
 (v55), filed them alone with nothing in the deck's own folder — so the missing cards *and* the
 tokens was a choice nobody could make. The v57 rung turned `all` into `all` with the switch on and

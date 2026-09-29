@@ -822,6 +822,95 @@ mod tests {
         assert_eq!(wishes(&conn, child), vec![("treasure".to_owned(), 2)]);
     }
 
+    /// A second **Treasure**: another art, another oracle card — Scryfall gives a token with
+    /// different text or stats its own — and sold in foil too. Only the name is shared with
+    /// [`with_treasure`]'s.
+    fn with_other_treasure(conn: &Connection) {
+        conn.execute_batch(
+            r#"INSERT INTO corpus.cards (id, oracle_id, name, set_code, collector_number, lang,
+                                         layout, type_line, finishes, raw)
+               VALUES ('treasure-lci', 'o-treasure-lci', 'Treasure', 'tlci', '20', 'en', 'token',
+                       'Token Artifact — Treasure', '["nonfoil","foil"]', '{}');"#,
+        )
+        .unwrap();
+    }
+
+    /// **Missing compares a token by its name alone; All and Different printing by its exact
+    /// printing and finish** (issue #675). The plan asks for three of one Treasure and the deck
+    /// sleeves three Treasures that are another art, another oracle card, and one of them foil —
+    /// Missing wants none, and the other two views want all three of the planned printing, in the
+    /// planned finish.
+    #[test]
+    fn missing_compares_tokens_by_name_and_the_other_views_by_printing_and_finish() {
+        let conn = db();
+        with_treasure(&conn);
+        with_other_treasure(&conn);
+        let d = deck(&conn, "Tithe", true);
+        mode(&conn, d, "missing");
+        tokens_switch(&conn, d, true);
+        put(&conn, d, "theory", "tithe", 1);
+        put(&conn, d, "live", "tithe", 1);
+        put(&conn, d, "theory", "treasure", 3);
+        put(&conn, d, "live", "treasure-lci", 2);
+        let cat = crate::deck_meta::category_for_name(&conn, d, "live", "Main deck").unwrap();
+        crate::deck::add_card(
+            &conn,
+            d,
+            "treasure-lci",
+            Some(cat),
+            None,
+            "live",
+            Some("foil"),
+            1,
+        )
+        .unwrap();
+        settle(&conn).unwrap();
+        assert!(
+            tokens_folder(&conn, d).is_none(),
+            "three Treasures in the deck answer three planned, whatever their art or finish"
+        );
+        assert_eq!(treasure_wishes(&conn), 0);
+
+        for word in ["all", "other"] {
+            mode(&conn, d, word);
+            settle(&conn).unwrap();
+            let (child, _, _) = tokens_folder(&conn, d).expect("the exact printing is wanted");
+            assert_eq!(
+                pinned(&conn, child),
+                vec![("treasure".to_owned(), Some("nonfoil".to_owned()), 3)],
+                "{word}: none of the planned printing is sleeved"
+            );
+        }
+    }
+
+    /// **Missing still wants what the name cannot cover, and a copy counts once.** A plan of
+    /// three Treasures against a deck holding one of the planned printing and one of another art:
+    /// the planned copy answers one line exactly, the other art answers one more by name, and
+    /// the third is wanted — pinned to the planned printing. All wants the two the exact
+    /// printing is short of.
+    #[test]
+    fn missing_wants_the_tokens_no_same_named_token_covers() {
+        let conn = db();
+        with_treasure(&conn);
+        with_other_treasure(&conn);
+        let d = tithe_deck(&conn, "missing", true);
+        put(&conn, d, "live", "treasure-lci", 1);
+        settle(&conn).unwrap();
+        let (child, _, _) = tokens_folder(&conn, d).expect("one still wanted");
+        assert_eq!(
+            pinned(&conn, child),
+            vec![("treasure".to_owned(), Some("nonfoil".to_owned()), 1)]
+        );
+
+        mode(&conn, d, "all");
+        settle(&conn).unwrap();
+        let (child, _, _) = tokens_folder(&conn, d).unwrap();
+        assert_eq!(
+            pinned(&conn, child),
+            vec![("treasure".to_owned(), Some("nonfoil".to_owned()), 2)]
+        );
+    }
+
     /// **The switch off is no subfolder under any view** — All included, which filed tokens
     /// unasked until v57.
     #[test]

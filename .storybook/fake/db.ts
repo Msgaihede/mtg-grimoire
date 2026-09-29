@@ -14678,10 +14678,13 @@ interface ManagedWant {
  * The card rows are the Compare view's own, **at that view's own quantity** (issue #512's
  * correction): All is the whole row, Missing is the copies no printing covers, Different printing
  * is the copies played as another. The token rows fill the subfolder **while `withTokens` is on,
- * under any of the three**, at their whole quantity — the Compare dialog's Tokens view — and
- * nowhere while it is off. That is user schema v57's shape (issue #617); from v55 to v56 the
- * tokens rode the mode instead, filed by All and by a fifth `tokens` word that put no card in
- * the folder at all.
+ * under any of the three**, and nowhere while it is off. That is user schema v57's shape (issue
+ * #617); from v55 to v56 the tokens rode the mode instead, filed by All and by a fifth `tokens`
+ * word that put no card in the folder at all.
+ *
+ * **How a token is compared follows the mode** (issue #675): Missing compares the **name** only,
+ * so any Treasure in the deck answers a planned one; All and Different printing compare the exact
+ * printing and finish, at the row's whole quantity — the Compare dialog's Tokens view.
  */
 function managedWants(
   db: FakeDb,
@@ -14691,20 +14694,26 @@ function managedWants(
 ): { cards: ManagedWant[]; tokens: ManagedWant[] } {
   const cards: ManagedWant[] = [];
   const tokens: ManagedWant[] = [];
-  for (const { oracleId, row } of theoryDiff(db, deckId, DEFAULT_MARKETPLACE)) {
-    if (oracleId === null) continue;
-    if (row.isToken) {
+  if (withTokens) {
+    // `deck_theory::wanted`'s token arm: Missing's pool is the token's name, the other two views'
+    // is the oracle card and take the whole row.
+    const pool = mode === "missing" ? "name" : "oracle";
+    for (const { oracleId, row } of tokenDiff(db, deckId, DEFAULT_MARKETPLACE, pool)) {
+      if (oracleId === null) continue;
+      const quantity = mode === "missing" ? row.quantity - row.heldAsOtherPrinting : row.quantity;
       // `(quantity > 0).then_some(…)` in the crate, which reads a token row as it reads a card.
-      if (!withTokens || row.quantity <= 0) continue;
+      if (quantity <= 0) continue;
       tokens.push({
         oracleId,
         cardId: row.cardId,
         name: row.name,
         finish: row.finish ?? "nonfoil",
-        quantity: row.quantity,
+        quantity,
       });
-      continue;
     }
+  }
+  for (const { oracleId, row } of theoryDiff(db, deckId, DEFAULT_MARKETPLACE)) {
+    if (oracleId === null || row.isToken) continue;
     const quantity =
       mode === "all"
         ? row.quantity
@@ -15920,9 +15929,19 @@ const TOKENS_CATEGORY = "Tokens & Emblems";
  * finishes, **paid out of the pool the card rows use** — the deck's copies of the token less the
  * ones an exact key already matched, handed down the rows in order — so one live Treasure cannot
  * excuse two rows, nor the row it already answered.
+ *
+ * **`pool` is `deck_theory::TokenPool`** (issue #675): the oracle card for Compare, the token's
+ * **name** for a managed wishlist following Missing — which is the one place a token is compared
+ * by name alone. It moves `heldAsOtherPrinting` and nothing else.
  */
-function tokenDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[] {
+function tokenDiff(
+  db: FakeDb,
+  deckId: number,
+  mp: MarketplaceId,
+  pool: "oracle" | "name" = "oracle",
+): GroupedDiff[] {
   const key = (row: DeckTokenRow) => `${row.cardId}|${row.finish}`;
+  const poolKey = (row: DeckTokenRow) => (pool === "name" ? row.name : row.oracleId);
   const planned = new Map<string, { row: DeckTokenRow; quantity: number }>();
   for (const row of deckTokenRows(db, deckId, "theory", mp)) {
     const held = planned.get(key(row));
@@ -15937,7 +15956,7 @@ function tokenDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[]
     // corpus answers no set code, which is the crate's `oracle: None`, so it is not another
     // printing *of* anything and excuses no row. It still counts toward its own exact key above.
     if (row.setCode !== null) {
-      liveByToken.set(row.oracleId, (liveByToken.get(row.oracleId) ?? 0) + row.quantity);
+      liveByToken.set(poolKey(row), (liveByToken.get(poolKey(row)) ?? 0) + row.quantity);
     }
   }
   const matched = new Map<string, number>();
@@ -15946,11 +15965,11 @@ function tokenDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[]
     // `matched_by_oracle` only for a line that names its oracle card.
     if (row.setCode === null) continue;
     const exact = Math.min(quantity, live.get(k) ?? 0);
-    matched.set(row.oracleId, (matched.get(row.oracleId) ?? 0) + exact);
+    matched.set(poolKey(row), (matched.get(poolKey(row)) ?? 0) + exact);
   }
-  const pool = new Map<string, number>();
-  for (const [oracle, held] of liveByToken) {
-    pool.set(oracle, Math.max(0, held - (matched.get(oracle) ?? 0)));
+  const left = new Map<string, number>();
+  for (const [pooled, held] of liveByToken) {
+    left.set(pooled, Math.max(0, held - (matched.get(pooled) ?? 0)));
   }
   const rows: GroupedDiff[] = [];
   for (const [k, { row, quantity }] of planned) {
@@ -15962,8 +15981,8 @@ function tokenDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[]
     // to and no pool to draw from, so the Send press and the managed settle both pass over it
     // (`oracleId === null`) rather than throwing on a card that is not there.
     const gone = row.setCode === null;
-    const take = gone ? 0 : Math.min(short, pool.get(row.oracleId) ?? 0);
-    if (!gone) pool.set(row.oracleId, (pool.get(row.oracleId) ?? 0) - take);
+    const take = gone ? 0 : Math.min(short, left.get(poolKey(row)) ?? 0);
+    if (!gone) left.set(poolKey(row), (left.get(poolKey(row)) ?? 0) - take);
     rows.push({
       oracleId: gone ? null : row.oracleId,
       row: {
