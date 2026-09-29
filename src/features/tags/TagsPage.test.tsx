@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { BUTTON_OVER_ART } from "@/components/QuantityStepper";
@@ -1042,6 +1042,160 @@ describe("the layout toggle", () => {
     expect(useAppStore.getState().tagsView).toBe("table");
     expect(useAppStore.getState().searchView).toBe("grid");
     expect(await screen.findByRole("row", { name: /Lightning Bolt/ })).toBeInTheDocument();
+  });
+});
+
+/**
+ * Spec 2026-09-29 §6.4: in grid view the page is one scrolling page — `main` scrolls it, the wall
+ * grows, the rail pins — and in table view it is the bounded arrangement it always was.
+ *
+ * **jsdom computes no layout and applies no stylesheet**, so the scroll itself, the pin and the
+ * rail's measured height are live-window claims. What the suite can hold is the *split*: which
+ * classes each view carries, and that the quick bar comes down over a driven observer with the
+ * picked tags in it, reaching the same selection the page row does.
+ */
+describe("one scrolling page in grid view", () => {
+  const section = () =>
+    screen.getByRole("heading", { name: "Browse cards by tag" }).closest("section")!;
+  /** The rail is the column the tag box is drawn in. */
+  const rail = () => screen.getByPlaceholderText(/search tags/i).closest<HTMLElement>(".w-72")!;
+
+  /**
+   * **The section is `h-full` in table view only.** Under the wall's `grow` a section clamped to
+   * one screen is a containing block one screen tall, and both sticky things on this page — the
+   * rail and the quick bar — would travel off the top with its end. This page had no test of
+   * `h-full` before; this one states the split rather than the old unconditional class.
+   */
+  it("lets the page grow in grid view and bounds it in table view", async () => {
+    wrap(<TagsPage />);
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    expect(section().classList.contains("h-full")).toBe(false);
+    expect(rail().classList.contains("sticky")).toBe(true);
+    expect(rail().classList.contains("self-start")).toBe(true);
+    // The quick bar is up, so the rail pins flush to `main`'s top.
+    expect(rail().style.top).toBe("0px");
+
+    act(() => useAppStore.setState({ tagsView: "table" }));
+
+    expect(section().classList.contains("h-full")).toBe(true);
+    expect(rail().classList.contains("sticky")).toBe(false);
+    expect(rail().classList.contains("min-h-0")).toBe(true);
+    // No inline `top` and no inline height: the table's rail is a stretched flex item again.
+    expect(rail().style.top).toBe("");
+    expect(rail().style.height).toBe("");
+  });
+
+  describe("with the filter row scrolled away", () => {
+    /** Every observer built while a test runs, and what it was pointed at. The setup file's
+     *  stub never fires, which is what keeps the bar up everywhere else in this suite. */
+    let watchers: {
+      callback: IntersectionObserverCallback;
+      observed: Element[];
+      self: IntersectionObserver;
+    }[];
+
+    beforeEach(() => {
+      watchers = [];
+      vi.stubGlobal(
+        "IntersectionObserver",
+        class {
+          private readonly record: (typeof watchers)[number];
+          constructor(callback: IntersectionObserverCallback) {
+            this.record = { callback, observed: [], self: this as unknown as IntersectionObserver };
+            watchers.push(this.record);
+          }
+          observe(target: Element) {
+            this.record.observed.push(target);
+          }
+          unobserve() {}
+          disconnect() {}
+          takeRecords(): IntersectionObserverEntry[] {
+            return [];
+          }
+        },
+      );
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    /**
+     * The page inside a box that scrolls, because `useUndocked` roots its observer on the nearest
+     * scroller and finds none without one. An inline `overflow-y` is the one way to make a
+     * scroller in an environment with no stylesheet — `AppShell`'s `main` is a class.
+     */
+    function wrapInScroller() {
+      return wrap(
+        <div style={{ overflowY: "auto" }}>
+          <TagsPage />
+        </div>,
+      );
+    }
+
+    /** Tell the observer watching the `FilterBar` block that its bottom is above the scroller's
+     *  top — the crossing that brings the quick bar down. Viewport pixels, stubbed. */
+    function scrollRowAway() {
+      const watcher = watchers.find((w) =>
+        w.observed.some((el) => el.classList.contains("@container/fb")),
+      );
+      expect(watcher).toBeDefined();
+      const entry = {
+        isIntersecting: false,
+        boundingClientRect: { bottom: 40 } as DOMRectReadOnly,
+        rootBounds: { top: 90 } as DOMRectReadOnly,
+      } as IntersectionObserverEntry;
+      act(() => watcher!.callback([entry], watcher!.self));
+    }
+
+    it("docks the quick bar with the picked tags as its lead, and drops the rail below it", async () => {
+      const user = userEvent.setup();
+      wrapInScroller();
+      await user.click(await railRow("Landscape"));
+      await screen.findByRole("button", { name: /^Landscape, art tag, included/ });
+
+      scrollRowAway();
+
+      const bar = await screen.findByRole("group", { name: "Filter quick bar" });
+      const lead = within(bar).getByRole("group", { name: "Picked tags" });
+      expect(lead.classList.contains("flex-nowrap")).toBe(true);
+      expect(
+        within(lead).getByRole("button", { name: /^Landscape, art tag, included/ }),
+      ).toBeInTheDocument();
+      // The weight floor stays on the page row: the bar is handed no `onFloorChange`.
+      expect(
+        within(bar).queryByRole("button", { name: new RegExp(`^${HIDE_BACKGROUND_LABEL}`) }),
+      ).not.toBeInTheDocument();
+      // The rail stands the bar's clearance lower, so the bar never covers the tag box.
+      expect(rail().style.top).toBe("41px");
+    });
+
+    /** The bar's chips are a second entrance to the page's one selection, not a copy of it. */
+    it("removes a tag from the bar and the page row with it", async () => {
+      const user = userEvent.setup();
+      wrapInScroller();
+      await user.click(await railRow("Landscape"));
+      await waitFor(() =>
+        expect(lastRequest().artTags).toEqual({ include: ["landscape"], exclude: [] }),
+      );
+
+      scrollRowAway();
+      const bar = await screen.findByRole("group", { name: "Filter quick bar" });
+      await user.click(within(bar).getByRole("button", { name: "Remove Landscape, art tag" }));
+
+      await waitFor(() => expect(lastRequest().artTags).toBeUndefined());
+      expect(
+        screen.queryByRole("button", { name: /^Landscape, art tag, included/ }),
+      ).not.toBeInTheDocument();
+    });
+
+    it("says so in the bar when nothing is picked", async () => {
+      wrapInScroller();
+      await screen.findByRole("button", { name: "Lightning Bolt" });
+
+      scrollRowAway();
+
+      const bar = await screen.findByRole("group", { name: "Filter quick bar" });
+      expect(within(bar).getByText("No tags picked")).toBeInTheDocument();
+    });
   });
 });
 

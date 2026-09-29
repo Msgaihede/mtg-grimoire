@@ -166,6 +166,10 @@ export function TagResults({ search }: { search: CardSearch }) {
   const empty = rows.length === 0;
 
   return (
+    // `min-h-0 flex-1` in both views, and it is only load-bearing in one: in table view it is
+    // what hands `VirtualTable` the bounded column `TagsPage` builds; in grid view the column
+    // above it has no height of its own, so `flex-1` resolves against content and the root is as
+    // tall as the growing wall inside it.
     <div className="flex min-h-0 flex-1 flex-col gap-2">
       {/* One live region, mounted for the life of the view: a region that appears together with
           its text announces nothing, because there was no change for a screen reader to notice.
@@ -228,7 +232,22 @@ export function TagResults({ search }: { search: CardSearch }) {
         (view === "grid" ? (
           <CardGrid
             rows={rows}
+            // A changed tag or filter moves this, which starts the wall at its top — and under
+            // `grow` that is `main` scrolled back to the page row, so a chip pressed in the quick
+            // bar lands the reader on the same state over the new first results.
             listKey={searchKey}
+            // **This wall grows and `main` scrolls it — the Tags page is one long page in grid
+            // view** (spec 2026-09-29 §6.4), the last of the four page-width walls to say so:
+            // card search on 2026-09-03, the collection and the wishlist on 2026-09-08. It was
+            // bounded until then because the page was `h-full` with a self-scrolling rail, so its
+            // filter row never left the screen and there was no quick bar to dock. `TagsPage`
+            // pins the rail beside it; `CardGrid`'s own `grow` carries why the two surfaces that
+            // stay bounded (the deck editor's docked panel, `AllPrintingsDialog`) are not this.
+            //
+            // A bare `grow` rather than `grow={view === "grid"}`: this branch is the grid's, so
+            // the comparison could only ever be true. The table beside it is `VirtualTable`,
+            // which keeps its own scrollport — the page's `h-full` is what bounds it.
+            grow
             // Named, because `CardGrid` defaults to `Search results` — the wall it was written
             // for. Two walls announcing the same name is the kind of thing only a reader who
             // cannot see them ever notices, and the table beside it already says `Tag results`.

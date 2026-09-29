@@ -139,6 +139,34 @@ describe("TagChips", () => {
   });
 
   /**
+   * **The filter quick bar's lead is one line, never two.** The bar is a 53px strip, so a chip
+   * row that wrapped would either spill out of it or push the bar taller for every third tag; it
+   * scrolls sideways instead. The page's own row keeps wrapping — a class assertion is the whole
+   * of what jsdom can see of either, since it applies no stylesheet.
+   */
+  it("draws one unwrapped line when singleLine, and says so when empty", () => {
+    render(
+      <TagChips
+        selection={EMPTY_SELECTION}
+        onRemove={() => {}}
+        onToggleMode={() => {}}
+        singleLine
+        emptyMessage="No tags picked"
+      />,
+    );
+    const group = screen.getByRole("group", { name: "Picked tags" });
+    expect(group.classList.contains("flex-nowrap")).toBe(true);
+    expect(screen.getByText("No tags picked")).toBeInTheDocument();
+  });
+
+  it("still wraps on the page row, where singleLine is not asked for", () => {
+    draw(selection([chip("forest")]));
+    const group = screen.getByRole("group", { name: "Picked tags" });
+    expect(group.classList.contains("flex-wrap")).toBe(true);
+    expect(group.classList.contains("flex-nowrap")).toBe(false);
+  });
+
+  /**
    * **The label must not promise "strong matches only".** The predicate behind it is
    * `weight <> 'weak'`, which admits `median` — 462 008 of 475 163 art taggings — so the control
    * excludes background detail and narrows to nothing stronger than that.
