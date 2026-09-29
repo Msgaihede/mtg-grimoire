@@ -31,6 +31,7 @@ import {
   type FilterLabels,
   type TrayCell,
 } from "@/features/search/FilterBar";
+import { FilterQuickBar } from "@/features/search/FilterQuickBar";
 import { ShelfLabel } from "@/features/shelves/ShelfLabel";
 import { FOLD_PAUSED_REASON, ShelfToolbar } from "@/features/shelves/ShelfToolbar";
 import { useFoldAnchor } from "@/features/shelves/useFoldAnchor";
@@ -76,6 +77,7 @@ import { tileKeyOf } from "@/lib/tileKey";
 import { useDeskWidth } from "@/lib/useDeskWidth";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useDockHeight } from "@/lib/useDockHeight";
+import { useFilterQuickBar } from "@/lib/useFilterQuickBar";
 import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
@@ -822,6 +824,26 @@ export function CollectionPage() {
   const deskRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
   /**
+   * **The filter quick bar** (spec 2026-09-29): a one-row copy of the page's filters that docks at
+   * the top of `main` once the page's own `FilterBar` block has scrolled out of view, so a reader
+   * forty shelves down can narrow the wall without scrolling back up to do it.
+   *
+   * `filterRow` is **state, not a ref**, and that is what makes it work: it is handed to
+   * `FilterBar` as a callback ref (`rootRef`), and `useFilterQuickBar` builds its
+   * `IntersectionObserver` over whatever element it is given — a `RefObject` notifies nobody, so a
+   * block that mounted after the first commit (or remounted) would never be observed at all.
+   *
+   * **Grid only.** The table view pins this section to `main`'s height (`h-full` below) and
+   * `VirtualTable` is its own scroller, so the filter row never leaves the screen there and asking
+   * would draw a bar over a page whose row is still in plain sight. Disabled, the hook answers
+   * hidden with no clearance, which is also what jsdom answers — its stub observer never fires.
+   *
+   * Declared here, beside `dockRef`, because two later sites read it before the JSX does: the
+   * dock's height below (`quick.dockTop`) and the wall's `renderSticky` (`quick.shown`).
+   */
+  const [filterRow, setFilterRow] = useState<HTMLDivElement | null>(null);
+  const quick = useFilterQuickBar(filterRow, view === "grid");
+  /**
    * What that row can spare for the column: the widest the panel may be drawn or dragged, whether
    * the list and the column fit **beside** each other, and — when they do not — how wide to draw
    * the panel **over** the list.
@@ -853,13 +875,22 @@ export function CollectionPage() {
    * The dock's height — **arithmetic rather than a length**, because CSS cannot say "the
    * scroller's visible height, less however much of the page sits above this row".
    *
-   * `sticky top-0` on the dock does the pinning and this does only the height. The hook finds the
-   * scroller itself, which is what lets one hook serve this page (scrolling in `AppShell`'s
-   * `main`) and the deck editor (an `overflow-y-auto` section of its own) without either site
-   * knowing which. `useDockHeight` carries the whole of it, including why it re-checks its wiring
+   * `sticky` on the dock (at `quick.dockTop`) does the pinning and this does only the height. The
+   * hook finds the scroller itself, which is what lets one hook serve this page (scrolling in
+   * `AppShell`'s `main`) and the deck editor (an `overflow-y-auto` section of its own) without
+   * either site knowing which. `useDockHeight` carries the whole of it, including why it re-checks its wiring
    * after every commit.
+   *
+   * **`quick.dockTop` is the third argument, and the dock's own `top` is the same number** — 41px
+   * while the filter quick bar is down (the bar's 53px, less `main`'s 20px padding the sticky
+   * already sits inside, plus the deck bar's 8px of clearance), 0 while it is up. The height is the
+   * scrollport *below the inset*, so a height measured against 0 under a dock pinned at 41 would
+   * run its foot 41px past the bottom of `main`, and the panel's last rows would be unreachable.
+   * Handing the hook the inset is also what re-measures on the flip: the bar coming down moves the
+   * dock without resizing either observed box and without a scroll having to follow, which is
+   * exactly the case the hook's `top` exists for (the deck editor's issue #577, the same shape).
    */
-  useDockHeight(dockRef, deskRef);
+  useDockHeight(dockRef, deskRef, quick.dockTop);
 
   /**
    * The export dialog, and the sweep that fills it — see `scope.ts`'s doc for why the sweep
@@ -3198,11 +3229,19 @@ export function CollectionPage() {
       <CollectionShelfSticky
         shelf={shelf}
         onOpen={collection.openFolder}
-        onTop={scrollToTop}
+        // **No `Top` on the shelf bar while the filter quick bar is down** (spec §6.2): the quick
+        // bar leads with its own `Top`, pinned directly above this one, and two buttons with one
+        // name and one job stacked 53px apart is a screen asking the reader which to press.
+        // Withholding the handler rather than hiding the button is the whole mechanism —
+        // `ShelfStickyBar` draws no `Top` at all without `onTop`, so nothing is left in the tab
+        // order or the accessibility tree. The quick bar's is the one to keep because it does
+        // more: it also puts the caret back in the page's search field. The table never gets
+        // here with `quick.shown` true — the hook is disabled outside grid view.
+        onTop={quick.shown ? undefined : scrollToTop}
         cards={cardTarget}
       />
     ),
-    [collection.openFolder, cardTarget],
+    [collection.openFolder, cardTarget, quick.shown],
   );
   /**
    * The heading each view brings into view — the grid's `revealShelfId` and the table's, one answer.
@@ -3276,11 +3315,33 @@ export function CollectionPage() {
         //
         // The wall wants the opposite. Under `CardGrid`'s `grow` it is as tall as its rows and
         // `main` is what scrolls them, and a section clamped to one screen would be a containing
-        // block one screen tall — which is as far as the dock's `sticky top-0` could then travel,
-        // so the search column would unstick and scroll away after the first viewport of cards.
+        // block one screen tall — which is as far as the dock's `sticky` could then travel, so
+        // the search column would unstick and scroll away after the first viewport of cards.
         view === "table" && "h-full",
       )}
     >
+      {/* **The filter quick bar** (spec 2026-09-29, §6.2) — the page row's filters in one row,
+          docked at the top of `main` once the `FilterBar` below has scrolled out of view.
+
+          **The section's first child**, above the figures band: it is a `sticky top-0 h-0`
+          wrapper, and a sticky box can travel only as far as its containing block, so it has to
+          sit in the section that is as tall as the wall rather than in any row inside it. `-mb-3`
+          is this section's `gap-3` handed back, so a wrapper of no height costs the page no
+          height either.
+
+          **It takes exactly what the page's `FilterBar` takes** — the same `search` (this page's
+          `useCollection`, so a chip pressed in the bar and one pressed on the page are one state),
+          `labels`, `sortRows` and `tray` — so it can never offer a filter the page row does not.
+          `shown` is `useFilterQuickBar`'s answer, which is always false in table view. */}
+      <FilterQuickBar
+        search={collection}
+        shown={quick.shown}
+        labels={COLLECTION_LABELS}
+        sortRows={collection.sortRows}
+        tray={COLLECTION_TRAY}
+        className="-mb-3"
+      />
+
       {/* Not drawn: the ribbon's `h1` already names the view, and a second Cinzel
           "Collection" 18px under it would be a subheading repeating its own heading. The
           header below says what this view is far better than a title would. */}
@@ -3355,6 +3416,10 @@ export function CollectionPage() {
           What was a bespoke two-line row of fourteen controls is the shared four-on-the-bar plus a
           tray, so a reader who has learned that row once does not have to learn it again here. */}
       <FilterBar
+        // The block the filter quick bar watches: once all of it — the row, an open tray and the
+        // stated line — is above `main`'s top, the quick bar comes down. A callback ref into
+        // state, so the observer is rebuilt if this block remounts (see `filterRow`).
+        rootRef={setFilterRow}
         search={collection}
         labels={COLLECTION_LABELS}
         sortRows={collection.sortRows}
@@ -3387,7 +3452,7 @@ export function CollectionPage() {
           // safe: `useDockHeight` measures the scrollport and subtracts however much of this row is
           // still below its top, clamped at zero — so a row that has scrolled past the top gives
           // the panel the full scrollport, and a row at rest gives it the scrollport under the
-          // header. `sticky top-0` does the pinning in both.
+          // header. `sticky` (at `quick.dockTop`) does the pinning in both.
           view === "table" && "min-h-0 flex-1",
         )}
       >
@@ -3656,6 +3721,13 @@ export function CollectionPage() {
                 // letterbox with a scrollbar of its own an inch from the page's — and nothing on
                 // screen said which one a wheel would turn.
                 grow
+                // **The shelf bar stacks flush under the filter quick bar** (spec §6.2): 53 while
+                // the bar is down, 0 while it is up. `CardGrid` adds it to the sticky anchor's
+                // `top` and to the edge `stickyShelfAt` measures from, so the shelf bar pins at
+                // the quick bar's foot rather than behind it *and* names the shelf actually under
+                // it rather than one 53px further up. Grid only — the table branch below takes
+                // nothing, because the quick bar never shows in table view.
+                stickyTop={quick.stickyTop}
                 // This wall's own zoom, kept apart from the search's: the two views are the same
                 // component over different rows, and a reader who peers at one printing's art in
                 // search is not asking for a binder at 2× as well. `CardGrid`'s `zoomSection`
@@ -3906,9 +3978,17 @@ export function CollectionPage() {
         <div
           ref={dockRef}
           className={cn(
-            "sticky top-0 flex shrink-0 self-start",
+            "sticky flex shrink-0 self-start",
             overWidth !== undefined && LAYER.popup,
           )}
+          // **The dock's `top` is inline, not a `top-0` class**: it is a number the filter quick
+          // bar computes — 41px (under the bar, at the deck bar's clearance) while the bar is down,
+          // 0 while it is up — and `useDockHeight` above is handed the very same `quick.dockTop`,
+          // so the inset and the height are one value read twice and can never disagree by a
+          // frame. Two classes switched on `quick.shown` would be a second spelling of 41 that the
+          // hook's argument would have to be kept in step with by hand. `DeckEditor`'s dock under
+          // its undocked header bar is the same arrangement (`barClearance`, issue #577).
+          style={{ top: quick.dockTop }}
         >
           <CollectionSearchPanel
             // The level the reader is standing in — a `+` files there, which is the shelf at the
