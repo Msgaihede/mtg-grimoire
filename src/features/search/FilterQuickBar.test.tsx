@@ -135,6 +135,31 @@ describe("FilterQuickBar", () => {
     expect(document.activeElement).toBe(filters);
   });
 
+  /**
+   * **The tray lays out in columns only inside an `@container/fb` box**, because its grid is
+   * `@min-[640px]/fb:grid-cols-2 @min-[900px]/fb:grid-cols-3` and a query naming a container no
+   * ancestor is resolves to nothing — one column at every width. jsdom applies no container query,
+   * so this pins the *structure*: the container is an ancestor of the tray, inside the bar, and
+   * it is **not** the tray's scroller nor inside it. A container is the containing block for
+   * `fixed` descendants, and every popup in the tray draws in a `fixed` frame, so a container on
+   * the scroller would have the scroller clip them.
+   */
+  it("hangs the tray inside a filter-row container that is not its scroller", async () => {
+    render(<FilterQuickBar search={search()} shown />, { wrapper: TooltipProvider });
+    const filters = within(bar()).getByRole("button", { name: FILTERS });
+    await userEvent.click(filters);
+    const tray = document.getElementById(filters.getAttribute("aria-controls")!)!;
+    const container = tray.closest<HTMLElement>('[class~="@container/fb"]');
+    expect(container).not.toBeNull();
+    expect(bar().contains(container)).toBe(true);
+    expect(container!.classList.contains("overflow-y-auto")).toBe(false);
+    const scroller = tray.closest<HTMLElement>(".overflow-y-auto");
+    expect(scroller).not.toBeNull();
+    // The scroller sits inside the container, never the other way round.
+    expect(scroller).not.toBe(container);
+    expect(container!.contains(scroller)).toBe(true);
+  });
+
   it("closes the tray on a press outside the bar", async () => {
     render(
       <>

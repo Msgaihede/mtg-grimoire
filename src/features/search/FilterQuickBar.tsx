@@ -119,9 +119,14 @@ function Divider(): ReactElement {
  * about the box the bar is actually in. The cost is the usual one: **jsdom applies no container
  * query and loads no stylesheet**, so every test sees every rung's controls at once (both mana
  * groups, the sort, every word) and the rungs are a live-window claim. And a container is the
- * containing block for `fixed` descendants (`src/CLAUDE.md`), which is fine here because nothing
- * this bar opens is `fixed`: the tray hangs `absolute` from it, and `AnchoredPopup` and `Dropdown`
- * both anchor rather than portal.
+ * containing block for `fixed` descendants (`src/CLAUDE.md`), which this bar has to live with
+ * rather than avoid: the tray hangs `absolute` from the group, but the sort `Dropdown` and every
+ * popup inside the tray **do** draw in a `fixed` frame. They land right anyway because
+ * `usePopupPlacement` measures that zero-size frame and subtracts whatever containing block it
+ * landed in, so a container above one moves nothing. What a container must never do is sit on
+ * or inside a *scroller* between a popup and the bar — overflow clips a descendant whose
+ * containing block is inside it — which is why the tray's own `@container/fb` is on the box
+ * around its scroller and never on the scroller (see the tray below). Nothing here portals.
  */
 export function FilterQuickBar<SortKey extends string>({
   search,
@@ -496,29 +501,47 @@ export function FilterQuickBar<SortKey extends string>({
               </button>
 
               {trayOpen && (
-                /* **The page's own `FilterTray`, same cells, hung under the bar.** `absolute
-                   inset-x-0 top-full` against the group, so it is the group's width — the panel's
-                   inline padding already restores `main`'s 20px, which is the spec's inset — and
-                   `mt-4` because the group's foot is the panel's 8px of `py-2` above the panel's
-                   own bottom edge, so 16px from the group is the spec's 8px under the bar — to
-                   within the hairline: the panel's 53px is border-box, its 1px `border-b` is
-                   inside that, and the tray lands 7px under the line itself. Scrolls
-                   inside itself past `100vh − 12rem`, and wears the bar's shadow so it reads as
-                   the bar's extension. Inside the group, so an outside press and Escape both treat
-                   it as part of the bar. */
+                /* **The page's own `FilterTray`, same cells, hung under the bar — in two boxes,
+                   and which box carries what is the whole of this.**
+
+                   The **outer** box is `@container/fb`, because the tray's grid asks that
+                   container for its columns (`@min-[640px]/fb:grid-cols-2`, `@min-[900px]/fb:…`)
+                   and a query naming a container no ancestor is resolves to nothing: without it
+                   the bar's tray drew one column at every width. It is `absolute inset-x-0
+                   top-full` against the group, so it is the group's width — the panel's inline
+                   padding already restores `main`'s 20px, which is the spec's inset — and it
+                   wears the bar's shadow so the tray reads as the bar's extension. `mt-[17px]`
+                   lands it exactly 8px under the bar's outer edge, like every other neighbour of
+                   the bar: the group's foot is the panel's 8px of `py-2` above the panel's
+                   bottom, the panel's 53px is border-box with its 1px `border-b` inside that, so
+                   8 + 1 + 8 is 17 from the group's foot.
+
+                   The **inner** box is the scroller — `overflow-y-auto` past `100vh − 12rem` —
+                   and **the container must never move onto it or inside it.** A container is the
+                   containing block for `fixed` descendants (`src/CLAUDE.md`), and every popup in
+                   the tray (the format and sort `Dropdown`s, the set picker) draws in a `fixed`
+                   frame; that frame lands right because `usePopupPlacement` measures it and
+                   subtracts whatever containing block it landed in, but a containing block
+                   *inside* the scroller would have the scroller clip every one of them. On the
+                   outer box, which has no overflow, the popups escape the scroller.
+
+                   Inside the group, so an outside press and Escape both treat it as part of the
+                   bar. */
                 <div
                   className={cn(
-                    "absolute inset-x-0 top-full mt-4 max-h-[calc(100vh-12rem)] overflow-y-auto rounded-lg",
+                    "@container/fb absolute inset-x-0 top-full mt-[17px] rounded-lg",
                     DOCKED_SHADOW,
                   )}
                 >
-                  <FilterTray
-                    id={trayId}
-                    search={search}
-                    cells={tray}
-                    labels={qbLabels}
-                    formatOptions={formatOptions}
-                  />
+                  <div className="max-h-[calc(100vh-12rem)] overflow-y-auto rounded-lg">
+                    <FilterTray
+                      id={trayId}
+                      search={search}
+                      cells={tray}
+                      labels={qbLabels}
+                      formatOptions={formatOptions}
+                    />
+                  </div>
                 </div>
               )}
             </div>
