@@ -48,8 +48,11 @@ function setDockHeight(dock: HTMLElement, px: number): void {
  * wall is a `min-h-0 flex-1` child, so an unsized dock draws it at nothing; `100%` of the row is
  * the *list's* height, which for a large collection is several thousand pixels; and a viewport
  * unit is wrong by whatever app chrome sits above the scroller. What is wanted is "the scroller's
- * visible height, less however much of the row still sits below its top", and that is arithmetic
- * over two measurements rather than a length.
+ * visible height, less however much of the row still sits below its top, less the scroller's own
+ * bottom padding", and that is arithmetic over measurements rather than a length. The padding is
+ * there because a sticky box is fenced by its containing block, which ends at the scroller's
+ * **content** edge: a dock filled to the scrollport's foot overhangs that fence, and the overhang
+ * becomes page height on a short page and a dock pushed upward at the end of a long one.
  *
  * `sticky` on the dock is the pinning and CSS does all of it. This is only the height.
  *
@@ -167,8 +170,18 @@ export function useDockHeight(
       // bottom 20px past it too, on every page that docks a column in a padded `main`. A scroller
       // with no padding reads `0` here and is sized exactly as before, which is also what every
       // case in the suite reads.
-      const edge = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
-      setDockHeight(dockEl, Math.max(0, visible - Math.max(edge + wired.top, below)));
+      //
+      // **The foot is the same fact at the other end.** A sticky box is fenced by its containing
+      // block, and that block ends at the scroller's content edge — `padding-bottom` above the
+      // scrollport's foot — so a dock filled to the foot overhangs its fence by the padding.
+      // Measured live on 2026-09-29 (debug build, `main`'s `p-5`): on a short page each
+      // scroll-to-end grew the page by 20px (the Tags rail, 20 → 115 over five scrolls), and at
+      // the end of a long one the sticky rule pushed the dock up by 20 (the collection's column
+      // at 41 against the quick bar's 53px foot). So the dock stops at the content edge too.
+      const style = getComputedStyle(scroller);
+      const edge = parseFloat(style.paddingTop) || 0;
+      const foot = parseFloat(style.paddingBottom) || 0;
+      setDockHeight(dockEl, Math.max(0, visible - foot - Math.max(edge + wired.top, below)));
     };
     const schedule = () => {
       if (frame === 0) frame = requestAnimationFrame(size);

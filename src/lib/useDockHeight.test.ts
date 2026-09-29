@@ -193,6 +193,38 @@ describe("useDockHeight", () => {
   });
 
   /**
+   * **The scroller's own `padding-bottom` is a foot the dock may never reach into.** A sticky box
+   * is fenced by its containing block, and that block ends at the scroller's content edge — so a
+   * dock sized to the scrollport's bottom overhangs by the padding. At the end of a long page the
+   * sticky rule then pushes the dock up by that much, and on a short one every scroll-to-end grows
+   * the page by it (measured live on Tags: 20 → 115 over five scrolls, `main`'s `p-5`). A 600px
+   * scrollport with a 20px foot, the row scrolled past, is a 580px dock.
+   */
+  it("keeps the dock off the scroller's bottom padding", () => {
+    const { scroller, row, dock } = tree(600);
+    scroller.style.paddingBottom = "20px";
+    topAt(scroller, 0);
+    topAt(row, -900);
+
+    mount(dock, row);
+
+    expect(dock.style.height).toBe("580px");
+  });
+
+  /** …and the foot comes off a row that still starts down the scrollport as well: 600 less 140
+   *  above it and 20 below it. */
+  it("takes the bottom padding off a dock measured from the row", () => {
+    const { scroller, row, dock } = tree(600);
+    scroller.style.paddingBottom = "20px";
+    topAt(scroller, 0);
+    topAt(row, 140);
+
+    mount(dock, row);
+
+    expect(dock.style.height).toBe("440px");
+  });
+
+  /**
    * **An inset that changes alone is measured in the commit that changed it.** The bar appearing
    * moves the dock with no scroll and no resize to report it, so a hook that waited for either
    * would leave the dock at its old height, reaching past the scrollport's foot by the inset. On

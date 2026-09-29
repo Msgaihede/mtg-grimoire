@@ -2158,8 +2158,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * `sticky` on the dock is the pinning and CSS does all of it — at the page's top edge, or
    * {@link barClearance} below it while the undocked bar is down; the height is the part CSS
    * cannot answer, and {@link useDockHeight} is where the arithmetic for it lives — the
-   * scroller's visible height, less however much of the desk row still sits below its top, and
-   * never less than the bar takes.
+   * scroller's visible height, less however much of the desk row still sits below its top (and
+   * never less than the bar takes), less the scroller's own bottom padding, which a sticky box's
+   * containing block ends above.
    *
    * **It was forty lines here until the collection and the wishlist grew the same column**
    * (2026-09-07), and the whole of what moving it cost is that the scroller is now *found* rather
