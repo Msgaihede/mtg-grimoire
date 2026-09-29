@@ -135,7 +135,11 @@ import { useCallback, useId, useRef, type JSX } from "react";
 import { ChevronRight, Plus, Trash2 } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { CardChin } from "@/components/CardChin";
-import { QuantityStepper } from "@/components/QuantityStepper";
+import {
+  QUANTITY_STEPPER_CARD_BOX,
+  QUANTITY_STEPPER_CARD_ICON,
+  QuantityStepper,
+} from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { atLeast, cardScaleVars } from "@/lib/cardZoom";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
@@ -197,23 +201,23 @@ export function tokenWallDrawn(tokens: DeckTokens, open: boolean): boolean {
 
 /**
  * A tile's icon button — Remove printing, since managed tokens took the eye and the reset away —
- * the same 20px box the `xs` stepper beside it draws, **at the same zoom**.
+ * the same box the `card` stepper beside it draws, **at the same zoom**.
  *
- * `--control-scale` rather than `--mark-scale`, character for character what `QuantityStepper`'s
- * `xs` size writes, so the three controls in the row are one height at every stop rather than
- * three that agree at 100%. The variable is published by the tile's root; everywhere else in the
- * app the `, 1` fallback leaves this box the 20px it has always been.
+ * **`QUANTITY_STEPPER_CARD_BOX` itself rather than a copy of it** (issue #687, which grew the row
+ * from `xs` to `card` so it matches the deck stack's own quantity column): both halves scale on
+ * `--control-scale`, so the three controls in the row are one height at every stop rather than
+ * three that agree at 100%. The variable is published by the tile's root.
  */
 const TILE_BUTTON = cn(
-  "grid shrink-0 place-items-center rounded-md border border-border text-dim",
-  "size-[calc(1.25rem*var(--control-scale,1))]",
+  "grid shrink-0 place-items-center border border-border text-dim",
+  QUANTITY_STEPPER_CARD_BOX,
   "hover:text-text",
   PRESS,
   FOCUS,
 );
 
-/** The glyph inside {@link TILE_BUTTON} — `size-3.5`, read at the same zoom the box is. */
-const TILE_ICON = "size-[calc(0.875rem*var(--control-scale,1))]";
+/** The glyph inside {@link TILE_BUTTON} — the stepper's own, at the same fraction of the box. */
+const TILE_ICON = QUANTITY_STEPPER_CARD_ICON;
 
 /**
  * The wall's gutters at 100% zoom — `gap-x-2.5` and `gap-y-4`, the numbers this band shipped
@@ -695,7 +699,9 @@ function TokenTile({
       <div className="flex items-center gap-[calc(0.25rem*var(--mark-scale,1))]">
         <div className="min-w-0 flex-1">
           <QuantityStepper
-            size="xs"
+            // **`card`, the deck stack's own quantity size** (issue #687): `xs` was a 20px box
+            // under a card the size of a stacked one, where the deck beside it draws 36px.
+            size="card"
             value={view.quantity}
             // **This entry and no other** — `entryRef`'s four facts, so a step on the foil Treasure
             // cannot land on the plain one, and an implicit entry says so and is materialised by

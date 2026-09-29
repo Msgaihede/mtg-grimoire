@@ -126,7 +126,10 @@ export function QuantityStepper({
    * the tile's bottom corner. That report was that the walls matched the deck builder in neither
    * style nor location, and one control on one kind of object is what closes it. The figures
    * below are the deck card's; a wall tile's are at each caller's own site, because what the
-   * ratio is held against differs and the argument for the ratio does not.
+   * ratio is held against differs and the argument for the ratio does not. **A fourth draws it
+   * lying down** — the deck editor's Tokens & Emblems tile since issue #687, which asked for its
+   * steppers to match the deck's own. It sits under the card rather than over it, so it keeps the
+   * panel tone, and its field takes the buttons' height rather than squaring to their width.
    *
    * **It was 24px until 2026-08-15 and 48px until 2026-08-20**, and each move was a correction of
    * the one before. 24 made it the smallest control in the app in the place with the most room
@@ -206,10 +209,15 @@ export function QuantityStepper({
         : size === "sm"
           ? "text-xs"
           : "text-sm";
+  // `card` lying on its side is the Tokens & Emblems tile (issue #687): the field keeps the
+  // buttons' height and radius at every zoom, where the `md` fallback below would be a fixed
+  // 36px box beside two buttons that scale.
   const wide =
     size === "xs"
       ? "h-[calc(1.25rem*var(--control-scale,1))] w-[calc(2rem*var(--control-scale,1))]"
-      : size === "sm"
+      : size === "card"
+        ? "h-[calc(2.25rem*var(--control-scale,1))] w-[calc(3.5rem*var(--control-scale,1))] rounded-lg"
+        : size === "sm"
         ? "h-7 w-12"
         : "h-9 w-14";
   // `fill` trades the fixed width for whatever the row has left. `min-w-0` beside it because a
