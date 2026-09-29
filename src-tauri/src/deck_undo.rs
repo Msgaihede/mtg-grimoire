@@ -585,9 +585,10 @@ pub enum Op {
     /// **It also rides the card writes**, which is the half of it that is not a token command:
     /// [`record_cells`], [`record_variant`] and `deck_meta`'s two hand-built steps (a pile
     /// switched off, a pile deleted) run [`crate::deck_tokens::reconcile_in`] after their write
-    /// and append the entries it removed through [`push_removed_tokens`] — a Treasure nothing
-    /// makes any more — so Ctrl+Z on the cut puts back the card **and** the reader's Treasure
-    /// printings. **The theory switch builds its own pair instead** (`deck::token_step`): it
+    /// and append what it did through [`push_removed_tokens`] — the zero-copy entries of a
+    /// Treasure nothing makes any more, and the state of one it kept as `manual` because the
+    /// reader had copies (issue #671) — so Ctrl+Z on the cut puts back the card **and** the
+    /// reader's Treasure as the deck's own. **The theory switch builds its own pair instead** (`deck::token_step`): it
     /// *moves* the live list's entries into the plan as well as reconciling, so its step carries
     /// the net difference between the deck's entries before and after, in both directions.
     ///
@@ -784,8 +785,11 @@ fn variants_of(cells: &[Cell]) -> Vec<&'static str> {
         .collect()
 }
 
-/// Append the token entries a card write's reconcile removed to both sides of its step:
-/// restored on the undo side, deleted again on the redo side, **after** the card ops on both.
+/// Append what a card write's reconcile did to both sides of its step, **after** the card ops on
+/// both: the entries it removed restored on the undo side and deleted again on the redo side, and
+/// the tokens it kept as `manual` (issue #671) put back to their old state on the undo side and
+/// made `manual` again on the redo side — so one Ctrl+Z on the cut brings the card back **and** its
+/// token back to being one the deck makes, rather than one it keeps by hand.
 ///
 /// Nothing to order against — `deck_token_printings` hangs off `decks` alone — so after is
 /// simply where a reader of the step expects the consequence. An empty list appends nothing, so
@@ -797,22 +801,27 @@ fn variants_of(cells: &[Cell]) -> Vec<&'static str> {
 /// through here: it moves entries as well as removing them, so it records a net difference of
 /// its own (`deck::token_step`).
 pub(crate) fn push_removed_tokens(
-    removed: Vec<TokenEntryRow>,
+    reconciled: crate::deck_tokens::Reconciled,
     undo: &mut Vec<Op>,
     redo: &mut Vec<Op>,
 ) {
-    if removed.is_empty() {
+    if reconciled.is_empty() {
         return;
     }
+    let crate::deck_tokens::Reconciled {
+        removed,
+        states_before,
+        states_after,
+    } = reconciled;
     undo.push(Op::Tokens {
         restore: removed.clone(),
         delete: vec![],
-        states: vec![],
+        states: states_before,
     });
     redo.push(Op::Tokens {
         restore: vec![],
         delete: removed,
-        states: vec![],
+        states: states_after,
     });
 }
 
@@ -3912,14 +3921,21 @@ mod tests {
         drive_cases_on(fresh_with_tokens, token_write_cases());
     }
 
-    /// **The reconcile's deletions ride the cut's own step, and nowhere else.** The case in the
+    /// **The reconcile's changes ride the cut's own step, and nowhere else.** The case in the
     /// sweep above proves the round trip; this pins its shape — one step, whose undo side ends in
-    /// an [`Op::Tokens`] restoring exactly the two entries — so a hook that filed its own step,
-    /// or left the entries off the cut's, is caught by name rather than by a snapshot diff.
+    /// an [`Op::Tokens`] restoring exactly the entry at zero and putting the Treasure's state back
+    /// to no row, and whose redo side deletes that entry and makes the Treasure `manual` again
+    /// (issue #671: the entry with copies is kept) — so a hook that filed its own step, or left
+    /// either off the cut's, is caught by name rather than by a snapshot diff.
     #[test]
     fn a_cut_that_reconciles_tokens_carries_them_on_its_own_step() {
         let (conn, id) = fresh_with_tokens();
         two_treasures(&conn, id);
+        conn.execute(
+            "UPDATE deck_token_printings SET quantity = 0 WHERE card_id = 'treasure-b'",
+            [],
+        )
+        .unwrap();
         let before: i64 = conn
             .query_row("SELECT count(*) FROM deck_undo", [], |r| r.get(0))
             .unwrap();
@@ -3933,24 +3949,39 @@ mod tests {
         let (step, _) = read_step(&conn, next_undo(&conn, id).unwrap().unwrap())
             .unwrap()
             .unwrap();
-        let Some(Op::Tokens { restore, .. }) = step.undo.last() else {
+        let Some(Op::Tokens {
+            restore, states, ..
+        }) = step.undo.last()
+        else {
             panic!(
                 "the undo side must end in the tokens it restores: {:?}",
                 step.undo
             );
         };
-        let mut restored: Vec<(&str, &str, i64)> = restore
+        let restored: Vec<(&str, &str, i64)> = restore
             .iter()
             .map(|r| (r.card_id.as_str(), r.finish.as_str(), r.quantity))
             .collect();
-        restored.sort_unstable();
+        assert_eq!(restored, vec![("treasure-b", "foil", 0)]);
         assert_eq!(
-            restored,
-            vec![("treasure-a", "nonfoil", 1), ("treasure-b", "foil", 1)]
+            states
+                .iter()
+                .map(|s| (s.oracle_id.as_str(), s.state.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![("o-treasure", None)],
+            "and puts the Treasure back to the deck's own"
         );
-        assert!(
-            matches!(step.redo.last(), Some(Op::Tokens { delete, .. }) if delete.len() == 2),
-            "and the redo side deletes them again"
+        let Some(Op::Tokens { delete, states, .. }) = step.redo.last() else {
+            panic!("the redo side must end in the tokens: {:?}", step.redo);
+        };
+        assert_eq!(delete.len(), 1, "the redo side deletes the zero again");
+        assert_eq!(
+            states
+                .iter()
+                .map(|s| (s.oracle_id.as_str(), s.state.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![("o-treasure", Some("manual"))],
+            "and keeps the Treasure with copies as the reader's"
         );
     }
 

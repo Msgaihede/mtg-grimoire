@@ -12669,18 +12669,19 @@ mod tests {
     /// holds a third art, `TREASURE` at 5, which collides with a live entry on the grain.
     ///
     /// The switch leaves exactly the live arts in the plan, the stale art gone. **The stale art
-    /// does not come back on an undo**: a plan with no cards makes no Treasure, so rule 7 owes its
-    /// removal whatever the switch does, and the switch reconciles both lists *before* it reads
-    /// the step's before-image. Undo therefore restores the live arts alone, and redo replaces
-    /// them again.
+    /// comes back on an undo, as the reader's own**: a plan with no cards makes no Treasure, and
+    /// since issue #671 rule 7 keeps a token with copies rather than deleting it — so the switch's
+    /// first reconcile, which runs *before* it reads the step's before-image, turns the plan's five
+    /// Treasures `manual` and leaves them standing, and the undo restores exactly what stood before
+    /// the press: the live arts, and the plan's copies. Redo replaces them again.
     ///
     /// **The reconcile between the undo and the redo is the point of the test.** In the app every
     /// undo goes through `sync::with_write`, whose backstop reconciles both lists the moment the
-    /// undo commits. When the step's before-image still held the stale art, the undo put it back,
-    /// the backstop deleted it again (the plan it sits in is empty), and the redo — which first
-    /// checks that the deck still holds what the undo restored — was refused for ever, with
-    /// nothing on screen saying why. The direct `apply_reversal` calls here bypass `with_write`,
-    /// so the test runs that reconcile by hand.
+    /// undo commits. When the step's before-image held an entry that backstop would delete, the
+    /// undo put it back, the backstop deleted it again, and the redo — which first checks that the
+    /// deck still holds what the undo restored — was refused for ever, with nothing on screen
+    /// saying why. The direct `apply_reversal` calls here bypass `with_write`, so the test runs
+    /// that reconcile by hand, and asserts it had nothing to take.
     #[test]
     fn the_theory_switch_replaces_the_plans_stale_token_entries_and_undo_puts_them_back() {
         let conn = seeded();
@@ -12709,10 +12710,17 @@ mod tests {
         crate::deck_undo::apply_reversal(&conn, deck, cursor, true).unwrap();
         // What `sync::with_write`'s backstop runs the moment an undo commits.
         let swept = crate::deck_tokens::reconcile_in(&conn, deck, &[LIVE, THEORY]).unwrap();
+        let mut before_press = two_treasure_arts(LIVE);
+        before_press.push((
+            THEORY.to_owned(),
+            TREASURE.to_owned(),
+            "nonfoil".to_owned(),
+            5,
+        ));
         assert_eq!(
             token_entries(&conn, deck),
-            two_treasure_arts(LIVE),
-            "undo puts the live arts back beside the card, and the stale art stays gone"
+            before_press,
+            "undo puts the live arts back beside the card, and the plan's copies with them"
         );
 
         let cursor = crate::deck_undo::next_redo(&conn, deck).unwrap().unwrap();

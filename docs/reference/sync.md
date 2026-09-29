@@ -1532,8 +1532,10 @@ rule on purpose:
   walked in local row order, two devices could keep the entry under two names.
   `the_finish_repair_folds_two_wrong_finishes_into_the_lower_uid` went red (`u-b` kept) without it.
 - **Rule 7's token reconcile is captured, deliberately, although every device derives it too.**
-  `deck_tokens::reconcile_in` deletes the entries of a token nothing makes any more, after card
-  writes and as a `sync::with_write` backstop — including after a sync apply. It is captured
+  `deck_tokens::reconcile_in` deletes the zero-copy entries of a token nothing makes any more, and
+  makes one with copies `manual` (#671), after card writes and as a `sync::with_write` backstop —
+  including after a sync apply. The state write converges for the delete's reason: every device
+  that reconciles writes the same word to the same grain. It is captured
   because a **delete** is not a counter: a second copy of it finds nothing and is a no-op, so
   convergence costs one redundant tombstone rather than a doubled sum; and because the deletions
   ride the card write's undo step, and a *captured* restore on this device is only meaningful on

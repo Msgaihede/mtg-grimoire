@@ -13,6 +13,8 @@
 //!                                                     │
 //!                              keep: component == token  OR  target layout == emblem
 //!                                                     │
+//!               cards.raw text ─▶ MARKERS ─▶ helper by name  (The Monarch, The Ring, …)
+//!                                                     │
 //!               group by ORACLE ID ──┬── LEFT JOIN deck_tokens          (the token's state)
 //!                                    └── deck_token_printings, per list (its entries)
 //! ```
@@ -150,6 +152,84 @@ const HELPER_FACE: &str = "Card";
 /// and the Doctor Who Cyberman, whose type line is a creature's rather than [`HELPER_FACE`].
 const FACE_DOWN_WORDS: &str = "face-down";
 
+/// A face a **dungeon** begins with — `Dungeon — Tomb of Annihilation`, and the
+/// `Dungeon — Undercity` face The Initiative already wears. The second helper face beside [`HELPER_FACE`]: a dungeon is
+/// a card a deck that ventures brings to the table, and no dungeon's line is ever exactly `Card`.
+const DUNGEON_FACE: &str = "Dungeon";
+
+/// A **game marker**: a helper card a deck brings to the table because one of its cards' rules
+/// text says so, whatever that card's `all_parts` names — issue #670.
+///
+/// **Why `all_parts` is not enough.** The keep rule is `component == token` or a target laid out
+/// `emblem`, and a helper is neither: The Monarch, Undercity // The Initiative and City's Blessing
+/// are laid out `token` / `double_faced_token` with a `Card` face, and a real card names one as a
+/// `combo_piece` when it names it at all. A helper is not a token by type, so widening the keep
+/// rule to every `combo_piece` helper would also derive Morph for 402 cards and every Plot,
+/// Foretell and Adventure reminder. The mechanics a player tracks *with* a card, as they track a
+/// Treasure, are the ones listed here, and a card's text is what says it plays one.
+struct Marker {
+    /// Lower-case phrases; a maker whose text holds any one of them, on any face, plays the
+    /// mechanic. Matched against [`rules_text`], which folds case and the curly apostrophe.
+    words: &'static [&'static str],
+    /// The helper cards' **whole** names, as `cards.name` holds them — ` // ` and all for a
+    /// two-faced helper. Every name that resolves is kept: venturing brings all three dungeons.
+    /// **A name the corpus does not hold resolves to nothing**, never an error, so a guessed
+    /// spelling costs a missing tile and not a deck that will not open.
+    helpers: &'static [&'static str],
+}
+
+/// Every [`Marker`] the resolver reads a maker's text for, in no order that matters.
+///
+/// The Monarch, Day // Night, City's Blessing and Start Your Engines! // Max Speed are spelled as
+/// the debug corpus and the Storybook corpus hold them, and Undercity // The Initiative is the
+/// `Dungeon — Undercity // Card` row the helper tests take from it. **The Ring's and the three
+/// dungeons' spellings were not measured** — this module was written without corpus access — so
+/// The Ring carries every spelling its reminder card goes by, and a spelling that matches nothing
+/// costs nothing.
+const MARKERS: [Marker; 7] = [
+    Marker {
+        words: &["become the monarch", "becomes the monarch"],
+        helpers: &["The Monarch"],
+    },
+    Marker {
+        words: &["the ring tempts you"],
+        helpers: &[
+            "The Ring",
+            "The Ring Tempts You",
+            "The Ring // The Ring Tempts You",
+        ],
+    },
+    Marker {
+        words: &["the initiative"],
+        helpers: &["Undercity // The Initiative", "The Initiative // Undercity"],
+    },
+    Marker {
+        words: &["venture into the dungeon"],
+        helpers: &[
+            "Lost Mine of Phandelver",
+            "Dungeon of the Mad Mage",
+            "Tomb of Annihilation",
+        ],
+    },
+    Marker {
+        words: &["city's blessing"],
+        helpers: &["City's Blessing"],
+    },
+    Marker {
+        words: &[
+            "daybound",
+            "nightbound",
+            "it becomes day",
+            "it becomes night",
+        ],
+        helpers: &["Day // Night"],
+    },
+    Marker {
+        words: &["start your engines!"],
+        helpers: &["Start Your Engines! // Max Speed"],
+    },
+];
+
 /// The words only the set checklists' text carries (`You can mark this card to represent a
 /// double-faced card in your library`) — the one `Card` helper the reader chose to leave out.
 const CHECKLIST_WORDS: &str = "this card to represent ";
@@ -163,8 +243,10 @@ const CHECKLIST_WORDS: &str = "this card to represent ";
 ///   peer on an older build can still write it and an old undo step can still restore it, and
 ///   every reader treats it as not hidden until the next launch retires it.
 /// * `manual` — the reader's own: a token added by hand, drawn in each list that holds an entry
-///   of it whether or not anything derives it. [`reconcile_in`] never takes a manual token's
-///   entries — no card made it, so no cut can unmake it.
+///   of it whether or not anything derives it — **or one the reader had copies of when the card
+///   that made it was cut**, which [`reconcile_in`] keeps and turns `manual` (issue #671).
+///   [`reconcile_in`] never takes a manual token's entries — no card made it, or the reader kept
+///   it, so no cut can unmake it.
 ///
 /// A constant here as well as a `CHECK` in the table, so the words this module writes are named
 /// rather than respelled. `every_state_word_is_one_the_table_accepts` walks every word in this
@@ -426,7 +508,10 @@ type StoredEntry = (String, String, i64);
 /// Every token one list of one deck derives, with the printing the resolver names for each.
 ///
 /// Five things about the walk, and the fourth — which is a rule that is deliberately *absent* —
-/// is the one to read twice:
+/// is the one to read twice. A sixth sits beside them: **a maker's rules text is read for
+/// [`MARKERS`]** — `you become the monarch`, `the Ring tempts you` — and each marker it names
+/// credits its helper card exactly as an `all_parts` token would be credited, because a helper is
+/// neither a `token` component nor an `emblem` layout and the keep rule never sees one (#670).
 ///
 /// 1. **Active categories only.** `deck_categories.is_active = 0` means *counts toward nothing*,
 ///    which is the whole of what the old `maybe` zone meant — so the Maybeboard makes no tokens.
@@ -484,6 +569,9 @@ fn derive(conn: &Connection, deck_id: i64, variant: &str) -> Result<Derivation, 
     let mut cache: HashMap<String, Option<Printing>> = HashMap::new();
     let mut groups: HashMap<String, Group> = HashMap::new();
     let mut unreadable = false;
+    // One lookup per marker a maker names, however many of the deck's cards name it — and none
+    // for a deck that names none, which is most of them.
+    let mut marker_helpers: HashMap<usize, Vec<Printing>> = HashMap::new();
 
     for maker in &makers {
         let row: Option<(String, Option<Vec<u8>>)> = blobs
@@ -504,8 +592,26 @@ fn derive(conn: &Connection, deck_id: i64, variant: &str) -> Result<Derivation, 
             unreadable = true;
             continue;
         };
-        // No `all_parts` at all is a card that makes nothing — read, and answered. One that is
-        // not an array is a blob this build cannot read.
+        // The markers first, because they are read off the text and not off `all_parts`: a card
+        // with no `all_parts` at all can still make its controller the monarch.
+        let text = rules_text(&value);
+        for (index, marker) in MARKERS.iter().enumerate() {
+            if !marker.words.iter().any(|word| text.contains(word)) {
+                continue;
+            }
+            let helpers = match marker_helpers.entry(index) {
+                std::collections::hash_map::Entry::Occupied(e) => e.into_mut(),
+                std::collections::hash_map::Entry::Vacant(e) => {
+                    e.insert(marker_printings(conn, marker.helpers)?)
+                }
+            };
+            for helper in helpers.iter() {
+                credit(&mut groups, helper, maker, &own_name);
+            }
+        }
+
+        // No `all_parts` at all is a card that makes nothing more — read, and answered. One that
+        // is not an array is a blob this build cannot read.
         let parts = match value.get("all_parts") {
             None => continue,
             Some(parts) => match parts.as_array() {
@@ -551,18 +657,7 @@ fn derive(conn: &Connection, deck_id: i64, variant: &str) -> Result<Derivation, 
             {
                 continue;
             }
-            let group = groups.entry(target.oracle_id.clone()).or_default();
-            group
-                .referenced
-                .entry(target.id.clone())
-                .or_insert_with(|| (target.clone(), 0))
-                .1 += 1;
-            if group.counted.insert(maker.clone()) {
-                group.sources.push(TokenSource {
-                    card_id: maker.clone(),
-                    name: own_name.clone(),
-                });
-            }
+            credit(&mut groups, target, maker, &own_name);
         }
     }
 
@@ -585,6 +680,84 @@ fn derive(conn: &Connection, deck_id: i64, variant: &str) -> Result<Derivation, 
     Ok(Derivation { tokens, unreadable })
 }
 
+/// One reference from `maker` to `target`: a count against that printing, and the maker among the
+/// token's sources once however many times it names it — an `all_parts` entry and a [`Marker`]
+/// naming one token are one source, not two.
+fn credit(groups: &mut HashMap<String, Group>, target: &Printing, maker: &str, own_name: &str) {
+    let group = groups.entry(target.oracle_id.clone()).or_default();
+    group
+        .referenced
+        .entry(target.id.clone())
+        .or_insert_with(|| (target.clone(), 0))
+        .1 += 1;
+    if group.counted.insert(maker.to_owned()) {
+        group.sources.push(TokenSource {
+            card_id: maker.to_owned(),
+            name: own_name.to_owned(),
+        });
+    }
+}
+
+/// A maker's rules text as [`MARKERS`] are matched against it: the card's own `oracle_text` and
+/// every face's, lower-cased, with the curly apostrophe folded to the straight one Scryfall
+/// writes. **Off the blob and not the `oracle_text` column**, because a two-faced card keeps
+/// its text on its faces and the column is NULL for one — a daybound werewolf, most of all.
+fn rules_text(card: &Value) -> String {
+    let mut text = String::new();
+    let faces = card
+        .get("card_faces")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten();
+    for body in std::iter::once(card).chain(faces) {
+        if let Some(t) = body.get("oracle_text").and_then(Value::as_str) {
+            text.push_str(t);
+            text.push('\n');
+        }
+    }
+    text.to_lowercase().replace('\u{2019}', "'")
+}
+
+/// The newest printing of each helper card `names` spells, one per `oracle_id` — what a
+/// [`Marker`] credits. **Paper, a [`TOKEN_LAYOUTS`] row, and outside the
+/// [`OTHER_GAME_SET_TYPES`]**, which is [`is_listed_token`]'s helper arm: a World Championships
+/// deck's copy of a helper is not the art a reader expects, and a name that somehow landed on a
+/// real card would otherwise be filed on the token wall.
+///
+/// `name IN (…)` rides `idx_cards_name`, so the cost is a handful of index probes rather than the
+/// full scan a face-name match would pay. Empty when no name resolves — the corpus has not
+/// downloaded yet, or Scryfall spells it otherwise — never an error for that.
+fn marker_printings(conn: &Connection, names: &[&str]) -> Result<Vec<Printing>, String> {
+    let marks = vec!["?"; names.len()].join(", ");
+    let sql = format!(
+        "SELECT {PRINTING_COLUMNS} FROM cards c
+          WHERE c.name IN ({marks})
+            AND c.is_paper = 1
+            AND c.layout IN ({layouts})
+            AND NOT EXISTS
+                (SELECT 1 FROM sets s
+                  WHERE s.code = c.set_code AND s.set_type IN ({other_games}))
+          ORDER BY c.oracle_id, c.released_at DESC, c.set_code, c.collector_number, c.id",
+        layouts = sql_words(&TOKEN_LAYOUTS),
+        other_games = sql_words(&OTHER_GAME_SET_TYPES),
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(names), printing_from)
+        .map_err(|e| e.to_string())?;
+    let mut seen = HashSet::new();
+    let mut out = Vec::new();
+    for row in rows {
+        // The first of each oracle id is its newest, by the `ORDER BY` — [`tie_break`] in SQL.
+        if let Some(p) = row.map_err(|e| e.to_string())? {
+            if seen.insert(p.oracle_id.clone()) {
+                out.push(p);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Every entry of every token one list of one deck needs, with the token's state joined on —
 /// **one row per stored entry, or one implicit row for a token with none** (spec §4.2 rule 1).
 ///
@@ -600,8 +773,8 @@ fn derive(conn: &Connection, deck_id: i64, variant: &str) -> Result<Derivation, 
 /// holds an entry in this list**. A hand-added token draws its entries and never an implicit one
 /// (the token-improvements spec §3.4), so a Soldier added to the live list is not on the plan's
 /// wall. An `auto` token with entries that the list does not derive — its maker was cut through a
-/// write the reconcile could not reach yet — draws nothing, and [`reconcile_in`] will take its
-/// entries at the next write.
+/// write the reconcile could not reach yet — draws nothing, and [`reconcile_in`] will settle it at
+/// the next write: its entries at zero deleted, and the token kept as `manual` if any has copies.
 ///
 /// Order is `(name, oracle_id)`, derived tokens first and hand-added ones after, and within one
 /// token its entries by `(card_id, finish)`. Which order the wall is actually in is
@@ -651,7 +824,7 @@ pub fn deck_token_rows(
     // **Any state but `auto` says so**: `manual`, and a `hidden` that arrived by sync after the
     // launch retired this device's own — a hand-added token dismissed on an older peer, which must
     // draw like any other until the next launch (Review Focus 1). An `auto` row with entries is a
-    // token whose maker was cut, which the reconcile takes.
+    // token whose maker was cut, which the reconcile settles — zeros deleted, copies kept `manual`.
     // Resolved by `oracle_id`, so a token whose every entry names a printing that has left the
     // corpus still draws — `default_card_id` is answerable without them.
     let mut added: Vec<(&String, Printing)> = Vec::new();
@@ -1102,10 +1275,11 @@ fn line_names_a_token(type_line: Option<&str>) -> bool {
 ///    derive has one, the six two-sided Role tokens and Mechtitan included.
 /// 2. **A game helper** ([`is_game_helper`]) — a card a deck brings to the table during an
 ///    ordinary game: The Monarch, The Initiative, Day // Night, City's Blessing, Energy Reserve,
-///    Radiation, the face-down Manifest and Morph cards. The reader's rule (2026-09-28): keep
-///    those, leave out advertising, checklists, standalone minigames and other games' cards, and
-///    keep anything in doubt — a list with one card too many costs a scroll, one that hides a card
-///    the reader needs costs a card they cannot add.
+///    Radiation, the face-down Manifest and Morph cards — and since issue #670 the dungeons a
+///    venturing deck brings, by a face beginning [`DUNGEON_FACE`]. The reader's rule
+///    (2026-09-28): keep those, leave out advertising, checklists, standalone minigames and other
+///    games' cards, and keep anything in doubt — a list with one card too many costs a scroll, one
+///    that hides a card the reader needs costs a card they cannot add.
 ///
 /// **Why the layout alone is not enough.** Scryfall files every helper under `token` or
 /// `double_faced_token` — measured on the debug corpus (`node:sqlite` over a copy, 2026-09-28),
@@ -1140,8 +1314,9 @@ pub fn is_listed_token(
 }
 
 /// [`is_listed_token`]'s second arm: a [`HELPER_LAYOUTS`] printing outside the
-/// [`OTHER_GAME_SET_TYPES`], which either has a [`HELPER_FACE`] (and is not a checklist,
-/// [`CHECKLIST_WORDS`]) or is a face-down reminder ([`FACE_DOWN_WORDS`]).
+/// [`OTHER_GAME_SET_TYPES`], which has a [`HELPER_FACE`] (and is not a checklist,
+/// [`CHECKLIST_WORDS`]), has a face beginning [`DUNGEON_FACE`], or is a face-down reminder
+/// ([`FACE_DOWN_WORDS`]).
 ///
 /// **Case-sensitive, as the SQL is** — `instr`, not `LIKE` — so
 /// `token_printings_keeps_the_game_helpers_and_leaves_out_other_games` holds the two to one answer.
@@ -1157,8 +1332,10 @@ fn is_game_helper(
         return false;
     }
     let text = oracle_text.unwrap_or("");
-    let helper_face = type_line.is_some_and(|line| line.split(" // ").any(|f| f == HELPER_FACE));
-    (helper_face && !text.contains(CHECKLIST_WORDS)) || text.contains(FACE_DOWN_WORDS)
+    let faces = || type_line.unwrap_or("").split(" // ");
+    let helper_face = faces().any(|f| f == HELPER_FACE);
+    let dungeon = faces().any(|f| f.starts_with(DUNGEON_FACE));
+    (helper_face && !text.contains(CHECKLIST_WORDS)) || dungeon || text.contains(FACE_DOWN_WORDS)
 }
 
 /// [`is_token_printing`] over the row `card_id` names — the one read the two add paths make.
@@ -1974,12 +2151,45 @@ pub fn remove_entry(
 }
 
 // ---------------------------------------------------------------------------------------
-// Rule 7 — a token nothing makes any more is removed
+// Rule 7 — a token nothing makes any more is removed at zero and kept with copies
 // ---------------------------------------------------------------------------------------
 
-/// **Rule 7**: delete every entry, in each of `variants`, of a token that list no longer derives
-/// and whose state is `auto` — and answer the rows it deleted, so the caller's undo step can put
-/// them back.
+/// What one [`reconcile_in`] did, for the caller's undo step: the entries it deleted, and the
+/// tokens it kept as the reader's own — each one's `deck_tokens` state before and after, in the
+/// same order.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct Reconciled {
+    /// The entries at zero it deleted — restored on the undo side, deleted again on the redo side.
+    pub removed: Vec<TokenEntryRow>,
+    /// The kept tokens' states as they stood before the reconcile made them `manual`.
+    pub states_before: Vec<TokenStateRow>,
+    /// The same tokens' states after — `manual`, with whatever legacy columns the row carried.
+    pub states_after: Vec<TokenStateRow>,
+}
+
+impl Reconciled {
+    /// Whether the reconcile changed nothing — no entry deleted, no token kept.
+    pub fn is_empty(&self) -> bool {
+        self.removed.is_empty() && self.states_before.is_empty()
+    }
+}
+
+/// **Rule 7**: settle every entry, in each of `variants`, of a token that list no longer derives
+/// and whose state is `auto` — and answer what it changed, so the caller's undo step can put it
+/// back.
+///
+/// **An entry at zero is deleted; a token with copies is kept and becomes `manual`**
+/// ([issue #671](https://github.com/Msgaihede/mtg-grimoire/issues/671)). Until then every entry
+/// went, which lost the one fact a reader needs after cutting a card: that the physical deck still
+/// has three Treasures in it that should come out. Kept, the token is drawn by
+/// [`deck_token_rows`]' hand-added tail with `derived: false` — the red outline and the
+/// `NOT MADE BY DECK` badge a token added by hand wears — until the reader removes it or steps it
+/// down. **`manual` rather than a new rule for `auto`**, because the state is what every build
+/// reads: a peer still on an older build leaves a `manual` token alone, where an `auto` one with
+/// entries and no maker is exactly what its own reconcile deletes and pushes to the group. The
+/// flip is written only when the reconcile keeps something, after every list has been walked, so a
+/// token kept in one list still has its zero entries in another list that does not make it
+/// deleted by the same pass.
 ///
 /// **A reconcile after every write that changes a list's cards, never a rule applied at read
 /// time** — reading around a stale entry would leave it in the table (and, in PR 3's Collection
@@ -1999,12 +2209,15 @@ pub fn remove_entry(
 /// as much the reader's. It said the opposite until then — *a dismissal is still a token the deck
 /// makes, and once it does not, it has nothing left to be dismissed from* — which was true while a
 /// dismissal was hidden, and took the entries of a token the wall was drawing, captured, and from
-/// the backstop on no undo step. Cutting a card and adding it back brings an `auto` token back as
-/// its implicit entry, which is what a reader who never picked a printing had anyway.
+/// the backstop on no undo step. Cutting a card and adding it back brings an `auto` token the
+/// reader never used back as its implicit entry, which is what they had anyway; one they had
+/// copies of was kept as `manual`, and the card coming back makes it `derived` again — the outline
+/// goes, the copies stay, and the state stays `manual` (Ctrl+Z on the cut is what puts `auto`
+/// back, through the step's states).
 ///
 /// **Three things keep it cheap and one keeps it safe.** The common case — a list with no
 /// entries of an `auto` token at all — is one indexed read and no derivation. A list is only derived
-/// when there is something it could delete. The deletes are ordinary captured writes: every
+/// when there is something it could settle. The deletes are ordinary captured writes: every
 /// device derives the same answer, a delete that finds nothing is a no-op there, and a captured
 /// delete keeps an undo's captured restore meaningful on the other device. **And a list whose
 /// makers cannot all be read deletes nothing** ([`Derivation::unreadable`]) — it cannot prove a
@@ -2014,8 +2227,10 @@ pub fn reconcile_in(
     tx: &Connection,
     deck_id: i64,
     variants: &[&str],
-) -> Result<Vec<TokenEntryRow>, String> {
-    let mut removed = Vec::new();
+) -> Result<Reconciled, String> {
+    let mut out = Reconciled::default();
+    // A `BTreeSet` so the states ride the step in one order on every device.
+    let mut kept: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     for variant in variants {
         let variant = crate::deck_meta::valid_variant(variant)?;
         let candidates: Vec<TokenEntryRow> = {
@@ -2045,13 +2260,23 @@ pub fn reconcile_in(
             continue;
         }
         for row in candidates {
-            if !derivation.tokens.contains_key(&row.oracle_id) {
-                drop_entry(tx, deck_id, &row)?;
-                removed.push(row);
+            if derivation.tokens.contains_key(&row.oracle_id) {
+                continue;
             }
+            if row.quantity > 0 {
+                kept.insert(row.oracle_id.clone());
+                continue;
+            }
+            drop_entry(tx, deck_id, &row)?;
+            out.removed.push(row);
         }
     }
-    Ok(removed)
+    for oracle_id in kept {
+        out.states_before.push(state_of(tx, deck_id, &oracle_id)?);
+        write_state(tx, deck_id, &oracle_id, MANUAL_STATE)?;
+        out.states_after.push(state_of(tx, deck_id, &oracle_id)?);
+    }
+    Ok(out)
 }
 
 /// **The backstop**: [`reconcile_in`] over both lists of every deck a write since the last settle
@@ -2880,6 +3105,7 @@ pub fn list_token_printings(
                      AND ((instr(' // ' || COALESCE(c.type_line, '') || ' // ',
                                  ' // {helper_face} // ') > 0
                            AND instr(COALESCE(c.oracle_text, ''), '{checklist}') = 0)
+                          OR instr(' // ' || COALESCE(c.type_line, ''), ' // {dungeon}') > 0
                           OR instr(COALESCE(c.oracle_text, ''), '{face_down}') > 0)))
           ORDER BY c.name, c.oracle_id, c.released_at DESC, c.set_code, c.collector_number, c.id",
         printing = crate::card::printing_columns(market),
@@ -2888,6 +3114,7 @@ pub fn list_token_printings(
         helpers = sql_words(&HELPER_LAYOUTS),
         other_games = sql_words(&OTHER_GAME_SET_TYPES),
         helper_face = HELPER_FACE,
+        dungeon = DUNGEON_FACE,
         checklist = CHECKLIST_WORDS,
         face_down = FACE_DOWN_WORDS,
     );
@@ -3141,6 +3368,10 @@ mod tests {
                 })
                 .collect();
             let mut body = json!({ "id": self.id, "name": self.name });
+            // The text a marker is read off (#670), where the blob carries it.
+            if !self.oracle_text.is_empty() {
+                body["oracle_text"] = json!(self.oracle_text);
+            }
             if !self.parts.is_empty() {
                 body["all_parts"] = json!(parts);
             }
@@ -3556,6 +3787,205 @@ mod tests {
             "nothing stored is the implicit entry — the default printing in its default finish, \
              at zero, `auto` — never a null"
         );
+    }
+
+    // ── Game markers (#670) ───────────────────────────────────────────────────────────
+
+    /// `Palace Jailer` — a monarch maker whose `all_parts` names no helper at all.
+    fn palace_jailer() -> Card<'static> {
+        Card {
+            id: "c-jailer",
+            oracle_id: "o-jailer",
+            name: "Palace Jailer",
+            type_line: "Creature — Human Soldier",
+            colors: "W",
+            oracle_text: "When Palace Jailer enters, you become the monarch.\nWhen Palace Jailer \
+                          enters, exile target creature an opponent controls until an opponent \
+                          becomes the monarch.",
+            ..Card::default()
+        }
+    }
+
+    /// The Monarch in a token set — the helper a monarch maker credits.
+    fn the_monarch() -> Card<'static> {
+        Card {
+            id: "c-monarch",
+            oracle_id: "o-monarch",
+            name: "The Monarch",
+            type_line: "Card",
+            layout: "token",
+            oracle_text: "At the beginning of your end step, draw a card.\nWhenever a creature \
+                          deals combat damage to you, its controller becomes the monarch.",
+            set_code: "tcn2",
+            released_at: "2018-08-09",
+            ..Card::default()
+        }
+    }
+
+    fn sources_of(row: &DeckTokenRow) -> Vec<&str> {
+        row.sources.iter().map(|s| s.name.as_str()).collect()
+    }
+
+    /// **A card that makes its controller the monarch derives The Monarch** — out of its text,
+    /// with nothing in `all_parts`, and in the token-set printing rather than a newer one from a
+    /// World Championships deck, which [`marker_printings`] leaves out as All tokens does.
+    #[test]
+    fn a_monarch_maker_derives_the_monarch() {
+        let conn = open();
+        conn.execute(
+            "INSERT INTO sets (code, name, set_type) VALUES ('wc99', 'wc99', 'memorabilia')",
+            [],
+        )
+        .unwrap();
+        palace_jailer().insert(&conn);
+        the_monarch().insert(&conn);
+        Card {
+            id: "c-monarch-wc",
+            set_code: "wc99",
+            released_at: "2024-01-01",
+            ..the_monarch()
+        }
+        .insert(&conn);
+        let (deck, main, _) = deck_with_piles(&conn);
+        play(&conn, deck, main, &palace_jailer(), "live");
+
+        let out = rows(&conn, deck);
+        assert_eq!(names(&out), vec!["The Monarch"]);
+        assert_eq!(
+            out[0].default_card_id, "c-monarch",
+            "never another game's copy"
+        );
+        assert_eq!(out[0].oracle_id, "o-monarch");
+        assert!(out[0].derived, "made by the deck, not added by hand");
+        assert_eq!(sources_of(&out[0]), vec!["Palace Jailer"]);
+    }
+
+    /// **The text is read off every face** — the column is NULL for a two-faced card, so a
+    /// tempt on the back face must still be found, and a curly apostrophe must still match.
+    #[test]
+    fn a_marker_on_a_back_face_is_found() {
+        let conn = open();
+        let maker = Card {
+            id: "c-dfc-maker",
+            oracle_id: "o-dfc-maker",
+            name: "Front // Back",
+            layout: "transform",
+            ..Card::default()
+        };
+        let blob = json!({
+            "id": maker.id,
+            "name": maker.name,
+            "card_faces": [
+                { "name": "Front", "oracle_text": "Ascend (you get the city\u{2019}s blessing)" },
+                { "name": "Back", "oracle_text": "Whenever this attacks, the Ring tempts you." },
+            ],
+        });
+        maker.insert_raw(&conn, &crate::card_row::gzip_raw(&blob.to_string()));
+        for (id, name, set_code) in [
+            ("c-ring", "The Ring", "tltr"),
+            ("c-blessing", "City's Blessing", "trix"),
+        ] {
+            Card {
+                id,
+                oracle_id: id,
+                name,
+                type_line: "Card",
+                layout: "token",
+                set_code,
+                ..Card::default()
+            }
+            .insert(&conn);
+        }
+        let (deck, main, _) = deck_with_piles(&conn);
+        play(&conn, deck, main, &maker, "live");
+
+        assert_eq!(
+            names(&rows(&conn, deck)),
+            vec!["City's Blessing", "The Ring"]
+        );
+    }
+
+    /// **Venturing brings every dungeon the corpus holds**, one tile each, and a dungeon it does
+    /// not hold is simply absent — never an error, never a hole.
+    #[test]
+    fn venturing_brings_every_dungeon_in_the_corpus() {
+        let conn = open();
+        let maker = Card {
+            id: "c-venturer",
+            oracle_id: "o-venturer",
+            name: "Dungeon Crawler",
+            oracle_text: "When this enters, venture into the dungeon.",
+            ..Card::default()
+        };
+        maker.insert(&conn);
+        for (id, name) in [
+            ("c-lost-mine", "Lost Mine of Phandelver"),
+            ("c-tomb", "Tomb of Annihilation"),
+        ] {
+            Card {
+                id,
+                oracle_id: id,
+                name,
+                type_line: "Dungeon",
+                layout: "token",
+                set_code: "tafr",
+                ..Card::default()
+            }
+            .insert(&conn);
+        }
+        let (deck, main, _) = deck_with_piles(&conn);
+        play(&conn, deck, main, &maker, "live");
+
+        let out = rows(&conn, deck);
+        assert_eq!(
+            names(&out),
+            vec!["Lost Mine of Phandelver", "Tomb of Annihilation"]
+        );
+        assert!(out.iter().all(|r| sources_of(r) == vec!["Dungeon Crawler"]));
+    }
+
+    /// **One maker naming a helper twice is one source** — once in `all_parts` and once in its
+    /// text — and a helper the corpus does not hold derives nothing at all.
+    #[test]
+    fn a_marker_named_twice_is_one_source_and_an_absent_helper_is_nothing() {
+        let conn = open();
+        let both = Card {
+            id: "c-both",
+            oracle_id: "o-both",
+            name: "Both Ways",
+            oracle_text: "When this enters, you become the monarch.",
+            parts: &[("c-monarch", "token", "The Monarch")],
+            ..Card::default()
+        };
+        both.insert(&conn);
+        let (deck, main, _) = deck_with_piles(&conn);
+        play(&conn, deck, main, &both, "live");
+        assert!(
+            rows(&conn, deck).is_empty(),
+            "no Monarch in the corpus: nothing, and no Err"
+        );
+
+        the_monarch().insert(&conn);
+        let out = rows(&conn, deck);
+        assert_eq!(names(&out), vec!["The Monarch"]);
+        assert_eq!(
+            sources_of(&out[0]),
+            vec!["Both Ways"],
+            "one source, not two"
+        );
+    }
+
+    /// **A marker is read only off the deck's active piles**, like every token: the Maybeboard
+    /// counts toward nothing, and makes its controller the monarch no more than it makes a
+    /// Treasure.
+    #[test]
+    fn a_marker_on_the_maybeboard_derives_nothing() {
+        let conn = open();
+        palace_jailer().insert(&conn);
+        the_monarch().insert(&conn);
+        let (deck, _, maybe) = deck_with_piles(&conn);
+        play(&conn, deck, maybe, &palace_jailer(), "live");
+        assert!(rows(&conn, deck).is_empty());
     }
 
     // ── The chin and the price ────────────────────────────────────────────────────────
@@ -4177,6 +4607,54 @@ mod tests {
             params![deck, oracle, quantity, state],
         )
         .unwrap();
+    }
+
+    /// One token's `deck_tokens.state`, or `None` for no row.
+    fn state_word(conn: &Connection, deck: i64, oracle: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT state FROM deck_tokens WHERE deck_id = ?1 AND oracle_id = ?2",
+            params![deck, oracle],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    /// The fixture every rule-7 hook test seeds: two live Treasure entries, **one with copies and
+    /// one at zero** — the two halves of issue #671.
+    fn seed_used_and_zero_treasure(conn: &Connection, deck: i64) {
+        seed_entry(conn, deck, "live", &treasure(), "nonfoil", 2);
+        seed_entry(conn, deck, "live", &treasure_older(), "foil", 0);
+    }
+
+    /// What a hook test asserts once the maker has gone: the Treasure at zero is deleted, the one
+    /// with copies is kept, and the token is `manual` — drawn as not made by the deck.
+    fn assert_kept_as_manual(conn: &Connection, deck: i64, context: &str) {
+        assert_eq!(
+            entries(conn, deck),
+            vec![e("live", treasure().oracle_id, treasure().id, "nonfoil", 2)],
+            "the entry at zero goes and the one with copies stays — {context}"
+        );
+        assert_eq!(
+            state_word(conn, deck, treasure().oracle_id).as_deref(),
+            Some(MANUAL_STATE),
+            "and the Treasure is the reader's now — {context}"
+        );
+    }
+
+    /// What a hook test asserts after one Ctrl+Z on the cut: both entries back, and the Treasure
+    /// the deck's own again — no `deck_tokens` row.
+    fn assert_restored_as_auto(conn: &Connection, deck: i64, context: &str) {
+        assert_eq!(
+            entries(conn, deck).len(),
+            2,
+            "one Ctrl+Z brings both entries back — {context}"
+        );
+        assert_eq!(
+            state_word(conn, deck, treasure().oracle_id),
+            None,
+            "and the Treasure back to `auto` — {context}"
+        );
     }
 
     /// The Treasure's second printing — an older one, priced, with a foil — which is what a
@@ -5667,8 +6145,8 @@ mod tests {
         let conn = open();
         let (deck, _, _) = tithe_deck(&conn);
         soldier().insert(&conn);
-        seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 2);
-        seed_entry(&conn, deck, "live", &treasure_older(), "foil", 1);
+        seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 0);
+        seed_entry(&conn, deck, "live", &treasure_older(), "foil", 0);
         seed_entry(&conn, deck, "live", &soldier(), "nonfoil", 3);
         seed_state(&conn, deck, soldier().oracle_id, None, "manual");
 
@@ -5679,22 +6157,116 @@ mod tests {
 
         conn.execute("DELETE FROM deck_cards WHERE deck_id = ?1", params![deck])
             .unwrap();
-        let removed = reconcile_in(&conn, deck, &["live"]).unwrap();
+        let done = reconcile_in(&conn, deck, &["live"]).unwrap();
         assert_eq!(
-            removed
+            done.removed
                 .iter()
                 .map(|r| (r.card_id.as_str(), r.finish.as_str(), r.quantity))
                 .collect::<Vec<_>>(),
             vec![
-                (treasure_older().id, "foil", 1),
-                (treasure().id, "nonfoil", 2)
+                (treasure_older().id, "foil", 0),
+                (treasure().id, "nonfoil", 0)
             ],
             "the rows it removed, for the caller's step"
+        );
+        assert!(
+            done.states_before.is_empty(),
+            "a token held at nothing is not one the reader is using, so nothing is kept"
         );
         assert_eq!(
             entries(&conn, deck),
             vec![e("live", soldier().oracle_id, soldier().id, "nonfoil", 3)],
             "the manual token stays — no card made it, so no cut can unmake it"
+        );
+    }
+
+    /// **Issue #671: a token the reader has copies of outlives the card that made it.** Cutting
+    /// the maker deletes the Treasure's entry at zero and keeps the one with copies, and the token
+    /// becomes `manual` — so the wall draws it as not made by the deck (`derived: false`, the red
+    /// outline), and the reader can see what to take out of the physical deck. The states ride the
+    /// answer for the caller's step.
+    #[test]
+    fn a_reconcile_keeps_a_token_with_copies_as_the_readers_own() {
+        let conn = open();
+        let (deck, main, _) = tithe_deck(&conn);
+        seed_used_and_zero_treasure(&conn, deck);
+
+        conn.execute("DELETE FROM deck_cards WHERE deck_id = ?1", params![deck])
+            .unwrap();
+        let done = reconcile_in(&conn, deck, &["live"]).unwrap();
+        assert_eq!(
+            done.removed,
+            vec![TokenEntryRow {
+                variant: "live".to_owned(),
+                oracle_id: treasure().oracle_id.to_owned(),
+                card_id: treasure_older().id.to_owned(),
+                finish: "foil".to_owned(),
+                quantity: 0,
+            }],
+            "only the entry at zero goes"
+        );
+        assert_eq!(
+            done.states_before
+                .iter()
+                .map(|s| (s.oracle_id.as_str(), s.state.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![(treasure().oracle_id, None)],
+            "the Treasure was the deck's"
+        );
+        assert_eq!(
+            done.states_after
+                .iter()
+                .map(|s| (s.oracle_id.as_str(), s.state.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![(treasure().oracle_id, Some(MANUAL_STATE))],
+            "and is the reader's now"
+        );
+        assert_kept_as_manual(&conn, deck, "reconcile_in");
+
+        let drawn = rows(&conn, deck);
+        assert_eq!(drawn.len(), 1, "one tile, the entry with copies");
+        assert!(!drawn[0].derived, "drawn as not made by the deck");
+        assert!(drawn[0].sources.is_empty());
+        assert_eq!(
+            (drawn[0].card_id.as_str(), drawn[0].quantity),
+            (treasure().id, 2)
+        );
+
+        assert!(
+            reconcile_in(&conn, deck, &["live"]).unwrap().is_empty(),
+            "and a later reconcile leaves the reader's token alone"
+        );
+
+        play(&conn, deck, main, &tithe(), "live");
+        let drawn = rows(&conn, deck);
+        assert!(
+            drawn.iter().all(|r| r.derived),
+            "the maker back makes it the deck's again, outline gone"
+        );
+        assert_eq!(drawn[0].quantity, 2, "with the reader's copies");
+    }
+
+    /// **The zero entries of a kept token go in every list the pass walks** — the state flip
+    /// waits until every list is settled, so a Treasure kept in the live list does not shield its
+    /// zero entry in a plan that makes it no more either.
+    #[test]
+    fn a_kept_token_still_loses_its_zero_entries_in_the_other_list() {
+        let conn = open();
+        let (deck, _, _) = tithe_deck(&conn);
+        seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 2);
+        seed_entry(&conn, deck, "theory", &treasure(), "nonfoil", 0);
+
+        conn.execute("DELETE FROM deck_cards WHERE deck_id = ?1", params![deck])
+            .unwrap();
+        let done = reconcile_in(&conn, deck, &["live", "theory"]).unwrap();
+        assert_eq!(done.removed.len(), 1);
+        assert_eq!(
+            entries(&conn, deck),
+            vec![e("live", treasure().oracle_id, treasure().id, "nonfoil", 2)]
+        );
+        assert_eq!(
+            state_word(&conn, deck, treasure().oracle_id).as_deref(),
+            Some(MANUAL_STATE)
         );
     }
 
@@ -5720,8 +6292,16 @@ mod tests {
 
         assert_eq!(
             entries(&conn, deck),
-            vec![e("live", soldier().oracle_id, soldier().id, "nonfoil", 3)],
-            "the Treasure the Tithe made is gone; the dismissed Soldier nothing makes is not"
+            vec![
+                e("live", treasure().oracle_id, treasure().id, "nonfoil", 2),
+                e("live", soldier().oracle_id, soldier().id, "nonfoil", 3)
+            ],
+            "the Treasure the Tithe made is kept by hand (issue #671); the dismissed Soldier nothing makes is untouched"
+        );
+        assert_eq!(
+            state_word(&conn, deck, soldier().oracle_id).as_deref(),
+            Some(HIDDEN_STATE),
+            "the dismissal is not rewritten — that is `retire_hidden`'s, at the next launch"
         );
         assert!(
             reconcile_in(&conn, deck, &["live"]).unwrap().is_empty(),
@@ -5758,45 +6338,49 @@ mod tests {
         let conn = open();
         let (deck, _, _) = tithe_deck(&conn);
         seed_entry(&conn, deck, "theory", &treasure(), "nonfoil", 2);
-        assert_eq!(
-            reconcile_in(&conn, deck, &["live"]).unwrap(),
-            vec![],
+        assert!(
+            reconcile_in(&conn, deck, &["live"]).unwrap().is_empty(),
             "the live list makes the Treasure"
         );
         assert_eq!(
-            reconcile_in(&conn, deck, &["theory"]).unwrap().len(),
+            reconcile_in(&conn, deck, &["theory"])
+                .unwrap()
+                .states_after
+                .len(),
             1,
-            "the theory list makes nothing"
+            "the theory list makes nothing, so its Treasure with copies is kept by hand"
         );
     }
 
     /// **The in-transaction hook, through the card write that files a step** — cutting the
-    /// maker through `set_card_quantity(.., 0)` takes both Treasure entries, and the history
-    /// holds no second row for it: they ride the cut's own step (Review Focus 2's first half;
-    /// `deck_undo`'s sweep undoes it).
+    /// maker through `set_card_quantity(.., 0)` takes the Treasure's entry at zero and keeps the
+    /// one with copies as `manual` (issue #671), and the history holds no second row for it: both
+    /// ride the cut's own step (Review Focus 2's first half; `deck_undo`'s sweep undoes it).
     #[test]
-    fn cutting_the_maker_removes_its_tokens_entries_inside_the_cut() {
+    fn cutting_the_maker_settles_its_tokens_entries_inside_the_cut() {
         let conn = open();
         let (deck, main, _) = tithe_deck(&conn);
-        seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 2);
-        seed_entry(&conn, deck, "live", &treasure_older(), "foil", 1);
+        seed_used_and_zero_treasure(&conn, deck);
 
         crate::deck::set_card_quantity(&conn, deck, tithe().id, main, "live", None, 0).unwrap();
-        assert!(entries(&conn, deck).is_empty());
+        assert_kept_as_manual(&conn, deck, "the cut");
 
         let audit = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
         crate::deck_undo::apply_reversal(&conn, deck, audit, true).unwrap();
-        assert_eq!(
-            entries(&conn, deck).len(),
-            2,
-            "Ctrl+Z brings both entries back"
+        assert_restored_as_auto(&conn, deck, "the cut");
+        assert!(
+            rows(&conn, deck).iter().all(|r| r.derived),
+            "with the card that makes them"
         );
-        assert_eq!(rows(&conn, deck).len(), 2, "with the card that makes them");
+
+        let redo = crate::deck_undo::next_redo(&conn, deck).unwrap().unwrap();
+        crate::deck_undo::apply_reversal(&conn, deck, redo, false).unwrap();
+        assert_kept_as_manual(&conn, deck, "the redo");
     }
 
     /// **The whole-list hook** — `deck_undo::record_variant`'s: an import that replaces the list
-    /// with one that no longer plays the maker takes the Treasure's entries in the import's own
-    /// transaction, and the import's one Ctrl+Z brings them back with the list.
+    /// with one that no longer plays the maker settles the Treasure in the import's own
+    /// transaction, and the import's one Ctrl+Z brings it back with the list.
     #[test]
     fn an_import_replacing_the_maker_removes_the_entries_and_undo_restores_them() {
         let conn = open();
@@ -5805,8 +6389,7 @@ mod tests {
         // list it cannot read deletes nothing.
         krenko().insert(&conn);
         goblin().insert(&conn);
-        seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 2);
-        seed_entry(&conn, deck, "live", &treasure_older(), "foil", 1);
+        seed_used_and_zero_treasure(&conn, deck);
 
         crate::import::commit_import(
             &conn,
@@ -5824,14 +6407,11 @@ mod tests {
             }],
         )
         .unwrap();
-        assert!(
-            entries(&conn, deck).is_empty(),
-            "the Tithe is gone, so its Treasure is"
-        );
+        assert_kept_as_manual(&conn, deck, "the import");
 
         let audit = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
         crate::deck_undo::apply_reversal(&conn, deck, audit, true).unwrap();
-        assert_eq!(entries(&conn, deck).len(), 2, "one Ctrl+Z brings both back");
+        assert_restored_as_auto(&conn, deck, "the import");
     }
 
     /// The same through the two hand-built steps in `deck_meta`: switching the maker's pile off,
@@ -5846,25 +6426,25 @@ mod tests {
                 params![main],
             )
             .unwrap();
-            seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 2);
-            seed_entry(&conn, deck, "live", &treasure_older(), "foil", 1);
+            seed_used_and_zero_treasure(&conn, deck);
 
             if delete {
                 crate::deck_meta::delete_category(&conn, main, None).unwrap();
             } else {
                 crate::deck_meta::set_category_active(&conn, main, false).unwrap();
             }
-            assert!(entries(&conn, deck).is_empty(), "delete: {delete}");
+            assert_kept_as_manual(&conn, deck, &format!("delete: {delete}"));
 
             let audit = crate::deck_undo::next_undo(&conn, deck).unwrap().unwrap();
             crate::deck_undo::apply_reversal(&conn, deck, audit, true).unwrap();
-            assert_eq!(entries(&conn, deck).len(), 2, "delete: {delete}");
+            assert_restored_as_auto(&conn, deck, &format!("delete: {delete}"));
         }
     }
 
     /// **The backstop**: a cut through `collection_alloc::deck_to_collection` files no undo step,
     /// so its transaction has nowhere to put a reconcile — and after `sync::with_write` returns
-    /// the Treasure entries are gone anyway, taken by the reconcile that rides every write.
+    /// the Treasure is settled anyway by the reconcile that rides every write: its entry at zero
+    /// gone, and the one with copies kept as `manual`.
     #[test]
     fn the_backstop_reconciles_a_cut_that_files_no_step() {
         let state = crate::index::fixtures::state_with_seeded_cards("deck-tokens-backstop");
@@ -5896,8 +6476,7 @@ mod tests {
             )
             .unwrap()
             .id;
-            seed_entry(&conn, deck, "live", &treasure(), "nonfoil", 2);
-            seed_entry(&conn, deck, "live", &treasure_older(), "foil", 1);
+            seed_used_and_zero_treasure(&conn, deck);
             (deck, landed)
         };
 
@@ -5907,10 +6486,7 @@ mod tests {
         .unwrap();
 
         let conn = crate::db::lock_blocking(&state.db);
-        assert!(
-            entries(&conn, deck).is_empty(),
-            "the Treasure nothing makes any more is gone once the write returns"
-        );
+        assert_kept_as_manual(&conn, deck, "the backstop");
     }
 
     // ── The launch repair ────────────────────────────────────────────────────────────
@@ -7586,6 +8162,16 @@ mod tests {
             set_code: "tc18",
             ..Card::default()
         };
+        // A dungeon's line is never `Card`, and is a helper by its `Dungeon` face (#670).
+        let tomb = Card {
+            id: "c-tomb",
+            oracle_id: "o-tomb",
+            name: "Tomb of Annihilation",
+            type_line: "Dungeon — Tomb of Annihilation",
+            layout: "token",
+            set_code: "tafr",
+            ..Card::default()
+        };
         let dfc = Card {
             id: "c-dfc-token",
             oracle_id: "o-dfc-token",
@@ -7603,6 +8189,7 @@ mod tests {
             monarch.clone(),
             day_night.clone(),
             manifest.clone(),
+            tomb.clone(),
             dfc.clone(),
             treasure(),
             elspeth_emblem(),
@@ -7623,6 +8210,7 @@ mod tests {
                 "Manifest",
                 "Mechtitan // Mechtitan",
                 "The Monarch",
+                "Tomb of Annihilation",
                 "Treasure",
             ],
             "the helpers in, and the ad, the Minotaur, the minigame, the checklist and the boss out"
