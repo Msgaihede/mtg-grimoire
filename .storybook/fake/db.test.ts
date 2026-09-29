@@ -42,6 +42,7 @@ import type {
   FakeDeckAudit,
   FakeDeckCard,
   FakeDeckCategory,
+  FakeDeckTodoList,
   FakeEntry,
   FakePriceSnapshot,
   FakeWish,
@@ -195,6 +196,20 @@ function deck(over: Partial<FakeDeck> = {}): FakeDeck {
     lastGroupBy: "category",
     lastSortBy: "alphabetical",
     archived: false,
+    updatedAt: WHEN,
+    ...over,
+  };
+}
+
+/** One `deck_todo_lists` row (user schema v59), stamped {@link WHEN} like {@link deck}. */
+function todoList(over: Partial<FakeDeckTodoList> = {}): FakeDeckTodoList {
+  return {
+    id: 1,
+    deckId: 1,
+    title: "To-do",
+    body: "- [ ] a",
+    sortOrder: 0,
+    createdAt: WHEN,
     updatedAt: WHEN,
     ...over,
   };
@@ -9773,173 +9788,337 @@ describe("the deck row itself", () => {
   /**
    * `decks.todos_open` (user schema v58): `notesOpen`'s twin one band down — shut by default, a
    * seed that never says and a deck made here alike — riding `deck_update` with
-   * `coalesce(?n, column)`. **And the list itself is on no `DeckRow`**: every deck list fetches
-   * rows, and a body travels only through `deck_todos` and `deck_todo_lists`.
+   * `coalesce(?n, column)`. **And no list is on any `DeckRow`**: since user schema v59 a deck's
+   * lists are rows of `deck_todo_lists`, which travel only through their own two reads.
    */
   it("opens a deck with its To-do band shut, and carries no list on the row", () => {
-    const db = makeDeckDb({ decks: [deck({ id: 1, todos: "- [ ] Revise tokens" })] });
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckTodoLists: [todoList({ id: 1, deckId: 1, body: "- [ ] Revise tokens" })],
+    });
     const listed = readHandlers(db).deck_list()[0];
     expect(listed).toMatchObject({ todosOpen: false });
     expect(listed).not.toHaveProperty("todos");
     const born = writeHandlers(db).deck_create({ deck: { name: "Burn", formatKey: "modern" } });
     expect(born).toMatchObject({ todosOpen: false });
-    expect(readHandlers(db).deck_todos({ deckId: born.id })).toBe("");
+    expect(readHandlers(db).deck_todo_lists({ deckId: born.id })).toEqual([]);
     const opened = writeHandlers(db).deck_update({ id: 1, patch: { todosOpen: true } });
     expect(opened).toMatchObject({ todosOpen: true, notesOpen: false });
     const left = writeHandlers(db).deck_update({ id: 1, patch: { notesOpen: true } });
     expect(left).toMatchObject({ todosOpen: true });
-    // A disclosure is not the list: opening the band wrote nothing into it.
-    expect(readHandlers(db).deck_todos({ deckId: 1 })).toBe("- [ ] Revise tokens");
+    // A disclosure is not a list: opening the band wrote nothing into one.
+    expect(readHandlers(db).deck_todo_lists({ deckId: 1 }).map((l) => l.body)).toEqual([
+      "- [ ] Revise tokens",
+    ]);
   });
 
   /**
-   * **The deck to-do list's three commands** (user schema v58, issue #672) — `deck_todos`,
-   * `deck_todos_set` and `deck_todo_lists`, `deck_todos.rs`' three. A read never refuses: an
-   * empty list and a deck that is not there both answer `""`, which the band draws the same way.
+   * **`deck_todo_lists`** (user schema v59) — one deck's lists in `sort_order, id`, every field
+   * of `DeckTodoList` and no other. A read never refuses: a deck with no list and a deck that is
+   * not there both answer `[]`, which the band draws the same way.
    */
-  it("reads an empty to-do list for a deck with none and for a deck that is not there", () => {
-    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
-    expect(readHandlers(db).deck_todos({ deckId: 1 })).toBe("");
-    expect(readHandlers(db).deck_todos({ deckId: 404 })).toBe("");
+  it("reads one deck's to-do lists in order, and none for a deck that has none or is gone", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 }), deck({ id: 2 })],
+      deckTodoLists: [
+        todoList({ id: 1, deckId: 1, title: "Later", sortOrder: 2 }),
+        // Two lists at one `sort_order`, so the id is what orders them.
+        todoList({ id: 5, deckId: 1, title: "Second", sortOrder: 0 }),
+        todoList({ id: 3, deckId: 1, title: "First", sortOrder: 0 }),
+        todoList({ id: 4, deckId: 2, title: "Elsewhere" }),
+      ],
+    });
+    const lists = readHandlers(db).deck_todo_lists({ deckId: 1 });
+    expect(lists.map((l) => l.title)).toEqual(["First", "Second", "Later"]);
+    expect(lists[0]).toEqual({
+      id: 3,
+      deckId: 1,
+      title: "First",
+      body: "- [ ] a",
+      sortOrder: 0,
+      createdAt: WHEN,
+      updatedAt: WHEN,
+    });
+    expect(readHandlers(db).deck_todo_lists({ deckId: 3 })).toEqual([]);
+    expect(readHandlers(db).deck_todo_lists({ deckId: 404 })).toEqual([]);
   });
 
   /**
-   * The band's write compares nothing (`expected: null`); the widget's always compares, so a tick
-   * against a list that moved since it was read is refused **and writes nothing** — neither the
-   * body nor `updatedAt`. A deck that is not there is asked first, so a stale id hears that the
-   * deck has gone rather than that its list moved.
+   * `deck_todo_list_create` puts the list **at the end**, stamps it and its deck in one instant,
+   * and refuses only a deck that is not there. An empty title and an empty body are both legal —
+   * a New to-do list dialog closed after typing only a title makes exactly that list.
    */
-  it("writes a to-do list, and refuses a compare-and-set against a list that moved", () => {
-    const CHANGED = "That to-do list changed since it was read. Try again.";
-    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+  it("creates a to-do list at the end of its deck, and refuses only a deck that is gone", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 }), deck({ id: 2 })],
+      deckTodoLists: [
+        todoList({ id: 1, deckId: 1, sortOrder: 4 }),
+        todoList({ id: 2, deckId: 2, sortOrder: 9 }),
+      ],
+    });
     const w = writeHandlers(db);
-    w.deck_todos_set({ deckId: 1, body: "- [ ] a", expected: null });
-    expect(readHandlers(db).deck_todos({ deckId: 1 })).toBe("- [ ] a");
-    const written = db.decks[0].updatedAt;
-    expect(written).toBeGreaterThan(WHEN);
+    const made = w.deck_todo_list_create({ deckId: 1, title: "Mana", body: "" });
+    expect(made).toMatchObject({ id: 3, deckId: 1, title: "Mana", body: "", sortOrder: 5 });
+    expect(made.createdAt).toBeGreaterThan(WHEN);
+    expect(made.updatedAt).toBe(made.createdAt);
+    expect(db.decks[0].updatedAt).toBe(made.createdAt);
+    // The other deck's list did not move, and neither did its deck.
+    expect(db.decks[1].updatedAt).toBe(WHEN);
 
-    w.deck_todos_set({ deckId: 1, body: "- [x] a", expected: "- [ ] a" });
-    expect(readHandlers(db).deck_todos({ deckId: 1 })).toBe("- [x] a");
-    const ticked = db.decks[0].updatedAt;
-    expect(ticked).toBeGreaterThan(written);
+    const untitled = w.deck_todo_list_create({ deckId: 1, title: "", body: "- [ ] a" });
+    expect(untitled).toMatchObject({ title: "", sortOrder: 6 });
+    expect(readHandlers(db).deck_todo_lists({ deckId: 1 }).map((l) => l.id)).toEqual([1, 3, 4]);
 
-    // The widget read `- [ ] a` and the list has been ticked since.
-    expect(() => w.deck_todos_set({ deckId: 1, body: "- [ ] a", expected: "- [ ] a" })).toThrow(
-      CHANGED,
-    );
-    expect(readHandlers(db).deck_todos({ deckId: 1 })).toBe("- [x] a");
-    expect(db.decks[0].updatedAt).toBe(ticked);
-
-    // Gone is asked before moved.
-    expect(() => w.deck_todos_set({ deckId: 404, body: "- [ ] a", expected: "nope" })).toThrow(
+    expect(() => w.deck_todo_list_create({ deckId: 404, title: "x", body: "" })).toThrow(
       "That deck is not there any more.",
     );
+    expect(db.deckTodoLists).toHaveLength(4);
   });
 
-  /** An autosave over an unchanged draft is not an edit: nothing moves the deck up the gallery or
-   *  the widget's `Last edited` order. And a write files no history row and no undo step — an
-   *  autosave every 600 ms would flood the drawer. */
-  it("writes nothing for an unchanged to-do list, and files no history or undo step", () => {
-    const db = makeDeckDb({ decks: [deck({ id: 1, todos: "- [ ] a" })] });
-    const h = allHandlers(db);
-    h.deck_todos_set({ deckId: 1, body: "- [ ] a", expected: null });
+  /**
+   * `deck_todo_list_update`'s refusals, **in the crate's order** — gone, then wrong deck, then
+   * moved — each asserted with every later check also failing, so a handler that asked in another
+   * order answers the wrong sentence. A refusal writes nothing: not the list, not either stamp.
+   */
+  it("refuses a to-do list update gone, then wrong deck, then moved, and writes nothing", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 }), deck({ id: 2 })],
+      deckTodoLists: [todoList({ id: 1, deckId: 1, body: "- [x] a" })],
+    });
+    const w = writeHandlers(db);
+    // Gone before wrong-deck and before moved.
+    expect(() =>
+      w.deck_todo_list_update({ deckId: 2, id: 404, title: null, body: "x", expected: "nope" }),
+    ).toThrow("That to-do list is not there any more.");
+    // Wrong deck before moved.
+    expect(() =>
+      w.deck_todo_list_update({ deckId: 2, id: 1, title: null, body: "x", expected: "nope" }),
+    ).toThrow("That to-do list belongs to a different deck.");
+    // The tick read `- [ ] a` and the list has been ticked since.
+    expect(() =>
+      w.deck_todo_list_update({
+        deckId: 1,
+        id: 1,
+        title: null,
+        body: "- [x] a",
+        expected: "- [ ] a",
+      }),
+    ).toThrow("That to-do list changed since it was read. Try again.");
+    expect(db.deckTodoLists[0]).toMatchObject({ body: "- [x] a", updatedAt: WHEN });
+    expect(db.decks.map((d) => d.updatedAt)).toEqual([WHEN, WHEN]);
+  });
+
+  /**
+   * A write that lands: `null` leaves a field alone and `""` empties it; a matching `expected`
+   * is a tick and a `null` one is the dialog's autosave. Each stamps the list and bumps its deck
+   * to one instant. **A title and body both equal to the stored ones write nothing** — an
+   * autosave over an unchanged draft must not move the list up the widget or the deck up the
+   * gallery.
+   */
+  it("updates a to-do list's title and body, and writes nothing when neither changed", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckTodoLists: [todoList({ id: 1, deckId: 1, title: "Mana", body: "- [ ] a" })],
+    });
+    const w = writeHandlers(db);
+    const list = () => db.deckTodoLists[0];
+
+    // Unchanged, whether said outright or left null.
+    expect(
+      w.deck_todo_list_update({ deckId: 1, id: 1, title: "Mana", body: "- [ ] a", expected: null }),
+    ).toBeNull();
+    w.deck_todo_list_update({ deckId: 1, id: 1, title: null, body: null, expected: "- [ ] a" });
+    expect(list().updatedAt).toBe(WHEN);
     expect(db.decks[0].updatedAt).toBe(WHEN);
 
-    h.deck_todos_set({ deckId: 1, body: "- [ ] b", expected: "- [ ] a" });
+    // A tick: the body moves, the title is left.
+    w.deck_todo_list_update({ deckId: 1, id: 1, title: null, body: "- [x] a", expected: "- [ ] a" });
+    expect(list()).toMatchObject({ title: "Mana", body: "- [x] a" });
+    const ticked = list().updatedAt;
+    expect(ticked).toBeGreaterThan(WHEN);
+    expect(db.decks[0].updatedAt).toBe(ticked);
+
+    // The dialog clears the title and compares nothing.
+    w.deck_todo_list_update({ deckId: 1, id: 1, title: "", body: null, expected: null });
+    expect(list()).toMatchObject({ title: "", body: "- [x] a" });
+    expect(list().updatedAt).toBeGreaterThan(ticked);
+    expect(list().createdAt).toBe(WHEN);
+  });
+
+  /**
+   * `deck_todo_list_delete` takes the one list and bumps its deck. **Idempotent**: a list that
+   * is already gone answers `null` and moves nothing — and an id sent with the wrong deck is
+   * refused with `TODO_LIST_WRONG_DECK`, `deck_todos::delete_list`'s one refusal.
+   */
+  it("deletes a to-do list, idempotently, and never through another deck", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 }), deck({ id: 2 })],
+      deckTodoLists: [todoList({ id: 1, deckId: 1 }), todoList({ id: 2, deckId: 1 })],
+    });
+    const w = writeHandlers(db);
+    expect(() => w.deck_todo_list_delete({ deckId: 2, id: 1 })).toThrow(
+      "That to-do list belongs to a different deck.",
+    );
+    expect(db.deckTodoLists.map((l) => l.id)).toEqual([1, 2]);
+    expect(db.decks.map((d) => d.updatedAt)).toEqual([WHEN, WHEN]);
+
+    expect(w.deck_todo_list_delete({ deckId: 1, id: 1 })).toBeNull();
+    expect(db.deckTodoLists.map((l) => l.id)).toEqual([2]);
+    const deleted = db.decks[0].updatedAt;
+    expect(deleted).toBeGreaterThan(WHEN);
+
+    expect(w.deck_todo_list_delete({ deckId: 1, id: 1 })).toBeNull();
+    expect(db.deckTodoLists.map((l) => l.id)).toEqual([2]);
+    expect(db.decks[0].updatedAt).toBe(deleted);
+  });
+
+  /** No list write files a history row or an undo step — an autosave every 600 ms would flood
+   *  the drawer, and the editor's own Ctrl+Z is the list's undo. */
+  it("files no history row and no undo step for any to-do list write", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const h = allHandlers(db);
+    const made = h.deck_todo_list_create({ deckId: 1, title: "", body: "- [ ] a" });
+    h.deck_todo_list_update({ deckId: 1, id: made.id, title: "T", body: "- [x] a", expected: null });
+    h.deck_todo_list_delete({ deckId: 1, id: made.id });
     expect(db.deckAudit).toHaveLength(0);
     expect(db.deckUndo).toHaveLength(0);
     expect(h.deck_undo_state({ deckId: 1, redoId: null }).undo).toBeNull();
   });
 
   /**
-   * `deck_undo::Op::Deck` writes only `DECK_FIELDS`, and neither `todos` nor `todos_open` is on
-   * it — so a Ctrl+Z on some *other* deck write never takes back a to-do typed since. The fake
-   * restores a whole deck snapshot, which is exactly the shape that would.
+   * `deck_undo::Op::Deck` writes only `DECK_FIELDS`, and `todos_open` is not on it; the lists
+   * are another table the snapshot never records. So a Ctrl+Z on some *other* deck write never
+   * takes back a to-do typed since. The fake restores a whole deck snapshot, which is exactly
+   * the shape that would.
    */
-  it("keeps the to-do list as it stands when another deck write is undone", () => {
+  it("keeps the to-do lists as they stand when another deck write is undone", () => {
     const db = makeDeckDb({ decks: [deck({ id: 1, name: "Burn" })] });
     const h = allHandlers(db);
     h.deck_update({ id: 1, patch: { name: "Burn 2" } });
-    h.deck_todos_set({ deckId: 1, body: "- [ ] Revise tokens", expected: null });
+    h.deck_todo_list_create({ deckId: 1, title: "To-do", body: "- [ ] Revise tokens" });
     h.deck_update({ id: 1, patch: { todosOpen: true } });
 
     const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
     h.deck_undo_apply({ deckId: 1, auditId: undo.id });
 
     expect(db.decks[0].name).toBe("Burn");
-    expect(h.deck_todos({ deckId: 1 })).toBe("- [ ] Revise tokens");
+    expect(h.deck_todo_lists({ deckId: 1 }).map((l) => l.body)).toEqual(["- [ ] Revise tokens"]);
     expect(db.decks[0].todosOpen).toBe(true);
   });
 
   /**
-   * Every deck with a list and no deck without one, **most recently edited first** and the id
-   * second — archived decks answered rather than filtered, since `Include archived decks` is the
-   * widget's own switch, and each row carrying the band's disclosure so a heading press knows
-   * whether it has to open it.
+   * **`every_deck_todo_list`** — every list with a body, across every deck, **most recently
+   * edited list first** and the list id second. An empty body is left out and an empty title is
+   * not; archived decks are answered rather than filtered, since `Include archived decks` is the
+   * widget's own switch; and each row carries its deck's name and the band's disclosure.
    */
-  it("lists every non-empty to-do list, newest first, archived ones included", () => {
+  it("lists every non-empty to-do list, newest first, archived decks included", () => {
     const db = makeDeckDb({
       decks: [
-        deck({ id: 1, name: "Burn", todos: "- [ ] one", updatedAt: WHEN }),
-        deck({ id: 2, name: "Empty", todos: "", updatedAt: WHEN + 50 }),
-        deck({
-          id: 3,
-          name: "Zoo",
-          archived: true,
-          todosOpen: true,
-          todos: "- [ ] three",
-          updatedAt: WHEN + 10,
-        }),
-        // Stamped alike with deck 1, so the id is what orders the two.
-        deck({ id: 4, name: "Affinity", todos: "- [x] four", updatedAt: WHEN }),
-        deck({ id: 5, name: "Unsaid" }),
+        deck({ id: 1, name: "Burn" }),
+        deck({ id: 2, name: "Zoo", archived: true, todosOpen: true }),
+      ],
+      deckTodoLists: [
+        todoList({ id: 1, deckId: 1, title: "Mana", body: "- [ ] one", updatedAt: WHEN }),
+        todoList({ id: 2, deckId: 1, title: "Blank", body: "", updatedAt: WHEN + 50 }),
+        todoList({ id: 3, deckId: 2, title: "", body: "- [ ] three", updatedAt: WHEN + 10 }),
+        // Stamped alike with list 1, so the id is what orders the two.
+        todoList({ id: 4, deckId: 2, title: "Old", body: "- [x] four", updatedAt: WHEN }),
       ],
     });
-    const lists = readHandlers(db).deck_todo_lists();
-    expect(lists.map((l) => l.deckId)).toEqual([3, 1, 4]);
+    const lists = readHandlers(db).every_deck_todo_list();
+    expect(lists.map((l) => l.id)).toEqual([3, 1, 4]);
     expect(lists[0]).toEqual({
-      deckId: 3,
-      name: "Zoo",
+      id: 3,
+      deckId: 2,
+      deckName: "Zoo",
       archived: true,
       todosOpen: true,
-      updatedAt: WHEN + 10,
+      title: "",
       body: "- [ ] three",
+      sortOrder: 0,
+      updatedAt: WHEN + 10,
     });
-    expect(lists[1]).toMatchObject({ archived: false, todosOpen: false });
+    expect(lists[1]).toMatchObject({ deckName: "Burn", archived: false, todosOpen: false });
 
-    // A write moves the deck it touched to the front.
-    writeHandlers(db).deck_todos_set({ deckId: 4, body: "- [ ] four", expected: "- [x] four" });
-    expect(readHandlers(db).deck_todo_lists().map((l) => l.deckId)).toEqual([4, 3, 1]);
-    // And a list emptied leaves the answer.
-    writeHandlers(db).deck_todos_set({ deckId: 3, body: "", expected: null });
-    expect(readHandlers(db).deck_todo_lists().map((l) => l.deckId)).toEqual([4, 1]);
+    const w = writeHandlers(db);
+    // A write moves the list it touched to the front — the list, not the deck's other lists.
+    w.deck_todo_list_update({ deckId: 2, id: 4, title: null, body: "- [ ] four", expected: null });
+    expect(readHandlers(db).every_deck_todo_list().map((l) => l.id)).toEqual([4, 3, 1]);
+    // A list emptied leaves the answer; its deck's other list stays.
+    w.deck_todo_list_update({ deckId: 2, id: 3, title: null, body: "", expected: null });
+    expect(readHandlers(db).every_deck_todo_list().map((l) => l.id)).toEqual([4, 1]);
+    // And the deck's name is joined at read time.
+    w.deck_update({ id: 1, patch: { name: "Burn 2" } });
+    expect(readHandlers(db).every_deck_todo_list()[1].deckName).toBe("Burn 2");
   });
 
-  /** `duplicate_deck` names neither column: a copy that brought the list would put every open
-   *  to-do in the widget twice, and ticking one would leave its twin open. */
-  it("leaves the to-do list and its open band behind on a duplicate", () => {
+  /** `deck_todo_lists.deck_id` is `ON DELETE CASCADE`: a deleted deck takes its lists and only
+   *  its lists, and clearing every deck clears the table. */
+  it("takes a deck's to-do lists with it on a delete, and every list on a clear", () => {
     const db = makeDeckDb({
-      decks: [deck({ id: 1, todos: "- [ ] Revise tokens", todosOpen: true })],
+      decks: [deck({ id: 1 }), deck({ id: 2 })],
+      deckTodoLists: [
+        todoList({ id: 1, deckId: 1 }),
+        todoList({ id: 2, deckId: 2 }),
+        todoList({ id: 3, deckId: 1 }),
+      ],
+    });
+    writeHandlers(db).deck_delete({ id: 1 });
+    expect(db.deckTodoLists.map((l) => l.id)).toEqual([2]);
+    expect(readHandlers(db).every_deck_todo_list().map((l) => l.deckId)).toEqual([2]);
+
+    writeHandlers(db).decks_clear();
+    expect(db.deckTodoLists).toEqual([]);
+  });
+
+  /** `duplicate_deck` copies no list and not `todos_open`: a copy that brought the lists would
+   *  put every open to-do in the widget twice, and ticking one would leave its twin open. */
+  it("leaves the to-do lists and the open band behind on a duplicate", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, todosOpen: true })],
+      deckTodoLists: [todoList({ id: 1, deckId: 1, body: "- [ ] Revise tokens" })],
     });
     const copy = writeHandlers(db).deck_duplicate({ id: 1 });
     expect(copy.todosOpen).toBe(false);
-    expect(readHandlers(db).deck_todos({ deckId: copy.id })).toBe("");
-    expect(readHandlers(db).deck_todo_lists().map((l) => l.deckId)).toEqual([1]);
+    expect(readHandlers(db).deck_todo_lists({ deckId: copy.id })).toEqual([]);
+    expect(readHandlers(db).every_deck_todo_list().map((l) => l.deckId)).toEqual([1]);
   });
 
-  /** The starter seed carries two lists, so the band's and the widget's stories have data: deck
-   *  4's nested one, edited more recently, ahead of deck 2's single line. Both bands shut. */
-  it("seeds two decks with to-do lists in the starter world", () => {
-    const lists = readHandlers(seed("starter")).deck_todo_lists();
-    expect(lists.map((l) => l.deckId)).toEqual([4, 2]);
-    expect(lists[0].body.split("\n")).toEqual([
+  /**
+   * The starter seed: v58's two `decks.todos` bodies converted as the rung converts them — one
+   * list each, titled `To-do` — plus a second list on deck 4 in v59's wider dialect, so the band
+   * has two cards and the reader a heading and a paragraph between to-dos. Both bands shut.
+   */
+  it("seeds three to-do lists over two decks in the starter world", () => {
+    const db = seed("starter");
+    const r = readHandlers(db);
+    expect(r.deck_todo_lists({ deckId: 2 }).map((l) => [l.title, l.body])).toEqual([
+      ["To-do", "- [ ] Cut three creatures"],
+    ]);
+    const testbed = r.deck_todo_lists({ deckId: 4 });
+    expect(testbed.map((l) => l.title)).toEqual(["To-do", "Mana"]);
+    expect(testbed[0].body.split("\n")).toEqual([
       "- [ ] Revise tokens",
       "  - [ ] Add a Treasure maker",
       "  - [x] Cut Clue tokens",
       "- [x] Sleeve the deck",
     ]);
-    expect(lists[1].body).toBe("- [ ] Cut three creatures");
-    expect(lists.every((l) => !l.todosOpen)).toBe(true);
+    expect(testbed[1].body).toContain("## Mana");
+    expect(testbed[1].body).toContain("\n\nSome notes about **why**.\n\n");
+
+    const every = r.every_deck_todo_list();
+    expect(every.map((l) => [l.deckId, l.title])).toEqual([
+      [4, "To-do"],
+      [4, "Mana"],
+      [2, "To-do"],
+    ]);
+    expect(every.every((l) => !l.todosOpen)).toBe(true);
+    // No seeded list is stamped after its deck, so the first write of any story still lands
+    // above every seeded stamp.
+    for (const l of db.deckTodoLists) {
+      expect(l.updatedAt).toBeLessThanOrEqual(db.decks.find((d) => d.id === l.deckId)!.updatedAt);
+    }
   });
 
   /**
@@ -12410,7 +12589,11 @@ describe("the busy fault", () => {
     // 124 → 125 on 2026-09-29 with user schema v58's `deck_todos_set` (issue #672), a plain
     // `sync::with_write` deck write whose two reads, `deck_todos` and `deck_todo_lists`, sit in
     // `readHandlers` — read from `left` on this tree. Count again after a merge.
-    expect(names).toHaveLength(125);
+    // 125 → 127 on 2026-09-29 with user schema v59's titled to-do lists: `deck_todos_set` retired
+    // and `deck_todo_list_create`, `_update` and `_delete` in its place, all plain
+    // `sync::with_write`; the two reads, `deck_todo_lists` and `every_deck_todo_list`, sit in
+    // `readHandlers`. Read from `left` on this tree, never added to. Count again after a merge.
+    expect(names).toHaveLength(127);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

@@ -573,14 +573,19 @@ pub fn run() {
             deck_notes::deck_note_detach,
             deck_notes::deck_note_reorder,
             deck_notes::card_notes,
-            // The To-do band's read and write and the home widget's read across every deck.
-            // `deck_todos::deck_todos` registers as `deck_todos`, `deck_notes`' reason above.
-            // Both reads are **fallible**, unlike the sticky notes' — an autosaving band that
-            // mounted on a failed read's `""` would write it over the reader's list. No
-            // capability entry, the app-command rule.
-            deck_todos::deck_todos,
-            deck_todos::deck_todos_set,
+            // The To-do band's lists — a deck's read and its three writes — and the home widget's
+            // read across every deck (user schema v59, which replaced #672's `deck_todos` /
+            // `deck_todos_set` pair when one column became a table). `deck_todos::deck_todo_lists`
+            // registers as `deck_todo_lists`, the last-path-segment rule above: the name #672's
+            // widget read wore, which is the deck's read now. Both reads are **fallible**, unlike
+            // the sticky notes' — an autosaving dialog opened over a failed read's `[]` would be
+            // writing beside lists the reader can no longer see. No capability entry, the
+            // app-command rule.
             deck_todos::deck_todo_lists,
+            deck_todos::deck_todo_list_create,
+            deck_todos::deck_todo_list_update,
+            deck_todos::deck_todo_list_delete,
+            deck_todos::every_deck_todo_list,
             marketplace::get_marketplace,
             marketplace::set_marketplace,
             zoom::card_zoom,

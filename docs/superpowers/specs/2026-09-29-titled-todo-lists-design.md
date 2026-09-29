@@ -112,11 +112,12 @@ drop the `decks` triggers, add `todos` back in v58's exact shape); every head li
 | `deck_todo_lists` | `deckId` | `DeckTodoList[]` for the deck, `sort_order, id`. `[]` for an unknown deck. |
 | `deck_todo_list_create` | `deckId, title, body` | the new `DeckTodoList`, at the end (`max(sort_order)+1`). `DECK_GONE` for an unknown deck. |
 | `deck_todo_list_update` | `deckId, id, title?, body?, expected?` | `()`. Either field may be `null` (unchanged). |
-| `deck_todo_list_delete` | `deckId, id` | `()`. Idempotent on a row already gone. |
+| `deck_todo_list_delete` | `deckId, id` | `()`. Idempotent on a row already gone; `TODO_LIST_WRONG_DECK` for another deck's list. |
 | `every_deck_todo_list` | — | `DeckTodoListEntry[]` — every list with a non-empty body, with its deck's `name`, `archived` and `todosOpen`; `updated_at DESC, id`. |
 
 `DeckTodoList` is `{ id, deckId, title, body, sortOrder, createdAt, updatedAt }`;
-`DeckTodoListEntry` is `{ id, deckId, deckName, archived, todosOpen, title, body, updatedAt }`.
+`DeckTodoListEntry` is `{ id, deckId, deckName, archived, todosOpen, title, body, sortOrder,
+updatedAt }` — `sortOrder` so the widget lists a deck's lists in the band's order (added at fan-in).
 
 **`deck_todo_list_update`** reads and writes in one transaction, and refuses in this order: a
 list that is not there is `TODO_LIST_GONE`; a list on another deck is `TODO_LIST_WRONG_DECK`;
@@ -153,6 +154,9 @@ level).
   as `""` by whoever wrote it.
 - **`isBlankList(title, body)`** — true when the title trims to nothing and `parseTodoBody` finds
   no block. The dialog's *closed untouched creates nothing* test.
+- *Amended at fan-in:* `#### x` to `###### x` read as a third-level heading (`noteMarkdown.ts`'
+  rule — a pasted deeper heading survives in the body and the editor draws it at level 3), and
+  `sameTodos` also ignores an empty paragraph, which Enter on an empty top-level to-do leaves.
 
 ---
 

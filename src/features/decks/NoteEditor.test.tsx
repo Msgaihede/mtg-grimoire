@@ -2,7 +2,7 @@
 // package this app declares. Reaching into an undeclared transitive dependency works until a
 // hoist changes.
 import { Editor } from "@tiptap/react";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { compile } from "tailwindcss";
 import { describe, expect, it, vi, type Mock } from "vitest";
@@ -20,7 +20,7 @@ import NoteEditor, {
   TODO_PLACEHOLDER,
 } from "./NoteEditor";
 import source from "./NoteEditor.tsx?raw";
-import { parseTodos, type TodoItem } from "./todoMarkdown";
+import { parseTodoBody, parseTodos, type TodoBlock, type TodoItem } from "./todoMarkdown";
 
 /**
  * jsdom implements no layout, so a `Range` answers nothing about where it is — and it does not
@@ -602,12 +602,32 @@ function shapeOf(items: TodoItem[]): TodoShape[] {
 }
 
 /**
- * Every shape a deck's to-do list can take, in the spelling Tiptap's task list writes — and the
- * tree the home widget's reader draws from each.
+ * The blocks {@link parseTodoBody} reads, one short line each — the order and kind of every block,
+ * a heading's level and a paragraph's words. The to-dos' own trees are {@link TodoShape}'s job; a
+ * list is summarised by how many to-dos it holds at its top.
+ */
+function blocksOf(blocks: TodoBlock[]): string[] {
+  return blocks.map((block) =>
+    block.kind === "heading"
+      ? `h${block.level}: ${block.text}`
+      : block.kind === "text"
+        ? `p: ${block.text}`
+        : `todos: ${block.items.length}`,
+  );
+}
+
+/**
+ * Every shape a deck's to-do list can take, in the spelling Tiptap writes — and what the reader
+ * draws from each: the blocks a card draws, and the tree the widget ticks.
  *
  * **This is the to-do dialect's fence**, the way {@link DIALECT_CORPUS} is the note dialect's: the
  * editor writes these bodies and `todoMarkdown.ts` reads them without mounting an editor, so both
  * halves are pinned to one list here and a shape one side grows is a red build on the other.
+ *
+ * **The #672 entries are kept byte for byte** — every line a to-do, one list — and each reads as
+ * one `todos` block holding the tree it always did, which is the promise that a body written
+ * before #688 opens and ticks exactly as it did. The entries after them are #688's: headings and
+ * paragraphs beside two lists, and a paragraph whose words only look like a to-do.
  *
  * ⚠️ **Measured, not assumed (2026-09-29, `@tiptap/extension-list` 3.31.3):**
  *
@@ -620,16 +640,23 @@ function shapeOf(items: TodoItem[]): TodoShape[] {
  *   continuation unindented, and the task list's own tokenizer is line-based, so that second line
  *   comes back as a paragraph *outside* the list. {@link CHECKLIST_EXTENSIONS} therefore leaves
  *   the node out; the case below that pins the upstream failure is what goes red if it is fixed.
+ * * **Blocks are separated by one blank line** (#688) — a heading, a paragraph and a list alike —
+ *   and a list after text is a list of its own, with no blank line inside it.
+ * * **A paragraph whose words start `- [ ] ` is written `\- \[ \] `**: the editor's own escape of
+ *   the leading bullet (`escapeLineStart`), and the markdown writer's of the brackets, which it
+ *   escapes anywhere in a line. Unescaped, the line was written as a bullet list this dialect has
+ *   no node for, and the parse dropped it — measured, and the reason for the escape.
  */
-const CHECKLIST_CORPUS: { body: string; todos: TodoShape[] }[] = [
+const CHECKLIST_CORPUS: { body: string; blocks: string[]; todos: TodoShape[] }[] = [
   // The emptied list: one empty item, which is a place to type rather than a thing to do.
-  { body: "- [ ] ", todos: [] },
+  { body: "- [ ] ", blocks: [], todos: [] },
 
   // Flat, and the tick.
-  { body: "- [ ] Revise tokens", todos: [todo("Revise tokens", false, 0)] },
-  { body: "- [x] Revise tokens", todos: [todo("Revise tokens", true, 0)] },
+  { body: "- [ ] Revise tokens", blocks: ["todos: 1"], todos: [todo("Revise tokens", false, 0)] },
+  { body: "- [x] Revise tokens", blocks: ["todos: 1"], todos: [todo("Revise tokens", true, 0)] },
   {
     body: "- [ ] Revise tokens\n- [x] Cut a land\n- [ ] Order sleeves",
+    blocks: ["todos: 3"],
     todos: [
       todo("Revise tokens", false, 0),
       todo("Cut a land", true, 1),
@@ -640,10 +667,12 @@ const CHECKLIST_CORPUS: { body: string; todos: TodoShape[] }[] = [
   // Nesting — two spaces a level, and it compounds.
   {
     body: "- [ ] Mana\n  - [ ] Cut a land",
+    blocks: ["todos: 1"],
     todos: [todo("Mana", false, 0, [todo("Cut a land", false, 1)])],
   },
   {
     body: "- [ ] Mana\n  - [x] Cut a land\n    - [ ] Swap in a Triome",
+    blocks: ["todos: 1"],
     todos: [
       todo("Mana", false, 0, [todo("Cut a land", true, 1, [todo("Swap in a Triome", false, 2)])]),
     ],
@@ -651,19 +680,52 @@ const CHECKLIST_CORPUS: { body: string; todos: TodoShape[] }[] = [
   // A done parent over an open child, and back out to the top.
   {
     body: "- [x] Mana\n  - [ ] Cut a land\n- [ ] Order sleeves",
+    blocks: ["todos: 2"],
     todos: [todo("Mana", true, 0, [todo("Cut a land", false, 1)]), todo("Order sleeves", false, 2)],
   },
 
   // The inline dialect inside a to-do: the four marks and a link.
   {
     body: "- [ ] **Revise** *the* ~~old~~ `tokens` [list](https://scryfall.com)",
+    blocks: ["todos: 1"],
     todos: [todo("Revise the old tokens list", false, 0)],
   },
   // A literal `*` and `_` come back escaped, and the reader has to take the backslash off.
-  { body: "- [ ] 2 \\* 3 and a\\_b", todos: [todo("2 * 3 and a_b", false, 0)] },
+  {
+    body: "- [ ] 2 \\* 3 and a\\_b",
+    blocks: ["todos: 1"],
+    todos: [todo("2 * 3 and a_b", false, 0)],
+  },
 
   // What an append leaves behind: a trailing empty item the reader leaves out.
-  { body: "- [ ] Revise tokens\n- [ ] ", todos: [todo("Revise tokens", false, 0)] },
+  {
+    body: "- [ ] Revise tokens\n- [ ] ",
+    blocks: ["todos: 1"],
+    todos: [todo("Revise tokens", false, 0)],
+  },
+
+  /* ---- #688: a to-do document ---- */
+
+  // A heading, a list with a sub-to-do, a paragraph with a mark, and a second list — the todos
+  // are both lists' top-level items in order, the text between them no to-do at all.
+  {
+    body: "## Mana\n\n- [ ] Cut a land\n  - [x] Check curve\n\nSome notes about **why**.\n\n- [ ] Revise tokens",
+    blocks: ["h2: Mana", "todos: 1", "p: Some notes about why.", "todos: 1"],
+    todos: [
+      todo("Cut a land", false, 2, [todo("Check curve", true, 3)]),
+      todo("Revise tokens", false, 7),
+    ],
+  },
+  // Text and nothing else is a list too — a list with no to-dos in it yet.
+  { body: "# Title\n\nplain words", blocks: ["h1: Title", "p: plain words"], todos: [] },
+  // Two lists with a line of text between them stay two lists.
+  {
+    body: "- [ ] a\n\nbetween\n\n- [ ] b",
+    blocks: ["todos: 1", "p: between", "todos: 1"],
+    todos: [todo("a", false, 0), todo("b", false, 4)],
+  },
+  // A paragraph whose words are `- [ ] literal`: escaped on the way out, and never a box.
+  { body: "\\- \\[ \\] literal", blocks: ["p: - [ ] literal"], todos: [] },
 ];
 
 /** One trip through the checklist editor: markdown in, document, markdown out. */
@@ -695,19 +757,123 @@ describe("the to-do dialect", () => {
     expect(misread).toEqual([]);
   });
 
+  /** …and the card's reader draws them as the same blocks, text and headings where they were. */
+  it("reads every shape as the blocks the editor drew", () => {
+    const misread = CHECKLIST_CORPUS.filter(
+      ({ body, blocks }) => JSON.stringify(blocksOf(parseTodoBody(body))) !== JSON.stringify(blocks),
+    ).map(({ body }) => `${JSON.stringify(body)} → ${JSON.stringify(blocksOf(parseTodoBody(body)))}`);
+    expect(misread).toEqual([]);
+  });
+
+  /** The same bodies, as the editor holds them: a heading, a paragraph and a list where written. */
+  it("opens text as text and to-dos as to-dos", () => {
+    const editor = checklistEditor(
+      "## Mana\n\n- [ ] Cut a land\n  - [x] Check curve\n\nSome notes about **why**.\n\n- [ ] Revise tokens",
+    );
+    const blocks: string[] = [];
+    editor.state.doc.forEach((node) => blocks.push(node.type.name));
+    expect(blocks).toEqual(["heading", "taskList", "paragraph", "taskList"]);
+    expect(editor.state.doc.child(0).attrs.level).toBe(2);
+    expect(() => editor.state.doc.check()).not.toThrow();
+    editor.destroy();
+  });
+
   it("settles the alternate spellings on the one it writes", () => {
     expect(checklistTrip("")).toBe("- [ ] ");
     expect(checklistTrip("- [ ] Mana\n    - [ ] Cut a land")).toBe("- [ ] Mana\n  - [ ] Cut a land");
     expect(checklistTrip("* [ ] Revise tokens")).toBe("- [ ] Revise tokens");
     expect(checklistTrip("- [X] Revise tokens")).toBe("- [x] Revise tokens");
     expect(checklistTrip("- [ ] 2 * 3")).toBe("- [ ] 2 \\* 3");
+    // A setext heading is written the one way the dialect has.
+    expect(checklistTrip("Title\n===")).toBe("# Title");
   });
 
   it("never moves a body twice", () => {
-    const unstable = ["", "- [ ] Mana\n    - [ ] Cut a land", "* [ ] a", "- [X] a", "- [ ] 2 * 3"]
+    const unstable = [
+      "",
+      "- [ ] Mana\n    - [ ] Cut a land",
+      "* [ ] a",
+      "- [X] a",
+      "- [ ] 2 * 3",
+      "Title\n===",
+    ]
       .map((body) => checklistTrip(body))
       .filter((once) => checklistTrip(once) !== once);
     expect(unstable).toEqual([]);
+  });
+
+  /**
+   * ⚠️ **A line of text that would read back as another block is escaped at its start** (#688) —
+   * `escapeLineStart`, and every row here is the measurement behind it.
+   *
+   * The markdown writer escapes `` \ ` * _ [ ] ~ `` anywhere in a line and `< > &` as entities,
+   * and nothing about the line's **start**. Before the escape, a paragraph beginning `- ` or `+ `
+   * was written as a bullet list — which this dialect has no node for, so the parse dropped the
+   * line outright — a `# ` one came back a heading, and a `1. ` one a list. Each row is written
+   * as a paragraph, asserted in the exact spelling the editor writes, and read back as the same
+   * paragraph with the same words.
+   */
+  it.each([
+    ["- [ ] literal", "\\- \\[ \\] literal"],
+    ["- plain dash", "\\- plain dash"],
+    ["+ plus", "\\+ plus"],
+    ["# not a heading", "\\# not a heading"],
+    ["###### six", "\\###### six"],
+    ["1. not a list", "1\\. not a list"],
+    ["2) paren", "2\\) paren"],
+    ["---", "\\---"],
+    ["- - -", "\\- - -"],
+    // Nothing to escape — none of these starts a block — and so nothing is.
+    ["#hashtag", "#hashtag"],
+    ["-5 life", "-5 life"],
+    ["2024 was a year", "2024 was a year"],
+    // Entities and the inline escapes, which the writer applies anywhere in a line.
+    ["> quoted", "&gt; quoted"],
+    ["* star", "\\* star"],
+    ["[x] box", "\\[x\\] box"],
+    // Four spaces in would be an indented code block, which this dialect would drop too.
+    ["    four spaces", "four spaces"],
+  ])("writes a line of text %j as %j, and reads it back as that text", (words, written) => {
+    const editor = checklistEditor("x");
+    editor.commands.setContent({
+      type: "doc",
+      content: [{ type: "paragraph", content: [{ type: "text", text: words }] }],
+    });
+    const body = editor.getMarkdown();
+    editor.destroy();
+    expect(body).toBe(written);
+
+    const back = checklistEditor(body);
+    expect(back.state.doc.childCount).toBe(1);
+    expect(back.state.doc.firstChild?.type.name).toBe("paragraph");
+    expect(back.state.doc.firstChild?.textContent).toBe(words.trimStart());
+    expect(back.getMarkdown()).toBe(body);
+    back.destroy();
+    // And the card's reader draws it as the words too, never as a box or a heading. ⚠️ Not asked
+    // of an entity: the writer spells `<`, `>` and `&` as `&lt;` `&gt;` `&amp;` — in a note and a
+    // to-do's line alike, measured — and `noteMarkdown.ts`' `parseInlines` decodes none of them,
+    // on the stated belief that Tiptap does not write them. That is the readers' to settle, and
+    // is older than #688; what is asserted above is that the *editor* reads them back.
+    if (!written.includes("&")) {
+      expect(blocksOf(parseTodoBody(body))).toEqual([`p: ${words.trimStart()}`]);
+    }
+  });
+
+  /**
+   * ⚠️ **`\- [ ] literal` — the bullet's escape alone — is not a spelling this editor reads back as
+   * text, and it is not one it writes.** It writes `\- \[ \] literal` (the corpus's last entry),
+   * because the markdown writer escapes brackets anywhere. Measured: given the shorter spelling,
+   * `TaskList`'s tokenizer still finds `- [ ] ` past the backslash, and the line opens as a
+   * paragraph holding only `\` over a to-do. Pinned so that anything reaching for the shorter
+   * spelling — a reader's test, a fixture, a seed — finds out here that the brackets' escapes are
+   * what keep the line text.
+   */
+  it("reads the bullet-only escape as a to-do, which is why the brackets are escaped too", () => {
+    const editor = checklistEditor("\\- [ ] literal");
+    const kinds: string[] = [];
+    editor.state.doc.forEach((node) => kinds.push(`${node.type.name}:${node.textContent}`));
+    expect(kinds).toEqual(["paragraph:\\", "taskList:literal"]);
+    editor.destroy();
   });
 
   /**
@@ -715,10 +881,10 @@ describe("the to-do dialect", () => {
    *
    * `hardBreak` writes `"  \n"` and leaves the rest of the line unindented, and `TaskList`'s
    * markdown tokenizer reads a task item one line at a time — so the break's second half comes
-   * back as a line **outside** the list. The load-time repair can only make that line a to-do of
-   * its own, so a broken to-do would split in two the next time it was opened. A construct only
-   * one side of the round trip can spell is the one thing the module header says must not enter a
-   * dialect, so the node is left out.
+   * back as a line **outside** the list: since #688, a paragraph of its own under the list. So a
+   * broken to-do would split in two the next time it was opened. A construct only one side of the
+   * round trip can spell is the one thing the module header says must not enter a dialect, so the
+   * node is left out.
    *
    * **This goes red the day the tokenizer learns continuation lines** — the body would then read
    * back as one to-do — which is the day a hard break could come back.
@@ -731,29 +897,29 @@ describe("the to-do dialect", () => {
       contentType: "markdown",
     });
     expect(Object.keys(editor.schema.nodes)).not.toContain("hardBreak");
-    const list = editor.state.doc.firstChild;
-    expect(list?.childCount).toBe(2);
-    expect(list?.child(1).textContent).toBe("second");
+    expect(editor.state.doc.childCount).toBe(2);
+    expect(editor.state.doc.firstChild?.childCount).toBe(1);
+    expect(editor.state.doc.child(1).type.name).toBe("paragraph");
+    expect(editor.state.doc.child(1).textContent).toBe("second");
     editor.destroy();
   });
 });
 
 describe("what the checklist may draw", () => {
-  it("is one task list of paragraphs with the inline marks, and nothing else", () => {
+  it("is a to-do document of paragraphs, headings and task lists with the inline marks, and nothing else", () => {
     const editor = new Editor({
       element: document.createElement("div"),
       extensions: CHECKLIST_EXTENSIONS,
     });
     const nodes = Object.keys(editor.schema.nodes);
     const marks = Object.keys(editor.schema.marks);
-    for (const node of ["doc", "paragraph", "text", "taskList", "taskItem"]) {
+    for (const node of ["doc", "paragraph", "heading", "text", "taskList", "taskItem"]) {
       expect(nodes).toContain(node);
     }
     for (const mark of ["bold", "italic", "strike", "code", "link"]) {
       expect(marks).toContain(mark);
     }
     for (const node of [
-      "heading",
       "bulletList",
       "orderedList",
       "listItem",
@@ -765,8 +931,14 @@ describe("what the checklist may draw", () => {
       expect(nodes).not.toContain(node);
     }
     expect(marks).not.toContain("underline");
-    // The top node takes a task list and only a task list — so every line is a to-do.
-    expect(editor.schema.topNodeType.spec.content).toBe("taskList");
+    // Text beside the to-dos (#688), where #672's top node took one task list and nothing else.
+    // `paragraph` first: it is what a split makes, so a heading's Enter makes a paragraph.
+    expect(editor.schema.topNodeType.spec.content).toBe("(paragraph | heading | taskList)+");
+    // …and a to-do is still one line of words: no heading inside one.
+    expect(editor.schema.nodes.taskItem.spec.content).toBe("paragraph taskList?");
+    expect(editor.extensionManager.extensions.find((e) => e.name === "heading")?.options.levels).toEqual(
+      [1, 2, 3],
+    );
     editor.destroy();
   });
 });
@@ -978,20 +1150,36 @@ describe("NoteEditor in checklist mode", () => {
     expect(onChange).toHaveBeenLastCalledWith("- [ ] Mana\n  - [ ] Cut a land\n- [ ] ");
   });
 
-  it("offers the marks, a link, outdent and indent — and none of the note's blocks", () => {
+  it("offers the marks, a link, the blocks a line can be, outdent and indent — in that order", () => {
     renderChecklist("- [ ] Revise tokens");
 
-    for (const name of ["Bold", "Italic", "Strikethrough", "Code", "Add a link", "Outdent", "Indent"]) {
-      expect(screen.getByRole("button", { name })).toBeInTheDocument();
-    }
-    for (const name of [
+    const toolbar = screen
+      .getAllByRole("button")
+      .map((button) => button.getAttribute("aria-label") ?? "")
+      .filter((name) => !name.startsWith("Delete "));
+    expect(toolbar).toEqual([
+      "Bold",
+      "Italic",
+      "Strikethrough",
+      "Code",
+      "Add a link",
       "Heading 1",
       "Heading 2",
       "Heading 3",
-      "Bulleted list",
-      "Numbered list",
-      "Quote",
-    ]) {
+      "Paragraph",
+      "To-do",
+      "Outdent",
+      "Indent",
+    ]);
+    // The block buttons are toggles; Outdent and Indent are presses.
+    for (const name of ["Heading 1", "Heading 2", "Heading 3", "Paragraph", "To-do"]) {
+      expect(screen.getByRole("button", { name })).toHaveAttribute("aria-pressed");
+    }
+    for (const name of ["Outdent", "Indent"]) {
+      expect(screen.getByRole("button", { name })).not.toHaveAttribute("aria-pressed");
+    }
+    // None of the note's other blocks: a to-do document holds no list but its own, and no quote.
+    for (const name of ["Bulleted list", "Numbered list", "Quote"]) {
       expect(screen.queryByRole("button", { name })).toBeNull();
     }
   });
@@ -1007,19 +1195,22 @@ describe("NoteEditor in checklist mode", () => {
     expect(onChange).toHaveBeenLastCalledWith("- [ ] Mana\n- [ ] Cut a land");
   });
 
-  it("teaches Enter and Tab on an empty list", async () => {
+  it("teaches writing, Enter and Tab on an empty list", async () => {
     render(<NoteEditor mode="checklist" value="" onChange={vi.fn()} ariaLabel="To-do list" />);
 
     const empty = await screen.findByRole("textbox");
     // Read as a string rather than through `toHaveAttribute(name, value)`, which checks only that
     // the attribute exists when the value it is handed is `undefined`.
     expect(empty.querySelector("[data-placeholder]")?.getAttribute("data-placeholder")).toBe(
-      "Add a to-do — Enter for the next, Tab to nest.",
+      "Write, or add a to-do — Enter for the next, Tab to nest.",
     );
+    // An empty list opens on one empty to-do, not on a line of text: the schema would fill an
+    // empty document with a paragraph, since that is what its content expression names first.
+    expect(empty.querySelectorAll("input[type=checkbox]")).toHaveLength(1);
   });
 
-  it("says what Enter and Tab do", () => {
-    expect(TODO_PLACEHOLDER).toBe("Add a to-do — Enter for the next, Tab to nest.");
+  it("says what a list holds, and what Enter and Tab do", () => {
+    expect(TODO_PLACEHOLDER).toBe("Write, or add a to-do — Enter for the next, Tab to nest.");
   });
 
   /**
@@ -1037,7 +1228,178 @@ describe("NoteEditor in checklist mode", () => {
     expect(editorOf(surface)).toBe(editor);
     expect(surface.querySelector('ul[data-type="taskList"]')).not.toBeNull();
     expect(screen.getByRole("button", { name: "Indent" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Heading 1" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Bulleted list" })).toBeNull();
+  });
+
+  it("appends a new list after a trailing line of text", () => {
+    const { editor, onChange } = renderChecklist("- [ ] Revise tokens\n\nSome notes", {
+      appendRequest: 1,
+    });
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Revise tokens\n\nSome notes\n\n- [ ] ");
+    const { $from } = editor.state.selection;
+    expect($from.parent.content.size).toBe(0);
+    expect($from.node($from.depth - 1).type.name).toBe("taskItem");
+    expect(editor.state.doc.childCount).toBe(3);
+  });
+
+  it("appends after a trailing heading as well", () => {
+    const { onChange } = renderChecklist("## Mana", { appendRequest: 1 });
+    expect(onChange).toHaveBeenLastCalledWith("## Mana\n\n- [ ] ");
+  });
+
+  it("deletes a list's only to-do from between two lines of text, and the list with it", async () => {
+    const { editor, onChange } = renderChecklist("Before\n\n- [ ] Revise tokens\n\nAfter");
+
+    await userEvent.click(screen.getByRole("button", { name: 'Delete "Revise tokens"' }));
+
+    expect(onChange).toHaveBeenLastCalledWith("Before\n\nAfter");
+    expect(() => editor.state.doc.check()).not.toThrow();
+  });
+});
+
+/* ----------------------------------------------------------- the block buttons ---- */
+
+/**
+ * Issue #688, in the reader's words: *"when clicking a typography in the rich text editor (like
+ * h1, h2, bold, italic, etc.) we don't create a to-do item. Also add a 'p' (paragraph) button for
+ * regular text not as a todo item."* Heading 1–3, Paragraph and To-do are the only presses that
+ * decide what a line is, and every one is driven here through the button a reader presses.
+ */
+describe("the checklist's block buttons", () => {
+  it("makes a to-do's line a heading, and leaves the to-dos after it a list", async () => {
+    const { editor, onChange } = renderChecklist("- [ ] Mana\n- [ ] Colours\n- [ ] Curve");
+    caretAfter(editor, "Colours");
+
+    await userEvent.click(screen.getByRole("button", { name: "Heading 2" }));
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Mana\n\n## Colours\n\n- [ ] Curve");
+    expect(() => editor.state.doc.check()).not.toThrow();
+  });
+
+  /**
+   * A nested to-do is lifted out of **every** list: its own sub-to-dos, and every to-do that came
+   * after it at any depth, follow it as one list at the top — the to-dos before it stay put.
+   */
+  it("lifts a nested to-do out of every list, and its sub-to-dos stay a list after it", async () => {
+    const { editor, onChange } = renderChecklist(
+      "- [ ] a\n  - [ ] b\n    - [ ] c\n  - [ ] d\n- [ ] e",
+    );
+    caretAfter(editor, "b");
+
+    await userEvent.click(screen.getByRole("button", { name: "Heading 2" }));
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] a\n\n## b\n\n- [ ] c\n- [ ] d\n- [ ] e");
+    expect(() => editor.state.doc.check()).not.toThrow();
+  });
+
+  it("keeps a lifted to-do's tick off the heading, and its done sub-to-do done", async () => {
+    const { editor, onChange } = renderChecklist("- [x] Mana\n  - [x] Cut a land");
+    caretAfter(editor, "Mana");
+
+    await userEvent.click(screen.getByRole("button", { name: "Heading 1" }));
+
+    expect(onChange).toHaveBeenLastCalledWith("# Mana\n\n- [x] Cut a land");
+  });
+
+  it("makes a to-do's line a paragraph", async () => {
+    const { editor, onChange } = renderChecklist("- [ ] Mana\n- [ ] Some thoughts");
+    caretAfter(editor, "Some thoughts");
+
+    await userEvent.click(screen.getByRole("button", { name: "Paragraph" }));
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Mana\n\nSome thoughts");
+  });
+
+  it("makes a heading a paragraph, and a lit heading pressed again a paragraph too", async () => {
+    const { editor, onChange } = renderChecklist("## Mana\n\n### Curve");
+    caretAfter(editor, "Mana");
+    await userEvent.click(screen.getByRole("button", { name: "Paragraph" }));
+    expect(onChange).toHaveBeenLastCalledWith("Mana\n\n### Curve");
+
+    caretAfter(editor, "Curve");
+    await userEvent.click(screen.getByRole("button", { name: "Heading 3" }));
+    expect(onChange).toHaveBeenLastCalledWith("Mana\n\nCurve");
+  });
+
+  it("makes a paragraph a to-do, joined to the list above it", async () => {
+    const { editor, onChange } = renderChecklist("- [ ] Mana\n\nColours");
+    caretAfter(editor, "Colours");
+
+    await userEvent.click(screen.getByRole("button", { name: "To-do" }));
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Mana\n- [ ] Colours");
+    expect(editor.state.doc.childCount).toBe(1);
+  });
+
+  it("joins the lists above and below a paragraph it makes a to-do", async () => {
+    const { editor, onChange } = renderChecklist("- [ ] a\n\nb\n\n- [ ] c");
+    caretAfter(editor, "b");
+
+    await userEvent.click(screen.getByRole("button", { name: "To-do" }));
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] a\n- [ ] b\n- [ ] c");
+    expect(editor.state.doc.childCount).toBe(1);
+  });
+
+  it("makes a heading a to-do, since a to-do's line is a paragraph", async () => {
+    const { editor, onChange } = renderChecklist("## Mana");
+    caretAfter(editor, "Mana");
+
+    await userEvent.click(screen.getByRole("button", { name: "To-do" }));
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Mana");
+  });
+
+  it("turns a to-do back into a paragraph when the lit To-do is pressed", async () => {
+    const { editor, onChange } = renderChecklist("- [ ] Mana");
+    caretAfter(editor, "Mana");
+
+    await userEvent.click(screen.getByRole("button", { name: "To-do" }));
+
+    expect(onChange).toHaveBeenLastCalledWith("Mana");
+  });
+
+  /** The complaint itself: a mark on a line of text used to be a mark on a to-do. */
+  it("never makes a to-do from a mark on a line of text", async () => {
+    const { editor, onChange } = renderChecklist("plain words");
+    act(() => {
+      editor.commands.setTextSelection({ from: 1, to: 6 });
+    });
+
+    await userEvent.click(screen.getByRole("button", { name: "Bold" }));
+    await userEvent.click(screen.getByRole("button", { name: "Italic" }));
+
+    expect(onChange).toHaveBeenLastCalledWith("***plain*** words");
+    expect(editor.state.doc.firstChild?.type.name).toBe("paragraph");
+    expect(screen.queryAllByRole("checkbox")).toHaveLength(0);
+  });
+
+  it("says which block the caret is standing in", () => {
+    const { editor } = renderChecklist("## Mana\n\nSome words\n\n- [ ] Revise tokens");
+    const pressed = () =>
+      ["Heading 1", "Heading 2", "Heading 3", "Paragraph", "To-do"].filter(
+        (name) => screen.getByRole("button", { name }).getAttribute("aria-pressed") === "true",
+      );
+
+    act(() => caretAfter(editor, "Mana"));
+    expect(pressed()).toEqual(["Heading 2"]);
+
+    act(() => caretAfter(editor, "Some words"));
+    expect(pressed()).toEqual(["Paragraph"]);
+
+    // A to-do's own line is a paragraph too — and it is the To-do that is lit, not Paragraph.
+    act(() => caretAfter(editor, "Revise tokens"));
+    expect(pressed()).toEqual(["To-do"]);
+  });
+
+  it("does nothing to a top-level to-do from Outdent", async () => {
+    const { editor, onChange } = renderChecklist("Some words\n\n- [ ] Revise tokens");
+    caretAfter(editor, "Revise tokens");
+
+    await userEvent.click(screen.getByRole("button", { name: "Outdent" }));
+
+    expect(onChange).not.toHaveBeenCalled();
   });
 });
 
@@ -1062,6 +1424,13 @@ function checklistEditor(markdown: string): Editor {
 function press(editor: Editor, key: string, init: KeyboardEventInit = {}): boolean {
   const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
   return editor.view.someProp("handleKeyDown", (handle) => handle(editor.view, event)) ?? false;
+}
+
+/** What the line a position is in is: a to-do's, a top-level paragraph, or a heading. */
+function blockOf($pos: Editor["state"]["selection"]["$from"]): string {
+  if ($pos.parent.type.name === "heading") return "heading";
+  if ($pos.depth >= 2 && $pos.node($pos.depth - 1).type.name === "taskItem") return "todo";
+  return $pos.depth === 1 ? $pos.parent.type.name : "other";
 }
 
 /** Where a row of the table puts the caret before its keys. */
@@ -1092,7 +1461,9 @@ interface KeyRow {
   after: string;
   /** Where the caret ends up: the words of its line and its offset in them. */
   lands?: { line: string; offset: number };
-  /** Whether the checklist claimed the last key — `false` is the browser's own. */
+  /** What the caret's line is afterwards: a to-do's, a paragraph at the top, or a heading. */
+  block?: "todo" | "paragraph" | "heading";
+  /** Whether any keymap claimed the last key — `false` is the browser's own. */
   handled?: boolean;
 }
 
@@ -1117,20 +1488,25 @@ const KEY_ROWS: KeyRow[] = [
     after: "- [ ] a\n- [ ] b",
     lands: { line: "a", offset: 1 },
   },
+  // #688: out of the top list is a line of text now, so an empty top-level to-do's Enter ends the
+  // list there. An empty paragraph is written as nothing — the blank line after the list is the
+  // separator before it — and the load drops it, so an unwritten line costs the body nothing.
   {
-    name: "Enter on the only, empty to-do does nothing",
+    name: "Enter on the only, empty to-do lifts it out to an empty line of text",
     body: "",
     caret: { empty: 0 },
     keys: [ENTER],
-    after: "- [ ] ",
+    after: "",
+    block: "paragraph",
     handled: true,
   },
   {
-    name: "Enter twice after a to-do makes one empty to-do and no blank line",
+    name: "Enter twice after a to-do ends the list on a line of text, with no empty to-do",
     body: "- [ ] a",
     caret: { after: "a" },
     keys: [ENTER, ENTER],
-    after: "- [ ] a\n- [ ] ",
+    after: "- [ ] a\n\n",
+    block: "paragraph",
     handled: true,
   },
   {
@@ -1141,8 +1517,25 @@ const KEY_ROWS: KeyRow[] = [
       { key: "Enter", shiftKey: true },
       { key: "Enter", shiftKey: true },
     ],
-    after: "- [ ] a\n- [ ] ",
+    after: "- [ ] a\n\n",
+    block: "paragraph",
     handled: true,
+  },
+  {
+    name: "Enter on an empty to-do between two ends the list there, and the rest follows as one",
+    body: "- [ ] a\n- [ ] \n- [ ] b\n  - [ ] c",
+    caret: { empty: 0 },
+    keys: [ENTER],
+    after: "- [ ] a\n\n\n\n- [ ] b\n  - [ ] c",
+    block: "paragraph",
+  },
+  {
+    name: "Enter on an emptied to-do with sub-to-dos leaves them a list under the line",
+    body: "- [ ] a\n- [ ] \n  - [ ] c\n- [ ] d",
+    caret: { empty: 0 },
+    keys: [ENTER],
+    after: "- [ ] a\n\n\n\n- [ ] c\n- [ ] d",
+    block: "paragraph",
   },
   {
     name: "Enter on an empty sub-to-do lifts it one level",
@@ -1150,6 +1543,34 @@ const KEY_ROWS: KeyRow[] = [
     caret: { empty: 0 },
     keys: [ENTER],
     after: "- [ ] a\n- [ ] ",
+    block: "todo",
+  },
+  {
+    name: "Enter inside a line of text is the ordinary split",
+    body: "Some words",
+    caret: { after: "Some" },
+    keys: [ENTER],
+    after: "Some\n\nwords",
+    lands: { line: " words", offset: 0 },
+    block: "paragraph",
+  },
+  {
+    name: "Enter at the end of a heading makes a line of text under it",
+    body: "## Mana",
+    caret: { after: "Mana" },
+    keys: [ENTER],
+    after: "## Mana\n\n",
+    lands: { line: "", offset: 0 },
+    block: "paragraph",
+  },
+  {
+    name: "Shift-Enter on a line of text splits it, since there is no break to make",
+    body: "Some words",
+    caret: { after: "Some" },
+    keys: [{ key: "Enter", shiftKey: true }],
+    after: "Some\n\nwords",
+    block: "paragraph",
+    handled: true,
   },
   {
     name: "Backspace in an empty last to-do removes it and lands at the end of the line above",
@@ -1261,10 +1682,144 @@ const KEY_ROWS: KeyRow[] = [
     keys: [{ key: "Tab", shiftKey: true }],
     after: "- [ ] a\n- [ ] b\n  - [ ] c\n  - [ ] d",
   },
+
+  /* ---- #688: #672's answers, re-checked with text beside the list ---- */
+
+  {
+    name: "Shift-Tab on a top-level to-do still does nothing, and leaves the key to the browser",
+    body: "Some words\n\n- [ ] a",
+    caret: { after: "a" },
+    keys: [{ key: "Tab", shiftKey: true }],
+    after: "Some words\n\n- [ ] a",
+    block: "todo",
+    handled: false,
+  },
+  {
+    name: "Backspace at the start of the first line still stays put, over text below",
+    body: "- [ ] a\n\nSome words",
+    caret: { before: "a" },
+    keys: [BACKSPACE],
+    after: "- [ ] a\n\nSome words",
+    handled: true,
+  },
+  {
+    name: "Backspace at the start of a list's first to-do under text makes it a line of text",
+    body: "Some words\n\n- [ ] a\n  - [ ] b\n- [ ] c",
+    caret: { before: "a" },
+    keys: [BACKSPACE],
+    after: "Some words\n\na\n\n- [ ] b\n- [ ] c",
+    lands: { line: "a", offset: 0 },
+    block: "paragraph",
+    handled: true,
+  },
+  {
+    name: "…and a second Backspace is the ordinary join onto the text above",
+    body: "Some words\n\n- [ ] a",
+    caret: { before: "a" },
+    keys: [BACKSPACE, BACKSPACE],
+    after: "Some wordsa",
+    lands: { line: "Some wordsa", offset: 10 },
+  },
+  {
+    name: "Backspace in an empty first to-do under text removes it and lands at the end of the text",
+    body: "Some words\n\n- [ ] \n- [ ] b",
+    caret: { empty: 0 },
+    keys: [BACKSPACE],
+    after: "Some words\n\n- [ ] b",
+    lands: { line: "Some words", offset: 10 },
+  },
+  {
+    name: "Backspace in a list's only, empty to-do takes the list from between two lines of text",
+    body: "Before\n\n- [ ] \n\nAfter",
+    caret: { empty: 0 },
+    keys: [BACKSPACE],
+    after: "Before\n\nAfter",
+    lands: { line: "Before", offset: 6 },
+  },
+  {
+    name: "Backspace at the start of text under a list joins its words onto the list's last line",
+    body: "- [ ] a\n  - [ ] b\n\nSome words",
+    caret: { before: "Some words" },
+    keys: [BACKSPACE],
+    after: "- [ ] a\n  - [ ] bSome words",
+    lands: { line: "bSome words", offset: 1 },
+    block: "todo",
+    handled: true,
+  },
+  {
+    name: "Backspace at the start of a heading under a list joins it the same way",
+    body: "- [ ] a\n\n## Mana",
+    caret: { before: "Mana" },
+    keys: [BACKSPACE],
+    after: "- [ ] aMana",
+    lands: { line: "aMana", offset: 1 },
+    block: "todo",
+  },
+  {
+    name: "Backspace on the empty line an Enter left under a list puts the caret back on the list",
+    body: "- [ ] a",
+    caret: { after: "a" },
+    keys: [ENTER, ENTER, BACKSPACE],
+    after: "- [ ] a",
+    lands: { line: "a", offset: 1 },
+    block: "todo",
+  },
+  {
+    name: "Backspace joining text between two lists leaves one list",
+    body: "- [ ] a\n\nb\n\n- [ ] c",
+    caret: { before: "b" },
+    keys: [BACKSPACE],
+    after: "- [ ] ab\n- [ ] c",
+    lands: { line: "ab", offset: 1 },
+  },
+  {
+    name: "Backspace at the start of text under text is the ordinary join",
+    body: "## Mana\n\nSome words",
+    caret: { before: "Some words" },
+    keys: [BACKSPACE],
+    after: "## ManaSome words",
+    lands: { line: "ManaSome words", offset: 4 },
+    block: "heading",
+  },
+  {
+    name: "Delete at the end of a list's last line joins the text under it onto the to-do",
+    body: "- [ ] a\n\nSome words\n\n- [ ] c",
+    caret: { after: "a" },
+    keys: [DELETE],
+    after: "- [ ] aSome words\n- [ ] c",
+    lands: { line: "aSome words", offset: 1 },
+    block: "todo",
+    handled: true,
+  },
+  {
+    name: "Delete at the end of text over a list joins the first to-do's words, its sub-to-dos in its place",
+    body: "Some words\n\n- [ ] a\n  - [ ] b\n- [ ] c",
+    caret: { after: "Some words" },
+    keys: [DELETE],
+    after: "Some wordsa\n\n- [ ] b\n- [ ] c",
+    lands: { line: "Some wordsa", offset: 10 },
+    block: "paragraph",
+    handled: true,
+  },
+  {
+    name: "Delete at the end of text over a one-to-do list takes the list",
+    body: "Some words\n\n- [ ] a\n\nAfter",
+    caret: { after: "Some words" },
+    keys: [DELETE],
+    after: "Some wordsa\n\nAfter",
+  },
+  {
+    name: "Delete at the end of text over text is the ordinary join",
+    body: "Some\n\nwords",
+    caret: { after: "Some" },
+    keys: [DELETE],
+    after: "Somewords",
+    lands: { line: "Somewords", offset: 4 },
+  },
 ];
 
 describe("the checklist's keys", () => {
-  it.each(KEY_ROWS)("$name", ({ body, caret, keys, after, lands, handled }) => {
+  it.each(KEY_ROWS)("$name", ({ body, caret, keys, after, lands, block, handled }) => {
     const editor = checklistEditor(body);
     placeCaret(editor, caret);
 
@@ -1273,11 +1828,16 @@ describe("the checklist's keys", () => {
 
     expect(editor.getMarkdown()).toBe(after);
     expect(() => editor.state.doc.check()).not.toThrow();
+    const { $from } = editor.state.selection;
     if (lands) {
-      const { $from } = editor.state.selection;
       expect({ line: $from.parent.textContent, offset: $from.parentOffset }).toEqual(lands);
     }
+    if (block) expect(blockOf($from)).toBe(block);
     if (handled !== undefined) expect(claimed).toBe(handled);
+    // Never two lists side by side: the dialect has no spelling for them.
+    const kinds: string[] = [];
+    editor.state.doc.forEach((node) => kinds.push(node.type.name));
+    expect(kinds.join(" ")).not.toContain("taskList taskList");
     editor.destroy();
   });
 
@@ -1329,9 +1889,25 @@ describe("a body written in a shape the keys can no longer make", () => {
     editor.destroy();
   });
 
-  it("makes a loose line a to-do of its own, and drops a blank one", () => {
-    expect(checklistTrip("- [ ] a\n\nloose words")).toBe("- [ ] a\n- [ ] loose words");
+  /** #672 made a loose line a to-do of its own, because nothing else could hold it; #688 keeps it
+   *  the line of text it is. A blank one is still dropped, at any level. */
+  it("keeps a loose line as text, and drops a blank one", () => {
+    expect(checklistTrip("- [ ] a\n\nloose words")).toBe("- [ ] a\n\nloose words");
     expect(checklistTrip("- [ ] \n\n  &nbsp;")).toBe("- [ ] ");
+    expect(checklistTrip("Some words\n\n&nbsp;\n\n- [ ] a")).toBe("Some words\n\n- [ ] a");
+    expect(checklistTrip("&nbsp;")).toBe("- [ ] ");
+  });
+
+  /** A block this dialect has no node for keeps its words, as text — marks and all. */
+  it("reads a quote as the line of text it holds", () => {
+    expect(checklistTrip("- [ ] a\n\n> a **quoted** line")).toBe("- [ ] a\n\na **quoted** line");
+  });
+
+  it("joins two lists the parse left side by side, whatever came between them", () => {
+    const editor = checklistEditor("- [ ] a\n\n&nbsp;\n\n- [ ] b");
+    expect(editor.state.doc.childCount).toBe(1);
+    expect(editor.getMarkdown()).toBe("- [ ] a\n- [ ] b");
+    editor.destroy();
   });
 
   it("makes a second paragraph inside a to-do its sub-to-do", () => {
@@ -1364,7 +1940,8 @@ describe("a body written in a shape the keys can no longer make", () => {
 
 /**
  * The checklist's own arbitrary utilities, lifted out of the shipped source the way
- * {@link PROMPT_UTILITIES} is — every bracketed class in `CHECKLIST_PROSE` and `DELETE_TODO`.
+ * {@link PROMPT_UTILITIES} is — every bracketed class in `CHECKLIST_PROSE`, `HEADING_PROSE` (its
+ * headings since #688, shared with the note) and `DELETE_TODO`.
  */
 function arbitraryUtilitiesOf(name: string): string[] {
   const block = source.match(new RegExp(`const ${name} = cn\\(([\\s\\S]*?)\\n\\);`))?.[1] ?? "";
@@ -1375,6 +1952,7 @@ function arbitraryUtilitiesOf(name: string): string[] {
 
 const CHECKLIST_UTILITIES = [
   ...arbitraryUtilitiesOf("CHECKLIST_PROSE"),
+  ...arbitraryUtilitiesOf("HEADING_PROSE"),
   ...arbitraryUtilitiesOf("DELETE_TODO"),
 ];
 
@@ -1382,7 +1960,18 @@ describe("the checklist's CSS is really compiled", () => {
   it("is drawn from arbitrary selectors at all", () => {
     // A sweep over nothing finds nothing — the prompt's own guard, for the same reason.
     expect(arbitraryUtilitiesOf("CHECKLIST_PROSE").length).toBeGreaterThanOrEqual(10);
+    // The headings a to-do document holds since #688, shared with the note's surface.
+    expect(arbitraryUtilitiesOf("HEADING_PROSE").length).toBeGreaterThanOrEqual(10);
     expect(arbitraryUtilitiesOf("DELETE_TODO").length).toBe(2);
+  });
+
+  /** The text between the lists is spaced; a to-do's own line and a sub-list stay flush. */
+  it("spaces the top-level blocks and not a to-do's line", async () => {
+    for (const utility of ["[&>p]:my-1", "[&>ul]:my-1", "[&_li_p]:m-0", "[&_li_ul]:m-0"]) {
+      expect(CHECKLIST_UTILITIES).toContain(utility);
+    }
+    expect(await compiledUtilities("[&>p]:my-1")).toMatch(/>\s*p\s*\{/);
+    expect(await compiledUtilities("[&_li_p]:m-0")).toMatch(/li\s+p\s*\{/);
   });
 
   it("emits a rule for every one of them", async () => {
@@ -1406,6 +1995,9 @@ describe("the checklist's CSS is really compiled", () => {
 
     expect(
       arbitraryUtilitiesOf("CHECKLIST_PROSE").filter((utility) => !onSurface.includes(utility)),
+    ).toEqual([]);
+    expect(
+      arbitraryUtilitiesOf("HEADING_PROSE").filter((utility) => !onSurface.includes(utility)),
     ).toEqual([]);
     expect(
       arbitraryUtilitiesOf("DELETE_TODO").filter((utility) => !onButton.includes(utility)),

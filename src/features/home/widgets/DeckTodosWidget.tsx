@@ -1,7 +1,8 @@
 /**
- * Every deck's To-do band, gathered on the home page and ticked off where it stands — a heading per
- * deck and its to-dos beneath it, sub-to-dos indented one step per level (issue #672, spec
- * `docs/superpowers/specs/2026-09-29-deck-todos-design.md` §7).
+ * Every deck's to-do lists, gathered on the home page and ticked off where they stand — a heading
+ * per deck, each of its lists' titles beneath it, and each list's to-dos under its title, sub-to-dos
+ * indented one step per level (issue #672, spec `docs/superpowers/specs/2026-09-29-deck-todos-design.md`
+ * §7, amended by `2026-09-29-titled-todo-lists-design.md` §6).
  *
  * **A body, not a card.** `WidgetCard` draws the title, the `Which decks` chip, the settings popover
  * and the Customize tray; this draws the headings, the to-dos, the one-line failure slot and the
@@ -10,56 +11,66 @@
  * this kind.
  *
  * ⚠️ **A to-do list is not a note.** It shares the deck notes' editor and inline dialect and nothing
- * else: one list to a deck, a column on the `decks` row (`decks.todos`), and a to-do is a *line* of
- * it with no id of its own. This file reads the list through `todoMarkdown.ts` and never loads the
- * editor — a card on a dashboard is no place for 141.5 kB of ProseMirror.
+ * else: a deck holds any number of titled lists (`deck_todo_lists`, user schema v59), and a to-do is
+ * a *line* of one list's body with no id of its own. This file reads each body through
+ * `todoMarkdown.ts` and never loads the editor — a card on a dashboard is no place for 141.5 kB of
+ * ProseMirror. **A body is a document now**, headings and paragraphs among the to-dos, and this
+ * card draws its to-dos only: `parseTodos` answers every to-do block's items and nothing else, so a
+ * text line never reaches a row here.
  *
  * ## Rust answers the lists; this file draws the conclusions
  *
- * One read, {@link deckTodoListsKey} over `deck_todo_lists`: every deck whose list is not empty, with
- * its name, whether it is archived, whether its band is open, and when it was last edited. Scope,
- * the archived switch, the two to-do switches and the order are all decided here, over that one
- * answer — the three orders are three readings of one list, `DeckCompletionWidget`'s argument. **The
- * open count is `countTodos` over the deck's whole list**, at every depth and whatever the switches
- * hide, so the heading says how much is left in the deck and never how much fitted on the card.
+ * One read, {@link deckTodoListsKey} over `every_deck_todo_list`: every list whose body is not
+ * empty, with its deck's name, whether the deck is archived, whether its band is open, the list's
+ * title and when the list was last edited. Grouping into decks, scope, the archived switch, the two
+ * to-do switches and the order are all decided here, over that one answer — the three orders are
+ * three readings of one list, `DeckCompletionWidget`'s argument. **The open count is `countTodos`
+ * over each of the deck's lists whole, summed**, at every depth and whatever the switches hide, so
+ * the heading says how much is left in the deck and never how much fitted on the card. **A list's
+ * place under its deck is its `sortOrder`, then its id** — the band's order, so the widget and the
+ * deck never list one deck's lists two ways.
  *
- * ## A tick is a compare-and-set
+ * ## A tick is a compare-and-set, on one list
  *
- * A to-do is named by its **source line in the body this card read**, and the body may have moved
- * since — the band autosaving in another window, a sync landing. So the tick sends the body it read
- * as `expected` and Rust refuses a mismatch with `TODOS_CHANGED` rather than flipping whatever now
- * sits on that line. A refusal re-reads and prints the refusal's own sentence in the one-line
- * failure slot; the reader ticks again against the fresh list. A success writes the new body into
- * the cache at once, so a second tick is made against the body the first one wrote, and then
- * re-reads under `["decks", "todos"]` — which is the band's key too. **While a write is out every
- * box refuses**, because a second tick's `expected` would be the body the first is replacing.
+ * A to-do is named by **its list's id and its source line in the body this card read**, and the
+ * body may have moved since — the list's dialog autosaving in another window, a sync landing. So the
+ * tick sends the body it read as `expected` and Rust refuses a mismatch with `TODOS_CHANGED` rather
+ * than flipping whatever now sits on that line. A refusal re-reads and prints the refusal's own
+ * sentence in the one-line failure slot; the reader ticks again against the fresh list. A success
+ * writes the new body into the cache by list id at once, so a second tick is made against the body
+ * the first one wrote, and then re-reads under `["decks", "todos"]` — which is the band's key too.
+ * **While a write is out every box refuses**, because a second tick's `expected` would be the body
+ * the first is replacing.
  *
  * **A tick can take the row the caret is on off the card** — with `Show completed` off the ticked
- * to-do is hidden, and a deck with nothing left leaves whole — and a removed node drops the caret
- * on `<body>`. So a tick pressed from a row holding the caret hands it on ({@link handoffTarget}):
- * to the deck's next row, else the row before, else the nearest deck heading left on the card.
+ * to-do is hidden, a list with nothing left leaves with its title, and a deck with no list left
+ * leaves whole — and a removed node drops the caret on `<body>`. So a tick pressed from a row
+ * holding the caret hands it on ({@link handoffTarget}): to the deck's next row, else the row
+ * before, else the nearest deck heading left on the card.
  *
- * **A line `parseTodos` reads only because nothing is dropped** — a plain bullet, a stray line from
- * a newer build — is drawn as an open to-do with no box to flip: `toggleTodo` answers `null` for it,
- * so its checkbox is `aria-disabled` and a press writes nothing.
+ * **A line `parseTodos` reads as a to-do with no box** — a plain bullet — is drawn as an open to-do
+ * with no box to flip: `toggleTodo` answers `null` for it, so its checkbox is `aria-disabled` and a
+ * press writes nothing.
  *
  * ## A heading opens the deck on its To-do band
  *
  * `DeckCompletionWidget`'s press — `setActiveView("decks")` then `setOpenDeckId(id)`, the order
  * `setActiveView`'s own clearing of the id forces — with one write in front: the band's disclosure,
- * sent only when {@link DeckTodoList.todosOpen} says it is shut, and awaited, so the deck opens on
- * it. A refused disclosure still opens the deck; the band is one press away there.
+ * sent only when {@link DeckTodoListEntry.todosOpen} says it is shut, and awaited, so the deck opens
+ * on it. A refused disclosure still opens the deck; the band is one press away there. A list's title
+ * is a subheading and presses nothing.
  *
  * ## Rows are whole, and a heading never closes the list
  *
- * Every row costs its own drawn height — a heading {@link LINE_PX}, a to-do its padding and one
- * {@link TEXT_LINE_PX} per line its text is estimated to wrap to — and rows are taken, with the
- * body's gap between each, until the next would not fit: `fit.fitCount`'s arithmetic, over rows of
- * more than one height. A footer line is reserved only when something is left over. **The to-do
- * the cut lands on is drawn clamped to the lines left** rather than dropped, so a to-do taller than
- * the whole card still shows its first lines instead of leaving the card empty but for `+N more`.
- * A heading whose to-dos all fell past the cut is dropped with them, `ActivityWidget`'s rule for a
- * day with no line left: it would read as a deck with nothing to do.
+ * Every row costs its own drawn height — a deck heading and a list title {@link LINE_PX} each, a
+ * to-do its padding and one {@link TEXT_LINE_PX} per line its text is estimated to wrap to — and
+ * rows are taken, with the body's gap between each, until the next would not fit: `fit.fitCount`'s
+ * arithmetic, over rows of more than one height. A footer line is reserved only when something is
+ * left over. **The to-do the cut lands on is drawn clamped to the lines left** rather than dropped,
+ * so a to-do taller than the whole card still shows its first lines instead of leaving the card
+ * empty but for `+N more`. A heading or a title whose to-dos all fell past the cut is dropped with
+ * them, `ActivityWidget`'s rule for a day with no line left: it would read as a deck, or a list,
+ * with nothing to do.
  *
  * **No `@container` here or on the page that draws this**, and no z-index that is not from
  * `LAYER` — `fit.ts`' module doc has the argument.
@@ -74,6 +85,7 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import type { Inline } from "@/features/decks/noteMarkdown";
 import {
   countTodos,
+  listTitle,
   parseTodos,
   toggleTodo,
   visibleTodos,
@@ -81,7 +93,13 @@ import {
 } from "@/features/decks/todoMarkdown";
 import { count, plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
-import { ipc, ipcError, type DeckRow, type DeckTodoList, type HomeWidget } from "@/lib/ipc";
+import {
+  ipc,
+  ipcError,
+  type DeckRow,
+  type DeckTodoListEntry,
+  type HomeWidget,
+} from "@/lib/ipc";
 import { PRESS_SOFT } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
 import { useAppStore } from "@/lib/store";
@@ -118,9 +136,10 @@ const TEXT_LINE_PX = 19;
 const ROW_PAD_PX = 8;
 
 /**
- * A one-line row, in pixels: a heading ({@link DeckHeading}'s `h-[27px]`) and a to-do of one line
- * are both this tall — `ActivityWidget`'s figure. **The classes named on the two constants above
- * and on the heading spell this out and must stay in step with it.**
+ * A one-line row, in pixels: a deck heading ({@link DeckHeading}'s `h-[27px]`), a list title
+ * ({@link ListHeading}'s, the same) and a to-do of one line are all this tall — `ActivityWidget`'s
+ * figure. **The classes named on the two constants above and on both headings spell this out and
+ * must stay in step with it.**
  */
 const LINE_PX = TEXT_LINE_PX + ROW_PAD_PX;
 
@@ -206,12 +225,32 @@ function orderOf(value: string | number | undefined): TodoOrder {
   return value === "name" || value === "open" ? value : "edited";
 }
 
-/** One deck's list, read: every to-do, the ones the switches leave, and how many are open. */
-export interface TodoDeck {
-  list: DeckTodoList;
-  /** What the switches leave to draw — `visibleTodos` over the whole tree. */
+/** One list, read: the entry it came from, the to-dos the switches leave, and how many are open. */
+export interface TodoList {
+  entry: DeckTodoListEntry;
+  /** What the switches leave to draw — `visibleTodos` over the list's whole tree. */
   visible: TodoItem[];
   /** Open to-dos across the whole list, at every depth. */
+  open: number;
+}
+
+/**
+ * One deck, read: the deck's facts (the same on every one of its entries), its lists, and the two
+ * figures its heading and the orders read.
+ */
+export interface TodoDeck {
+  deckId: number;
+  name: string;
+  archived: boolean;
+  todosOpen: boolean;
+  /** The newest `updatedAt` among the deck's lists — what `Last edited` orders by. */
+  updatedAt: number;
+  /**
+   * In {@link todoDecks}' `inScope`, every list holding a to-do at all; in `drawn`, only those
+   * with something left to draw. In the answer's order either way.
+   */
+  lists: TodoList[];
+  /** Open to-dos across every list the deck holds, at every depth — summed, and never cut. */
   open: number;
 }
 
@@ -225,13 +264,20 @@ export interface TodoFilter {
 }
 
 /**
- * The decks in scope, read — and the ones among them with anything to draw.
+ * The decks in scope, read and grouped — and the ones among them with anything to draw.
  *
- * `inScope` is every deck the scope and the archived switch leave **that holds a to-do at all**;
- * `drawn` is those with something left once completed ones and sub-to-dos are hidden. The two are
- * kept apart because the card's empty sentences are about them: nothing in scope is
- * {@link NO_TODOS}, and nothing drawn over a non-empty scope is {@link ALL_DONE} when nothing in
- * scope is open and {@link NESTED_ONLY} when something is.
+ * The answer is one entry per **list**; this folds them into decks, in the order each deck is first
+ * met, and each deck's lists in the answer's order. `inScope` is every deck the scope and the
+ * archived switch leave **that holds a to-do at all** — a list of text alone holds none, and is
+ * dropped here; `drawn` is those with something left once completed ones and sub-to-dos are hidden,
+ * each carrying only its lists that have. The two are kept apart because the card's empty sentences
+ * are about them: nothing in scope is {@link NO_TODOS}, and nothing drawn over a non-empty scope is
+ * {@link ALL_DONE} when nothing in scope is open and {@link NESTED_ONLY} when something is. A
+ * deck in `drawn` keeps its `inScope` open count, so its heading still counts a list the switches
+ * hid.
+ *
+ * **`updatedAt` is the newest of every entry the deck has in the answer**, a text-only list's
+ * included: an edit to any of its lists is an edit to the deck's to-dos.
  *
  * **The archived switch holds in both scopes**, so it always means what its label says; the
  * checklist offers an archived deck only while it is on, and a choice made while it was on is
@@ -239,23 +285,48 @@ export interface TodoFilter {
  * comparison cannot measure.
  */
 export function todoDecks(
-  lists: readonly DeckTodoList[],
+  entries: readonly DeckTodoListEntry[],
   filter: TodoFilter,
 ): { inScope: TodoDeck[]; drawn: TodoDeck[] } {
   const chosen = new Set(filter.deckIds);
-  const inScope: TodoDeck[] = [];
-  for (const list of lists) {
-    if (list.archived && !filter.archived) continue;
-    if (filter.scope === "chosen" && !chosen.has(list.deckId)) continue;
-    const items = parseTodos(list.body);
+  const byDeck = new Map<number, TodoDeck>();
+  for (const entry of entries) {
+    if (entry.archived && !filter.archived) continue;
+    if (filter.scope === "chosen" && !chosen.has(entry.deckId)) continue;
+    let deck = byDeck.get(entry.deckId);
+    if (deck === undefined) {
+      deck = {
+        deckId: entry.deckId,
+        name: entry.deckName,
+        archived: entry.archived,
+        todosOpen: entry.todosOpen,
+        updatedAt: entry.updatedAt,
+        lists: [],
+        open: 0,
+      };
+      byDeck.set(entry.deckId, deck);
+    }
+    deck.updatedAt = Math.max(deck.updatedAt, entry.updatedAt);
+    const items = parseTodos(entry.body);
     if (items.length === 0) continue;
-    inScope.push({
-      list,
+    const open = countTodos(items).open;
+    deck.lists.push({
+      entry,
       visible: visibleTodos(items, { showDone: filter.showDone, nested: filter.nested }),
-      open: countTodos(items).open,
+      open,
     });
+    deck.open += open;
   }
-  return { inScope, drawn: inScope.filter((deck) => deck.visible.length > 0) };
+  for (const deck of byDeck.values()) {
+    deck.lists.sort((a, b) => a.entry.sortOrder - b.entry.sortOrder || a.entry.id - b.entry.id);
+  }
+  const inScope = [...byDeck.values()].filter((deck) => deck.lists.length > 0);
+  const drawn: TodoDeck[] = [];
+  for (const deck of inScope) {
+    const lists = deck.lists.filter((list) => list.visible.length > 0);
+    if (lists.length > 0) drawn.push({ ...deck, lists });
+  }
+  return { inScope, drawn };
 }
 
 /**
@@ -266,42 +337,44 @@ export function todoDecks(
 export function sortTodoDecks(decks: readonly TodoDeck[], order: TodoOrder): TodoDeck[] {
   switch (order) {
     case "name":
-      return sortOptions(decks, (deck) => deck.list.name);
+      return sortOptions(decks, (deck) => deck.name);
     case "open":
       return sortOptions(
         decks,
-        (deck) => deck.list.name,
+        (deck) => deck.name,
         (deck) => [-deck.open],
       );
     case "edited":
       return sortOptions(
         decks,
-        (deck) => deck.list.name,
-        (deck) => [-deck.list.updatedAt],
+        (deck) => deck.name,
+        (deck) => [-deck.updatedAt],
       );
   }
 }
 
 /**
- * One drawn row: a deck's heading, or one to-do at a depth. A to-do's `lines` is its text's
- * estimated line count; `clamp` is set only on the to-do the cut landed on, and is the number of
- * lines it is drawn at.
+ * One drawn row: a deck's heading, a list's title, or one to-do at a depth. A to-do's `lines` is
+ * its text's estimated line count; `clamp` is set only on the to-do the cut landed on, and is the
+ * number of lines it is drawn at.
  */
 export type TodoRow =
   | { kind: "deck"; deck: TodoDeck }
+  | { kind: "list"; deck: TodoDeck; list: TodoList }
   | {
       kind: "item";
       deck: TodoDeck;
+      list: TodoList;
       item: TodoItem;
       depth: number;
       lines: number;
       clamp?: number;
     };
 
-/** A row's drawn height, in pixels — a heading one line, a to-do its padding and its estimated
- *  lines. */
+/** A row's drawn height, in pixels — a deck heading or a list title one line, a to-do its padding
+ *  and its estimated lines. */
 function rowPx(row: TodoRow): number {
-  return row.kind === "deck" ? LINE_PX : ROW_PAD_PX + row.lines * TEXT_LINE_PX;
+  return row.kind === "item" ? ROW_PAD_PX + row.lines * TEXT_LINE_PX : LINE_PX;
 }
 
 /**
@@ -316,19 +389,23 @@ export function linesOf(text: string, widthPx: number): number {
     .reduce((sum, part) => sum + Math.max(1, Math.ceil(part.length / perLine)), 0);
 }
 
-/** The decks' rows in drawn order — each heading, then its to-dos depth first. */
+/** The decks' rows in drawn order — each deck's heading, then each of its lists' titles followed by
+ *  that list's to-dos depth first. */
 export function todoRows(decks: readonly TodoDeck[], bodyWidthPx: number): TodoRow[] {
   const rows: TodoRow[] = [];
-  const walk = (deck: TodoDeck, items: readonly TodoItem[], depth: number) => {
+  const walk = (deck: TodoDeck, list: TodoList, items: readonly TodoItem[], depth: number) => {
     for (const item of items) {
       const width = bodyWidthPx - depth * INDENT_PX - BOX_PX;
-      rows.push({ kind: "item", deck, item, depth, lines: linesOf(item.text, width) });
-      walk(deck, item.children, depth + 1);
+      rows.push({ kind: "item", deck, list, item, depth, lines: linesOf(item.text, width) });
+      walk(deck, list, item.children, depth + 1);
     }
   };
   for (const deck of decks) {
     rows.push({ kind: "deck", deck });
-    walk(deck, deck.visible, 0);
+    for (const list of deck.lists) {
+      rows.push({ kind: "list", deck, list });
+      walk(deck, list, list.visible, 0);
+    }
   }
   return rows;
 }
@@ -341,7 +418,8 @@ function itemCount(rows: readonly TodoRow[]): number {
 /**
  * The rows `budget` pixels hold, in order, with `gap` between each: every row that fits whole,
  * then — if the row the cut lands on is a to-do with at least one line of room left — that to-do
- * clamped to those lines. A heading left last is dropped.
+ * clamped to those lines. A list title left last is dropped, and then a deck heading left last:
+ * both would name something with nothing under it.
  */
 function cutTo(
   rows: readonly TodoRow[],
@@ -364,7 +442,7 @@ function cutTo(
     }
     break;
   }
-  if (shown[shown.length - 1]?.kind === "deck") shown.pop();
+  while (shown.length > 0 && shown[shown.length - 1].kind !== "item") shown.pop();
   return { shown, hidden: itemCount(rows) - itemCount(shown) };
 }
 
@@ -399,30 +477,45 @@ function openWords(deck: TodoDeck): string {
   return `${count(deck.open)} open`;
 }
 
-/** One tick in flight: the deck, the body read, the body to write, and the line pressed. */
+/** One list's drawn rows: its title at the top, then the to-dos the cut left it. */
+interface ListGroup {
+  list: TodoList;
+  items: Extract<TodoRow, { kind: "item" }>[];
+}
+
+/** One tick in flight: the deck and the list, the body read, the body to write, and the line
+ *  pressed. */
 interface Tick {
   deckId: number;
+  listId: number;
   body: string;
   next: string;
   line: number;
 }
 
-/** On a to-do's press: which deck's list it is in. With {@link TODO_LINE_ATTR}, how
- *  {@link handoffTarget} finds a row by what it is rather than by where it is drawn. */
+/** On a to-do's press: which deck it is under — how {@link handoffTarget} gathers the deck's rows. */
 const TODO_DECK_ATTR = "data-todo-deck";
-/** On a to-do's press: its source line — the name a tick gives it, and stable across one. */
+/** On a to-do's press: which list it is a line of. With {@link TODO_LINE_ATTR}, how
+ *  {@link handoffTarget} finds a row by what it is rather than by where it is drawn. */
+const TODO_LIST_ATTR = "data-todo-list";
+/** On a to-do's press: its source line in its list's body — the name a tick gives it, and stable
+ *  across one. */
 const TODO_LINE_ATTR = "data-todo-line";
 /** On a deck heading's press: the deck it opens. */
 const TODO_HEADING_ATTR = "data-todo-heading";
 
 /**
- * A caret owed to the card: the tick was pressed on a row holding it. The line names the row —
- * a tick flips one character and moves no line — and `decks` is the order the decks were drawn
- * in, for when the ticked deck leaves the card whole and the caret has to go to another one.
+ * A caret owed to the card: the tick was pressed on a row holding it. The list and the line name
+ * the row — a tick flips one character and moves no line — `lists` is the order the deck's lists
+ * were drawn in, for when the ticked list leaves the card and the caret has to go to its neighbour,
+ * and `decks` is the order the decks were drawn in, for when the ticked deck leaves the card whole
+ * and the caret has to go to another one.
  */
 interface CaretHandoff {
   deckId: number;
+  listId: number;
   line: number;
+  lists: readonly number[];
   decks: readonly number[];
 }
 
@@ -431,8 +524,9 @@ interface CaretHandoff {
  * reached next, in drawn order:
  *
  * 1. **The deck's next row** — the ticked row itself if it is somehow still drawn, else the first
- *    row after it. Lines rise in drawn order within a deck, since the rows are the list walked
- *    depth first.
+ *    row after it: later in the same list, else in a list drawn after it. A row is placed by its
+ *    list's drawn position and then its line — lines rise in drawn order within a list, since the
+ *    rows are the list walked depth first — and a list the press did not see drawn goes last.
  * 2. **The row before it**, when the ticked one was the deck's last.
  * 3. **A deck heading**: the ticked deck's own, then the decks drawn after it, then those before.
  *    With completed ones hidden a deck with no row left is not drawn at all, heading included, so
@@ -445,10 +539,18 @@ function handoffTarget(root: HTMLElement | null, owed: CaretHandoff): HTMLElemen
   const rows = Array.from(
     root.querySelectorAll<HTMLElement>(`[${TODO_DECK_ATTR}="${owed.deckId}"]`),
   );
-  const lineOf = (el: HTMLElement) => Number(el.getAttribute(TODO_LINE_ATTR));
-  const after = rows.find((el) => lineOf(el) >= owed.line);
+  const listAt = (listId: number) => {
+    const at = owed.lists.indexOf(listId);
+    return at < 0 ? owed.lists.length : at;
+  };
+  /** Negative when `el` is drawn before the ticked row, zero at it, positive after it. */
+  const place = (el: HTMLElement) => {
+    const list = listAt(Number(el.getAttribute(TODO_LIST_ATTR))) - listAt(owed.listId);
+    return list !== 0 ? list : Number(el.getAttribute(TODO_LINE_ATTR)) - owed.line;
+  };
+  const after = rows.find((el) => place(el) >= 0);
   if (after !== undefined) return after;
-  const before = rows.filter((el) => lineOf(el) < owed.line);
+  const before = rows.filter((el) => place(el) < 0);
   if (before.length > 0) return before[before.length - 1];
   const at = owed.decks.indexOf(owed.deckId);
   const order =
@@ -479,19 +581,24 @@ export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactE
   const setActiveView = useAppStore((s) => s.setActiveView);
   const setOpenDeckId = useAppStore((s) => s.setOpenDeckId);
 
-  const listsQuery = useQuery({ queryKey: deckTodoListsKey, queryFn: () => ipc.deckTodoLists() });
+  const listsQuery = useQuery({
+    queryKey: deckTodoListsKey,
+    queryFn: () => ipc.everyDeckTodoList(),
+  });
 
   /**
-   * The tick. The success writes the new body into the cache before anything re-reads, so the
-   * next tick's `expected` is the body this one wrote; `onSettled` returns the re-read, so the row
-   * stays greyed until the list on screen is the one Rust holds — and a refusal's re-read is what
-   * the reader ticks against next.
+   * The tick — the list's own compare-and-set, the body only and never the title. The success
+   * writes the new body into the cache by list id before anything re-reads, so the next tick's
+   * `expected` is the body this one wrote; `onSettled` returns the re-read, so the row stays greyed
+   * until the list on screen is the one Rust holds — and a refusal's re-read is what the reader
+   * ticks against next.
    */
   const tick = useMutation({
-    mutationFn: ({ deckId, next, body }: Tick) => ipc.deckTodosSet(deckId, next, body),
-    onSuccess: (_answer, { deckId, next }) => {
-      client.setQueryData<DeckTodoList[]>(deckTodoListsKey, (lists) =>
-        lists?.map((each) => (each.deckId === deckId ? { ...each, body: next } : each)),
+    mutationFn: ({ deckId, listId, next, body }: Tick) =>
+      ipc.deckTodoListUpdate(deckId, listId, { body: next, expected: body }),
+    onSuccess: (_answer, { listId, next }) => {
+      client.setQueryData<DeckTodoListEntry[]>(deckTodoListsKey, (entries) =>
+        entries?.map((each) => (each.id === listId ? { ...each, body: next } : each)),
       );
     },
     onSettled: () => client.invalidateQueries({ queryKey: TODOS_ROOT }),
@@ -546,24 +653,47 @@ export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactE
   const rows = todoRows(sortTodoDecks(drawn, order), fit.bodyWidthPx);
   const { shown, hidden } = cutRows(rows, fit, failure === null ? 0 : footerLinePx(fit));
 
-  /** Consecutive rows of one deck, so each deck is one list item with its heading at the top. */
-  const groups: { deck: TodoDeck; items: Extract<TodoRow, { kind: "item" }>[] }[] = [];
+  /**
+   * Consecutive rows of one deck, and within it of one list, so each deck is one list item with its
+   * heading at the top and each list one item under it with its title at the top. A cut never ends
+   * on a heading or a title ({@link cutTo}), so every group drawn has a to-do in it.
+   */
+  const groups: { deck: TodoDeck; lists: ListGroup[] }[] = [];
   for (const row of shown) {
-    if (row.kind === "deck") groups.push({ deck: row.deck, items: [] });
-    else groups[groups.length - 1]?.items.push(row);
+    const group = groups[groups.length - 1];
+    if (row.kind === "deck") groups.push({ deck: row.deck, lists: [] });
+    else if (row.kind === "list") group?.lists.push({ list: row.list, items: [] });
+    else group?.lists[group.lists.length - 1]?.items.push(row);
   }
 
   const busy = tick.isPending;
-  const onTick = (deck: TodoDeck, item: TodoItem, next: string | null, from: HTMLElement) => {
+  const onTick = (
+    deck: TodoDeck,
+    list: TodoList,
+    item: TodoItem,
+    next: string | null,
+    from: HTMLElement,
+  ) => {
     if (busy || next === null) return;
     if (from === document.activeElement) {
       handoff.current = {
-        deckId: deck.list.deckId,
+        deckId: deck.deckId,
+        listId: list.entry.id,
         line: item.line,
-        decks: groups.map((group) => group.deck.list.deckId),
+        lists:
+          groups
+            .find((group) => group.deck.deckId === deck.deckId)
+            ?.lists.map((each) => each.list.entry.id) ?? [],
+        decks: groups.map((group) => group.deck.deckId),
       };
     }
-    tick.mutate({ deckId: deck.list.deckId, body: deck.list.body, next, line: item.line });
+    tick.mutate({
+      deckId: deck.deckId,
+      listId: list.entry.id,
+      body: list.entry.body,
+      next,
+      line: item.line,
+    });
   };
 
   /**
@@ -572,10 +702,10 @@ export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactE
    * band's disclosure goes before both, and is awaited, so the deck opens on it. `["decks"]` is
    * what every deck write invalidates, and it is what the deck editor's row read sits under.
    */
-  const openDeck = async (list: DeckTodoList) => {
-    if (!list.todosOpen) {
+  const openDeck = async (deck: TodoDeck) => {
+    if (!deck.todosOpen) {
       try {
-        await ipc.deckUpdate(list.deckId, { todosOpen: true });
+        await ipc.deckUpdate(deck.deckId, { todosOpen: true });
         void client.invalidateQueries({ queryKey: ["decks"] });
       } catch {
         // Open the deck anyway: its To-do band is one press away there, and a heading that did
@@ -583,7 +713,7 @@ export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactE
       }
     }
     setActiveView("decks");
-    setOpenDeckId(list.deckId);
+    setOpenDeckId(deck.deckId);
   };
 
   return (
@@ -594,34 +724,44 @@ export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactE
         className="m-0 flex shrink-0 list-none flex-col p-0"
         style={{ gap: fit.rowGap }}
       >
-        {groups.map(({ deck, items }) => (
-          <li key={deck.list.deckId} className="flex flex-col" style={{ gap: fit.rowGap }}>
+        {groups.map(({ deck, lists }) => (
+          <li key={deck.deckId} className="flex flex-col" style={{ gap: fit.rowGap }}>
             <DeckHeading
               deck={deck}
               counts={counts}
-              onOpen={still ? undefined : () => void openDeck(deck.list)}
+              onOpen={still ? undefined : () => void openDeck(deck)}
             />
             <ul className="m-0 flex list-none flex-col p-0" style={{ gap: fit.rowGap }}>
-              {items.map(({ item, depth, clamp }) => {
-                const next = toggleTodo(deck.list.body, item.line);
-                const pending =
-                  busy &&
-                  tick.variables?.deckId === deck.list.deckId &&
-                  tick.variables.line === item.line;
-                return (
-                  <TodoLine
-                    key={item.line}
-                    deckId={deck.list.deckId}
-                    item={item}
-                    depth={depth}
-                    clamp={clamp}
-                    boxless={next === null}
-                    refused={busy || next === null}
-                    pending={pending}
-                    onTick={still ? undefined : (from) => onTick(deck, item, next, from)}
-                  />
-                );
-              })}
+              {lists.map(({ list, items }) => (
+                <li key={list.entry.id} className="flex flex-col" style={{ gap: fit.rowGap }}>
+                  <ListHeading list={list} />
+                  <ul className="m-0 flex list-none flex-col p-0" style={{ gap: fit.rowGap }}>
+                    {items.map(({ item, depth, clamp }) => {
+                      const next = toggleTodo(list.entry.body, item.line);
+                      const pending =
+                        busy &&
+                        tick.variables?.listId === list.entry.id &&
+                        tick.variables.line === item.line;
+                      return (
+                        <TodoLine
+                          key={item.line}
+                          deckId={deck.deckId}
+                          listId={list.entry.id}
+                          item={item}
+                          depth={depth}
+                          clamp={clamp}
+                          boxless={next === null}
+                          refused={busy || next === null}
+                          pending={pending}
+                          onTick={
+                            still ? undefined : (from) => onTick(deck, list, item, next, from)
+                          }
+                        />
+                      );
+                    })}
+                  </ul>
+                </li>
+              ))}
             </ul>
           </li>
         ))}
@@ -657,14 +797,14 @@ function DeckHeading({
   counts: boolean;
   onOpen: (() => void) | undefined;
 }): ReactElement {
-  const said = counts ? `${deck.list.name} · ${openWords(deck)}` : deck.list.name;
+  const said = counts ? `${deck.name} · ${openWords(deck)}` : deck.name;
   const inner = (
     <>
       <span
         aria-hidden="true"
         className="min-w-0 truncate font-heading text-sm leading-none text-accent"
       >
-        {deck.list.name}
+        {deck.name}
       </span>
       <span
         aria-hidden="true"
@@ -693,13 +833,31 @@ function DeckHeading({
           type="button"
           aria-label={said}
           onClick={onOpen}
-          {...{ [TODO_HEADING_ATTR]: deck.list.deckId }}
+          {...{ [TODO_HEADING_ATTR]: deck.deckId }}
           className={cn("group rounded-sm text-left", row, PRESS_SOFT, FOCUS)}
         >
           {inner}
         </button>
       )}
     </h4>
+  );
+}
+
+/**
+ * A list's title, under its deck's heading — `listTitle`'s words, so a list with no title reads
+ * *Untitled list* as it does on the band's card. `h5` under the deck's `h4`, so the card, its decks
+ * and their lists are one outline. One line tall ({@link LINE_PX}, the `h-[27px]`), cut with an
+ * ellipsis rather than wrapped, and set small and dim in the body face so it reads as a label over
+ * the to-dos rather than as a second deck. It presses nothing: the deck's heading is the way into
+ * the band, and a second press on the same row of the card would open the same place.
+ */
+function ListHeading({ list }: { list: TodoList }): ReactElement {
+  return (
+    <h5 className="m-0 flex h-[27px] shrink-0 items-center">
+      <span className="min-w-0 truncate text-xs font-medium leading-none text-dim">
+        {listTitle(list.entry.title)}
+      </span>
+    </h5>
   );
 }
 
@@ -716,11 +874,12 @@ function DeckHeading({
  * so a line that can never be ticked does not look like one that can. `pending` is the row the
  * write in flight is about, and is the one drawn faint. `clamp` is set on the to-do the cut landed
  * on ({@link cutTo}), and draws its text at that many lines with an ellipsis. The press is handed
- * back to `onTick`, which asks whether it holds the caret; the deck and the line it carries are
- * how {@link handoffTarget} finds the row a caret goes to next.
+ * back to `onTick`, which asks whether it holds the caret; the deck, the list and the line it
+ * carries are how {@link handoffTarget} finds the row a caret goes to next.
  */
 function TodoLine({
   deckId,
+  listId,
   item,
   depth,
   clamp,
@@ -730,6 +889,7 @@ function TodoLine({
   onTick,
 }: {
   deckId: number;
+  listId: number;
   item: TodoItem;
   depth: number;
   clamp: number | undefined;
@@ -765,7 +925,11 @@ function TodoLine({
           aria-label={tickLabel(item)}
           aria-disabled={refused ? true : undefined}
           onClick={(event) => onTick(event.currentTarget)}
-          {...{ [TODO_DECK_ATTR]: deckId, [TODO_LINE_ATTR]: item.line }}
+          {...{
+            [TODO_DECK_ATTR]: deckId,
+            [TODO_LIST_ATTR]: listId,
+            [TODO_LINE_ATTR]: item.line,
+          }}
           className={cn(
             "group rounded-sm",
             row,

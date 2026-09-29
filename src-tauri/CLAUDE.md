@@ -225,8 +225,26 @@ than by the test.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v58**
-  (2026-09-29, [issue #672](https://github.com/Msgaihede/mtg-grimoire/issues/672)) is
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v59**
+  (2026-09-29, [issue #688](https://github.com/Msgaihede/mtg-grimoire/issues/688)) is
+  `deck_todo_lists`, a deck's **titled to-do lists, several to a deck** — the eighteenth synced
+  table, and **the rung below it reversed the same day**: v58 had argued one list to a deck into two
+  columns so as to owe no census, and several lists are a table's shape. `deck_notes`' v43 shape
+  column for column (`title`, `body`, `sort_order`, both stamps, `sync_uid` on its own line), with
+  `idx_deck_todo_lists_deck (deck_id, sort_order)` and the UNIQUE uid index, **uid-only with no
+  grain** for `deck_notes`' reason. The rung **converts in place, with capture off**: every deck
+  whose `todos` is not `''` gets one row titled `To-do`, stamped with the deck's `updated_at` and
+  named `schema::todo_list_uid(<deck uid>)` — `theory_pile_uid`'s derivation over
+  `deck_todo_lists/legacy/<deck uid>`, so every device names its own conversion the same way; a deck
+  with no uid gives a row with none. Then it drops `decks.todos`, **the three `decks` capture
+  triggers first** (v43's move — both read `NEW.todos`), and `todos` comes off the `decks` capture
+  spec, where a v58 peer's key is now skipped. `todos_open` stays. No audit row, undo step or
+  activity row for a list write, no list copied by `duplicate_deck`, and a deck delete cascades.
+  It owes `UNDO_V59`, now the head of every chain, which puts `todos` back **by dropping
+  `todos_open` and re-adding both in v58's order** — an `ADD COLUMN` appends, and `todos` alone
+  would leave a tail no v58 file had. `deck_todos.rs` is rewritten over the table; see its module
+  doc. That is one above **v58**
+  (2026-09-29, [issue #672](https://github.com/Msgaihede/mtg-grimoire/issues/672)), which is
   `decks.todos TEXT NOT NULL DEFAULT ''` and `decks.todos_open INTEGER NOT NULL DEFAULT 0` — a
   deck's to-do checklist, in the dialect `todoMarkdown.ts` reads (`''` is no list), and whether its
   To-do band is expanded. **Two columns and not a table**, because one list to a deck is a column's
@@ -235,11 +253,12 @@ than by the test.
   capture spec, on no history row and no `deck_undo::DECK_FIELDS`, not carried by `duplicate_deck`.
   `todos_open` is `notes_open`'s twin, `DEFAULT 0` for v43's reason, and **syncs where `notes_open`
   does not**, on `tokens_open`'s argument. `todos` rides neither `DeckRow` nor `DeckPatch` —
-  `deck_todos.rs` is its only reader and writer, and `set_todos` is a compare-and-set against an
+  `deck_todos.rs` was its only reader and writer, and `set_todos` a compare-and-set against an
   optional `expected` that a `coalesce` in `update_deck` could not honour. `deck_row` reads
   `todos_open` at 32 and `update_deck` binds it at `?26`. No trigger comes off, unlike v57: nothing
-  here writes a row. It owes `UNDO_V58`, now the head of every chain, which drops the three `decks`
-  capture triggers before its two columns for `UNDO_V56`'s reason. That is one above **v57**
+  here writes a row. It owes `UNDO_V58`, which ran first in every chain until `UNDO_V59` landed
+  above it, and which drops the three `decks` capture triggers before its two columns for
+  `UNDO_V56`'s reason. That is one above **v57**
   (2026-09-28, [issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617)), which is
   `decks.managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0`, whether a theory deck's managed
   wishlist files the plan's missing tokens in its **Tokens** subfolder — a switch beside
@@ -1579,11 +1598,11 @@ with the arithmetic behind the 105-character code and the crate pins, is
   nobody removed it from, with no press anywhere that said the roster was changing. **The real fix
   is a wire change carrying public keys in the manifest** and is not built; until it is, a
   partial-view device declines rather than breaking the group.
-- **The manifest is deliberately not a synced table** — it would be the eighteenth now, and this
+- **The manifest is deliberately not a synced table** — it would be the nineteenth now, and this
   line said *thirteenth* until `deck_tokens` took that number at user schema v37, then
   *fourteenth* through v43's two note tables, v46's `sticky_notes` and v52's
-  `deck_token_printings` — three rungs and four tables it did not move for — which is the
-  argument for not counting in prose at all. A manifest that *is* the key
+  `deck_token_printings` — three rungs and four tables it did not move for — then *eighteenth*
+  until v59's `deck_todo_lists`, which is the argument for not counting in prose at all. A manifest that *is* the key
   distribution cannot disagree with it, where a synced `device_removals` table could arrive late,
   arrive out of order, or arrive at a device that cannot decrypt it — which is precisely the state
   a rotation puts every peer in.
@@ -1686,9 +1705,10 @@ record, with every measurement, is
   landed, and there is no such setting any more**: `sync_relay_set_url` and `valid_relay_url` are
   deleted, `RelayStatus` no longer carries a `relayUrl`, and what the panel draws in its place is
   `sync_supporter_status`'s answer.
-- **Seventeen tables sync and `schema::SYNCED_TABLES` is the census.** (It read *fifteen* through
+- **Eighteen tables sync and `schema::SYNCED_TABLES` is the census.** (It read *fifteen* through
   v46's `sticky_notes` and v52's `deck_token_printings`, the sixteenth and seventeenth — the
-  failure the next sentence records, twice more.) ⚠️ **This line said *eleven*
+  failure the next sentence records, twice more — and *seventeen* until v59's `deck_todo_lists`,
+  the eighteenth, which was counted in the same change.) ⚠️ **This line said *eleven*
   from schema v25 until 2026-08-31**, on the argument that the spec's twelfth was
   `deck_allocations`, which v25 dropped — true when written, and made wrong by v31 adding
   `device_names` back to twelve without this page moving. **v37 makes it thirteen**: `deck_tokens`,
@@ -3080,7 +3100,7 @@ The whole record, including the pipeline the crate implements:
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
 | [home-page.md](../docs/reference/home-page.md) | `home.rs`, `startview.rs` and `activity.rs` (v44) — the layout document whose vocabulary is TypeScript's and what keeps its round trip, why an empty widget list is a layout, the activity log's three rules and the write-site census, why `activity` is not synced where `deck_audit` is, and the nine commands |
 | [collection-sharing.md](../docs/reference/collection-sharing.md) | `share/` and the second Worker (v41) — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher exists to avoid, the two-step upload, both partial indexes and the one that refused nothing, the `live`/`lapsed`/`revoked` pass, and what is not deployed |
-| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the seventeen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
+| [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the eighteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |
 | [multi-window.md](../docs/reference/multi-window.md) | `changes.rs`, `window.rs`'s `open_new` and the scanner's lease — why a second *process* stays refused, the commit-driven mask and both of the update hook's blind spots, the emitter's locked take, and the live pass behind every figure |
 | [card-scanner.md](../docs/reference/card-scanner.md) | `scanner.rs` and the crate behind it — the pipeline and every measurement, the three evidence tiers and their weights, both tracker verdicts, the debug server, §9's first commands, the raw body and lazy asset load, and §10's embedded assets and their load order, the filters mask, Fast and Exact, `decision_seq`, the `app_meta` tray and the synthetic evaluation |

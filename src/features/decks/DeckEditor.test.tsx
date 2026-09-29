@@ -171,9 +171,9 @@ const deckNotes = vi.hoisted(() => vi.fn());
  *  request, the band opens its editor seeded with the card, and the reader's **Save** is what
  *  writes — so a test that wants to see this call has to go through the dialog. */
 const deckNoteCreate = vi.hoisted(() => vi.fn());
-/** The To-do band's read (issue #672) — hoisted so `beforeEach` can put back the empty list every
- *  case here expects: a deck with no to-dos, which draws no count and no alert. */
-const deckTodos = vi.hoisted(() => vi.fn());
+/** The To-do band's read (issues #672, #688) — hoisted so `beforeEach` can put back what every
+ *  case here expects: a deck with no to-do lists, which draws no count and no alert. */
+const deckTodoLists = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
 // Hoisted so the token-pile cases can answer a deck that makes something and watch the two writes
@@ -246,11 +246,13 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckNoteDetach: vi.fn().mockResolvedValue(undefined),
     // **The To-do band asks on every open as well**, for the Notes band's reason one band up: its
     // header counts the open to-dos whether or not the band is drawn. Left off the mock, the read
-    // rejects with `ipc.deckTodos is not a function`, the band draws its refusal line, and every
-    // `getByRole("alert")` in this file finds two. The write is here so a press that reached it
-    // fails as the command it is rather than as a missing double.
-    deckTodos,
-    deckTodosSet: vi.fn().mockResolvedValue(undefined),
+    // rejects with `ipc.deckTodoLists is not a function`, the band draws its refusal line, and
+    // every `getByRole("alert")` in this file finds two. The writes are here so a press that
+    // reached one fails as the command it is rather than as a missing double.
+    deckTodoLists,
+    deckTodoListCreate: vi.fn().mockResolvedValue(undefined),
+    deckTodoListUpdate: vi.fn().mockResolvedValue(undefined),
+    deckTodoListDelete: vi.fn().mockResolvedValue(undefined),
     formatSpecs,
     searchCards,
     searchOpen,
@@ -940,9 +942,9 @@ beforeEach(() => {
   // No notes unless a test says otherwise — which is what keeps the band silent and, since
   // 2026-09-10, keeps the note glyph off every card in every other case here.
   deckNotes.mockReset().mockResolvedValue([]);
-  // No to-do list unless a test says otherwise — `""` is what `decks.todos` holds on every deck
+  // No to-do list unless a test says otherwise — what `deck_todo_lists` answers for every deck
   // nobody has written a to-do on.
-  deckTodos.mockReset().mockResolvedValue("");
+  deckTodoLists.mockReset().mockResolvedValue([]);
   // **The whole note back, never `undefined`.** The band chains the created note's *id* off this
   // answer — it is the only place that id ever arrives — so a stub resolving nothing is a
   // TypeError inside a mutation callback, reported against whichever test ran next.
@@ -2154,7 +2156,17 @@ describe("DeckEditor", () => {
    * strip together, which is the one arrangement that costs a reader a drop.
    */
   it("draws the to-do band under the price strip and under the notes band, over this deck's list", async () => {
-    deckTodos.mockResolvedValue("- [ ] Revise tokens\n- [x] Cut Clue tokens");
+    deckTodoLists.mockResolvedValue([
+      {
+        id: 7,
+        deckId: 4,
+        title: "To-do",
+        body: "- [ ] Revise tokens\n- [x] Cut Clue tokens",
+        sortOrder: 0,
+        createdAt: 0,
+        updatedAt: 0,
+      },
+    ]);
     await open();
 
     const asOf = screen.getByText(/prices, last updated with/i);
@@ -2166,7 +2178,7 @@ describe("DeckEditor", () => {
     expect(todos.tagName).toBe("SECTION");
     expect(todos.classList).toContain("shrink-0");
 
-    expect(deckTodos).toHaveBeenCalledWith(4);
+    expect(deckTodoLists).toHaveBeenCalledWith(4);
     expect(await within(todos).findByText("1 open · 1 done")).toBeInTheDocument();
 
     // The region a reader reads opts back into selection, like the notes band's body.

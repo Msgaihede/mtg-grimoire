@@ -42,9 +42,14 @@ binder or the wishlist (`collection_entries.notes`, `wishlist_entries.notes`), w
 with that row through a fold, a move and an export field of its own. And a **sticky note** is
 the reader's prose about nothing in particular, on the home page — `sticky_notes` at user schema
 v46, filed against no deck, no card and no row, which is the whole of what separates it from the
-first three. A **deck to-do list** is a fifth thing and is **not a note at all** — `decks.todos`,
-one checklist to a deck at user schema v58, whose to-dos are lines with no row of their own — yet it
-shares the notes' editor and their inline dialect, which is exactly what makes it easy to miscall.
+first three. A **deck to-do list** is a fifth thing and is **not a note at all** —
+`deck_todo_lists`, many titled lists to a deck at user schema v59, each body a document of
+headings, text and to-dos, whose to-dos are still lines with no row of their own. **It is now
+shaped exactly like a deck note** — a title, a body, a card in a band beside the Notes band, the
+notes' editor and their inline dialect — which is what makes it easy to miscall, and why the
+difference has to be said: no card attachments, no row in `deck_notes`, no Save and no history.
+v58 had one checklist to a deck in `decks.todos`, every line a to-do; v59 converted it and dropped
+the column.
 **The overlap is not cosmetic**: `deck_notes` and `sticky_notes` share a title-and-body shape, a
 CommonMark dialect and a renderer, so a sentence that says "notes" and means one of them reads
 perfectly as the other. Say which.
@@ -262,7 +267,7 @@ number to compare against.
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
 | [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
 | [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what is not deployed** |
-| [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the seventeen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
+| [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the eighteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 
 ## Running and verifying

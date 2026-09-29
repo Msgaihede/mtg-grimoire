@@ -6,7 +6,7 @@ import { compile } from "tailwindcss";
 import twEntry from "tailwindcss/index.css?raw";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { DeckPatch, DeckRow, DeckTodoList, HomeWidget } from "@/lib/ipc";
+import type { DeckPatch, DeckRow, DeckTodoListEntry, HomeWidget } from "@/lib/ipc";
 
 /**
  * The three commands this widget calls, in front of an **intact** mirror — `DeckCompletionWidget`'s
@@ -18,9 +18,15 @@ import type { DeckPatch, DeckRow, DeckTodoList, HomeWidget } from "@/lib/ipc";
  * reaches the screen if the body reads the key it claims to. The stubs are for what a cache cannot
  * hold: a read still out, a refetch, and the two writes.
  */
-const deckTodoLists = vi.hoisted(() => vi.fn<() => Promise<DeckTodoList[]>>());
-const deckTodosSet = vi.hoisted(() =>
-  vi.fn<(deckId: number, body: string, expected: string | null) => Promise<void>>(),
+const everyDeckTodoList = vi.hoisted(() => vi.fn<() => Promise<DeckTodoListEntry[]>>());
+const deckTodoListUpdate = vi.hoisted(() =>
+  vi.fn<
+    (
+      deckId: number,
+      id: number,
+      change: { title?: string | null; body?: string | null; expected?: string | null },
+    ) => Promise<void>
+  >(),
 );
 const deckUpdate = vi.hoisted(() => vi.fn<(id: number, patch: DeckPatch) => Promise<DeckRow>>());
 const deckList = vi.hoisted(() => vi.fn<() => Promise<DeckRow[]>>());
@@ -28,7 +34,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/ipc")>();
   return {
     ...actual,
-    ipc: { ...actual.ipc, deckTodoLists, deckTodosSet, deckUpdate, deckList },
+    ipc: { ...actual.ipc, everyDeckTodoList, deckTodoListUpdate, deckUpdate, deckList },
   };
 });
 
@@ -50,11 +56,20 @@ import {
 /** `deck_todos::TODOS_CHANGED`, word for word — the sentence a refused tick must print. */
 const TODOS_CHANGED = "That to-do list changed since it was read. Try again.";
 
-/** One deck's list, annotated so the mirror checks the fixture. */
-function list(over: Partial<DeckTodoList> & { deckId: number; name: string }): DeckTodoList {
+/**
+ * One list of one deck, annotated so the mirror checks the fixture. A deck's list takes the id
+ * `deckId * 10` unless the case names one, so a list id and a deck id are never the same number and
+ * a body that sends the wrong one cannot pass by coincidence.
+ */
+function list(
+  over: Partial<DeckTodoListEntry> & { deckId: number; deckName: string },
+): DeckTodoListEntry {
   return {
+    id: over.deckId * 10,
+    title: "To-do",
     archived: false,
     todosOpen: false,
+    sortOrder: 0,
     updatedAt: 1_800_000_000,
     body: "- [ ] A to-do",
     ...over,
@@ -67,28 +82,28 @@ function list(over: Partial<DeckTodoList> & { deckId: number; name: string }): D
  */
 const BURN_BODY =
   "- [ ] Revise tokens\n  - [ ] Add a Treasure maker\n  - [x] Cut Clue tokens\n- [x] Sleeve the deck";
-const BURN = list({ deckId: 1, name: "Burn", body: BURN_BODY, updatedAt: 1_800_000_100 });
+const BURN = list({ deckId: 1, deckName: "Burn", body: BURN_BODY, updatedAt: 1_800_000_100 });
 const ATRAXA = list({
   deckId: 2,
-  name: "Atraxa",
+  deckName: "Atraxa",
   body: "- [ ] Cut three creatures",
   updatedAt: 1_800_000_300,
   todosOpen: true,
 });
 const MONO = list({
   deckId: 3,
-  name: "Mono Red",
+  deckName: "Mono Red",
   body: "- [ ] One\n- [ ] Two\n- [ ] Three",
   updatedAt: 1_800_000_200,
 });
 const SHELF = list({
   deckId: 4,
-  name: "Old Shelf",
+  deckName: "Old Shelf",
   body: "- [ ] Put it back together",
   archived: true,
 });
 /** Every to-do done — nothing to draw while completed ones are hidden. */
-const FINISHED = list({ deckId: 5, name: "Finished", body: "- [x] All of it" });
+const FINISHED = list({ deckId: 5, deckName: "Finished", body: "- [x] All of it" });
 
 function widget(config: unknown = null): HomeWidget {
   return { id: "deckTodos", kind: "deckTodos", x: 0, y: 0, w: 3, h: 3, config };
@@ -108,7 +123,7 @@ function wrapper({ children }: { children: ReactNode }) {
   return <QueryClientProvider client={qc}>{children}</QueryClientProvider>;
 }
 
-function seed(lists: readonly DeckTodoList[]) {
+function seed(lists: readonly DeckTodoListEntry[]) {
   qc.setQueryData(deckTodoListsKey, lists);
 }
 
@@ -136,9 +151,30 @@ function headings(): string[] {
     .map((el) => el.getAttribute("aria-label") ?? "");
 }
 
+/** Every list title's text, in drawn order. */
+function titles(): string[] {
+  return screen.queryAllByRole("heading", { level: 5 }).map((el) => el.textContent ?? "");
+}
+
 /** Every checkbox's accessible name, in drawn order. */
 function boxes(): string[] {
   return screen.queryAllByRole("checkbox").map((el) => el.getAttribute("aria-label") ?? "");
+}
+
+/**
+ * The card as one outline, in document order: `# deck` for a deck heading, `## title` for a list
+ * title, and a to-do's checkbox name — so a case can say what is drawn under what, not only that
+ * each piece is somewhere on the card.
+ */
+function outline(): string[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('h4, h5, [role="checkbox"]')).map(
+    (el) =>
+      el.tagName === "H4"
+        ? `# ${el.getAttribute("aria-label")}`
+        : el.tagName === "H5"
+          ? `## ${el.textContent}`
+          : (el.getAttribute("aria-label") ?? ""),
+  );
 }
 
 /** Replace the two store actions a press writes, and the band's disclosure write, recording the
@@ -164,8 +200,8 @@ function recordWrites(): string[] {
 }
 
 beforeEach(() => {
-  deckTodoLists.mockReset().mockResolvedValue([]);
-  deckTodosSet.mockReset().mockResolvedValue(undefined);
+  everyDeckTodoList.mockReset().mockResolvedValue([]);
+  deckTodoListUpdate.mockReset().mockResolvedValue(undefined);
   deckUpdate.mockReset().mockResolvedValue({} as DeckRow);
   deckList.mockReset().mockResolvedValue([]);
   qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
@@ -215,7 +251,7 @@ describe("DeckTodosWidget", () => {
     });
 
     it("draws a to-do's marks, and keeps a hard break a line of its own", () => {
-      seed([list({ deckId: 1, name: "Burn", body: "- [ ] cut **three** creatures  \n      then test" })]);
+      seed([list({ deckId: 1, deckName: "Burn", body: "- [ ] cut **three** creatures  \n      then test" })]);
       draw();
 
       const box = screen.getByRole("checkbox");
@@ -225,16 +261,133 @@ describe("DeckTodosWidget", () => {
     });
   });
 
+  /**
+   * **A deck holds any number of titled lists** (user schema v59), and the answer is one entry per
+   * list — so the card folds them into decks itself, and draws each list's title under its deck.
+   */
+  describe("lists", () => {
+    const MANA = list({
+      id: 101,
+      deckId: 1,
+      deckName: "Burn",
+      title: "Mana",
+      body: "- [ ] Cut a land\n  - [x] Check curve",
+      updatedAt: 1_800_000_500,
+    });
+    const TOKENS = list({
+      id: 102,
+      deckId: 1,
+      deckName: "Burn",
+      title: "Tokens",
+      body: "- [ ] Revise tokens\n- [ ] Add a Treasure maker",
+      updatedAt: 1_800_000_400,
+    });
+
+    it("heads the deck once, then each list's title, then that list's to-dos", () => {
+      seed([MANA, TOKENS]);
+      draw();
+
+      expect(outline()).toEqual([
+        "# Burn · 3 open",
+        "## Mana",
+        'Mark "Cut a land" done',
+        "## Tokens",
+        'Mark "Revise tokens" done',
+        'Mark "Add a Treasure maker" done',
+      ]);
+      // The two lists are one deck, and one heading press, not two.
+      expect(screen.getAllByRole("button", { name: /^Burn/ })).toHaveLength(1);
+    });
+
+    it("draws a deck's lists in the band's order, never in the order they were edited", () => {
+      // Tokens was edited last and comes second in the band; the read answers it first.
+      seed([
+        { ...TOKENS, sortOrder: 1, updatedAt: 1_800_000_900 },
+        { ...MANA, sortOrder: 0, updatedAt: 1_800_000_100 },
+      ]);
+      draw();
+
+      expect(outline().filter((line) => line.startsWith("## "))).toEqual(["## Mana", "## Tokens"]);
+    });
+
+    it("calls a list with no title an Untitled list", () => {
+      seed([{ ...MANA, title: "   " }]);
+      draw();
+
+      expect(titles()).toEqual(["Untitled list"]);
+    });
+
+    it("leaves out a list with nothing to draw, and still counts it in the heading", () => {
+      const done = { ...TOKENS, body: "- [x] Revise tokens" };
+      const parked = { ...TOKENS, id: 103, title: "Parked", body: "- [ ] Later" };
+      seed([MANA, done, parked]);
+      draw({ nested: false });
+
+      expect(titles()).toEqual(["Mana", "Parked"]);
+      expect(headings()).toEqual(["Burn · 2 open"]);
+    });
+
+    it("leaves out a deck with no list left to draw", () => {
+      seed([{ ...MANA, body: "- [x] Cut a land" }, { ...TOKENS, body: "- [x] Revise tokens" }, MONO]);
+      draw();
+
+      expect(headings()).toEqual(["Mono Red · 3 open"]);
+    });
+
+    /** A body is a document now — headings and paragraphs among the to-dos — and a card draws the
+     *  to-dos alone. A list of text alone holds no to-do, so it is not drawn at all. */
+    it("never draws a list's headings or text", () => {
+      seed([
+        {
+          ...MANA,
+          body: "## Before the event\n\n- [ ] Cut a land\n\nSome notes about **why**.\n\n- [ ] Sleeve",
+        },
+        { ...TOKENS, title: "Thoughts", body: "Just words, no boxes." },
+      ]);
+      draw();
+
+      expect(outline()).toEqual([
+        "# Burn · 2 open",
+        "## Mana",
+        'Mark "Cut a land" done',
+        'Mark "Sleeve" done',
+      ]);
+      expect(screen.queryByText(/Before the event/)).toBeNull();
+      expect(screen.queryByText(/Some notes/)).toBeNull();
+      expect(screen.queryByText(/Just words/)).toBeNull();
+    });
+
+    it("orders Last edited by a deck's newest list", () => {
+      // Atraxa's one list is newer than Tokens but older than Mana, so Burn goes first: a deck is as
+      // recent as its newest list, never its first or its oldest.
+      seed([ATRAXA, { ...TOKENS, updatedAt: 1_800_000_100 }, { ...MANA, updatedAt: 1_800_000_900 }]);
+      draw();
+
+      expect(headings().map((name) => name.split(" · ")[0])).toEqual(["Burn", "Atraxa"]);
+    });
+
+    it("orders Most open by the deck's lists summed", () => {
+      // Mono Red's one list holds three open; Zoo's two hold two each, so neither alone beats it
+      // and only their sum does — and Zoo sorts after Mono Red by name, so no tie can explain it.
+      const zoo = (id: number) =>
+        list({ id, deckId: 7, deckName: "Zoo", body: "- [ ] a\n- [ ] b", updatedAt: 1 });
+      seed([MONO, zoo(71), zoo(72)]);
+      draw({ order: "open" });
+
+      expect(headings()).toEqual(["Zoo · 4 open", "Mono Red · 3 open"]);
+    });
+  });
+
   describe("the switches", () => {
     it("hides a completed to-do, but keeps a done parent over an open child, drawn done", () => {
-      seed([list({ deckId: 1, name: "Burn", body: "- [x] Parent\n  - [ ] Child\n- [x] Alone" })]);
+      seed([list({ deckId: 1, deckName: "Burn", body: "- [x] Parent\n  - [ ] Child\n- [x] Alone" })]);
       draw();
 
       expect(boxes()).toEqual(['Mark "Parent" not done', 'Mark "Child" done']);
     });
 
     it("shows completed to-dos when asked", () => {
-      seed([list({ deckId: 1, name: "Burn", body: "- [x] Parent\n  - [ ] Child\n- [x] Alone" })]);
+      seed([list({ deckId: 1, deckName: "Burn", body: "- [x] Parent\n  - [ ] Child\n- [x] Alone" })]);
       draw({ done: true });
 
       expect(boxes()).toEqual([
@@ -289,7 +442,7 @@ describe("DeckTodosWidget", () => {
     });
 
     it("orders by name", () => {
-      seed([MONO, BURN, ATRAXA, list({ deckId: 9, name: "burn again" })]);
+      seed([MONO, BURN, ATRAXA, list({ deckId: 9, deckName: "burn again" })]);
       draw({ order: "name" });
 
       const expected = ["Mono Red", "Burn", "Atraxa", "burn again"].sort((a, b) =>
@@ -299,7 +452,7 @@ describe("DeckTodosWidget", () => {
     });
 
     it("orders by most open, a tie settled by name", () => {
-      seed([BURN, ATRAXA, MONO, list({ deckId: 9, name: "Aggro", body: "- [ ] x\n- [ ] y" })]);
+      seed([BURN, ATRAXA, MONO, list({ deckId: 9, deckName: "Aggro", body: "- [ ] x\n- [ ] y" })]);
       draw({ order: "open" });
 
       expect(names()).toEqual(["Mono Red", "Aggro", "Burn", "Atraxa"]);
@@ -347,7 +500,7 @@ describe("DeckTodosWidget", () => {
      * switch.
      */
     it("names Show sub-to-dos when the only open to-dos are nested under finished ones", () => {
-      seed([list({ deckId: 1, name: "Burn", body: "- [x] P\n  - [ ] c" })]);
+      seed([list({ deckId: 1, deckName: "Burn", body: "- [x] P\n  - [ ] c" })]);
       draw({ nested: false });
 
       expect(screen.getByText(NESTED_ONLY)).toBeInTheDocument();
@@ -356,12 +509,12 @@ describe("DeckTodosWidget", () => {
     });
 
     it("says it is loading while the read is out, and why when it is refused", async () => {
-      deckTodoLists.mockReturnValue(new Promise(() => {}));
+      everyDeckTodoList.mockReturnValue(new Promise(() => {}));
       const { unmount } = draw();
       expect(screen.getByText("Loading to-dos…")).toBeInTheDocument();
       unmount();
 
-      deckTodoLists.mockRejectedValue("the database is busy");
+      everyDeckTodoList.mockRejectedValue("the database is busy");
       qc.clear();
       draw();
       expect(await screen.findByText(/the database is busy/)).toBeInTheDocument();
@@ -377,14 +530,54 @@ describe("DeckTodosWidget", () => {
 
       await user.click(screen.getByRole("checkbox", { name: 'Mark "Add a Treasure maker" done' }));
 
-      expect(deckTodosSet).toHaveBeenCalledTimes(1);
-      expect(deckTodosSet).toHaveBeenCalledWith(1, toggleTodo(BURN_BODY, 1), BURN_BODY);
+      expect(deckTodoListUpdate).toHaveBeenCalledTimes(1);
+      expect(deckTodoListUpdate).toHaveBeenCalledWith(1, BURN.id, {
+        body: toggleTodo(BURN_BODY, 1),
+        expected: BURN_BODY,
+      });
       expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks", "todos"] });
+    });
+
+    /** Two lists of one deck are two bodies, so a tick names its own list and sends its own body
+     *  as `expected` — never the deck's first list's. */
+    it("sends the ticked list's id, and that list's body as the expected one", async () => {
+      const user = userEvent.setup();
+      const second = list({ id: 12, deckId: 1, deckName: "Burn", title: "Later", body: "- [ ] x" });
+      seed([BURN, second]);
+      draw();
+
+      await user.click(screen.getByRole("checkbox", { name: 'Mark "x" done' }));
+
+      expect(deckTodoListUpdate).toHaveBeenCalledWith(1, 12, {
+        body: toggleTodo("- [ ] x", 0),
+        expected: "- [ ] x",
+      });
+    });
+
+    /** The next tick's `expected` has to be the body this one wrote, and it is read off the cache —
+     *  so the success writes that list's entry, found by its id, and leaves the deck's other list
+     *  alone. */
+    it("writes a success into the cache by list id before anything re-reads", async () => {
+      const user = userEvent.setup();
+      everyDeckTodoList.mockReturnValue(new Promise(() => {}));
+      const second = list({ id: 12, deckId: 1, deckName: "Burn", title: "Later", body: "- [ ] x" });
+      seed([BURN, second]);
+      draw({ done: true });
+
+      await user.click(screen.getByRole("checkbox", { name: 'Mark "x" done' }));
+
+      await waitFor(() =>
+        expect(qc.getQueryData<DeckTodoListEntry[]>(deckTodoListsKey)).toEqual([
+          BURN,
+          { ...second, body: toggleTodo("- [ ] x", 0) },
+        ]),
+      );
+      expect(screen.getByRole("checkbox", { name: 'Mark "x" not done' })).toBeChecked();
     });
 
     it("greys the row while the write is out, and takes no second tick", async () => {
       const user = userEvent.setup();
-      deckTodosSet.mockReturnValue(new Promise(() => {}));
+      deckTodoListUpdate.mockReturnValue(new Promise(() => {}));
       seed([BURN]);
       draw();
 
@@ -393,26 +586,26 @@ describe("DeckTodosWidget", () => {
       expect(box).toHaveAttribute("aria-disabled", "true");
 
       await user.click(screen.getByRole("checkbox", { name: 'Mark "Add a Treasure maker" done' }));
-      expect(deckTodosSet).toHaveBeenCalledTimes(1);
+      expect(deckTodoListUpdate).toHaveBeenCalledTimes(1);
     });
 
     it("prints a refusal's own sentence and reads the lists again", async () => {
       const user = userEvent.setup();
-      deckTodosSet.mockRejectedValue(TODOS_CHANGED);
-      deckTodoLists.mockResolvedValue([BURN]);
+      deckTodoListUpdate.mockRejectedValue(TODOS_CHANGED);
+      everyDeckTodoList.mockResolvedValue([BURN]);
       seed([BURN]);
       draw();
 
       await user.click(screen.getByRole("checkbox", { name: 'Mark "Revise tokens" done' }));
 
       expect(await screen.findByRole("alert")).toHaveTextContent(TODOS_CHANGED);
-      expect(deckTodoLists).toHaveBeenCalled();
+      expect(everyDeckTodoList).toHaveBeenCalled();
     });
 
-    /** A line `parseTodos` reads as a to-do only because nothing is dropped — it has no box. */
+    /** A plain bullet is a to-do `parseTodos` reads with no box. */
     it("greys a to-do with no box to tick, and writes nothing for it", async () => {
       const user = userEvent.setup();
-      seed([list({ deckId: 1, name: "Burn", body: "- plain bullet\n- [ ] a" })]);
+      seed([list({ deckId: 1, deckName: "Burn", body: "- plain bullet\n- [ ] a" })]);
       draw();
 
       const plain = screen.getByRole("checkbox", { name: 'Mark "plain bullet" done' });
@@ -422,7 +615,7 @@ describe("DeckTodosWidget", () => {
       );
 
       await user.click(plain);
-      expect(deckTodosSet).not.toHaveBeenCalled();
+      expect(deckTodoListUpdate).not.toHaveBeenCalled();
       // Drawn as not tickable, too: a dashed box, where a tickable to-do's is solid.
       const boxOf = (el: HTMLElement) => el.querySelector('[aria-hidden="true"]');
       expect(boxOf(plain)?.classList.contains("border-dashed")).toBe(true);
@@ -437,7 +630,7 @@ describe("DeckTodosWidget", () => {
      */
     it("hands the caret to the next to-do when the ticked one leaves the card", async () => {
       const user = userEvent.setup();
-      deckTodoLists.mockResolvedValue([{ ...MONO, body: toggleTodo(MONO.body, 1)! }]);
+      everyDeckTodoList.mockResolvedValue([{ ...MONO, body: toggleTodo(MONO.body, 1)! }]);
       seed([MONO]);
       draw();
 
@@ -454,7 +647,7 @@ describe("DeckTodosWidget", () => {
 
     it("hands the caret to the to-do before when the ticked one was the deck's last", async () => {
       const user = userEvent.setup();
-      deckTodoLists.mockResolvedValue([{ ...MONO, body: toggleTodo(MONO.body, 2)! }]);
+      everyDeckTodoList.mockResolvedValue([{ ...MONO, body: toggleTodo(MONO.body, 2)! }]);
       seed([MONO]);
       draw();
 
@@ -471,7 +664,7 @@ describe("DeckTodosWidget", () => {
     it("hands the caret to the next deck's heading when the ticked deck leaves the card", async () => {
       const user = userEvent.setup();
       const done = { ...ATRAXA, body: toggleTodo(ATRAXA.body, 0)! };
-      deckTodoLists.mockResolvedValue([done, MONO]);
+      everyDeckTodoList.mockResolvedValue([done, MONO]);
       seed([ATRAXA, MONO]);
       draw();
       expect(headings()).toEqual(["Atraxa · 1 open", "Mono Red · 3 open"]);
@@ -482,16 +675,55 @@ describe("DeckTodosWidget", () => {
       expect(document.activeElement).toBe(screen.getByRole("button", { name: "Mono Red · 3 open" }));
     });
 
+    /**
+     * A list whose last open to-do is ticked leaves the card with its title, while its deck stays —
+     * so the caret goes to the deck's next row, which is the first to-do of the list drawn after it.
+     * The rows are found by **list and line**: both lists have a to-do on line 0.
+     */
+    it("hands the caret to the next list's first to-do when the ticked list leaves the card", async () => {
+      const user = userEvent.setup();
+      const first = list({ id: 31, deckId: 3, deckName: "Mono Red", title: "First", body: "- [ ] a" });
+      const second = list({ id: 32, deckId: 3, deckName: "Mono Red", title: "Second", body: "- [ ] b" });
+      everyDeckTodoList.mockResolvedValue([{ ...first, body: toggleTodo(first.body, 0)! }, second]);
+      seed([first, second]);
+      draw();
+      expect(titles()).toEqual(["First", "Second"]);
+
+      await user.click(screen.getByRole("checkbox", { name: 'Mark "a" done' }));
+
+      await waitFor(() => expect(titles()).toEqual(["Second"]));
+      expect(document.activeElement).toBe(screen.getByRole("checkbox", { name: 'Mark "b" done' }));
+    });
+
+    /**
+     * The deck's last list leaves, so the caret goes back to the row before it — the **last** row
+     * of the list above, `a2` on line 1. A handoff that placed rows by line alone would take `a` on
+     * line 0 for "the next row at or after line 0", which is the list-blind answer this pins against.
+     */
+    it("hands the caret to the list before's last to-do when the deck's last list leaves", async () => {
+      const user = userEvent.setup();
+      const first = list({ id: 31, deckId: 3, deckName: "Mono Red", title: "First", body: "- [ ] a\n- [ ] a2" });
+      const second = list({ id: 32, deckId: 3, deckName: "Mono Red", title: "Second", body: "- [ ] b" });
+      everyDeckTodoList.mockResolvedValue([first, { ...second, body: toggleTodo(second.body, 0)! }]);
+      seed([first, second]);
+      draw();
+
+      await user.click(screen.getByRole("checkbox", { name: 'Mark "b" done' }));
+
+      await waitFor(() => expect(titles()).toEqual(["First"]));
+      expect(document.activeElement).toBe(screen.getByRole("checkbox", { name: 'Mark "a2" done' }));
+    });
+
     it("leaves the caret on a ticked to-do that stays on the card", async () => {
       const user = userEvent.setup();
-      deckTodoLists.mockResolvedValue([{ ...MONO, body: toggleTodo(MONO.body, 1)! }]);
+      everyDeckTodoList.mockResolvedValue([{ ...MONO, body: toggleTodo(MONO.body, 1)! }]);
       seed([MONO]);
       draw({ done: true });
 
       await user.click(screen.getByRole("checkbox", { name: 'Mark "Two" done' }));
 
       const two = await screen.findByRole("checkbox", { name: 'Mark "Two" not done' });
-      await waitFor(() => expect(deckTodoLists).toHaveBeenCalled());
+      await waitFor(() => expect(everyDeckTodoList).toHaveBeenCalled());
       expect(document.activeElement).toBe(two);
     });
 
@@ -560,7 +792,7 @@ describe("DeckTodosWidget", () => {
       await user.click(screen.getByText("Revise tokens"));
       await user.click(screen.getByText("Burn"));
 
-      expect(deckTodosSet).not.toHaveBeenCalled();
+      expect(deckTodoListUpdate).not.toHaveBeenCalled();
       expect(deckUpdate).not.toHaveBeenCalled();
       expect(writes).toEqual([]);
     });
@@ -569,7 +801,7 @@ describe("DeckTodosWidget", () => {
   describe("what fits", () => {
     const many = list({
       deckId: 1,
-      name: "Burn",
+      deckName: "Burn",
       body: Array.from({ length: 20 }, (_, i) => `- [ ] Item ${i + 1}`).join("\n"),
     });
 
@@ -590,27 +822,47 @@ describe("DeckTodosWidget", () => {
       expect(screen.queryByText(/^\+\d+ more$/)).toBeNull();
     });
 
-    /**
-     * A heading with none of its to-dos under it would read as a deck with nothing to do. Eight
-     * 27px rows (a heading, five items, a heading, one item) in a body 253px tall: with the footer
-     * reserved, seven rows and their 6px gaps fit, so the cut lands exactly on the second heading —
-     * which goes too.
-     */
-    it("never ends on a heading with nothing under it", () => {
-      const first = list({
-        deckId: 1,
-        name: "Burn",
-        updatedAt: 2,
-        body: Array.from({ length: 5 }, (_, i) => `- [ ] Item ${i + 1}`).join("\n"),
-      });
-      const second = list({ deckId: 2, name: "Atraxa", updatedAt: 1, body: "- [ ] Later" });
-      seed([first, second]);
+    /** Four one-line to-dos — with a title above them, six rows of the seven below. */
+    const four = Array.from({ length: 4 }, (_, i) => `- [ ] Item ${i + 1}`).join("\n");
+    /** A body 253px tall: with the footer reserved, seven 27px rows and their 6px gaps fit. */
+    const seven = () => {
       const fit = makeFit({ w: 3, h: 3, widthPx: spanPx(3, 104), heightPx: 305, density: "comfortable" });
       expect(fit.fitCount(27, 24)).toBe(7);
-      draw(null, { fit });
+      return fit;
+    };
 
-      expect(headings()).toEqual(["Burn · 5 open"]);
-      expect(boxes()).toHaveLength(5);
+    /**
+     * A heading with none of its to-dos under it would read as a deck with nothing to do. Nine
+     * 27px rows (a heading, a title, four items, a heading, a title, one item): seven fit, so the
+     * cut lands exactly on the second heading — which goes too.
+     */
+    it("never ends on a heading with nothing under it", () => {
+      const first = list({ deckId: 1, deckName: "Burn", updatedAt: 2, body: four });
+      const second = list({ deckId: 2, deckName: "Atraxa", updatedAt: 1, body: "- [ ] Later" });
+      seed([first, second]);
+      draw(null, { fit: seven() });
+
+      expect(headings()).toEqual(["Burn · 4 open"]);
+      expect(boxes()).toHaveLength(4);
+      expect(screen.getByText("+1 more")).toBeInTheDocument();
+    });
+
+    /** A list title costs a line like a heading, and is dropped like one: the same seven rows, with
+     *  the seventh the deck's second list's title rather than a second deck's heading. */
+    it("never ends on a list title with nothing under it", () => {
+      const first = list({ id: 11, deckId: 1, deckName: "Burn", title: "First", body: four });
+      const second = list({ id: 12, deckId: 1, deckName: "Burn", title: "Second", body: "- [ ] x" });
+      seed([first, second]);
+      draw(null, { fit: seven() });
+
+      expect(outline()).toEqual([
+        "# Burn · 5 open",
+        "## First",
+        'Mark "Item 1" done',
+        'Mark "Item 2" done',
+        'Mark "Item 3" done',
+        'Mark "Item 4" done',
+      ]);
       expect(screen.getByText("+1 more")).toBeInTheDocument();
     });
 
@@ -621,7 +873,7 @@ describe("DeckTodosWidget", () => {
      */
     it("draws a to-do too tall for the box clamped to the lines left, not an empty card", () => {
       const long = "Swap the whole mana base for fetches and shocks ".repeat(6).trim();
-      seed([list({ deckId: 1, name: "Burn", body: `- [ ] ${long}\n- [ ] Next` })]);
+      seed([list({ deckId: 1, deckName: "Burn", body: `- [ ] ${long}\n- [ ] Next` })]);
       draw(null, { fit: fitFor(2, 2) });
 
       expect(headings()).toEqual(["Burn · 2 open"]);

@@ -252,16 +252,16 @@ struct Meta {
     /// `created_at` / `updated_at`. `deck_audit` and `muted_tags` carry their own stamp
     /// (`at`, `muted_at`) as an ordinary field and have neither column.
     timestamps: bool,
-    /// Whether the table can hold a sentence for the reader at all. Eleven of the seventeen
+    /// Whether the table can hold a sentence for the reader at all. Twelve of the eighteen
     /// cannot: `decks`, `deck_categories`, `deck_labels`, `deck_tokens`, `deck_token_printings`,
-    /// `deck_notes`, `deck_note_cards`, `deck_audit`, `muted_tags`, `device_names` and
-    /// `sticky_notes`.
+    /// `deck_notes`, `deck_note_cards`, `deck_todo_lists`, `deck_audit`, `muted_tags`,
+    /// `device_names` and `sticky_notes`.
     needs_review: bool,
     /// The self-referencing column a cycle can form on, for the three folder tables.
     tree: Option<&'static str>,
 }
 
-const META: [Meta; 17] = [
+const META: [Meta; 18] = [
     Meta {
         table: "deck_folders",
         order: 0,
@@ -586,6 +586,27 @@ const META: [Meta; 17] = [
         timestamps: true,
         // No `needs_review` column on the table. An entry whose printing leaves the corpus is an
         // orphan drawn from the row's own `oracle_id`, not a conflict to report.
+        needs_review: false,
+        tree: None,
+    },
+    Meta {
+        table: "deck_todo_lists",
+        // Appended rather than slotted in behind `decks`, `deck_notes`' reason: the rank is only
+        // ever *sorted* by, so what it has to say is "after the deck this row hangs off", which
+        // any number above 1 says.
+        order: 17,
+        // **No grain, deliberately** — `deck_notes`' argument, and v59's rows are why it holds.
+        // Two devices each starting a list while apart must stay two lists, and nothing about a
+        // title could tell an accidental duplicate from a deliberate one: two readers' `To-do`
+        // are the ordinary case. The rows v59 converted out of `decks.todos` need no grain to
+        // meet either, because every device derived the same uid for its own conversion
+        // (`schema::todo_list_uid`) — so they meet on the uid, like every other row here.
+        grains: &[],
+        counters: &[],
+        timestamps: true,
+        // No `needs_review` column on the table: every field is last-writer-wins text the reader
+        // can see for themselves, and a list deleted on one device and ticked on another
+        // resolves add-wins with the list still in front of them.
         needs_review: false,
         tree: None,
     },

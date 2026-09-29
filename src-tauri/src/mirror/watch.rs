@@ -115,6 +115,12 @@ pub fn surface_of(table: &str) -> Option<Dirty> {
         // mirrored file names a token yet — the token-stacks spec §4.4 says so and keeps a token
         // section out of scope — so a write here costs one pass that renders identical bytes,
         // and `None` would be the arm a reader has to remember to move.
+        // **`deck_todo_lists` joins on `deck_notes`' argument** (user schema v59): no mirrored
+        // file names a to-do list — the deck to-dos spec §9 keeps to-dos out of the mirror,
+        // exports and shares — so a write here costs one pass that renders identical bytes, and
+        // `None` would be the arm a reader has to remember to move. Its v58 predecessor, the
+        // `decks.todos` column, reached `DECKS_AND_COLLECTION` through the `decks` arm below; a
+        // row of a deck's contents maps to decks alone, as the notes' do.
         "deck_cards"
         | "deck_categories"
         | "deck_labels"
@@ -122,7 +128,8 @@ pub fn surface_of(table: &str) -> Option<Dirty> {
         | "deck_tokens"
         | "deck_token_printings"
         | "deck_notes"
-        | "deck_note_cards" => Some(DECKS_ONLY),
+        | "deck_note_cards"
+        | "deck_todo_lists" => Some(DECKS_ONLY),
         // Both, and the over-approximation is deliberate: a deck's name titles its group
         // folder in the cabinet, so a rename that only marked decks would leave the folder
         // named after the old one until something else touched the collection. Being wrong
@@ -1085,6 +1092,8 @@ mod tests {
                 "deck_labels",
                 "deck_note_cards",
                 "deck_notes",
+                // User schema v59, a deck's to-do lists — `deck_notes`' decision, see `surface_of`.
+                "deck_todo_lists",
                 // User schema v52, beside the table it split out of — see `surface_of`.
                 "deck_token_printings",
                 "deck_tokens",
@@ -1219,6 +1228,8 @@ mod tests {
         assert!(!surface_of("deck_notes").unwrap().collection);
         assert!(surface_of("deck_note_cards").unwrap().decks);
         assert!(!surface_of("deck_note_cards").unwrap().collection);
+        assert!(surface_of("deck_todo_lists").unwrap().decks);
+        assert!(!surface_of("deck_todo_lists").unwrap().collection);
         assert!(surface_of("deck_folders").unwrap().decks);
         assert!(surface_of("wishlist_entries").unwrap().wishlist);
         assert!(surface_of("wishlist_folders").unwrap().wishlist);
