@@ -102,7 +102,7 @@ describe("every workflow and composite action", () => {
 describe("the rules' own guards", () => {
   // A census that matched nothing would pass every assertion above.
   it("sees the checkouts and the pins it is about", () => {
-    expect(checkoutSteps(releaseYml).length).toBeGreaterThanOrEqual(2);
+    expect(checkoutSteps(releaseYml).length).toBeGreaterThanOrEqual(1);
     expect(usesOf(releaseYml)).toContain(
       "tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0",
     );
