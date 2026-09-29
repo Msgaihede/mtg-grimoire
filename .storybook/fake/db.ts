@@ -318,6 +318,7 @@ import { hasVariableCost } from "@/lib/mana";
 import {
   DEFAULT_TOKEN_QUANTITY,
   isListedToken,
+  isTokenLayout,
   isTokenPrinting,
   tokenSubtitle,
 } from "@/features/decks/deckTokens";
@@ -5766,6 +5767,82 @@ function tokenPrintings(db: FakeDb, oracleId: string): FakeCard[] {
     .sort(byPrintingRank);
 }
 
+/**
+ * `deck_tokens::MARKERS`, word for word — the game markers a maker's own rules text brings to the
+ * table whatever its `all_parts` names (issue #670): The Monarch for `you become the monarch`,
+ * The Ring for `the Ring tempts you`, and so on. Lower-case phrases matched against
+ * {@link rulesText}; whole helper names, every one that resolves kept. The crate's doc says which
+ * spellings were measured and why an unmeasured one costs nothing.
+ */
+const TOKEN_MARKERS: readonly { words: readonly string[]; helpers: readonly string[] }[] = [
+  { words: ["become the monarch", "becomes the monarch"], helpers: ["The Monarch"] },
+  {
+    words: ["the ring tempts you"],
+    helpers: ["The Ring", "The Ring Tempts You", "The Ring // The Ring Tempts You"],
+  },
+  {
+    words: ["the initiative"],
+    helpers: ["Undercity // The Initiative", "The Initiative // Undercity"],
+  },
+  {
+    words: ["venture into the dungeon"],
+    helpers: ["Lost Mine of Phandelver", "Dungeon of the Mad Mage", "Tomb of Annihilation"],
+  },
+  { words: ["city's blessing"], helpers: ["City's Blessing"] },
+  {
+    words: ["daybound", "nightbound", "it becomes day", "it becomes night"],
+    helpers: ["Day // Night"],
+  },
+  { words: ["start your engines!"], helpers: ["Start Your Engines! // Max Speed"] },
+];
+
+/** `deck_tokens::OTHER_GAME_SET_TYPES` — a helper from one of these is another game's copy. */
+const OTHER_GAME_SET_TYPES: ReadonlySet<string> = new Set(["memorabilia", "minigame"]);
+
+/**
+ * `deck_tokens::rules_text` — the card's own text and every face's, lower-cased, the curly
+ * apostrophe folded to the straight one. Off the faces as well, because a two-faced card keeps its
+ * text there.
+ */
+function rulesText(card: FakeCard): string {
+  let faces: unknown;
+  try {
+    faces = JSON.parse(card.faces);
+  } catch {
+    faces = [];
+  }
+  const texts = [card.oracleText];
+  if (Array.isArray(faces)) {
+    for (const face of faces as { oracle_text?: unknown }[]) {
+      if (typeof face.oracle_text === "string") texts.push(face.oracle_text);
+    }
+  }
+  return texts
+    .filter((t): t is string => t !== null)
+    .join("\n")
+    .toLowerCase()
+    .replace(/\u2019/g, "'");
+}
+
+/**
+ * `deck_tokens::marker_printings` — the newest paper printing of each helper `names` spells, one
+ * per oracle id, laid out as a token and outside another game's set.
+ */
+function markerHelpers(db: FakeDb, names: readonly string[]): FakeCard[] {
+  const newest = new Map<string, FakeCard>();
+  const matches = db.cards
+    .filter(
+      (c) =>
+        names.includes(c.name) &&
+        c.isPaper &&
+        isTokenLayout(c.layout) &&
+        !(c.setType !== null && OTHER_GAME_SET_TYPES.has(c.setType)),
+    )
+    .sort(byPrintingRank);
+  for (const c of matches) if (!newest.has(c.oracleId)) newest.set(c.oracleId, c);
+  return [...newest.values()];
+}
+
 /** One token the deck derives, accumulated while walking its cards. */
 interface DerivedToken {
   token: FakeCard;
@@ -5821,6 +5898,23 @@ function derivedTokens(db: FakeDb, deckId: number, variant: DeckVariant): Derive
       row.sources.push({ cardId: dc.cardId, name: maker.name });
       row.refs.set(token.id, (row.refs.get(token.id) ?? 0) + 1);
       out.set(token.oracleId, row);
+    }
+    // The markers, off the maker's text (#670). A maker naming a helper twice is one source.
+    const text = rulesText(maker);
+    for (const marker of TOKEN_MARKERS) {
+      if (!marker.words.some((word) => text.includes(word))) continue;
+      for (const token of markerHelpers(db, marker.helpers)) {
+        const row: DerivedToken = out.get(token.oracleId) ?? {
+          token,
+          sources: [],
+          refs: new Map(),
+        };
+        if (!row.sources.some((source) => source.cardId === dc.cardId)) {
+          row.sources.push({ cardId: dc.cardId, name: maker.name });
+        }
+        row.refs.set(token.id, (row.refs.get(token.id) ?? 0) + 1);
+        out.set(token.oracleId, row);
+      }
     }
   }
   return [...out.values()];
@@ -24489,13 +24583,16 @@ function reconcileBackstop(db: FakeDb, dirty: readonly number[]): void {
 }
 
 /**
- * `deck_tokens::reconcile_in` — delete every entry, in each of `variants`, of a token that list
- * no longer derives and that is not `manual`, and answer what went.
+ * `deck_tokens::reconcile_in` — settle every entry, in each of `variants`, of a token that list
+ * no longer derives and that is not `manual`: **an entry at zero is deleted, and a token with
+ * copies is kept and becomes `manual`** (issue #671), so the wall draws it as not made by the
+ * deck. Answers what was deleted.
  *
- * **A `manual` token is never touched** — no card made it, so no cut can unmake it — and a
- * `hidden` one is: a dismissal is still a token the deck makes, and once it does not it has
- * nothing left to be dismissed from. Cutting the maker and adding it back brings the token back
- * as its implicit entry. A deck that is gone has nothing to reconcile.
+ * **A `manual` token is never touched** — no card made it, or the reader kept it, so no cut can
+ * unmake it — and a `hidden` one is: a dismissal is still a token the deck makes, and once it does
+ * not it has nothing left to be dismissed from. The flip waits until every list is walked, so a
+ * token kept in one list still loses its zero entries in the other. Cutting the maker and adding
+ * it back makes the token derived again. A deck that is gone has nothing to reconcile.
  */
 function reconcileTokens(
   db: FakeDb,
@@ -24504,18 +24601,21 @@ function reconcileTokens(
 ): FakeDeckTokenPrinting[] {
   if (!db.decks.some((d) => d.id === deckId)) return [];
   const removed = new Set<FakeDeckTokenPrinting>();
+  const kept = new Set<string>();
   for (const variant of variants) {
     const derived = new Set(derivedTokens(db, deckId, variant).map((d) => d.token.oracleId));
     for (const entry of db.deckTokenPrintings) {
       if (entry.deckId !== deckId || entry.variant !== variant) continue;
       if (derived.has(entry.oracleId)) continue;
       if (storedToken(db, deckId, entry.oracleId)?.state === "manual") continue;
-      removed.add(entry);
+      if (entry.quantity > 0) kept.add(entry.oracleId);
+      else removed.add(entry);
     }
   }
   if (removed.size > 0) {
     db.deckTokenPrintings = db.deckTokenPrintings.filter((e) => !removed.has(e));
   }
+  for (const oracleId of [...kept].sort()) writeTokenState(db, deckId, oracleId, "manual");
   return [...removed];
 }
 

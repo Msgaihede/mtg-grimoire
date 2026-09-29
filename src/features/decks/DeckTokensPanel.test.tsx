@@ -492,7 +492,7 @@ describe("DeckTokensPanel", () => {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
     expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
-      "Nothing in this deck makes Oko, Shadowmoor Scion Emblem. It was added manually.",
+      "Nothing in this deck makes Oko, Shadowmoor Scion Emblem. It was added by hand, or kept after the card that made it was cut.",
     );
   });
 
@@ -508,6 +508,6 @@ describe("DeckTokensPanel", () => {
     expect(within(region).getByRole("spinbutton", { name: `Quantity of ${OKO_NAME}` })).toHaveValue(0);
     expect(within(region).getByText("NOT MADE BY DECK")).toBeInTheDocument();
     expect(within(region).getByRole("button", { name: `Remove ${OKO_NAME}` })).toBeInTheDocument();
-    expect(within(region).getByText("Added manually")).toBeInTheDocument();
+    expect(within(region).getByText("Added or kept by hand")).toBeInTheDocument();
   });
 });

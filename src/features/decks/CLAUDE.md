@@ -4620,10 +4620,13 @@ already effective, and `viewOf` copies them.
      the one it adds to), because rule 3's zero was *the last entry* and beside the new one it is
      not — a `0` tile no stepper can zero again. One Undo brings the zero back.
   6. **Theory and live never share an entry**; every entry write names its list.
-  7. **A token nothing makes any more is removed** — its entries in that list are deleted, unless
-     its state is anything but `auto`: `manual`, or a pre-v55 `hidden` the launch has not retired
-     yet, which the wall draws as the reader's own. That is a reconcile after card writes, below,
-     never a read-time filter.
+  7. **A token nothing makes any more is removed at zero and kept with copies** — its entries in
+     that list at zero are deleted, and if any entry has copies the token is kept and becomes
+     `manual`, so the wall draws it as not made by the deck, red outline and all
+     ([issue #671](https://github.com/Msgaihede/mtg-grimoire/issues/671): the reader still has those
+     Treasures in the physical deck). A token whose state is anything but `auto` is not touched:
+     `manual`, or a pre-v55 `hidden` the launch has not retired yet, which the wall draws as the
+     reader's own. That is a reconcile after card writes, below, never a read-time filter.
 
   **Remove printing** (v55, managed tokens spec §3.4) is the one write that takes a token's
   **last** entry, which rule 3's stepper holds at zero: `deck_token_remove` deletes one stored
@@ -4643,8 +4646,9 @@ already effective, and `viewOf` copies them.
   spec §4.2, the census of 18 writers on 2026-09-26). Inside the write's own transaction for every
   card write that files an undo step — `deck_undo::record_cells` and `record_variant`, plus by hand
   the three steps built without them (the theory switch, a pile switched off, a pile deleted) — so
-  its deletions **ride the card write's own step**, and Ctrl+Z on a cut Smothering Tithe puts back
-  the card **and** the reader's Treasure printings. After every write, as a backstop on
+  its deletions and the state of a token it kept **ride the card write's own step**, and Ctrl+Z on
+  a cut Smothering Tithe puts back the card, the Treasure entries at zero, **and** the kept
+  Treasures as the deck's own again. After every write, as a backstop on
   `sync::with_write`'s hook, for the writers that file no step: the Collection tab's filing and the
   live cut, a sync pull, and **undo and redo themselves** (Scryfall's reconcile takes the write
   connection outside `with_write`, so the marks it leaves are reconciled at the next write that
@@ -4659,11 +4663,11 @@ already effective, and `viewOf` copies them.
   **The theory switch moves the live list's entries into the plan with the cards** rather than
   letting the reconcile take them — the Treasure arts the reader chose are part of the deck that
   becomes the plan — and replaces what the plan held, on the switch's one undoable step. **One
-  Ctrl+Z puts the live arts back, not the plan's stale ones**: v52's launch conversion pass copied
-  every old pick into *both* lists, a plan with no cards makes no token, so the switch reconciles
-  both lists
-  before it reads what its step records, and restoring an entry rule 7 owes the deletion of would
-  only hand the backstop a row to delete and the redo a reason to refuse.
+  Ctrl+Z puts the live arts back, and the plan's copies, but not its entries at zero**: v52's
+  launch conversion pass copied every old pick into *both* lists, a plan with no cards makes no
+  token, so the switch reconciles both lists before it reads what its step records — keeping the
+  copies as `manual` since #671 — and restoring an entry rule 7 owes the deletion of would only
+  hand the backstop a row to delete and the redo a reason to refuse.
 - **A token is never a deck card, and the router is Rust's** (spec §4.6). Adding or dropping a
   token, a double-faced token or an emblem from the search column — either tab, any pile, quick
   add, the card menu's `Add to`, a drop on the sidebar's deck entry — files it as a **token entry**
