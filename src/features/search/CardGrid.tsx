@@ -902,11 +902,14 @@ export function CardGrid<T extends GridCard>({
    * (the default) where nothing is docked, which is every wall but a shelved one while the filter
    * quick bar is down (spec 2026-09-29 §6.2).
    *
-   * **Two things move with it, and they must move together.** The sticky anchor's `top` becomes
-   * `stickyTop − stickyInset`, and the edge {@link stickyShelfAt} measures from moves down by the
-   * same amount — the bar names the shelf under *its own* top edge, and with 53px of quick bar over
-   * the wall that edge is 53px further into the content than the scrollport's. Moving the bar and
-   * not the edge would name the shelf the quick bar is covering.
+   * **Three things move with it, and they must move together.** The sticky anchor's `top` becomes
+   * `stickyTop − stickyInset`; the edge {@link stickyShelfAt} measures from moves down by the same
+   * amount — the bar names the shelf under *its own* top edge, and with 53px of quick bar over the
+   * wall that edge is 53px further into the content than the scrollport's; and the virtualiser's
+   * `scrollPaddingStart` grows by it, so a row a reveal, an arrow walk or a caret chase aligns to
+   * the top lands under the shelf bar's foot rather than under either bar. Moving the bar and not
+   * the edge would name the shelf the quick bar is covering; moving it and not the padding would
+   * park every revealed row behind the two bars.
    *
    * Only a sectioned wall draws a shelf bar, so a flat wall ignores it. A number rather than a
    * boolean because the wall has no business knowing what is docked above it or how tall that is:
@@ -1279,9 +1282,13 @@ export function CardGrid<T extends GridCard>({
     // **The sticky bar's strip is not somewhere a row can be revealed to** — final review S-M2 and
     // the re-check's check H, where headings brought in from above landed half under the bar. On a
     // sectioned wall every `scrollToIndex` that aligns a row to the top (a reveal, an arrow walk, a
-    // caret chasing its tile) stops the bar's height short of it. `0` on a flat wall, which has no
-    // bar and is the virtualiser's own default.
-    scrollPaddingStart: shelved ? SHELF_STICKY_HEIGHT : 0,
+    // caret chasing its tile) stops the bar's height short of it — plus `stickyTop`, the docked bar
+    // the shelf bar stacks under while the filter quick bar is down, since that strip is covered
+    // too. `scrollToIndex` sets the offset itself and never reads CSS `scroll-padding`, so `main`'s
+    // own padding cannot stand in for this. `0` on a flat wall, which has no bar and is the
+    // virtualiser's own default. Read every render, so a bar dropping in mid-scroll takes effect on
+    // the next scroll the wall asks for.
+    scrollPaddingStart: shelved ? SHELF_STICKY_HEIGHT + stickyTop : 0,
     scrollMargin,
     // Two rows of tiles beyond the viewport, which is the prefetch: their `<img>`s mount
     // and the protocol fills the cache before the reader scrolls onto them.
