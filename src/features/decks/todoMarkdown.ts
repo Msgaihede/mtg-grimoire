@@ -273,13 +273,50 @@ export function visibleTodos(
   return out;
 }
 
+/** A tree with its source lines left out — what two bodies must agree on to hold the same to-dos. */
+interface TodoShape {
+  done: boolean;
+  inlines: Inline[];
+  children: TodoShape[];
+}
+
+function shapeOf(items: readonly TodoItem[]): TodoShape[] {
+  return items.map((item) => ({
+    done: item.done,
+    inlines: item.inlines,
+    children: shapeOf(item.children),
+  }));
+}
+
+/**
+ * Whether two bodies hold the same to-dos: the same boxes, words, marks, nesting and order, as
+ * {@link parseTodos} reads them — whatever else differs between the two texts.
+ *
+ * **What it lets differ is what `parseTodos` does not draw**, and the one that matters is an empty
+ * to-do with nothing under it: the line New to-do appends and Enter after the last line makes,
+ * which is a place to type rather than a thing to do. The band asks this rather than comparing
+ * bytes before it writes, because a write for that line alone would move the deck's `updated_at`
+ * — and with it *Last edited* in the widget and the gallery — over a change nothing reads. The
+ * rest it lets differ is as invisible: source line numbers, line endings, the spaces around a
+ * to-do's words.
+ *
+ * `line` is left out on purpose: an empty line in the middle moves every line after it, and a
+ * widget tick is always made against the stored body's own lines, never the draft's.
+ */
+export function sameTodos(a: string, b: string): boolean {
+  if (a === b) return true;
+  return JSON.stringify(shapeOf(parseTodos(a))) === JSON.stringify(shapeOf(parseTodos(b)));
+}
+
 /**
  * The body as it should be stored: `""` when it holds no to-do, and otherwise exactly as written.
  *
  * An emptied checklist is still one empty item in the editor, and storing that line would keep a
  * deck in the widget's list for ever with nothing to show under it. Anything with a to-do in it is
  * stored byte for byte — the reader's own spacing is theirs, and a normaliser here would be a third
- * place deciding what the dialect looks like.
+ * place deciding what the dialect looks like. So an empty to-do beside real ones is stored as it
+ * stands when a real change is written with it; what keeps it from being written *on its own* is
+ * {@link sameTodos}, at the band's write.
  */
 export function todosText(body: string): string {
   return parseTodos(body).length === 0 ? "" : body;

@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ReactNode } from "react";
 import { compile } from "tailwindcss";
@@ -428,6 +428,71 @@ describe("DeckTodosWidget", () => {
       expect(boxOf(plain)?.classList.contains("border-dashed")).toBe(true);
       const tickable = screen.getByRole("checkbox", { name: 'Mark "a" done' });
       expect(boxOf(tickable)?.classList.contains("border-dashed")).toBe(false);
+    });
+
+    /**
+     * **With completed ones hidden, the row a tick lands on leaves the card — and the caret was
+     * on it.** A removed node takes the focus with it to `<body>`, so the next Tab restarts from
+     * the top of the app. The caret goes to the to-do the reader would have reached next.
+     */
+    it("hands the caret to the next to-do when the ticked one leaves the card", async () => {
+      const user = userEvent.setup();
+      deckTodoLists.mockResolvedValue([{ ...MONO, body: toggleTodo(MONO.body, 1)! }]);
+      seed([MONO]);
+      draw();
+
+      await user.click(screen.getByRole("checkbox", { name: 'Mark "Two" done' }));
+
+      await waitFor(() =>
+        expect(screen.queryByRole("checkbox", { name: 'Mark "Two" done' })).toBeNull(),
+      );
+      expect(document.activeElement).not.toBe(document.body);
+      expect(document.activeElement).toBe(
+        screen.getByRole("checkbox", { name: 'Mark "Three" done' }),
+      );
+    });
+
+    it("hands the caret to the to-do before when the ticked one was the deck's last", async () => {
+      const user = userEvent.setup();
+      deckTodoLists.mockResolvedValue([{ ...MONO, body: toggleTodo(MONO.body, 2)! }]);
+      seed([MONO]);
+      draw();
+
+      act(() => screen.getByRole("checkbox", { name: 'Mark "Three" done' }).focus());
+      await user.keyboard(" ");
+
+      await waitFor(() =>
+        expect(screen.queryByRole("checkbox", { name: 'Mark "Three" done' })).toBeNull(),
+      );
+      expect(document.activeElement).toBe(screen.getByRole("checkbox", { name: 'Mark "Two" done' }));
+    });
+
+    /** A deck whose last open to-do is ticked leaves the card whole, heading and all. */
+    it("hands the caret to the next deck's heading when the ticked deck leaves the card", async () => {
+      const user = userEvent.setup();
+      const done = { ...ATRAXA, body: toggleTodo(ATRAXA.body, 0)! };
+      deckTodoLists.mockResolvedValue([done, MONO]);
+      seed([ATRAXA, MONO]);
+      draw();
+      expect(headings()).toEqual(["Atraxa · 1 open", "Mono Red · 3 open"]);
+
+      await user.click(screen.getByRole("checkbox", { name: 'Mark "Cut three creatures" done' }));
+
+      await waitFor(() => expect(headings()).toEqual(["Mono Red · 3 open"]));
+      expect(document.activeElement).toBe(screen.getByRole("button", { name: "Mono Red · 3 open" }));
+    });
+
+    it("leaves the caret on a ticked to-do that stays on the card", async () => {
+      const user = userEvent.setup();
+      deckTodoLists.mockResolvedValue([{ ...MONO, body: toggleTodo(MONO.body, 1)! }]);
+      seed([MONO]);
+      draw({ done: true });
+
+      await user.click(screen.getByRole("checkbox", { name: 'Mark "Two" done' }));
+
+      const two = await screen.findByRole("checkbox", { name: 'Mark "Two" not done' });
+      await waitFor(() => expect(deckTodoLists).toHaveBeenCalled());
+      expect(document.activeElement).toBe(two);
     });
 
     /** `PRESS_SOFT` dips on `:active`; a row that refuses the press must not look pressed. */

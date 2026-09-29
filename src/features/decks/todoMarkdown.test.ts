@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { countTodos, parseTodos, todosText, toggleTodo, visibleTodos } from "./todoMarkdown";
+import {
+  countTodos,
+  parseTodos,
+  sameTodos,
+  todosText,
+  toggleTodo,
+  visibleTodos,
+} from "./todoMarkdown";
 
 /**
  * The to-do dialect, pinned from the reading side.
@@ -217,6 +224,30 @@ describe("visibleTodos", () => {
   it("leaves the tree it was handed untouched", () => {
     visibleTodos(items, { showDone: false, nested: false });
     expect(items[0].children).toHaveLength(1);
+  });
+});
+
+describe("sameTodos", () => {
+  it("holds a body the same as itself, and as one with an empty to-do added or taken away", () => {
+    expect(sameTodos(TWO, TWO)).toBe(true);
+    expect(sameTodos(TWO, `${TWO}\n- [ ] `)).toBe(true);
+    expect(sameTodos(`${TWO}\n- [ ] `, TWO)).toBe(true);
+    expect(sameTodos("- [ ] a\n- [ ] \n- [ ] b", "- [ ] a\n- [ ] b")).toBe(true);
+    expect(sameTodos("- [ ] a", "- [ ] a\n  - [ ] ")).toBe(true);
+    expect(sameTodos("", "- [ ] ")).toBe(true);
+  });
+
+  it("tells apart a tick, a word, a mark, a nesting and an order", () => {
+    expect(sameTodos("- [ ] a", "- [x] a")).toBe(false);
+    expect(sameTodos("- [ ] a", "- [ ] b")).toBe(false);
+    expect(sameTodos("- [ ] a b", "- [ ] a **b**")).toBe(false);
+    expect(sameTodos("- [ ] a\n- [ ] b", "- [ ] a\n  - [ ] b")).toBe(false);
+    expect(sameTodos("- [ ] a\n- [ ] b", "- [ ] b\n- [ ] a")).toBe(false);
+    expect(sameTodos("- [ ] a", "")).toBe(false);
+  });
+
+  it("keeps an emptied parent that still has sub-to-dos under it", () => {
+    expect(sameTodos("- [ ] \n  - [ ] child", "- [ ] child")).toBe(false);
   });
 });
 

@@ -296,6 +296,50 @@ describe("the band, open", () => {
   });
 
   /**
+   * **A revert made while the band's own save is on the wire** — delete a line, pause, Ctrl+Z,
+   * click away, under a lock that holds the save. While the save is out the store still holds the
+   * body *before* it, which is exactly the body the revert returns to, so a band that asked the
+   * store whether anything changed would send nothing — and the save of the deleted line would
+   * land after it, be adopted by the idle band, and take the reverted line off the screen and the
+   * disk. The last body sent is what a revert has to be measured against.
+   */
+  it("sends a revert made while its own save is on the wire, and ends on it", async () => {
+    const before = "- [ ] Revise tokens\n- [ ] Cut Clue tokens";
+    const deleted = "- [ ] Revise tokens";
+    deckTodos.mockResolvedValue(before);
+    const answers: Array<() => void> = [];
+    deckTodosSet.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          answers.push(resolve);
+        }),
+    );
+    const { client } = renderBand();
+    const box = await editor();
+    fakeClock();
+
+    act(() => box.focus());
+    fireEvent.change(box, { target: { value: deleted } });
+    await tick(600);
+    expect(deckTodosSet).toHaveBeenCalledTimes(1);
+
+    fireEvent.change(box, { target: { value: before } });
+    act(() => box.blur());
+    await tick(0);
+
+    // Answer each save as it reaches the wire; the second waits behind the first (the scope).
+    while (answers.length > 0) {
+      const next = answers.shift()!;
+      await act(async () => next());
+      await tick(0);
+    }
+
+    expect(deckTodosSet.mock.calls.map(([, body]) => body)).toEqual([deleted, before]);
+    expect(client.getQueryData(KEY)).toBe(before);
+    expect(textbox()).toHaveValue(before);
+  });
+
+  /**
    * **A re-read that began before the save, answering after it.** Every deck write invalidates
    * `["decks"]`, so a background read of this list can be in flight when the band saves — and it
    * holds the body from before the write. Landing after the band has cached its own answer, it
@@ -441,6 +485,94 @@ describe("the band, open", () => {
     await tick(600);
 
     expect(deckTodosSet).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **An empty to-do is a place to type, and writing one would be a write about nothing.** New
+   * to-do, or Enter after the last line, then a click away: the draft now ends in `- [ ] `, a line
+   * `parseTodos` drops. Sent, it would move the deck's `updated_at` — reordering *Last edited* in
+   * the widget and the gallery — over a change nothing reads. And the editor keeps the empty line
+   * while the reader is there: nothing is adopted over it.
+   */
+  it("writes nothing for an empty to-do the reader has not typed in, and keeps it on screen", async () => {
+    deckTodos.mockResolvedValue("- [ ] Revise tokens");
+    renderBand();
+    const box = await editor();
+    fakeClock();
+
+    act(() => box.focus());
+    fireEvent.change(box, { target: { value: "- [ ] Revise tokens\n- [ ] " } });
+    act(() => box.blur());
+    await tick(600);
+    await tick(0);
+
+    expect(deckTodosSet).not.toHaveBeenCalled();
+    expect(textbox()).toBe(box);
+    expect(box).toHaveValue("- [ ] Revise tokens\n- [ ] ");
+  });
+
+  it("writes nothing for an empty to-do added while its own save is on the wire", async () => {
+    deckTodos.mockResolvedValue("- [ ] Revise tokens");
+    let answer: () => void = () => {};
+    deckTodosSet.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { client } = renderBand();
+    const box = await editor();
+    fakeClock();
+
+    const mine = "- [ ] Revise tokens\n- [ ] Mine";
+    act(() => box.focus());
+    fireEvent.change(box, { target: { value: mine } });
+    await tick(600);
+    expect(deckTodosSet).toHaveBeenCalledTimes(1);
+
+    // The empty line is measured against the body on the wire, not the store's older one.
+    fireEvent.change(box, { target: { value: `${mine}\n- [ ] ` } });
+    act(() => box.blur());
+    await tick(0);
+    await act(async () => answer());
+    await tick(0);
+
+    expect(deckTodosSet).toHaveBeenCalledTimes(1);
+    expect(client.getQueryData(KEY)).toBe(mine);
+    expect(textbox()).toBe(box);
+    expect(box).toHaveValue(`${mine}\n- [ ] `);
+  });
+
+  it("writes nothing for an empty to-do taken away, and does not put it back", async () => {
+    deckTodos.mockResolvedValue("- [ ] Revise tokens\n- [ ] ");
+    renderBand();
+    const box = await editor();
+    fakeClock();
+
+    act(() => box.focus());
+    fireEvent.change(box, { target: { value: "- [ ] Revise tokens" } });
+    act(() => box.blur());
+    await tick(600);
+    await tick(0);
+
+    expect(deckTodosSet).not.toHaveBeenCalled();
+    expect(textbox()).toBe(box);
+    expect(box).toHaveValue("- [ ] Revise tokens");
+  });
+
+  it("writes a real change beside an empty to-do byte for byte", async () => {
+    deckTodos.mockResolvedValue("- [ ] Revise tokens");
+    renderBand();
+    const box = await editor();
+    fakeClock();
+
+    act(() => box.focus());
+    fireEvent.change(box, { target: { value: "- [x] Revise tokens\n- [ ] " } });
+    act(() => box.blur());
+    await tick(0);
+
+    expect(deckTodosSet).toHaveBeenCalledTimes(1);
+    expect(deckTodosSet).toHaveBeenCalledWith(4, "- [x] Revise tokens\n- [ ] ", null);
   });
 
   it("moves the header count with the draft, before anything is saved", async () => {

@@ -56,7 +56,7 @@ import { ipcError } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { META_SUBMIT } from "./metaRows";
-import { countTodos, parseTodos, todosText } from "./todoMarkdown";
+import { countTodos, parseTodos, sameTodos, todosText } from "./todoMarkdown";
 import { useDeckTodos } from "./useDeckTodos";
 
 /**
@@ -129,10 +129,11 @@ export function DeckTodosPanel({ deckId, open, onToggle }: DeckTodosPanelProps):
    * editor over a body nobody read is an empty checklist whose first keystroke would autosave it
    * over whatever the deck really holds.
    *
-   * It moves three ways and only three. The adoption below sets it to a body that arrived; a write
+   * It moves three ways and only three. The adoption below sets it to a body that arrived; a flush
    * sets it to the text it sent, so the band's own answer coming back reads as *already agreed*
-   * rather than as a body from elsewhere to remount over; and a refused write puts it back to what
-   * the store still holds ({@link owed}), because nothing was agreed after all.
+   * rather than as a body from elsewhere to remount over — or, when it sent nothing, to the body
+   * the draft was found to hold the same to-dos as ({@link write}); and a refused write puts it
+   * back to what the store still holds ({@link owed}), because nothing was agreed after all.
    */
   const [synced, setSynced] = useState<string | undefined>(undefined);
   /** What the editor holds now — its own markdown, as it last reported it. The header's count is
@@ -192,11 +193,12 @@ export function DeckTodosPanel({ deckId, open, onToggle }: DeckTodosPanelProps):
    * rather than per dependency, because the flush on unmount has to see the last one.
    *
    * `mutate` is here rather than captured, so a mutation object that changed identity costs a
-   * render and not a write sent through a stale observer.
+   * render and not a write sent through a stale observer. `saving` is here for {@link write}: while
+   * a save is out, `stored` is the body before it and says nothing about what the disk will hold.
    */
-  const latest = useRef({ stored, synced, mutate: todos.save.mutate });
+  const latest = useRef({ stored, synced, saving, mutate: todos.save.mutate });
   useEffect(() => {
-    latest.current = { stored, synced, mutate: todos.save.mutate };
+    latest.current = { stored, synced, saving, mutate: todos.save.mutate };
   });
 
   /**
@@ -223,8 +225,8 @@ export function DeckTodosPanel({ deckId, open, onToggle }: DeckTodosPanelProps):
   }, []);
 
   /**
-   * The one writer. Answers the text the editor now agrees with the store about, or `null` when
-   * nothing was pending.
+   * The one writer. Answers the body the editor now agrees with the store about — what it sent,
+   * or the body it found it had no need to send — or `null` when nothing was pending.
    *
    * Refs throughout and a stable identity, which is what lets the unmount effect below use it as a
    * cleanup: a writer that changed identity would re-run that effect and write on every render.
@@ -233,10 +235,23 @@ export function DeckTodosPanel({ deckId, open, onToggle }: DeckTodosPanelProps):
    * **Stored through `todosText`**: an emptied checklist is still one empty item in the editor,
    * and stored as it stands it would keep a deck in the widget's list with nothing under it.
    *
-   * **Nothing is sent when the draft has come back to either answer it could already be**: the
-   * stored body (the write would change nothing) or the body the editor was seeded with (the
-   * reader's edits cancelled out — and sending it then would undo a tick that arrived while they
-   * were typing, where not sending it lets the adoption take that tick).
+   * **Nothing is sent when the draft holds the same to-dos as an answer it could already be** —
+   * `sameTodos`, so an empty to-do the reader has not typed in (New to-do, or Enter after the last
+   * line) is not a write that moves the deck's `updated_at` over nothing. The two answers:
+   *
+   * * **The stored body, and only while no save is out.** The write would change nothing. While a
+   *   save *is* out the store still holds the body before it, so the draft coming back to that body
+   *   — a line deleted, a pause, Ctrl+Z — is a change from what the disk is about to hold, and
+   *   skipping it lost the revert: the save of the deleted line landed afterwards and an idle band
+   *   adopted it, on screen and on disk.
+   * * **The body last agreed** — the text last sent, or the body the editor was seeded with. The
+   *   first is what a save out will leave on disk; the second is the reader's edits cancelling out,
+   *   and sending it then would undo a tick that arrived while they were typing, where not sending
+   *   it lets the adoption take that tick.
+   *
+   * **The body it matched is what it answers**, never the draft, so the band records as agreed a
+   * body the store really holds or is about to: recording the draft would read as a body from
+   * elsewhere and remount the editor over the empty to-do the reader is standing in.
    */
   const write = useCallback((): string | null => {
     if (timerRef.current !== null) {
@@ -246,8 +261,10 @@ export function DeckTodosPanel({ deckId, open, onToggle }: DeckTodosPanelProps):
     if (!pendingRef.current) return null;
     pendingRef.current = false;
     const next = todosText(draftRef.current);
-    const { stored: now, synced: agreed, mutate } = latest.current;
-    if (next !== now && next !== agreed) mutate(next, { onError: owed });
+    const { stored: now, synced: agreed, saving: inFlight, mutate } = latest.current;
+    if (!inFlight && now !== undefined && sameTodos(next, now)) return now;
+    if (agreed !== undefined && sameTodos(next, agreed)) return agreed;
+    mutate(next, { onError: owed });
     return next;
   }, [owed]);
 

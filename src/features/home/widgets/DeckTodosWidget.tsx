@@ -34,6 +34,11 @@
  * re-reads under `["decks", "todos"]` — which is the band's key too. **While a write is out every
  * box refuses**, because a second tick's `expected` would be the body the first is replacing.
  *
+ * **A tick can take the row the caret is on off the card** — with `Show completed` off the ticked
+ * to-do is hidden, and a deck with nothing left leaves whole — and a removed node drops the caret
+ * on `<body>`. So a tick pressed from a row holding the caret hands it on ({@link handoffTarget}):
+ * to the deck's next row, else the row before, else the nearest deck heading left on the card.
+ *
  * **A line `parseTodos` reads only because nothing is dropped** — a plain bullet, a stray line from
  * a newer build — is drawn as an open to-do with no box to flip: `toggleTodo` answers `null` for it,
  * so its checkbox is `aria-disabled` and a press writes nothing.
@@ -61,7 +66,7 @@
  */
 import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { Check } from "lucide-react";
-import type { ReactElement } from "react";
+import { useLayoutEffect, useRef, type ReactElement } from "react";
 
 import { MultiDropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
@@ -293,9 +298,10 @@ export type TodoRow =
       clamp?: number;
     };
 
-/** A row's drawn height, in pixels — a to-do at `lines` lines. */
-function rowPx(row: TodoRow, lines = row.kind === "item" ? row.lines : 1): number {
-  return row.kind === "deck" ? LINE_PX : ROW_PAD_PX + lines * TEXT_LINE_PX;
+/** A row's drawn height, in pixels — a heading one line, a to-do its padding and its estimated
+ *  lines. */
+function rowPx(row: TodoRow): number {
+  return row.kind === "deck" ? LINE_PX : ROW_PAD_PX + row.lines * TEXT_LINE_PX;
 }
 
 /**
@@ -401,6 +407,61 @@ interface Tick {
   line: number;
 }
 
+/** On a to-do's press: which deck's list it is in. With {@link TODO_LINE_ATTR}, how
+ *  {@link handoffTarget} finds a row by what it is rather than by where it is drawn. */
+const TODO_DECK_ATTR = "data-todo-deck";
+/** On a to-do's press: its source line — the name a tick gives it, and stable across one. */
+const TODO_LINE_ATTR = "data-todo-line";
+/** On a deck heading's press: the deck it opens. */
+const TODO_HEADING_ATTR = "data-todo-heading";
+
+/**
+ * A caret owed to the card: the tick was pressed on a row holding it. The line names the row —
+ * a tick flips one character and moves no line — and `decks` is the order the decks were drawn
+ * in, for when the ticked deck leaves the card whole and the caret has to go to another one.
+ */
+interface CaretHandoff {
+  deckId: number;
+  line: number;
+  decks: readonly number[];
+}
+
+/**
+ * Where a caret goes when the to-do it was on has left the card — the row the reader would have
+ * reached next, in drawn order:
+ *
+ * 1. **The deck's next row** — the ticked row itself if it is somehow still drawn, else the first
+ *    row after it. Lines rise in drawn order within a deck, since the rows are the list walked
+ *    depth first.
+ * 2. **The row before it**, when the ticked one was the deck's last.
+ * 3. **A deck heading**: the ticked deck's own, then the decks drawn after it, then those before.
+ *    With completed ones hidden a deck with no row left is not drawn at all, heading included, so
+ *    in practice this is the next deck's heading.
+ *
+ * `null` when the card has nothing left to take it — every deck done, and a sentence in its place.
+ */
+function handoffTarget(root: HTMLElement | null, owed: CaretHandoff): HTMLElement | null {
+  if (root === null) return null;
+  const rows = Array.from(
+    root.querySelectorAll<HTMLElement>(`[${TODO_DECK_ATTR}="${owed.deckId}"]`),
+  );
+  const lineOf = (el: HTMLElement) => Number(el.getAttribute(TODO_LINE_ATTR));
+  const after = rows.find((el) => lineOf(el) >= owed.line);
+  if (after !== undefined) return after;
+  const before = rows.filter((el) => lineOf(el) < owed.line);
+  if (before.length > 0) return before[before.length - 1];
+  const at = owed.decks.indexOf(owed.deckId);
+  const order =
+    at < 0
+      ? [owed.deckId, ...owed.decks]
+      : [owed.deckId, ...owed.decks.slice(at + 1), ...owed.decks.slice(0, at).reverse()];
+  for (const id of order) {
+    const heading = root.querySelector<HTMLElement>(`[${TODO_HEADING_ATTR}="${id}"]`);
+    if (heading !== null) return heading;
+  }
+  return null;
+}
+
 export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactElement {
   const scope = todoScope(widget);
   const deckIds = pinnedDeckIds(widget);
@@ -436,6 +497,32 @@ export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactE
     onSettled: () => client.invalidateQueries({ queryKey: TODOS_ROOT }),
   });
 
+  /** The card's list of decks, for {@link handoffTarget} to search. */
+  const listRef = useRef<HTMLUListElement>(null);
+  /** A caret a tick owes, from the press until the write has settled. */
+  const handoff = useRef<CaretHandoff | null>(null);
+
+  /**
+   * **Hand the caret on once its row has gone.** A layout effect, so it lands in the commit that
+   * removed the row, before a frame is painted with the caret on `<body>` — and after React's own
+   * focus restore, which gives up on a node no longer in the document. Only when the caret really
+   * is on `<body>`: a reader who has moved it on by then keeps it where they put it. The debt is
+   * dropped once the write settles, so a later re-read that changes the list takes nothing.
+   *
+   * No dependency list: what it waits on is a removal, which no value here names.
+   */
+  useLayoutEffect(() => {
+    const owed = handoff.current;
+    if (owed === null) return;
+    const active = document.activeElement;
+    if (active === null || active === document.body) {
+      handoff.current = null;
+      handoffTarget(listRef.current, owed)?.focus();
+      return;
+    }
+    if (!tick.isPending) handoff.current = null;
+  });
+
   if (listsQuery.error !== null) {
     return (
       <WidgetMessage tone="destructive">
@@ -467,8 +554,15 @@ export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactE
   }
 
   const busy = tick.isPending;
-  const onTick = (deck: TodoDeck, item: TodoItem, next: string | null) => {
+  const onTick = (deck: TodoDeck, item: TodoItem, next: string | null, from: HTMLElement) => {
     if (busy || next === null) return;
+    if (from === document.activeElement) {
+      handoff.current = {
+        deckId: deck.list.deckId,
+        line: item.line,
+        decks: groups.map((group) => group.deck.list.deckId),
+      };
+    }
     tick.mutate({ deckId: deck.list.deckId, body: deck.list.body, next, line: item.line });
   };
 
@@ -495,6 +589,7 @@ export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactE
   return (
     <>
       <ul
+        ref={listRef}
         aria-label="Decks"
         className="m-0 flex shrink-0 list-none flex-col p-0"
         style={{ gap: fit.rowGap }}
@@ -516,13 +611,14 @@ export function DeckTodosWidget({ widget, fit, still }: WidgetBodyProps): ReactE
                 return (
                   <TodoLine
                     key={item.line}
+                    deckId={deck.list.deckId}
                     item={item}
                     depth={depth}
                     clamp={clamp}
                     boxless={next === null}
                     refused={busy || next === null}
                     pending={pending}
-                    onTick={still ? undefined : () => onTick(deck, item, next)}
+                    onTick={still ? undefined : (from) => onTick(deck, item, next, from)}
                   />
                 );
               })}
@@ -597,6 +693,7 @@ function DeckHeading({
           type="button"
           aria-label={said}
           onClick={onOpen}
+          {...{ [TODO_HEADING_ATTR]: deck.list.deckId }}
           className={cn("group rounded-sm text-left", row, PRESS_SOFT, FOCUS)}
         >
           {inner}
@@ -618,9 +715,12 @@ function DeckHeading({
  * box under the pointer. `boxless` is the second of those two, and is drawn as such: a dashed box,
  * so a line that can never be ticked does not look like one that can. `pending` is the row the
  * write in flight is about, and is the one drawn faint. `clamp` is set on the to-do the cut landed
- * on ({@link cutTo}), and draws its text at that many lines with an ellipsis.
+ * on ({@link cutTo}), and draws its text at that many lines with an ellipsis. The press is handed
+ * back to `onTick`, which asks whether it holds the caret; the deck and the line it carries are
+ * how {@link handoffTarget} finds the row a caret goes to next.
  */
 function TodoLine({
+  deckId,
   item,
   depth,
   clamp,
@@ -629,13 +729,14 @@ function TodoLine({
   pending,
   onTick,
 }: {
+  deckId: number;
   item: TodoItem;
   depth: number;
   clamp: number | undefined;
   boxless: boolean;
   refused: boolean;
   pending: boolean;
-  onTick: (() => void) | undefined;
+  onTick: ((from: HTMLElement) => void) | undefined;
 }): ReactElement {
   const inner = (
     <>
@@ -663,7 +764,8 @@ function TodoLine({
           aria-checked={item.done}
           aria-label={tickLabel(item)}
           aria-disabled={refused ? true : undefined}
-          onClick={onTick}
+          onClick={(event) => onTick(event.currentTarget)}
+          {...{ [TODO_DECK_ATTR]: deckId, [TODO_LINE_ATTR]: item.line }}
           className={cn(
             "group rounded-sm",
             row,

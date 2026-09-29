@@ -14945,11 +14945,11 @@ pub(crate) mod tests {
             "{UNDO_V58} {UNDO_V57} PRAGMA main.user_version = 56;"
         ))
         .unwrap();
-        // The rewind took the real `sync_upd_decks` off ([`UNDO_V58`] first, [`UNDO_V57`] had it
-        // not), and head's `capture::install` cannot put a v56 one back — it would name the
-        // columns the rewind just dropped. So a stand-in
-        // under the same name, which is what a paired v56 file carries when the rung runs: the
-        // rung must drop it before its `UPDATE`s, or it fires. Measured: with the rung's three
+        // The rewind took the real `sync_upd_decks` off — [`UNDO_V58`] drops it, and [`UNDO_V57`]
+        // would have had [`UNDO_V58`] not — and head's `capture::install` cannot put a v56 one
+        // back: it would name the columns the rewind just dropped. So a stand-in is created under
+        // the same name, which is what a paired v56 file carries when the rung runs: the rung
+        // must drop it before its `UPDATE`s, or it fires. Measured: with the rung's three
         // `DROP TRIGGER`s taken out, `fired` reads 2 and this test fails.
         conn.execute_batch(
             "CREATE TABLE fired (n INTEGER);

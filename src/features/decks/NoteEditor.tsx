@@ -483,6 +483,9 @@ function backspaceTodo(editor: Editor): boolean {
             Selection.findFrom($at, 1, true) ??
             Selection.atStart(tr.doc),
         );
+        // A key's edit follows the caret, as upstream `joinBackward` does: the line it lands on
+        // can be above the fold of a long list.
+        tr.scrollIntoView();
         return true;
       })
       .run();
@@ -513,6 +516,7 @@ function backspaceTodo(editor: Editor): boolean {
         }
       }
       tr.setSelection(TextSelection.create(tr.doc, joinAt));
+      tr.scrollIntoView();
       return true;
     })
     .run();
@@ -564,6 +568,8 @@ function deleteTodoForward(editor: Editor): boolean {
       }
       tr.insert(joinAt, words);
       tr.setSelection(TextSelection.create(tr.doc, joinAt));
+      // Upstream `joinForward`'s scroll, which this replaces along with its join.
+      tr.scrollIntoView();
       return true;
     })
     .run();

@@ -60,12 +60,17 @@ export function useDeckTodos(deckId: number) {
    * refused its own reader's typing because the widget had ticked a line would lose a sentence to
    * save a checkmark, which is the trade the spec refuses in as many words.
    *
-   * **It does not invalidate `["decks"]`, and that is deliberate twice over.** The write bumps
-   * the deck's `updated_at` in Rust, so the gallery's *edited* order really is behind by one
+   * **It does not invalidate `["decks"]` itself, and that is deliberate twice over.** The write
+   * bumps the deck's `updated_at` in Rust, so the gallery's *edited* order really is behind by one
    * write — but an autosave lands on every pause in typing, and invalidating the root on each
    * would re-read the whole deck (`deck_get`, every card, every price) once per phrase for the
-   * sake of one timestamp. The gallery catches up at the next deck write of any kind, and
-   * another window refreshes through the `decks` change mask regardless of what this one does.
+   * sake of one timestamp. The gallery catches up at the next deck write of any kind.
+   *
+   * ⚠️ **That saving holds in a single window only.** With two or more windows open, the commit
+   * emits `db:changed` naming `decks` (`changes.rs`), and **the writing window hears its own event
+   * too**: `crossWindow.ts`' `refreshForTables` maps `decks` to `["decks"]`, so every window —
+   * this one included — re-reads the deck once per autosave. Nothing here can opt out of that, and
+   * the band's adoption is what keeps the re-read of its own key from moving the editor.
    *
    * **`setQueryData` rather than a refetch**, because the answer is already in hand: the command
    * stores exactly the string it was given, so reading it back would be a round trip to learn
@@ -112,8 +117,6 @@ export function useDeckTodos(deckId: number) {
   return {
     /** The stored body, `undefined` until the first read answers. `""` is a deck with no list. */
     body: query.data,
-    /** The read has landed at least once and is not currently refused. */
-    loaded: query.isSuccess,
     /**
      * The read's refusal in the command's own words, or `null`.
      *

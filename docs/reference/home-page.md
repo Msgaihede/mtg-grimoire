@@ -2158,6 +2158,14 @@ body it read as `expected`**. The band's autosave sends none.
   fresh list.
 - **While a write is out every box refuses**, `aria-disabled`, because a second tick's `expected`
   would be the body the first is replacing. Only the pressed row is drawn faint.
+- **A tick that takes its own row off the card hands the caret on.** With `Show completed` off the
+  ticked to-do is hidden the moment the success lands, and a deck with no row left leaves whole,
+  heading included — and a removed node drops the caret on `<body>`, so the next Tab restarted from
+  the top of the app. A press made from a row holding the caret now owes it (`handoffTarget`): to
+  that deck's next row, else the row before, else the nearest deck heading still on the card. It
+  moves only a caret that really fell to `<body>`, so a reader who has moved on keeps theirs, and
+  the debt is dropped when the write settles. An emptied card (every deck done) has nothing to take
+  it.
 - **A line with no box is drawn with a dashed, inert box.** `parseTodos` drops nothing it does not
   understand, so a plain bullet or a stray line from a newer build reads as an open to-do. But
   `toggleTodo` answers `null` for it, so its row is `aria-disabled`, a press writes nothing, and the
@@ -2190,7 +2198,10 @@ the next would not fit, and a `+N more` footer is reserved only when something i
 to-do the cut lands on is drawn clamped to the lines left** (`CLAMP_CLASSES`, whole class names,
 because an interpolated `line-clamp-…` emits no rule), so a to-do taller than the whole card still
 shows its first lines. A heading whose to-dos all fell past the cut is dropped with them. The wrap
-estimate is a guessed glyph width (`CHAR_PX`) that no live pass has measured yet.
+estimate is a guessed glyph width (`CHAR_PX`, 7px, rounded up). **One live pass has checked it, at
+one size**: on 2026-09-29 (a **debug** build, 1920×1080) a to-do wrapping to three lines drew
+whole in a 3×3 card, the body's `scrollHeight` 304 equal to its `clientHeight` 304 — no overflow.
+**The 6×3 box is still unmeasured**, and is the next live pass's to take.
 
 | State | The card says |
 | --- | --- |

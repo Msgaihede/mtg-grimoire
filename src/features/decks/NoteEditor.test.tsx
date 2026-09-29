@@ -1281,6 +1281,30 @@ describe("the checklist's keys", () => {
     editor.destroy();
   });
 
+  /**
+   * **A key's edit follows the caret**, as the upstream `joinBackward` and `joinForward` these
+   * replace did — in a long list the line the caret lands on can be off screen. jsdom scrolls
+   * nothing, so what is asserted is the transaction's own flag, the thing the view acts on.
+   */
+  const SCROLL_ROWS: [string, string, Caret, string][] = [
+    ["Backspace removing an empty to-do", "- [ ] a\n- [ ] ", { empty: 0 }, "Backspace"],
+    ["Backspace joining a line onto the one above", "- [ ] a\n- [ ] b", { before: "b" }, "Backspace"],
+    ["Delete joining the next line on", "- [ ] a\n- [ ] b", { after: "a" }, "Delete"],
+  ];
+  it.each(SCROLL_ROWS)("scrolls the caret into view after %s", (_name, body, caret, key) => {
+    const editor = checklistEditor(body);
+    placeCaret(editor, caret);
+    const edits: boolean[] = [];
+    editor.on("transaction", ({ transaction }) => {
+      if (transaction.docChanged) edits.push(transaction.scrolledIntoView);
+    });
+
+    expect(press(editor, key)).toBe(true);
+
+    expect(edits).toEqual([true]);
+    editor.destroy();
+  });
+
   /** The narrowed item is the first line of defence: a to-do cannot hold a second paragraph. */
   it("holds one line and at most one sub-list in a to-do", () => {
     const editor = checklistEditor("- [ ] a");
