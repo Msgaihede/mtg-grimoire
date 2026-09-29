@@ -661,6 +661,18 @@ pub struct DeckPatch {
     /// a history drawer for. The column is `DEFAULT 0`, [`Self::notes_open`]'s answer: the split
     /// is new, so off is exactly today's chart and the upgrade changes nothing on screen.
     pub curve_creatures: Option<bool>,
+    /// Whether the editor's **To-do** band is expanded — user schema v58, the deck to-dos spec.
+    ///
+    /// [`Self::notes_open`]'s twin one band down and every rule it carries: a reading preference,
+    /// storage only on this side, on this patch rather than on [`DeckViewState`] because a
+    /// disclosure a reader opens once is worth an `updated_at`, and **no arm in
+    /// [`record_deck_edit`]**. `DEFAULT 0` for the same reason: the band is new, so shut takes
+    /// nothing from anybody.
+    ///
+    /// **The list itself is not on this patch, and must not join it**: `decks.todos` is written
+    /// only by [`crate::deck_todos::set_todos`], whose compare-and-set a `coalesce` here could not
+    /// honour, and whose write records no history row where this command's writes can.
+    pub todos_open: Option<bool>,
     /// How this deck treats its tokens — one of [`TOKEN_MODES`], user schema v52, replacing
     /// v47's `token_stack` switch. `hidden` takes the Tokens & Emblems pile out of all four
     /// views; `managed` draws it, and so will `collection` once PR 3 gives it custody.
@@ -977,6 +989,17 @@ pub struct DeckRow {
     /// deliberately does not carry it**, the three disclosures' note — so a copy takes the
     /// column default, which here is *unsplit*. See [`DeckPatch::curve_creatures`].
     pub curve_creatures: bool,
+    /// Whether the editor's **To-do** band is expanded — user schema v58, `DEFAULT 0`, so every
+    /// existing deck draws it shut.
+    ///
+    /// [`Self::notes_open`]'s twin: read here as well as written through [`DeckPatch`], because a
+    /// switch the app can set and never see is a switch nothing can draw. **[`duplicate_deck`]
+    /// deliberately does not carry it**, the disclosures' note — a copy starts collapsed.
+    ///
+    /// **The list itself is deliberately not on this row.** Every deck list the app draws fetches
+    /// `DeckRow`s, and a checklist body riding each of them would be text nobody on those pages
+    /// reads; `decks.todos` travels only through [`crate::deck_todos`]' two reads.
+    pub todos_open: bool,
     /// How this deck treats its tokens — `managed`, `collection` or `hidden` (user schema v52,
     /// `DEFAULT 'managed'`, replacing v47's `token_stack`). **Every deck on every disk reads
     /// `managed` after the upgrade, the ones whose switch was off included** — the reader's
@@ -1331,7 +1354,7 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
             d.default_category_id, d.game_key, d.bracket, d.tokens_open,
             d.theory_mark_exact, d.theory_mark_name, d.theory_mark_unplanned,
             d.virtual_only, d.stats_open, d.notes_open, d.token_mode, d.managed_wishlist_mode,
-            d.token_rail_index, d.curve_creatures, d.managed_wishlist_tokens
+            d.token_rail_index, d.curve_creatures, d.managed_wishlist_tokens, d.todos_open
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -1479,6 +1502,12 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // silent trap is `curve_creatures` one to the left, where a crossed index would file a
         // deck's tokens because the reader split a chart.
         managed_wishlist_tokens: r.get(31)?,
+        // 32, at the end of the named list, same rule — user schema v58's To-do band disclosure.
+        // A `bool` over an `INTEGER` like the two before it, and the silent trap is its twin
+        // `notes_open` at 26: the fourth disclosure of one editor, and a crossed index would open
+        // the Notes band where the reader pressed To-do, both fields still holding a `0` or a
+        // `1`. The checklist beside it in the table is deliberately not read at all.
+        todos_open: r.get(32)?,
     })
 }
 
@@ -2494,6 +2523,12 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 -- so a crossed number is an UPDATE that succeeds and splits a chart where the
                 -- reader asked for tokens.
                 managed_wishlist_tokens = coalesce(?25, managed_wishlist_tokens),
+                -- `?26`, the next number at the **end**, same rule one rung later. User schema
+                -- v58's To-do band disclosure is the fourth `Option<bool>` that opens a band,
+                -- beside `?14`, `?19` and `?20`, so a crossed number is an UPDATE that succeeds
+                -- and opens a band the reader did not press. `todos` itself has no hole here:
+                -- `deck_todos::set_todos` is its only writer.
+                todos_open = coalesce(?26, todos_open),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -2524,6 +2559,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.token_rail_index,
                 patch.curve_creatures,
                 patch.managed_wishlist_tokens,
+                patch.todos_open,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -3613,6 +3649,12 @@ pub fn duplicate_deck(conn: &Connection, id: i64) -> Result<DeckRow, String> {
             // pile jumped back to last would not be a copy. **`managed_wishlist_tokens` (user
             // schema v57) travels with `managed_wishlist_mode`**, which was already here: the
             // two together are one answer about what the deck's folder holds.
+            //
+            // **User schema v58's `todos` and `todos_open` are absent, both on purpose.** A copy
+            // that carried its original's list would draw every open to-do in the home widget
+            // twice, and ticking one would leave its twin open; the disclosure is a band the
+            // reader happened to have open, left behind for the other three disclosures' reason.
+            // The copy takes both `DEFAULT`s — no list, and the band shut.
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 folder_id, theory_enabled,
                                 separate_x_group, bracket, theory_mark_exact, theory_mark_name,
@@ -11325,6 +11367,11 @@ mod tests {
             // `true` rather than the column's `DEFAULT 0`, the same rule: `false` is what every
             // deck carries and would read correct on a field that never left Rust.
             curve_creatures: true,
+            // `true` rather than the column's `DEFAULT 0`, the same rule — and the fourth
+            // disclosure, read at 32 beside `notes_open` at 26, its twin. Both are `true`, so it
+            // is the key below, not the value, that separates the two; `stats_open` is the one
+            // disclosure that disagrees.
+            todos_open: true,
             // `hidden` rather than the column's `DEFAULT 'managed'`, the same rule again:
             // `managed` is what every deck carries and would read correct on a field that never
             // left Rust. And a word no other TEXT field here can hold — `managedWishlist` beside
@@ -11407,6 +11454,11 @@ mod tests {
                 // curve reads this key to know whether to split its bars, and a snake-cased one
                 // would be `undefined` — falsy, so a split the reader saved would never draw.
                 "curveCreatures": true,
+                // User schema v58, and `todosOpen` rather than `todos_open`: the To-do band reads
+                // this key to know whether to draw itself open, and a snake-cased one would be
+                // `undefined` — falsy, so a band the reader opened would draw shut. **No `todos`
+                // key**, which is the other half of the assertion: the list is not on this row.
+                "todosOpen": true,
                 // User schema v52, and `tokenMode` rather than `token_mode`: the four views read
                 // this key to decide whether to draw the token pile at all, and a snake-cased one
                 // would be `undefined` — which no mode is, so the page would fall back on
@@ -11468,7 +11520,7 @@ mod tests {
         let patch: DeckPatch = serde_json::from_str(
             r#"{"coverCardId":"bolt-lea","archived":true,"separateXGroup":true,"gameKey":"mtgo",
                 "virtualOnly":true,"tokenMode":"hidden","tokenRailIndex":-1,
-                "curveCreatures":true,"managedWishlistTokens":true}"#,
+                "curveCreatures":true,"managedWishlistTokens":true,"todosOpen":true}"#,
         )
         .expect("the patch payload");
         assert_eq!(patch.cover_card_id.as_deref(), Some("bolt-lea"));
@@ -11491,6 +11543,9 @@ mod tests {
         // mode, and a misspelled key would be read as an omitted one — a press that saves
         // nothing.
         assert_eq!(patch.managed_wishlist_tokens, Some(true));
+        // User schema v58. The To-do band's disclosure sends this, and a misspelled key would be
+        // read as an omitted one — a band that opens and forgets it was opened.
+        assert_eq!(patch.todos_open, Some(true));
         assert!(patch.name.is_none(), "an omitted field means leave it");
 
         // And the third: `deck_set_view_state`'s `viewState`, which the editor sends one
@@ -12063,6 +12118,91 @@ mod tests {
         );
     }
 
+    /// The To-do band's disclosure, end to end — and **`false` on a new deck is the assertion**,
+    /// user schema v58's `DEFAULT 0` and never a Rust fallback.
+    ///
+    /// [`the_notes_disclosure_round_trips_and_is_not_recorded`]'s job one band down. It is the
+    /// fourth disclosure `bool`, read at 32 by `deck_row` and bound to `?26` in `update_deck`, so
+    /// it is moved **against its twin `notes_open`** (26, `?20`) and beside
+    /// `managed_wishlist_tokens` (31, `?25`), the column it was appended after: both stay shut
+    /// while this opens, so a crossed index or hole with either changes a readback. No history
+    /// row, the disclosures' rule.
+    #[test]
+    fn the_todos_disclosure_round_trips_and_is_not_recorded() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        assert!(
+            !deck.todos_open,
+            "a new deck's To-do band is shut — the column's own DEFAULT 0, never a Rust fallback"
+        );
+
+        let patched = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                todos_open: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(patched.todos_open, "the readback is the write");
+        assert!(
+            !patched.notes_open && !patched.managed_wishlist_tokens,
+            "and neither neighbour moved with it"
+        );
+
+        let read = read_deck(&conn, deck.id).unwrap().unwrap();
+        assert!(
+            read.todos_open && !read.notes_open && !read.managed_wishlist_tokens,
+            "…including through `DECK_SELECT`'s positional reads"
+        );
+
+        // Absent means "leave it", the `coalesce(?n, column)` contract.
+        let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
+        assert!(after.todos_open, "an absent field means leave it");
+
+        // And its twin moves on its own: opening Notes leaves To-do where it was, and shutting
+        // To-do leaves Notes open.
+        let notes = update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                notes_open: Some(true),
+                todos_open: Some(false),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(notes.notes_open && !notes.todos_open);
+
+        // A real edit first, so the absence below is an absence and not an empty list.
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                name: Some("Burn II".to_owned()),
+                todos_open: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let words: Vec<String> = crate::deck_audit::list(&conn, deck.id, 20)
+            .unwrap()
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::DECK)
+            .map(|r| r.payload.clone())
+            .collect();
+        assert!(
+            words.iter().any(|p| p.contains("name")),
+            "the drawer has to be reachable for the next assertion to mean anything: {words:?}"
+        );
+        assert!(
+            !words.iter().any(|p| p.contains("todosOpen")),
+            "opening a band is not an edit anybody reads a drawer for: {words:?}"
+        );
+    }
+
     /// A copy shows its stats, because [`duplicate_deck`] does not carry the column and the
     /// column's own `DEFAULT` is open.
     ///
@@ -12084,12 +12224,17 @@ mod tests {
                 tokens_open: Some(true),
                 notes_open: Some(true),
                 curve_creatures: Some(true),
+                todos_open: Some(true),
                 ..Default::default()
             },
         )
         .unwrap();
 
         let copy = duplicate_deck(&conn, deck.id).unwrap();
+        assert!(
+            !copy.todos_open,
+            "nor the To-do band — user schema v58's DEFAULT 0, and the original had it open"
+        );
         assert!(
             !copy.curve_creatures,
             "nor the curve split — user schema v56's DEFAULT 0, the disclosures' rule"

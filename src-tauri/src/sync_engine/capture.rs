@@ -508,6 +508,18 @@ pub const TABLES: [Spec; 17] = [
             // that added it is uncaptured**: every device converts its own copy of the synced
             // mode the same way, so the conversion is derived and not an edit to send.
             "managed_wishlist_tokens",
+            // User schema v58's to-do list — the reader's own checklist, one document to a deck
+            // — and it travels **per field** like everything on this list: a to-do edit on one
+            // device and a rename on another touch two fields and both survive. What it cannot
+            // do is merge *within* the text, so two devices editing one deck's list while apart
+            // keep the later write whole; a deck note's body behaves exactly the same way.
+            "todos",
+            // And whether the To-do band is open, which travels for `tokens_open`'s reason: a
+            // reader who opened the band on one device meant it about the deck. Both `DEFAULT`
+            // safely for an old peer — `''` and `0`, no list and a shut band — and adding is the
+            // safe direction, `theory_mark_*`'s note above: a v57 device neither names nor reads
+            // either key.
+            "todos_open",
         ],
         counters: &[],
         parents: &[
@@ -1481,6 +1493,45 @@ mod tests {
             fields.get("managed_wishlist_tokens"),
             Some(&serde_json::json!(1)),
             "the switch must reach the reader's other devices, in {fields}"
+        );
+    }
+
+    /// **A deck's to-do list and its band's disclosure both travel** (user schema v58) — the
+    /// same missing-fence argument twice over. A list written on one device and absent on the
+    /// next is the reader's own words gone missing, with nothing on screen saying why; the
+    /// disclosure is `tokens_open`'s. Two statements, so each column is shown to ride an op of
+    /// its own rather than the second one's `fields` carrying the first by accident.
+    #[test]
+    fn a_decks_todo_list_and_its_disclosure_are_captured() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
+             VALUES (1, 'Burn', 'modern', 0, 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        conn.execute("UPDATE decks SET todos = '- [ ] a' WHERE id = 1", [])
+            .unwrap();
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 1, "one write, one op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[0].2).unwrap();
+        assert_eq!(
+            fields.get("todos"),
+            Some(&serde_json::json!("- [ ] a")),
+            "the list must reach the reader's other devices, in {fields}"
+        );
+
+        conn.execute("UPDATE decks SET todos_open = 1 WHERE id = 1", [])
+            .unwrap();
+        let rows = ops(&conn);
+        assert_eq!(rows.len(), 2, "a second write, a second op");
+        let fields: serde_json::Value = serde_json::from_str(&rows[1].2).unwrap();
+        assert_eq!(
+            fields.get("todos_open"),
+            Some(&serde_json::json!(1)),
+            "an opened band must reach the reader's other devices, in {fields}"
         );
     }
 

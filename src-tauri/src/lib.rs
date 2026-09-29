@@ -54,6 +54,11 @@ pub mod deck_pull;
 pub mod deck_query;
 pub mod deck_quick_add;
 pub mod deck_theory;
+/// **A deck's to-do list** — user schema v58. Two `decks` columns rather than a table, three
+/// commands and no renderer: the body is the checklist dialect `todoMarkdown.ts` reads, stored as
+/// text, and every conclusion drawn from it (what is open, which line a tick flips) is
+/// TypeScript's. Nothing in it reaches a filesystem or a network.
+pub mod deck_todos;
 /// **The tokens and emblems a deck needs, derived — and which printings of them the reader keeps,
 /// stored.** Which tokens a deck makes is derived (schema v37): it reads `all_parts` out of each
 /// deck card's gzip `raw` blob, which is [`card::meld_parts`]' one trick applied to a different

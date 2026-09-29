@@ -132,6 +132,9 @@ const DECK_FIELDS: &[&str] = &[
     // disclosure is not an audited edit, so there is nothing for a Ctrl+Z to put back.
     // User schema v56's `curve_creatures` (the Mana curve's creature split) is absent on the
     // same terms: how a chart is drawn has no history row either.
+    // User schema v58's `todos` and `todos_open` are absent on the same terms: the band's
+    // disclosure is a disclosure, and the list's writes record no step — the editor's own
+    // Ctrl+Z is its undo (`crate::deck_todos`).
     // `token_stack` (user schema v47) was absent on the same terms — a view setting with no
     // history row — and user schema v52 dropped the column for `token_mode`, below, which is
     // not a view setting and is on this list.
