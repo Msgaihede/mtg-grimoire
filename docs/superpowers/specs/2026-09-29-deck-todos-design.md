@@ -178,7 +178,7 @@ block at the foot — `deck_notes.rs`'s shape.
 | --- | --- |
 | `deck_todos(deck_id)` | the body; refuses `DECK_GONE` |
 | `deck_todos_set(deck_id, body, expected?)` | `()` — see below |
-| `deck_todo_lists()` | every deck whose `todos <> ''`: `{ deckId, name, archived, updatedAt, body }` |
+| `deck_todo_lists()` | every deck whose `todos <> ''`: `{ deckId, name, archived, todosOpen, updatedAt, body }` — `todosOpen` so the widget's heading press writes the disclosure only when it is shut |
 
 **`deck_todos_set` is a compare-and-set when `expected` is given.** The update is
 `UPDATE decks SET todos = ?2, updated_at = … WHERE id = ?1 AND (?3 IS NULL OR todos = ?3)`; zero rows
@@ -305,8 +305,9 @@ in TS. Grouped by deck:
   renders through the widget's own `Inline` components with **`whitespace-pre-line`** (a hard break
   is a `"\n"` inside a run).
 - **The checkbox ticks in place**: `toggleTodo(body, line)` → `deck_todos_set(deckId, next, body)`.
-  The row greys while the write is in flight. `TODOS_CHANGED` refetches and says "That deck's list
-  changed — try again." in the widget's one-line failure slot.
+  The row greys while the write is in flight. A refusal refetches and prints the refusal's own
+  sentence — `TODOS_CHANGED` is "That to-do list changed since it was read. Try again." — in the
+  widget's one-line failure slot.
 - Decks with nothing visible (every to-do done and completed hidden) are left out. Rows are whole
   rows, cut with `fit.fitCount`; what does not fit is summarised by a `+N more` footer.
 
