@@ -1691,6 +1691,26 @@ describe("FilterBar, its rarity chips", () => {
  * while a colour was picked. It is back in the group and always drawn, so these cases assert it
  * is on the bar with the tray shut, whatever the colour row holds.
  */
+describe("FilterBar, its root", () => {
+  /** The filter quick bar docks when this element's bottom edge leaves the scroller, so the ref
+   *  has to be the **whole** block — the row, the tray and the stated filters under it — and
+   *  not the first line alone. */
+  it("hands its root element to rootRef, so a page can watch it scroll away", () => {
+    let root: HTMLDivElement | null = null;
+    render(
+      <FilterBar
+        search={search()}
+        rootRef={(el) => {
+          root = el;
+        }}
+      />,
+      { wrapper: TooltipProvider },
+    );
+    expect(root).not.toBeNull();
+    expect(root!.contains(screen.getByRole("searchbox", { name: "Search cards" }))).toBe(true);
+  });
+});
+
 describe("FilterBar, its Exact chip", () => {
   /** Matched on a **prefix**: the chip's accessible name is its own sentence, which names the
    *  state as well as the word, and the sentence changes with the press. */
