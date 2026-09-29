@@ -535,6 +535,7 @@ describe("isListedToken", () => {
       ["token", "Card", "At the beginning of your end step, draw a card.", "token"], // The Monarch
       ["double_faced_token", "Card // Card", null, "token"], // Day // Night
       ["double_faced_token", "Dungeon — Undercity // Card", null, "token"], // The Initiative
+      ["token", "Dungeon — Tomb of Annihilation", null, "token"], // a dungeon (#670)
       ["token", "Creature", FACE_DOWN, "token"], // Manifest
       ["token", "Artifact Creature — Cyberman", "(You can cover a face-down creature…)", "token"],
       ["token", "Card", null, "masters"], // The List's City's Blessing
@@ -553,6 +554,8 @@ describe("isListedToken", () => {
       ["token", "Boss", "Whenever a creature the bosses control dies…", "token"], // TMNT arena
       ["token", "Event", "Destroy all Turtles.", "token"],
       ["token", "Creature — Ninja", "This creature can't block.", "token"],
+      ["token", "Dungeon — Tomb of Annihilation", null, "memorabilia"], // another game's copy
+      ["normal", "Dungeon — Tomb of Annihilation", null, "token"], // never a real card's layout
       // The helper arm is `token` and `double_faced_token` only, and never a real card.
       ["emblem", "Card", null, "token"],
       ["normal", "Card", null, "token"],

@@ -147,7 +147,8 @@ const OTHER_GAME_SET_TYPES: ReadonlySet<string> = new Set(["memorabilia", "minig
  *    `Emblem` face.
  * 2. **A game helper** — a `token` or `double_faced_token` printing outside a `memorabilia` or
  *    `minigame` set, with a face whose type line is exactly `Card` (The Monarch, Day // Night,
- *    Undercity // The Initiative) and no checklist's `this card to represent `, **or** a face-down
+ *    Undercity // The Initiative) and no checklist's `this card to represent `, **or** a face
+ *    beginning `Dungeon` (the dungeons a venturing deck brings, issue #670), **or** a face-down
  *    reminder whose text says `face-down` (Manifest, Morph, the Cyberman).
  *
  * The reader's rule (2026-09-28): keep what a deck brings to the table in an ordinary game, leave
@@ -169,8 +170,14 @@ export function isListedToken(
   if (!HELPER_LAYOUTS.has(layout)) return false;
   if (setType !== null && setType !== undefined && OTHER_GAME_SET_TYPES.has(setType)) return false;
   const text = oracleText ?? "";
-  const helperFace = (typeLine ?? "").split(" // ").some((face) => face === "Card");
-  return (helperFace && !text.includes("this card to represent ")) || text.includes("face-down");
+  const faces = (typeLine ?? "").split(" // ");
+  const helperFace = faces.some((face) => face === "Card");
+  const dungeon = faces.some((face) => face.startsWith("Dungeon"));
+  return (
+    (helperFace && !text.includes("this card to represent ")) ||
+    dungeon ||
+    text.includes("face-down")
+  );
 }
 
 /**
