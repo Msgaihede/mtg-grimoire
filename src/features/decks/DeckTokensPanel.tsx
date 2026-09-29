@@ -616,6 +616,9 @@ function TokenTile({
           // printing and the finish are what separate this press from the tiles beside it. A
           // hand-added token's name carries the badge's words, since the badge is `aria-hidden`.
           aria-label={tokenArtName(view)}
+          // The test handle for the faded picture below — an attribute rather than the class,
+          // which is a recipe (`cardControl.tsx`'s rule for a mark a view spreads on a card).
+          data-token-uncounted={view.quantity === 0 ? "" : undefined}
           // `relative` for the badge: it is laid over the picture's bottom-left corner.
           className={cn("relative block w-full rounded-lg", FOCUS_INSET)}
           {...TOKEN_ART_MARK}
@@ -634,6 +637,17 @@ function TokenTile({
             // Not virtualised: every token the deck makes is mounted at once, so the browser's
             // own intersection gate is the only thing bounding what the wall asks for.
             loading="lazy"
+            // **An entry at 0 is drawn faded** (issue #673): it is a token the deck can make and
+            // the reader has not counted, so it is on the band to be found and left off every
+            // stack. Only the picture fades — the stepper that counts it up, the chin and the
+            // lines under it stay at full strength, and so does `NOT MADE BY DECK`, which is a
+            // warning rather than a picture. 60% is the switched-off pile's own `opacity-60`
+            // (`StackView`), the deck's one word for "counts toward nothing".
+            className={cn(
+              "transition-opacity duration-[var(--duration-fast)] ease-standard",
+              "motion-reduce:transition-none",
+              view.quantity === 0 && "opacity-60",
+            )}
           />
           {/* Where a rule-break card wears `RULE BREAK`, in its style — `DeckCardFace`'s own
               corner, whose offset clears the chin riding up under the picture here too. Inside
