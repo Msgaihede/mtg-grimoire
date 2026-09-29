@@ -6978,3 +6978,60 @@ rather than being arranged: `useTooltip` refuses falsy content and an empty list
 engine, so a stretched cell, a short tile and a caption 20px out of line are all the same DOM; and
 each tile was individually *correct* — the fault only exists in the relation between them. A wall
 is the unit to look at when checking a wall.
+
+## The filter quick bar (2026-09-29)
+
+Spec: [2026-09-29-filter-quick-bar-design.md](../superpowers/specs/2026-09-29-filter-quick-bar-design.md).
+Design canvas: https://claude.ai/artifact/PXnLSk6oqFPjxYazsbEPrQ.
+
+**What it is.** A 53px, one-row copy of a card wall's filter row that docks over the top of
+`AppShell`'s `main` once that row has scrolled away — on card search, the collection, the wishlist
+and Tags, **grid view only** (every table view scrolls in its own box, so its filter row never
+leaves). It is the deck editor's undocked bar (issue #577) drawn for the filter row, and the two
+share their primitives: `lib/dockedBar.ts` holds the numbers, `components/DockedBar.tsx` the panel
+and the caret-hold rule. `features/search/FilterQuickBar.tsx` is the bar; `lib/useFilterQuickBar.ts`
+is the one hook a page calls.
+
+**The trigger is the whole `FilterBar` block** — its root, reached through `FilterBar`'s `rootRef`,
+so an open tray, the "Filtering by" line and `TagQueryRow` all count as "the filters are still on
+screen". `useUndocked` answers the crossing with an `IntersectionObserver`; the page re-renders on
+the flip only. The bar stays while the caret holds it (`holdsBar`: a text field, or keyboard
+modality), exactly as the deck bar does.
+
+**The numbers, and where each one lands.**
+
+| Number | Value | Used by |
+| --- | --- | --- |
+| `DOCKED_BAR_HEIGHT_PX` | 53 | the panel's height; `stickyTop` — the shelf bar pins flush under it |
+| `DOCKED_BAR_SHELL_PAD_PX` | 20 | `main`'s `p-5`; the panel reaches back over it on three sides |
+| `DOCKED_BAR_CLEARANCE_PX` | 41 (53 − 20 + 8) | `dockTop` — the docked search column and the Tags rail pin 8px under the bar; `main`'s `scroll-padding-top` is its padding plus this |
+
+A sticky inset is measured from the scroller's **padding** edge and the bar from its **top**, which
+is why the column's number subtracts the shell pad and the shelf bar's does not: `CardGrid`'s anchor
+already takes `stickyInset` off, so it adds the full 53.
+
+**`CardGrid`'s `stickyTop` moves three things, not two.** The anchor's `top`, the edge the shelf
+bar names its shelf from, and the virtualiser's `scrollPaddingStart`. The third was found in review:
+`scrollToIndex` sets the offset itself and never reads CSS `scroll-padding`, so without it a shelf
+reveal, the paging walk and the caret chase parked their row 36px down — under the 53px bar.
+
+**One Top on screen.** While the bar is down, the shelf bar is handed no `onTop` and draws no Top
+button; the quick bar's Top scrolls `main` to 0 and puts the caret in the page's own search field.
+
+**`LAYER.quickBar` is `z-35`**, between `popup` and `dragTray`: the tray hangs from the bar over the
+collection's and wishlist's docked search column, which is `popup` while it overlays the list and
+comes later in the DOM, so at an equal rung it would paint through the tray.
+
+**The rungs are container queries** (`@container/qb`, content box = `main`'s content width): below
+860 the sort leaves, below 1100 the mana values fold into one `Mana value` press, below 1500 Top,
+Filters and Reset all lose their words. Tags folds its mana values below 1500, because its picked
+tags ride in the bar as a single sideways-scrolling line (`TagChips singleLine`).
+
+**Tags is two layouts now.** Grid view scrolls `main` as one page (the wall is `CardGrid grow`) and
+pins the rail beside it with `useDockHeight`; table view is the old arrangement. `useDockHeight`
+takes its inline height off when it unwires, which is what lets the rail go back to flex sizing on
+the switch.
+
+**A changed search starts the wall at the top.** So a chip pressed in the bar scrolls the page row
+back into view and the bar leaves — the reader lands on the same state over the new first results.
+That is intended. Typing does not do it mid-word: the caret holds the bar.
