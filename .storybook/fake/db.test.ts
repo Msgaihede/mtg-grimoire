@@ -17385,11 +17385,13 @@ describe("deck tokens", () => {
   });
 
   /**
-   * **Rule 7, and Review Focus 2**: switching off the pile that holds a token's makers takes the
-   * token's entries away — and **Ctrl+Z on that press puts back the pile and the reader's
-   * printings together**, because the reconcile's deletions ride the write's own step.
+   * **Rule 7, and Review Focus 2**: switching off the pile that holds a token's makers leaves the
+   * token nothing makes — and since issue #671 **a token the reader has copies of is kept, as
+   * their own** (`manual`, drawn not made by the deck) rather than deleted. **Ctrl+Z on that press
+   * puts back the pile and the token as the deck's together**, because the reconcile's changes
+   * ride the write's own step.
    */
-  it("removes a token nothing makes any more, and brings its printings back on undo", () => {
+  it("keeps a token with copies nothing makes any more, and undo makes it the deck's again", () => {
     const db = seed("starter");
     const h = allHandlers(db);
     h.deck_token_add_printing({
@@ -17401,27 +17403,47 @@ describe("deck tokens", () => {
     const main = db.deckCategories.find((c) => c.deckId === 1 && c.kind === "main")!;
 
     h.deck_category_set_active({ id: main.id, isActive: false });
+    expect(
+      rowsOf(db, 1, TOKEN_ORACLE.treasure).map((r) => [r.cardId, r.quantity, r.derived, r.state]),
+    ).toEqual([
+      [TOKEN_PRINTING.treasureTafr, 4, false, "manual"],
+      [TOKEN_PRINTING.treasureThob, 1, false, "manual"],
+    ]);
+
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+    expect(
+      rowsOf(db, 1, TOKEN_ORACLE.treasure).map((r) => [r.cardId, r.finish, r.quantity, r.derived]),
+    ).toEqual([
+      [TOKEN_PRINTING.treasureTafr, "nonfoil", 4, true],
+      [TOKEN_PRINTING.treasureThob, "foil", 1, true],
+    ]);
+  });
+
+  /** Issue #671's other half: a token held at zero is not one the reader is using, so a cut
+   *  deletes it rather than keeping it. */
+  it("deletes a token at zero that nothing makes any more", () => {
+    const db = seed("starter");
+    const h = allHandlers(db);
+    for (const e of db.deckTokenPrintings) {
+      if (e.deckId === 1 && e.oracleId === TOKEN_ORACLE.treasure) e.quantity = 0;
+    }
+    const main = db.deckCategories.find((c) => c.deckId === 1 && c.kind === "main")!;
+
+    h.deck_category_set_active({ id: main.id, isActive: false });
     expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)).toEqual([]);
     expect(
       db.deckTokenPrintings.filter(
         (e) => e.deckId === 1 && e.oracleId === TOKEN_ORACLE.treasure && e.variant === "live",
       ),
     ).toEqual([]);
-
-    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
-    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
-    expect(
-      rowsOf(db, 1, TOKEN_ORACLE.treasure).map((r) => [r.cardId, r.finish, r.quantity]),
-    ).toEqual([
-      [TOKEN_PRINTING.treasureTafr, "nonfoil", 4],
-      [TOKEN_PRINTING.treasureThob, "foil", 1],
-    ]);
   });
 
   /**
    * **The backstop**: a card write that files no step still reconciles — cutting both of deck 1's
-   * Treasure makers takes the Treasure's entries with the second cut. A `manual` token is never
-   * touched, because no card made it and no cut can unmake it.
+   * Treasure makers settles the Treasure with the second cut, kept as the reader's own because it
+   * has copies (issue #671). A `manual` token is never touched, because no card made it and no cut
+   * can unmake it.
    */
   it("reconciles after a write that files no step, and leaves a manual token alone", () => {
     const db = seed("starter");
@@ -17453,10 +17475,9 @@ describe("deck tokens", () => {
     cut("Ragavan, Nimble Pilferer");
     expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)).toHaveLength(1);
     cut("Smuggler's Copter");
-    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)).toEqual([]);
-    expect(
-      db.deckTokenPrintings.filter((e) => e.deckId === 1 && e.oracleId === TOKEN_ORACLE.treasure),
-    ).toEqual([]);
+    expect(rowsOf(db, 1, TOKEN_ORACLE.treasure)).toEqual([
+      expect.objectContaining({ derived: false, state: "manual", implicit: false }),
+    ]);
     // Cut Elesh Norn, which makes both Wurms: the manual one keeps its entry.
     for (const row of db.deckCards.filter(
       (c) => c.deckId === 1 && c.name === "Elesh Norn, Grand Cenobite",
@@ -17482,8 +17503,9 @@ describe("deck tokens", () => {
    * the live list. On a new deck, because the starter's two lists hold the same cards and could not
    * tell a move from a coincidence.
    *
-   * The stale plan entry is the v52 conversion pass's copy of an old pick: the plan makes no
-   * Treasure, so rule 7 owes its deletion whatever the switch does, and the crate reconciles both
+   * The stale plan entry is the v52 conversion pass's copy of an old pick, stepped to zero: the
+   * plan makes no Treasure, so rule 7 owes its deletion whatever the switch does (one with copies
+   * is kept as `manual` since issue #671, and an undo restores it), and the crate reconciles both
    * lists **before** it reads the step's before-image — an undo that restored it would hand the
    * backstop a row to delete and the crate's redo a reason to refuse.
    */
@@ -17524,7 +17546,7 @@ describe("deck tokens", () => {
       oracleId: TOKEN_ORACLE.treasure,
       cardId: TOKEN_PRINTING.treasureTafr,
       finish: "nonfoil",
-      quantity: 7,
+      quantity: 0,
       createdAt: 0,
       updatedAt: 0,
     });

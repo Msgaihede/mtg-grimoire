@@ -2572,7 +2572,11 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
     press must not move the deck up the gallery.
   - **Rule 7's reconcile takes only an `auto` token's entries** — never a `manual` one's, and since
     v55's final review never a `hidden` one's either, because the wall draws a dismissal of a token
-    nothing makes as the reader's own until `retire_hidden` settles it at launch. **It runs in two
+    nothing makes as the reader's own until `retire_hidden` settles it at launch. **And since
+    [#671](https://github.com/Msgaihede/mtg-grimoire/issues/671) only the ones at zero**: a token
+    with copies is kept and made `manual` (drawn `derived: false`, the red outline), and
+    `reconcile_in` answers a `Reconciled` — deleted rows plus those tokens' states before and after
+    — which `deck_undo::push_removed_tokens` puts on both sides of the step. **It runs in two
     layers.** `reconcile_in` inside `deck_undo::record_cells`,
     `record_variant` and the three hand-built steps (the theory switch, `set_category_active`,
     `delete_category`), so its deletions ride the card write's own step; and

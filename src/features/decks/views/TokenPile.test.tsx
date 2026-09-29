@@ -252,7 +252,7 @@ describe("tokenEntryName", () => {
 describe("tokenMadeBy", () => {
   it("names the deck cards that make it, or the reader's own press", () => {
     expect(tokenMadeBy(token())).toBe("From Smothering Tithe");
-    expect(tokenMadeBy(token({ sources: [] }))).toBe("Added manually");
+    expect(tokenMadeBy(token({ sources: [] }))).toBe("Added or kept by hand");
   });
 });
 
