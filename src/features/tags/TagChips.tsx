@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { FILTER_CONTROL, ToggleChip } from "@/components/FilterChips";
 import { FOCUS_INSET } from "@/lib/focus";
@@ -149,6 +149,37 @@ export function TagChips({
   });
 
   const chips = selection.chips;
+
+  /**
+   * **The one-line row says when it is hiding something, and only then.** It scrolls with its
+   * scrollbar hidden, so a chip past the cap is cut off at the row's edge with no cue that there is
+   * more to reach. `StatedFiltersLine` answers the same problem with a right-edge fade — but that
+   * line is always as wide as its box, and this row **shrinks to its chips**, so an unconditional
+   * fade would dim the last chip of a row with nothing hidden at all. So the fade is keyed on
+   * `data-overflow` (the class string below), and this sets it from `scrollWidth > clientWidth`.
+   *
+   * Written onto the element rather than held in state: it is a fact about layout that only the
+   * stylesheet reads, and a `setState` here would be a render per resize for no output React draws.
+   * Checked on three occasions — now, whenever the chips change (a row already at its width cap
+   * does not *resize* when a chip is added, only its content grows, so the row's observer would
+   * say nothing), and whenever the row or the group inside it resizes (the bar narrowing with the
+   * window). The page row wraps and never overflows sideways, so it is never watched.
+   */
+  useLayoutEffect(() => {
+    const el = row.current;
+    if (!singleLine || !el) return;
+    const check = () => el.toggleAttribute("data-overflow", el.scrollWidth > el.clientWidth);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    const group = el.firstElementChild;
+    if (group) observer.observe(group);
+    return () => {
+      observer.disconnect();
+      el.removeAttribute("data-overflow");
+    };
+  }, [singleLine, chips]);
+
   // The floor narrows the art *includes* and nothing else, so this is exactly the condition
   // under which the control can change a single row.
   const canFloor = chips.some((c) => c.namespace === "art" && c.mode === "include");
@@ -162,12 +193,15 @@ export function TagChips({
     //
     // Both boxes change together under `singleLine` (see the prop): the row is what scrolls and
     // carries the cap, and the group inside it must stop wrapping too, or the row would scroll a
-    // group that had already folded itself onto a second line.
+    // group that had already folded itself onto a second line. The row is `relative` because it
+    // is a scroll container (`src/CLAUDE.md`), and it fades its right edge only while the effect
+    // above has marked it `data-overflow` — the variant written whole, since Tailwind reads
+    // source text and an assembled class emits no rule.
     <div
       ref={row}
       className={
         singleLine
-          ? "flex min-w-0 max-w-[min(28rem,32%)] shrink flex-nowrap items-center gap-1.5 overflow-x-auto [scrollbar-width:none]"
+          ? "relative flex min-w-0 max-w-[min(28rem,32%)] shrink flex-nowrap items-center gap-1.5 overflow-x-auto [scrollbar-width:none] data-[overflow]:[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]"
           : "flex flex-wrap items-center gap-1.5"
       }
     >

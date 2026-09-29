@@ -1,6 +1,6 @@
 import { useState } from "react";
-import { describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { act, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { ArtWeightFloor, TagNamespace } from "@/lib/ipc";
 import {
@@ -157,6 +157,84 @@ describe("TagChips", () => {
     const group = screen.getByRole("group", { name: "Picked tags" });
     expect(group.classList.contains("flex-nowrap")).toBe(true);
     expect(screen.getByText("No tags picked")).toBeInTheDocument();
+  });
+
+  /**
+   * **The one-line row fades its right edge only while it actually overflows.** The row shrinks
+   * to its chips, so an unconditional fade would dim the last chip of a row with nothing hidden;
+   * the fade is keyed on `data-overflow`, which a `ResizeObserver` on the row sets from
+   * `scrollWidth > clientWidth` and which is re-checked when the chips change. jsdom lays nothing
+   * out and its observer never fires, so both are driven here by hand: a stubbed observer whose
+   * callback the test calls, and the two widths defined on the row.
+   */
+  describe("the one-line row's overflow mark", () => {
+    let fire: () => void = () => {};
+    let observed: Element[] = [];
+    beforeEach(() => {
+      observed = [];
+      vi.stubGlobal(
+        "ResizeObserver",
+        class {
+          constructor(callback: ResizeObserverCallback) {
+            fire = () => callback([], this as unknown as ResizeObserver);
+          }
+          observe(el: Element) {
+            observed.push(el);
+          }
+          unobserve() {}
+          disconnect() {}
+        },
+      );
+    });
+    afterEach(() => vi.unstubAllGlobals());
+
+    const widths = (el: HTMLElement, scroll: number, client: number) => {
+      Object.defineProperty(el, "scrollWidth", { value: scroll, configurable: true });
+      Object.defineProperty(el, "clientWidth", { value: client, configurable: true });
+    };
+    const one = (chips: TagChip[]) => (
+      <TagChips
+        selection={selection(chips)}
+        onRemove={() => {}}
+        onToggleMode={() => {}}
+        singleLine
+      />
+    );
+
+    it("marks the row while it overflows and clears the mark when it stops", () => {
+      render(one([chip("forest"), chip("water")]));
+      const row = screen.getByRole("group", { name: "Picked tags" }).parentElement!;
+      expect(observed).toContain(row);
+      expect(row).not.toHaveAttribute("data-overflow");
+
+      widths(row, 400, 250);
+      act(() => fire());
+      expect(row).toHaveAttribute("data-overflow");
+
+      widths(row, 250, 250);
+      act(() => fire());
+      expect(row).not.toHaveAttribute("data-overflow");
+    });
+
+    it("re-checks when the chips change, with no resize to report it", () => {
+      const { rerender } = render(one([chip("forest")]));
+      const row = screen.getByRole("group", { name: "Picked tags" }).parentElement!;
+      expect(row).not.toHaveAttribute("data-overflow");
+
+      // A row already at its width cap does not resize when a chip is added — only its content
+      // grows — so the observer on the row has nothing to say, and the chips are what must ask.
+      widths(row, 400, 250);
+      rerender(one([chip("forest"), chip("water"), chip("flower")]));
+      expect(row).toHaveAttribute("data-overflow");
+    });
+
+    it("never marks the wrapping page row", () => {
+      draw(selection([chip("forest")]));
+      const row = screen.getByRole("group", { name: "Picked tags" }).parentElement!;
+      widths(row, 400, 250);
+      act(() => fire());
+      expect(row).not.toHaveAttribute("data-overflow");
+    });
   });
 
   it("still wraps on the page row, where singleLine is not asked for", () => {
