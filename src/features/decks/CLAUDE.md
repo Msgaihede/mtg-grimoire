@@ -5096,6 +5096,11 @@ already effective, and `viewOf` copies them.
     entry it sits on (`Remove Treasure, …, TMH3 · 12, Foil`), so a token's plain and foil tiles are
     two presses; `Remove printing` is the pointer's word, the same everywhere. Dismiss, Restore and
     Reset were the token's and went with v55.
+  - **An entry at 0 draws its picture at `opacity-60` on the band** (2026-09-29,
+    [issue #673](https://github.com/Msgaihede/mtg-grimoire/issues/673)) — the switched-off pile's
+    number, since both mean *counts toward nothing*. **The picture only**: the stepper that counts
+    it up, the chin, the subtitle and `NOT MADE BY DECK` stay at full strength. `data-token-uncounted`
+    on the art button is the handle. The pile needs no rule — it never draws an entry at 0.
   - **A token nothing in the deck makes is marked the way a rule-break card is** (managed tokens
     spec §3.5): **`isHandAdded` is `!derived`, never `state === "manual"`**, because a derived
     token can be `manual` (kept by hand after a cut) and marking it would be a false sentence about

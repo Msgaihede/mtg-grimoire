@@ -17983,6 +17983,35 @@ describe("Compare's token rows", () => {
       }),
     ]);
   });
+
+  /**
+   * **A managed wishlist compares a token by the mode it follows** (issue #675): Missing by name
+   * alone, so a deck holding Treasures of another art and finish wants none of the planned one;
+   * All and Different printing by the exact printing and finish, at the whole shortfall.
+   */
+  it("files tokens by name under Missing and by printing and finish under the other two", () => {
+    const db = world(
+      [{ cardId: TOKEN_PRINTING.treasureThob, finish: "nonfoil", quantity: 3 }],
+      [
+        { cardId: TOKEN_PRINTING.treasureTafr, finish: "nonfoil", quantity: 1 },
+        { cardId: TOKEN_PRINTING.treasureTafr, finish: "foil", quantity: 1 },
+      ],
+    );
+    const w = writeHandlers(db);
+    const tokenWishes = () =>
+      db.wishlistEntries
+        .filter((wish) => wish.oracleId === TOKEN_ORACLE.treasure && wish.folderId !== null)
+        .map((wish) => [wish.cardId, wish.preferredFinish, wish.quantity]);
+
+    w.deck_update({ id: 4, patch: { managedWishlist: "missing", managedWishlistTokens: true } });
+    // Two of the three answered by name, whatever their art or finish.
+    expect(tokenWishes()).toEqual([[TOKEN_PRINTING.treasureThob, "nonfoil", 1]]);
+
+    for (const managedWishlist of ["all", "other"] as const) {
+      w.deck_update({ id: 4, patch: { managedWishlist } });
+      expect(tokenWishes(), managedWishlist).toEqual([[TOKEN_PRINTING.treasureThob, "nonfoil", 3]]);
+    }
+  });
 });
 
 /**

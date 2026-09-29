@@ -921,8 +921,8 @@ function ManagedWishlistGroup({
           the row's two settings, because they describe one folder. Under `Off` the tokens'
           sentence is left out whatever is stored, since there is no folder for it to be about. */}
       <p className="mt-1 text-[0.6875rem] leading-snug text-dim">
-        {filing && tokens
-          ? `${MANAGED_WISHLIST_HINT[mode]} ${MANAGED_WISHLIST_TOKENS_HINT}`
+        {mode !== "off" && tokens
+          ? `${MANAGED_WISHLIST_HINT[mode]} ${MANAGED_WISHLIST_TOKENS_HINT[mode]}`
           : MANAGED_WISHLIST_HINT[mode]}
       </p>
     </div>

@@ -33,11 +33,15 @@ describe("the managed wishlist's modes", () => {
     }
   });
 
-  /** The switch's own sentence names the subfolder, which is where a reader will look. */
-  it("says the tokens switch files the plan's missing token printings in a Tokens subfolder", () => {
-    expect(MANAGED_WISHLIST_TOKENS_HINT).toBe(
-      "Missing tokens go in its Tokens subfolder.",
-    );
+  /** The switch's own sentence names the subfolder, which is where a reader will look — and
+   *  says how the mode compares a token (issue #675): by name under Missing, by exact printing
+   *  and finish under the other two. */
+  it("says the tokens switch files missing tokens in a Tokens subfolder, matched per mode", () => {
+    expect(MANAGED_WISHLIST_TOKENS_HINT).toEqual({
+      all: "Missing tokens go in its Tokens subfolder, matched by exact printing and finish.",
+      missing: "Missing tokens go in its Tokens subfolder, matched by name in any printing.",
+      other: "Missing tokens go in its Tokens subfolder, matched by exact printing and finish.",
+    });
   });
 
   it("reads the stored word, and anything else — the retired tokens included — as off", () => {

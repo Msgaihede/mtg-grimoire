@@ -667,13 +667,15 @@ describe("DeckSettingsForm", () => {
     // The view's line, then the tokens' — one caption for the one folder.
     expect(
       screen.getByText(
-        /cards this deck doesn't have in any printing\..*Missing tokens go in its Tokens subfolder\./,
+        /cards this deck doesn't have in any printing\..*Missing tokens go in its Tokens subfolder, matched by name in any printing\./,
       ),
     ).toBeVisible();
     // Picking a different view leaves the toggle as it was: the two are independent.
     await userEvent.click(within(group).getByRole("button", { name: "All" }));
     expect(onChange).toHaveBeenLastCalledWith({ managedWishlist: "all" });
     expect(screen.getByRole("button", { name: "Tokens" })).toHaveAttribute("aria-pressed", "true");
+    // …and the tokens' sentence follows the view: All matches a token's exact printing (#675).
+    expect(screen.getByText(/matched by exact printing and finish\./)).toBeVisible();
 
     // Back to `Off`: the toggle goes, and so does its sentence — but nothing is written to it,
     // so the stored answer is there for the next view picked.
