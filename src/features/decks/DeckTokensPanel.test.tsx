@@ -226,6 +226,27 @@ describe("DeckTokensPanel", () => {
     expect(remove.parentElement).toBe(grows.parentElement);
   });
 
+  /**
+   * Issue #673: an entry at 0 fades its picture and nothing else. Asserted as a pair — faded here,
+   * not there — because an `opacity-60` on every frame would pass a one-sided check.
+   */
+  it("fades the picture of an entry at zero, and only the picture", () => {
+    band();
+
+    const uncounted = screen.getByRole("button", { name: `Change the art for ${WURM_NAME}` });
+    const counted = screen.getByRole("button", { name: `Change the art for ${TMOM_PLAIN}` });
+    expect(uncounted.hasAttribute("data-token-uncounted")).toBe(true);
+    expect(counted.hasAttribute("data-token-uncounted")).toBe(false);
+    // The frame is the button's first child: `CardArt`'s own box.
+    expect(uncounted.firstElementChild!.classList.contains("opacity-60")).toBe(true);
+    expect(counted.firstElementChild!.classList.contains("opacity-60")).toBe(false);
+
+    // The stepper that counts it up is not inside the faded frame.
+    const tile = tileOf(`Change the art for ${WURM_NAME}`);
+    const stepper = within(tile).getByRole("spinbutton", { name: `Quantity of ${WURM_NAME}` });
+    expect(stepper.closest(".opacity-60")).toBeNull();
+  });
+
   /** The foil entry's picture wears the sheen; the plain copy of the same printing does not. */
   it("draws each entry's own finish on its picture", () => {
     band();
