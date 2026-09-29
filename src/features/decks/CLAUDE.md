@@ -1823,8 +1823,9 @@ layer.
   - **`shrink-0` is unchanged and is still the whole of why this editor scrolls** — it rides on
     the component's own root now. So is the placement: below the price strip, below Tokens &
     emblems — and above `DeckNotesPanel`, which renders after it in `DeckEditor.tsx` since user
-    schema v43 and is the band that is last on the page. (This read "last on the page" until
-    2026-09-28, long after the notes band landed under it.)
+    schema v43, and the To-do band, which renders after that since v58 and is the band that is
+    last on the page. (This read "last on the page" until 2026-09-28, long after the notes band
+    landed under it, and then named the notes band as last until the To-do band landed under that.)
   - **No bar in the band is a control.** The design it was built from makes every bar a button
     that narrows the deck list; that is a cross-component feature reaching into all four views and
     is deliberately out of this pass, which is why there is no filter chip beside the heading. What
@@ -1843,7 +1844,8 @@ layer.
   would put four charts between a card and the one drop that takes it out — and since 2026-09-08
   it is also below the **Tokens & Emblems** band, so it no longer sits directly under the price
   strip — and since user schema v43 it is not the last band on the page either:
-  `DeckNotesPanel` renders after it. **The figures in (2) and (3) below predate that band entirely**
+  `DeckNotesPanel` renders after it, and the To-do band after that since v58. **The figures in (2)
+  and (3) below predate the Tokens & Emblems band entirely**, and both bands under this one
   (2026-08-14 against 2026-09-07), so read them as the arithmetic of the deck, the strip and this
   band alone; nothing has been re-measured with a token wall open above it, and an open one is
   another `stackCardHeight`-and-change of column;
@@ -5410,3 +5412,98 @@ Two things that fix carries, both easy to undo by accident:
   `StrictMode` double-invokes it. Taking the request is a **render-phase adjustment** rather than a
   `setState` in an effect, which `react-hooks/set-state-in-effect` refuses — and that rule only
   goes red at `npm run verify`, never in `tsc` or vitest.
+
+## The To-do band
+
+User schema **v58**, 2026-09-29, [issue #672](https://github.com/Msgaihede/mtg-grimoire/issues/672).
+The storage side, the three commands and the compare-and-set are
+[decks-storage.md](../../../docs/reference/decks-storage.md)'s *Deck to-dos*; the home widget that
+gathers every deck's list is [home-page.md](../../../docs/reference/home-page.md) §16; the design is
+[the spec](../../../docs/superpowers/specs/2026-09-29-deck-todos-design.md).
+
+- **⚠️ A to-do list is not a note.** A deck has exactly one, stored whole in `decks.todos` and
+  edited as one document; a *to-do* is one line of it, with no id. It borrows the Notes band's
+  header and the notes' editor and nothing else — no cards, no dialog, no masonry, no Save.
+  `DeckTodosPanel.tsx` is the wiring and `TodosBand` the drawing over plain props (the Notes band's
+  split), `useDeckTodos.ts` owns the query and the one write, and `todoMarkdown.ts` draws every
+  conclusion about the text.
+- **The last band on the page**: `DeckEditor` mounts it directly after `DeckNotesPanel`, gated on
+  `row`. A `<section aria-label="To-do">`, never an `<aside>`, and `shrink-0` on its own root, both
+  for the Notes band's reasons. **Shut by default**, through `decks.todos_open` and the ordinary
+  `deck.update`. The header is the Notes band's grammar: the disclosure with `aria-expanded` and a
+  turning chevron, a mono `N open · M done` read off the **draft** so it moves as the reader ticks
+  (nothing for an empty list), and **New to-do** at the far end in `META_SUBMIT`, which opens a
+  shut band and asks the editor for a fresh item at the end. The read runs whether or not the band
+  is open, because the count is the reason to open it. One `role="alert"` line sits outside the
+  collapsible region, and a refused save outranks a refused read on it.
+- **The editor is reached through `React.lazy` and by nothing else.** `DeckNotesPanel.test.tsx`
+  sweeps `src/` for a static import of `NoteEditor`, a type-only one included, so the checklist
+  mode's props are named at the call site and nowhere else in the file. A deck whose band stays
+  shut never fetches the chunk.
+- **The body is `select-text`**, because the editor's root is `select-none` (issue #473) and a
+  to-do is written to be read. The editor's `contenteditable` edits its own text whatever an
+  ancestor says; the class is for the rest of the region.
+- **The editor is `NoteEditor`'s checklist mode**, described here at the level of what it does:
+  - The document is one task list and every line is a to-do. An empty list shows the placeholder
+    *Add a to-do — Enter for the next, Tab to nest.*
+  - Enter on a to-do with words makes the next one, and so does Shift-Enter. Tab nests a to-do
+    under the one above it and Shift-Tab lifts it out. Enter on an **empty nested** to-do lifts
+    it; Enter on an **empty top-level** to-do does nothing. Backspace in an empty to-do removes
+    it.
+  - A to-do holds one paragraph and at most one nested list. A body holding more than one
+    top-level list is joined into one as it loads.
+  - The toolbar is the marks, a link, **Outdent** and **Indent**. Every row has a delete button,
+    which takes the to-do's sub-to-dos with it; deleting the only to-do leaves one empty one. The
+    editor's Ctrl+Z is the only undo a deleted to-do has, because a to-do write files no undo
+    step.
+  - A checkbox is named `Mark "<text>" done` or `Mark "<text>" not done`, after the to-do's **own**
+    line and never its sub-to-dos' words. The widget names its rows the same way.
+  - ⚠️ **Hard breaks are off, against the spec.** Tiptap's task-list markdown reader reads a task
+    item one line at a time, so the second half of a broken to-do came back as a line outside the
+    list — an invalid document — and no spelling of a break survived the round trip (measured
+    against `@tiptap/extension-list` 3.31.3). So Shift-Enter starts a new to-do rather than
+    breaking one. `todoMarkdown.ts` still reads a break, for a body written elsewhere; the editor
+    never writes one.
+  - The body is `- [ ] ` / `- [x] ` lines, each sub-to-do indented **two spaces per level** under
+    its parent — measured, and pinned byte for byte by `NoteEditor.test.tsx`'s to-do corpus.
+    `todoMarkdown.ts` compares indent widths against a stack rather than dividing by two, so it
+    holds whatever the editor writes.
+- **Autosave is `StickyNoteDialog`'s mechanism and its 600 ms**: a timer restarted on every change,
+  a flush when the caret leaves the editor, and a flush on unmount. Focus is tracked on a wrapper
+  around the editor, its toolbar and link field included, so moving the caret to New to-do or to
+  the disclosure counts as leaving and writes at once. **The band writes with no `expected`** — it
+  is the author's surface, and its draft is the truth of what the reader typed.
+- **One save at a time, in the order they were made.** The save mutation has a TanStack `scope`
+  per deck, because `deck_todos_set` waits for the write lock and the wait is not fair: without it
+  a newer save could land first, the older one last, and the band would adopt the older text over
+  the reader's newer words. A queued save still reads as pending, which holds the band still while
+  it waits. **The save cancels in-flight reads of its key before it caches its answer**, in
+  `onSuccess` and deliberately not in `onMutate`: `onMutate` runs when a save is *queued*, so a
+  read that began while it waited would still land stale after it. The save invalidates the
+  widget's key by name and **not `["decks"]`**, which would re-read the whole deck once per phrase
+  typed for the sake of one timestamp.
+- **A list changed elsewhere is taken only when the band is idle.** The widget ticking, another
+  window typing into the same deck's band and a sync apply all reach the query, because it sits
+  under `["decks"]`. The editor takes the new body only when the caret is not in it, nothing typed
+  is unsaved and no save is pending or queued — and takes it as a **remount** seeded with it (the
+  editor's `key`), never as text pushed into an editor the reader may be about to type in.
+  Otherwise the reader's typing wins and the next autosave overwrites what arrived: a tick lost
+  from the widget is recoverable at a glance, a sentence lost mid-type is not. **All of it is
+  decided during render or in an event, never with a `setState` in an effect.** A band closed from
+  elsewhere unmounts the editor without a blur React hears, so the caret flag is cleared during
+  render whenever no editor is drawn.
+- **A failed read mounts no editor.** The editor is gated on the first read that landed, not on the
+  query's current state. A refused **first** read draws the alert and no editor, because an editor
+  over a body nobody read is an empty checklist whose first keystroke would autosave `""` over the
+  deck's real list — which is also why `deck_todos` is fallible in Rust. A refused **refetch** later
+  keeps the editor the reader is typing in, since TanStack keeps the last good answer.
+- **An empty checklist is not a to-do.** The editor draws an emptied list as one empty to-do and
+  writes it as `- [ ] `. The band stores through `todosText`, which answers `""` whenever
+  `parseTodos` finds no to-do, so an emptied list takes the deck out of the widget rather than
+  leaving a heading over nothing. `parseTodos` drops an empty to-do only when nothing is under it,
+  because an emptied parent is still the line its sub-to-dos hang from.
+- **A refused save leaves the draft on screen and still owed.** The next change, blur or unmount
+  tries again — `StickyNoteDialog`'s rule, with no retry timer — and the alert says why meanwhile.
+- **A test that mounts `DeckEditor` mocks `deckTodos` and `deckTodosSet`**, or the band's refused
+  read puts a second `role="alert"` on the page and every `getByRole("alert")` in the file finds
+  two — the Notes band's trap, one band down.

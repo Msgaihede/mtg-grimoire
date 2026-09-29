@@ -132,8 +132,9 @@ own census; `DEFAULT_LAYOUT` is what a first launch is handed. A kind may be in 
 `wishlistValue`, which has never been on a first launch; `newPrintings` and `stickyNotes`, which
 joined the catalogue alone because either one would break the rectangle; `valueHistory`
 (§14), which stayed out for `newPrintings`' reason — a widget in the seed rearranges the page of
-every reader who never asked for it; and §15's `deckCompletion`, `toReview`, `wishlistSavings`
-and `comingSoon`, for that reason again (their spec's §1). So the sentence below still names **eight** widgets in an
+every reader who never asked for it; §15's `deckCompletion`, `toReview`, `wishlistSavings`
+and `comingSoon`, for that reason again (their spec's §1); and §16's `deckTodos`, for it once more.
+So the sentence below still names **eight** widgets in an
 eight-by-seven rectangle and is correct as written, and `DEFAULT_LAYOUT`'s three copies —
 `widgets.ts`, `home.rs` and the Storybook fake — did not move. Counting the table below and
 editing that literal to match is the mistake this note exists to stop.
@@ -167,6 +168,7 @@ stores nothing). All of it lives in `config` — the extension rule below.
 | `setCompletion` | every set the reader holds a card from, and how much of it | `{ sort: complete·cards·name, bars }` |
 | `priceMovers` | owned printings whose price moved most over a window | `{ window: 7d·30d·all, direction: both·up·down }` |
 | `stickyNotes` | the reader's own notes, as a board of tinted tiles or a pad of stacked sheets | `{ layout: board·pad, dates, strip, pinned }` |
+| `deckTodos` | every deck's To-do band gathered: a heading per deck and its to-dos under it, each ticked off in place (§16) | `{ scope: all·chosen, deckIds, order: edited·name·open, done, nested, archived, counts }` |
 | `newPrintings` | reprints of cards the watched decks hold, in release-day groups | `{ scope: all·chosen, deckIds, window: 30·90·365, langs: en·all·chosen, langIds, virtual, theory, basics }` |
 | `deckCompletion` | each deck's actual list against the collection or against its plan, with the cost of the rest | `{ compare: collection·theory, scope: all·chosen, deckIds, order: done·cheapest·name, complete }` |
 | `toReview` | scanned cards waiting, flagged binder entries, wishes and deck cards, and Recently removed — each row opening its list | `{ removed }` |
@@ -559,6 +561,8 @@ Each goes **in the module its data lives in** — `search.rs` is the pattern.
 | `deck_completion` | `deck_completion.rs` | `[{ deckId, list, wanted, owned, missing, missingCost, unpricedMissing }]` — under `compare: collection` every deck that is not virtual, its live list against its own group; under `theory` every deck that keeps a plan, its live list against that plan (§15) |
 | `deck_review_count` | `deck_completion.rs` | how many `deck_cards` rows carry a `needs_review` sentence (§15) |
 | `upcoming_sets` | `upcoming_sets.rs` | `{ today, sets: [{ code, name, releasedAt, previewed, inDecks }] }` — sets not yet out, soonest first (§15) |
+| `deck_todo_lists` | `deck_todos.rs` | `[{ deckId, name, archived, todosOpen, updatedAt, body }]` — every deck whose to-do list is not empty, archived ones included, most recently edited first (§16) |
+| `deck_todos_set` | `deck_todos.rs` | `()` — the widget's tick, always with `expected`, so a list that moved since it was read is refused with `TODOS_CHANGED` (§16) |
 
 Registration is two places — `lib.rs`'s module map and `desktop.rs`'s `generate_handler!` list —
 and a command missing from the second answers `unknown command` at runtime with nothing red.
@@ -2075,3 +2079,129 @@ plan mid-fade and flash its loading sentence; the page's own Optimise button wri
 press instead. It said *a boolean because there is nothing else to say — the widget only ever asks
 about the whole list* until issue #598, when the card's managed switch and chosen folders became
 things to say.
+
+## 16. To-dos — `deckTodos`, over `decks.todos` (2026-09-29)
+
+[Issue #672](https://github.com/Msgaihede/mtg-grimoire/issues/672), from the Luminia Discord: a
+place to note things to do, each pointed at a deck. The design is
+[the deck to-dos spec](../superpowers/specs/2026-09-29-deck-todos-design.md) §7, amended after the
+build where the two disagree. The storage, the three commands and the compare-and-set are
+[decks-storage.md](decks-storage.md)'s *Deck to-dos*, and the deck's own To-do band, the other half
+of this, is `src/features/decks/CLAUDE.md`'s *The To-do band*.
+
+⚠️ **A to-do list is not a note** — neither a deck note nor §12's sticky note. It is one column on a
+deck's row, and a to-do is one line of it with no id of its own. It shares the notes' editor and
+their inline dialect and nothing else, and **this widget never loads the editor**:
+`todoMarkdown.ts` reads each list into a tree, and the card draws that tree with its own inline
+components.
+
+**Catalogue only, and Rust's vocabulary untouched.** `DEFAULT_LAYOUT` did not move in any of its
+three copies, and `home.rs` gained nothing, so an older build keeps the kind as an unknown-widget
+placeholder and loses nothing on a round trip — §15's arrangement exactly. In `WIDGET_META` the row
+sits between `stickyNotes` and `newPrintings`, beside the other kind a reader writes into, so the
+`widgets.test.ts` pin on `WIDGETS.slice(-4)` still names round two's four kinds.
+
+**One read and one write, both `deck_todos.rs`'.** `deck_todo_lists` answers every deck whose list
+is not empty, and every conclusion is drawn here in TypeScript: the scope, the archived switch, the
+two to-do switches and the order. The key is `deckTodoListsKey`, `["decks", "todos", "lists"]`,
+under `["decks"]` so every deck write and the `decks` change mask refresh it with no bridge, and
+under `["decks", "todos"]` beside the band's own `["decks", "todos", deckId]`. **The third segment
+is a string where the band's is a number**, so neither key prefix-matches the other: the band's
+autosave invalidates this key by name without sweeping its own. `deck_todos_set` is the second write
+in §6's table, and its absences are not the sticky notes': a list belongs to a deck, so the write
+moves the deck's `updated_at`, and it writes no `deck_audit`, `deck_undo` or `activity` row.
+
+### Settings
+
+| Setting | Options | Default |
+| --- | --- | --- |
+| `Which decks` (the chip) | `All decks` · `Chosen…` | `All decks` |
+| `Order` | `Last edited` · `Name` · `Most open` | `Last edited` |
+| `Show completed` | on · off | off |
+| `Show sub-to-dos` | on · off | on |
+| `Include archived decks` | on · off | off |
+| `Show open count` | on · off | on |
+
+- **`Chosen…` reuses Deck completion's picker.** `renderExtraSettings` draws the same
+  `MultiDropdown`, writing `{ deckIds, scope: "chosen" }`, read back with `pinnedDeckIds`. It is
+  drawn only while the scope is `Chosen…`, with a sentence in its place otherwise, and it offers
+  every deck rather than only those with a list, because a reader may choose a deck before writing
+  its first to-do.
+- **`Include archived decks` holds under `Chosen…` too**, where `DecksWidget` and Deck completion
+  draw a chosen archived deck regardless. Here the switch always means what its label says: the
+  picker offers archived decks only while it is on, and a choice it does not offer is kept in the
+  stored set and comes back ticked with the switch. The known cost: a `Chosen…` set of archived
+  decks alone, with the switch off, reads *No to-dos yet*.
+- **`Last edited` is the deck's own `updated_at`**, which every deck write moves — a rename, a card
+  add, the band's disclosure — and not only a to-do write. `Name` is `sortOptions`' collator, and
+  `Most open` counts open to-dos at every depth; every tie is settled by name.
+- **The open count is `countTodos` over the deck's whole list**, whatever the two to-do switches
+  hide, so a heading says how much is left in the deck and never how much fitted on the card.
+- **`visibleTodos` is the two to-do switches**, and they compose in one order. With `Show completed`
+  off, a done to-do is hidden **unless it still has a visible child**, which it keeps and is drawn
+  done, so a tree never loses the parent its open sub-to-do sits under. With `Show sub-to-dos` off
+  only the top level is drawn, so a done parent over an open child is hidden too.
+
+### The tick is a compare-and-set
+
+A to-do is named by its **source line in the body this card read**. The whole row is the checkbox —
+a `role="checkbox"` press named `Mark "<text>" done` or `Mark "<text>" not done`, the band's
+editor's own words — and a press sends `toggleTodo(body, line)` through `deck_todos_set` **with the
+body it read as `expected`**. The band's autosave sends none.
+
+- **A success writes the new body into the cache at once**, so a second tick's `expected` is the
+  body the first one wrote, and then re-reads under `["decks", "todos"]` — the band's key too, so an
+  open band hears the tick and takes it once nobody is typing in it.
+- **A refusal re-reads and prints the refusal's own sentence** in a one-line failure slot
+  (`role="alert"`, truncated, with the whole sentence as a hint when cut). `TODOS_CHANGED` reads
+  *That to-do list changed since it was read. Try again.*, and the reader ticks again against the
+  fresh list.
+- **While a write is out every box refuses**, `aria-disabled`, because a second tick's `expected`
+  would be the body the first is replacing. Only the pressed row is drawn faint.
+- **A line with no box is drawn with a dashed, inert box.** `parseTodos` drops nothing it does not
+  understand, so a plain bullet or a stray line from a newer build reads as an open to-do. But
+  `toggleTodo` answers `null` for it, so its row is `aria-disabled`, a press writes nothing, and the
+  dashed box says so before anybody presses. No path writes such a line today.
+- **A link is drawn and never followed.** The row is the press, and nothing pressable may sit inside
+  a press; the deck's band is where a link is opened.
+- **`still`** (the catalogue's preview): no press anywhere, so nothing ticks and nothing navigates.
+
+### The heading opens the deck on its To-do band
+
+Each deck's heading is `ActivityWidget`'s day heading, pressed: the deck's name in the accent's
+display face, a hairline, and `N open` in mono when `Show open count` is on. The press does three
+things in a fixed order:
+
+1. **`deckUpdate(id, { todosOpen: true })`, only when `todosOpen` says the band is shut**, awaited,
+   then `["decks"]` invalidated, so the editor's row read sees the band open. A refused write is
+   swallowed and the deck opens anyway, because the band is one press away there.
+2. `setActiveView("decks")`.
+3. `setOpenDeckId(id)`. The order is Deck completion's, forced by `setActiveView` clearing the id on
+   the way in.
+
+The known cost: the disclosure is an ordinary `deck_update`, which moves `updated_at`, so pressing a
+heading over a shut band moves that deck to the top of `Last edited`.
+
+### Rows are whole, and there are four empty sentences
+
+Each row costs its own drawn height: a heading is one line, and a to-do is its padding plus one line
+per line its text is estimated to wrap to. Rows are taken, with the body's gap between each, until
+the next would not fit, and a `+N more` footer is reserved only when something is left over. **The
+to-do the cut lands on is drawn clamped to the lines left** (`CLAMP_CLASSES`, whole class names,
+because an interpolated `line-clamp-…` emits no rule), so a to-do taller than the whole card still
+shows its first lines. A heading whose to-dos all fell past the cut is dropped with them. The wrap
+estimate is a guessed glyph width (`CHAR_PX`) that no live pass has measured yet.
+
+| State | The card says |
+| --- | --- |
+| no deck in scope holds a to-do | **No to-dos yet**, and a dim *Add them in any deck's To-do band.* |
+| `Chosen…` with nothing chosen | *No decks chosen. Choose decks in this widget's settings.* |
+| every to-do in scope done, completed hidden | *Every to-do here is done. Enable Show completed in settings to view them.* |
+| open to-dos only under finished parents, sub-to-dos hidden | *Open to-dos are nested under finished ones. Enable Show sub-to-dos in settings to view them.* |
+
+**The last two are beyond the spec, which had only the first.** Without them, a reader who has ticked
+everything would be told they never wrote a to-do. And `ALL_DONE` alone was false in one case: with
+`Show sub-to-dos` off, a deck whose only open work is nested draws nothing while something in it is
+still open. Both sentences read the switch's name off the registry, so neither can point at a
+renamed row. A read still in flight is *Loading to-dos…*, and a refused one is `WidgetMessage`'s
+destructive sentence.

@@ -225,8 +225,22 @@ than by the test.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v57**
-  (2026-09-28, [issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617)) is
+  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v58**
+  (2026-09-29, [issue #672](https://github.com/Msgaihede/mtg-grimoire/issues/672)) is
+  `decks.todos TEXT NOT NULL DEFAULT ''` and `decks.todos_open INTEGER NOT NULL DEFAULT 0` — a
+  deck's to-do checklist, in the dialect `todoMarkdown.ts` reads (`''` is no list), and whether its
+  To-do band is expanded. **Two columns and not a table**, because one list to a deck is a column's
+  shape: a table would owe the synced-table census, a uid and a grain, where these inherit the
+  deck's cascade, change mask and capture trigger. v56's rules otherwise: both on the `decks`
+  capture spec, on no history row and no `deck_undo::DECK_FIELDS`, not carried by `duplicate_deck`.
+  `todos_open` is `notes_open`'s twin, `DEFAULT 0` for v43's reason, and **syncs where `notes_open`
+  does not**, on `tokens_open`'s argument. `todos` rides neither `DeckRow` nor `DeckPatch` —
+  `deck_todos.rs` is its only reader and writer, and `set_todos` is a compare-and-set against an
+  optional `expected` that a `coalesce` in `update_deck` could not honour. `deck_row` reads
+  `todos_open` at 32 and `update_deck` binds it at `?26`. No trigger comes off, unlike v57: nothing
+  here writes a row. It owes `UNDO_V58`, now the head of every chain, which drops the three `decks`
+  capture triggers before its two columns for `UNDO_V56`'s reason. That is one above **v57**
+  (2026-09-28, [issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617)), which is
   `decks.managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0`, whether a theory deck's managed
   wishlist files the plan's missing tokens in its **Tokens** subfolder — a switch beside
   `managed_wishlist_mode`, which loses its fifth word `tokens`. **The rung converts rows, so it
@@ -235,8 +249,9 @@ than by the test.
   `all` → switch on; `tokens` → `missing` with the switch on (the reader's answer); the rest keep
   `0`. The mode's rules otherwise: on the capture spec, a history row (`managedWishlistTokens`),
   on `deck_undo::DECK_FIELDS`, carried by `duplicate_deck`. `deck_row` reads it at 31 and
-  `update_deck` binds it at `?25`. It owes `UNDO_V57`, now the head of every chain, which drops
-  the capture triggers before the column for `UNDO_V56`'s reason. That is one above **v56**
+  `update_deck` binds it at `?25`. It owes `UNDO_V57`, which drops the capture triggers before the
+  column for `UNDO_V56`'s reason and ran first in every chain until `UNDO_V58` landed above it.
+  That is one above **v56**
   (2026-09-28, [the deck-stats band plan](../docs/superpowers/plans/2026-09-28-deck-stats-band-redesign.md)
   §3) is `decks.curve_creatures INTEGER NOT NULL DEFAULT 0`, whether the Deck stats band's Mana
   curve splits each bar into creatures and noncreatures — v42's `stats_open` one control further
