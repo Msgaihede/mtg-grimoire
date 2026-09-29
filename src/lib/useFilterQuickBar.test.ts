@@ -118,6 +118,10 @@ describe("useFilterQuickBar", () => {
   it("never shows while disabled (table view), whatever the row does", () => {
     const { main, row } = page();
     const { result } = renderHook(() => useFilterQuickBar(row, false));
+    // Nothing watches the row at all — not merely an answer ignored. Without this, handing the
+    // row to `useUndocked` while disabled would build an observer per table view and pass, since
+    // `shown` is also gated on `enabled`; and a crossing delivered to nothing proves nothing.
+    expect(watchers.some((w) => w.observed.includes(row))).toBe(false);
     act(() => fireCrossing(row, { isIntersecting: false, bottom: -5, rootTop: 0 }));
     expect(result.current.shown).toBe(false);
     expect(main.style.scrollPaddingTop).toBe("");
