@@ -715,13 +715,13 @@ describe("the to-do dialect", () => {
    *
    * `hardBreak` writes `"  \n"` and leaves the rest of the line unindented, and `TaskList`'s
    * markdown tokenizer reads a task item one line at a time — so the break's second half comes
-   * back as a paragraph **outside** the list. The document that makes is one this schema forbids
-   * (`doc` holds one task list and nothing else), and the reader's next keystroke is into it. A
-   * construct only one side of the round trip can spell is the one thing the module header says
-   * must not enter a dialect, so the node is left out.
+   * back as a line **outside** the list. The load-time repair can only make that line a to-do of
+   * its own, so a broken to-do would split in two the next time it was opened. A construct only
+   * one side of the round trip can spell is the one thing the module header says must not enter a
+   * dialect, so the node is left out.
    *
-   * **This goes red the day the tokenizer learns continuation lines**, which is the day a hard
-   * break could come back.
+   * **This goes red the day the tokenizer learns continuation lines** — the body would then read
+   * back as one to-do — which is the day a hard break could come back.
    */
   it("has no hard break, because its own reader cannot read one back out of a to-do", () => {
     const editor = new Editor({
@@ -731,7 +731,9 @@ describe("the to-do dialect", () => {
       contentType: "markdown",
     });
     expect(Object.keys(editor.schema.nodes)).not.toContain("hardBreak");
-    expect(() => editor.state.doc.check()).toThrow(/Invalid content for node doc/);
+    const list = editor.state.doc.firstChild;
+    expect(list?.childCount).toBe(2);
+    expect(list?.child(1).textContent).toBe("second");
     editor.destroy();
   });
 });
@@ -1036,6 +1038,303 @@ describe("NoteEditor in checklist mode", () => {
     expect(surface.querySelector('ul[data-type="taskList"]')).not.toBeNull();
     expect(screen.getByRole("button", { name: "Indent" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Heading 1" })).toBeNull();
+  });
+});
+
+/* ------------------------------------------------------------ the checklist's keys ---- */
+
+/** An editor on the checklist kit, outside React — what the key table drives. */
+function checklistEditor(markdown: string): Editor {
+  return new Editor({
+    element: document.createElement("div"),
+    extensions: CHECKLIST_EXTENSIONS,
+    content: markdown,
+    contentType: "markdown",
+  });
+}
+
+/**
+ * One keypress through ProseMirror's own `handleKeyDown` chain — every keymap plugin in priority
+ * order, the path a real key takes — answering whether any of them claimed it. `false` is the
+ * browser's own key: what a real window would then do is the default action, which jsdom does not
+ * perform, so the document standing still is the assertion.
+ */
+function press(editor: Editor, key: string, init: KeyboardEventInit = {}): boolean {
+  const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...init });
+  return editor.view.someProp("handleKeyDown", (handle) => handle(editor.view, event)) ?? false;
+}
+
+/** Where a row of the table puts the caret before its keys. */
+type Caret = { after: string } | { before: string } | { empty: number };
+
+function placeCaret(editor: Editor, caret: Caret): void {
+  if ("after" in caret) return caretAfter(editor, caret.after);
+  if ("before" in caret) {
+    caretAfter(editor, caret.before);
+    editor.commands.setTextSelection(editor.state.selection.from - caret.before.length);
+    return;
+  }
+  const empties: number[] = [];
+  editor.state.doc.descendants((node, pos) => {
+    if (node.type.name === "paragraph" && node.content.size === 0) empties.push(pos + 1);
+  });
+  const at = empties[caret.empty];
+  if (at === undefined) throw new Error(`no empty to-do number ${caret.empty}`);
+  editor.commands.setTextSelection(at);
+}
+
+interface KeyRow {
+  name: string;
+  body: string;
+  caret: Caret;
+  keys: { key: string; shiftKey?: boolean }[];
+  /** The body after the keys. */
+  after: string;
+  /** Where the caret ends up: the words of its line and its offset in them. */
+  lands?: { line: string; offset: number };
+  /** Whether the checklist claimed the last key — `false` is the browser's own. */
+  handled?: boolean;
+}
+
+const ENTER = { key: "Enter" };
+const BACKSPACE = { key: "Backspace" };
+const DELETE = { key: "Delete" };
+
+/**
+ * Every answer the checklist gives Enter, Shift-Enter, Backspace, Delete and Shift-Tab, one row
+ * each. **The first four rows are the review's own reproductions** (2026-09-29): before the keys
+ * were bound, the first saved `"- [ ] a\n\n  \n- [ ] b"` — two top-level lists on reload — and the
+ * next three each left a line under a checkbox that was not a to-do. Every row asserts the body
+ * *and* that the document is one this schema holds, because the defect was a body that looked
+ * plausible while being a shape nothing can reopen.
+ */
+const KEY_ROWS: KeyRow[] = [
+  {
+    name: "Enter then Backspace at the end of a to-do puts the list back as it was",
+    body: "- [ ] a\n- [ ] b",
+    caret: { after: "a" },
+    keys: [ENTER, BACKSPACE],
+    after: "- [ ] a\n- [ ] b",
+    lands: { line: "a", offset: 1 },
+  },
+  {
+    name: "Enter on the only, empty to-do does nothing",
+    body: "",
+    caret: { empty: 0 },
+    keys: [ENTER],
+    after: "- [ ] ",
+    handled: true,
+  },
+  {
+    name: "Enter twice after a to-do makes one empty to-do and no blank line",
+    body: "- [ ] a",
+    caret: { after: "a" },
+    keys: [ENTER, ENTER],
+    after: "- [ ] a\n- [ ] ",
+    handled: true,
+  },
+  {
+    name: "Shift-Enter twice does what Enter does",
+    body: "- [ ] a",
+    caret: { after: "a" },
+    keys: [
+      { key: "Enter", shiftKey: true },
+      { key: "Enter", shiftKey: true },
+    ],
+    after: "- [ ] a\n- [ ] ",
+    handled: true,
+  },
+  {
+    name: "Enter on an empty sub-to-do lifts it one level",
+    body: "- [ ] a\n  - [ ] ",
+    caret: { empty: 0 },
+    keys: [ENTER],
+    after: "- [ ] a\n- [ ] ",
+  },
+  {
+    name: "Backspace in an empty last to-do removes it and lands at the end of the line above",
+    body: "- [ ] a\n- [ ] ",
+    caret: { empty: 0 },
+    keys: [BACKSPACE],
+    after: "- [ ] a",
+    lands: { line: "a", offset: 1 },
+  },
+  {
+    name: "Backspace in an empty first to-do removes it and lands at the start of the next",
+    body: "- [ ] \n- [ ] b",
+    caret: { empty: 0 },
+    keys: [BACKSPACE],
+    after: "- [ ] b",
+    lands: { line: "b", offset: 0 },
+  },
+  {
+    name: "Backspace in the only, empty to-do leaves the list as one empty to-do",
+    body: "- [ ] ",
+    caret: { empty: 0 },
+    keys: [BACKSPACE],
+    after: "- [ ] ",
+    handled: true,
+  },
+  {
+    name: "Backspace in an empty only sub-to-do takes its list and lands on its parent's line",
+    body: "- [ ] a\n  - [ ] ",
+    caret: { empty: 0 },
+    keys: [BACKSPACE],
+    after: "- [ ] a",
+    lands: { line: "a", offset: 1 },
+  },
+  {
+    name: "Backspace at the start of a sub-to-do lifts it",
+    body: "- [ ] a\n  - [ ] b",
+    caret: { before: "b" },
+    keys: [BACKSPACE],
+    after: "- [ ] a\n- [ ] b",
+  },
+  {
+    name: "Backspace at the start of a to-do joins its words onto the line above",
+    body: "- [ ] a\n- [ ] b",
+    caret: { before: "b" },
+    keys: [BACKSPACE],
+    after: "- [ ] ab",
+    lands: { line: "ab", offset: 1 },
+  },
+  {
+    name: "Backspace at the start of a to-do brings its sub-to-dos with its words",
+    body: "- [ ] a\n- [ ] b\n  - [ ] c",
+    caret: { before: "b" },
+    keys: [BACKSPACE],
+    after: "- [ ] ab\n  - [ ] c",
+    lands: { line: "ab", offset: 1 },
+  },
+  {
+    name: "Backspace at the start of a to-do joins onto the last line above, however deep",
+    body: "- [ ] a\n  - [ ] b\n- [ ] c",
+    caret: { before: "c" },
+    keys: [BACKSPACE],
+    after: "- [ ] a\n  - [ ] bc",
+    lands: { line: "bc", offset: 1 },
+  },
+  {
+    name: "Backspace at the start of the first line stays put",
+    body: "- [ ] a\n- [ ] b",
+    caret: { before: "a" },
+    keys: [BACKSPACE],
+    after: "- [ ] a\n- [ ] b",
+    handled: true,
+  },
+  {
+    name: "Backspace inside a line is the browser's own",
+    body: "- [ ] ab",
+    caret: { after: "a" },
+    keys: [BACKSPACE],
+    after: "- [ ] ab",
+    handled: false,
+  },
+  {
+    name: "Delete at the end of a to-do joins the next line onto it",
+    body: "- [ ] a\n- [ ] b\n  - [ ] c",
+    caret: { after: "a" },
+    keys: [DELETE],
+    after: "- [ ] ab\n  - [ ] c",
+    lands: { line: "ab", offset: 1 },
+  },
+  {
+    name: "Delete into a to-do's own first sub-to-do puts that one's sub-to-dos in its place",
+    body: "- [ ] a\n  - [ ] b\n    - [ ] c\n  - [ ] d",
+    caret: { after: "a" },
+    keys: [DELETE],
+    after: "- [ ] ab\n  - [ ] c\n  - [ ] d",
+    lands: { line: "ab", offset: 1 },
+  },
+  {
+    name: "Delete at the end of the last line does nothing",
+    body: "- [ ] a\n- [ ] b",
+    caret: { after: "b" },
+    keys: [DELETE],
+    after: "- [ ] a\n- [ ] b",
+    handled: true,
+  },
+  {
+    name: "Shift-Tab lifts a to-do that has sub-to-dos and siblings after it",
+    body: "- [ ] a\n  - [ ] b\n    - [ ] c\n  - [ ] d",
+    caret: { after: "b" },
+    keys: [{ key: "Tab", shiftKey: true }],
+    after: "- [ ] a\n- [ ] b\n  - [ ] c\n  - [ ] d",
+  },
+];
+
+describe("the checklist's keys", () => {
+  it.each(KEY_ROWS)("$name", ({ body, caret, keys, after, lands, handled }) => {
+    const editor = checklistEditor(body);
+    placeCaret(editor, caret);
+
+    let claimed = false;
+    for (const { key, shiftKey } of keys) claimed = press(editor, key, { shiftKey });
+
+    expect(editor.getMarkdown()).toBe(after);
+    expect(() => editor.state.doc.check()).not.toThrow();
+    if (lands) {
+      const { $from } = editor.state.selection;
+      expect({ line: $from.parent.textContent, offset: $from.parentOffset }).toEqual(lands);
+    }
+    if (handled !== undefined) expect(claimed).toBe(handled);
+    editor.destroy();
+  });
+
+  /** The narrowed item is the first line of defence: a to-do cannot hold a second paragraph. */
+  it("holds one line and at most one sub-list in a to-do", () => {
+    const editor = checklistEditor("- [ ] a");
+    expect(editor.schema.nodes.taskItem.spec.content).toBe("paragraph taskList?");
+    editor.destroy();
+  });
+});
+
+/* ----------------------------------------------------------- a body in a bad shape ---- */
+
+describe("a body written in a shape the keys can no longer make", () => {
+  /**
+   * The review's reproduction, verbatim: what Enter then Backspace saved before the keys were
+   * bound. Its blank middle line splits it into two top-level lists, which this schema cannot hold
+   * — it now opens as the one list it was meant to be.
+   */
+  it("opens the old two-list body as one valid list", () => {
+    const editor = checklistEditor("- [ ] a\n\n  \n- [ ] b");
+    expect(() => editor.state.doc.check()).not.toThrow();
+    expect(editor.state.doc.childCount).toBe(1);
+    expect(editor.getMarkdown()).toBe("- [ ] a\n- [ ] b");
+    editor.destroy();
+  });
+
+  it("makes a loose line a to-do of its own, and drops a blank one", () => {
+    expect(checklistTrip("- [ ] a\n\nloose words")).toBe("- [ ] a\n- [ ] loose words");
+    expect(checklistTrip("- [ ] \n\n  &nbsp;")).toBe("- [ ] ");
+  });
+
+  it("makes a second paragraph inside a to-do its sub-to-do", () => {
+    expect(checklistTrip("- [ ] a\n\n  b")).toBe("- [ ] a\n  - [ ] b");
+  });
+
+  /** Both roads into the editor: the first paint, and a body handed in later (`setContent`). */
+  it("draws one list on mount and on a later value alike", () => {
+    const onChange = vi.fn<(markdown: string) => void>();
+    const { view, surface, editor } = renderChecklist("- [ ] a\n\n  \n- [ ] b", { onChange });
+    expect(surface.querySelectorAll(":scope > ul")).toHaveLength(1);
+    expect(() => editor.state.doc.check()).not.toThrow();
+
+    view.rerender(
+      <NoteEditor
+        mode="checklist"
+        value={"- [ ] c\n\n  \n- [ ] d"}
+        onChange={onChange}
+        ariaLabel="To-do list"
+      />,
+    );
+
+    expect(surface.querySelectorAll(":scope > ul")).toHaveLength(1);
+    expect(() => editor.state.doc.check()).not.toThrow();
+    expect(editor.getMarkdown()).toBe("- [ ] c\n- [ ] d");
+    // Squaring a body up is not an edit: nothing was written back for it.
+    expect(onChange).not.toHaveBeenCalled();
   });
 });
 

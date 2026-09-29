@@ -73,9 +73,11 @@ import Heading, { type Level } from "@tiptap/extension-heading";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Placeholder } from "@tiptap/extensions";
 import { Markdown } from "@tiptap/markdown";
-import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
+import { Fragment, type Node as ProseMirrorNode, type ResolvedPos } from "@tiptap/pm/model";
+import { Selection, TextSelection, type Transaction } from "@tiptap/pm/state";
 import {
   EditorContent,
+  Extension,
   mergeAttributes,
   // `TiptapNode` because the bare name would shadow the DOM's own `Node`, which the checklist's
   // node view needs for `contains()`.
@@ -83,6 +85,7 @@ import {
   useEditor,
   useEditorState,
   type Editor,
+  type JSONContent,
 } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
 import {
@@ -334,6 +337,22 @@ function removeGlyph(): SVGSVGElement {
  * The positions are read off the transaction's own document, so a press racing a keystroke acts
  * on the row as it is now rather than as it was drawn.
  */
+function removeTodoAt(tr: Transaction, pos: number): boolean {
+  const item = tr.doc.nodeAt(pos);
+  if (!item || item.type.name !== "taskItem") return false;
+  const $pos = tr.doc.resolve(pos);
+  if ($pos.parent.childCount > 1) {
+    tr.delete(pos, pos + item.nodeSize);
+  } else if ($pos.depth > 1) {
+    tr.delete($pos.before(), $pos.after());
+  } else {
+    const { taskItem, paragraph } = tr.doc.type.schema.nodes;
+    tr.replaceWith(pos, pos + item.nodeSize, taskItem.create({ checked: false }, paragraph.create()));
+  }
+  return true;
+}
+
+/** The row's delete button: {@link removeTodoAt} on the row it is drawn on. */
 function deleteTodo(editor: Editor, getPos: () => number | undefined): void {
   const pos = getPos();
   if (typeof pos !== "number") return;
@@ -343,29 +362,257 @@ function deleteTodo(editor: Editor, getPos: () => number | undefined): void {
     // button it was on detached, and the caret has to come back into the list rather than land
     // on `<body>`. No scroll — the reader is looking at the row they just removed.
     .focus(undefined, { scrollIntoView: false })
+    .command(({ tr }) => removeTodoAt(tr, pos))
+    .run();
+}
+
+/**
+ * The to-do the caret is standing in, as the positions every key below needs — or `null` when the
+ * caret is not on a to-do's own line. With {@link ChecklistItem}'s content that is the only line a
+ * to-do has, so "the paragraph the caret is in" and "the to-do's line" are the same test.
+ */
+function todoAt($pos: ResolvedPos) {
+  if ($pos.parent.type.name !== "paragraph" || $pos.depth < 2) return null;
+  const itemDepth = $pos.depth - 1;
+  const item = $pos.node(itemDepth);
+  if (item.type.name !== "taskItem") return null;
+  return {
+    item,
+    itemPos: $pos.before(itemDepth),
+    listDepth: itemDepth - 1,
+    // The top list is the document's only child, at depth 1; anything deeper is a sub-list.
+    nested: itemDepth - 1 > 1,
+    empty: $pos.parent.content.size === 0,
+  };
+}
+
+/**
+ * Lift the to-do the caret is in (or the run a selection spans) one level — Shift-Tab, Outdent,
+ * and an Enter or a Backspace that means *out*.
+ *
+ * ⚠️ **Never ProseMirror's `liftListItem` alone.** When the lifted to-do has sub-to-dos *and*
+ * siblings after it, `liftToOuterList` first wraps those siblings as a second list inside it and
+ * joins the two afterwards — and a to-do here holds at most one list, so that intermediate step
+ * throws out of the key handler (`TransformError: Invalid content for node taskItem`, measured with
+ * this wrapper taken out). The siblings are moved into the to-do's own
+ * sub-list first, which is exactly where ProseMirror would have put them, so the lift that follows
+ * has nothing after it to wrap and never builds the shape.
+ */
+function liftTodo(editor: Editor): boolean {
+  return editor
+    .chain()
     .command(({ tr }) => {
-      const item = tr.doc.nodeAt(pos);
-      if (!item || item.type.name !== "taskItem") return false;
-      const $pos = tr.doc.resolve(pos);
-      if ($pos.parent.childCount > 1) {
-        tr.delete(pos, pos + item.nodeSize);
-      } else if ($pos.depth > 1) {
-        tr.delete($pos.before(), $pos.after());
+      const { $from, $to } = tr.selection;
+      const range = $from.blockRange(
+        $to,
+        (node) => node.childCount > 0 && node.firstChild?.type.name === "taskItem",
+      );
+      // The top list, or no list: nothing to lift into, and `liftListItem` below says so.
+      if (!range || range.depth < 2 || range.endIndex >= range.parent.childCount) return true;
+      const last = range.parent.child(range.endIndex - 1);
+      const followers = tr.doc.slice(range.end, range.$to.end(range.depth)).content;
+      tr.delete(range.end, range.$to.end(range.depth));
+      if (last.childCount > 1) {
+        // Inside the sub-list it already has, at its end.
+        tr.insert(range.end - 2, followers);
       } else {
-        const { taskItem, paragraph } = tr.doc.type.schema.nodes;
-        tr.replaceWith(
-          pos,
-          pos + item.nodeSize,
-          taskItem.create({ checked: false }, paragraph.create()),
-        );
+        tr.insert(range.end - 1, tr.doc.type.schema.nodes.taskList.create(null, followers));
       }
+      return true;
+    })
+    .liftListItem("taskItem")
+    .run();
+}
+
+/**
+ * Enter and Shift-Enter. **A to-do with words splits into the next one; an empty one never makes
+ * a line that is not a to-do.** An empty sub-to-do lifts one level, which is how a reader walks
+ * back out of a nest; an empty top-level to-do does nothing, because out of the list is nowhere —
+ * the document holds nothing else. Always handled, so the browser's own Enter never reaches the
+ * surface.
+ */
+function enterTodo(editor: Editor): boolean {
+  if (!editor.state.selection.empty) editor.commands.deleteSelection();
+  const at = todoAt(editor.state.selection.$from);
+  if (!at) return true;
+  if (at.empty) {
+    if (at.nested) liftTodo(editor);
+    return true;
+  }
+  editor.commands.splitListItem("taskItem");
+  return true;
+}
+
+/**
+ * Backspace at the start of a to-do's line. Anywhere else it is an ordinary Backspace and this
+ * answers `false`.
+ *
+ * * **An empty to-do with nothing under it is removed**, and the caret goes to the end of the line
+ *   above — the previous to-do in reading order, which for a first sub-to-do is its parent — or,
+ *   for the list's first line, to the start of the one below. The document's only to-do stays: it
+ *   is the empty list.
+ * * **A sub-to-do lifts one level**, the way out of a nest a reader expects from the key.
+ * * **A top-level to-do joins its words onto the end of the line above**, and **its sub-to-dos go
+ *   with them**, becoming the sub-to-dos of the to-do that took the words. That is always valid:
+ *   the line above is the last line of everything before, so the to-do it belongs to has no
+ *   sub-list of its own for them to collide with. The list's first line has nothing above it and
+ *   stays where it is.
+ *
+ * Handled at all, rather than left to `listKeymap` and the core keymap, because their fallbacks
+ * are the ones the review found: a join that leaves a second paragraph inside a to-do, and a lift
+ * that leaves a line outside every to-do. The schema now refuses the first; this is what the key
+ * does instead.
+ */
+function backspaceTodo(editor: Editor): boolean {
+  const { selection } = editor.state;
+  if (!selection.empty || selection.$from.parentOffset !== 0) return false;
+  const at = todoAt(selection.$from);
+  if (!at) return false;
+  const { item, itemPos } = at;
+  const list = selection.$from.node(at.listDepth);
+
+  if (at.empty && item.childCount === 1) {
+    if (!at.nested && list.childCount === 1) return true;
+    return editor
+      .chain()
+      .command(({ tr }) => {
+        removeTodoAt(tr, itemPos);
+        const $at = tr.doc.resolve(tr.mapping.map(itemPos));
+        tr.setSelection(
+          Selection.findFrom($at, -1, true) ??
+            Selection.findFrom($at, 1, true) ??
+            Selection.atStart(tr.doc),
+        );
+        return true;
+      })
+      .run();
+  }
+
+  if (at.nested) return liftTodo(editor) || true;
+  if (selection.$from.index(at.listDepth) === 0) return true;
+
+  return editor
+    .chain()
+    .command(({ tr }) => {
+      const above = Selection.findFrom(tr.doc.resolve(itemPos), -1, true);
+      if (!above) return false;
+      const joinAt = above.$head.pos;
+      const words = item.firstChild?.content;
+      const under = item.childCount > 1 ? item.child(1) : null;
+      tr.delete(itemPos, itemPos + item.nodeSize);
+      if (words) tr.insert(joinAt, words);
+      const lineEnd = joinAt + (words?.size ?? 0);
+      if (under) {
+        const $line = tr.doc.resolve(lineEnd);
+        const owner = $line.node($line.depth - 1);
+        if (owner.childCount > 1) {
+          // Not reachable by construction (see above), and still not a second list if it were.
+          tr.insert($line.after($line.depth - 1) - 2, under.content);
+        } else {
+          tr.insert($line.after(), under);
+        }
+      }
+      tr.setSelection(TextSelection.create(tr.doc, joinAt));
       return true;
     })
     .run();
 }
 
 /**
- * `TaskItem`, with a delete button on every row and a Shift-Enter that means something.
+ * Delete at the end of a to-do's line: **the next line joins onto this one**, the mirror of a
+ * Backspace at its start. The to-do that line belonged to goes, and its sub-to-dos stay in the
+ * list they were in: when it was this to-do's own first sub-to-do, its sub-to-dos take its place
+ * in that list; otherwise this to-do has no sub-list of its own (the next line would be in it)
+ * and they become that. Nothing after the last line: nothing happens.
+ *
+ * Handled rather than left upstream because `listKeymap`'s join builds a second paragraph inside
+ * a to-do, which {@link ChecklistItem} refuses — and what ProseMirror fits in its place instead is
+ * the next to-do nested under this one, which is not what the key says.
+ */
+function deleteTodoForward(editor: Editor): boolean {
+  const { selection } = editor.state;
+  const { $from } = selection;
+  if (!selection.empty || $from.parentOffset !== $from.parent.content.size) return false;
+  const at = todoAt($from);
+  if (!at) return false;
+  return editor
+    .chain()
+    .command(({ tr }) => {
+      const joinAt = $from.pos;
+      const next = Selection.findFrom(tr.doc.resolve($from.after()), 1, true);
+      if (!next) return true;
+      const $next = next.$head;
+      const nextItem = $next.node($next.depth - 1);
+      if ($next.parent.type.name !== "paragraph" || nextItem.type.name !== "taskItem") return true;
+      const words = nextItem.firstChild?.content ?? Fragment.empty;
+      const under = nextItem.childCount > 1 ? nextItem.child(1) : null;
+      const { taskList } = tr.doc.type.schema.nodes;
+      if (at.item.childCount > 1) {
+        // The next line is this to-do's own first sub-to-do: its sub-to-dos take its place.
+        const list = at.item.child(1);
+        const listPos = at.itemPos + 1 + (at.item.firstChild?.nodeSize ?? 0);
+        const items = (under?.content ?? Fragment.empty).append(list.content.cut(nextItem.nodeSize));
+        if (items.childCount > 0) {
+          tr.replaceWith(listPos, listPos + list.nodeSize, taskList.create(null, items));
+        } else {
+          tr.delete(listPos, listPos + list.nodeSize);
+        }
+      } else {
+        const nextPos = $next.before($next.depth - 1);
+        tr.delete(nextPos, nextPos + nextItem.nodeSize);
+        if (under) tr.insert(joinAt + 1, under);
+      }
+      tr.insert(joinAt, words);
+      tr.setSelection(TextSelection.create(tr.doc, joinAt));
+      return true;
+    })
+    .run();
+}
+
+/**
+ * The checklist's keys, ahead of everything upstream.
+ *
+ * **An extension of their own, at priority 102, rather than bindings on {@link ChecklistItem}.**
+ * Tiptap runs keymaps by priority, highest first, so a binding on the item (priority 100) runs
+ * before `listKeymap` and the core keymap but *after* `TaskItem`'s own branching Delete keymap,
+ * which sits at 101 — and that one is what nested the next to-do under this one. A node's
+ * priority also orders the schema, so raising the item's to get ahead of it would move more than
+ * keys; an extension that holds nothing but keys moves nothing else.
+ *
+ * Tab is not here: `TaskItem`'s `sinkListItem` already nests a to-do under the one above and
+ * joins the sub-list it has, which is a shape this schema holds.
+ */
+const ChecklistKeys = Extension.create({
+  name: "checklistKeys",
+  priority: 102,
+
+  addKeyboardShortcuts() {
+    const enter = () => enterTodo(this.editor);
+    const backspace = () => backspaceTodo(this.editor);
+    const forward = () => deleteTodoForward(this.editor);
+    return {
+      Enter: enter,
+      // There is no hard break in this dialect (see {@link CHECKLIST_EXTENSIONS}), so the key
+      // does what Enter does rather than nothing.
+      "Shift-Enter": enter,
+      "Shift-Tab": () => liftTodo(this.editor),
+      Backspace: backspace,
+      "Mod-Backspace": backspace,
+      "Shift-Backspace": backspace,
+      Delete: forward,
+      "Mod-Delete": forward,
+    };
+  },
+});
+
+/**
+ * `TaskItem`, narrowed to one line and at most one sub-list, with a delete button on every row.
+ *
+ * **`content: "paragraph taskList?"`** where `TaskItem` has `paragraph block*`. A to-do is one
+ * line, so a second paragraph inside one is a shape this dialect has no spelling for — it came out
+ * as an indented blank and read back as a line outside the list — and the narrower expression
+ * makes every command that would build it fail rather than succeed. The markdown parse builds
+ * exactly this shape (a paragraph, then one list of sub-to-dos), so no body in the corpus moved.
  *
  * **The parent's node view is wrapped, never copied** (`this.parent?.()`), so Tiptap's checkbox,
  * its accessible name and its own `update` stay exactly Tiptap's; what this adds is appended to
@@ -375,16 +622,10 @@ function deleteTodo(editor: Editor, getPos: () => number | undefined): void {
  * view already answered — its `stopEvent`, its `ignoreMutation` — is still asked first-hand for
  * anything that is not the button.
  *
- * **Shift-Enter makes the next to-do**, because there is no hard break in this dialect for it to
- * make (see {@link CHECKLIST_EXTENSIONS}) and a key that did nothing at all would read as broken.
+ * Its keys are {@link ChecklistKeys}', which says why they are not bindings here.
  */
 const ChecklistItem = TaskItem.extend({
-  addKeyboardShortcuts() {
-    return {
-      ...this.parent?.(),
-      "Shift-Enter": () => this.editor.commands.splitListItem(this.name),
-    };
-  },
+  content: "paragraph taskList?",
 
   addNodeView() {
     const parent = this.parent?.();
@@ -432,6 +673,81 @@ const ChecklistItem = TaskItem.extend({
   },
 });
 
+/** A node's words, marks and all taken off — what a stray block becomes a to-do with. */
+function plainWords(node: JSONContent): string {
+  return node.text ?? (node.content ?? []).map(plainWords).join("");
+}
+
+/**
+ * Every node of a parsed body as to-dos, in reading order and at the level they were found:
+ * a list gives its items, an item is squared up by {@link oneTodo}, and any other block with
+ * words in it becomes one open to-do holding them. A block with no words — a blank line, the
+ * `&nbsp;` an emptied paragraph is written as — is dropped rather than drawn as an empty to-do.
+ */
+function todosOf(nodes: readonly JSONContent[]): JSONContent[] {
+  return nodes.flatMap((node): JSONContent[] => {
+    if (node.type === "taskList") return todosOf(node.content ?? []);
+    if (node.type === "taskItem") return [oneTodo(node)];
+    const words = plainWords(node);
+    if (words.trim() === "") return [];
+    const line =
+      node.type === "paragraph" ? node : { type: "paragraph", content: [{ type: "text", text: words }] };
+    return [{ type: "taskItem", attrs: { checked: false }, content: [line] }];
+  });
+}
+
+/** One to-do in {@link ChecklistItem}'s shape: its own line, then at most one list under it. */
+function oneTodo(item: JSONContent): JSONContent {
+  const [first, ...rest] = item.content ?? [];
+  const ownLine = first?.type === "paragraph";
+  const under = todosOf(ownLine ? rest : (item.content ?? []));
+  const line = ownLine ? first : { type: "paragraph" };
+  return { ...item, content: under.length > 0 ? [line, { type: "taskList", content: under }] : [line] };
+}
+
+/**
+ * A parsed body as the one document this schema can hold: a single task list of to-dos.
+ *
+ * **The second line of defence, and it exists because the first one can be late.** Tiptap loads
+ * a parsed body without checking it against the schema, so a body already written in a shape the
+ * keys can no longer make — two lists, a line outside every to-do, a second paragraph inside one —
+ * would open as an invalid document and break the next keystroke. Written bodies in that shape
+ * exist: the review found this editor saving `"- [ ] a\n\n  \n- [ ] b"` before its keys were
+ * bound, which reads back as two top-level lists. Repaired here, before the editor draws it, it
+ * opens as one list — and a valid body passes through unchanged, which the round-trip corpus pins.
+ */
+function oneListBody(doc: JSONContent): JSONContent {
+  const todos = todosOf(doc.content ?? []);
+  const content =
+    todos.length > 0
+      ? todos
+      : [{ type: "taskItem", attrs: { checked: false }, content: [{ type: "paragraph" }] }];
+  return { ...doc, content: [{ type: "taskList", content }] };
+}
+
+/**
+ * `Markdown`, with every parse this editor makes squared up by {@link oneListBody}.
+ *
+ * Both roads a body takes into the editor go through the manager's `parse` — the first paint (its
+ * `onBeforeCreate` converts `content` before the document exists) and every later `setContent` —
+ * so the repair is one wrap of that method, after the parent has built the manager, plus the
+ * initial content the parent has already converted by then. `onCreate` would be too late: Tiptap
+ * fires it on a timer, after the first paint and after the value effect.
+ */
+const ChecklistMarkdown = Markdown.extend({
+  onBeforeCreate(event) {
+    this.parent?.(event);
+    const manager = this.editor.markdown;
+    if (!manager) return;
+    const parse = manager.parse.bind(manager);
+    manager.parse = (markdown: string) => oneListBody(parse(markdown));
+    const initial = this.editor.options.content;
+    if (initial !== null && typeof initial === "object" && !Array.isArray(initial)) {
+      this.editor.options.content = oneListBody(initial as JSONContent);
+    }
+  },
+});
+
 /**
  * The checklist's whole dialect, spelled out — `NOTE_EXTENSIONS`' rule, every option that is off
  * written out, for its reason.
@@ -445,18 +761,25 @@ const ChecklistItem = TaskItem.extend({
  * ⚠️ **`hardBreak` is off, which is where this list departs from the spec** (§3 keeps it), and
  * the reason is a measurement rather than a preference. Its markdown is `"  \n"` with the rest of
  * the line unindented, and `TaskList`'s tokenizer reads a task item **one line at a time** — so
- * the second half of a broken to-do comes back as a paragraph *outside* the list, in a document
- * whose top node may hold nothing but the list. A construct only one side of the round trip can
- * spell is exactly what the module header says must not enter a dialect. `NoteEditor.test.tsx`
- * pins the failure, and goes red the day the tokenizer learns continuation lines.
+ * the second half of a broken to-do comes back as a line *outside* the list, which
+ * {@link ChecklistMarkdown} can only turn into a to-do of its own. A construct only one side of the
+ * round trip can spell is exactly what the module header says must not enter a dialect.
+ * `NoteEditor.test.tsx` pins the split, and goes red the day the tokenizer learns continuation
+ * lines.
+ *
+ * **Three layers keep every line a to-do**, and each covers what the one before cannot.
+ * {@link ChecklistItem} narrows a to-do to one line and at most one sub-list, so no command can
+ * build a second paragraph inside one; {@link ChecklistKeys} gives Enter, Backspace, Delete and
+ * Shift-Tab answers that never need the shapes the schema now refuses; and
+ * {@link ChecklistMarkdown} squares up a body already written in one of them before it is drawn.
  *
  * Three behaviours stay, each as in `NOTE_EXTENSIONS`: `undoRedo` is Ctrl+Z, which is the only
- * undo a deleted to-do has; `listKeymap` because its default list types include `taskItem` —
- * Backspace at the head of a to-do and Delete at the end of one — and it skips the `listItem`
- * type this schema does not have rather than failing on it; and `gapcursor` by absence, the one
- * StarterKit type that can only be said as "off". `trailingNode` stays off for the stronger of
- * its two reasons here: the paragraph it pins to the end of a document is one this top node
- * cannot hold at all.
+ * undo a deleted to-do has; `listKeymap`, whose default list types include `taskItem` and which
+ * skips the `listItem` type this schema does not have rather than failing on it — kept for what it
+ * does that {@link ChecklistKeys} does not claim, though the keys that key off a to-do's line
+ * boundaries are all answered before it; and `gapcursor` by absence, the one StarterKit type that
+ * can only be said as "off". `trailingNode` stays off for the stronger of its two reasons here:
+ * the paragraph it pins to the end of a document is one this top node cannot hold at all.
  *
  * **`document: false`, and {@link ChecklistDocument} in its place** — StarterKit builds its own
  * `doc` with `block+` and hands out no handle to change it, the same reason `NoteHeading` exists.
@@ -504,8 +827,9 @@ export const CHECKLIST_EXTENSIONS = [
         `Mark "${todoWords(node)}" ${checked ? "not done" : "done"}`,
     },
   }),
+  ChecklistKeys,
   Placeholder.configure({ placeholder: TODO_PLACEHOLDER, includeChildren: true }),
-  Markdown,
+  ChecklistMarkdown,
 ];
 
 /**
@@ -1005,7 +1329,10 @@ export default function NoteEditor({
             <ToolButton
               icon={ListIndentDecrease}
               name="Outdent"
-              onPress={() => editor.chain().focus().liftListItem("taskItem").run()}
+              onPress={() => {
+                editor.commands.focus();
+                liftTodo(editor);
+              }}
             />
             <ToolButton
               icon={ListIndentIncrease}
