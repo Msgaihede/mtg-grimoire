@@ -2,10 +2,10 @@
 // package this app declares. Reaching into an undeclared transitive dependency works until a
 // hoist changes.
 import { Editor } from "@tiptap/react";
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { compile } from "tailwindcss";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
 // Tailwind's own entry, read through Vite rather than `node:fs` — this project has no
 // `@types/node` on purpose, which is `tokens.test.ts`'s note and why `?raw` is the house style
 // for a test that asserts against a file's text. The entry is self-contained (one
@@ -13,8 +13,14 @@ import { describe, expect, it, vi } from "vitest";
 // is the whole of the resolver the compile below needs.
 import twEntry from "tailwindcss/index.css?raw";
 import appCss from "@/index.css?raw";
-import NoteEditor, { NOTE_EXTENSIONS, NOTE_PLACEHOLDER } from "./NoteEditor";
+import NoteEditor, {
+  CHECKLIST_EXTENSIONS,
+  NOTE_EXTENSIONS,
+  NOTE_PLACEHOLDER,
+  TODO_PLACEHOLDER,
+} from "./NoteEditor";
 import source from "./NoteEditor.tsx?raw";
+import { parseTodos, type TodoItem } from "./todoMarkdown";
 
 /**
  * jsdom implements no layout, so a `Range` answers nothing about where it is — and it does not
@@ -569,5 +575,534 @@ describe("the prompt's CSS is really compiled", () => {
     const together = layerOf(await buildSheet([...siblings, mistyped]), "utilities");
     expect(together).toContain("content:");
     expect(together).not.toContain("attr(data-placeholder)");
+  });
+});
+
+/* ------------------------------------------------------------------ the checklist ---- */
+
+/** A to-do as {@link parseTodos} reads it, with the inline runs left out — the tree, not the marks. */
+interface TodoShape {
+  text: string;
+  done: boolean;
+  line: number;
+  children: TodoShape[];
+}
+
+function todo(text: string, done: boolean, line: number, children: TodoShape[] = []): TodoShape {
+  return { text, done, line, children };
+}
+
+function shapeOf(items: TodoItem[]): TodoShape[] {
+  return items.map((item) => ({
+    text: item.text,
+    done: item.done,
+    line: item.line,
+    children: shapeOf(item.children),
+  }));
+}
+
+/**
+ * Every shape a deck's to-do list can take, in the spelling Tiptap's task list writes — and the
+ * tree the home widget's reader draws from each.
+ *
+ * **This is the to-do dialect's fence**, the way {@link DIALECT_CORPUS} is the note dialect's: the
+ * editor writes these bodies and `todoMarkdown.ts` reads them without mounting an editor, so both
+ * halves are pinned to one list here and a shape one side grows is a red build on the other.
+ *
+ * ⚠️ **Measured, not assumed (2026-09-29, `@tiptap/extension-list` 3.31.3):**
+ *
+ * * **A sub-to-do is indented by two spaces a level** — `renderNestedMarkdownContent` through the
+ *   markdown extension's default `indent`, and the three-deep entry pins that it compounds (two,
+ *   then four). Four spaces in is read back and written out as two (the normalisations below).
+ * * **The emptied list is `"- [ ] "`, with its trailing space** — one empty item, which is what a
+ *   task list that may not be empty collapses to, and which the reader leaves out.
+ * * **There is no hard break in this dialect at all.** `hardBreak` writes `"  \n"` and the
+ *   continuation unindented, and the task list's own tokenizer is line-based, so that second line
+ *   comes back as a paragraph *outside* the list. {@link CHECKLIST_EXTENSIONS} therefore leaves
+ *   the node out; the case below that pins the upstream failure is what goes red if it is fixed.
+ */
+const CHECKLIST_CORPUS: { body: string; todos: TodoShape[] }[] = [
+  // The emptied list: one empty item, which is a place to type rather than a thing to do.
+  { body: "- [ ] ", todos: [] },
+
+  // Flat, and the tick.
+  { body: "- [ ] Revise tokens", todos: [todo("Revise tokens", false, 0)] },
+  { body: "- [x] Revise tokens", todos: [todo("Revise tokens", true, 0)] },
+  {
+    body: "- [ ] Revise tokens\n- [x] Cut a land\n- [ ] Order sleeves",
+    todos: [
+      todo("Revise tokens", false, 0),
+      todo("Cut a land", true, 1),
+      todo("Order sleeves", false, 2),
+    ],
+  },
+
+  // Nesting — two spaces a level, and it compounds.
+  {
+    body: "- [ ] Mana\n  - [ ] Cut a land",
+    todos: [todo("Mana", false, 0, [todo("Cut a land", false, 1)])],
+  },
+  {
+    body: "- [ ] Mana\n  - [x] Cut a land\n    - [ ] Swap in a Triome",
+    todos: [
+      todo("Mana", false, 0, [todo("Cut a land", true, 1, [todo("Swap in a Triome", false, 2)])]),
+    ],
+  },
+  // A done parent over an open child, and back out to the top.
+  {
+    body: "- [x] Mana\n  - [ ] Cut a land\n- [ ] Order sleeves",
+    todos: [todo("Mana", true, 0, [todo("Cut a land", false, 1)]), todo("Order sleeves", false, 2)],
+  },
+
+  // The inline dialect inside a to-do: the four marks and a link.
+  {
+    body: "- [ ] **Revise** *the* ~~old~~ `tokens` [list](https://scryfall.com)",
+    todos: [todo("Revise the old tokens list", false, 0)],
+  },
+  // A literal `*` and `_` come back escaped, and the reader has to take the backslash off.
+  { body: "- [ ] 2 \\* 3 and a\\_b", todos: [todo("2 * 3 and a_b", false, 0)] },
+
+  // What an append leaves behind: a trailing empty item the reader leaves out.
+  { body: "- [ ] Revise tokens\n- [ ] ", todos: [todo("Revise tokens", false, 0)] },
+];
+
+/** One trip through the checklist editor: markdown in, document, markdown out. */
+function checklistTrip(markdown: string): string {
+  const editor = new Editor({
+    element: document.createElement("div"),
+    extensions: CHECKLIST_EXTENSIONS,
+    content: markdown,
+    contentType: "markdown",
+  });
+  const out = editor.getMarkdown();
+  editor.destroy();
+  return out;
+}
+
+describe("the to-do dialect", () => {
+  it("round-trips every shape without rewriting it", () => {
+    const moved = CHECKLIST_CORPUS.filter(({ body }) => checklistTrip(body) !== body).map(
+      ({ body }) => `${JSON.stringify(body)} → ${JSON.stringify(checklistTrip(body))}`,
+    );
+    expect(moved).toEqual([]);
+  });
+
+  /** The other half of the fence: the widget's reader draws the same bodies as the same trees. */
+  it("reads every shape as the tree the editor drew", () => {
+    const misread = CHECKLIST_CORPUS.filter(
+      ({ body, todos }) => JSON.stringify(shapeOf(parseTodos(body))) !== JSON.stringify(todos),
+    ).map(({ body }) => `${JSON.stringify(body)} → ${JSON.stringify(shapeOf(parseTodos(body)))}`);
+    expect(misread).toEqual([]);
+  });
+
+  it("settles the alternate spellings on the one it writes", () => {
+    expect(checklistTrip("")).toBe("- [ ] ");
+    expect(checklistTrip("- [ ] Mana\n    - [ ] Cut a land")).toBe("- [ ] Mana\n  - [ ] Cut a land");
+    expect(checklistTrip("* [ ] Revise tokens")).toBe("- [ ] Revise tokens");
+    expect(checklistTrip("- [X] Revise tokens")).toBe("- [x] Revise tokens");
+    expect(checklistTrip("- [ ] 2 * 3")).toBe("- [ ] 2 \\* 3");
+  });
+
+  it("never moves a body twice", () => {
+    const unstable = ["", "- [ ] Mana\n    - [ ] Cut a land", "* [ ] a", "- [X] a", "- [ ] 2 * 3"]
+      .map((body) => checklistTrip(body))
+      .filter((once) => checklistTrip(once) !== once);
+    expect(unstable).toEqual([]);
+  });
+
+  /**
+   * ⚠️ **Why the checklist has no hard break, pinned as the measurement rather than described.**
+   *
+   * `hardBreak` writes `"  \n"` and leaves the rest of the line unindented, and `TaskList`'s
+   * markdown tokenizer reads a task item one line at a time — so the break's second half comes
+   * back as a paragraph **outside** the list. The document that makes is one this schema forbids
+   * (`doc` holds one task list and nothing else), and the reader's next keystroke is into it. A
+   * construct only one side of the round trip can spell is the one thing the module header says
+   * must not enter a dialect, so the node is left out.
+   *
+   * **This goes red the day the tokenizer learns continuation lines**, which is the day a hard
+   * break could come back.
+   */
+  it("has no hard break, because its own reader cannot read one back out of a to-do", () => {
+    const editor = new Editor({
+      element: document.createElement("div"),
+      extensions: CHECKLIST_EXTENSIONS,
+      content: "- [ ] first  \nsecond",
+      contentType: "markdown",
+    });
+    expect(Object.keys(editor.schema.nodes)).not.toContain("hardBreak");
+    expect(() => editor.state.doc.check()).toThrow(/Invalid content for node doc/);
+    editor.destroy();
+  });
+});
+
+describe("what the checklist may draw", () => {
+  it("is one task list of paragraphs with the inline marks, and nothing else", () => {
+    const editor = new Editor({
+      element: document.createElement("div"),
+      extensions: CHECKLIST_EXTENSIONS,
+    });
+    const nodes = Object.keys(editor.schema.nodes);
+    const marks = Object.keys(editor.schema.marks);
+    for (const node of ["doc", "paragraph", "text", "taskList", "taskItem"]) {
+      expect(nodes).toContain(node);
+    }
+    for (const mark of ["bold", "italic", "strike", "code", "link"]) {
+      expect(marks).toContain(mark);
+    }
+    for (const node of [
+      "heading",
+      "bulletList",
+      "orderedList",
+      "listItem",
+      "blockquote",
+      "codeBlock",
+      "horizontalRule",
+      "hardBreak",
+    ]) {
+      expect(nodes).not.toContain(node);
+    }
+    expect(marks).not.toContain("underline");
+    // The top node takes a task list and only a task list — so every line is a to-do.
+    expect(editor.schema.topNodeType.spec.content).toBe("taskList");
+    editor.destroy();
+  });
+});
+
+/** The ProseMirror instance behind a mounted surface — Tiptap hangs it on the view's own DOM. */
+function editorOf(surface: HTMLElement): Editor {
+  return (surface as HTMLElement & { editor: Editor }).editor;
+}
+
+/** Put the caret at the end of the first text run containing `text`. */
+function caretAfter(editor: Editor, text: string): void {
+  let at: number | null = null;
+  editor.state.doc.descendants((node, pos) => {
+    if (at !== null || !node.isText) return at === null;
+    const index = node.text?.indexOf(text) ?? -1;
+    if (index >= 0) at = pos + index + text.length;
+    return false;
+  });
+  if (at === null) throw new Error(`no text run holds ${JSON.stringify(text)}`);
+  editor.commands.setTextSelection(at);
+}
+
+function renderChecklist(
+  value: string,
+  props: Partial<{
+    onChange: Mock<(markdown: string) => void>;
+    appendRequest: number;
+    onAppendHandled: () => void;
+  }> = {},
+) {
+  const onChange = props.onChange ?? vi.fn<(markdown: string) => void>();
+  const view = render(
+    <NoteEditor
+      mode="checklist"
+      value={value}
+      onChange={onChange}
+      ariaLabel="To-do list"
+      appendRequest={props.appendRequest}
+      onAppendHandled={props.onAppendHandled}
+    />,
+  );
+  const surface = screen.getByRole("textbox", { name: "To-do list" });
+  return { view, surface, editor: editorOf(surface), onChange };
+}
+
+describe("NoteEditor in checklist mode", () => {
+  it("draws one task list, and a checkbox named after each to-do's own words", () => {
+    const { surface } = renderChecklist("- [ ] Mana\n  - [x] Cut a land\n- [ ] Order sleeves");
+
+    expect(surface.querySelectorAll('ul[data-type="taskList"]')).toHaveLength(2);
+    expect(surface.querySelectorAll("input[type=checkbox]")).toHaveLength(3);
+    // A parent is named for its own line, never for its sub-to-dos' words run on after it.
+    expect(screen.getByRole("checkbox", { name: 'Mark "Mana" done' })).not.toBeChecked();
+    expect(screen.getByRole("checkbox", { name: 'Mark "Cut a land" not done' })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: 'Mark "Order sleeves" done' })).not.toBeChecked();
+  });
+
+  it("hands the caller the ticked markdown when a box is pressed", async () => {
+    const { onChange } = renderChecklist("- [ ] Revise tokens");
+
+    await userEvent.click(screen.getByRole("checkbox", { name: 'Mark "Revise tokens" done' }));
+
+    expect(onChange).toHaveBeenLastCalledWith("- [x] Revise tokens");
+    expect(screen.getByRole("checkbox", { name: 'Mark "Revise tokens" not done' })).toBeChecked();
+  });
+
+  /**
+   * Driven through ProseMirror's own keydown path rather than through the commands, so the
+   * bindings are what is under test — `TaskItem`'s Enter, Tab and Shift-Tab reach the keymap
+   * plugin in jsdom exactly as they do in the window.
+   */
+  it("makes the next to-do on Enter, nests it on Tab and lifts it back on Shift-Tab", () => {
+    const { surface, editor, onChange } = renderChecklist("- [ ] Revise tokens");
+    caretAfter(editor, "Revise tokens");
+
+    fireEvent.keyDown(surface, { key: "Enter" });
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Revise tokens\n- [ ] ");
+
+    fireEvent.keyDown(surface, { key: "Tab" });
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Revise tokens\n  - [ ] ");
+
+    fireEvent.keyDown(surface, { key: "Tab", shiftKey: true });
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Revise tokens\n- [ ] ");
+  });
+
+  /** There is no hard break to make (see the dialect's own case), so the key does the list thing. */
+  it("makes the next to-do on Shift-Enter too, since there is no line to break", () => {
+    const { surface, editor, onChange } = renderChecklist("- [ ] Revise tokens");
+    caretAfter(editor, "Revise tokens");
+
+    fireEvent.keyDown(surface, { key: "Enter", shiftKey: true });
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Revise tokens\n- [ ] ");
+  });
+
+  it("deletes a to-do with its sub-to-dos from the row's own button", async () => {
+    const { onChange } = renderChecklist(
+      "- [ ] Mana\n  - [ ] Cut a land\n    - [ ] Swap in a Triome\n- [ ] Order sleeves",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: 'Delete "Mana"' }));
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Order sleeves");
+    expect(screen.queryByRole("button", { name: 'Delete "Cut a land"' })).toBeNull();
+    expect(screen.queryByRole("button", { name: 'Delete "Swap in a Triome"' })).toBeNull();
+  });
+
+  it("takes an only sub-to-do's list with it, rather than leaving an empty one behind", async () => {
+    const { onChange } = renderChecklist("- [ ] Mana\n  - [ ] Cut a land\n- [ ] Order sleeves");
+
+    await userEvent.click(screen.getByRole("button", { name: 'Delete "Cut a land"' }));
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Mana\n- [ ] Order sleeves");
+  });
+
+  /**
+   * A task list may not be empty, so deleting the last to-do leaves one empty one — the list's
+   * own resting state, which the reader draws as nothing at all.
+   */
+  it("leaves one empty to-do when the only one is deleted", async () => {
+    const { editor, onChange } = renderChecklist("- [ ] Revise tokens");
+
+    await userEvent.click(screen.getByRole("button", { name: 'Delete "Revise tokens"' }));
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] ");
+    expect(parseTodos(onChange.mock.lastCall?.[0] ?? "unset")).toEqual([]);
+    expect(() => editor.state.doc.check()).not.toThrow();
+    expect(screen.getByRole("checkbox", { name: 'Mark "empty to-do" done' })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: 'Delete "empty to-do"' })).toBeInTheDocument();
+  });
+
+  it("renames a row's delete button as its words change", () => {
+    const { editor } = renderChecklist("- [ ] Revise tokens");
+    caretAfter(editor, "Revise tokens");
+
+    editor.commands.insertContent(" twice");
+
+    expect(screen.getByRole("button", { name: 'Delete "Revise tokens twice"' })).toBeInTheDocument();
+  });
+
+  it("appends an empty to-do when asked, puts the caret in it, and says it has", () => {
+    const handled = vi.fn();
+    const onChange = vi.fn();
+    const { view, editor } = renderChecklist("- [ ] Revise tokens", {
+      onChange,
+      appendRequest: 0,
+      onAppendHandled: handled,
+    });
+    expect(handled).not.toHaveBeenCalled();
+
+    view.rerender(
+      <NoteEditor
+        mode="checklist"
+        value="- [ ] Revise tokens"
+        onChange={onChange}
+        ariaLabel="To-do list"
+        appendRequest={1}
+        onAppendHandled={handled}
+      />,
+    );
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Revise tokens\n- [ ] ");
+    expect(handled).toHaveBeenCalledTimes(1);
+    const { $from } = editor.state.selection;
+    expect($from.parent.type.name).toBe("paragraph");
+    expect($from.parent.content.size).toBe(0);
+    expect($from.index(1)).toBe(1);
+  });
+
+  it("appends nothing when the last to-do is already empty, and still says it has", () => {
+    const handled = vi.fn();
+    const onChange = vi.fn();
+    const { view } = renderChecklist("- [ ] Revise tokens\n- [ ] ", {
+      onChange,
+      appendRequest: 0,
+      onAppendHandled: handled,
+    });
+
+    view.rerender(
+      <NoteEditor
+        mode="checklist"
+        value={"- [ ] Revise tokens\n- [ ] "}
+        onChange={onChange}
+        ariaLabel="To-do list"
+        appendRequest={1}
+        onAppendHandled={handled}
+      />,
+    );
+
+    expect(onChange).not.toHaveBeenCalled();
+    expect(handled).toHaveBeenCalledTimes(1);
+  });
+
+  /** The band opens and asks in one press, so the editor mounts already holding the request. */
+  it("appends on a mount that already carries a request", () => {
+    const handled = vi.fn();
+    const { onChange } = renderChecklist("- [ ] Revise tokens", {
+      appendRequest: 1,
+      onAppendHandled: handled,
+    });
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Revise tokens\n- [ ] ");
+    expect(handled).toHaveBeenCalledTimes(1);
+  });
+
+  it("appends at the top level, under a last to-do that has sub-to-dos", () => {
+    const { onChange } = renderChecklist("- [ ] Mana\n  - [ ] Cut a land", { appendRequest: 1 });
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Mana\n  - [ ] Cut a land\n- [ ] ");
+  });
+
+  it("offers the marks, a link, outdent and indent — and none of the note's blocks", () => {
+    renderChecklist("- [ ] Revise tokens");
+
+    for (const name of ["Bold", "Italic", "Strikethrough", "Code", "Add a link", "Outdent", "Indent"]) {
+      expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    }
+    for (const name of [
+      "Heading 1",
+      "Heading 2",
+      "Heading 3",
+      "Bulleted list",
+      "Numbered list",
+      "Quote",
+    ]) {
+      expect(screen.queryByRole("button", { name })).toBeNull();
+    }
+  });
+
+  it("nests and lifts a to-do from the toolbar", async () => {
+    const { editor, onChange } = renderChecklist("- [ ] Mana\n- [ ] Cut a land");
+    caretAfter(editor, "Cut a land");
+
+    await userEvent.click(screen.getByRole("button", { name: "Indent" }));
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Mana\n  - [ ] Cut a land");
+
+    await userEvent.click(screen.getByRole("button", { name: "Outdent" }));
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] Mana\n- [ ] Cut a land");
+  });
+
+  it("teaches Enter and Tab on an empty list", async () => {
+    render(<NoteEditor mode="checklist" value="" onChange={vi.fn()} ariaLabel="To-do list" />);
+
+    const empty = await screen.findByRole("textbox");
+    // Read as a string rather than through `toHaveAttribute(name, value)`, which checks only that
+    // the attribute exists when the value it is handed is `undefined`.
+    expect(empty.querySelector("[data-placeholder]")?.getAttribute("data-placeholder")).toBe(
+      "Add a to-do — Enter for the next, Tab to nest.",
+    );
+  });
+
+  it("says what Enter and Tab do", () => {
+    expect(TODO_PLACEHOLDER).toBe("Add a to-do — Enter for the next, Tab to nest.");
+  });
+
+  /**
+   * The kit is chosen once, at mount. `useEditor` builds its schema from the list it is handed
+   * first, so a list that changed under a live editor would be a toolbar and a schema disagreeing
+   * about what the document can hold.
+   */
+  it("keeps the kit and the editor it mounted with across a re-render", () => {
+    const { view, surface, editor } = renderChecklist("- [ ] Revise tokens");
+
+    view.rerender(
+      <NoteEditor value="- [ ] Revise tokens" onChange={vi.fn()} ariaLabel="To-do list" />,
+    );
+
+    expect(editorOf(surface)).toBe(editor);
+    expect(surface.querySelector('ul[data-type="taskList"]')).not.toBeNull();
+    expect(screen.getByRole("button", { name: "Indent" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Heading 1" })).toBeNull();
+  });
+});
+
+/**
+ * The checklist's own arbitrary utilities, lifted out of the shipped source the way
+ * {@link PROMPT_UTILITIES} is — every bracketed class in `CHECKLIST_PROSE` and `DELETE_TODO`.
+ */
+function arbitraryUtilitiesOf(name: string): string[] {
+  const block = source.match(new RegExp(`const ${name} = cn\\(([\\s\\S]*?)\\n\\);`))?.[1] ?? "";
+  return [...block.matchAll(/"([^"]+)"/g)]
+    .flatMap(([, literal]) => literal.split(/\s+/))
+    .filter((utility) => utility.startsWith("["));
+}
+
+const CHECKLIST_UTILITIES = [
+  ...arbitraryUtilitiesOf("CHECKLIST_PROSE"),
+  ...arbitraryUtilitiesOf("DELETE_TODO"),
+];
+
+describe("the checklist's CSS is really compiled", () => {
+  it("is drawn from arbitrary selectors at all", () => {
+    // A sweep over nothing finds nothing — the prompt's own guard, for the same reason.
+    expect(arbitraryUtilitiesOf("CHECKLIST_PROSE").length).toBeGreaterThanOrEqual(10);
+    expect(arbitraryUtilitiesOf("DELETE_TODO").length).toBe(2);
+  });
+
+  it("emits a rule for every one of them", async () => {
+    const silent: string[] = [];
+    for (const utility of CHECKLIST_UTILITIES) {
+      if ((await compiledUtilities(utility)) === "") silent.push(utility);
+    }
+    expect(silent).toEqual([]);
+  });
+
+  /**
+   * The other way a class in the source can fail to reach the page: `cn` is `tailwind-merge`, which
+   * drops whichever of two classes it judges to conflict. A compiled rule on no element paints
+   * nothing, so the drawn surface and the drawn button are asked for every one of them.
+   */
+  it("reaches the drawn surface and the drawn button intact", () => {
+    const { surface } = renderChecklist("- [ ] Revise tokens");
+    const button = screen.getByRole("button", { name: 'Delete "Revise tokens"' });
+    const onSurface = surface.className.split(/\s+/);
+    const onButton = button.className.split(/\s+/);
+
+    expect(
+      arbitraryUtilitiesOf("CHECKLIST_PROSE").filter((utility) => !onSurface.includes(utility)),
+    ).toEqual([]);
+    expect(
+      arbitraryUtilitiesOf("DELETE_TODO").filter((utility) => !onButton.includes(utility)),
+    ).toEqual([]);
+    expect(onButton).toContain("opacity-0");
+  });
+
+  /** A done to-do strikes its own line and never its sub-to-dos' — the `>div>p` is the point. */
+  it("strikes a done to-do's own paragraph and nothing under it", async () => {
+    expect(CHECKLIST_UTILITIES).toContain("[&_li[data-checked=true]>div>p]:line-through");
+    const struck = await compiledUtilities("[&_li[data-checked=true]>div>p]:line-through");
+    expect(struck).toContain("line-through");
+    expect(struck).toMatch(/li\[data-checked=["']?true["']?\]\s*>\s*div\s*>\s*p/);
+  });
+
+  /** Hovering a sub-to-do shows its own button and not its parent's as well. */
+  it("reveals a row's delete button on the innermost row under the pointer only", async () => {
+    expect(CHECKLIST_UTILITIES).toContain("[li:hover:not(:has(li:hover))>&]:opacity-100");
+    const shown = await compiledUtilities("[li:hover:not(:has(li:hover))>&]:opacity-100");
+    expect(shown).toContain("opacity");
+    expect(shown).toMatch(/li:hover:not\(:has\(li:hover\)\)\s*>/);
   });
 });

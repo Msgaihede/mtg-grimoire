@@ -16,6 +16,13 @@
  * rounding on 141.5. So 141.5 kB remains the number to quote, and the sentence above remains the
  * reason this module is lazy.
  *
+ * **`@tiptap/extension-list` is a fifth on the same terms** (2026-09-29, the checklist below):
+ * `@tiptap/starter-kit` already depends on it at the same version — its bullet list, list item
+ * and list keymap live there — so it was in the graph before it was named, and `package.json`
+ * declares it only so the import is not reaching into another package's transitive tree. What
+ * naming it adds is `TaskList` and `TaskItem`'s own code, which was **not measured**; nothing
+ * here claims a figure for it.
+ *
  * **This is the canonical site for that figure.** It is repeated at roughly fifteen other call
  * sites and across the specs and plans — `grep -rn "141.5" src/ docs/` is the census — and none
  * of them is wrong, so none of them was rewritten: a prose-only sweep routes to neither CI job
@@ -35,6 +42,12 @@
  * dialect on one side only. `NoteEditor.test.tsx` holds the committed corpus and asserts that
  * Tiptap's markdown out is byte-identical to the markdown in for each of them.
  *
+ * **There is a second dialect since 2026-09-29, and it has a second reader.** `mode="checklist"`
+ * edits a deck's to-do list with {@link CHECKLIST_EXTENSIONS} — one task list and nothing else —
+ * and `todoMarkdown.ts` reads those bodies for the home widget without an editor either. So the
+ * test file holds a second committed corpus, and asserts both halves against it: the editor's
+ * round trip byte for byte, and that reader's tree for the same body.
+ *
  * ## Two things the CSP decides, and both fail silently if you get them wrong
  *
  * **The stylesheet is imported so Vite bundles it**, never injected at runtime. The shipped policy
@@ -49,16 +62,24 @@
  * angle bracket for the same reason.)
  *
  * **Every hint is `useTooltip()`'s spread and never a `title`**, which matters more here than on
- * an ordinary row: the toolbar is icon-only, so the hint is the whole of what a pointer gets.
+ * an ordinary row: the toolbar is icon-only, so the hint is the whole of what a pointer gets. The
+ * checklist's per-row delete button is the one control here that binds none, and not by choice:
+ * it is plain DOM inside a ProseMirror node view, where no hook can run — so it carries no
+ * `title` either, and its `aria-label` is the whole of its name.
  */
 import "prosemirror-view/style/prosemirror.css";
 
 import Heading, { type Level } from "@tiptap/extension-heading";
+import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Placeholder } from "@tiptap/extensions";
 import { Markdown } from "@tiptap/markdown";
+import type { Node as ProseMirrorNode } from "@tiptap/pm/model";
 import {
   EditorContent,
   mergeAttributes,
+  // `TiptapNode` because the bare name would shadow the DOM's own `Node`, which the checklist's
+  // node view needs for `contains()`.
+  Node as TiptapNode,
   useEditor,
   useEditorState,
   type Editor,
@@ -73,6 +94,8 @@ import {
   Italic,
   Link as LinkIcon,
   List,
+  ListIndentDecrease,
+  ListIndentIncrease,
   ListOrdered,
   Strikethrough,
   TextQuote,
@@ -215,6 +238,277 @@ export const NOTE_EXTENSIONS = [
 ];
 
 /**
+ * What an empty to-do list says. It teaches the two keys, because the list has no other way in:
+ * no toolbar button makes a to-do, and nesting is a keystroke nothing on screen draws.
+ */
+export const TODO_PLACEHOLDER = "Add a to-do — Enter for the next, Tab to nest.";
+
+/**
+ * A document that is one task list and nothing else — so every line is a to-do, and there is no
+ * place to type a paragraph outside one.
+ *
+ * `renderMarkdown` is not optional and its absence is silent: the stock `Document` carries one,
+ * and a top node without it serialises **every** body as `""` — measured, on every entry of the
+ * corpus at once. One child means the separator is never used; it is `Document`'s own.
+ */
+const ChecklistDocument = TiptapNode.create({
+  name: "doc",
+  topNode: true,
+  content: "taskList",
+  renderMarkdown: (node, h) => (node.content ? h.renderChildren(node.content, "\n\n") : ""),
+});
+
+/** The words a row's controls are named after: the to-do's own line, and nothing under it. */
+function todoWords(node: ProseMirrorNode): string {
+  // `firstChild` rather than the item's own `textContent`, which runs a parent's sub-to-dos on
+  // after its words — `Mark "ManaCut a land" done` for a to-do that says "Mana". The home
+  // widget names its boxes from the reader's own line too, and the two must say one thing.
+  return node.firstChild?.textContent || "empty to-do";
+}
+
+/** A to-do's checkbox: the app's own `size-4 accent-accent` box, and its keyboard outline. */
+const TODO_CHECKBOX = cn("size-4 cursor-pointer accent-accent", FOCUS);
+
+/**
+ * A row's delete button, quiet until the row is the one being pointed at.
+ *
+ * ⚠️ **The two reveals are compiled in `NoteEditor.test.tsx`, not read** — an arbitrary variant
+ * Tailwind cannot parse emits no rule and no warning, and the button would simply never appear.
+ *
+ * **The innermost row only.** A sub-to-do is inside its parent's `<li>`, so a bare `li:hover`
+ * would light the parent's button too, and a pointer resting on one line would offer to delete
+ * three. The `:not(:has(…))` is what makes it the row under the pointer and no row around it.
+ * The same test for a caret: a Tab onto a row's own box or button shows that row's button, and
+ * only that row's. Focus in the text itself is the surface's, never a row's, so typing shows none.
+ *
+ * Invisible rather than absent, so the row never reflows as the pointer crosses it, and still in
+ * the tab order, which is what makes the caret half reachable at all.
+ */
+const DELETE_TODO = cn(
+  "flex size-5 shrink-0 items-center justify-center rounded text-dim opacity-0 hover:text-text",
+  "[li:hover:not(:has(li:hover))>&]:opacity-100",
+  "[li:focus-within:not(:has(li:focus-within))>&]:opacity-100",
+  FOCUS,
+);
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+/**
+ * Lucide's `X` — the glyph the link row's Cancel draws — built as DOM, because a node view is
+ * not React and cannot render the component. The two paths and the attributes are
+ * `lucide-react`'s own (v1.28, ISC, © Lucide Contributors), copied rather than redrawn.
+ */
+function removeGlyph(): SVGSVGElement {
+  const svg = document.createElementNS(SVG_NS, "svg");
+  for (const [name, value] of [
+    ["viewBox", "0 0 24 24"],
+    ["fill", "none"],
+    ["stroke", "currentColor"],
+    ["stroke-width", "2"],
+    ["stroke-linecap", "round"],
+    ["stroke-linejoin", "round"],
+    ["aria-hidden", "true"],
+    ["class", "size-3.5"],
+  ]) {
+    svg.setAttribute(name, value);
+  }
+  for (const d of ["M18 6 6 18", "m6 6 12 12"]) {
+    const path = document.createElementNS(SVG_NS, "path");
+    path.setAttribute("d", d);
+    svg.append(path);
+  }
+  return svg;
+}
+
+/**
+ * Take the to-do at `getPos()` out of the document, **with its sub-to-dos** — a sub-to-do belongs
+ * to its parent, so deleting the parent and orphaning the children would leave them indented
+ * under a line that is gone.
+ *
+ * Two cases are not a plain delete, because a task list may not be empty. **A sub-to-do that is
+ * its list's only item takes the list with it** — the parent keeps its words and loses an empty
+ * indent. **The document's only to-do is cleared instead**, to one empty item: a document with no
+ * task list is one this schema cannot hold, and one empty to-do is exactly the list's resting
+ * state, which `todoMarkdown.ts` reads as nothing at all. Ctrl+Z brings any of the three back.
+ *
+ * The positions are read off the transaction's own document, so a press racing a keystroke acts
+ * on the row as it is now rather than as it was drawn.
+ */
+function deleteTodo(editor: Editor, getPos: () => number | undefined): void {
+  const pos = getPos();
+  if (typeof pos !== "number") return;
+  editor
+    .chain()
+    // `focus` first, `TaskItem`'s own checkbox's order: a press from the keyboard leaves the
+    // button it was on detached, and the caret has to come back into the list rather than land
+    // on `<body>`. No scroll — the reader is looking at the row they just removed.
+    .focus(undefined, { scrollIntoView: false })
+    .command(({ tr }) => {
+      const item = tr.doc.nodeAt(pos);
+      if (!item || item.type.name !== "taskItem") return false;
+      const $pos = tr.doc.resolve(pos);
+      if ($pos.parent.childCount > 1) {
+        tr.delete(pos, pos + item.nodeSize);
+      } else if ($pos.depth > 1) {
+        tr.delete($pos.before(), $pos.after());
+      } else {
+        const { taskItem, paragraph } = tr.doc.type.schema.nodes;
+        tr.replaceWith(
+          pos,
+          pos + item.nodeSize,
+          taskItem.create({ checked: false }, paragraph.create()),
+        );
+      }
+      return true;
+    })
+    .run();
+}
+
+/**
+ * `TaskItem`, with a delete button on every row and a Shift-Enter that means something.
+ *
+ * **The parent's node view is wrapped, never copied** (`this.parent?.()`), so Tiptap's checkbox,
+ * its accessible name and its own `update` stay exactly Tiptap's; what this adds is appended to
+ * the view it hands back. The button is `contentEditable=false`; `stopEvent` keeps ProseMirror's
+ * own mouse and key handling off it, so a press is a press and never a caret placed under it; and
+ * `ignoreMutation` keeps its DOM from reading as an edit to the document. Everything the parent's
+ * view already answered — its `stopEvent`, its `ignoreMutation` — is still asked first-hand for
+ * anything that is not the button.
+ *
+ * **Shift-Enter makes the next to-do**, because there is no hard break in this dialect for it to
+ * make (see {@link CHECKLIST_EXTENSIONS}) and a key that did nothing at all would read as broken.
+ */
+const ChecklistItem = TaskItem.extend({
+  addKeyboardShortcuts() {
+    return {
+      ...this.parent?.(),
+      "Shift-Enter": () => this.editor.commands.splitListItem(this.name),
+    };
+  },
+
+  addNodeView() {
+    const parent = this.parent?.();
+    if (!parent) return null;
+
+    return (props) => {
+      const view = parent(props);
+      const row = view.dom;
+
+      if (row instanceof HTMLElement) {
+        row.querySelector("input[type=checkbox]")?.setAttribute("class", TODO_CHECKBOX);
+      }
+
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.contentEditable = "false";
+      remove.className = DELETE_TODO;
+      remove.setAttribute("aria-label", `Delete "${todoWords(props.node)}"`);
+      remove.append(removeGlyph());
+      // The caret stays where it is — `ToolButton`'s rule: a press that took focus would drop the
+      // selection a mouse reader is in the middle of, one row over.
+      remove.addEventListener("mousedown", (event) => event.preventDefault());
+      remove.addEventListener("click", (event) => {
+        event.preventDefault();
+        deleteTodo(props.editor, props.getPos);
+      });
+      row.appendChild(remove);
+
+      return {
+        ...view,
+        update: (node, decorations, innerDecorations) => {
+          const kept = view.update?.(node, decorations, innerDecorations) ?? false;
+          // The name follows the words, the checkbox's own rule: a reader who retyped a to-do
+          // must not be offered the deletion of the line it used to be.
+          if (kept) remove.setAttribute("aria-label", `Delete "${todoWords(node)}"`);
+          return kept;
+        },
+        stopEvent: (event) =>
+          (event.target instanceof Node && remove.contains(event.target)) ||
+          (view.stopEvent?.(event) ?? false),
+        ignoreMutation: (mutation) =>
+          remove.contains(mutation.target) || (view.ignoreMutation?.(mutation) ?? false),
+      };
+    };
+  },
+});
+
+/**
+ * The checklist's whole dialect, spelled out — `NOTE_EXTENSIONS`' rule, every option that is off
+ * written out, for its reason.
+ *
+ * **The dialect is a task list of paragraphs with the inline marks**: document (one task list),
+ * task list, task item (nested), paragraph, text, bold, italic, strike, code, link. That is what
+ * the to-do corpus in `NoteEditor.test.tsx` pins and what `todoMarkdown.ts` reads, and nothing
+ * else — so headings, both other lists, list items and blockquote are off: a document that can
+ * hold none of them has no button for them either.
+ *
+ * ⚠️ **`hardBreak` is off, which is where this list departs from the spec** (§3 keeps it), and
+ * the reason is a measurement rather than a preference. Its markdown is `"  \n"` with the rest of
+ * the line unindented, and `TaskList`'s tokenizer reads a task item **one line at a time** — so
+ * the second half of a broken to-do comes back as a paragraph *outside* the list, in a document
+ * whose top node may hold nothing but the list. A construct only one side of the round trip can
+ * spell is exactly what the module header says must not enter a dialect. `NoteEditor.test.tsx`
+ * pins the failure, and goes red the day the tokenizer learns continuation lines.
+ *
+ * Three behaviours stay, each as in `NOTE_EXTENSIONS`: `undoRedo` is Ctrl+Z, which is the only
+ * undo a deleted to-do has; `listKeymap` because its default list types include `taskItem` —
+ * Backspace at the head of a to-do and Delete at the end of one — and it skips the `listItem`
+ * type this schema does not have rather than failing on it; and `gapcursor` by absence, the one
+ * StarterKit type that can only be said as "off". `trailingNode` stays off for the stronger of
+ * its two reasons here: the paragraph it pins to the end of a document is one this top node
+ * cannot hold at all.
+ *
+ * **`document: false`, and {@link ChecklistDocument} in its place** — StarterKit builds its own
+ * `doc` with `block+` and hands out no handle to change it, the same reason `NoteHeading` exists.
+ *
+ * **The placeholder takes `includeChildren`**, which the note's does not: it looks for an empty
+ * *top-level* textblock by default, and the top level here is the list — so without it an empty
+ * checklist would teach nothing at all.
+ */
+export const CHECKLIST_EXTENSIONS = [
+  StarterKit.configure({
+    // In the dialect. `text` and `gapcursor` are on by being absent.
+    paragraph: {},
+    bold: {},
+    italic: {},
+    strike: {},
+    code: {},
+    link: { openOnClick: false },
+
+    // Replaced below by the one-list document.
+    document: false,
+
+    // Out of the dialect: every block a to-do list cannot hold, and the break it cannot read.
+    heading: false,
+    bulletList: false,
+    orderedList: false,
+    listItem: false,
+    blockquote: false,
+    hardBreak: false,
+    codeBlock: false,
+    horizontalRule: false,
+    underline: false,
+    trailingNode: false,
+
+    // Behaviour, not schema.
+    undoRedo: {},
+    listKeymap: {},
+    dropcursor: false,
+  }),
+  ChecklistDocument,
+  TaskList,
+  ChecklistItem.configure({
+    nested: true,
+    a11y: {
+      checkboxLabel: (node, checked) =>
+        `Mark "${todoWords(node)}" ${checked ? "not done" : "done"}`,
+    },
+  }),
+  Placeholder.configure({ placeholder: TODO_PLACEHOLDER, includeChildren: true }),
+  Markdown,
+];
+
+/**
  * How the body is drawn inside the box.
  *
  * Written out one whole class at a time because Tailwind scans source **text** — a descendant
@@ -236,10 +530,46 @@ const PROSE = cn(
   "[&_li]:my-0.5 [&_li>p]:my-0",
   "[&_blockquote]:my-1 [&_blockquote]:border-l-2 [&_blockquote]:border-border",
   "[&_blockquote]:pl-3 [&_blockquote]:text-dim",
+  "[&>:first-child]:mt-0 [&>:last-child]:mb-0",
+);
+
+/**
+ * How the inline marks are drawn, on both surfaces — a to-do and a note are one inline dialect,
+ * so a `code` span or a link must not look like two things one band apart.
+ */
+const INLINE_PROSE = cn(
   "[&_code]:rounded [&_code]:bg-surface [&_code]:px-1 [&_code]:py-0.5",
   "[&_code]:font-mono [&_code]:text-[0.8125rem]",
   "[&_a]:text-accent [&_a]:underline [&_a]:underline-offset-2",
-  "[&>:first-child]:mt-0 [&>:last-child]:mb-0",
+);
+
+/**
+ * How a to-do list is drawn inside the box. Every bracketed class here is compiled in
+ * `NoteEditor.test.tsx`, for `SURFACE`'s reason below.
+ *
+ * **No bullet and no indent of the list's own**: the box is the marker, and a sub-list sits inside
+ * its parent's text column, so each level's boxes line up under the words of the to-do above them
+ * — the indent is the row's own geometry, one box and one gap, rather than a number to keep in
+ * step with it.
+ *
+ * **One row per to-do** — the box's label, the words, and the row's delete button at the far end.
+ * The label is the first line's own height, so the box sits on that line whatever wraps beneath
+ * it, and it is `relative` because `TaskItem` names the box with an absolutely positioned hidden
+ * span inside it, which with no positioned ancestor is laid out against the page instead.
+ *
+ * **Done strikes the to-do's own line and nothing under it.** `>div>p` is the item's first
+ * paragraph and never a sub-to-do's, which sits one list further down — a done parent over an open
+ * child is a thing a reader writes, and striking the child would say it was done too. A link in a
+ * done line goes dim with the words around it rather than staying the one lit thing in the row.
+ */
+const CHECKLIST_PROSE = cn(
+  "[&_ul]:m-0 [&_ul]:list-none [&_ul]:p-0",
+  "[&_li]:flex [&_li]:items-start [&_li]:gap-2 [&_li]:py-0.5",
+  "[&_li>label]:relative [&_li>label]:flex [&_li>label]:h-5 [&_li>label]:shrink-0",
+  "[&_li>label]:items-center [&_li>div]:min-w-0 [&_li>div]:flex-1 [&_p]:m-0",
+  "[&_li[data-checked=true]>div>p]:text-dim [&_li[data-checked=true]>div>p]:line-through",
+  "[&_li[data-checked=true]>div>p_a]:text-dim",
+  INLINE_PROSE,
 );
 
 /**
@@ -258,8 +588,13 @@ const PROSE = cn(
  * ⚠️ **The prompt's five utilities are compiled in `NoteEditor.test.tsx` rather than read.** An
  * arbitrary value Tailwind cannot parse emits **no rule and no warning**, so a surface with no
  * prompt is what a typo here buys — and nothing else in either build can see it.
+ *
+ * **The checklist draws the same box** ({@link CHECKLIST_SURFACE}), prompt included: the prompt
+ * paints only while the whole document is empty (`is-editor-empty`), and a list of one empty
+ * to-do is exactly that, so the empty paragraph it lands on is the first child of that to-do's
+ * text column and the recipe needs no second spelling.
  */
-const SURFACE = cn(
+const SURFACE_BOX = cn(
   "min-h-32 w-full px-2.5 py-2 text-sm text-text",
   "focus:outline-none",
   // The prompt, painted on the empty paragraph {@link Placeholder} marked. `float-left h-0` is
@@ -271,8 +606,12 @@ const SURFACE = cn(
   "[&_.is-editor-empty:first-child]:before:text-dim",
   "[&_.is-editor-empty:first-child]:before:content-[attr(data-placeholder)]",
   PRESS_STILL,
-  PROSE,
 );
+
+const SURFACE = cn(SURFACE_BOX, PROSE, INLINE_PROSE);
+
+/** A to-do list's writing surface: the note's box, drawn as rows. */
+const CHECKLIST_SURFACE = cn(SURFACE_BOX, CHECKLIST_PROSE);
 
 /**
  * What the writing surface is, as far as ProseMirror is concerned.
@@ -282,9 +621,9 @@ const SURFACE = cn(
  * likeliest caller changes it on every keystroke, since an untitled note's name is its body's
  * first line. Both the build and the update read this one object.
  */
-function surfaceAttributes(ariaLabel: string): Record<string, string> {
+function surfaceAttributes(ariaLabel: string, surface: string): Record<string, string> {
   return {
-    class: SURFACE,
+    class: surface,
     // ProseMirror's `contenteditable` maps to a textbox in a real browser and to nothing at all
     // in jsdom, so the role is spelled out: without it every test here would have to address the
     // box by a class.
@@ -394,8 +733,11 @@ export default function NoteEditor({
   value,
   onChange,
   ariaLabel,
+  mode = "note",
+  appendRequest,
+  onAppendHandled,
 }: {
-  /** The note's body, as CommonMark in the dialect above. */
+  /** The note's body, as CommonMark in the dialect above — or, in checklist mode, a to-do list. */
   value: string;
   /** Called with **markdown** on every edit — never HTML and never ProseMirror JSON. */
   onChange: (markdown: string) => void;
@@ -405,6 +747,22 @@ export default function NoteEditor({
    * cannot tell apart.
    */
   ariaLabel: string;
+  /**
+   * `"checklist"` edits a deck's to-do list: {@link CHECKLIST_EXTENSIONS}, a toolbar of the marks,
+   * a link, Outdent and Indent, and a delete button on every row. Omitted, this is the note
+   * editor it has always been. **Read once, at mount** — the schema is built from it, and a
+   * schema cannot change under a live document.
+   */
+  mode?: "note" | "checklist";
+  /**
+   * Checklist mode only: a counter the host bumps to ask for a fresh to-do at the end of the list
+   * with the caret in it — the band's **New to-do**. A counter rather than a flag, so a second
+   * press is a second request; `0` and absent ask for nothing, and a mount that already carries a
+   * request honours it, because the band opens and asks in one press.
+   */
+  appendRequest?: number;
+  /** Called once each request has been honoured — including one that appended nothing. */
+  onAppendHandled?: () => void;
 }) {
   // Latched, because `useEditor` builds its `onUpdate` once and would otherwise call the first
   // render's callback for the life of the editor. An unstable prop is then a re-render rather
@@ -416,13 +774,28 @@ export default function NoteEditor({
     onChangeRef.current = onChange;
   }, [onChange]);
 
+  // The same latch, for the same reason, so a host's inline callback is not a dependency of the
+  // append below — which would otherwise run again, and ask again, on every host render.
+  const onAppendHandledRef = useRef(onAppendHandled);
+  useEffect(() => {
+    onAppendHandledRef.current = onAppendHandled;
+  }, [onAppendHandled]);
+
+  // **Chosen once, at mount, and never again.** The schema is built from the extension list the
+  // editor is first handed, so a list that changed under a live editor would be a toolbar and a
+  // surface drawn for one kit over a document of the other. Both lists are module constants, so
+  // latching the choice is all it takes for `useEditor` to see one stable array for life.
+  const [checklist] = useState(mode === "checklist");
+  const extensions = checklist ? CHECKLIST_EXTENSIONS : NOTE_EXTENSIONS;
+  const surface = checklist ? CHECKLIST_SURFACE : SURFACE;
+
   const linkFieldId = useId();
 
   const editor = useEditor({
-    extensions: NOTE_EXTENSIONS,
+    extensions,
     content: value,
     contentType: "markdown",
-    editorProps: { attributes: surfaceAttributes(ariaLabel) },
+    editorProps: { attributes: surfaceAttributes(ariaLabel, surface) },
     onUpdate: ({ editor: instance }) => onChangeRef.current(instance.getMarkdown()),
   });
 
@@ -458,8 +831,41 @@ export default function NoteEditor({
 
   // The name follows the prop rather than the mount. See {@link surfaceAttributes}.
   useEffect(() => {
-    editor.setOptions({ editorProps: { attributes: surfaceAttributes(ariaLabel) } });
-  }, [editor, ariaLabel]);
+    editor.setOptions({ editorProps: { attributes: surfaceAttributes(ariaLabel, surface) } });
+  }, [editor, ariaLabel, surface]);
+
+  /**
+   * Honour a request for a fresh to-do: append an empty one at the end of the list — at the top
+   * level, under whatever the last to-do holds — unless the last one is already empty, then put
+   * the caret there. Either way the request is answered, so the host can stop asking.
+   *
+   * **An empty last to-do is reused rather than doubled**, which is what makes the press safe to
+   * repeat: a reader who presses New to-do twice without typing gets one blank line, not two.
+   *
+   * The position is the end of the first task list's own content rather than the document's, so
+   * a body some other writer left with a stray line after the list still appends into the list.
+   * The destroyed guard is the value effect's, for its reason.
+   */
+  useEffect(() => {
+    if (!checklist || !appendRequest || editor.isDestroyed) return;
+    const list = editor.state.doc.firstChild;
+    if (list?.type.name === "taskList") {
+      const last = list.lastChild;
+      const lastEmpty = last !== null && last.childCount === 1 && last.textContent === "";
+      if (!lastEmpty) {
+        editor
+          .chain()
+          .insertContentAt(list.content.size + 1, {
+            type: "taskItem",
+            attrs: { checked: false },
+            content: [{ type: "paragraph" }],
+          })
+          .run();
+      }
+    }
+    editor.commands.focus("end");
+    onAppendHandledRef.current?.();
+  }, [editor, appendRequest, checklist]);
 
   function openLink() {
     setLinkDraft(marks.href);
@@ -528,47 +934,54 @@ export default function NoteEditor({
           />
         </ToolGroup>
 
-        <ToolGroup>
-          <ToolButton
-            icon={Heading1}
-            name="Heading 1"
-            pressed={marks.h1}
-            onPress={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-          />
-          <ToolButton
-            icon={Heading2}
-            name="Heading 2"
-            pressed={marks.h2}
-            onPress={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-          />
-          <ToolButton
-            icon={Heading3}
-            name="Heading 3"
-            pressed={marks.h3}
-            onPress={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-          />
-        </ToolGroup>
+        {/* The note's blocks. A to-do list can hold none of them, so it draws none of them — a
+            heading button over a document that cannot have a heading would be a press that does
+            nothing. */}
+        {!checklist && (
+          <>
+            <ToolGroup>
+              <ToolButton
+                icon={Heading1}
+                name="Heading 1"
+                pressed={marks.h1}
+                onPress={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+              />
+              <ToolButton
+                icon={Heading2}
+                name="Heading 2"
+                pressed={marks.h2}
+                onPress={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+              />
+              <ToolButton
+                icon={Heading3}
+                name="Heading 3"
+                pressed={marks.h3}
+                onPress={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+              />
+            </ToolGroup>
 
-        <ToolGroup>
-          <ToolButton
-            icon={List}
-            name="Bulleted list"
-            pressed={marks.bullet}
-            onPress={() => editor.chain().focus().toggleBulletList().run()}
-          />
-          <ToolButton
-            icon={ListOrdered}
-            name="Numbered list"
-            pressed={marks.ordered}
-            onPress={() => editor.chain().focus().toggleOrderedList().run()}
-          />
-          <ToolButton
-            icon={TextQuote}
-            name="Quote"
-            pressed={marks.quote}
-            onPress={() => editor.chain().focus().toggleBlockquote().run()}
-          />
-        </ToolGroup>
+            <ToolGroup>
+              <ToolButton
+                icon={List}
+                name="Bulleted list"
+                pressed={marks.bullet}
+                onPress={() => editor.chain().focus().toggleBulletList().run()}
+              />
+              <ToolButton
+                icon={ListOrdered}
+                name="Numbered list"
+                pressed={marks.ordered}
+                onPress={() => editor.chain().focus().toggleOrderedList().run()}
+              />
+              <ToolButton
+                icon={TextQuote}
+                name="Quote"
+                pressed={marks.quote}
+                onPress={() => editor.chain().focus().toggleBlockquote().run()}
+              />
+            </ToolGroup>
+          </>
+        )}
 
         <ToolGroup>
           {/* Two names on one button, which is `Set as foil` / `Set as regular`'s grammar: the
@@ -584,6 +997,23 @@ export default function NoteEditor({
             <ToolButton icon={LinkIcon} name="Add a link" onPress={openLink} />
           )}
         </ToolGroup>
+
+        {/* Tab and Shift-Tab, for a pointer. Not toggles — nothing is "on" about a level — so no
+            `aria-pressed`; each is one press that moves the to-do the caret is in one level. */}
+        {checklist && (
+          <ToolGroup>
+            <ToolButton
+              icon={ListIndentDecrease}
+              name="Outdent"
+              onPress={() => editor.chain().focus().liftListItem("taskItem").run()}
+            />
+            <ToolButton
+              icon={ListIndentIncrease}
+              name="Indent"
+              onPress={() => editor.chain().focus().sinkListItem("taskItem").run()}
+            />
+          </ToolGroup>
+        )}
       </div>
 
       {linkDraft !== null && (
