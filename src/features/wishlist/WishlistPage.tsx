@@ -38,6 +38,7 @@ import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import type { SearchCardDrag } from "@/features/search/searchCardDrag";
 import { FilterBar, StatedFiltersLine, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
+import { FilterQuickBar } from "@/features/search/FilterQuickBar";
 import { count, plural } from "@/lib/counts";
 import { useDragRecord } from "@/lib/dndTarget";
 import { readFolderDrag, type FolderDrag, type FolderEdge } from "@/lib/folderDrag";
@@ -67,6 +68,7 @@ import { useAppStore } from "@/lib/store";
 import { useDeskWidth } from "@/lib/useDeskWidth";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useDockHeight } from "@/lib/useDockHeight";
+import { useFilterQuickBar } from "@/lib/useFilterQuickBar";
 import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
@@ -579,6 +581,28 @@ export function WishlistPage() {
   const deskRef = useRef<HTMLDivElement>(null);
   const dockRef = useRef<HTMLDivElement>(null);
   /**
+   * **The filter quick bar's trigger, and every inset it hands the page** (spec 2026-09-29, §2 and
+   * §6.3).
+   *
+   * `filterRow` is the page `FilterBar`'s whole root block — the row, an open tray and anything
+   * under it — held in **state** through a callback ref rather than in a ref object, because
+   * `useUndocked` builds its `IntersectionObserver` against the element it is handed and has to be
+   * told when that element changes; a `ref.current` notifies nobody. The bar comes down once the
+   * *bottom* of that block has left `main`, so an open tray on the page row keeps it away.
+   *
+   * **Grid only.** In table view this section is `h-full` and `VirtualTable` is its own scroller, so
+   * the page row never leaves `main` and there is nothing to dock; the hook is told so rather than
+   * left to find out, and answers hidden with zero insets — which is also why the table's own Top
+   * (`scrollTableTop`) is untouched by anything below.
+   *
+   * The three numbers go to three places, each further down this file: `dockTop` (41 while the bar
+   * is down) is the docked search column's `top` and `useDockHeight`'s inset; `stickyTop` (53) is
+   * how far the wall's shelf bar stands below `main`'s top so it pins flush under the quick bar;
+   * `shown` takes the shelf bar's own Top away, so one Top is on screen.
+   */
+  const [filterRow, setFilterRow] = useState<HTMLDivElement | null>(null);
+  const quick = useFilterQuickBar(filterRow, view === "grid");
+  /**
    * What that row can spare for the column: the widest the panel may be drawn or dragged, whether
    * the list and the column fit **beside each other**, and — when they do not — how wide to draw
    * the panel **over** the list, which is the door out of the rail rather than a refusal to open.
@@ -608,12 +632,21 @@ export function WishlistPage() {
    * The dock's height — **arithmetic rather than a length**, because CSS cannot say "the scroller's
    * visible height, less however much of the page sits above this row".
    *
-   * `sticky top-0` on the dock does the pinning and this does only the height. The hook finds the
+   * `sticky` on the dock does the pinning and this does only the height. The hook finds the
    * scroller itself, which is what lets one hook serve this page (scrolling in `AppShell`'s `main`)
    * and the deck editor (an `overflow-y-auto` section of its own) without either site knowing
    * which.
+   *
+   * **The third argument is the dock's own `top`, and it has to be the same number the dock is
+   * drawn at** — `quick.dockTop`, 41 while the filter quick bar is down and 0 otherwise. The dock
+   * pins at that inset so the search column starts under the bar rather than behind it (53px of
+   * bar, less `main`'s 20px padding the sticky inset is measured from, plus the deck bar's 8px of
+   * clearance), and a dock pinned lower is that much shorter or its foot hangs past the window.
+   * The deck editor hands its own column the same inset for the same bar (issue #577). The hook
+   * re-measures in the commit that changes it, because the bar appearing moves the dock without
+   * resizing either observed box and no scroll need follow.
    */
-  useDockHeight(dockRef, deskRef);
+  useDockHeight(dockRef, deskRef, quick.dockTop);
 
   /**
    * Rewrite one wish wherever the wishlist is cached.
@@ -1942,11 +1975,28 @@ export function WishlistPage() {
     (group: "decks" | "managed") => <ShelfLabel group={group} />,
     [],
   );
+  /**
+   * The shelf bar, for both views — the wall's and the table's (`scrollTableTop`, below).
+   *
+   * **It draws no Top while the filter quick bar is down** (spec §6.3): the quick bar has one of its
+   * own at the far left of `main`, and two Tops a shelf bar's height apart would be two presses
+   * with one name that go to different places: the shelf bar's is `CardGrid`'s
+   * `virtualizer.scrollToOffset(0)`, the wall's first row, while the quick bar's is `main`'s 0 with
+   * the caret in the page row's search field. `WishShelfSticky`'s `onTop` is optional and draws no
+   * button without it.
+   * `quick.shown` is always `false` in table view (the hook is fenced on grid), so the table's
+   * shelf bar keeps its Top unconditionally — which is why that call site needs no change.
+   */
   const renderSticky = useCallback(
     (shelf: Shelf | null, scrollToTop: () => void) => (
-      <WishShelfSticky shelf={shelf} onOpen={openFolder} onTop={scrollToTop} cards={cardDrops} />
+      <WishShelfSticky
+        shelf={shelf}
+        onOpen={openFolder}
+        onTop={quick.shown ? undefined : scrollToTop}
+        cards={cardDrops}
+      />
     ),
-    [openFolder, cardDrops],
+    [openFolder, cardDrops, quick.shown],
   );
 
   /**
@@ -2183,11 +2233,37 @@ export function WishlistPage() {
         //
         // The wall wants the opposite. Under `WishlistGrid`'s `grow` it is as tall as its rows and
         // `main` is what scrolls them, and a section clamped to one screen would be a containing
-        // block one screen tall — which is as far as the dock's `sticky top-0` could then travel,
+        // block one screen tall — which is as far as the dock's `sticky` could then travel,
         // so the search column would unstick and scroll away after the first viewport of wishes.
         view === "table" && "h-full",
       )}
     >
+      {/* **The filter quick bar** (spec 2026-09-29, §6.3) — the page row below folded into one line
+          and docked across the top of `main` once that row has scrolled away, grid view only.
+
+          **The section's first child, and it has to be.** Its wrapper is `sticky top-0 h-0`, and a
+          sticky box travels only within its containing block — this section, which under the
+          wall's `grow` is as tall as the wishes — so the bar stays pinned for the whole length of
+          the wall — and first, above the figures band, where the spec places it: a sticky box pins
+          only once its static position reaches the scroller's top, and at the head of the section
+          that has always happened by the time the page row has scrolled away.
+          `-mb-3` cancels this section's `gap-3`: the wrapper is zero height, so without it the bar
+          would cost the page 12px of gap whether it is drawn or not, and every line under it
+          would move the moment it mounts.
+
+          **The same `search`, `labels`, `sortRows` and `tray` as the `FilterBar` below**, prop for
+          prop, so every control on the bar is a second entrance to one of the row's, on the same
+          state — it can never offer a filter the row does not, and the wishlist's tray (no price
+          band, `WishlistQuery` has no price fields) is the bar's tray too. */}
+      <FilterQuickBar
+        search={wishlist}
+        shown={quick.shown}
+        labels={WISHLIST_LABELS}
+        sortRows={wishlist.sortRows}
+        tray={WISHLIST_TRAY}
+        className="-mb-3"
+      />
+
       {/* Not drawn: the ribbon's `h1` already names the view, and a second Cinzel "Wishlist"
           under it would be a subheading repeating its own heading. */}
       <h2 className="sr-only">Wishlist</h2>
@@ -2290,6 +2366,10 @@ export function WishlistPage() {
         layoutFor="wishlist"
         // The chips are stated in the path row instead — see `StatedFiltersLine` there.
         statesFilters={false}
+        // **The quick bar's trigger** — this row's whole root block, handed to `useFilterQuickBar`
+        // through `setFilterRow` so its observer is rebuilt if the block remounts. The bar comes
+        // down when the block's foot leaves `main` and goes when any of it is back.
+        rootRef={setFilterRow}
       />
 
       {/* **The row the sidebar made necessary.** This page was `flex-col` from its root down, so
@@ -2316,7 +2396,7 @@ export function WishlistPage() {
           // safe: `useDockHeight` measures the scrollport and subtracts however much of this row is
           // still below its top, clamped at zero — so a row that has scrolled past the top gives
           // the panel the full scrollport, and a row at rest gives it the scrollport under the
-          // header. `sticky top-0` does the pinning in both.
+          // header. `sticky` at `quick.dockTop` does the pinning in both.
           view === "table" && "min-h-0 flex-1",
         )}
       >
@@ -2558,6 +2638,14 @@ export function WishlistPage() {
                 rowMenu={rowMenu}
                 rowMenuKey={rowMenuKey}
                 marketplace={marketplace}
+                // **The shelf bar pins flush under the filter quick bar** (spec §6.3): 53 while the
+                // bar is down, 0 otherwise. `CardGrid` adds it to the shelf anchor's `top` and to
+                // the edge `stickyShelfAt` measures from, so the bar both stands under the quick
+                // bar and names the shelf actually under *its* top — without it the shelf bar
+                // would be pinned behind the quick bar, and name the shelf 53px above the one in
+                // view. The table needs none: it is its own scroller and the quick bar never
+                // shows over it.
+                stickyTop={quick.stickyTop}
                 {...filing}
               />
             ) : (
@@ -2603,9 +2691,16 @@ export function WishlistPage() {
         </div>
 
         {/* The dock: a 36px column of the row whatever the panel is doing inside it, so nothing
-            reflows on a collapse. `sticky top-0` pins it to the top of `AppShell`'s scroller and
+            reflows on a collapse. `sticky` pins it to the top of `AppShell`'s scroller and
             {@link useDockHeight} gives it the height, because CSS cannot say "the scroller's
             visible height, less however much of the page sits above this row".
+
+            **Its `top` is `quick.dockTop` rather than `top-0`** — 41px while the filter quick bar
+            is down, so the column starts under the bar instead of behind it, and 0 otherwise. An
+            inline style rather than a class, because the number is a state and Tailwind reads
+            only whole class names in source. `useDockHeight` is handed the same value above, and
+            the two must stay one: a dock pinned at 41 but sized as though pinned at 0 hangs 41px
+            past the foot of the window.
 
             **`LAYER.popup` only while the panel is drawn over the list, and it has to be _here_.**
             `position: sticky` always creates a stacking context, so a z-index asked for inside
@@ -2617,9 +2712,10 @@ export function WishlistPage() {
         <div
           ref={dockRef}
           className={cn(
-            "sticky top-0 flex shrink-0 self-start",
+            "sticky flex shrink-0 self-start",
             overWidth !== undefined && LAYER.popup,
           )}
+          style={{ top: quick.dockTop }}
         >
           <WishlistSearchPanel
             // **The root inside a deck's managed folder**, which refuses an add by hand: the
