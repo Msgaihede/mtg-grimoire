@@ -28,6 +28,11 @@ describe("the layer scale", () => {
     expect(numberOf(LAYER.overlappingMark)).toBeLessThan(numberOf(LAYER.raised));
     expect(numberOf(LAYER.raised)).toBeLessThan(numberOf(LAYER.header));
     expect(numberOf(LAYER.header)).toBeLessThan(numberOf(LAYER.popup));
+    // The filter quick bar's tray hangs over the collection's and the wishlist's docked search
+    // column, which is `LAYER.popup` and later in the DOM — so the bar must outrank a popup —
+    // while a drag's tray and every dialog still cover it.
+    expect(numberOf(LAYER.popup)).toBeLessThan(numberOf(LAYER.quickBar));
+    expect(numberOf(LAYER.quickBar)).toBeLessThan(numberOf(LAYER.dragTray));
     expect(numberOf(LAYER.popup)).toBeLessThan(numberOf(LAYER.dragTray));
     expect(numberOf(LAYER.dragTray)).toBeLessThan(numberOf(LAYER.overlay));
     // A dialog opened over another dialog is above the one it covers. Both are `fixed inset-0`

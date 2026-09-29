@@ -1562,9 +1562,11 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   paint later simply for being later in the DOM. Variant spellings
   (`has-[[aria-expanded=true]]:z-10`) are their own entries, written out: Tailwind scans
   source text for whole class names, so a class built by interpolation emits no rule at all.
-- **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 <
+- **The ladder is `raised 10 < header 20 < popup 30 < quickBar 35 < dragTray 40 < overlay 45 <
   overlayStacked 46 < tooltip 47 < gate 50 < caption 60`**, and `layers.test.ts` asserts every
-  link of it. **`overlayStacked` was added on 2026-09-03 and pushed `tooltip` up one**, when the
+  link of it. **`quickBar` was added on 2026-09-29** for the filter quick bar, whose tray hangs
+  over the collection's and the wishlist's docked search column — `LAYER.popup`, and later in the
+  DOM — while a drag's tray and every dialog must still cover it. **`overlayStacked` was added on 2026-09-03 and pushed `tooltip` up one**, when the
   card detail modal grew nested overlays that open over it: two `fixed inset-0` scrims at one
   number, neither inside the other, is the document-order bug `layers.ts` opens with, and a
   tooltip has to clear the highest rung a *dialog* is drawn at rather than a particular number.
@@ -7006,9 +7008,21 @@ modality), exactly as the deck bar does.
 | `DOCKED_BAR_SHELL_PAD_PX` | 20 | `main`'s `p-5`; the panel reaches back over it on three sides |
 | `DOCKED_BAR_CLEARANCE_PX` | 41 (53 − 20 + 8) | `dockTop` — the docked search column and the Tags rail pin 8px under the bar; `main`'s `scroll-padding-top` is its padding plus this |
 
-A sticky inset is measured from the scroller's **padding** edge and the bar from its **top**, which
+A sticky inset is measured from the scroller's **content** edge and the bar from its **top**, which
 is why the column's number subtracts the shell pad and the shelf bar's does not: `CardGrid`'s anchor
-already takes `stickyInset` off, so it adds the full 53.
+already takes `stickyInset` off, so it adds the full 53. (This read "padding edge" for a day;
+`lib/dockedBar.ts` says content edge, and the arithmetic — 53 − 20 + 8 — only closes on the content
+edge.)
+
+**The same fact at the other end sizes the docked columns** (found by the live pass). A sticky
+box is fenced by its containing block, and that block ends at `main`'s content edge — 20px above
+the scrollport's foot. `useDockHeight` filled the dock to the foot, so the dock overhung its fence
+by `main`'s `padding-bottom`: on a short page each scroll-to-end grew the page by 20px (the Tags
+rail, **20 → 115 over five scrolls**, debug build), and at the end of a long one sticky pushed
+the dock up 20px (the collection's column standing at **41** against the bar's **53px** foot). The
+hook now takes `padding-bottom` off as well:
+`visible − paddingBottom − max(paddingTop + top, below)`, floored at 0. A scroller with no padding
+is sized exactly as before.
 
 **`CardGrid`'s `stickyTop` moves three things, not two.** The anchor's `top`, the edge the shelf
 bar names its shelf from, and the virtualiser's `scrollPaddingStart`. The third was found in review:
@@ -7025,7 +7039,30 @@ comes later in the DOM, so at an equal rung it would paint through the tray.
 **The rungs are container queries** (`@container/qb`, content box = `main`'s content width): below
 860 the sort leaves, below 1100 the mana values fold into one `Mana value` press, below 1500 Top,
 Filters and Reset all lose their words. Tags folds its mana values below 1500, because its picked
-tags ride in the bar as a single sideways-scrolling line (`TagChips singleLine`).
+tags ride in the bar as a single sideways-scrolling line (`TagChips singleLine`). The folded
+press's summary of what is picked is capped at `max-w-16 truncate`; its `aria-label` keeps the
+whole list.
+
+**That tag line fades its right edge only while it overflows.** Its scrollbar is hidden, so a chip
+past the `min(28rem, 32%)` cap was cut off with no cue. `StatedFiltersLine`'s mask was not copied
+as it stands: that line is as wide as its box, while this row shrinks to its chips, so an
+unconditional fade would dim the last chip of a row hiding nothing. A `ResizeObserver` on the row
+(and on the group inside it, plus a re-check whenever the chips change — a row already at its cap
+does not resize when a chip is added) sets `data-overflow` from `scrollWidth > clientWidth`, and
+the fade is the variant `data-[overflow]:[mask-image:…]`, written whole. The row is `relative`,
+being a scroll container.
+
+**The bar's tray is two boxes, and which carries what is the fix.** `FilterTray`'s grid asks
+`@container/fb` for its columns, and no ancestor of the bar's tray was that container, so it drew
+**one column at every width**. The outer box is `@container/fb absolute inset-x-0 top-full
+mt-[17px] rounded-lg` with the bar's shadow and no overflow; the inner box is the
+`max-h-[calc(100vh-12rem)] overflow-y-auto` scroller holding the tray. **The container must never
+be the scroller or inside it**: a container is the containing block for `fixed` descendants, every
+popup in the tray (format and sort `Dropdown`, the set picker) draws in a `fixed` frame, and
+overflow clips a descendant whose containing block is on or inside the scroller. `usePopupPlacement`
+measures that frame, so a container *above* the scroller moves nothing. `mt-[17px]` is the group's
+foot to the bar's outer edge (the panel's 8px of `py-2` plus its 1px `border-b`, inside its 53px
+border box) plus the 8px every neighbour of the bar keeps.
 
 **Tags is two layouts now.** Grid view scrolls `main` as one page (the wall is `CardGrid grow`) and
 pins the rail beside it with `useDockHeight`; table view is the old arrangement. `useDockHeight`
