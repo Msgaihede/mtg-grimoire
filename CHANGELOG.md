@@ -30,6 +30,51 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.35.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.34.1...v0.35.0) (2026-09-29)
+
+
+### Features
+
+* **collection:** dock the quick bar over the collection ([29d0f3c](https://github.com/Msgaihede/mtg-grimoire/commit/29d0f3cf4d1dfb1d54af9b70af3fad9b40402b1d))
+* deck-linked to-do list and a To-dos home widget ([cd5cecd](https://github.com/Msgaihede/mtg-grimoire/commit/cd5cecd7475c8d29b6e4145de8a9441dcd9dc7a8))
+* **decks:** a checklist mode for the note editor ([d21484a](https://github.com/Msgaihede/mtg-grimoire/commit/d21484a4f32c9c1540718801ebb061d3d6f66ddb))
+* **decks:** a To-do band under the notes band ([539addd](https://github.com/Msgaihede/mtg-grimoire/commit/539addd060b6bdfae99f349d72b8c4cddfbf681f))
+* **decks:** derive game markers — The Monarch, The Ring, The Initiative, dungeons ([6644ee6](https://github.com/Msgaihede/mtg-grimoire/commit/6644ee61c970a3e8245a52458c10b79c25c6e465))
+* **decks:** derive game markers — The Monarch, The Ring, The Initiative, dungeons ([d97d02e](https://github.com/Msgaihede/mtg-grimoire/commit/d97d02e5ffc2c910ded71021363c9692bbefb1ec)), closes [#670](https://github.com/Msgaihede/mtg-grimoire/issues/670)
+* **decks:** fade the art of zero-quantity tokens in the Tokens & Emblems band ([274bc9e](https://github.com/Msgaihede/mtg-grimoire/commit/274bc9efb23846ed5a8e2ac2ec1f5a3ec7b0a09b))
+* **decks:** fade the art of zero-quantity tokens in the Tokens & Emblems band ([81ef399](https://github.com/Msgaihede/mtg-grimoire/commit/81ef399ab3deb4a74d75f8b02945265346b146a0)), closes [#673](https://github.com/Msgaihede/mtg-grimoire/issues/673)
+* **decks:** keep a token with copies when the card that made it is cut ([c373924](https://github.com/Msgaihede/mtg-grimoire/commit/c373924527fe20f63dedf7d13e310b5af10de08e))
+* **decks:** keep a token with copies when the card that made it is cut ([d52d805](https://github.com/Msgaihede/mtg-grimoire/commit/d52d805fa66a1521cf2c0168e5f291002d66e75d))
+* **decks:** mirror the to-do commands in ipc.ts and the Storybook fake ([2422b8c](https://github.com/Msgaihede/mtg-grimoire/commit/2422b8cb6c4685b9dcf0a95e365d2736cf68d500))
+* **decks:** read, count and tick the to-do checklist dialect ([f8b0af8](https://github.com/Msgaihede/mtg-grimoire/commit/f8b0af83034b26622216b443303405d1b95fd566))
+* **decks:** store a to-do checklist on each deck (user schema v58) ([482ca26](https://github.com/Msgaihede/mtg-grimoire/commit/482ca2636ba15ac8b9fd19f324d5c95f6b580e1b))
+* dock a filter quick bar over the card walls ([ad22d1f](https://github.com/Msgaihede/mtg-grimoire/commit/ad22d1f01dfaffb968f5df424b71b315f0189b52))
+* **home:** a To-dos widget that gathers open to-dos across decks ([c1da0a4](https://github.com/Msgaihede/mtg-grimoire/commit/c1da0a40a06d8d40b8b3213bfa550b381cee218c))
+* **search:** dock the quick bar on the card search ([cc6e5bf](https://github.com/Msgaihede/mtg-grimoire/commit/cc6e5bf341fa18a130f8a09c21f19e13f0173fe1))
+* **search:** expose the filter row's seams for the quick bar ([d0171d4](https://github.com/Msgaihede/mtg-grimoire/commit/d0171d48a2c824499139b34e89dc312bafadcf77))
+* **search:** the filter quick bar ([a412c86](https://github.com/Msgaihede/mtg-grimoire/commit/a412c86d3d7883f08782ae0073e22e37b4d0e7a0))
+* **shelves:** let a docked bar stack the shelf bar under it ([31630f9](https://github.com/Msgaihede/mtg-grimoire/commit/31630f95fed522af5a47bc5c6e21461adf672538))
+* **tags:** scroll the Tags page as one page and dock the quick bar ([ef221d1](https://github.com/Msgaihede/mtg-grimoire/commit/ef221d164dd1a5e3b953f54b2188e534624d65c7))
+* **ui:** share the docked bar's primitives and add useFilterQuickBar ([fc5149b](https://github.com/Msgaihede/mtg-grimoire/commit/fc5149b6066068d946543bb3e3e0d823a962a124))
+* **wishlist:** dock the quick bar over the wishlist ([e95a80b](https://github.com/Msgaihede/mtg-grimoire/commit/e95a80bdb44e44249d6ba81c4ec695d8b1b85734))
+
+
+### Bug Fixes
+
+* **decks:** compare managed-wishlist tokens by the deck's mode ([9a4f8b3](https://github.com/Msgaihede/mtg-grimoire/commit/9a4f8b3459a5812a2803367a88af80042b4d405e))
+* **decks:** compare managed-wishlist tokens by the deck's mode ([#675](https://github.com/Msgaihede/mtg-grimoire/issues/675)) ([8a263e2](https://github.com/Msgaihede/mtg-grimoire/commit/8a263e269c28d3946d15bf47d2fb90cddf4e071d))
+* **decks:** compare to-do drafts losslessly so a formatting-only edit still saves ([f475be1](https://github.com/Msgaihede/mtg-grimoire/commit/f475be10c9412d9f8b3dba68248958f37ffe5aaa))
+* **decks:** keep every checklist line a to-do under Enter, Backspace and Delete ([d56e85a](https://github.com/Msgaihede/mtg-grimoire/commit/d56e85a1f110fffa4f3ae07d331ae2188aeb39fe))
+* **decks:** never lose a reverted to-do edit, and skip saves that change nothing ([1b5d82b](https://github.com/Msgaihede/mtg-grimoire/commit/1b5d82b2f3814a9ffe1780fd1f3d4d33fcd630b0))
+* **decks:** serialize the To-do band's autosaves and drop stale reads ([a39291c](https://github.com/Msgaihede/mtg-grimoire/commit/a39291c1f5c8b27dd0b916f5892c4c1dce8b701a))
+* **dock:** keep a docked column off the scroller's bottom padding ([6705de4](https://github.com/Msgaihede/mtg-grimoire/commit/6705de45fb247b42381e7ee891fa482b50553a6a))
+* **home:** honest To-dos empty states, clamped rows, and inert boxless lines ([1f43faf](https://github.com/Msgaihede/mtg-grimoire/commit/1f43faf24a46b3ede5d7c87f422076ba60ae06a0))
+* **search:** cap the quick bar's folded mana-value summary ([65a600b](https://github.com/Msgaihede/mtg-grimoire/commit/65a600bb6e9408f4329f04e6675c00f52dba6ed2))
+* **search:** give the quick bar's tray its filter-row container ([fa52434](https://github.com/Msgaihede/mtg-grimoire/commit/fa524344578d7db650190553972415be5884a1da))
+* **shelves:** reveal rows below a docked bar as well as the shelf bar ([dd4b613](https://github.com/Msgaihede/mtg-grimoire/commit/dd4b613329dcf14401f67a3ea0f1bf2be9616655))
+* **tags:** fade the quick bar's tag lead only while it overflows ([928f57a](https://github.com/Msgaihede/mtg-grimoire/commit/928f57ad3c28d23d0724bab6e27be42e1e989a7a))
+* **tags:** give the Tags page story a scroller for the growing wall ([62a9823](https://github.com/Msgaihede/mtg-grimoire/commit/62a9823cc7ee8511ae6731bbd22bb1449e70ebf0))
+
 ## [0.34.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.34.0...v0.34.1) (2026-09-29)
 
 
