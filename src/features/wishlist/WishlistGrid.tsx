@@ -301,6 +301,7 @@ export function WishlistGrid({
   rowMenu,
   rowMenuKey,
   marketplace,
+  stickyTop,
 }: {
   rows: WishRow[];
   /** Identity of the current list, so a new one starts at the top. */
@@ -348,6 +349,9 @@ export function WishlistGrid({
   /** Which marketplace the cost mark quotes. Passed rather than read here so the wall and the
    *  header above it cannot disagree about what they are pricing in. */
   marketplace: Marketplace;
+  /** The height of a bar docked over `main` — the filter quick bar's while it is down — straight
+   *  through to `CardGrid`'s `stickyTop`, so the shelf bar stacks under it. Absent is `0`. */
+  stickyTop?: number;
 }) {
   // Opening a card is a store write and nothing else — `App` owns the pane, so the wall never
   // has to know whether one is open, only which card is in it.
@@ -414,6 +418,7 @@ export function WishlistGrid({
     <CardGrid
       rows={tiles}
       sections={sections}
+      stickyTop={stickyTop}
       label="Your wishlist"
       listKey={listKey}
       // **This wall grows and `main` scrolls it — the page is one long page.** The search page said

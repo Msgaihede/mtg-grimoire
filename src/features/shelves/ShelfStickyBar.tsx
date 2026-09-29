@@ -40,7 +40,13 @@ export function ShelfStickyBar({
 }: {
   shelf: Shelf | null;
   onOpen: (folderId: number) => void;
-  onTop: () => void;
+  /**
+   * Scroll the wall back to its top. **Absent, no Top is drawn** — the filter quick bar (spec
+   * 2026-09-29 §6.2) carries the page's one Top while it is docked over the wall, and a second one
+   * a bar's height under it would be two controls for one act. Absent rather than greyed, because
+   * a greyed Top would say the page cannot go back up, which it can.
+   */
+  onTop?: () => void;
   dropRef?: (el: HTMLElement | null) => void;
   dropMark?: "none" | "armed" | "over";
 }): ReactElement | null {
@@ -103,15 +109,19 @@ export function ShelfStickyBar({
           )}
         </ol>
       </nav>
-      <button
-        type="button"
-        onClick={onTop}
-        className={SHELF_TEXT_BUTTON}
-        {...tip("Scroll back to the top")}
-      >
-        <ArrowUp className="size-3.5" aria-hidden="true" />
-        Top
-      </button>
+      {/* The filter quick bar carries the page's one Top while it is docked, and the page then
+          hands this bar no `onTop` — see the prop. */}
+      {onTop && (
+        <button
+          type="button"
+          onClick={onTop}
+          className={SHELF_TEXT_BUTTON}
+          {...tip("Scroll back to the top")}
+        >
+          <ArrowUp className="size-3.5" aria-hidden="true" />
+          Top
+        </button>
+      )}
     </div>
   );
 }

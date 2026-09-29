@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { FilterBar } from "@/features/search/FilterBar";
+import { FilterQuickBar } from "@/features/search/FilterQuickBar";
 import { HIDDEN_TAGS_KEY } from "@/features/settings/useHiddenTags";
 import { useCardSearch } from "@/features/search/useCardSearch";
 import {
@@ -12,7 +13,11 @@ import {
   type TagHit,
   type TagNamespace,
 } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
+import { useDockHeight } from "@/lib/useDockHeight";
+import { useFilterQuickBar } from "@/lib/useFilterQuickBar";
 import { ORACLE_TAGS_STATUS_KEY } from "@/lib/useOracleTagProgress";
+import { cn } from "@/lib/utils";
 import { TAG_NAMESPACE_LABEL } from "./namespaces";
 import { TagChips } from "./TagChips";
 import { TagResults } from "./TagResults";
@@ -135,6 +140,22 @@ function settleFloor(next: TagSelection): TagSelection {
 }
 
 /**
+ * The dock `useDockHeight` is handed in **table** view: a ref that never holds an element.
+ *
+ * **Handing no dock is how the rail's pinned height is taken off**, and that is not a
+ * workaround. In grid view the hook writes an inline `height` onto the rail so the sticky column
+ * is exactly the visible part of `main` below its top; in table view the rail is a stretched flex
+ * item again and must be sized by the row, and an inline height left behind would pin it at a
+ * number no flex rule can override. The hook clears what it wrote when it unwires, and swapping
+ * the dock for one whose `current` is `null` is what unwires it.
+ *
+ * At module scope so its identity never changes — the hook compares the *element*, not the ref,
+ * so this is not load-bearing for correctness, but a fresh object per render would read as if it
+ * were.
+ */
+const NO_RAIL: RefObject<HTMLElement | null> = { current: null };
+
+/**
  * Browse the corpus by what a card **is of** rather than by what it is called.
  *
  * ## The page in one sentence
@@ -149,15 +170,34 @@ function settleFloor(next: TagSelection): TagSelection {
  * They are read together, not one after the other: picking a tag is how the wall changes, and a
  * reader compares the tag they picked against the pictures it answered with. Stacked, the rail
  * would take a fixed slice off the top of an 800px window and the wall would get one row of art
- * — so they are side by side, each scrolling itself, and the two chrome rows that describe the
- * whole query (the chips, then the filter bar) span both. `min-h-0` is what lets either shrink
- * past its content; **a `min-h-*` would be the opposite of the fix**, since it replaces
- * `min-height: auto` with a *ceiling* on a flex item and the content spills instead.
+ * — so they are side by side, and the two chrome rows that describe the whole query (the chips,
+ * then the filter bar) span both. The rail is `w-72`, 288px and fixed; the measurement that chose
+ * it over `w-64` is at the rail itself.
  *
- * The rail is 256px and fixed. At the app's own 1280×800 with the card pane docked, the view is
- * ~632px wide, which leaves the wall ~360 — two columns of art at the default zoom, and four with
- * the pane closed. Wider would be a rail that reads better while browsing and a wall that cannot
- * show a theme.
+ * ## Two arrangements, one per layout — and grid view is one scrolling page
+ *
+ * **In grid view `main` scrolls the whole page**, exactly as card search, the collection and the
+ * wishlist do. The wall is `CardGrid`'s `grow`: as tall as its rows, no scrollport of its own,
+ * virtualised against `main`. The rail beside it is `sticky self-start` and pinned while the wall
+ * scrolls past, and `useDockHeight` draws it exactly as tall as the part of `main` on screen below
+ * its top — the collection's docked search column, for the same reason: a sticky box has no height
+ * CSS can name, `100%` of the row is the *wall's* height, and a viewport unit is wrong by the app
+ * chrome above `main`. `TagTree` scrolls inside that measured height on its own `min-h-0 flex-1`.
+ *
+ * So the filter row **leaves the screen** in grid view, which it never did while the page was
+ * `h-full` — and that is what the filter quick bar is for (spec 2026-09-29): once the whole
+ * `FilterBar` block has scrolled above `main`'s top, `useFilterQuickBar` brings down a one-line
+ * copy of it with **the picked tags as its lead**, and the rail pins `dockTop` (41px) lower so the
+ * bar never covers the search box at the top of it. The weight floor stays on the page row only;
+ * the bar is for narrowing a wall mid-scroll, and `Hide background details` is set once at the top.
+ *
+ * **In table view it is the old arrangement, unchanged**: the section is `h-full`, the body and
+ * the results column are `min-h-0 flex-1`, and `VirtualTable` scrolls inside the definite height
+ * that chain hands it — as the search page's table does. Nothing leaves the screen there, so the
+ * quick bar is never drawn and the rail is handed no dock ({@link NO_RAIL}), which is what takes
+ * the height grid view pinned on it back off. `min-h-0` is what lets either column shrink past
+ * its content; **a `min-h-*` would be the opposite of the fix**, since it replaces `min-height:
+ * auto` with a *ceiling* on a flex item and the content spills instead.
  */
 export function TagsPage() {
   /**
@@ -216,6 +256,40 @@ export function TagsPage() {
    * asking "which cards do this", where one row per card is the right answer.
    */
   const search = useCardSearch({ tagTerms, defaultAllPrintings: true });
+
+  /**
+   * Which layout the wall is in — and on this page it decides the **page's** arrangement as well
+   * as the wall's (see the docblock above): grid is one scrolling page with a pinned rail, table
+   * is the bounded column it always was.
+   */
+  const view = useAppStore((s) => s.tagsView);
+
+  /**
+   * **The filter quick bar** (spec 2026-09-29): a one-line copy of the page's filters, led by the
+   * picked tags, that docks across the top of `main` once the whole `FilterBar` block has scrolled
+   * above it.
+   *
+   * The block is held in **state** through a callback ref, not a `useRef`: the hook builds its
+   * `IntersectionObserver` from the element it is handed, and a ref object changes without a
+   * render — an observer built on the first commit, while `.current` was still null, would never
+   * be rebuilt onto the real node. Grid only, and the hook is where that is enforced: in table
+   * view the filter row never leaves `main`, so there is nothing for a bar to stand in for.
+   */
+  const [filterRow, setFilterRow] = useState<HTMLDivElement | null>(null);
+  const quick = useFilterQuickBar(filterRow, view === "grid");
+
+  /**
+   * The rail's pinned height, in grid view — `useDockHeight` over the rail (`dock`) and the body
+   * row it sits in (`anchor`), inset by `quick.dockTop` so the rail pins below a docked quick bar
+   * rather than under it, and is shortened by the same 41px so its foot still meets the window's.
+   *
+   * **Grid only**: in table view the rail is bounded by the flex column again and must carry no
+   * pinned height — handing no dock is what makes `useDockHeight` take its height off, since the
+   * hook clears the height it wrote whenever it unwires.
+   */
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const railRef = useRef<HTMLDivElement>(null);
+  useDockHeight(view === "grid" ? railRef : NO_RAIL, bodyRef, quick.dockTop);
 
   /**
    * Hide a tag everywhere, and put the two lists that draw it out of date.
@@ -296,7 +370,42 @@ export function TagsPage() {
   );
 
   return (
-    <section className="flex h-full flex-col gap-3">
+    <section
+      className={cn(
+        "flex flex-col gap-3",
+        // **`h-full` is the table's, not the page's** — the search page's rule, for its reason.
+        // `VirtualTable` has a height only while every box above it has one, and this section
+        // pinned to `main`'s height is the top of that chain. Under the wall's `grow` it is the
+        // opposite: a section clamped to one screen is a containing block one screen tall, so
+        // the rail's `sticky` and the quick bar's would both travel off the top with its end
+        // after the first viewport of cards.
+        view === "table" && "h-full",
+      )}
+    >
+      {/* **First child, before the heading**: the wrapper is `sticky top-0 h-0`, so it has to
+          start at the section's top edge to be pinned from the first pixel of scroll. `-mb-3` is
+          the section's `gap-3` cancelled, or a zero-height wrapper would push the page down 12px
+          for a bar that is not drawn. The lead is the picked tags, on one line that scrolls
+          sideways (`singleLine`) — and **no `onFloorChange`**: the weight toggle stays on the
+          page row, since it is set once rather than reached for mid-scroll, and the bar has no
+          room for a control that greys more often than it is used. `widest` folds the mana
+          values one rung earlier than the search page does, to pay for the chips' width. */}
+      <FilterQuickBar
+        search={search}
+        shown={quick.shown}
+        className="-mb-3"
+        manaValuesFrom="widest"
+        lead={
+          <TagChips
+            selection={selection}
+            onRemove={removeTag}
+            onToggleMode={toggleTagMode}
+            singleLine
+            emptyMessage="No tags picked"
+          />
+        }
+      />
+
       {/* Not shown: the ribbon already says `Tags` and the window is short. It is here to name
           the view for assistive tech, exactly as the search view's does. */}
       <h2 className="sr-only">Browse cards by tag</h2>
@@ -313,9 +422,16 @@ export function TagsPage() {
         onFloorChange={setFloor}
       />
 
-      <FilterBar search={search} layoutFor="tags" />
+      {/* `rootRef` hands the quick bar's hook the whole block — row, open tray, "Filtering by",
+          `TagQueryRow` — whose bottom edge is what brings the bar down. */}
+      <FilterBar search={search} layoutFor="tags" rootRef={setFilterRow} />
 
-      <div className="flex min-h-0 flex-1 gap-4">
+      {/* The body: rail and wall. **`bodyRef` is the rail's anchor** — the row whose top says how
+          much of the page is still above the rail — and in table view it is also the flex item
+          that hands both columns their bounded height, which is the only view where it gets one.
+          In grid view it is as tall as the wall, and that height is what the sticky rail travels
+          down. */}
+      <div ref={bodyRef} className={cn("flex gap-4", view === "table" && "min-h-0 flex-1")}>
         {/* The rail. `border-r` rather than a filled panel: the direction keeps its fills for the
             card art and the mana chips, and a hairline is enough to say that the column left of
             it asks the question and the one right of it answers.
@@ -326,8 +442,26 @@ export function TagsPage() {
             real taxonomy in, `w-64` left the name 14–55px of a 199px row and clipped **23 of the
             24** widest roots; dropping the unit word off the reach (`tagReachFigure`) took that
             to **3**, and `w-72` took it to **0**. Measured as a pair, in the window, and both
-            wanted — `w-80` alone also left 3. It costs the wall 32px of 1660. */}
-        <div className="flex min-h-0 w-72 shrink-0 flex-col gap-3 border-r border-border pr-4">
+            wanted — `w-80` alone also left 3. It costs the wall 32px of 1660.
+
+            **Two arrangements.** In table view it is a stretched flex item bounded by the body
+            (`min-h-0`), as it always was. In grid view it is `sticky self-start`: pinned while
+            the wall scrolls `main` past it, `self-start` so the row's `stretch` does not draw it
+            as tall as the wall, and its height written by `useDockHeight` — the collection's
+            docked column, the same three classes for the same reasons. Its `top` is
+            `quick.dockTop`, so it stands 41px lower while the quick bar is down and the bar never
+            covers the tag box; the hook is handed the same number, so its foot still meets the
+            window's. `TagTree` scrolls inside that height on its own `min-h-0 flex-1` in both
+            views, which is why the rail's `min-h-0` can be the table's alone: in a row the rail's
+            height is its cross axis, where `min-height: auto` never applies. */}
+        <div
+          ref={railRef}
+          className={cn(
+            "flex w-72 shrink-0 flex-col gap-3 border-r border-border pr-4",
+            view === "table" ? "min-h-0" : "sticky self-start",
+          )}
+          style={view === "grid" ? { top: quick.dockTop } : undefined}
+        >
           <TagSearchBox
             value={text}
             onChange={setText}
@@ -354,8 +488,10 @@ export function TagsPage() {
         </div>
 
         {/* `min-w-0`, or a long card name in the table would push the wall wider than its share
-            and take the rail's width instead of truncating. */}
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            and take the rail's width instead of truncating. `min-h-0` is the table's alone — it
+            is what lets `VirtualTable` scroll inside a bounded column, and under a growing wall
+            there is no bounded column for it to shrink into: the wall is as tall as its rows. */}
+        <div className={cn("flex min-w-0 flex-1 flex-col", view === "table" && "min-h-0")}>
           <TagResults search={search} />
         </div>
       </div>

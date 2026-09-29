@@ -89,6 +89,15 @@ export const LAYER = {
   /** Anchored to a control and floating over the page: pickers, quick-adds, menus, previews. */
   popup: "z-30",
   /**
+   * The filter quick bar (spec 2026-09-29), docked over the top of `main` on the four card walls.
+   *
+   * **Above {@link LAYER.popup} because its tray hangs over the collection's and the wishlist's
+   * docked search column**, which is `popup` while it overlays the list and comes *later* in the
+   * DOM — at an equal rung the column would paint through the tray. Below `dragTray` and every
+   * dialog, which must still cover it.
+   */
+  quickBar: "z-35",
+  /**
    * The two surfaces the deck editor draws **only during a drag**: the remove tray at the foot
    * of the window and the quick zones across the top of it. Above `popup` on purpose — a drag
    * can start while a menu or a select is open, and these are the drop targets the pointer is

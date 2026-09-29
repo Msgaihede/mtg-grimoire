@@ -29,13 +29,25 @@ const meta = {
   component: TagsPage,
   tags: ["autodocs"],
   decorators: [
-    // The page is `h-full`, so it needs a parent with a height or its two columns are handed a
-    // 0px window and the wall's virtualiser draws nothing. 1032px is exactly the content column
-    // at the app's narrow rung — the 1280-wide window `src-tauri/src/window.rs` opens on a 1080p
-    // desk, less the sidebar's `w-52` (208px) and less `main`'s `p-5` on both sides (40px). The
-    // height is chosen rather than derived; the ribbon above it is not a fixed number of pixels.
+    // **This box stands in for `AppShell`'s `main`, and the `overflow-auto` is the load-bearing
+    // half of it.** `h-full` is the table's and not the page's: in table view the page is pinned
+    // to this box's height and `VirtualTable` scrolls inside it, so the box needs a height or the
+    // virtualiser is handed a 0px window. In grid view — the store's default — the page is one
+    // long page since spec 2026-09-29 §6.4: the wall takes `CardGrid`'s `grow` and asks the
+    // nearest *scrolling* ancestor to scroll its rows, the rail is a `sticky` column sized by
+    // `useDockHeight` against that same scroller, and the filter quick bar's `useUndocked` roots
+    // its observer on it. Without a scroller all three find nothing: the wall falls back to
+    // scrolling itself and draws every row of the fixture in a box that overflows its frame, the
+    // rail is never sized, and the bar can never come down. `relative` is the rule that goes with
+    // any `overflow` in this app (`src/CLAUDE.md`): a scroll container has to be the containing
+    // block for its own absolutely positioned content.
+    //
+    // 1032px is exactly the content column at the app's narrow rung — the 1280-wide window
+    // `src-tauri/src/window.rs` opens on a 1080p desk, less the sidebar's `w-52` (208px) and less
+    // `main`'s `p-5` on both sides (40px). The height is chosen rather than derived; the ribbon
+    // above it is not a fixed number of pixels.
     (Story) => (
-      <div className="h-[640px] w-[1032px]">
+      <div className="relative h-[640px] w-[1032px] overflow-auto">
         <Story />
       </div>
     ),

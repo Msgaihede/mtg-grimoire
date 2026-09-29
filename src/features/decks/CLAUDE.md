@@ -2897,7 +2897,8 @@ layer.
   which is `overflow-y-auto`; the collection and the wishlist scroll in `AppShell`'s `main`
   instead, so the hook finds the **nearest scrolling ancestor** rather than assuming one —
   `CardGrid`'s `nearestScroller` already answered that question. Nothing about the arithmetic
-  moved; it is the same `scroller.clientHeight − (anchor.top − scroller.top)`, floored at 0,
+  moved then; it was the same `scroller.clientHeight − (anchor.top − scroller.top)`, floored at 0
+  (the scroller's top and bottom padding came off it later — see *The undocked bar*),
   `requestAnimationFrame`-coalesced, with a passive listener and a `ResizeObserver` on both boxes.
   **`useDeskWidth` is the sibling extraction and `DeckEditor` deliberately does not call it** — its
   `panelOverWidth` carries an extra `selectedCardId === null` clause, its desk mounts only once
@@ -4312,7 +4313,8 @@ taken there.
   inset is measured from the scroller's *content* edge and `main` is `p-5`, and 20px in from each
   side for the same padding — so cards scrolled past visibly above it and down both sides, and its
   shadow barely read on the felt. The panel now sits at `-20px` top, left and right of its
-  zero-height sticky wrapper (`SHELL_PAD_PX`, inline styles from the constant — **it has to move
+  zero-height sticky wrapper (`DOCKED_BAR_SHELL_PAD_PX` in `src/lib/dockedBar.ts`, shared with the
+  filter quick bar since 2026-09-29; inline styles from the constant — **it has to move
   with `AppShell`'s `p-5` or not at all**), its inline padding puts the controls back over the
   column's own edges, and it is square, opaque `bg-surface` with a `border-b`. The shadow is cast
   down only: the panel spans `main`'s padding box, where `overflow` clips, so its sides and top are
@@ -4358,7 +4360,11 @@ taken there.
   walk to is never parked under it (WCAG 2.4.11) — to `main`'s own padding **plus** 41, because
   scroll padding is measured from the top edge where a sticky inset is measured from the content
   edge. `useDockHeight` counts that padding too since this change; before it, a pinned dock's
-  bottom 20px hung past the window on every page that docks a column in `main`.
+  bottom 20px hung past the window on every page that docks a column in `main`. **It takes the
+  scroller's `padding-bottom` off as well since 2026-09-29** (the filter quick bar's live pass): a
+  sticky box's containing block ends at the content edge, so a dock filled to the scrollport's
+  foot overhung it by 20px — page height gained per scroll-to-end on a short page, and the dock
+  pushed up 20px at the end of a long one.
 - **Driven in the shipped window 2026-09-28, docked** (`npm run tauri dev`, a **debug** build, a
   copy of the real db, Azula — Theory + Actual, 100 cards, `scrollTop` 1600, the three larger sizes
   emulated over CDP). At every size the panel's box was `main`'s own top-left and client width —

@@ -1679,6 +1679,26 @@ describe("FilterBar, its rarity chips", () => {
   });
 });
 
+describe("FilterBar, its root", () => {
+  /** The filter quick bar docks when this element's bottom edge leaves the scroller, so the ref
+   *  has to be the **whole** block — the row, the tray and the stated filters under it — and
+   *  not the first line alone. */
+  it("hands its root element to rootRef, so a page can watch it scroll away", () => {
+    let root: HTMLDivElement | null = null;
+    render(
+      <FilterBar
+        search={search()}
+        rootRef={(el) => {
+          root = el;
+        }}
+      />,
+      { wrapper: TooltipProvider },
+    );
+    expect(root).not.toBeNull();
+    expect(root!.contains(screen.getByRole("searchbox", { name: "Search cards" }))).toBe(true);
+  });
+});
+
 /**
  * The `Exact` chip — **the reading the colour chips get**, drawn round at the end of their group.
  *

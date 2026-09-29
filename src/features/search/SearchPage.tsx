@@ -24,9 +24,11 @@ import { statusLine } from "@/lib/motion";
 import { pricesAsOf } from "@/lib/prices";
 import { priceRange } from "@/lib/priceRange";
 import { useAppStore } from "@/lib/store";
+import { useFilterQuickBar } from "@/lib/useFilterQuickBar";
 import { cn } from "@/lib/utils";
 import { CardGrid } from "./CardGrid";
 import { FilterBar } from "./FilterBar";
+import { FilterQuickBar } from "./FilterQuickBar";
 import { useCardSearch, type CardSearch } from "./useCardSearch";
 
 /**
@@ -329,6 +331,21 @@ export function SearchPage() {
     if (pendingSet !== null) clearPendingSet();
   }, [pendingSet, clearPendingSet]);
 
+  // **The filter quick bar** (spec 2026-09-29): a one-row copy of the page's filters that docks at
+  // the top of `main` once the whole `FilterBar` block — row, open tray, stated filters — has
+  // scrolled above it, so a reader deep in the wall can narrow it without scrolling back up.
+  //
+  // The block is held in *state* through a callback ref rather than in a `useRef`, because the
+  // hook builds its `IntersectionObserver` from the element it is handed: a ref object changes
+  // without a render, so an observer built on the first commit (when `.current` was still null)
+  // would never be rebuilt onto the real node. State makes the element's arrival a render.
+  //
+  // `view === "grid"` is the fence and not a detail: in table view the section is `h-full` and
+  // `VirtualTable` is its own scroller, so the filter row never leaves `main` and there is nothing
+  // to stand in for. The hook answers hidden there without building an observer at all.
+  const [filterRow, setFilterRow] = useState<HTMLDivElement | null>(null);
+  const quick = useFilterQuickBar(filterRow, view === "grid");
+
   // Warm the images for the page that just landed, so its first paint is not a wall of
   // empty frames. The grid's own overscan mounts two rows of off-screen `<img>`s, which
   // covers the *next scroll*; this covers the *next page*. Grid only — the table shows no
@@ -381,20 +398,33 @@ export function SearchPage() {
         // section pinned to `main`'s height is the top of that chain, and without it the table
         // collapses to nothing.
         //
-        // The wall wants the opposite and now says so: under `CardGrid`'s `grow` it is as tall
-        // as its rows, `main` is what scrolls, and a section clamped to one screen would be a
-        // containing block one screen tall — which is as far as `FilterBar`'s `sticky top-0`
-        // could then travel, so the bar would unstick and scroll away after the first viewport
-        // of cards. That pin has never engaged before, because until now every wall this row
-        // sits above was its own scroller; the bar's own comment says so.
+        // The wall wants the opposite: under `CardGrid`'s `grow` it is as tall as its rows, the
+        // section grows with it and `main` is what scrolls — so in grid view the filter row
+        // scrolls away with the top of the page. Nothing pins it; `FilterBar` is not sticky and
+        // has not been for a long time (this paragraph said it was `sticky top-0` until
+        // 2026-09-29). What stands in for it once it has gone is `FilterQuickBar`, the first
+        // child below (spec 2026-09-29). The one thing a clamp would still break is that bar:
+        // its wrapper is `sticky`, and a section one screen tall is a containing block one
+        // screen tall, so the bar would travel off the top with the section's end.
         view === "table" && "h-full",
       )}
     >
+      {/* **First child, before the heading**: the wrapper is `sticky top-0 h-0`, so it has to
+          sit at the section's top edge for its sticky range to be the whole section, and it is
+          the first thing a caret meets when it is down. `-mb-4` is the section's `gap-4`
+          cancelled: the wrapper is zero-height and mounts only while the bar is shown or the
+          caret holds it, so without the margin the gap it brings would shove the whole page
+          16px down at the moment the bar appears — the layout jump the `h-0` box exists to
+          avoid. */}
+      <FilterQuickBar search={search} shown={quick.shown} className="-mb-4" />
+
       {/* Not shown: the filter bar says what this view is far better than a title would,
           and the window is short. It is here to name the view for assistive tech. */}
       <h2 className="sr-only">Card search</h2>
 
-      <FilterBar search={search} />
+      {/* `rootRef` hands the hook above the whole block — row, tray, stated filters — whose
+          bottom edge is the quick bar's trigger. */}
+      <FilterBar search={search} rootRef={setFilterRow} />
 
       <Results search={search} />
     </section>
@@ -589,7 +619,8 @@ function Results({ search }: { search: CardSearch }) {
             listKey={searchKey}
             // **This wall grows and `main` scrolls it — the page is one long page.** The first of
             // the four page-width walls to say so, on 2026-09-03; the collection's and the
-            // wishlist's followed on 2026-09-08, so the Tags page is the one left. The two bounded
+            // wishlist's followed on 2026-09-08, and the Tags page's grid view on 2026-09-29 with
+            // the filter quick bar, so all four grow in grid view now. The two bounded
             // surfaces that must keep a scroller of their own are untouched — see `CardGrid`'s
             // `grow`, which carries why the deck editor's 206px docked panel and
             // `AllPrintingsDialog` are not this.

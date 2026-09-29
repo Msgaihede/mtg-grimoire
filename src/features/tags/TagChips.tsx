@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useLayoutEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { FILTER_CONTROL, ToggleChip } from "@/components/FilterChips";
 import { FOCUS_INSET } from "@/lib/focus";
@@ -85,6 +85,28 @@ export interface TagChipsProps {
    * as an instruction the search box cannot carry out.
    */
   emptyMessage?: string | null;
+  /**
+   * **Draw the chips as one line that scrolls sideways, and never as a second row** — the filter
+   * quick bar's `lead` (spec 2026-09-29 §5), where the Tags page docks its picked tags beside the
+   * folded filters.
+   *
+   * The bar is a fixed 53px strip, so the page row's `flex-wrap` has nowhere to go there: a third
+   * tag would either spill out of the bar or grow it, and a docked bar that changes height moves
+   * every sticky thing measured against it. So the row does not wrap, it **scrolls on its own x
+   * axis** with the scrollbar hidden (a trackpad or Shift+wheel reaches the rest, and so does Tab,
+   * which scrolls a focused chip into view), and it is **capped at `min(28rem, 32%)`** of the bar
+   * so a reader with many tags picked still has the search box and the colours beside them. It
+   * `shrink`s below that cap before anything else on the bar has to, which is what lets the
+   * mana values stay inline one rung longer than the chips would otherwise allow.
+   *
+   * The empty sentence goes to `text-xs whitespace-nowrap` with it: the bar's controls are
+   * `text-xs`, and a `text-sm` invitation wrapping to two lines inside a 53px strip is the one
+   * thing this prop exists to prevent.
+   *
+   * Unset, nothing changes — the page row still wraps, which is the right answer for a row with
+   * the whole page's width under it.
+   */
+  singleLine?: boolean;
 }
 
 export function TagChips({
@@ -94,6 +116,7 @@ export function TagChips({
   onFloorChange,
   ariaLabel = "Picked tags",
   emptyMessage = "No tags selected. Pick one from the list to filter cards.",
+  singleLine = false,
 }: TagChipsProps) {
   const row = useRef<HTMLDivElement>(null);
   /**
@@ -126,6 +149,37 @@ export function TagChips({
   });
 
   const chips = selection.chips;
+
+  /**
+   * **The one-line row says when it is hiding something, and only then.** It scrolls with its
+   * scrollbar hidden, so a chip past the cap is cut off at the row's edge with no cue that there is
+   * more to reach. `StatedFiltersLine` answers the same problem with a right-edge fade — but that
+   * line is always as wide as its box, and this row **shrinks to its chips**, so an unconditional
+   * fade would dim the last chip of a row with nothing hidden at all. So the fade is keyed on
+   * `data-overflow` (the class string below), and this sets it from `scrollWidth > clientWidth`.
+   *
+   * Written onto the element rather than held in state: it is a fact about layout that only the
+   * stylesheet reads, and a `setState` here would be a render per resize for no output React draws.
+   * Checked on three occasions — now, whenever the chips change (a row already at its width cap
+   * does not *resize* when a chip is added, only its content grows, so the row's observer would
+   * say nothing), and whenever the row or the group inside it resizes (the bar narrowing with the
+   * window). The page row wraps and never overflows sideways, so it is never watched.
+   */
+  useLayoutEffect(() => {
+    const el = row.current;
+    if (!singleLine || !el) return;
+    const check = () => el.toggleAttribute("data-overflow", el.scrollWidth > el.clientWidth);
+    check();
+    const observer = new ResizeObserver(check);
+    observer.observe(el);
+    const group = el.firstElementChild;
+    if (group) observer.observe(group);
+    return () => {
+      observer.disconnect();
+      el.removeAttribute("data-overflow");
+    };
+  }, [singleLine, chips]);
+
   // The floor narrows the art *includes* and nothing else, so this is exactly the condition
   // under which the control can change a single row.
   const canFloor = chips.some((c) => c.namespace === "art" && c.mode === "include");
@@ -136,13 +190,42 @@ export function TagChips({
     // The row, and inside it the group. **The weight control is not a picked tag**, so it sits
     // outside the `role="group"` that names them — a group whose label promises the reader a
     // list of their tags must not also contain a switch.
-    <div ref={row} className="flex flex-wrap items-center gap-1.5">
-      <div role="group" aria-label={ariaLabel} className="flex flex-wrap items-center gap-1.5">
+    //
+    // Both boxes change together under `singleLine` (see the prop): the row is what scrolls and
+    // carries the cap, and the group inside it must stop wrapping too, or the row would scroll a
+    // group that had already folded itself onto a second line. The row is `relative` because it
+    // is a scroll container (`src/CLAUDE.md`), and it fades its right edge only while the effect
+    // above has marked it `data-overflow` — the variant written whole, since Tailwind reads
+    // source text and an assembled class emits no rule.
+    <div
+      ref={row}
+      className={
+        singleLine
+          ? "relative flex min-w-0 max-w-[min(28rem,32%)] shrink flex-nowrap items-center gap-1.5 overflow-x-auto [scrollbar-width:none] data-[overflow]:[mask-image:linear-gradient(to_right,black_calc(100%-1.5rem),transparent)]"
+          : "flex flex-wrap items-center gap-1.5"
+      }
+    >
+      <div
+        role="group"
+        aria-label={ariaLabel}
+        className={cn(
+          "flex items-center gap-1.5",
+          singleLine ? "flex-nowrap" : "flex-wrap",
+        )}
+      >
         {chips.length === 0 ? (
           // An empty row is an invitation rather than a blank: the Tags page's whole gesture is
           // picking a motif, and nothing else on screen says where from. A caller with no such
           // gesture to name passes `null` and gets a row that simply is not there.
-          emptyMessage && <p className="text-sm text-dim">{emptyMessage}</p>
+          emptyMessage && (
+            <p
+              className={
+                singleLine ? "text-xs whitespace-nowrap text-dim" : "text-sm text-dim"
+              }
+            >
+              {emptyMessage}
+            </p>
+          )
         ) : (
           chips.map((chip, i) => (
             <PickedChip

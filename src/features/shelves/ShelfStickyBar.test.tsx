@@ -103,6 +103,21 @@ describe("ShelfStickyBar", () => {
     expect(onTop).toHaveBeenCalledTimes(1);
   });
 
+  /**
+   * **One Top on screen** (filter quick bar, spec §6.2): while the quick bar is docked over the
+   * wall it carries the page's Top, so the page hands this bar no `onTop` and the button is not
+   * drawn — absent rather than greyed, because a second Top a few pixels under the first is only
+   * a second thing to read.
+   */
+  it("draws Top only when given onTop", () => {
+    const { rerender } = render(
+      <ShelfStickyBar shelf={FETCHLANDS} onOpen={() => {}} onTop={() => {}} />,
+    );
+    expect(screen.getByRole("button", { name: /top/i })).toBeInTheDocument();
+    rerender(<ShelfStickyBar shelf={FETCHLANDS} onOpen={() => {}} />);
+    expect(screen.queryByRole("button", { name: /top/i })).toBeNull();
+  });
+
   /** Spec §5.3/§6: the bar is a permanent target for a card — "file it into the shelf I am in". */
   it("hands the whole bar to the page as one drop target", () => {
     const dropRef = vi.fn();

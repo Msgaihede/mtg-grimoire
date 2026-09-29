@@ -228,6 +228,7 @@ export function ManaChip({
   onClick,
   disabled = false,
   title,
+  className,
 }: {
   symbol: ManaKey;
   pressed: boolean;
@@ -240,6 +241,16 @@ export function ManaChip({
    * a caller adding a count to it has to keep that name at the front (WCAG 2.5.3).
    */
   title?: string;
+  /**
+   * Merged **last** through `cn`, so a clash resolves the caller's way — `size-8` replaces the
+   * circle's `size-9` rather than standing beside it, where the emitted sheet's source order
+   * would decide which one draws.
+   *
+   * For the filter quick bar's 32px chips and its `ring-offset-surface` — the only caller. The
+   * bar is a `bg-surface` strip, so the pressed ring's `ring-offset-bg` gap would paint a dark
+   * halo that is not the ground the chip stands on.
+   */
+  className?: string;
 }) {
   const tip = useTooltip();
   const name = title ?? MANA_LABEL[symbol];
@@ -256,7 +267,7 @@ export function ManaChip({
       // `aria-describedby` would have a screen reader hear it twice.
       {...tip(name, { describes: false })}
       style={{ backgroundColor: `var(--color-mana-${symbol.toLowerCase()})` }}
-      className={cn(roundChipClass(pressed, disabled), "text-black")}
+      className={cn(roundChipClass(pressed, disabled), "text-black", className)}
     >
       {/* The glyph itself comes from the bundled `mana-font`; the fill is ours, because
           the font's own `--ms-mana-*` values are a shade off the direction doc's. */}
@@ -287,9 +298,17 @@ export function ManaChip({
 export function ColorExactChip({
   pressed,
   onClick,
+  className,
 }: {
   pressed: boolean;
   onClick: () => void;
+  /**
+   * Merged **last**, after this chip's own border and fill — {@link ManaChip}'s `className`, for
+   * the same caller: the filter quick bar's 32px chips and its `ring-offset-surface` — the only
+   * caller. One seam on both round chips, because the quick bar draws them as one group and a
+   * group resized on six of its seven chips is the row growing a second kind of circle.
+   */
+  className?: string;
 }) {
   const tip = useTooltip();
   const name = pressed
@@ -306,7 +325,11 @@ export function ColorExactChip({
       aria-pressed={pressed}
       aria-label={name}
       {...tip(name, { describes: false })}
-      className={cn(roundChipClass(pressed, false), "border border-border bg-surface text-text")}
+      className={cn(
+        roundChipClass(pressed, false),
+        "border border-border bg-surface text-text",
+        className,
+      )}
     >
       <Glyph className="size-5" aria-hidden="true" />
     </button>

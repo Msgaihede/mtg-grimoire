@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import {
   ActiveFilterChip,
+  ColorExactChip,
   FILTER_CONTROL,
   FILTER_FOCUS,
   filterChipState,
@@ -545,6 +546,37 @@ describe("the filter row grows for a finger", () => {
       "coarse:before:content-['']",
     ]) {
       expect(chip.classList.contains(cls), cls).toBe(true);
+    }
+  });
+});
+
+describe("the round chips, resized by a caller", () => {
+  /**
+   * The filter quick bar draws the colour group at 32px on a `bg-surface` strip, where the row
+   * draws it at 36px on the page's `bg-bg`. **The caller's classes are merged last**, so
+   * tailwind-merge resolves each clash the caller's way — `size-8` replaces `size-9` rather than
+   * sitting beside it, which is a coin toss in the emitted sheet and not a resize.
+   */
+  it("lets a caller resize the round chips", () => {
+    render(<ManaChip symbol="W" pressed={false} onClick={() => {}} className="size-8" />);
+    const chip = screen.getByRole("button", { name: "White" });
+    expect(chip.classList.contains("size-8")).toBe(true);
+    expect(chip.classList.contains("size-9")).toBe(false);
+  });
+
+  /**
+   * The Exact chip takes the same seam, and the ring's offset is the half of it that is not a
+   * size: a pressed chip's gap is painted in `ring-offset-bg`, which on the quick bar's surface
+   * would be a dark halo that is not the strip it stands on.
+   */
+  it("lets a caller resize the Exact chip and repaint its ring's offset", () => {
+    render(<ColorExactChip pressed onClick={() => {}} className="size-8 ring-offset-surface" />);
+    const chip = screen.getByRole("button", { name: /^Exact\b/ });
+    for (const cls of ["size-8", "ring-offset-surface"]) {
+      expect(chip.classList.contains(cls), cls).toBe(true);
+    }
+    for (const cls of ["size-9", "ring-offset-bg"]) {
+      expect(chip.classList.contains(cls), cls).toBe(false);
     }
   });
 });

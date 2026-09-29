@@ -1,5 +1,5 @@
-import { useState, type ButtonHTMLAttributes, type ReactElement, type ReactNode } from "react";
-import { AnimatePresence, motion, useIsPresent } from "motion/react";
+import { useState, type ButtonHTMLAttributes, type ReactElement } from "react";
+import { AnimatePresence } from "motion/react";
 import {
   ArrowUpToLine,
   Ellipsis,
@@ -10,57 +10,32 @@ import {
   Undo2,
   type LucideIcon,
 } from "lucide-react";
+import { DockedPanel, holdsBar } from "@/components/DockedBar";
 import { FILTER_FOCUS } from "@/components/FilterChips";
 import type { MenuItem } from "@/components/menu/types";
-import { isTextField, useContextMenu, useMenuOpener } from "@/components/menu/useContextMenu";
+import { useContextMenu, useMenuOpener } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useDndDragging } from "@/lib/dndTarget";
+import { DOCKED_BAR_CLEARANCE_PX } from "@/lib/dockedBar";
 import { FOCUS } from "@/lib/focus";
 import type { CardSummary, DeckVariant } from "@/lib/ipc";
-import { KEYBOARD_MODALITY_ATTR } from "@/lib/keyboardModality";
 import { LAYER } from "@/lib/layers";
-import { dockBar } from "@/lib/motion";
 import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { readDragData } from "./dnd";
 import { PLAIN_PRESS } from "./headerControls";
 import { QuickAdd } from "./QuickAdd";
 
-/**
- * `AppShell`'s `main` padding — its `p-5` — which the docked bar reaches back across so that it
- * meets the scroller's own top and side edges (issue #646).
- *
- * The bar's box is the editor column's, and the column sits inside that padding, so a panel
- * drawn at the column's edges leaves 20px of deck showing down each side and above it. Reaching
- * out by exactly this much puts the panel on the scroller's padding box, which is where
- * `overflow` clips — so the panel ends at the scroller's edges and its shadow cannot bleed past
- * them. The same number comes back as the panel's inline padding, which puts the first and last
- * control over the column's own edges again, directly above the header controls they stand in
- * for. **Change it with `AppShell`'s `p-5` or not at all.**
+/*
+ * The bar's geometry and shadow — the shell pad it reaches back across, its 53px height, the gap
+ * under it and the 41px clearance they come to — are `@/lib/dockedBar`'s, and the panel that
+ * spends them and the caret-hold rule are `@/components/DockedBar`'s. They moved out of this file
+ * when the filter quick bar (spec 2026-09-29) became a second bar docked the same way, so the two
+ * cannot drift; each constant's argument moved with it.
  */
-const SHELL_PAD_PX = 20;
 
-/** The bar's height: 36 of control, `py-2` above and below it, and the hairline under it. */
-const BAR_HEIGHT_PX = 53;
-
-/** Room left under the bar before whatever sticks beneath it, so that reads as a neighbour. */
-const BAR_GAP_PX = 8;
-
-/**
- * How far down the page the undocked bar reaches, in px, **measured from the scroller's content
- * edge** — what a surface that sticks to the top of the same scroller has to start below so it is
- * not drawn under the bar.
- *
- * A sticky inset is measured from the content edge, and the bar's top is {@link SHELL_PAD_PX}
- * *above* that edge, flush with the scroller's own top. So its foot is `53 − 20 = 33` below the
- * content edge, and {@link BAR_GAP_PX} under that is **41**. It was 66 while the bar floated
- * `top-2` inside the padding — 8 + 50 + 8 — which is the 28px of deck that issue #646 reported
- * showing above it. `DeckEditor` offsets the docked search panel and the table view's sticky
- * header by this, and adds the scroller's measured padding to it for `scroll-padding-top`, which
- * is measured from the top edge instead. Only while the bar is shown — a clearance held open
- * under a bar that is not drawn is a strip of desk nobody can use.
- */
-export const DECK_BAR_CLEARANCE_PX = BAR_HEIGHT_PX - SHELL_PAD_PX + BAR_GAP_PX;
+/** The deck editor's name for {@link DOCKED_BAR_CLEARANCE_PX} — named in `features/decks/CLAUDE.md`. */
+export const DECK_BAR_CLEARANCE_PX = DOCKED_BAR_CLEARANCE_PX;
 
 /**
  * How much room the editor column gives the bar — `DeckEditor` picks the rung from the same
@@ -182,37 +157,6 @@ const WORD_PRESS = cn(
   "inline-flex shrink-0 items-center justify-center gap-1.5 whitespace-nowrap",
 );
 
-/**
- * The docked bar's shadow, cast down over the deck only. The panel spans the scroller's padding
- * box, whose `overflow` clips everything outside it, so the sides and the top of any shadow are
- * cut off at the window's own edges and what is left is what falls on the cards: a tight contact
- * shadow for the edge and a deep soft one for the lift. Black at these alphas because the desk
- * under it is this app's dark felt and card art, and Tailwind's own `shadow-lg` (0.1) does not
- * read on either. Written out whole: an interpolated arbitrary value emits no rule.
- */
-const DOCKED_SHADOW =
-  "shadow-[0_1px_2px_rgb(0_0_0/0.55),0_10px_24px_-4px_rgb(0_0_0/0.75),0_24px_48px_-12px_rgb(0_0_0/0.55)]";
-
-/**
- * Whether a caret arriving on this element should keep the bar drawn after the header docks.
- *
- * **In one of the two fields, always** — that is the case the hold exists for: a reader typing a
- * card name scrolls up to look at the deck, and a field that left the DOM under them would drop
- * the caret on `<body>` mid-word. **On a button, only when the keyboard put it there.** A mouse
- * press focuses a button as a side effect in Chromium on Windows, so holding on *any* caret would
- * keep the bar pinned over a docked header after nearly every press — over the header's own
- * actions row, until the reader happened to click somewhere else — for a caret the reader never
- * asked for and cannot see. A keyboard reader's caret is the one they steer by, so it holds.
- *
- * "The keyboard put it there" is `lib/keyboardModality`'s answer and not `:focus-visible`, for
- * the reason that module is written: it is decided when focus *moves*, which is exactly when this
- * is asked. Its attribute is written by a `window` capture listener, so it already describes this
- * move by the time React's `onFocus` hears it.
- */
-function holdsBar(target: EventTarget | null): boolean {
-  return isTextField(target) || document.documentElement.hasAttribute(KEYBOARD_MODALITY_ATTR);
-}
-
 /** A hairline between two groups of the bar. `aria-hidden`: a line is not a control. */
 function Divider(): ReactElement {
   return <span aria-hidden="true" className="h-5 w-px shrink-0 bg-border" />;
@@ -257,43 +201,6 @@ function WordedPress({
 }
 
 /**
- * The bar's own box: `PopupPanel`'s exit handling on the {@link dockBar} preset.
- *
- * Not `PopupPanel` itself, whose `popup` preset scales — see {@link dockBar} for why a box as
- * wide as the page must not. What it keeps from that component is the half a test leans on: on
- * the way out it leaves the accessibility tree and stops taking the pointer, so a bar fading away
- * already reads as gone rather than as a second, stale toolbar.
- */
-function DockedPanel({ children }: { children: ReactNode }): ReactElement {
-  const present = useIsPresent();
-  return (
-    <motion.div
-      {...dockBar}
-      aria-hidden={present ? undefined : true}
-      // From the constants rather than as classes, so the clearance a neighbour is offset by and
-      // the box it is offset from are one set of numbers — see {@link SHELL_PAD_PX}.
-      style={{
-        top: -SHELL_PAD_PX,
-        left: -SHELL_PAD_PX,
-        right: -SHELL_PAD_PX,
-        height: BAR_HEIGHT_PX,
-        paddingInline: SHELL_PAD_PX,
-      }}
-      className={cn(
-        // Docked: square, flush to the ribbon above and to both edges of the scroller, with one
-        // hairline under it where it meets the deck. Opaque, because a bar the cards can be seen
-        // through is the complaint this box answers.
-        "absolute border-b border-border bg-surface py-2",
-        DOCKED_SHADOW,
-        !present && "pointer-events-none",
-      )}
-    >
-      {children}
-    </motion.div>
-  );
-}
-
-/**
  * The deck editor's header, folded into one line and docked across the top of the page while
  * the header itself is scrolled away (issue #577, docked since issue #646).
  *
@@ -319,7 +226,8 @@ function DockedPanel({ children }: { children: ReactNode }): ReactElement {
  * listbox asks for as it drops out of the bar over the deck. The two bars cannot meet — see
  * `mounted` below.
  *
- * **The panel then reaches out across the scroller's padding**, {@link SHELL_PAD_PX} up and to
+ * **The panel then reaches out across the scroller's padding** (`DockedPanel`, and the
+ * `DOCKED_BAR_SHELL_PAD_PX` in `@/lib/dockedBar` it is drawn from), that far up and to
  * each side, so it is square against the ribbon above and both edges of the window. It floated
  * `top-2` inside the column until issue #646, which left 28px of cards scrolling past above it
  * and 20px down each side: a panel hovering over the deck rather than a toolbar attached to the

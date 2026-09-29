@@ -558,6 +558,39 @@ describe("CardGrid shelves", () => {
   });
 
   /**
+   * **A docked bar over `main` moves the top the shelf bar pins to** (filter quick bar, spec §6.2).
+   * While the quick bar is down it covers the first 53px of the scrollport, so the shelf bar has to
+   * stack flush under it — `top` is `stickyTop − stickyInset` — and the shelf it names has to be
+   * the one under *its* top edge, `stickyTop` further down the wall than the scrollport's. The
+   * scroll offset is chosen so the two edges disagree: the scrollport's top is still in Binder's
+   * rows and the bar's is past the Staples heading's start, so a wall that measured from the old
+   * edge would name Binder.
+   */
+  it("pins the shelf bar stickyTop below the scroller's top, and names the shelf from there", () => {
+    const renderSticky = vi.fn<GridSections<GridCard>["renderSticky"]>(() => null);
+    const { container } = wall(
+      shelves(
+        [
+          { shelf: BINDER, tiles: [tile("a", "Card A"), tile("b", "Card B")] },
+          { shelf: STAPLES, tiles: [tile("c", "Card C")] },
+        ],
+        { renderSticky },
+      ),
+      { stickyTop: 53 },
+    );
+    const anchor = container.querySelector<HTMLElement>("[data-shelf-sticky]");
+    // jsdom computes no padding, so stickyInset is 0 and top is exactly the offset.
+    expect(anchor?.style.top).toBe("53px");
+
+    // The bar's edge 10px past the Staples heading's start (a heading partly under the bar names
+    // its shelf); the scrollport's edge is then 43px above that heading, in Binder's rows.
+    const group = screen.getByRole("group", { name: "Your collection" });
+    group.scrollTop = offsetOf(rowOf(heading("Staples"))) + 12 + 10 - 53;
+    fireEvent.scroll(group);
+    expect(renderSticky.mock.lastCall?.[0]?.name).toBe("Staples");
+  });
+
+  /**
    * The same wiring, driven by a real `scroll` event: jsdom stores `scrollTop` and the virtualiser
    * reads it on `scroll`, so the only thing faked is that nothing actually moved on a screen. The
    * offsets are read off the rows the wall drew rather than typed, so a change to the tile's pitch
@@ -680,7 +713,7 @@ describe("CardGrid shelves", () => {
 
   /** The same wall re-rendered with a different `sections` — what a page does when it sets
    *  `revealShelfId`. */
-  const revealWall = (sections: GridSections<GridCard>) => (
+  const revealWall = (sections: GridSections<GridCard>, stickyTop?: number) => (
     <CardGrid
       rows={NO_ROWS}
       sections={sections}
@@ -689,6 +722,7 @@ describe("CardGrid shelves", () => {
       listKey="k"
       label="Your collection"
       zoomSection="collection"
+      stickyTop={stickyTop}
     />
   );
   const eightThenTrade = () =>
@@ -803,6 +837,42 @@ describe("CardGrid shelves", () => {
     const heading = startOf(s, pitch, (r) => r.kind === "heading" && r.shelf.id === middle.id);
     expect((scrollTo.mock.lastCall?.[0] as ScrollToOptions).top).toBe(
       heading - SHELF_STICKY_HEIGHT,
+    );
+  });
+
+  /**
+   * **…and below a docked bar over it, too** (filter quick bar, spec §6.2). With the quick bar
+   * down, the shelf bar sits `stickyTop` below the scrollport's top, so the strip a row must not be
+   * revealed into is `stickyTop + SHELF_STICKY_HEIGHT` tall. `scrollToIndex` sets the offset itself
+   * and never reads CSS `scroll-padding`, so `main`'s own padding cannot rescue this — the
+   * virtualiser's `scrollPaddingStart` has to carry it.
+   *
+   * The wall mounts at `stickyTop` 0 and gains 53 on a later render, which is what a page does when
+   * the quick bar drops in mid-scroll: the virtualiser takes its options every render, and this is
+   * where that is proved rather than assumed.
+   */
+  it("reveals a heading below a docked bar and the sticky bar together", () => {
+    const middle = shelf(6, "Middle");
+    const s = shelves([
+      { shelf: BINDER, tiles: eightOf("a") },
+      { shelf: middle, tiles: eightOf("m") },
+      { shelf: TRADE, tiles: eightOf("t") },
+    ]);
+    const { rerender } = render(revealWall(s));
+    giveScrollExtent();
+    const pitch = offsetOf(rowOf(art("Card a1"))) - offsetOf(rowOf(art("Card a0")));
+    const group = screen.getByRole("group", { name: "Your collection" });
+    group.scrollTop = 99999;
+    fireEvent.scroll(group);
+    rerender(revealWall(s, 53));
+    const scrollTo = vi.mocked(HTMLElement.prototype.scrollTo);
+    scrollTo.mockClear();
+
+    rerender(revealWall({ ...s, revealShelfId: middle.id }, 53));
+
+    const heading = startOf(s, pitch, (r) => r.kind === "heading" && r.shelf.id === middle.id);
+    expect((scrollTo.mock.lastCall?.[0] as ScrollToOptions).top).toBe(
+      heading - SHELF_STICKY_HEIGHT - 53,
     );
   });
 

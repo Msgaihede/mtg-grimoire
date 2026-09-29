@@ -152,7 +152,9 @@ export function CollectionShelfSticky({
 }: {
   shelf: Shelf | null;
   onOpen: (folderId: number) => void;
-  onTop: () => void;
+  /** Straight through to {@link ShelfStickyBar} — absent while the filter quick bar is docked,
+   *  which carries the page's one Top then, and the bar draws none. */
+  onTop?: () => void;
   cards: CardTarget;
 }): ReactElement | null {
   const to = shelf === null ? undefined : shelfTarget(shelf);

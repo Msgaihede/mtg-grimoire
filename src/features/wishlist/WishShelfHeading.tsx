@@ -113,7 +113,9 @@ export function WishShelfSticky({
 }: {
   shelf: Shelf | null;
   onOpen: (folderId: number) => void;
-  onTop: () => void;
+  /** Straight through to {@link ShelfStickyBar} — absent while the filter quick bar is docked,
+   *  which carries the page's one Top then, and the bar draws none. */
+  onTop?: () => void;
   cards: (shelf: Shelf) => CardDrops | undefined;
 }) {
   const drops = (shelf === null ? undefined : cards(shelf)) ?? NO_CARDS;

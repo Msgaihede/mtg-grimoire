@@ -1,4 +1,4 @@
-import { useId, useMemo, useState, type ReactNode } from "react";
+import { useId, useMemo, useState, type ReactNode, type Ref } from "react";
 import { ArrowUp } from "lucide-react";
 import { motion } from "motion/react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
@@ -55,7 +55,7 @@ import {
  * The orders the picker offers, in the one order an option list in this app is drawn in:
  * alphabetically by the words on screen (`lib/options.ts`).
  *
- * Sorted once at module scope rather than inside a memo, unlike `formatOptions` below. Nothing
+ * Sorted once at module scope rather than inside a memo, unlike {@link useFormatOptions}. Nothing
  * about a sort is faceted — an order that would hand back the same rows rearranged is still an
  * order worth offering — so there is no state here for the ordering to depend on.
  * `SEARCH_SORT_OPTIONS` is declared in the order the orders were reasoned about, which is the
@@ -382,12 +382,87 @@ const RARITIES = ["common", "uncommon", "rare", "mythic"] as const;
  * It names the *row* and not "no order picked", which is what it said while that row was called
  * `Default order`. `Best match` is a row a reader deliberately picks, so "no order picked" would
  * be the button contradicting the select beside it.
+ *
+ * Exported because the filter quick bar draws a second direction button over the same state, and
+ * two buttons on one flag must never announce it in two sentences.
  */
-function sortDirectionName(dir: SortDir | undefined): string {
+export function sortDirectionName(dir: SortDir | undefined): string {
   if (!dir) return "Best match has no sort direction";
   return dir === "asc"
     ? "Sort ascending (click for descending)"
     : "Sort descending (click for ascending)";
+}
+
+/**
+ * The formats in the order the dropdown draws them: **pickable first, greyed last, each
+ * half alphabetical by the word on screen.**
+ *
+ * **The list is the search's own (`search.formats`) rather than the shared `FORMATS`, and it
+ * can be longer than that array.** The hook answers with those keys plus its caller's default
+ * format whenever that one is not among them — the deck editor's docked panel opens on the
+ * format of the deck being edited, and a deck can be in a format this picker has never
+ * offered. That extra key is not decoration: **a `<select>` whose `value` matches no
+ * `<option>` does not draw blank — it silently reports the first one.** React never assigns
+ * `select.value` for a controlled select; `react-dom` walks the options setting `selected`,
+ * and on no match it selects the first row that is not disabled — which since the `Unplayable`
+ * chip was merged in is the pinned `Any card`, the **widest** row this control has. So the
+ * control would read "every card, art cards included" while the filter it names goes on
+ * narrowing the results underneath, which is a control that lies about the list beside it —
+ * and it lies further than it used to, because the row it now falls back to is not merely a
+ * different filter but the opposite end of the one it is on. The options therefore have to
+ * come from whoever owns the value, and a constant imported here could only ever be right for
+ * the callers that never set one.
+ *
+ * The seeded key is a format like every other once it arrives: it sorts into the alphabet by
+ * its label, greys by its own facet count, and is pinned by nothing. `Any card` and `Any
+ * format` are the two rows that stay outside the sort, because they are the two rows that are
+ * not formats.
+ *
+ * Alphabetical because a reader hunting for "Modern" hunts under M. `FORMATS`' own order is
+ * roughly how the formats rank, which is knowledge this control never shows and which no two
+ * players would write down the same way — so it stays a fact about the keys and stops being
+ * a layout. The greyed half sinks rather than disappearing: a format nothing in this search
+ * is legal in is still worth offering (it says the search has nothing there), and dropping it
+ * would make the list jump under the cursor each time the facets land, which is the same
+ * reason `SetCombobox` greys instead of filtering.
+ *
+ * Each option's disabled state is decided once and spent twice — as the grouping level and
+ * as the attribute — because the two are the same question and `optionDisabled`'s "a
+ * selected option is never greyed" arm is exactly where they must not disagree: the format
+ * the reader picked stays in the pickable half however its own count reads, so the way out
+ * of a dead end never sinks below the rows the reader cannot use.
+ *
+ * With no facets at all `optionDisabled` is false for every key, so both halves collapse
+ * into one plain alphabetical list without a branch for it.
+ *
+ * **Belt and braces since the 2026-08-25 move to `<Dropdown>`, not the only defence any
+ * more.** The shell no longer falls back to a wrong row on an unmatched value the way the old
+ * `<select>` did — it draws its own placeholder dash instead (`DEFAULT_PLACEHOLDER`,
+ * `Dropdown.tsx`) — but a dash reading "no format at all" while a seeded format goes on
+ * narrowing the results underneath is still a control that lies about the list beside it, just
+ * a quieter lie than `Any card`'s. The list still has to come from whoever owns the value.
+ *
+ * **Exported as a hook since the filter quick bar (2026-09-29)**, which draws this same tray from
+ * a strip docked at the top of the scroller and must offer the same rows in the same order — a
+ * second copy of this memo would be two orderings of one picker that agree only until one of
+ * them moves.
+ */
+export function useFormatOptions<SortKey extends string>(
+  search: FilterSurface<SortKey>,
+): { value: string; label: string; disabled: boolean }[] {
+  const facets = search.facets;
+  return useMemo(
+    () =>
+      sortOptions(
+        search.formats.map((f) => ({
+          ...f,
+          disabled: optionDisabled(facets?.formats, f.value, search.format === f.value),
+        })),
+        (f) => f.label,
+        (f) => [f.disabled ? 1 : 0],
+      ),
+    [facets?.formats, search.format, search.formats],
+  );
 }
 
 /** A word with its first letter raised — the rarities and the colours are stored lower-case. */
@@ -662,8 +737,20 @@ export function FilterBar<SortKey extends string>({
   layoutToggle = true,
   layoutFor = "search",
   statesFilters = true,
+  rootRef,
 }: {
   search: FilterSurface<SortKey>;
+  /**
+   * The bar's root element — the `@container/fb` box — for a page that watches it scroll away.
+   *
+   * **The whole block — row, tray, stated filters, tag row — is what the quick bar stands in for,
+   * so its bottom edge is the trigger.** A ref on the first line alone would dock the quick bar
+   * while the tray or the stated filters under it were still on screen, and the reader would see
+   * two filter rows at once. A prop rather than `forwardRef` because React 19 passes `ref` as a
+   * prop anyway, and a name that says *which* element is less to guess at than a bare `ref` on a
+   * component with four boxes inside it.
+   */
+  rootRef?: Ref<HTMLDivElement>;
   /** What this surface calls its search box, and the `id` stem its labels bind through — see
    *  {@link FilterLabels}. Defaults to {@link SEARCH_LABELS}. */
   labels?: FilterLabels;
@@ -743,67 +830,7 @@ export function FilterBar<SortKey extends string>({
    * a failed query and the first render all arrive as.
    */
   const facets = search.facets;
-  /**
-   * The formats in the order the dropdown draws them: **pickable first, greyed last, each
-   * half alphabetical by the word on screen.**
-   *
-   * **The list is the search's own (`search.formats`) rather than the shared `FORMATS`, and it
-   * can be longer than that array.** The hook answers with those keys plus its caller's default
-   * format whenever that one is not among them — the deck editor's docked panel opens on the
-   * format of the deck being edited, and a deck can be in a format this picker has never
-   * offered. That extra key is not decoration: **a `<select>` whose `value` matches no
-   * `<option>` does not draw blank — it silently reports the first one.** React never assigns
-   * `select.value` for a controlled select; `react-dom` walks the options setting `selected`,
-   * and on no match it selects the first row that is not disabled — which since the `Unplayable`
-   * chip was merged in is the pinned `Any card`, the **widest** row this control has. So the
-   * control would read "every card, art cards included" while the filter it names goes on
-   * narrowing the results underneath, which is a control that lies about the list beside it —
-   * and it lies further than it used to, because the row it now falls back to is not merely a
-   * different filter but the opposite end of the one it is on. The options therefore have to
-   * come from whoever owns the value, and a constant imported here could only ever be right for
-   * the callers that never set one.
-   *
-   * The seeded key is a format like every other once it arrives: it sorts into the alphabet by
-   * its label, greys by its own facet count, and is pinned by nothing. `Any card` and `Any
-   * format` are the two rows that stay outside the sort, because they are the two rows that are
-   * not formats.
-   *
-   * Alphabetical because a reader hunting for "Modern" hunts under M. `FORMATS`' own order is
-   * roughly how the formats rank, which is knowledge this control never shows and which no two
-   * players would write down the same way — so it stays a fact about the keys and stops being
-   * a layout. The greyed half sinks rather than disappearing: a format nothing in this search
-   * is legal in is still worth offering (it says the search has nothing there), and dropping it
-   * would make the list jump under the cursor each time the facets land, which is the same
-   * reason `SetCombobox` greys instead of filtering.
-   *
-   * Each option's disabled state is decided once and spent twice — as the grouping level and
-   * as the attribute — because the two are the same question and `optionDisabled`'s "a
-   * selected option is never greyed" arm is exactly where they must not disagree: the format
-   * the reader picked stays in the pickable half however its own count reads, so the way out
-   * of a dead end never sinks below the rows the reader cannot use.
-   *
-   * With no facets at all `optionDisabled` is false for every key, so both halves collapse
-   * into one plain alphabetical list without a branch for it.
-   *
-   * **Belt and braces since the 2026-08-25 move to `<Dropdown>`, not the only defence any
-   * more.** The shell no longer falls back to a wrong row on an unmatched value the way the old
-   * `<select>` did — it draws its own placeholder dash instead (`DEFAULT_PLACEHOLDER`,
-   * `Dropdown.tsx`) — but a dash reading "no format at all" while a seeded format goes on
-   * narrowing the results underneath is still a control that lies about the list beside it, just
-   * a quieter lie than `Any card`'s. The list still has to come from whoever owns the value.
-   */
-  const formatOptions = useMemo(
-    () =>
-      sortOptions(
-        search.formats.map((f) => ({
-          ...f,
-          disabled: optionDisabled(facets?.formats, f.value, search.format === f.value),
-        })),
-        (f) => f.label,
-        (f) => [f.disabled ? 1 : 0],
-      ),
-    [facets?.formats, search.format, search.formats],
-  );
+  const formatOptions = useFormatOptions(search);
   // Which way the list runs, or nothing when it runs in an order that has no direction. **The
   // surface's own answer** — it was derived here from `sortSelection === ""` until 2026-08-25,
   // which is a rule about the card search's empty spec and not about a sort. See
@@ -1262,7 +1289,7 @@ export function FilterBar<SortKey extends string>({
     // measures a zero-size frame precisely so it can subtract whatever containing block it landed
     // in. **jsdom applies no stylesheet and computes no containment**, so nothing in the suite
     // can see the failure; `src/CLAUDE.md` carries the rule.
-    <div className="@container/fb flex flex-col gap-2">
+    <div ref={rootRef} className="@container/fb flex flex-col gap-2">
       {row}
 
       {trayOpen && (
@@ -1298,8 +1325,13 @@ export function FilterBar<SortKey extends string>({
  * opt-out of its own (`docs/reference/motion.md`); and the tray is a disclosure a reader opened
  * deliberately, looking straight at it, which is the one case where arriving instantly reads as
  * responsive rather than as a jump.
+ *
+ * **Exported for the filter quick bar**, which opens this same tray under its docked strip rather
+ * than drawing a second one. `formatOptions` stays a prop rather than being computed in here, so
+ * each host builds it with {@link useFormatOptions} at its own top level — the tray mounts and
+ * unmounts with its disclosure, and a hook inside it would re-sort on every open.
  */
-function FilterTray<SortKey extends string>({
+export function FilterTray<SortKey extends string>({
   id,
   search,
   cells,
