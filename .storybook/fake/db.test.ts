@@ -16097,6 +16097,47 @@ describe("deck tokens", () => {
   });
 
   /**
+   * `a_monarch_maker_derives_the_monarch` (#670): a card whose own text makes its controller the
+   * monarch derives The Monarch though its `all_parts` names none — the newest paper copy outside
+   * another game's set, credited to the maker once however many ways it names the helper.
+   */
+  it("derives a game marker from a maker's rules text", () => {
+    const db = seed("starter");
+    const base = db.cards.find((c) => c.id === TOKEN_PRINTING.construct)!;
+    const monarch: FakeCard = {
+      ...base,
+      id: "c-monarch",
+      oracleId: "o-monarch",
+      name: "The Monarch",
+      typeLine: "Card",
+      oracleText: "At the beginning of your end step, draw a card.",
+      setType: "token",
+      releasedAt: "2018-08-09",
+    };
+    const adCopy: FakeCard = {
+      ...monarch,
+      id: "c-monarch-wc",
+      setType: "memorabilia",
+      releasedAt: "2024-01-01",
+    };
+    db.cards = [
+      ...db.cards.map((c) =>
+        c.name === "Ragavan, Nimble Pilferer"
+          ? { ...c, oracleText: `${c.oracleText ?? ""}\nWhen this enters, you become the monarch.` }
+          : c,
+      ),
+      monarch,
+      adCopy,
+    ];
+
+    const row = tokensOf(db, 1).find((r) => r.name === "The Monarch");
+
+    expect(row?.derived).toBe(true);
+    expect(row?.cardId).toBe(monarch.id);
+    expect(row?.sources.map((s) => s.name)).toEqual(["Ragavan, Nimble Pilferer"]);
+  });
+
+  /**
    * The `is_active = 0` rule, and the only way to see it: Ancient Tomb sits on deck 1's
    * Maybeboard and names the older Treasure printing, so an implementation reading every
    * category would show a third source **and** quietly move the default art.

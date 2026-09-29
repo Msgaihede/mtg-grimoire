@@ -3077,6 +3077,54 @@ naming their own printing, and **those are never `deck_cards` rows**, because th
 fences tokens behind `legal_mask != 0`. A deck that somehow listed a Spirit token and drew a
 Spirit on its token wall would be right rather than wrong. No extra fence is needed.
 
+### Game markers: a second arm read off the maker's text (issue #670)
+
+The keep rule never sees a **game helper**. The Monarch, Undercity // The Initiative, City's
+Blessing, Day // Night and the dungeons are filed under `token` / `double_faced_token`, not
+`emblem`, and a real card names one as a `combo_piece` when it names it at all. So a deck that
+plays `Palace Jailer` derived no Monarch, although *All tokens* could already add one by hand.
+Widening the keep rule to every `combo_piece` helper would also derive Morph for 402 cards and
+every Plot, Foretell and Adventure reminder, so the fix is narrower than that.
+
+> For each maker, read its rules text (top-level `oracle_text` and every face's, off the `raw`
+> blob, lower-cased, `’` folded to `'`). When it holds one of a **marker's** phrases, credit that
+> marker's helper cards exactly as an `all_parts` token would be credited.
+
+`deck_tokens::MARKERS` is the table:
+
+| Phrase in the maker's text | Helper card names looked up |
+| --- | --- |
+| `become the monarch`, `becomes the monarch` | The Monarch |
+| `the ring tempts you` | The Ring, The Ring Tempts You, The Ring // The Ring Tempts You |
+| `the initiative` | Undercity // The Initiative, The Initiative // Undercity |
+| `venture into the dungeon` | Lost Mine of Phandelver, Dungeon of the Mad Mage, Tomb of Annihilation |
+| `city's blessing` | City's Blessing |
+| `daybound`, `nightbound`, `it becomes day`, `it becomes night` | Day // Night |
+| `start your engines!` | Start Your Engines! // Max Speed |
+
+- **Names, not a face-name match.** `name IN (…)` uses `idx_cards_name`. Matching ` // X` inside
+  the name would scan the whole corpus on every open of such a deck. `marker_printings` keeps
+  one printing per oracle id: the newest **paper** printing with a token layout, outside a
+  `memorabilia` or `minigame` set. That is the helper arm of `is_listed_token`, so a World
+  Championships deck's copy is never the default art.
+- **A name the corpus does not hold resolves to nothing, never an error.** The Monarch, Day //
+  Night, City's Blessing and Start Your Engines! // Max Speed are spelled the way the debug corpus
+  and the Storybook corpus hold them. Undercity // The Initiative matches the helper tests'
+  `Dungeon — Undercity // Card` row. **The Ring's spellings and the three dungeon names were not
+  measured**: the change was written without corpus access. So The Ring lists every spelling its
+  reminder card goes by. Confirm them against a live corpus and remove the misses.
+- **One maker is one source**, however many ways it names a helper (an `all_parts` entry and a
+  phrase both count). The markers are read before the `all_parts` early return, so a card with no
+  `all_parts` can still make its controller the monarch. Inactive piles contribute nothing, as for
+  every token.
+- **Reconcile follows for free.** `reconcile_in` asks `derive`, so a helper whose last marker maker
+  is cut loses its `auto` entries like any token. A marker lookup never sets `unreadable`: a
+  helper missing from the corpus has no entries anybody could hold.
+- **Dungeons are listed too.** `is_listed_token`'s helper arm, and its SQL and TypeScript twins,
+  also keep a face beginning `Dungeon`, so a dungeon can be picked from *All tokens* like
+  The Initiative. A dungeon's line is never exactly `Card`.
+- The Storybook fake mirrors the table in `.storybook/fake/db.ts` (`TOKEN_MARKERS`).
+
 ### The grain is `(deck_id, oracle_id)`, and only deviations are written down
 
 ```sql
@@ -3447,9 +3495,9 @@ name), then newest printing first by `list_printings`' tail; a row with no `orac
 - **What All tokens lists** (the reader's rule, 2026-09-28): **a token or an emblem** — a token
   or two-sided layout with a type line or any ` // ` face beginning `Token` or `Emblem` — **or a
   game helper**: a `token` / `double_faced_token` printing outside a `memorabilia` or `minigame`
-  set (a subquery on `sets`, so a set `sets` does not list is kept) that either has a face whose
-  type line is exactly `Card` and no checklist's `this card to represent `, or says `face-down`
-  in its text. So The Monarch, The Initiative, Day // Night, City's Blessing, Energy Reserve,
+  set (a subquery on `sets`, so a set `sets` does not list is kept) that has a face whose
+  type line is exactly `Card` and no checklist's `this card to represent `, has a face beginning
+  `Dungeon` (since #670), or says `face-down` in its text. So The Monarch, The Initiative, Day // Night, City's Blessing, Energy Reserve,
   Radiation, Plot, Foretell, On an Adventure, Start Your Engines, the OTC Bounties, Punchcard and
   the face-down Manifest, Morph and Cyberman cards are listed, and the World Championship decks'
   ads, bios and decklists, the set checklists, the booster minigames, the Theros challenge decks
