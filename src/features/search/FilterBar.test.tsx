@@ -1679,18 +1679,6 @@ describe("FilterBar, its rarity chips", () => {
   });
 });
 
-/**
- * The `Exact` chip — **the reading the colour chips get**, drawn round at the end of their group.
- *
- * Loose is the default and the deckbuilder's question: `RW` answers mono-R, mono-W, RW and the
- * colourless cards that fit in any deck. Strict is the RW cards alone, and it is a *modifier* on
- * the colour filter rather than a filter of its own, which is why it is not in the badge's count
- * and why the strip states it inside the colour chip.
- *
- * **It was a tray cell from 2026-09-23 to 2026-09-28**, and before that a sixth chip drawn only
- * while a colour was picked. It is back in the group and always drawn, so these cases assert it
- * is on the bar with the tray shut, whatever the colour row holds.
- */
 describe("FilterBar, its root", () => {
   /** The filter quick bar docks when this element's bottom edge leaves the scroller, so the ref
    *  has to be the **whole** block — the row, the tray and the stated filters under it — and
@@ -1711,6 +1699,18 @@ describe("FilterBar, its root", () => {
   });
 });
 
+/**
+ * The `Exact` chip — **the reading the colour chips get**, drawn round at the end of their group.
+ *
+ * Loose is the default and the deckbuilder's question: `RW` answers mono-R, mono-W, RW and the
+ * colourless cards that fit in any deck. Strict is the RW cards alone, and it is a *modifier* on
+ * the colour filter rather than a filter of its own, which is why it is not in the badge's count
+ * and why the strip states it inside the colour chip.
+ *
+ * **It was a tray cell from 2026-09-23 to 2026-09-28**, and before that a sixth chip drawn only
+ * while a colour was picked. It is back in the group and always drawn, so these cases assert it
+ * is on the bar with the tray shut, whatever the colour row holds.
+ */
 describe("FilterBar, its Exact chip", () => {
   /** Matched on a **prefix**: the chip's accessible name is its own sentence, which names the
    *  state as well as the word, and the sentence changes with the press. */
