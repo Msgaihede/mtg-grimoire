@@ -209,6 +209,12 @@ export function DeckTodosPanel({ deckId, open, onToggle }: DeckTodosPanelProps):
    * flush that sent this text recorded it as agreed; left there, the next flush would find the
    * draft equal to the agreed body and send nothing — a refused save that no later way out ever
    * retries, with the alert the only sign.
+   *
+   * **It hears only the newest save's refusal** — TanStack calls a per-call callback for the
+   * mutation its observer currently follows, and nothing older. That is enough because saves run
+   * one at a time in the order they were made (`useDeckTodos`' `scope`): an older save refused
+   * while a newer one waits is followed by that newer one, which carries every word the older one
+   * did.
    */
   const owed = useCallback(() => {
     pendingRef.current = true;

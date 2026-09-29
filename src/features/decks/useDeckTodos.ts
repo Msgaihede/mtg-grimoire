@@ -72,10 +72,38 @@ export function useDeckTodos(deckId: number) {
    * nothing — and a refetch that landed while the reader went on typing would be a second body
    * arriving for the band to decide whether to adopt. The widget's read *is* invalidated, by its
    * own key, because it draws every deck's list and has no other way to hear about this one.
+   *
+   * ⚠️ **One save at a time per deck — the `scope`.** Two pauses 600 ms apart put two saves on
+   * the wire, and `deck_todos_set` waits for the database's write lock (up to five seconds,
+   * `db.rs`' `WRITE_LOCK_WAIT`), which is not fair: the newer save can take it first. Disk then
+   * ends on the *older* text, this `onSuccess` runs for the older one last and caches it, and the
+   * band — whose observer only follows the newest mutation, so it no longer reads as saving —
+   * adopts it over the reader's newer words. A shared scope makes TanStack run them in the order
+   * they were made, so the last one typed is the last one written. It also keeps a queued save
+   * reading as pending, which is what holds the band still while it waits.
+   *
+   * ⚠️ **In-flight reads of this key are cancelled before the answer is cached.** A background
+   * re-read — any deck write invalidates `["decks"]` — that read the body before this write
+   * committed would otherwise land *after* `setQueryData` and put the old text back, which an idle
+   * band then adopts. Cancelling reverts that query to its state before the read began, and the
+   * body is cached on top of the revert. **The `await` is the library's documented recipe rather
+   * than today's necessity**: in `@tanstack/query-core` 5.101.4 the revert is applied
+   * synchronously inside the cancel (`Query`'s `onCancel`), so an un-awaited cancel passes every
+   * test here — measured, 2026-09-29. Awaiting the promise `cancelQueries` answers is what keeps the
+   * order *cancel, then cache* true without depending on where a later release applies the revert.
+   *
+   * **Here and not in `onMutate`**, which is where the recipe usually puts it and where it misses
+   * two cases. `onMutate` runs when a save is *queued* — before the scope lets it run — so every
+   * read that starts while it waits behind another save, or while its own command is on the wire,
+   * is still in flight at success and still stale. At success there is nothing left to wait for:
+   * a read still running now may have begun before the commit, and one that has already answered
+   * is overwritten by the line below.
    */
   const save = useMutation({
     mutationFn: (body: string) => ipc.deckTodosSet(deckId, body, null),
-    onSuccess: (_answer, body) => {
+    scope: { id: `deck-todos-${deckId}` },
+    onSuccess: async (_answer, body) => {
+      await queryClient.cancelQueries({ queryKey: deckTodosKey(deckId) });
       queryClient.setQueryData(deckTodosKey(deckId), body);
       void queryClient.invalidateQueries({ queryKey: deckTodoListsKey });
     },

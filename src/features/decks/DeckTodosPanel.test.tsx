@@ -252,6 +252,133 @@ describe("the band, open", () => {
     expect(box).toHaveValue("- [ ] Revise tokens\n- [ ] Mine");
   });
 
+  /**
+   * **Two pauses, two saves — and the database's write lock is not fair.** `deck_todos_set` waits
+   * up to five seconds for it, so under a busy lock two saves 600 ms apart can both be waiting and
+   * the newer can win: disk ends on the older text, the older answer is cached last, and an idle
+   * band adopts it over the newer words. The saves are answered here **newest first**, which is the
+   * order that loses them; the band must have made the newer one wait its turn rather than race.
+   */
+  it("lands two saves in the order they were typed, whichever order their answers come in", async () => {
+    deckTodos.mockResolvedValue("- [ ] Revise tokens");
+    const answers: Array<() => void> = [];
+    deckTodosSet.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          answers.push(resolve);
+        }),
+    );
+    const { client } = renderBand();
+    const box = await editor();
+    fakeClock();
+
+    const older = "- [ ] Revise tokens\n- [ ] Cut";
+    const newer = "- [ ] Revise tokens\n- [ ] Cut three creatures";
+    fireEvent.change(box, { target: { value: older } });
+    await tick(600);
+    fireEvent.change(box, { target: { value: newer } });
+    await tick(600);
+
+    // The newer save waits behind the older one rather than racing it for the lock.
+    expect(deckTodosSet).toHaveBeenCalledTimes(1);
+
+    // Answer whatever is on the wire, newest first — the order an unfair lock can hand them out.
+    while (answers.length > 0) {
+      const next = answers.pop()!;
+      await act(async () => next());
+      await tick(0);
+    }
+
+    expect(deckTodosSet.mock.calls.map(([, body]) => body)).toEqual([older, newer]);
+    expect(client.getQueryData(KEY)).toBe(newer);
+    expect(textbox()).toBe(box);
+    expect(box).toHaveValue(newer);
+  });
+
+  /**
+   * **A re-read that began before the save, answering after it.** Every deck write invalidates
+   * `["decks"]`, so a background read of this list can be in flight when the band saves — and it
+   * holds the body from before the write. Landing after the band has cached its own answer, it
+   * would put the old text back and an idle band would adopt it.
+   */
+  it("keeps its saved body when a read that began before the save answers after it", async () => {
+    deckTodos.mockResolvedValue("- [ ] Revise tokens");
+    const { client } = renderBand();
+    const box = await editor();
+
+    let stale: (body: string) => void = () => {};
+    deckTodos.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          stale = resolve;
+        }),
+    );
+    act(() => {
+      void client.invalidateQueries({ queryKey: KEY });
+    });
+    await waitFor(() => expect(deckTodos).toHaveBeenCalledTimes(2));
+    fakeClock();
+
+    const mine = "- [ ] Revise tokens\n- [ ] Mine";
+    fireEvent.change(box, { target: { value: mine } });
+    await tick(600);
+    await tick(0);
+    expect(deckTodosSet).toHaveBeenCalledWith(4, mine, null);
+
+    await act(async () => stale("- [ ] Revise tokens"));
+    await tick(0);
+
+    expect(client.getQueryData(KEY)).toBe(mine);
+    expect(textbox()).toBe(box);
+    expect(box).toHaveValue(mine);
+  });
+
+  /**
+   * **The same race with the read starting while the save is on the wire** — the case a cancel in
+   * `onMutate` cannot see, because it has already run by then. Holding the save open is what puts
+   * the read inside the round trip.
+   */
+  it("keeps its saved body when a read that began during the save answers after it", async () => {
+    deckTodos.mockResolvedValue("- [ ] Revise tokens");
+    let answer: () => void = () => {};
+    deckTodosSet.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    const { client } = renderBand();
+    const box = await editor();
+    fakeClock();
+
+    const mine = "- [ ] Revise tokens\n- [ ] Mine";
+    fireEvent.change(box, { target: { value: mine } });
+    await tick(600);
+    expect(deckTodosSet).toHaveBeenCalledTimes(1);
+
+    let stale: (body: string) => void = () => {};
+    deckTodos.mockImplementation(
+      () =>
+        new Promise<string>((resolve) => {
+          stale = resolve;
+        }),
+    );
+    await act(async () => {
+      void client.invalidateQueries({ queryKey: KEY });
+    });
+    await tick(0);
+    expect(deckTodos).toHaveBeenCalledTimes(2);
+
+    await act(async () => answer());
+    await tick(0);
+    await act(async () => stale("- [ ] Revise tokens"));
+    await tick(0);
+
+    expect(client.getQueryData(KEY)).toBe(mine);
+    expect(textbox()).toBe(box);
+    expect(box).toHaveValue(mine);
+  });
+
   it("writes the pending draft when it unmounts before the delay is up", async () => {
     deckTodos.mockResolvedValue("- [ ] Revise tokens");
     const view = renderBand();

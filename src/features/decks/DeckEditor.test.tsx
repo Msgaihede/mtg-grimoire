@@ -2140,7 +2140,9 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **The To-do band is mounted, and it is the last thing on the page** (issue #672).
+   * **The To-do band is mounted, under the price strip and under the Notes band** (issue #672).
+   * It renders last in `DeckEditor.tsx`; what this asserts is the two orderings that matter, not
+   * that nothing follows it.
    *
    * This is the call-site fence the Notes band's card-menu rows taught this file to want: the
    * band's own suite stands it up with every prop handed in by hand, so only a test *here* can say
@@ -2151,7 +2153,7 @@ describe("DeckEditor", () => {
    * reason one test up: "notes before to-dos" alone would stay green if both were moved above the
    * strip together, which is the one arrangement that costs a reader a drop.
    */
-  it("draws the to-do band last, under the price strip and under the notes band", async () => {
+  it("draws the to-do band under the price strip and under the notes band, over this deck's list", async () => {
     deckTodos.mockResolvedValue("- [ ] Revise tokens\n- [x] Cut Clue tokens");
     await open();
 
