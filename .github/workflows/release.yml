@@ -149,100 +149,18 @@ jobs:
           gh release upload "${{ needs.release-please.outputs.tag_name }}" \
             "$PORTABLE_ZIP" --clobber --repo "${{ github.repository }}"
 
-  # **Signs the two files the in-app updater installs, and is a job of its own on purpose.** The
-  # updater (`src-tauri/src/update.rs`) refuses a portable zip or an NSIS setup without a minisign
-  # signature from the key compiled into it, so this job's secret is the whole of what makes an
-  # update trustworthy.
-  #
-  # **Never in the build job.** A build leg runs a great deal of other people's code — tauri-action,
-  # rust-cache, every npm install script and every cargo build script in the tree — and any of it
-  # can read a secret in the same job and send it anywhere. A leaked signing key signs arbitrary
-  # updates for ever, from anywhere, for every install that trusts it; that is the one outcome this
-  # design exists to prevent, and no later fix unleaks it. So the secret lives here, beside
-  # nothing but a pinned checkout, a pinned Node and `scripts/update-signing.mjs`, which is
-  # `node:crypto` and `node:fs` and nothing else: **no `npm ci`, no third-party action, and the
-  # secret on one step only.**
-  #
-  # **What it signs is what the draft holds**, downloaded by its uploaded name — GitHub's dotted
-  # spelling of the NSIS setup — so `<asset>.minisig` is exactly the name the updater looks for.
-  # The trusted comment is `mtg-grimoire <version> <kind>`, and the updater requires it to name
-  # the release it is installing and its own install kind, which is what stops an older release's
-  # signed build being replayed onto a newer one. The version comes from release-please's output,
-  # which is `tag_name` without its `v` — the updater's `ReleaseInfo::version` exactly.
-  #
-  # **Fail-safe**: an unset `UPDATE_SIGNING_KEY` makes the script exit 1, this job fails, and
-  # `publish` — which needs it — never runs, so the draft stays a draft. A release without
-  # signatures never goes public. The repository secret is a one-time setup, recorded in
-  # docs/reference/in-app-updates.md with the key rotation.
-  sign:
-    name: sign
-    needs: [release-please, build]
-    if: needs.release-please.outputs.release_created == 'true'
-    runs-on: ubuntu-22.04
-    permissions:
-      contents: write
-    steps:
-      # The script, and nothing else from the repository is run.
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version-file: .nvmrc
-
-      - name: Download the two update assets from the draft
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.release-please.outputs.tag_name }}
-          REPO: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          mkdir -p signing
-          gh release download "$TAG" --repo "$REPO" --dir signing \
-            --pattern '*-windows-x64-portable.zip' --pattern '*_x64-setup.exe'
-          shopt -s nullglob
-          portable=(signing/*-windows-x64-portable.zip)
-          nsis=(signing/*_x64-setup.exe)
-          # Exactly one of each, or the updater would be offered a file nobody signed.
-          if [ "${#portable[@]}" -ne 1 ] || [ "${#nsis[@]}" -ne 1 ]; then
-            echo "Expected one portable zip and one NSIS setup on the draft; found ${#portable[@]} and ${#nsis[@]}." >&2
-            exit 1
-          fi
-          ls -l signing
-
-      - name: Sign them
-        shell: bash
-        env:
-          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
-          VERSION: ${{ needs.release-please.outputs.version }}
-        run: |
-          set -euo pipefail
-          node scripts/update-signing.mjs sign signing/*-windows-x64-portable.zip \
-            --trusted-comment "mtg-grimoire $VERSION portable"
-          node scripts/update-signing.mjs sign signing/*_x64-setup.exe \
-            --trusted-comment "mtg-grimoire $VERSION nsis"
-
-      - name: Attach the signatures to the draft
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.release-please.outputs.tag_name }}
-          REPO: ${{ github.repository }}
-        run: gh release upload "$TAG" signing/*.minisig --clobber --repo "$REPO"
-
   publish:
     name: publish
-    needs: [release-please, build, sign]
+    needs: [release-please, build]
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-22.04
     # Flips the draft to published, and nothing else.
     permissions:
       contents: write
     steps:
-      # The release goes public only once every platform's assets are attached **and the two the
-      # updater installs are signed** — `needs: sign` is what makes an unsigned release impossible.
+      # The release goes public only once every platform's assets are attached. A `sign` job sat
+      # between the two from 2026-09-28 to 2026-09-29 and was removed: there was no key to sign
+      # with. docs/reference/in-app-updates.md records what the updater trusts without it.
       - name: Publish the draft release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

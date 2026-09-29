@@ -76,8 +76,8 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   `actions/checkout` sets `persist-credentials: false`** (nothing after one runs `git` against
   the remote; uploads are `gh`/tauri-action with the token handed in), and **no workflow grants a
   write permission above `jobs:`** — `release.yml` and `scanner-bundle.yml` are `permissions: {}`
-  with a grant per job. **`scripts/actions-pinned.test.mjs` fences all of it**, plus the signing
-  secret's isolation below; a new workflow or composite action is globbed in the day it lands.
+  with a grant per job. **`scripts/actions-pinned.test.mjs` fences all of it**; a new workflow or
+  composite action is globbed in the day it lands.
 - **The `powershell` job runs the repo's `.ps1` tests on `windows-latest`** — `lock.test.ps1`
   for the worktree locks and `pr-auto.test.ps1` for the auto-PR guard — and its arm in
   `ci-route.mjs` must stay **above** `src-tauri/*` and `scripts/*` — first-match-wins, and
@@ -124,23 +124,12 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
 
 - **It is one workflow on purpose.** A release created with `GITHUB_TOKEN` does not trigger
   `on: release` in another workflow — GitHub's recursion guard — so release-please, the build
-  matrix, the signing step and the publish step are jobs in one file, chained on
-  `release_created`.
-- **The `sign` job minisign-signs the portable zip and the NSIS setup — the two files the in-app
-  updater installs, and refuses unsigned — and it must never move into the build job**
-  (2026-09-28). A build leg runs tauri-action, rust-cache and every npm and cargo build script in
-  the tree; any of them can read a secret in the same job, and a leaked signing key signs updates
-  for every install, from anywhere, for good. So `sign` is a pinned checkout, a pinned
-  setup-node and `scripts/update-signing.mjs` (`node:crypto`/`node:fs` only) — **no `npm ci`, no
-  third-party action, `UPDATE_SIGNING_KEY` on one step**. It downloads both files from the draft
-  under their uploaded, dotted names so `<asset>.minisig` is the name the updater asks for, and
-  signs each with the trusted comment `mtg-grimoire <version> <kind>`, which the updater requires
-  to match the release and install kind it is installing (the replay fence). **`publish` needs
-  it, so an unset secret leaves the release a draft** — fail-safe, never unsigned.
-  **One-time setup: the `UPDATE_SIGNING_KEY` repository secret**, and the matching public key in
-  `update::SIGNING_PUBLIC_KEY`; the order, and the rotation that takes effect a release late, are
-  [in-app-updates.md](../docs/reference/in-app-updates.md). Written 2026-09-28 and **not yet run
-  on GitHub** — `gh release download` of a draft by tag is the step nobody has measured.
+  matrix and the publish step are jobs in one file, chained on `release_created`.
+- **There is no update-signing job.** A `sign` job existed from 2026-09-28 to 2026-09-29; it
+  needed an `UPDATE_SIGNING_KEY` secret nobody had set, stopped v0.34.0 as a draft, and was
+  removed with the updater's minisign check. **The v0.34.0 draft must never be published** — its
+  binaries still carry the check. [in-app-updates.md](../docs/reference/in-app-updates.md) has
+  the record. If signing returns, the secret goes in a job of its own and never a build leg.
 - **Versions are never typed by hand.** release-please reads the `feat:`/`fix:`/`!` prefixes and
   keeps a release PR open that bumps all five version files. `bump-minor-pre-major` is on, so
   while on `0.x` a `feat!:` bumps the **minor**; reaching 1.0 is a deliberate `Release-As: 1.0.0`
@@ -175,8 +164,7 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
 - **Linux artifacts are built but unverified** — nobody has run a Linux build.
 - Not done, deliberately: no code signing (SmartScreen warns on the installers), and **not**
   GitHub Packages — none of its registry types hosts a desktop installer. **That is Authenticode,
-  and it is still not done**: the `sign` job's minisign signatures are read by the app's own
-  updater and by nothing in Windows, so they change nothing SmartScreen sees.
+  and it is still not done.**
 
 ## `scanner-bundle.yml`
 

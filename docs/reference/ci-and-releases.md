@@ -142,14 +142,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     checkout already fetched, and every upload is `gh` or tauri-action, each handed its token.
   - **Workflow-level `permissions: {}`** in `release.yml` and `scanner-bundle.yml`, with each job
     naming its own (`ci.yml` stays `contents: read`, which grants nothing to write).
-    `release-please` keeps `contents`/`issues`/`pull-requests: write`; `build`, `sign` and
-    `publish` get `contents: write` alone.
+    `release-please` keeps `contents`/`issues`/`pull-requests: write`; `build` and `publish` get
+    `contents: write` alone.
   - **`scripts/actions-pinned.test.mjs` is the fence**: it globs every workflow and composite
     action and fails on a `uses:` that is neither local nor a SHA with a version comment, a
     checkout without `persist-credentials: false`, a write grant above `jobs:`, a Dependabot
-    config that stops watching either directory — and on the signing secret appearing anywhere but
-    one step of `release.yml`'s `sign` job, that job gaining a `uses:` other than checkout and
-    setup-node or an `npm` install, or `publish` no longer needing it. Comments are stripped
+    config that stops watching either directory. (It also fenced the update-signing secret to one
+    step of a `sign` job until that job was removed on 2026-09-29, below.) Comments are stripped
     before any of it is read, since these files explain themselves in prose that names both.
 - **A push to `main` gets a concurrency group of its own; PR runs still cancel each other.**
   Routing on a push diffs from `github.event.before`, so a cancelled `main` run's commits were
@@ -163,8 +162,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `frontend` skipped entirely: the frontend it needs is one file it writes itself.
 - **`.github/workflows/release.yml` is one workflow on purpose.** A release created with
   `GITHUB_TOKEN` does not trigger `on: release` in another workflow — GitHub's recursion
-  guard — so release-please, the build matrix, the signing step and the publish step
-  are jobs in one file, chained on `release_created`.
+  guard — so release-please, the build matrix and the publish step are jobs in one file,
+  chained on `release_created`.
 - **Versions are never typed by hand.** release-please reads the `feat:`/`fix:`/`!` prefixes
   and keeps a `chore(main): release X.Y.Z` PR open that bumps all five version files —
   `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`,
@@ -184,21 +183,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   release-please's next run cannot find the previous release and replays the whole history
   into the changelog. `gh release upload`/`edit` **do** resolve a draft by tag even though no
   tag exists yet (measured 2026-08-09 — the draft's own URL is `untagged-<sha>`).
-- **`release.yml`'s `sign` job signs the two files the in-app updater installs**, and is why
-  a release needs the **`UPDATE_SIGNING_KEY`** repository secret (2026-09-28). It runs after
-  every build leg, downloads the portable zip and the NSIS setup from the draft by their
-  uploaded — dotted — names, runs `node scripts/update-signing.mjs sign` on each with the trusted
-  comment `mtg-grimoire <version> <kind>`, and uploads the two `.minisig` files; `publish` needs
-  it. **It is a job of its own because a build leg runs other people's code** — tauri-action,
-  rust-cache, every npm install script, every cargo build script — and any of it could read a
-  secret in the same job; a leaked signing key signs updates for every install, from anywhere,
-  for good. So the `sign` job holds a pinned checkout, a pinned setup-node and a dependency-free
-  script, no `npm ci`, and the secret on one step. **An unset secret fails it, and the draft is
-  never published** — a release without signatures cannot go public. What the updater checks,
-  what the signature does and does not prove, the one-time setup and the key rotation are
-  [in-app-updates.md](in-app-updates.md). ⚠️ **Not run on GitHub yet** — written 2026-09-28; the
-  first release after it lands is its proof, and the `gh release download` of a draft by tag is
-  the step to watch (the `upload`/`edit` pair is measured to resolve a draft; `download` is not).
+- **There is no `sign` job, and there was one for a day.** `release.yml` gained a job on
+  2026-09-28 (`8a5568d6`) that minisign-signed the portable zip and the NSIS setup with the
+  `UPDATE_SIGNING_KEY` repository secret, and `publish` needed it. The secret was never set, so
+  v0.34.0's run failed at `sign` on 2026-09-29 and the release stayed a draft — fail-safe, as
+  designed. Signing was removed the same day on the maintainer's decision, the updater's check
+  with it; [in-app-updates.md](in-app-updates.md) has what the updater trusts now and why the
+  v0.34.0 draft must never be published. **If it comes back, the job's one structural rule still
+  holds**: the secret goes in a job of its own, never a build leg, because a build leg runs
+  tauri-action, rust-cache and every npm and cargo build script, any of which can read a secret
+  in the same job.
 - **release-please needs "Allow GitHub Actions to create and approve pull requests"**
   (`can_approve_pull_request_reviews: true`). It is one toggle covering both verbs, and with
   it off the run fails at the very last step — after parsing every commit, resolving the
@@ -262,7 +256,5 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - Not done, deliberately: no code signing (no certificate, so SmartScreen warns on the
   installers) and **not** GitHub Packages — none of its registry types hosts a desktop
   installer, which is why the compiled app goes to Releases instead. **"Code signing" there means
-  Authenticode, and it is still not done.** The minisign signatures the `sign` job writes are a
-  different thing with a different reader: they are checked by the app's own updater and by
-  nothing in Windows, so SmartScreen warns exactly as before, and a first install from the
-  release page is verified by nothing at all.
+  Authenticode, and it is still not done** — and neither, since 2026-09-29, is update signing,
+  which was a different thing with a different reader (the app's own updater, never Windows).
