@@ -39,6 +39,7 @@ const EVERY_KIND: Record<WidgetKind, true> = {
   priceMovers: true,
   newPrintings: true,
   stickyNotes: true,
+  deckTodos: true,
   deckCompletion: true,
   toReview: true,
   wishlistSavings: true,
@@ -237,6 +238,16 @@ describe("WIDGETS", () => {
         // would miss rather than something they have to ask for.
         toggles: { dates: true, strip: true, pinned: true },
         chip: "layout",
+      },
+      // Issue #672. `scope` is `deckCompletion`'s two words and checklist; completed to-dos and
+      // archived decks are subjects the reader asks for, so both of those switches start off.
+      deckTodos: {
+        picks: {
+          scope: { ids: ["all", "chosen"], dflt: undefined },
+          order: { ids: ["edited", "name", "open"], dflt: undefined },
+        },
+        toggles: { done: false, nested: true, archived: false, counts: true },
+        chip: "scope",
       },
       // The first kind with a switch that starts *off*, and the two that do are the issue's own
       // requirement rather than a taste: a virtual deck is a pile the reader does not own, and a

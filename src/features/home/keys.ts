@@ -319,6 +319,19 @@ export const deckCompletionKey = (
 ): QueryKey => [...deckCompletionRoot, marketplace, compare];
 
 /**
+ * Every deck whose To-do band holds anything — `ipc.deckTodoLists`, the To-dos widget's read (issue
+ * #672).
+ *
+ * **Under `["decks"]` on purpose**: a checklist is a column on the `decks` row, so every deck write
+ * (a rename, an archive, the band's `todosOpen`) and the `decks` change mask a sync or a second
+ * window fires already refresh it, with no bridge. **And under `["decks", "todos"]`**, beside the
+ * band's own `["decks", "todos", deckId]` — so the band's autosave invalidates this key by name
+ * and the widget's tick refreshes the band, each through that one prefix. The band (`DeckTodosPanel`)
+ * imports this constant rather than spelling it again.
+ */
+export const deckTodoListsKey: QueryKey = ["decks", "todos", "lists"];
+
+/**
  * The sets still to come within `days` — `ipc.upcomingSets`, Coming soon's read.
  *
  * Under `["decks"]` with no bridge, and the sync is why that is enough: the answer is half the
