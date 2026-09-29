@@ -35,9 +35,27 @@
  * stacks' order, and the stacks are what `splitRail` answers for.
  */
 import type { CardWalkStop, PaneDeckContext } from "@/lib/store";
+import type { DeckTokenView } from "./deckTokens";
 import { deckCardSlot } from "./dnd";
 import type { CardGroup } from "./grouping";
 import { splitRail } from "./views/columns";
+import { withTokenPile } from "./views/tokenSlot";
+
+/**
+ * The Tokens & Emblems pile as the walk needs it — the entries the views draw, and where.
+ *
+ * `views` is the pile's own list (`DeckEditor`'s `pileTokenList`, the counted entries), and
+ * `railIndex` the stored slot the views clamp with `tokenRailSlot`. Only three fields of an entry
+ * make a stop, so that is all this asks for.
+ */
+export interface WalkTokenPile {
+  views: readonly Pick<DeckTokenView, "printingId" | "oracleId" | "name">[];
+  railIndex: number;
+}
+
+/** What the rail loop inserts to say "the token pile's stops go here" — `TOKEN_ITEM`'s job in the
+ *  views, spelled locally so this file needs nothing from their drawing module. */
+const TOKEN_PILE = Symbol("token pile");
 
 /**
  * One stop on the walk — re-exported here because this is where a **deck's** stops are made, and
@@ -84,15 +102,53 @@ export type { CardWalkStop };
  * One card filed in two piles is **two** stops, and that is right rather than a duplicate: they
  * are two `deck_cards` rows with two addresses, and a press inside the modal writes to one of
  * them.
+ *
+ * ## The token pile (issue #686)
+ *
+ * **`tokens` puts the Tokens & Emblems pile on the walk, where the views draw it** — among the
+ * rail's piles at `withTokenPile`'s slot, the same call Grid and Text make. Without it a token
+ * opened from the pile was on no walk, so both modals found their place at `-1`, drew no chevrons
+ * and let ArrowLeft and ArrowRight fall through. Table draws its token section after the whole
+ * table, so there the walk agrees exactly when the pile is stored last, which is the default.
+ *
+ * **A token stop is a plain stop — `deck: null`.** A token is no `deck_cards` row (spec §4.6), so
+ * there is no slot to name, and a step onto one then opens the card the way a press on the pile
+ * does (`setSelectedCardId`, `DeckEditor`'s `openTokenCard`). None of it enters `groups`, so the
+ * deck's size, piles, stats and validation are untouched by it.
+ *
+ * **One stop per printing, not per entry.** A plain and a foil copy of one token are two entries
+ * on the pile, but the modal opens on a printing and finds its place by `cardId` alone, so a
+ * second stop for the same printing could never be reached and the first would step onto the
+ * card already open.
  */
-export function deckWalkStops(groups: readonly CardGroup[], deckId: number): CardWalkStop[] {
+export function deckWalkStops(
+  groups: readonly CardGroup[],
+  deckId: number,
+  tokens?: WalkTokenPile,
+): CardWalkStop[] {
   const { command, flow, rail } = splitRail(groups);
   const stops: CardWalkStop[] = [];
+  const railed: (CardGroup | typeof TOKEN_PILE)[] =
+    tokens === undefined ? rail : withTokenPile(rail, tokens.railIndex, TOKEN_PILE);
 
   // A plain loop rather than a `filter` and a `map`, for `splitRail`'s own reason one file over:
   // two passes are two places for the rule about which rows survive to be stated, and the second
   // one is the one that gets edited without the first.
-  for (const group of [...command, ...flow, ...rail]) {
+  for (const group of [...command, ...flow, ...railed]) {
+    if (group === TOKEN_PILE) {
+      const seen = new Set<string>();
+      for (const token of tokens?.views ?? []) {
+        if (seen.has(token.printingId)) continue;
+        seen.add(token.printingId);
+        stops.push({
+          cardId: token.printingId,
+          oracleId: token.oracleId,
+          name: token.name,
+          deck: null,
+        });
+      }
+      continue;
+    }
     for (const card of group.cards) {
       // The orphan. `oracleId` is the field, and narrowing it here is also what makes the stop's
       // own `oracleId` a `string` with no assertion.

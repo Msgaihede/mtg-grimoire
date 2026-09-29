@@ -208,6 +208,83 @@ describe("deckWalkStops", () => {
 });
 
 /**
+ * **The token pile is on the walk** (issue #686) — a token opened from the pile used to be on no
+ * walk at all, so the card modal and the printings modal both found their place at `-1`, drew no
+ * chevrons and let the arrow keys fall through.
+ */
+describe("deckWalkStops — the token pile", () => {
+  /** A counted token entry — only the three fields a stop is made of. */
+  const token = (name: string, printingId = `t-${name}`) => ({
+    name,
+    printingId,
+    oracleId: `o-${name}`,
+  });
+
+  const drawn = () => [
+    group("Ramp", [inPile("Sol Ring", 1, "Ramp")]),
+    group("Sideboard", [inPile("Pyroblast", 2, "Sideboard")], { kind: "side" }),
+    group("Maybeboard", [inPile("Fog", 3, "Maybeboard")], { kind: "maybe" }),
+  ];
+
+  /**
+   * **Where the views draw it: after `railIndex` rail piles**, which is `tokenRailSlot`'s answer
+   * and not a position of this file's own. Slot 1 here is between the Sideboard and the
+   * Maybeboard — a place neither end of the walk could reach by accident.
+   */
+  it("walks the pile at the rail slot the views draw it in", () => {
+    const stops = deckWalkStops(drawn(), 4, { views: [token("Treasure")], railIndex: 1 });
+
+    expect(names(stops)).toEqual(["Sol Ring", "Pyroblast", "Treasure", "Fog"]);
+  });
+
+  /** `-1` is last, and so is a slot the rail no longer has — the views' own clamp. */
+  it("walks the pile last when it is stored last or at a slot the rail has lost", () => {
+    for (const railIndex of [-1, 9]) {
+      const stops = deckWalkStops(drawn(), 4, { views: [token("Treasure")], railIndex });
+      expect(names(stops)).toEqual(["Sol Ring", "Pyroblast", "Fog", "Treasure"]);
+    }
+  });
+
+  /**
+   * **A token stop is a plain stop**: a token is no `deck_cards` row, so there is no slot to name,
+   * and `deck: null` is what makes a step onto it open the card the way a press on the pile does
+   * (`setSelectedCardId`) rather than re-anchor to a deck row that does not exist.
+   */
+  it("stops on each token as its printing, with no deck slot", () => {
+    const stops = deckWalkStops([], 4, { views: [token("Treasure", "t-1")], railIndex: -1 });
+
+    expect(stops).toEqual([
+      { cardId: "t-1", oracleId: "o-Treasure", name: "Treasure", deck: null },
+    ]);
+  });
+
+  /**
+   * **One stop per printing, not per entry.** A plain copy and a foil copy of one token are two
+   * entries on the pile, but the modal opens on the printing alone and finds its place by
+   * `cardId` — so two stops for one printing would leave the second unreachable and the first a
+   * step onto the card already open.
+   */
+  it("stops once on a printing the pile holds in two finishes", () => {
+    const stops = deckWalkStops([], 4, {
+      views: [token("Treasure", "t-1"), token("Treasure", "t-1"), token("Clue", "t-2")],
+      railIndex: -1,
+    });
+
+    expect(stops.map((s) => s.cardId)).toEqual(["t-1", "t-2"]);
+  });
+
+  /** A deck with no rail at all still walks its pile — the pile is then the whole of the rail. */
+  it("walks the pile after the flow on a deck with nothing on the rail", () => {
+    const stops = deckWalkStops([group("Ramp", [inPile("Sol Ring", 1, "Ramp")])], 4, {
+      views: [token("Treasure")],
+      railIndex: 0,
+    });
+
+    expect(names(stops)).toEqual(["Sol Ring", "Treasure"]);
+  });
+});
+
+/**
  * **The test that would have caught both incidents `deckSlotOf`'s doc records.**
  *
  * A deck row is `(deck, card, category, variant, finish)`, and a comparison that names four of

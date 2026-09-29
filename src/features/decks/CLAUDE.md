@@ -1043,6 +1043,13 @@ layer.
   piles is two stops**, which is right rather than a duplicate: two `deck_cards` rows, two
   addresses, and a press in the modal writes to one of them. `[]` on the editor's unmount, or a
   stale walk would step a modal opened from the Collection into somebody's Sideboard.
+  **The token pile is on the walk since 2026-09-29** ([issue #686](https://github.com/Msgaihede/mtg-grimoire/issues/686)):
+  `deckWalkStops`' third argument puts the pile's counted entries among the rail's piles at
+  `withTokenPile`'s slot (`views/tokenSlot.ts`, the arithmetic the views draw with), as **plain
+  stops** — `deck: null`, one per printing — so a token opened from the pile gets the modals'
+  chevrons and arrow keys, and a step onto one opens it as a press on the pile does. Before it a
+  token was on no walk and both modals found their place at `-1`. It is the *modals'* walk only:
+  the desk's own arrow keys (`StackView`) still step over the pile, and nothing enters `groups`.
 - **A pile can be dragged past its neighbours on the desk, in `StackView`'s flow and — since
   2026-09-24 — within its rail** (added 2026-08-17). A grip in each flowing heading (`GroupHeader`'s `handle` slot) is the drag
   source and the arrow keys on it are the keyboard's whole path — `CategoriesDialog`'s rule, kept

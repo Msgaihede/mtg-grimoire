@@ -8719,6 +8719,29 @@ describe("DeckEditor — the token pile (issue #507)", () => {
     ).toBeGreaterThan(0);
   });
 
+  /**
+   * **The pile is on the walk the modals step along** (issue #686), so the arrow keys and the
+   * chevrons reach a token opened from it — and the Wurm at 0, which the pile does not draw, is
+   * not a stop either: the walk is what the reader is looking at.
+   */
+  it("publishes the pile's tokens on the deck's walk", async () => {
+    deckWith({});
+    await open();
+
+    await waitFor(() =>
+      expect(useAppStore.getState().cardWalk.stops.map((stop: CardWalkStop) => stop.name)).toEqual(
+        ["Bear", "Lightning Bolt", "Treasure"],
+      ),
+    );
+    const { stops } = useAppStore.getState().cardWalk;
+    expect(stops[stops.length - 1]).toEqual({
+      cardId: "t-default",
+      oracleId: "o-treasure",
+      name: "Treasure",
+      deck: null,
+    });
+  });
+
   /** And no pile at all where nothing is counted: a deck whose every token is at 0 draws its band
    *  and nothing in the views, which is the absence of a pile rather than an empty one. */
   it("draws no pile on a deck whose every token is at 0", async () => {
