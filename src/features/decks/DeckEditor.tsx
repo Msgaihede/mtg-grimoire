@@ -4039,40 +4039,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
-   * The same deck as a **walk** — every drawn row, in the order the desk draws it — published to
-   * the store so the printings modal's left/right keys can step through the deck behind it.
-   *
-   * It goes through the store because `AllPrintingsDialog` is mounted at `App` level, a sibling
-   * of the shell, so there is no context between here and there; and it is published from here
-   * rather than derived there because {@link groups} is the only place this order exists.
-   * `groupBy` and `sortBy` are this component's `useState`, and the rows are `shown` — the deck
-   * narrowed by the toolbar's text box and label chips. Nothing outside this file can reconstruct
-   * any of that.
-   *
-   * **What it costs, since the input recomputes on every keystroke in that box.** `groups` is a
-   * new array per letter typed, so this is a new array of ~100 lean objects per letter and a
-   * `set` on the store. That is noise beside `buildGroups` itself, which runs on the same
-   * keystroke over the same rows and does strictly more — a sort per pile and a price sum per
-   * heading. The part worth being careful about is not the arithmetic but the **write**: a
-   * zustand `set` re-runs every subscriber's selector, and the modal is the only thing in the
-   * app that selects `cardWalk`. It is shut nearly always, and shut it draws nothing, so an
-   * ordinary keystroke here costs one selector call and one `Object.is`. That stays true only
-   * for as long as this field has one reader — a component that selected the walk to decide
-   * something *else* would turn typing in a deck's filter into a re-render of a surface that has
-   * nothing to do with the deck.
-   *
-   * Memoised so that a render which changed none of the inputs does not rewrite the store at
-   * all: without it every unrelated re-render of this component — a hover on a stack, a mutation
-   * settling — would publish an identical walk under a new identity and re-render the modal.
-   */
-  const deckWalk = useMemo(() => deckWalkStops(groups, deckId), [groups, deckId]);
-
-  // Published through the same hook the three card lists use, which is also where the two-effect
-  // shape this needs — publish on change, clear once on unmount — is written down and argued.
-  // `the deck` is what the modal's chevrons say they are stepping along.
-  usePublishCardWalk("the deck", deckWalk);
-
-  /**
    * Every finding, filed under each row it marks, so a view can mark a card — by the row's slot
    * and never by its printing, so a parked copy does not wear the break its active twin is part
    * of (issue #554).
@@ -4652,6 +4618,50 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * the plan, so a keystroke anywhere in the editor does not hand four views a new pile.
    */
   const tokenRailIndex = localTokenRail?.index ?? row?.tokenRailIndex ?? -1;
+
+  /**
+   * The same deck as a **walk** — every drawn row, in the order the desk draws it — published to
+   * the store so the printings modal's left/right keys can step through the deck behind it.
+   *
+   * It goes through the store because `AllPrintingsDialog` is mounted at `App` level, a sibling
+   * of the shell, so there is no context between here and there; and it is published from here
+   * rather than derived there because {@link groups} is the only place this order exists.
+   * `groupBy` and `sortBy` are this component's `useState`, and the rows are `shown` — the deck
+   * narrowed by the toolbar's text box and label chips. Nothing outside this file can reconstruct
+   * any of that.
+   *
+   * **What it costs, since the input recomputes on every keystroke in that box.** `groups` is a
+   * new array per letter typed, so this is a new array of ~100 lean objects per letter and a
+   * `set` on the store. That is noise beside `buildGroups` itself, which runs on the same
+   * keystroke over the same rows and does strictly more — a sort per pile and a price sum per
+   * heading. The part worth being careful about is not the arithmetic but the **write**: a
+   * zustand `set` re-runs every subscriber's selector, and the modal is the only thing in the
+   * app that selects `cardWalk`. It is shut nearly always, and shut it draws nothing, so an
+   * ordinary keystroke here costs one selector call and one `Object.is`. That stays true only
+   * for as long as this field has one reader — a component that selected the walk to decide
+   * something *else* would turn typing in a deck's filter into a re-render of a surface that has
+   * nothing to do with the deck.
+   *
+   * Memoised so that a render which changed none of the inputs does not rewrite the store at
+   * all: without it every unrelated re-render of this component — a hover on a stack, a mutation
+   * settling — would publish an identical walk under a new identity and re-render the modal.
+   */
+  const deckWalk = useMemo(
+    () =>
+      deckWalkStops(
+        groups,
+        deckId,
+        // The pile's tokens join the walk where the views draw them (issue #686) — see
+        // `deckWalkStops`. Nothing until the deck row has answered, as the pile draws nothing.
+        tokenPileDrawn ? { views: pileTokenList, railIndex: tokenRailIndex } : undefined,
+      ),
+    [groups, deckId, tokenPileDrawn, pileTokenList, tokenRailIndex],
+  );
+
+  // Published through the same hook the three card lists use, which is also where the two-effect
+  // shape this needs — publish on change, clear once on unmount — is written down and argued.
+  // `the deck` is what the modal's chevrons say they are stepping along.
+  usePublishCardWalk("the deck", deckWalk);
 
   /**
    * **The pile's Remove printing, handing the caret on** (`tokenCaret.ts`) — kept here rather than
