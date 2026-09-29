@@ -145,7 +145,8 @@ const GAP = 12;
  * virtualiser does not know about it (its `scrollMargin` is 0 there), so the sticky bar's edge is
  * corrected by it; under `grow` the measured `scrollMargin` already includes it.
  *
- * That correction assumes the bar is flush with the top of the scrollport, which a plain
+ * That correction assumes the bar is flush with the top of the scrollport (or with the foot of a
+ * docked bar `stickyTop` below it, which the edge adds back), which a plain
  * `sticky top-0` is **not** in Chromium — it pins at the scroller's padding edge, 12px down here.
  * The anchor's measured negative `top` is what makes it flush; see `stickyInset` in `CardGrid`.
  */
@@ -414,6 +415,7 @@ export function CardGrid<T extends GridCard>({
   baseTileWidth = TILE_BASE_WIDTH,
   grow = false,
   sections,
+  stickyTop = 0,
 }: {
   /** The cards to draw — **not drawn under {@link sections}**, which lays out its own. */
   rows: T[];
@@ -894,6 +896,23 @@ export function CardGrid<T extends GridCard>({
    * zoom resizes the tiles and never a heading. See {@link GridSections}.
    */
   sections?: GridSections<T>;
+  /**
+   * **How far below the top of the scrollport the shelf bar pins** — the height of a bar docked
+   * over the scroller, so the shelf bar stacks flush under it rather than sliding beneath it; `0`
+   * (the default) where nothing is docked, which is every wall but a shelved one while the filter
+   * quick bar is down (spec 2026-09-29 §6.2).
+   *
+   * **Two things move with it, and they must move together.** The sticky anchor's `top` becomes
+   * `stickyTop − stickyInset`, and the edge {@link stickyShelfAt} measures from moves down by the
+   * same amount — the bar names the shelf under *its own* top edge, and with 53px of quick bar over
+   * the wall that edge is 53px further into the content than the scrollport's. Moving the bar and
+   * not the edge would name the shelf the quick bar is covering.
+   *
+   * Only a sectioned wall draws a shelf bar, so a flat wall ignores it. A number rather than a
+   * boolean because the wall has no business knowing what is docked above it or how tall that is:
+   * the page that docks the bar measures it and says so here.
+   */
+  stickyTop?: number;
 }) {
   const wallRef = useRef<HTMLDivElement>(null);
   const rowsRef = useRef<HTMLDivElement>(null);
@@ -1154,7 +1173,8 @@ export function CardGrid<T extends GridCard>({
   /**
    * **How far below its scroller's top edge a `sticky top-0` element really pins** — the scroller's
    * own `padding-top`, which the sticky bar's anchor takes off again as a negative `top` so the bar
-   * sits flush against the top of the scrollport.
+   * sits flush against the top of the scrollport, or against the foot of a docked bar `stickyTop`
+   * below it.
    *
    * Chromium contracts a sticky element's constraint rectangle by the scroll container's padding,
    * so `top: 0` means "the padding edge", not "the top of what the reader sees". Measured
@@ -2051,8 +2071,10 @@ export function CardGrid<T extends GridCard>({
    * The shelf the sticky bar names — see {@link stickyShelfAt}. The edge is where the bar's top
    * sits in the virtualiser's coordinates: the scroller's offset, less the wall's own `p-3` on a
    * bounded wall, and exactly the offset under `grow`, where `scrollMargin` is already inside every
-   * row's `start`. Both assume the bar is pinned flush with the top of the scrollport, which the
-   * anchor's `stickyInset` correction is what makes true.
+   * row's `start`. Both assume the bar is pinned flush with the top of the scrollport, or with the
+   * foot of a docked bar `stickyTop` below it, which the anchor's `stickyInset` correction is what
+   * makes true — so `stickyTop` is added here too, and the bar names the shelf under its own top
+   * edge rather than the one the docked bar is covering.
    *
    * **As fresh as the last render, and no fresher**: the virtualiser re-renders when its range or
    * its is-scrolling flag changes, not per pixel, so inside one row the bar can trail by that row
@@ -2062,7 +2084,7 @@ export function CardGrid<T extends GridCard>({
     ? stickyShelfAt(
         shelved.layout,
         virtualRows,
-        (virtualizer.scrollOffset ?? 0) - (grow ? 0 : WALL_INSET_PX),
+        (virtualizer.scrollOffset ?? 0) - (grow ? 0 : WALL_INSET_PX) + stickyTop,
       )
     : null;
 
@@ -2172,12 +2194,14 @@ export function CardGrid<T extends GridCard>({
         // **`top-0` is corrected by the scroller's own padding** — see `stickyInset`: Chromium pins
         // a sticky box at the scroller's padding edge, so without the negative `top` the bar would
         // float 12px (bounded) or 20px (`main`, under `grow`) below the top of the scrollport. Flush
-        // is also what the edge `stickyShelf` measures from assumes.
+        // with the top of the scrollport, or with the foot of a docked bar `stickyTop` below it, is
+        // also what the edge `stickyShelf` measures from assumes — so the `top` is
+        // `stickyTop − stickyInset`, and the edge carries the same `stickyTop`.
         <div
           ref={stickyRef}
           data-shelf-sticky=""
           className={cn("sticky top-0 h-0", LAYER.header)}
-          style={stickyInset ? { top: -stickyInset } : undefined}
+          style={stickyInset || stickyTop ? { top: stickyTop - stickyInset } : undefined}
         >
           <div className="absolute inset-x-0 top-0">
             {sections.renderSticky(stickyShelf, scrollToTop)}

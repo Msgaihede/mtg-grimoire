@@ -558,6 +558,39 @@ describe("CardGrid shelves", () => {
   });
 
   /**
+   * **A docked bar over `main` moves the top the shelf bar pins to** (filter quick bar, spec §6.2).
+   * While the quick bar is down it covers the first 53px of the scrollport, so the shelf bar has to
+   * stack flush under it — `top` is `stickyTop − stickyInset` — and the shelf it names has to be
+   * the one under *its* top edge, `stickyTop` further down the wall than the scrollport's. The
+   * scroll offset is chosen so the two edges disagree: the scrollport's top is still in Binder's
+   * rows and the bar's is past the Staples heading's start, so a wall that measured from the old
+   * edge would name Binder.
+   */
+  it("pins the shelf bar stickyTop below the scroller's top, and names the shelf from there", () => {
+    const renderSticky = vi.fn<GridSections<GridCard>["renderSticky"]>(() => null);
+    const { container } = wall(
+      shelves(
+        [
+          { shelf: BINDER, tiles: [tile("a", "Card A"), tile("b", "Card B")] },
+          { shelf: STAPLES, tiles: [tile("c", "Card C")] },
+        ],
+        { renderSticky },
+      ),
+      { stickyTop: 53 },
+    );
+    const anchor = container.querySelector<HTMLElement>("[data-shelf-sticky]");
+    // jsdom computes no padding, so stickyInset is 0 and top is exactly the offset.
+    expect(anchor?.style.top).toBe("53px");
+
+    // The bar's edge 10px past the Staples heading's start (a heading partly under the bar names
+    // its shelf); the scrollport's edge is then 43px above that heading, in Binder's rows.
+    const group = screen.getByRole("group", { name: "Your collection" });
+    group.scrollTop = offsetOf(rowOf(heading("Staples"))) + 12 + 10 - 53;
+    fireEvent.scroll(group);
+    expect(renderSticky.mock.lastCall?.[0]?.name).toBe("Staples");
+  });
+
+  /**
    * The same wiring, driven by a real `scroll` event: jsdom stores `scrollTop` and the virtualiser
    * reads it on `scroll`, so the only thing faked is that nothing actually moved on a screen. The
    * offsets are read off the rows the wall drew rather than typed, so a change to the tile's pitch
