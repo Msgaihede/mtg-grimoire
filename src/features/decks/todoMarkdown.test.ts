@@ -230,11 +230,24 @@ describe("visibleTodos", () => {
 describe("sameTodos", () => {
   it("holds a body the same as itself, and as one with an empty to-do added or taken away", () => {
     expect(sameTodos(TWO, TWO)).toBe(true);
+    // A trailing empty to-do, either way round.
     expect(sameTodos(TWO, `${TWO}\n- [ ] `)).toBe(true);
     expect(sameTodos(`${TWO}\n- [ ] `, TWO)).toBe(true);
+    // One in the middle, and one nested under the last to-do.
     expect(sameTodos("- [ ] a\n- [ ] \n- [ ] b", "- [ ] a\n- [ ] b")).toBe(true);
     expect(sameTodos("- [ ] a", "- [ ] a\n  - [ ] ")).toBe(true);
+    // The editor's empty-paragraph marker, in both spellings, and a ticked empty line.
+    expect(sameTodos("- [ ] a", "- [ ] a\n- [ ] &nbsp;")).toBe(true);
+    expect(sameTodos("- [ ] a", "- [ ] a\n- [x]  ")).toBe(true);
+    // An emptied parent whose only sub-to-do is empty goes with it.
+    expect(sameTodos("- [ ] a", "- [ ] a\n- [ ] \n  - [ ] ")).toBe(true);
     expect(sameTodos("", "- [ ] ")).toBe(true);
+  });
+
+  it("lets line endings, trailing spaces and trailing blank lines differ", () => {
+    expect(sameTodos("- [ ] a\r\n- [ ] b", "- [ ] a\n- [ ] b")).toBe(true);
+    expect(sameTodos("- [ ] a  \n- [ ] b\t", "- [ ] a\n- [ ] b")).toBe(true);
+    expect(sameTodos("- [ ] a\n\n", "- [ ] a")).toBe(true);
   });
 
   it("tells apart a tick, a word, a mark, a nesting and an order", () => {
@@ -244,6 +257,19 @@ describe("sameTodos", () => {
     expect(sameTodos("- [ ] a\n- [ ] b", "- [ ] a\n  - [ ] b")).toBe(false);
     expect(sameTodos("- [ ] a\n- [ ] b", "- [ ] b\n- [ ] a")).toBe(false);
     expect(sameTodos("- [ ] a", "")).toBe(false);
+  });
+
+  /**
+   * **What a comparison of `parseTodos`' reading could not see**, each one a shape the editor
+   * writes: a mark nested inside another (the reader drops the inner one), a link's address inside
+   * a mark, and a link with no scheme (the reader draws it as its words).
+   */
+  it("tells apart edits the reader's own inlines lose", () => {
+    expect(sameTodos("- [ ] **a b**", "- [ ] **a *b***")).toBe(false);
+    expect(sameTodos("- [ ] **bold nested italic**", "- [ ] **bold *nested italic***")).toBe(false);
+    expect(sameTodos("- [ ] **bold and rest**", "- [ ] **bold *and* rest**")).toBe(false);
+    expect(sameTodos("- [ ] ~~[x](https://a)~~", "- [ ] ~~[x](https://b)~~")).toBe(false);
+    expect(sameTodos("- [ ] word", "- [ ] [word](example.com)")).toBe(false);
   });
 
   it("keeps an emptied parent that still has sub-to-dos under it", () => {

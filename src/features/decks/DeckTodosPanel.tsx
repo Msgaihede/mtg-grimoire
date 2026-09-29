@@ -132,7 +132,7 @@ export function DeckTodosPanel({ deckId, open, onToggle }: DeckTodosPanelProps):
    * It moves three ways and only three. The adoption below sets it to a body that arrived; a flush
    * sets it to the text it sent, so the band's own answer coming back reads as *already agreed*
    * rather than as a body from elsewhere to remount over — or, when it sent nothing, to the body
-   * the draft was found to hold the same to-dos as ({@link write}); and a refused write puts it
+   * the draft was found to say the same thing as ({@link write}); and a refused write puts it
    * back to what the store still holds ({@link owed}), because nothing was agreed after all.
    */
   const [synced, setSynced] = useState<string | undefined>(undefined);
@@ -235,9 +235,10 @@ export function DeckTodosPanel({ deckId, open, onToggle }: DeckTodosPanelProps):
    * **Stored through `todosText`**: an emptied checklist is still one empty item in the editor,
    * and stored as it stands it would keep a deck in the widget's list with nothing under it.
    *
-   * **Nothing is sent when the draft holds the same to-dos as an answer it could already be** —
-   * `sameTodos`, so an empty to-do the reader has not typed in (New to-do, or Enter after the last
-   * line) is not a write that moves the deck's `updated_at` over nothing. The two answers:
+   * **Nothing is sent when the draft says the same thing as an answer it could already be** —
+   * `sameTodos`, a string comparison that lets an empty to-do the reader has not typed in (New
+   * to-do, or Enter after the last line) differ and nothing that changes a word or a mark, so that
+   * line is not a write that moves the deck's `updated_at` over nothing. The two answers:
    *
    * * **The stored body, and only while no save is out.** The write would change nothing. While a
    *   save *is* out the store still holds the body before it, so the draft coming back to that body

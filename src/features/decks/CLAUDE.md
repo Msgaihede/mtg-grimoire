@@ -5485,11 +5485,15 @@ gathers every deck's list is [home-page.md](../../../docs/reference/home-page.md
   open, the commit's `db:changed` (`changes.rs`) reaches the writing window too, and
   `crossWindow.ts`' `refreshForTables` maps `decks` to `["decks"]` — so every window, the writer
   included, re-reads the deck once per autosave.
-- **Nothing is sent when the draft holds the same to-dos as a body the band already agrees
-  with** — `todoMarkdown.ts`' `sameTodos`, which compares what `parseTodos` reads rather than
-  bytes. So an empty to-do the reader has not typed in (New to-do, or Enter after the last line,
-  then a click away) is not a write, and does not move `updated_at` and *Last edited* over
-  nothing; a real change beside it is still stored byte for byte, empty line included. **The
+- **Nothing is sent when the draft says the same thing as a body the band already agrees
+  with** — `todoMarkdown.ts`' `sameTodos`, a **string** comparison of the two bodies after taking
+  out only `\r`, trailing whitespace, trailing blank lines and every empty to-do with nothing
+  under it. So an empty to-do the reader has not typed in (New to-do, or Enter after the last
+  line, then a click away) is not a write, and does not move `updated_at` and *Last edited* over
+  nothing; a real change beside it is still stored byte for byte, empty line included. ⚠️ **It
+  must never compare what `parseTodos` reads**: those inlines drop a mark nested in another and
+  read a scheme-less link as words, so a nested italic or a changed link address was never sent
+  and vanished at the next remount — it shipped that way for one review round. **The
   stored body counts only while no save is out**: while one is, the cache holds the body *before*
   it, and a draft that came back to that body (delete a line, pause, Ctrl+Z) is a change from
   what the disk is about to hold — skipping it once lost the revert, on screen and on disk, when

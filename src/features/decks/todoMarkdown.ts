@@ -273,39 +273,64 @@ export function visibleTodos(
   return out;
 }
 
-/** A tree with its source lines left out — what two bodies must agree on to hold the same to-dos. */
-interface TodoShape {
-  done: boolean;
-  inlines: Inline[];
-  children: TodoShape[];
-}
-
-function shapeOf(items: readonly TodoItem[]): TodoShape[] {
-  return items.map((item) => ({
-    done: item.done,
-    inlines: item.inlines,
-    children: shapeOf(item.children),
-  }));
+/**
+ * Whether an item line holds no words — nothing after its box, or only the editor's
+ * empty-paragraph marker. `trim` takes the marker's no-break-space spelling with the rest of the
+ * whitespace; the entity spelling is named.
+ */
+function emptyItem(line: string): boolean {
+  const item = ITEM.exec(line);
+  if (!item) return false;
+  const words = item[3].trim();
+  return words === "" || EMPTY_PARAGRAPH.includes(words);
 }
 
 /**
- * Whether two bodies hold the same to-dos: the same boxes, words, marks, nesting and order, as
- * {@link parseTodos} reads them — whatever else differs between the two texts.
+ * A body with nothing taken out of it but what cannot change what it says: every `\r`, the
+ * whitespace at the end of each line, the blank lines at the end of the body, and **every empty
+ * to-do with nothing under it** — an item line with no words ({@link emptyItem}) whose next
+ * non-blank line is not indented deeper. Read from the end, so the line tested against is the next
+ * one *kept*: an emptied parent whose only sub-to-do was itself empty goes too, as `parseTodos`
+ * drops it. Everything else is the body's own text, character for character.
+ */
+function normalised(body: string): string {
+  const lines = body.replace(/\r/g, "").split("\n").map((line) => line.trimEnd());
+  const kept: string[] = [];
+  // The indent of the next line kept below this one, or `null` while there is none.
+  let below: number | null = null;
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i];
+    if (line === "") {
+      kept.push(line);
+      continue;
+    }
+    const indent = width(LEAD.exec(line)?.[0] ?? "");
+    if (emptyItem(line) && (below === null || below <= indent)) continue;
+    kept.push(line);
+    below = indent;
+  }
+  return kept.reverse().join("\n").replace(/\n+$/, "");
+}
+
+/**
+ * Whether two bodies say the same thing: equal once each is {@link normalised} — **a string
+ * comparison, and lossless everywhere but the handful of differences that function names**.
  *
- * **What it lets differ is what `parseTodos` does not draw**, and the one that matters is an empty
- * to-do with nothing under it: the line New to-do appends and Enter after the last line makes,
- * which is a place to type rather than a thing to do. The band asks this rather than comparing
- * bytes before it writes, because a write for that line alone would move the deck's `updated_at`
- * — and with it *Last edited* in the widget and the gallery — over a change nothing reads. The
- * rest it lets differ is as invisible: source line numbers, line endings, the spaces around a
- * to-do's words.
+ * **The one that matters is an empty to-do with nothing under it**: the line New to-do appends and
+ * Enter after the last line makes, which is a place to type rather than a thing to do. The band
+ * asks this rather than comparing bytes before it writes, because a write for that line alone
+ * would move the deck's `updated_at` — and with it *Last edited* in the widget and the gallery —
+ * over a change nothing reads. The rest it lets differ is as invisible: line endings, trailing
+ * whitespace, trailing blank lines.
  *
- * `line` is left out on purpose: an empty line in the middle moves every line after it, and a
- * widget tick is always made against the stored body's own lines, never the draft's.
+ * ⚠️ **Never compare what {@link parseTodos} reads instead**, which this did for one review round.
+ * Its inlines are lossy on purpose — `noteMarkdown.ts`' reader drops a mark nested inside another
+ * and reads a link with no scheme as plain text — so `**a *b***` against `**a b**`, or two links
+ * that differ only in their address, read as one body, and the band never sent the edit: it
+ * vanished at the next remount. The editor writes exactly those shapes.
  */
 export function sameTodos(a: string, b: string): boolean {
-  if (a === b) return true;
-  return JSON.stringify(shapeOf(parseTodos(a))) === JSON.stringify(shapeOf(parseTodos(b)));
+  return a === b || normalised(a) === normalised(b);
 }
 
 /**

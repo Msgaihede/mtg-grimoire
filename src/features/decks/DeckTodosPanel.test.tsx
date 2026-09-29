@@ -560,6 +560,26 @@ describe("the band, open", () => {
     expect(box).toHaveValue("- [ ] Revise tokens");
   });
 
+  /**
+   * **An edit a lossy reading would miss is still an edit.** `parseTodos`' inlines drop a mark
+   * nested inside another, so a band that asked them whether anything changed would see nothing
+   * here, send nothing, and lose the italic at the next remount. The comparison is the text's.
+   */
+  it("sends an edit that only nests one mark inside another", async () => {
+    deckTodos.mockResolvedValue("- [ ] **bold nested italic**");
+    renderBand();
+    const box = await editor();
+    fakeClock();
+
+    act(() => box.focus());
+    fireEvent.change(box, { target: { value: "- [ ] **bold *nested italic***" } });
+    act(() => box.blur());
+    await tick(0);
+
+    expect(deckTodosSet).toHaveBeenCalledTimes(1);
+    expect(deckTodosSet).toHaveBeenCalledWith(4, "- [ ] **bold *nested italic***", null);
+  });
+
   it("writes a real change beside an empty to-do byte for byte", async () => {
     deckTodos.mockResolvedValue("- [ ] Revise tokens");
     renderBand();
