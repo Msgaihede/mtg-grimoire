@@ -592,7 +592,7 @@ function TokenTile({
   const why =
     view.sources.length > 0
       ? `From ${view.sources.map((source) => source.name).join(", ")}`
-      : "Added manually";
+      : "Added or kept by hand";
 
   return (
     <div

@@ -396,7 +396,7 @@ describe("the not-made-by-deck mark", () => {
   it("says the badge and the tooltip in the spec's words", () => {
     expect(NOT_MADE_BY_DECK).toBe("NOT MADE BY DECK");
     expect(notMadeByDeckHint("Treasure")).toBe(
-      "Nothing in this deck makes Treasure. It was added manually.",
+      "Nothing in this deck makes Treasure. It was added by hand, or kept after the card that made it was cut.",
     );
   });
 

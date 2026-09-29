@@ -24470,13 +24470,16 @@ function reconcileBackstop(db: FakeDb, dirty: readonly number[]): void {
 }
 
 /**
- * `deck_tokens::reconcile_in` — delete every entry, in each of `variants`, of a token that list
- * no longer derives and that is not `manual`, and answer what went.
+ * `deck_tokens::reconcile_in` — settle every entry, in each of `variants`, of a token that list
+ * no longer derives and that is not `manual`: **an entry at zero is deleted, and a token with
+ * copies is kept and becomes `manual`** (issue #671), so the wall draws it as not made by the
+ * deck. Answers what was deleted.
  *
- * **A `manual` token is never touched** — no card made it, so no cut can unmake it — and a
- * `hidden` one is: a dismissal is still a token the deck makes, and once it does not it has
- * nothing left to be dismissed from. Cutting the maker and adding it back brings the token back
- * as its implicit entry. A deck that is gone has nothing to reconcile.
+ * **A `manual` token is never touched** — no card made it, or the reader kept it, so no cut can
+ * unmake it — and a `hidden` one is: a dismissal is still a token the deck makes, and once it does
+ * not it has nothing left to be dismissed from. The flip waits until every list is walked, so a
+ * token kept in one list still loses its zero entries in the other. Cutting the maker and adding
+ * it back makes the token derived again. A deck that is gone has nothing to reconcile.
  */
 function reconcileTokens(
   db: FakeDb,
@@ -24485,18 +24488,21 @@ function reconcileTokens(
 ): FakeDeckTokenPrinting[] {
   if (!db.decks.some((d) => d.id === deckId)) return [];
   const removed = new Set<FakeDeckTokenPrinting>();
+  const kept = new Set<string>();
   for (const variant of variants) {
     const derived = new Set(derivedTokens(db, deckId, variant).map((d) => d.token.oracleId));
     for (const entry of db.deckTokenPrintings) {
       if (entry.deckId !== deckId || entry.variant !== variant) continue;
       if (derived.has(entry.oracleId)) continue;
       if (storedToken(db, deckId, entry.oracleId)?.state === "manual") continue;
-      removed.add(entry);
+      if (entry.quantity > 0) kept.add(entry.oracleId);
+      else removed.add(entry);
     }
   }
   if (removed.size > 0) {
     db.deckTokenPrintings = db.deckTokenPrintings.filter((e) => !removed.has(e));
   }
+  for (const oracleId of [...kept].sort()) writeTokenState(db, deckId, oracleId, "manual");
   return [...removed];
 }
 

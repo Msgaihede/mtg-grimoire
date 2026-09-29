@@ -538,7 +538,7 @@ export const NOT_MADE_BY_DECK = "NOT MADE BY DECK";
 
 /** The badge's sentence for the pointer, naming the token — managed tokens spec §3.5's words. */
 export function notMadeByDeckHint(name: string): string {
-  return `Nothing in this deck makes ${name}. It was added manually.`;
+  return `Nothing in this deck makes ${name}. It was added by hand, or kept after the card that made it was cut.`;
 }
 
 /**

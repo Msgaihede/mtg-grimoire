@@ -3533,12 +3533,31 @@ commands; `add_printing_in` calls it inside whatever transaction it was handed, 
   the column stays on that list so that the steps already filed still apply (*`decks.token_mode`*,
   below).
 
-### Rule 7: a token nothing makes any more is removed, in two layers (v52)
+### Rule 7: a token nothing makes any more is removed at zero and kept with copies, in two layers (v52, #671)
 
 The reader: *"if you cut all cards that create a token, so a token is no longer needed in the deck,
-simply remove all tokens of that type"*. `deck_tokens::reconcile_in(tx, deck, variants)` deletes
+simply remove all tokens of that type"*. `deck_tokens::reconcile_in(tx, deck, variants)` settles
 every entry, in each list asked about, of a token that list no longer derives and **whose state is
-`auto`**, and **answers the rows it deleted** so the caller's step can put them back. A `manual`
+`auto`**, and **answers a `Reconciled`** — the rows it deleted, and the states of the tokens it
+kept, before and after — so the caller's step can put both back.
+
+**Since [issue #671](https://github.com/Msgaihede/mtg-grimoire/issues/671) (2026-09-29) only an
+entry at zero is deleted.** A token with copies — any entry above zero, in any list the pass walks —
+is **kept, and becomes `manual`**, which is what the band's **Add printing** makes a token nothing
+derives. The wall then draws it through `deck_token_rows`' hand-added tail with `derived: false`:
+the red outline and the `NOT MADE BY DECK` badge. The issue's reason is the physical deck —
+deleting the Treasures lost the one fact a reader needs after cutting Smothering Tithe, that three
+Treasures are still sleeved beside it and should come out. **`manual`, and not a new rule for
+`auto`**, because the state word is what every build reads: a peer on an older build leaves a
+`manual` token alone, where an `auto` one with entries and no maker is exactly what its own reconcile
+deletes and pushes to the group. The flip is written after every list has been walked, so a token
+kept in one list still loses its zero entries in another list that does not make it either
+(`a_kept_token_still_loses_its_zero_entries_in_the_other_list`), and the states ride the card
+write's step through `push_removed_tokens`: one Ctrl+Z on the cut puts the card back **and** the
+token back to `auto`. Adding the maker back by hand makes the token `derived` again — the outline
+goes, the copies stay — but leaves it `manual`, so a later cut keeps its zero entries in a list
+nothing makes it, where they draw as a `0` tile the trash button removes. Pinned by
+`a_reconcile_keeps_a_token_with_copies_as_the_readers_own`. A `manual`
 token is never taken — no card made it, so no cut can unmake it — **and since the final review of
 v55 nor is a `hidden` one**: `deck_token_rows`' hand-added tail draws any state but `auto`, so a
 pre-v55 dismissal of a token nothing makes is on the wall like a `manual` one until `retire_hidden`
@@ -3547,7 +3566,7 @@ drawing, capture the deletes for the group and, from the backstop, file them on 
 then this read *a `hidden` token is taken like any other: a dismissal is still a token the deck
 makes, and once it is not, it has nothing left to be dismissed from* — true while a dismissal hid
 the token.) `a_reconcile_keeps_a_dismissed_token_nothing_makes`. Cutting the card and adding it back
-brings an `auto` token back as its implicit entry. **A reconcile after every card write and never a
+brings an `auto` token the reader never used back as its implicit entry. **A reconcile after every card write and never a
 read-time rule** — reading
 around a stale entry would leave it in the table, and in PR 3's Collection mode (dropped on
 2026-09-27, before it was built) its copies in the
@@ -3562,7 +3581,7 @@ deck's folder, which is the stranding the rule exists to prevent.
   theory, importing — which append the rows through `push_removed_tokens` after the card ops;
   and by hand at the three steps built without them: `deck_meta::set_category_active`,
   `deck_meta::delete_category` (both lists each), and the theory switch (below).
-  `cutting_the_maker_removes_its_tokens_entries_inside_the_cut`,
+  `cutting_the_maker_settles_its_tokens_entries_inside_the_cut`,
   `an_import_replacing_the_maker_removes_the_entries_and_undo_restores_them`,
   `switching_the_makers_pile_off_or_deleting_it_removes_the_entries_and_undo_restores_them` and
   `a_cut_that_reconciles_tokens_carries_them_on_its_own_step`.
@@ -3609,12 +3628,14 @@ of letting them follow the deck that became the plan. The switch runs in this or
 1. **Both lists are reconciled first, and only then is the step's before-image read.** Every deck
    that never had a plan holds a theory copy of each old pick (the launch conversion makes one per
    list), and
-   a plan with no cards makes no token, so rule 7 owes those entries' removal whatever the press
-   does. Read into the before-image, an undo would put such an entry back, the `with_write`
-   backstop would delete it the moment the undo committed, and the redo — which checks that the
+   a plan with no cards makes no token, so rule 7 owes those entries' settling whatever the press
+   does. Read into the before-image unsettled, an undo would put back an entry the `with_write`
+   backstop would delete the moment the undo committed, and the redo — which checks that the
    deck still holds what the undo restored — would be refused for ever, with nothing on screen
    saying why. So those deletions ride no step, like every backstop deletion, and **one Ctrl+Z
-   restores the live arts but not the plan's stale ones**.
+   restores the live arts and the plan's copies, but not its entries at zero** — since #671 a
+   plan's stale copy above zero is kept as `manual` by this first reconcile, so it is in the
+   before-image and the undo puts it back.
 2. `deck_theory::move_live_into_theory` moves the cards.
 3. `move_live_tokens_into_theory` **deletes the plan's surviving entries** — after the reconcile
    those can only be `manual` tokens' — because `theory_is_empty` asks about `deck_cards` alone and
