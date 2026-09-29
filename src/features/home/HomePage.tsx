@@ -128,6 +128,7 @@ import {
   DeckCompletionWidgetSettings,
 } from "./widgets/DeckCompletionWidget";
 import { DecksWidget, DecksWidgetSettings } from "./widgets/DecksWidget";
+import { DeckTodosWidget, DeckTodosWidgetSettings } from "./widgets/DeckTodosWidget";
 import { FoldersWidget, FoldersWidgetSettings } from "./widgets/FoldersWidget";
 import { NewPrintingsWidget, NewPrintingsWidgetSettings } from "./widgets/NewPrintingsWidget";
 import { PriceMoversWidget } from "./widgets/PriceMoversWidget";
@@ -248,6 +249,8 @@ function renderBody(props: WidgetBodyProps): ReactElement {
       return <NewPrintingsWidget {...props} />;
     case "stickyNotes":
       return <StickyNotesWidget {...props} />;
+    case "deckTodos":
+      return <DeckTodosWidget {...props} />;
     case "deckCompletion":
       return <DeckCompletionWidget {...props} />;
     case "toReview":
@@ -277,6 +280,9 @@ function renderExtraSettings(widget: HomeWidget, onConfig: ConfigPatch): ReactNo
     // the card's comparison can measure, which a checklist of every deck cannot.
     case "deckCompletion":
       return <DeckCompletionWidgetSettings widget={widget} onConfig={onConfig} />;
+    // The to-dos' own `Chosen…` checklist — every deck, archived ones while they are included.
+    case "deckTodos":
+      return <DeckTodosWidgetSettings widget={widget} onConfig={onConfig} />;
     case "wishlistSavings":
       return <WishlistSavingsWidgetSettings widget={widget} onConfig={onConfig} />;
     default:

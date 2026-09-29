@@ -3656,6 +3656,21 @@ export interface DeckPatch {
    */
   curveCreatures?: boolean;
   /**
+   * Whether the editor's **To-do** band is expanded. See {@link DeckRow.todosOpen} — a per-deck
+   * reading preference, so switching it writes one column and touches neither a `deck_cards` row
+   * nor the checklist itself.
+   *
+   * **It rides this patch and not {@link ipc.deckSetViewState}**, for the argument spelled out
+   * on {@link tokensOpen}, and it takes {@link notesOpen}'s answer one band down.
+   *
+   * **Opening the band is not writing the list, and writing the list is not opening the band.**
+   * The checklist is `decks.todos`, written by {@link ipc.deckTodosSet} and never by a patch — a
+   * caller that reached for this to save a to-do is reaching for that. The home widget's deck
+   * heading is the one caller that sends this from outside the editor: it opens a deck with its
+   * band expanded, and sends `true` only when {@link DeckTodoList.todosOpen} says it is shut.
+   */
+  todosOpen?: boolean;
+  /**
    * How the deck keeps its tokens. See {@link DeckRow.tokenMode} — `decks.token_mode`, user
    * schema v52, which replaced v47's `token_stack` switch. Writing it touches no `deck_cards`,
    * `deck_tokens` or `deck_token_printings` row, and in PR 2 no collection row either.
@@ -4075,6 +4090,26 @@ export interface DeckRow {
    * and never see is a setting nothing can draw.
    */
   curveCreatures: boolean;
+  /**
+   * Whether the editor's **To-do** band is expanded — `decks.todos_open INTEGER NOT NULL
+   * DEFAULT 0`, user schema v58, and `false` on every deck that predates it.
+   *
+   * **{@link notesOpen}'s twin one band down, and `DEFAULT 0` for its reason**: the band is new,
+   * so a collapsed default takes nothing from anybody. **Per deck**, for {@link tokensOpen}'s
+   * reason — whether a reader wants a deck's checklist in front of them is an answer about a
+   * particular deck.
+   *
+   * Read on the row as well as written through {@link DeckPatch}: a setting the app can write
+   * and never see is a setting nothing can draw.
+   *
+   * **The checklist itself is not on this row, and that is the point of the split.** It is
+   * `decks.todos`, one column over, and `DECK_SELECT` never reads it: every deck list in the app
+   * fetches `DeckRow`s, and a gallery tile or a deck menu has no use for a body it would carry on
+   * every read. The list travels only through {@link ipc.deckTodos} and
+   * {@link ipc.deckTodoLists} — which is {@link notesOpen}'s arrangement for the notes, where the
+   * row says whether the band is open and never what is written in it.
+   */
+  todosOpen: boolean;
   /**
    * Which of the Compare dialog's three views this deck's **managed wishlist** follows — `all`,
    * `missing` or `other` (Different printing) — or `off` for no folder
@@ -4977,6 +5012,48 @@ export interface CardNote {
   title: string;
   /** The CommonMark source — {@link DeckNote.body}'s rules apply unchanged, `parseNoteBody`
    *  included. */
+  body: string;
+}
+
+/**
+ * One deck's **to-do checklist**, as the home page's `deckTodos` widget reads it — what
+ * {@link ipc.deckTodoLists} answers, one per deck whose list is not empty.
+ *
+ * ⚠️ **A to-do list is not a note**, and the two share an editor and an inline dialect and
+ * nothing else. A {@link DeckNote} is a row, many to a deck, with cards attached; a deck's to-do
+ * list is **one column on the deck** (`decks.todos`, user schema v58), one list to a deck — so it
+ * has no id, no sort order and no attachments, and `deckId` is the whole of its address. A single
+ * to-do is a line of that list and not a row anywhere: the widget names one by its source line in
+ * the `body` it read, and the compare-and-set on {@link ipc.deckTodosSet} is what makes that name
+ * safe to act on.
+ *
+ * The deck's `name`, `archived` and `todosOpen` travel beside the body so the widget needs no
+ * second read to head a list, to leave an archived deck's out, or to decide whether pressing a
+ * heading must open the band first.
+ */
+export interface DeckTodoList {
+  deckId: number;
+  /** The deck's name at the time of the read — the widget's heading for the list. */
+  name: string;
+  /** Whether the deck is archived. **Answered, not filtered**: an archived deck's to-dos are still
+   *  the reader's, and whether the widget draws them is its own `Include archived decks` switch. */
+  archived: boolean;
+  /** {@link DeckRow.todosOpen}, carried here so the widget's heading press writes the disclosure
+   *  only when it is shut — a deck whose band is already open costs no `deckUpdate` at all. */
+  todosOpen: boolean;
+  /** Unix seconds — the deck's own `updated_at`, which a to-do write moves and so does every other
+   *  deck write, so it dates the deck rather than the list. The lists arrive most recently edited
+   *  first, so the widget's `Last edited` order sorts nothing. */
+  updatedAt: number;
+  /**
+   * The checklist — `- [ ] text` and `- [x] text` lines, sub-to-dos indented under their parent,
+   * in the dialect `features/decks/todoMarkdown.ts` reads. **Never empty here**: a deck with no
+   * list is absent from the answer rather than present with `""`.
+   *
+   * It arrives as **source**, for {@link DeckNote.body}'s reason, and it is also the `expected`
+   * the widget hands back to {@link ipc.deckTodosSet} with a tick — so it must travel untouched:
+   * a caller that trimmed it would be refused on every press.
+   */
   body: string;
 }
 
@@ -8653,6 +8730,21 @@ export const ipc = {
    * look like an empty list, which is `combosForCard`'s rule beside it on the same rail.
    */
   cardNotes: (oracleId: string) => invoke<CardNote[]>("card_notes", { oracleId }),
+  /**
+   * One deck's to-do checklist, in `todoMarkdown.ts`' dialect. `""` for a deck with none — and for
+   * a deck that is not there, which the band draws the same way. **Refuses rather than answering
+   * `""` when the read fails**, because the band autosaves and must never save over a list it could
+   * not read.
+   */
+  deckTodos: (deckId: number): Promise<string> => invoke("deck_todos", { deckId }),
+  /**
+   * Write one deck's checklist. `expected` is a compare-and-set: the widget passes the body it read
+   * and a moved list is refused with `deck_todos::TODOS_CHANGED`; the band passes `null`.
+   */
+  deckTodosSet: (deckId: number, body: string, expected: string | null): Promise<void> =>
+    invoke("deck_todos_set", { deckId, body, expected }),
+  /** Every deck with a non-empty checklist, most recently edited first. */
+  deckTodoLists: (): Promise<DeckTodoList[]> => invoke("deck_todo_lists"),
   /**
    * The format the last deck made on this install was given — or `null` where no deck has ever
    * been made.

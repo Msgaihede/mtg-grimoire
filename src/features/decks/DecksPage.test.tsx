@@ -143,6 +143,7 @@ const BURN: DeckRow = {
   tokenRailIndex: -1,
   statsOpen: true,
   curveCreatures: false,
+  todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
 };

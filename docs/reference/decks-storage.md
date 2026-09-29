@@ -4559,3 +4559,147 @@ savepoint. Unlike an unknown *table*, a dropped *column* cannot stall that peer'
 checkable, and it splices the field into a **real captured op** rather than hand-writing one,
 because a v43 build emits no `notes` and a test that merely hoped the field was present would pass
 while proving nothing. [sync.md](sync.md) carries the rest.
+
+## Deck to-dos: one checklist to a deck, as two columns
+
+User schema **v58**, 2026-09-29, [issue #672](https://github.com/Msgaihede/mtg-grimoire/issues/672),
+reported through Discord. The design is
+[the deck to-dos spec](../superpowers/specs/2026-09-29-deck-todos-design.md), amended after the
+build where the build found it wrong. The module is `deck_todos.rs`, `sticky_notes.rs`' file shape:
+pure functions over a `Connection` first, the three command wrappers at the foot.
+
+⚠️ **A to-do list is not a note.** It shares the notes' editor (`NoteEditor`'s checklist mode) and
+their inline dialect, and nothing else. A **deck note** is a row of `deck_notes`, many to a deck; a
+**deck to-do list** is one column on the deck's own row, one to a deck; and a **to-do** is one line
+of that column, with no id, no date and no sync uid of its own.
+
+### Two columns and not a table
+
+```sql
+ALTER TABLE decks ADD COLUMN todos TEXT NOT NULL DEFAULT '';
+ALTER TABLE decks ADD COLUMN todos_open INTEGER NOT NULL DEFAULT 0;
+```
+
+`todos` is the checklist in the dialect `todoMarkdown.ts` reads, and **`''` is a deck with no
+list**. `todos_open` is whether the editor's To-do band is expanded. **One list to a deck is a
+column's shape.** A table would have owed the synced-table census, a `sync_uid`, a uid index and a
+grain on `deck_id`, and a grain would fold two devices' first to-dos into one row by rules written
+for cards. The two columns owe none of that and inherit what `decks` already has: the delete cascade
+(a deleted deck's list goes with its row), the change mask and the capture trigger.
+
+- **`todos` is on neither `DeckRow` nor `DeckPatch`.** Every deck list the app draws fetches
+  `DeckRow`s, and a checklist body on each of them would be text no gallery reads. The body travels
+  only through `deck_todos` and `deck_todo_lists`, and it is written only by `deck_todos_set`, whose
+  compare-and-set a `coalesce(?n, todos)` in `update_deck` could not honour.
+- **`todos_open` rides both, as `notes_open` does.** `DECK_SELECT` appends `d.todos_open` last,
+  `deck_row` reads it at **32**, and `update_deck` binds it at **`?26`**. The trap is its twin:
+  `notes_open` at 26 is the other `bool` over an `INTEGER` for a band beside it, so a crossed index
+  would open the Notes band where the reader pressed To-do. Read the numbers off `deck_row`, never
+  off this page.
+- **`DEFAULT 0`, `notes_open`'s reason.** The band is new, so a shut default takes nothing from
+  anybody. It writes **no history row**: `record_deck_edit` has no arm for it, and
+  `the_todos_disclosure_round_trips_and_is_not_recorded` pins that. Opening the band is still a
+  `deck_update`, so it moves the deck's `updated_at` like every patch does.
+- **`duplicate_deck` carries neither.** A copy that brought its original's list would draw every
+  open to-do in the home widget twice, and ticking one would leave its twin open. The disclosure is
+  left behind for the other disclosures' reason, so the copy starts with no list and a shut band.
+  `a_duplicate_carries_neither_column` pins both, and the Storybook fake's `deck_duplicate` resets
+  both.
+
+### Both columns sync, and `todos_open` is where the twins part
+
+Both are on the `decks` capture spec, after `managed_wishlist_tokens`. Last-writer-wins is **per
+field**, so a to-do edit on one device and a rename on another touch two fields and both survive.
+What it cannot do is merge *inside* the text: **two devices editing one deck's list while apart keep
+the later write whole**, which is what a deck note's body already does and the cost the reader
+accepted when one document was chosen over one row per to-do. Adding is the safe direction:
+`apply` walks the *local* spec, so a v57 peer never asks for either key and a v58 device receiving a
+v57 op leaves both columns alone.
+
+**`todos_open` syncs and `notes_open` does not.** The two are twins everywhere else, and this is the
+one place they differ. `todos_open` travels on `tokens_open`'s argument, which `stats_open` and
+`curve_creatures` already follow: a reader who opened the band on one device meant it about the
+deck. `notes_open` is on no capture spec.
+
+### The three commands
+
+| Command | Answers |
+| --- | --- |
+| `deck_todos(deckId)` | the body, `""` for a deck with no list **and for a deck that is not there** |
+| `deck_todos_set(deckId, body, expected?)` | `()`, or a refusal (below) |
+| `deck_todo_lists()` | every deck whose `todos <> ''`, as `{ deckId, name, archived, todosOpen, updatedAt, body }`, `updated_at DESC, id` |
+
+- **The read answers `""` for an unknown deck**, which is `deck_notes::list_notes`' standing and
+  what the spec's table did not say (it said the read refuses `DECK_GONE`, and was amended). A read
+  is about the list; the read about the deck is what reports a deck gone, and a band drawn for one
+  has nothing to show either way. The write is where a missing deck is refused.
+- **Both reads are fallible, where `sticky_notes`' read is not.** The band autosaves, so a failed
+  read that answered `""` would mount an empty editor whose next autosave wrote `""` over the
+  reader's list; the widget ticks against the body it read, so a failed read that answered `[]`
+  would draw *No to-dos yet* over a reader who has some.
+- **`deck_todo_lists` answers archived decks too.** Whether one is drawn is the widget's
+  *Include archived decks* switch, which TypeScript applies. `id` breaks the `updated_at` tie,
+  because the stamp is whole seconds and two decks touched in one second are an ordinary state.
+- **Registration is `lib.rs`' module map and `desktop.rs`' `generate_handler!`.** The spec also
+  named a web router's `COMMANDS` and `match`, and there is no web router in this tree. No
+  capability entry, because an app's own commands take none. The reads are
+  `#[tauri::command(async)]` on a sync `fn`, `sticky_notes`' reason; the write is `async` with
+  `spawn_blocking` and `sync::with_write`, so it answers `db::BUSY` while a sync holds the
+  connection. `ipc.test.ts` pins all three names and their arguments, and `DeckTodoList` is on its
+  `plainMirrors` table.
+
+### The compare-and-set, and why the widget needs it
+
+`set_todos(conn, deck_id, body, expected)` reads the stored list and writes in **one transaction**,
+so nothing can land between the comparison and the `UPDATE`. It checks in this order:
+
+1. **A missing deck is `deck::GONE`**, first, so a stale tick against a deleted deck says the deck
+   went rather than that its list moved.
+2. **With `expected`, a stored list that is not exactly `expected` is `TODOS_CHANGED`** — *"That
+   to-do list changed since it was read. Try again."*, a `pub const` sentence, `deck_notes`'
+   convention — and a refusal writes nothing.
+3. **A body equal to the stored one writes nothing at all**: no `updated_at`, no capture op, no
+   mirror pass. The band flushes on blur and on unmount, so a write can carry exactly the text
+   already stored, and one that changed nothing must not move the deck up the widget's *Last
+   edited* order.
+4. Otherwise `UPDATE decks SET todos = ?2, updated_at = unixepoch()`.
+
+**The band sends no `expected`.** It is the author's surface, and its autosave is the truth of what
+the reader typed. **The widget always sends the body it parsed**, because a tick there is "flip the
+marker on line *n* of *this* text", and the text can move under it: the band autosaving in another
+window, or a sync apply. A line number against a moved list would flip the wrong to-do, so a stale
+tick is refused and the widget reads the list again rather than guessing.
+
+**Rust stores the text and draws no conclusion from it.** Which to-dos are open, how deep one is
+nested and which line a tick flips are all `todoMarkdown.ts`', the crate root's boundary. A parser
+here would be a second implementation of that one.
+
+### A write records nothing but the list and the deck's stamp
+
+A to-do write moves the deck's `updated_at`, as a deck note does, so a deck the reader just worked
+through reads as recently edited. **It writes no `deck_audit` row, no `deck_undo` step and no
+`activity` row.** The band autosaves on every pause in typing, so one history line per pause would
+bury every real edit in the drawer. The editor's own Ctrl+Z is the undo, the call `sticky_notes.rs`
+made for the same reason. Two consequences follow:
+
+- **A deck undo never touches the list.** `todos` is on no `deck_undo::DECK_FIELDS`, and `Op::Deck`
+  writes only the fields whose two sides differ, so Ctrl+Z on a rename does not take back the
+  to-dos typed since. The Storybook fake's whole-deck `restoreDeck` was changed to keep the current
+  list for the same reason.
+- **A tick in the widget is not undoable from the deck.** The widget's write is the same command,
+  with the same absences, and nothing in the deck's history says it happened.
+
+### The mirror renders identical bytes for it
+
+`decks` maps to `DECKS_AND_COLLECTION` in `mirror::watch::surface_of`, because a deck's name titles
+its group folder in the cabinet. The spec said `DECKS_ONLY` and was amended. So a to-do write marks
+both surfaces and costs one mirror pass, which renders identical bytes: no mirrored file, export
+format or share names a to-do. It is the cost `deck_notes` already accepts, one table over. Step 3
+above is why a flush that carries the stored text costs no pass at all.
+
+### Nothing to register for a second window
+
+`decks` is already on `userTables.json`, and `crossWindow.ts` maps a `decks` change to `["decks"]`
+and `["collection"]`. The band's key `["decks", "todos", deckId]` and the widget's
+`["decks", "todos", "lists"]` both sit under `["decks"]`, so a write in one window reaches both in
+the other with no new entry anywhere.

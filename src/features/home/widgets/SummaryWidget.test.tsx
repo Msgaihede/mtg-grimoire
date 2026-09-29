@@ -65,6 +65,7 @@ function deck(name: string, over: Partial<DeckRow> = {}): DeckRow {
     tokenRailIndex: -1,
     statsOpen: true,
     curveCreatures: false,
+    todosOpen: false,
     ...over,
   };
 }

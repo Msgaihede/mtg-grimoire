@@ -86,6 +86,9 @@ import { DeckNameField } from "./DeckNameField";
 // anywhere on this path would put it back with nothing going red. `DeckNotesPanel.test.tsx`
 // sweeps `src/` for exactly that.
 import { DeckNotesPanel, type DeckNoteRequest } from "./DeckNotesPanel";
+// The same rule for the band under it: `DeckTodosPanel` reaches the editor through `React.lazy`
+// in checklist mode, and this file names only the band.
+import { DeckTodosPanel } from "./DeckTodosPanel";
 import { notedOracleIds } from "./deckNotes";
 import { useDeckNotes } from "./useDeckNotes";
 import { useHiddenStacks } from "./useHiddenStacks";
@@ -6002,15 +6005,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
         // What the reader has written down about this deck — many notes, each managed and
         // deleted on its own, each free to name any number of cards (issue #447, schema v43).
         //
-        // **After `DeckStats`, and last on the page.** Neither this band nor the two above it may
-        // go between the deck and `PriceStrip`: the remove tray is drawn on that strip for the
-        // length of a drag, at `-top-3` reaching up into this column's own `gap-3`, so anything
-        // inserted between them would leave a reader dragging a card past a wall of prose to
-        // reach the one drop that takes it out. Below the strip, the three bands are only ever
-        // ordered against each other, and the reader's reason for this one being last is that a
-        // notebook is opened deliberately: the tokens wall is a list of cards the deck is about
-        // to want and the stats band is four charts read at a glance, where a note is read by
-        // somebody who came here to read it.
+        // **After `DeckStats`, and above only the To-do band** — which renders after it since
+        // issue #672; this said "last on the page" until then. Neither this band nor the two
+        // above it may go between the deck and `PriceStrip`: the remove tray is drawn on that
+        // strip for the length of a drag, at `-top-3` reaching up into this column's own `gap-3`,
+        // so anything inserted between them would leave a reader dragging a card past a wall of
+        // prose to reach the one drop that takes it out. Below the strip, the bands are only ever
+        // ordered against each other, and the reader's reason for this one coming after the other
+        // two is that a notebook is opened deliberately: the tokens wall is a list of cards the
+        // deck is about to want and the stats band is four charts read at a glance, where a note
+        // is read by somebody who came here to read it.
         //
         // **A `section` and `shrink-0`** for the two reasons the bands above spell out in full —
         // a second complementary landmark answered `getByRole("complementary")` and broke five of
@@ -6042,6 +6046,32 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           // every render of a deck the reader is editing.
           request={noteRequest}
           onRequestHandled={clearNoteRequest}
+        />
+      )}
+
+      {row && (
+        // The deck's to-do list — one checklist to a deck, edited in place and saved as it is
+        // typed (issue #672, `decks.todos`). ⚠️ **Not a note**: it borrows the notes band's header
+        // and the notes' editor and nothing else.
+        //
+        // **Directly after the notes band, and so last on the page.** It inherits every reason
+        // the three bands above it are where they are — below `PriceStrip` and never between it
+        // and the deck, whose remove tray reaches up into this column's `gap-3` for the length of
+        // a drag — and the reader's reason for this order is the spec's: what there is still to
+        // do about a deck sits under what they wrote about it.
+        //
+        // **A `section` and `shrink-0`**, both on the panel's own root, for the notes band's two
+        // reasons: a second complementary landmark broke `App.test.tsx`'s pane assertions, and
+        // `shrink-0` on the bands below the desk is the whole of why this editor scrolls.
+        //
+        // `todosOpen` is the deck's own column (`decks.todos_open`), `notesOpen`'s twin one column
+        // along and `DEFAULT 0` for its reason — the band is new, so a shut default takes nothing
+        // from anybody. No `cards` and no request: the list names no card, and nothing else in
+        // the editor asks this band for anything.
+        <DeckTodosPanel
+          deckId={deckId}
+          open={row.todosOpen}
+          onToggle={(next) => deck.update.mutate({ todosOpen: next })}
         />
       )}
 

@@ -171,6 +171,9 @@ const deckNotes = vi.hoisted(() => vi.fn());
  *  request, the band opens its editor seeded with the card, and the reader's **Save** is what
  *  writes — so a test that wants to see this call has to go through the dialog. */
 const deckNoteCreate = vi.hoisted(() => vi.fn());
+/** The To-do band's read (issue #672) — hoisted so `beforeEach` can put back the empty list every
+ *  case here expects: a deck with no to-dos, which draws no count and no alert. */
+const deckTodos = vi.hoisted(() => vi.fn());
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
 // Hoisted so the token-pile cases can answer a deck that makes something and watch the two writes
@@ -241,6 +244,13 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckNoteDelete: vi.fn().mockResolvedValue(undefined),
     deckNoteAttach: vi.fn().mockResolvedValue(undefined),
     deckNoteDetach: vi.fn().mockResolvedValue(undefined),
+    // **The To-do band asks on every open as well**, for the Notes band's reason one band up: its
+    // header counts the open to-dos whether or not the band is drawn. Left off the mock, the read
+    // rejects with `ipc.deckTodos is not a function`, the band draws its refusal line, and every
+    // `getByRole("alert")` in this file finds two. The write is here so a press that reached it
+    // fails as the command it is rather than as a missing double.
+    deckTodos,
+    deckTodosSet: vi.fn().mockResolvedValue(undefined),
     formatSpecs,
     searchCards,
     searchOpen,
@@ -395,6 +405,9 @@ const DECK: DeckRow = {
   // Schema v43, and `0` is the column's own default: the Notes band is new, so no deck on any
   // disk has ever shown one and a shut default takes nothing from anybody.
   notesOpen: false,
+  // Schema v58, `notes_open`'s twin one column along and `0` for its reason: the To-do band is
+  // new, so a shut default takes nothing from anybody.
+  todosOpen: false,
   // Schema v16, and `0` is `AUTO_CATEGORY` — the column's own default and the state every deck
   // is born in: an add that names no pile is filed by what the card does. A test about the
   // setting overrides it through `detail()`, which is the *only* way to move it now — it was a
@@ -927,6 +940,9 @@ beforeEach(() => {
   // No notes unless a test says otherwise — which is what keeps the band silent and, since
   // 2026-09-10, keeps the note glyph off every card in every other case here.
   deckNotes.mockReset().mockResolvedValue([]);
+  // No to-do list unless a test says otherwise — `""` is what `decks.todos` holds on every deck
+  // nobody has written a to-do on.
+  deckTodos.mockReset().mockResolvedValue("");
   // **The whole note back, never `undefined`.** The band chains the created note's *id* off this
   // answer — it is the only place that id ever arrives — so a stub resolving nothing is a
   // TypeError inside a mutation callback, reported against whichever test ran next.
@@ -2121,6 +2137,58 @@ describe("DeckEditor", () => {
 
     await userEvent.click(disclosure);
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { notesOpen: true }));
+  });
+
+  /**
+   * **The To-do band is mounted, under the price strip and under the Notes band** (issue #672).
+   * It renders last in `DeckEditor.tsx`; what this asserts is the two orderings that matter, not
+   * that nothing follows it.
+   *
+   * This is the call-site fence the Notes band's card-menu rows taught this file to want: the
+   * band's own suite stands it up with every prop handed in by hand, so only a test *here* can say
+   * the editor actually draws it — and draws it over **this** deck's list, which is what the read
+   * being asked for deck 4 says.
+   *
+   * The order is asserted against the price strip as well as the notes band, for the Notes band's
+   * reason one test up: "notes before to-dos" alone would stay green if both were moved above the
+   * strip together, which is the one arrangement that costs a reader a drop.
+   */
+  it("draws the to-do band under the price strip and under the notes band, over this deck's list", async () => {
+    deckTodos.mockResolvedValue("- [ ] Revise tokens\n- [x] Cut Clue tokens");
+    await open();
+
+    const asOf = screen.getByText(/prices, last updated with/i);
+    const notes = screen.getByRole("region", { name: "Notes" });
+    const todos = screen.getByRole("region", { name: "To-do" });
+
+    expect(asOf.compareDocumentPosition(todos) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(notes.compareDocumentPosition(todos) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(todos.tagName).toBe("SECTION");
+    expect(todos.classList).toContain("shrink-0");
+
+    expect(deckTodos).toHaveBeenCalledWith(4);
+    expect(await within(todos).findByText("1 open · 1 done")).toBeInTheDocument();
+
+    // The region a reader reads opts back into selection, like the notes band's body.
+    const disclosure = within(todos).getByRole("button", { name: "To-do" });
+    const body = document.getElementById(disclosure.getAttribute("aria-controls") ?? "");
+    expect(body?.classList).toContain("select-text");
+  });
+
+  /**
+   * **The press writes `decks.todos_open` through the ordinary `deck_update`** — the one piece of
+   * the band's wiring its own suite cannot see, since it has no deck to write to. Shut on arrival:
+   * the column is `DEFAULT 0`.
+   */
+  it("writes the to-do band's open state onto the deck", async () => {
+    await open();
+
+    const todos = screen.getByRole("region", { name: "To-do" });
+    const disclosure = within(todos).getByRole("button", { name: "To-do" });
+    expect(disclosure).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(disclosure);
+    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { todosOpen: true }));
   });
 
   /**

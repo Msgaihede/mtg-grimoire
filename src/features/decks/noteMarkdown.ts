@@ -119,8 +119,10 @@ const QUOTE = /^\s*>[ \t]?(.*)$/;
  * The lookbehind is not decoration — a line whose text genuinely ends in a backslash is
  * serialized `a\\`, and without it that escaped backslash would read as a line break the reader
  * never typed.
+ *
+ * Exported because `todoMarkdown.ts` reads a to-do's hard break by this same rule.
  */
-const HARD_BREAK = / {2,}$|(?<!\\)\\$/;
+export const HARD_BREAK = / {2,}$|(?<!\\)\\$/;
 
 /**
  * The six inline shapes, scanned left to right in one pass, **with the backslash escape first**.
@@ -225,8 +227,11 @@ function pushText(out: Inline[], text: string): void {
  * Entities are **not** decoded, which is the other difference from the sibling: release-please
  * escapes angle brackets on its way out and Tiptap does not, so a `&lt;` in a note body is four
  * characters the reader typed and decoding them would rewrite what their note says.
+ *
+ * Exported because `todoMarkdown.ts` reads a to-do's text through it too, so a to-do and a note
+ * are one inline dialect rather than two that agree today.
  */
-function parseInlines(line: string): Inline[] {
+export function parseInlines(line: string): Inline[] {
   const out: Inline[] = [];
   const scanner = new RegExp(INLINE.source, "g");
   let at = 0;
@@ -275,8 +280,12 @@ function flatten(source: string): string {
   return inlineText(parseInlines(source));
 }
 
-/** Everything a row of runs says, with the markup gone. */
-function inlineText(inlines: Inline[]): string {
+/**
+ * Everything a row of runs says, with the markup gone.
+ *
+ * Exported because `todoMarkdown.ts` answers a to-do's plain text with it.
+ */
+export function inlineText(inlines: Inline[]): string {
   return inlines.map((run) => run.text).join("");
 }
 

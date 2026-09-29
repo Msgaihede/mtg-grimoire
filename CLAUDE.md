@@ -42,7 +42,9 @@ binder or the wishlist (`collection_entries.notes`, `wishlist_entries.notes`), w
 with that row through a fold, a move and an export field of its own. And a **sticky note** is
 the reader's prose about nothing in particular, on the home page — `sticky_notes` at user schema
 v46, filed against no deck, no card and no row, which is the whole of what separates it from the
-first three.
+first three. A **deck to-do list** is a fifth thing and is **not a note at all** — `decks.todos`,
+one checklist to a deck at user schema v58, whose to-dos are lines with no row of their own — yet it
+shares the notes' editor and their inline dialect, which is exactly what makes it easy to miscall.
 **The overlap is not cosmetic**: `deck_notes` and `sticky_notes` share a title-and-body shape, a
 CommonMark dialect and a renderer, so a sentence that says "notes" and means one of them reads
 perfectly as the other. Say which.

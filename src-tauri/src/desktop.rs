@@ -16,12 +16,12 @@ use crate::sync::AppState;
 use crate::{
     activity, camera, card, collection, collection_alloc, collection_folders, combos, db, deck,
     deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_query,
-    deck_quick_add, deck_theory, deck_tokens, deck_undo, deckpane, decksort, errors, export, home,
-    images, import, index, listview, markcolors, marketplace, marketplace_feed, mirror, nav,
-    new_printings, paths, price_history, recent_cards, reset, scanner, schema, scryfall, search,
-    searchopen, set_completion, share, shelffolds, stackhide, startup, startview, sticky_notes,
-    sync, sync_engine, sync_pair, tags, upcoming_sets, update, value_history, window, wishlist,
-    wishlist_folders, wishlist_optimize, zoom,
+    deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, errors,
+    export, home, images, import, index, listview, markcolors, marketplace, marketplace_feed,
+    mirror, nav, new_printings, paths, price_history, recent_cards, reset, scanner, schema,
+    scryfall, search, searchopen, set_completion, share, shelffolds, stackhide, startup, startview,
+    sticky_notes, sync, sync_engine, sync_pair, tags, upcoming_sets, update, value_history, window,
+    wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -573,6 +573,14 @@ pub fn run() {
             deck_notes::deck_note_detach,
             deck_notes::deck_note_reorder,
             deck_notes::card_notes,
+            // The To-do band's read and write and the home widget's read across every deck.
+            // `deck_todos::deck_todos` registers as `deck_todos`, `deck_notes`' reason above.
+            // Both reads are **fallible**, unlike the sticky notes' — an autosaving band that
+            // mounted on a failed read's `""` would write it over the reader's list. No
+            // capability entry, the app-command rule.
+            deck_todos::deck_todos,
+            deck_todos::deck_todos_set,
+            deck_todos::deck_todo_lists,
             marketplace::get_marketplace,
             marketplace::set_marketplace,
             zoom::card_zoom,

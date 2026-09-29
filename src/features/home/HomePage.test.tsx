@@ -66,6 +66,11 @@ vi.mock("./widgets/RecentCardsWidget", () => ({ RecentCardsWidget: stubs.body })
 vi.mock("./widgets/SetCompletionWidget", () => ({ SetCompletionWidget: stubs.body }));
 vi.mock("./widgets/PriceMoversWidget", () => ({ PriceMoversWidget: stubs.body }));
 vi.mock("./widgets/StickyNotesWidget", () => ({ StickyNotesWidget: stubs.body }));
+vi.mock("./widgets/DeckTodosWidget", () => ({
+  DeckTodosWidget: stubs.body,
+  // Its own `Chosen…` checklist — a sentence, for the Decks stub's reason above.
+  DeckTodosWidgetSettings: () => "the to-do deck picker",
+}));
 vi.mock("./widgets/DeckCompletionWidget", () => ({
   DeckCompletionWidget: stubs.body,
   // Its own checklist since issue #600 — a sentence, for the Decks stub's reason above.
@@ -247,7 +252,7 @@ describe("HomePage", () => {
     mount(layoutOf(widget({ id: "np", kind: "newPrintings", w: 3, h: 3 })));
 
     expect(screen.getByText("Body of np")).toBeInTheDocument();
-    expect(screen.queryByText(/came from a newer version/)).toBeNull();
+    expect(screen.queryByText(/needs a newer version/)).toBeNull();
 
     await customize(user);
     await user.click(screen.getByRole("button", { name: "Settings for New printings" }));
@@ -274,12 +279,39 @@ describe("HomePage", () => {
     for (const id of ["dc", "tr", "ws", "cs"]) {
       expect(screen.getByText(`Body of ${id}`)).toBeInTheDocument();
     }
-    expect(screen.queryByText(/came from a newer version/)).toBeNull();
+    expect(screen.queryByText(/needs a newer version/)).toBeNull();
 
     await customize(user);
     await user.click(screen.getByRole("button", { name: "Settings for Deck completion" }));
     expect(await screen.findByText("the deck completion picker")).toBeInTheDocument();
     expect(screen.queryByText("the deck pin picker")).toBeNull();
+  });
+
+  /**
+   * **The To-dos kind (issue #672), through the same two switches** — its body and its own
+   * `Chosen…` checklist, each asserted present and the placeholder asserted absent, for the first
+   * case's reason: a forgotten `case` is not a type error. And it is in the catalogue, previewed
+   * still.
+   */
+  it("draws the to-dos body and its checklist through the two switches, and offers it", async () => {
+    const user = userEvent.setup();
+    mount(layoutOf(widget({ id: "td", kind: "deckTodos", x: 0, y: 0, w: 3, h: 3 })));
+
+    expect(screen.getByText("Body of td")).toBeInTheDocument();
+    expect(screen.queryByText(/needs a newer version/)).toBeNull();
+
+    await customize(user);
+    await user.click(screen.getByRole("button", { name: "Settings for To-dos" }));
+    expect(await screen.findByText("the to-do deck picker")).toBeInTheDocument();
+    expect(screen.queryByText("the deck completion picker")).toBeNull();
+    await user.keyboard("{Escape}");
+
+    await user.click(screen.getByRole("button", { name: "Add widget" }));
+    const dialog = await screen.findByRole("dialog", { name: "Widget catalogue" });
+    expect(within(dialog).getByRole("button", { name: "Add To-dos" })).toBeInTheDocument();
+    expect(handed.get("preview-deckTodos")).toEqual(
+      expect.objectContaining({ still: true, editing: false }),
+    );
   });
 
   /** Each new kind is in the catalogue, previewed as its own body told it is still. */

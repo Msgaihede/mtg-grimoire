@@ -52,6 +52,7 @@ export type WidgetKind =
   | "priceMovers"
   | "newPrintings"
   | "stickyNotes"
+  | "deckTodos"
   | "deckCompletion"
   | "toReview"
   | "wishlistSavings"
@@ -385,9 +386,9 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
   },
   /**
    * The reader's own prose. Insertion order is the catalogue's order, and this and
-   * `newPrintings` directly below were appended as a pair — that one landed on `main` while this
-   * was being written, so which of the two is last is an accident of merge order and nothing reads
-   * it.
+   * `newPrintings` below were appended as a pair — that one landed on `main` while this was being
+   * written, so which of the two is last is an accident of merge order and nothing reads it.
+   * `deckTodos` sits between them since 2026-09-29, beside the other kind a reader writes into.
    *
    * `min` is `[3, 2]` where every other kind's is `[2, 2]` or smaller, and that is the one figure
    * here doing real work rather than copying a neighbour: at a two-cell width the Board's tiles are
@@ -422,6 +423,52 @@ const WIDGET_META: Record<WidgetKind, Omit<WidgetMeta, "kind">> = {
       { key: "pinned", label: "Pinned note first" },
     ],
     chip: "layout",
+  },
+  /**
+   * Every deck's To-do band, gathered and ticked off in place (issue #672, spec
+   * `docs/superpowers/specs/2026-09-29-deck-todos-design.md` §7). **Directly after `stickyNotes`**,
+   * because insertion order is the catalogue's and a reader looking for somewhere to write things
+   * down finds the two side by side — and because appending it would move round two's four off the
+   * catalogue's end, which `widgets.test.ts` pins.
+   *
+   * `scope` is `deckCompletion`'s two words and its `Chosen…` checklist
+   * (`DeckTodosWidgetSettings`). Two switches start off, `WidgetToggle.dflt`'s reason: a completed
+   * to-do is a line the reader has finished with, and an archived deck is one they put away — both
+   * are subjects to ask for. `chip` is the scope, since *which decks* is what a glance at a card
+   * cannot otherwise tell. Not in {@link DEFAULT_LAYOUT}, for every catalogue-only kind's reason.
+   */
+  deckTodos: {
+    label: "To-dos",
+    description: "Open to-dos from every deck's To-do band, ticked off where they stand.",
+    def: [3, 3],
+    min: [2, 2],
+    max: [6, 6],
+    picks: [
+      {
+        key: "scope",
+        label: "Which decks",
+        options: [
+          { id: "all", label: "All decks" },
+          { id: "chosen", label: "Chosen…" },
+        ],
+      },
+      {
+        key: "order",
+        label: "Order",
+        options: [
+          { id: "edited", label: "Last edited" },
+          { id: "name", label: "Name" },
+          { id: "open", label: "Most open" },
+        ],
+      },
+    ],
+    toggles: [
+      { key: "done", label: "Show completed", dflt: false },
+      { key: "nested", label: "Show sub-to-dos" },
+      { key: "archived", label: "Include archived decks", dflt: false },
+      { key: "counts", label: "Show open count" },
+    ],
+    chip: "scope",
   },
   newPrintings: {
     label: "New printings",

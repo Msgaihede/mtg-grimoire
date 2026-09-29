@@ -1072,6 +1072,7 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   // no control to hide it.
   statsOpen: true,
   curveCreatures: false,
+  todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
   ...over,

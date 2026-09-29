@@ -163,6 +163,7 @@ const DECK: DeckRow = {
   // no control to hide it.
   statsOpen: true,
   curveCreatures: false,
+  todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
   updatedAt: 1_800_000_000,

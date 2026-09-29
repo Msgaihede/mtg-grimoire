@@ -1297,9 +1297,31 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `other` and `off` keep `0`. `capture::install` puts the triggers back right after `migrate_user`,
   and `the_v57_conversion_is_not_captured` pins both halves. On the `decks` capture spec, with a
   history row, a place on `deck_undo::DECK_FIELDS` and a seat in `duplicate_deck` — the mode's
-  rules. One `ADD COLUMN`, no index. It owes **`UNDO_V57`**, at the head of every chain, which drops
-  the capture triggers before the column for `UNDO_V56`'s reason and does not convert the mode
-  back.
+  rules. One `ADD COLUMN`, no index. It owes **`UNDO_V57`**, which drops the capture triggers before
+  the column for `UNDO_V56`'s reason and does not convert the mode back, and which was the head of
+  every chain until v58's `UNDO_V58` landed above it.
+  **v58 adds `decks.todos TEXT NOT NULL DEFAULT ''` and `decks.todos_open INTEGER NOT NULL DEFAULT
+  0`** (2026-09-29, [issue #672](https://github.com/Msgaihede/mtg-grimoire/issues/672),
+  [the deck to-dos spec](../superpowers/specs/2026-09-29-deck-todos-design.md) §4) — a deck's
+  to-do checklist, in the dialect `todoMarkdown.ts` reads (`''` is no list), and whether the
+  editor's To-do band is expanded. **Two columns and not a table**, because one list to a deck is a
+  column's shape: a table would owe the synced-table census, a uid and a grain, where these inherit
+  the deck's delete cascade, its change mask and its capture trigger. Otherwise v56's rules: **both
+  on the `decks` capture spec** (per-field last-writer-wins, so a to-do edit and a rename on two
+  devices both survive, while two devices editing one list apart keep the later write whole), on no
+  history row and no `deck_undo::DECK_FIELDS`, and **not carried by `duplicate_deck`**, so a copy
+  starts with no list and a shut band. `todos_open` is `notes_open`'s twin and `DEFAULT 0` for v43's
+  reason, and it syncs where `notes_open` does not, on `tokens_open`'s argument. `todos` rides
+  neither `DeckRow` nor `DeckPatch`; `deck_todos.rs` is the only thing that reads or writes it. **No
+  trigger comes off**, unlike v57, because nothing here writes a row and an `ADD COLUMN` is no edit
+  to capture. Two `ADD COLUMN`s and no index, so neither figure at the top of this page moves. It
+  owes **`UNDO_V58`**, for `UNDO_V13`'s loud reason, **at the head of every chain** — `grep -c
+  '{UNDO_V58}' src-tauri/src/schema.rs` counts the chains plus the rung test's own rewind, so read
+  that rather than a number here. Like `UNDO_V56` it drops the three `decks` capture triggers before
+  its two `DROP COLUMN`s, because `sync_ins_decks` and `sync_upd_decks` read `NEW.todos` and
+  `NEW.todos_open` on a fixture that ran `capture::install`, and it drops the columns in the reverse
+  of the order the rung adds them. [decks-storage.md](decks-storage.md)'s *Deck to-dos* has the three
+  commands and the compare-and-set.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

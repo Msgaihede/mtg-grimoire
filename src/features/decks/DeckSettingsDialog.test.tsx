@@ -73,6 +73,7 @@ const BURN: DeckRow = {
   tokensOpen: false,
   statsOpen: true,
   curveCreatures: false,
+  todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
   tokenMode: "managed",

@@ -28,6 +28,7 @@ import {
   deckCompletionRoot,
   deckListKey,
   deckReviewCountKey,
+  deckTodoListsKey,
   deckValuesKey,
   NEW_PRINTINGS_ROOT,
   newPrintingsKey,
@@ -213,6 +214,14 @@ describe("shape", () => {
     expect(scannerTrayCountKey).toEqual(["scanner", "trayCount"]);
     // Not the gallery's value key: that one is the narrower main + commander + maybe pile.
     expect(deckCompletionKey("tcgplayer", "collection")).not.toEqual(deckValuesKey("tcgplayer"));
+  });
+
+  // Issue #672. The lists live on the `decks` row, so the key sits under `["decks"]` and every deck
+  // write refreshes it; and under `["decks", "todos"]` beside the band's `["decks", "todos", id]`,
+  // so one invalidation of that prefix — the widget's tick, the band's autosave — reaches both.
+  it("files the to-do lists under the decks root, beside the band's own read", () => {
+    expect(deckTodoListsKey).toEqual(["decks", "todos", "lists"]);
+    expect(deckTodoListsKey.slice(0, 1)).toEqual(deckListKey.slice(0, 1));
   });
 
   // **The savings widget and the Wishlist page's hand-off dialog plan one question, so they are

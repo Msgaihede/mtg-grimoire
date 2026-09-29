@@ -78,6 +78,7 @@ const MADE: DeckRow = {
   tokenRailIndex: -1,
   statsOpen: true,
   curveCreatures: false,
+  todosOpen: false,
   defaultCategoryId: 0,
   bracket: 0,
   updatedAt: 1786266000,
