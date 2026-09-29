@@ -27,6 +27,7 @@ import deckNotesRs from "../../src-tauri/src/deck_notes.rs?raw";
 import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
 import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
 import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
+import deckTodosRs from "../../src-tauri/src/deck_todos.rs?raw";
 import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
 import desktopRs from "../../src-tauri/src/desktop.rs?raw";
 // `cardFiltersRs` rather than `filtersRs`, which the scanner's own `filters.rs` already holds
@@ -83,6 +84,7 @@ import {
   type ComboProgress,
   type DbChanged,
   type DeckNote,
+  type DeckTodoList,
   type DeckTokenRow,
   type FeedProgressEvent,
   type OracleTagProgressEvent,
@@ -1008,6 +1010,13 @@ describe("ipc argument names match the Rust command signatures", () => {
     // misspelt key is a `Creatures` toggle that turns itself off on every reload.
     await ipc.deckUpdate(4, { curveCreatures: true });
     expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { curveCreatures: true } });
+    // User schema v58's To-do band, `notesOpen`'s twin one band down and the same quiet failure:
+    // a misspelt key is a band that closes itself on every reload — and a home widget whose deck
+    // heading opens the deck with the band still shut. ⚠️ **Opening the band is not writing the
+    // list** for `notesOpen`'s reason: the checklist is `decks.todos`, written by `deckTodosSet`
+    // and pinned further down, and never a key on this patch.
+    await ipc.deckUpdate(4, { todosOpen: true });
+    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { todosOpen: true } });
 
     invoke.mockResolvedValue(undefined);
     await ipc.deckDelete(4);
@@ -3462,6 +3471,96 @@ describe("ipc argument names match the Rust command signatures", () => {
     }
   });
 
+  /**
+   * **The deck to-do list's three** (user schema v58, issue #672), pinned on the day they were
+   * written — one case, because they are one band's and one widget's worth of commands.
+   *
+   * `deck_todo_lists` takes **no arguments at all**, `sticky_notes`' trap: an argument object sent
+   * to a command that declares only the managed state is a deserialisation error and not a type
+   * error. It and `deck_todos` are `#[tauri::command(async)]` on a *sync* `fn`, so the crate is
+   * matched on `fn <name>(` for them rather than through `commandParams`, which only sees a
+   * `pub async fn`.
+   *
+   * **`deck_todos_set`'s `expected` is the one worth the case.** It is an `Option` in the crate,
+   * so a wrapper that spelled it any other way is **not** refused: Tauri drops the key, the crate
+   * reads `None`, and every tick the widget makes becomes a blind write. The compare-and-set is
+   * what stops a tick from flipping line *n* of a list that moved since the widget read it — the
+   * band autosaving in another window, a sync apply — so losing it flips the wrong to-do, with
+   * both suites green and nothing on screen to say why.
+   *
+   * **The registrations are asserted too**, because a command the handler list forgot answers
+   * `unknown command` at run time with both suites green — and matched on a word boundary, since
+   * `deck_todos::deck_todos` is a prefix of `deck_todos::deck_todos_set` and a bare `toContain`
+   * would pass on the write alone.
+   */
+  it("sends the deck to-do list's three commands under the names they declare", async () => {
+    // A pass must never be able to mean "the crate was never read".
+    expect(deckTodosRs.length, "deck_todos.rs was not read").toBeGreaterThan(1_000);
+    const declares = (command: string, param: string) =>
+      expect(deckTodosRs, `\`${command}\` declares no \`${param}\``).toMatch(
+        new RegExp(`fn ${command}\\([^)]*\\b${param}\\s*:`, "s"),
+      );
+
+    invoke.mockResolvedValue("- [ ] Revise tokens");
+    expect(await ipc.deckTodos(7)).toBe("- [ ] Revise tokens");
+    expect(invoke).toHaveBeenLastCalledWith("deck_todos", { deckId: 7 });
+    declares("deck_todos", "deck_id");
+
+    // The widget's tick: the body it read travels back as `expected`, byte for byte.
+    invoke.mockResolvedValue(undefined);
+    await ipc.deckTodosSet(7, "- [x] Revise tokens", "- [ ] Revise tokens");
+    expect(invoke).toHaveBeenLastCalledWith("deck_todos_set", {
+      deckId: 7,
+      body: "- [x] Revise tokens",
+      expected: "- [ ] Revise tokens",
+    });
+    // The band's autosave compares nothing, and says so with an explicit `null` rather than a
+    // dropped key — equality here, so a wrapper that left the key off on `null` is red.
+    await ipc.deckTodosSet(7, "", null);
+    expect(invoke).toHaveBeenLastCalledWith("deck_todos_set", {
+      deckId: 7,
+      body: "",
+      expected: null,
+    });
+
+    // Annotated rather than inferred, which is half the assertion: a field this side spells
+    // differently is a compile error here and `undefined` in the widget.
+    const list: DeckTodoList = {
+      deckId: 7,
+      name: "Rakdos Sacrifice",
+      archived: false,
+      todosOpen: true,
+      updatedAt: 20,
+      body: "- [ ] Revise tokens\n  - [x] Cut Clue tokens",
+    };
+    invoke.mockResolvedValue([list]);
+    expect(await ipc.deckTodoLists()).toEqual([list]);
+    expect(invoke).toHaveBeenLastCalledWith("deck_todo_lists");
+    expect(deckTodosRs).toContain("fn deck_todo_lists(");
+
+    // The one `pub async fn`, so its payload is read out of `ipc.ts` rather than written down
+    // here — containment rather than equality on the crate's side, `finishBearing`'s rule, since
+    // it also declares a `state` it is never sent.
+    const sent = payloadKeys(ipcSource, "deck_todos_set").map(snake);
+    const declared = commandParams(deckTodosRs, "deck_todos_set");
+    expect(sent).toEqual(["deck_id", "body", "expected"]);
+    expect(
+      declared,
+      "`deck_todos_set` is not declared `pub async fn` in deck_todos.rs",
+    ).not.toHaveLength(0);
+    for (const key of sent) {
+      expect(declared, `\`deck_todos_set\` is sent \`${key}\` and does not declare it`).toContain(
+        key,
+      );
+    }
+
+    for (const command of ["deck_todos", "deck_todos_set", "deck_todo_lists"]) {
+      expect(desktopRs, `\`${command}\` is not registered`).toMatch(
+        new RegExp(`deck_todos::${command}\\b`),
+      );
+    }
+  });
+
   it("reads the error log with a limit and clears it with nothing", async () => {
     invoke.mockResolvedValue([]);
     await ipc.errorLogList(50);
@@ -5236,6 +5335,18 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["DeckNote", deckNotesRs, "DeckNoteRow"],
     ["DeckNoteCard", deckNotesRs, "DeckNoteCard"],
     ["CardNote", deckNotesRs, "CardNoteRow"],
+    // **The deck to-do list's one** (user schema v58, issue #672) — the home widget's read, and
+    // not a note's shape one module over: a to-do list is a column on the deck, so it has no id of
+    // its own and carries the deck's facts instead. Here rather than on `mirrors` for
+    // `HomeLayout`'s reason: six fields.
+    //
+    // Every drift is the quiet kind. A renamed `body` empties every list, and the widget draws
+    // *No to-dos yet* for a reader with a dozen. A renamed `todosOpen` is `undefined`, which is
+    // falsy, so a heading press writes the disclosure on every deck whether its band was shut or
+    // not — a write per press that nothing on screen shows. And a renamed `archived` is
+    // `undefined` too, so the `Include archived decks` switch filters nothing and an archived
+    // deck's to-dos sit among the live ones.
+    ["DeckTodoList", deckTodosRs, "DeckTodoList"],
     // **The scanner's three stored rows** (2026-09-15) — the only camelCase structs in
     // `scanner.rs`, because they are this app's `app_meta` rows rather than the detector's JSON,
     // so they are here and not on `snakeMirrors` below. Here rather than on `mirrors` for

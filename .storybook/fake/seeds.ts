@@ -932,6 +932,12 @@ function starterDecks(): FakeDeck[] {
       // finds filed under another deck, so the confirmation that takes a card off *this* deck's
       // list has something to take. Its own Sol Ring row therefore reads owned 1 of 1.
       archived: false,
+      // **The smaller of the two to-do lists** (user schema v58): one open item and nothing
+      // nested, so the home widget has a second deck to group under — and one whose `updatedAt`
+      // is older than deck 4's, so `deck_todo_lists`' newest-first order has two answers to put
+      // in order. The band stays shut (`todosOpen` absent reads `false`), which is what every
+      // editor story written before the band existed was drawn against.
+      todos: "- [ ] Cut three creatures",
       updatedAt: CLOCK_BASE - DAY,
     }),
     deck({
@@ -998,6 +1004,18 @@ function starterDecks(): FakeDeck[] {
       lastVariant: "theory",
       lastGroupBy: "type",
       lastSortBy: "manaCost",
+      // **The larger to-do list** (user schema v58): an open item with two sub-to-dos, one done
+      // and one not, and a done item beside it — so a done to-do sits at both depths, the
+      // widget's `Show completed` switch has something to hide at each, and `Show sub-to-dos`
+      // has something to fold away. The indent is two spaces, and nothing here depends on the
+      // number: `todoMarkdown.ts` compares indent widths against a stack rather than dividing by
+      // a constant. The band stays shut, deck 2's reason.
+      todos: [
+        "- [ ] Revise tokens",
+        "  - [ ] Add a Treasure maker",
+        "  - [x] Cut Clue tokens",
+        "- [x] Sleeve the deck",
+      ].join("\n"),
       updatedAt: CLOCK_BASE - 2 * HOUR,
     },
   ];

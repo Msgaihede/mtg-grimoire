@@ -9771,6 +9771,178 @@ describe("the deck row itself", () => {
   });
 
   /**
+   * `decks.todos_open` (user schema v58): `notesOpen`'s twin one band down — shut by default, a
+   * seed that never says and a deck made here alike — riding `deck_update` with
+   * `coalesce(?n, column)`. **And the list itself is on no `DeckRow`**: every deck list fetches
+   * rows, and a body travels only through `deck_todos` and `deck_todo_lists`.
+   */
+  it("opens a deck with its To-do band shut, and carries no list on the row", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, todos: "- [ ] Revise tokens" })] });
+    const listed = readHandlers(db).deck_list()[0];
+    expect(listed).toMatchObject({ todosOpen: false });
+    expect(listed).not.toHaveProperty("todos");
+    const born = writeHandlers(db).deck_create({ deck: { name: "Burn", formatKey: "modern" } });
+    expect(born).toMatchObject({ todosOpen: false });
+    expect(readHandlers(db).deck_todos({ deckId: born.id })).toBe("");
+    const opened = writeHandlers(db).deck_update({ id: 1, patch: { todosOpen: true } });
+    expect(opened).toMatchObject({ todosOpen: true, notesOpen: false });
+    const left = writeHandlers(db).deck_update({ id: 1, patch: { notesOpen: true } });
+    expect(left).toMatchObject({ todosOpen: true });
+    // A disclosure is not the list: opening the band wrote nothing into it.
+    expect(readHandlers(db).deck_todos({ deckId: 1 })).toBe("- [ ] Revise tokens");
+  });
+
+  /**
+   * **The deck to-do list's three commands** (user schema v58, issue #672) — `deck_todos`,
+   * `deck_todos_set` and `deck_todo_lists`, `deck_todos.rs`' three. A read never refuses: an
+   * empty list and a deck that is not there both answer `""`, which the band draws the same way.
+   */
+  it("reads an empty to-do list for a deck with none and for a deck that is not there", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    expect(readHandlers(db).deck_todos({ deckId: 1 })).toBe("");
+    expect(readHandlers(db).deck_todos({ deckId: 404 })).toBe("");
+  });
+
+  /**
+   * The band's write compares nothing (`expected: null`); the widget's always compares, so a tick
+   * against a list that moved since it was read is refused **and writes nothing** — neither the
+   * body nor `updatedAt`. A deck that is not there is asked first, so a stale id hears that the
+   * deck has gone rather than that its list moved.
+   */
+  it("writes a to-do list, and refuses a compare-and-set against a list that moved", () => {
+    const CHANGED = "That to-do list changed since it was read. Try again.";
+    const db = makeDeckDb({ decks: [deck({ id: 1 })] });
+    const w = writeHandlers(db);
+    w.deck_todos_set({ deckId: 1, body: "- [ ] a", expected: null });
+    expect(readHandlers(db).deck_todos({ deckId: 1 })).toBe("- [ ] a");
+    const written = db.decks[0].updatedAt;
+    expect(written).toBeGreaterThan(WHEN);
+
+    w.deck_todos_set({ deckId: 1, body: "- [x] a", expected: "- [ ] a" });
+    expect(readHandlers(db).deck_todos({ deckId: 1 })).toBe("- [x] a");
+    const ticked = db.decks[0].updatedAt;
+    expect(ticked).toBeGreaterThan(written);
+
+    // The widget read `- [ ] a` and the list has been ticked since.
+    expect(() => w.deck_todos_set({ deckId: 1, body: "- [ ] a", expected: "- [ ] a" })).toThrow(
+      CHANGED,
+    );
+    expect(readHandlers(db).deck_todos({ deckId: 1 })).toBe("- [x] a");
+    expect(db.decks[0].updatedAt).toBe(ticked);
+
+    // Gone is asked before moved.
+    expect(() => w.deck_todos_set({ deckId: 404, body: "- [ ] a", expected: "nope" })).toThrow(
+      "That deck is not there any more.",
+    );
+  });
+
+  /** An autosave over an unchanged draft is not an edit: nothing moves the deck up the gallery or
+   *  the widget's `Last edited` order. And a write files no history row and no undo step — an
+   *  autosave every 600 ms would flood the drawer. */
+  it("writes nothing for an unchanged to-do list, and files no history or undo step", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, todos: "- [ ] a" })] });
+    const h = allHandlers(db);
+    h.deck_todos_set({ deckId: 1, body: "- [ ] a", expected: null });
+    expect(db.decks[0].updatedAt).toBe(WHEN);
+
+    h.deck_todos_set({ deckId: 1, body: "- [ ] b", expected: "- [ ] a" });
+    expect(db.deckAudit).toHaveLength(0);
+    expect(db.deckUndo).toHaveLength(0);
+    expect(h.deck_undo_state({ deckId: 1, redoId: null }).undo).toBeNull();
+  });
+
+  /**
+   * `deck_undo::Op::Deck` writes only `DECK_FIELDS`, and neither `todos` nor `todos_open` is on
+   * it — so a Ctrl+Z on some *other* deck write never takes back a to-do typed since. The fake
+   * restores a whole deck snapshot, which is exactly the shape that would.
+   */
+  it("keeps the to-do list as it stands when another deck write is undone", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, name: "Burn" })] });
+    const h = allHandlers(db);
+    h.deck_update({ id: 1, patch: { name: "Burn 2" } });
+    h.deck_todos_set({ deckId: 1, body: "- [ ] Revise tokens", expected: null });
+    h.deck_update({ id: 1, patch: { todosOpen: true } });
+
+    const undo = h.deck_undo_state({ deckId: 1, redoId: null }).undo!;
+    h.deck_undo_apply({ deckId: 1, auditId: undo.id });
+
+    expect(db.decks[0].name).toBe("Burn");
+    expect(h.deck_todos({ deckId: 1 })).toBe("- [ ] Revise tokens");
+    expect(db.decks[0].todosOpen).toBe(true);
+  });
+
+  /**
+   * Every deck with a list and no deck without one, **most recently edited first** and the id
+   * second — archived decks answered rather than filtered, since `Include archived decks` is the
+   * widget's own switch, and each row carrying the band's disclosure so a heading press knows
+   * whether it has to open it.
+   */
+  it("lists every non-empty to-do list, newest first, archived ones included", () => {
+    const db = makeDeckDb({
+      decks: [
+        deck({ id: 1, name: "Burn", todos: "- [ ] one", updatedAt: WHEN }),
+        deck({ id: 2, name: "Empty", todos: "", updatedAt: WHEN + 50 }),
+        deck({
+          id: 3,
+          name: "Zoo",
+          archived: true,
+          todosOpen: true,
+          todos: "- [ ] three",
+          updatedAt: WHEN + 10,
+        }),
+        // Stamped alike with deck 1, so the id is what orders the two.
+        deck({ id: 4, name: "Affinity", todos: "- [x] four", updatedAt: WHEN }),
+        deck({ id: 5, name: "Unsaid" }),
+      ],
+    });
+    const lists = readHandlers(db).deck_todo_lists();
+    expect(lists.map((l) => l.deckId)).toEqual([3, 1, 4]);
+    expect(lists[0]).toEqual({
+      deckId: 3,
+      name: "Zoo",
+      archived: true,
+      todosOpen: true,
+      updatedAt: WHEN + 10,
+      body: "- [ ] three",
+    });
+    expect(lists[1]).toMatchObject({ archived: false, todosOpen: false });
+
+    // A write moves the deck it touched to the front.
+    writeHandlers(db).deck_todos_set({ deckId: 4, body: "- [ ] four", expected: "- [x] four" });
+    expect(readHandlers(db).deck_todo_lists().map((l) => l.deckId)).toEqual([4, 3, 1]);
+    // And a list emptied leaves the answer.
+    writeHandlers(db).deck_todos_set({ deckId: 3, body: "", expected: null });
+    expect(readHandlers(db).deck_todo_lists().map((l) => l.deckId)).toEqual([4, 1]);
+  });
+
+  /** `duplicate_deck` names neither column: a copy that brought the list would put every open
+   *  to-do in the widget twice, and ticking one would leave its twin open. */
+  it("leaves the to-do list and its open band behind on a duplicate", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1, todos: "- [ ] Revise tokens", todosOpen: true })],
+    });
+    const copy = writeHandlers(db).deck_duplicate({ id: 1 });
+    expect(copy.todosOpen).toBe(false);
+    expect(readHandlers(db).deck_todos({ deckId: copy.id })).toBe("");
+    expect(readHandlers(db).deck_todo_lists().map((l) => l.deckId)).toEqual([1]);
+  });
+
+  /** The starter seed carries two lists, so the band's and the widget's stories have data: deck
+   *  4's nested one, edited more recently, ahead of deck 2's single line. Both bands shut. */
+  it("seeds two decks with to-do lists in the starter world", () => {
+    const lists = readHandlers(seed("starter")).deck_todo_lists();
+    expect(lists.map((l) => l.deckId)).toEqual([4, 2]);
+    expect(lists[0].body.split("\n")).toEqual([
+      "- [ ] Revise tokens",
+      "  - [ ] Add a Treasure maker",
+      "  - [x] Cut Clue tokens",
+      "- [x] Sleeve the deck",
+    ]);
+    expect(lists[1].body).toBe("- [ ] Cut three creatures");
+    expect(lists.every((l) => !l.todosOpen)).toBe(true);
+  });
+
+  /**
    * `decks.token_mode` (user schema v52), which replaced v47's `token_stack` switch: **`managed`
    * by default** — a seed that never says and a deck made here alike, because every deck starts
    * there, the ones whose stack was off included — moved by the ordinary patch, **audited** under
@@ -12235,7 +12407,10 @@ describe("the busy fault", () => {
     // which joined `unlocked` above, and `export_write_file`'s rename to `export_save_file` moved
     // nothing because it was already there. Read from `left` on this tree, never subtracted to.
     // 124 when the two met — read from `left` after the merge, never subtracted to.
-    expect(names).toHaveLength(124);
+    // 124 → 125 on 2026-09-29 with user schema v58's `deck_todos_set` (issue #672), a plain
+    // `sync::with_write` deck write whose two reads, `deck_todos` and `deck_todo_lists`, sit in
+    // `readHandlers` — read from `left` on this tree. Count again after a merge.
+    expect(names).toHaveLength(125);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
