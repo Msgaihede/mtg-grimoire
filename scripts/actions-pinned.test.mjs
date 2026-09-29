@@ -1,11 +1,13 @@
-// The supply chain of the three workflows and the composite action, held to five rules — each one
+// The supply chain of the three workflows and the composite action, held to four rules — each one
 // a hole issue #545 found open on 2026-09-28, and each checkable from the files' text:
 //
 //   1. every `uses:` is local or a full commit SHA, the tag it was on in a trailing comment;
 //   2. every `actions/checkout` says `persist-credentials: false`;
 //   3. no workflow grants a write permission at the top level — a job names its own;
-//   4. Dependabot watches both places a pin can live;
-//   5. the release's signing secret reaches one step of one job, and that job runs nobody's code.
+//   4. Dependabot watches both places a pin can live.
+//
+// A fifth held the release's signing secret to one step of a `sign` job; that job was removed on
+// 2026-09-29 with update signing itself.
 //
 // A tag is whatever its owner last pushed, so `@v1` in `release.yml` ran code nobody here had read
 // beside a write token and a release in progress. The files are globbed, so a new workflow or a new
@@ -62,16 +64,6 @@ const code = (src) =>
 
 /** A workflow's text above `jobs:` — where a workflow-wide grant would sit. */
 const header = (src) => code(src.slice(0, src.search(/^jobs:/m)));
-
-/** One job's code in `release.yml`: from `  <name>:` to the next job at the same indent. */
-function job(yml, name) {
-  const src = code(yml);
-  const start = src.search(new RegExp(`^ {2}${name}:\\s*$`, "m"));
-  expect(start, `release.yml has a \`${name}\` job`).toBeGreaterThan(-1);
-  const rest = src.slice(start + 1);
-  const next = rest.search(/^ {2}[\w-]+:\s*$/m);
-  return next === -1 ? src.slice(start) : src.slice(start, start + 1 + next);
-}
 
 describe("every workflow and composite action", () => {
   it("is found", () => {
@@ -132,29 +124,5 @@ describe("dependabot.yml", () => {
     expect(dependabot).toMatch(/package-ecosystem:\s*github-actions/);
     expect(dependabot).toMatch(/^\s*-\s*"\/"\s*$/m);
     expect(dependabot).toMatch(/^\s*-\s*"\/\.github\/actions\/\*"\s*$/m);
-  });
-});
-
-describe("release.yml's signing secret", () => {
-  const sign = job(releaseYml, "sign");
-
-  it("reaches one step of the `sign` job and nothing else", () => {
-    expect(code(releaseYml).match(/UPDATE_SIGNING_KEY/g)).toHaveLength(2); // the name, and its value
-    expect(code(releaseYml).match(/secrets\.UPDATE_SIGNING_KEY/g)).toHaveLength(1);
-    expect(sign).toContain("UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}");
-    expect(job(releaseYml, "build")).not.toContain("UPDATE_SIGNING_KEY");
-  });
-
-  it("sits in a job that installs nothing and runs no third-party action", () => {
-    expect(sign).not.toMatch(/npm (?:ci|install|i)\b|npx /);
-    expect(
-      usesOf(sign)
-        .map((u) => u.split("@")[0])
-        .sort(),
-    ).toEqual(["actions/checkout", "actions/setup-node"]);
-  });
-
-  it("is what `publish` waits for", () => {
-    expect(job(releaseYml, "publish")).toMatch(/^\s*needs:\s*\[[^\]]*\bsign\b[^\]]*\]/m);
   });
 });
