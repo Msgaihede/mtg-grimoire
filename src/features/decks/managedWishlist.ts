@@ -15,7 +15,9 @@
  * questions — the mode says which card copies the folder wants, the switch says whether a
  * `Tokens` subfolder inside it holds the token printings the plan is short of — and the switch
  * reaches all three views alike. So no mode's caption mentions tokens at all; the switch has its
- * own sentence, {@link MANAGED_WISHLIST_TOKENS_HINT}, drawn after the mode's when it is on.
+ * own sentence, {@link MANAGED_WISHLIST_TOKENS_HINT}, drawn after the mode's when it is on — one
+ * per mode since issue #675, because the mode decides whether a token is matched by name or by
+ * its exact printing and finish.
  */
 
 import type { ManagedWishlistMode } from "@/lib/ipc";
@@ -53,12 +55,19 @@ export const MANAGED_WISHLIST_HINT: Record<ManagedWishlistMode, string> = {
 export const MANAGED_WISHLIST_TOKENS_LABEL = "Tokens";
 
 /**
- * The tokens switch's sentence, appended to the mode's caption while it is on. It names the
- * subfolder, because that is where a reader will go looking and nothing else on the screen says
- * where the wishes went; it says nothing about the mode, because it is true under all three.
+ * The tokens switch's sentence under each filing mode, appended to the mode's caption while it
+ * is on. It names the subfolder, because that is where a reader will go looking and nothing else
+ * on the screen says where the wishes went — and **it says how a token is compared, because the
+ * mode decides that** (issue #675): Missing asks whether the deck holds a token of that name at
+ * all, and All and Different Printing ask for the exact printing and finish the plan names
+ * (`deck_theory::wanted`). The mode's own caption still says nothing about tokens, since it is
+ * drawn with the switch off too.
  */
-export const MANAGED_WISHLIST_TOKENS_HINT =
-  "Missing tokens go in its Tokens subfolder.";
+export const MANAGED_WISHLIST_TOKENS_HINT: Record<Exclude<ManagedWishlistMode, "off">, string> = {
+  all: "Missing tokens go in its Tokens subfolder, matched by exact printing and finish.",
+  missing: "Missing tokens go in its Tokens subfolder, matched by name in any printing.",
+  other: "Missing tokens go in its Tokens subfolder, matched by exact printing and finish.",
+};
 
 /**
  * A stored word read leniently — Rust already answers one of the four, so this is a fence for a
