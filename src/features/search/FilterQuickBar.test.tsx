@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
@@ -222,7 +222,39 @@ describe("FilterQuickBar", () => {
     render(<FilterQuickBar search={search()} shown lead={<span>picked tags here</span>} />, {
       wrapper: TooltipProvider,
     });
-    expect(within(bar()).getByText("picked tags here")).toBeInTheDocument();
+    const lead = within(bar()).getByText("picked tags here");
+    const top = within(bar()).getByRole("button", { name: "Back to the top" });
+    const field = within(bar()).getByRole("searchbox", { name: "Search cards" });
+    // After Top and before the search field, in document order — which is tab order and what a
+    // screen reader walks, and the one ordering jsdom can see.
+    expect(top.compareDocumentPosition(lead) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(lead.compareDocumentPosition(field) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /**
+   * **The caret holds the bar up after `shown` goes false, and lets go when it leaves.** Typing
+   * resets the wall to its top, which brings the page row back and flips `shown` — so a bar that
+   * unmounted on `shown` alone would take the field away under the next keystroke and drop the
+   * caret on `<body>`. Blurring to something outside the bar is what ends the hold.
+   */
+  it("stays while the caret is in its search field, and goes when the caret leaves", async () => {
+    const s = search();
+    const outside = document.createElement("button");
+    document.body.append(outside);
+    try {
+      const { rerender } = render(<FilterQuickBar search={s} shown />, {
+        wrapper: TooltipProvider,
+      });
+      within(bar()).getByRole("searchbox", { name: "Search cards" }).focus();
+      rerender(<FilterQuickBar search={s} shown={false} />);
+      expect(bar()).toBeInTheDocument();
+      outside.focus();
+      await waitFor(() =>
+        expect(screen.queryByRole("group", { name: "Filter quick bar" })).toBeNull(),
+      );
+    } finally {
+      outside.remove();
+    }
   });
 
   it("the folded mana-value press says what is picked and opens the chips", async () => {
