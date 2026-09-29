@@ -248,12 +248,17 @@ const TOKEN_CATEGORY: &str = "Tokens & Emblems";
 /// one card are two lines here and now **two** wishes.
 ///
 /// **The substitution count.** [`TheoryDiffRow::held_as_other_printing`] is per oracle card by
-/// definition, so the pool it draws from is keyed here and nowhere else.
+/// definition, so the pool it draws from is keyed on it — through [`Self::pool`], which is the
+/// oracle id on every card row and on every token row but one kind (below).
 ///
 /// It is deliberately **not** on [`TheoryDiffRow`]: the webview draws a printing, a count and
 /// two figures, and has no use for a uuid it cannot show.
 struct Grouped {
     oracle_id: Option<String>,
+    /// What [`Tally`] pools live copies under for [`TheoryDiffRow::held_as_other_printing`] — the
+    /// oracle id, except for a token row read at [`TokenPool::Name`], where it is the token's
+    /// name (issue #675). `None` for an orphan, which is not another printing of anything.
+    pool: Option<String>,
     /// The printing's `cards.finishes`, for [`OWNED_SPARE_SQL`]'s [`entry_spellings`] — not on
     /// [`TheoryDiffRow`] for `oracle_id`'s reason.
     finishes: Option<String>,
@@ -437,7 +442,7 @@ pub fn theory_diff(
 ) -> Result<Vec<TheoryDiffRow>, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let mut rows = grouped_diff(&tx, deck_id, marketplace)?;
-    rows.extend(token_diff(&tx, deck_id, marketplace)?);
+    rows.extend(token_diff(&tx, deck_id, marketplace, TokenPool::Oracle)?);
     Ok(rows.into_iter().map(|g| g.row).collect())
 }
 
@@ -481,7 +486,8 @@ impl Tally {
         }
     }
 
-    /// One live row of `quantity` copies, and the oracle card it is a copy of.
+    /// One live row of `quantity` copies, and the pool it feeds — [`Grouped::pool`]: the oracle
+    /// card it is a copy of, or a token's name.
     fn hold(&mut self, key: String, oracle: Option<&str>, quantity: i64) {
         // An orphan contributes nothing to the pool: a row whose printing has left `cards`
         // names no oracle card, so it is not another printing *of* anything.
@@ -512,7 +518,7 @@ impl Tally {
         for (key, mut grouped) in order {
             let wanted_here = wanted.get(&key).copied().unwrap_or(0);
             let held_here = held.get(&key).copied().unwrap_or(0);
-            if let Some(oracle) = &grouped.oracle_id {
+            if let Some(oracle) = &grouped.pool {
                 *matched_by_oracle.entry(oracle.clone()).or_insert(0) += wanted_here.min(held_here);
             }
             let short = wanted_here - held_here;
@@ -551,7 +557,7 @@ impl Tally {
         for grouped in &mut diff {
             // An orphan is never a substitution: it names no oracle card to be another printing
             // of.
-            let Some(oracle) = grouped.oracle_id.as_deref() else {
+            let Some(oracle) = grouped.pool.as_deref() else {
                 continue;
             };
             let Some(left) = pool.get_mut(oracle) else {
@@ -620,6 +626,7 @@ fn grouped_diff(
         let key = group_key(&card_id, finish.as_deref());
         if variant == THEORY {
             tally.want(key, quantity, || Grouped {
+                pool: oracle.clone(),
                 oracle_id: oracle,
                 finishes,
                 row: TheoryDiffRow {
@@ -669,17 +676,34 @@ fn grouped_diff(
 /// oracle card, is never another printing of anything and files no wish — `add_wish` refuses a
 /// `card_id` the corpus does not hold, and from inside a press that refusal would abort the
 /// whole press rather than skip one line.
+///
+/// **`pool` decides only [`TheoryDiffRow::held_as_other_printing`]**, never the shortfall: every
+/// row is still one printing and finish less the live list's copies of that printing and finish.
+/// [`TokenPool::Oracle`] is the Compare dialog's reading; [`TokenPool::Name`] is a managed
+/// wishlist following Missing's (issue #675), and is why a token row's pool is not simply its
+/// oracle id.
 fn token_diff(
     conn: &Connection,
     deck_id: i64,
     marketplace: crate::sorting::Marketplace,
+    pool: TokenPool,
 ) -> Result<Vec<Grouped>, String> {
+    // The pool key of one token row: `None` for an orphan — [`Tally::hold`]'s rule, it is not a
+    // printing *of* anything — and otherwise the oracle card or the name, as `pool` says.
+    let pool_of = |token: &crate::deck_tokens::DeckTokenRow| {
+        token.set_code.as_ref().map(|_| match pool {
+            TokenPool::Oracle => token.oracle_id.clone(),
+            TokenPool::Name => token.name.clone(),
+        })
+    };
     let mut tally = Tally::default();
     for token in crate::deck_tokens::deck_token_rows(conn, deck_id, THEORY, marketplace)? {
-        let finish = regular_as_none(token.finish);
+        let finish = regular_as_none(token.finish.clone());
         let key = group_key(&token.card_id, finish.as_deref());
+        let pooled = pool_of(&token);
         let oracle = token.set_code.is_some().then_some(token.oracle_id);
         tally.want(key, token.quantity, || Grouped {
+            pool: pooled,
             oracle_id: oracle,
             finishes: token.finishes,
             row: TheoryDiffRow {
@@ -698,12 +722,25 @@ fn token_diff(
         });
     }
     for token in crate::deck_tokens::deck_token_rows(conn, deck_id, LIVE, marketplace)? {
+        let pooled = pool_of(&token);
         let finish = regular_as_none(token.finish);
         let key = group_key(&token.card_id, finish.as_deref());
-        let oracle = token.set_code.is_some().then_some(token.oracle_id);
-        tally.hold(key, oracle.as_deref(), token.quantity);
+        tally.hold(key, pooled.as_deref(), token.quantity);
     }
     tally.settle(conn)
+}
+
+/// What [`token_diff`] counts a live token as "another printing of" — the grain
+/// [`TheoryDiffRow::held_as_other_printing`] is paid out at for token rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TokenPool {
+    /// The same oracle card — a card row's grain, and the Compare dialog's reading.
+    Oracle,
+    /// The same **name**, whatever the printing, the finish or the oracle card (issue #675): a
+    /// managed wishlist following **Missing** asks whether the deck holds *a* Treasure, not that
+    /// Treasure. Wider than the oracle card on purpose — two Soldier tokens with different stats
+    /// are two oracle cards and, to a reader asking "do I have Soldiers", one answer.
+    Name,
 }
 
 /// A token entry's finish as a deck row spells it: `nonfoil` — [`crate::schema::FINISHES`]`[0]`
@@ -971,7 +1008,7 @@ pub fn missing_to_wishlist(
     // the dialog sends for a token line finds that line here.
     let market = crate::sorting::Marketplace::default();
     let mut lines = grouped_diff(&tx, deck_id, market)?;
-    lines.extend(token_diff(&tx, deck_id, market)?);
+    lines.extend(token_diff(&tx, deck_id, market, TokenPool::Oracle)?);
     for grouped in lines {
         // Recomputed rather than carried out of `grouped_diff`, which answers rows and not keys:
         // `group_key` is the one place "the same planned card" is spelled, and spelling it twice
@@ -1073,10 +1110,20 @@ pub(crate) enum DiffView {
 /// and still shows each row's whole count; a wishlist line is a count of cardboard to go and get,
 /// so it carries only the copies the view is about, and a line with none is dropped.
 ///
-/// **`tokens` adds the token rows, each at its whole quantity, whichever view the cards
-/// follow** (user schema v57, issue #617): a token is never a card the deck plays in some other
-/// printing, so Missing and Different printing have nothing to say about one, and a token's
-/// shortfall is the same line under all three. `false` reads no token wall at all.
+/// **`tokens` adds the token rows under whichever view the cards follow** (user schema v57, issue
+/// #617), and **the view decides how a token is compared** (issue #675):
+///
+/// - **Missing compares the name only.** A token row wants `quantity − held_as_other_printing`
+///   out of a pool keyed on the token's name ([`TokenPool::Name`]), so a deck that holds three
+///   Treasures of any printing, finish or art wants no fourth for a plan of three — the question
+///   Missing asks of a card, asked one grain wider, because a token's printing is its art and
+///   nothing else.
+/// - **All and Different printing compare the exact printing and finish**: a token row wants its
+///   whole shortfall of that printing in that finish, which is what the Compare dialog's Tokens
+///   view lists. Different printing's card reading — copies played as another printing — has no
+///   token counterpart worth filing: a reader who pinned a token's art wants that art.
+///
+/// `false` reads no token wall at all.
 ///
 /// Reads [`grouped_diff`] and [`token_diff`] rather than a query of its own, so the folder and
 /// the dialog beside it cannot come to disagree about which rows a view holds — and reads the
@@ -1091,7 +1138,11 @@ pub(crate) fn wanted(
     let market = crate::sorting::Marketplace::default();
     let mut lines = grouped_diff(conn, deck_id, market)?;
     if tokens {
-        lines.extend(token_diff(conn, deck_id, market)?);
+        let pool = match view {
+            DiffView::Missing => TokenPool::Name,
+            DiffView::All | DiffView::Other => TokenPool::Oracle,
+        };
+        lines.extend(token_diff(conn, deck_id, market, pool)?);
     }
     Ok(lines
         .into_iter()
@@ -1100,9 +1151,10 @@ pub(crate) fn wanted(
             let oracle_id = g.oracle_id?;
             let held = g.row.held_as_other_printing;
             let quantity = match view {
+                // A token's `held` is paid out of its name's pool here — see above.
+                DiffView::Missing => g.row.quantity - held,
                 _ if g.row.is_token => g.row.quantity,
                 DiffView::All => g.row.quantity,
-                DiffView::Missing => g.row.quantity - held,
                 DiffView::Other => held,
             };
             (quantity > 0).then_some(Wanted {

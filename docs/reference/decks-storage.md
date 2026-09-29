@@ -4191,8 +4191,15 @@ switch sits beside it in Deck settings, drawn only when the mode is not `Off`.
   answers `None` for `off` before it reads the switch, so a mode switched off and on again brings
   the tokens back with it.
 - **`deck_theory::wanted(view, tokens)`** — the view is card rows only now (`DiffView` lost its
-  `Tokens` variant), and `tokens` adds `token_diff`'s rows at their whole quantity under any of the
-  three. The Compare dialog's own **Tokens** tab is unchanged.
+  `Tokens` variant), and `tokens` adds `token_diff`'s rows under any of the three. **Since
+  2026-09-29 the view decides how a token is compared**
+  ([issue #675](https://github.com/Msgaihede/mtg-grimoire/issues/675)): `Missing` reads
+  `token_diff` at `TokenPool::Name`, so a token row's `held_as_other_printing` is paid out of the
+  deck's copies of any token **of that name** and the row wants `quantity −
+  held_as_other_printing`; `All` and `Other` read it at `TokenPool::Oracle` and want the whole
+  exact printing-and-finish shortfall. `Grouped::pool` is the pool key, separate from the wish's
+  oracle id for exactly this. The Compare dialog's own **Tokens** tab is unchanged — it reads
+  `TokenPool::Oracle`.
 - **The mode's rules otherwise, each for the mode's reason**: on the `decks` capture spec after
   `managed_wishlist_mode`; a history row, `managedWishlistTokens`, booleans on both sides; on
   `deck_undo::DECK_FIELDS` beside the mode, so one Ctrl+Z puts a Save that moved both back whole;
