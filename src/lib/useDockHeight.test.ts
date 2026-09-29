@@ -369,6 +369,25 @@ describe("useDockHeight", () => {
   });
 
   /**
+   * **A dock that stops being handed over gets its height back.** The Tags page hands its rail to
+   * this hook in grid view and nothing in table view, where the rail is laid out by the flex row
+   * again — and an inline `height` left behind from the grid would pin it at a number the flex
+   * layout cannot override. Unwiring is the one moment the hook still holds the old box.
+   */
+  it("clears the height it wrote when the dock is no longer handed over", () => {
+    const { scroller, row, dock } = tree(600);
+    topAt(scroller, 0);
+    topAt(row, 140);
+    const view = mount(dock, row);
+    expect(dock.style.height).toBe("460px");
+
+    view.rerender({ d: null, a: row });
+
+    expect(dock.style.height).toBe("");
+    expect(watchers[0].disconnected).toBe(true);
+  });
+
+  /**
    * Unmount gives back the listener, the observer and any frame still owed. The frame matters as
    * much as the other two: it closes over the dock, and a callback that ran after the tree had
    * gone would write a style onto a detached node — harmless here, and the shape of the leak this

@@ -55,6 +55,7 @@ import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useCardSelection } from "@/lib/useCardSelection";
 import { nearestScroller, useDockHeight } from "@/lib/useDockHeight";
+import { useScrollPaddingTop } from "@/lib/useScrollPaddingTop";
 import { useScrollPerView } from "@/lib/useScrollPerView";
 import { useUndocked } from "@/lib/useUndocked";
 import { cn } from "@/lib/utils";
@@ -1292,28 +1293,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const barClearance = undocked ? DECK_BAR_CLEARANCE_PX : 0;
   /** The header's first control, where the caret goes when the bar's ↥ takes the reader back up. */
   const backRef = useRef<HTMLButtonElement>(null);
-  /**
-   * **A caret the page scrolls to must not land under the bar** — WCAG 2.4.11, Focus Not
-   * Obscured. The arrow keys walk the desk by focusing cards, and a focus scrolls its target only
-   * as far as the scrollport's edge, which is exactly where the bar sits: the card would be
-   * reached and not be seen. `scroll-padding-top` on the scroller moves that edge for every
-   * scroll-into-view at once. It belongs to `AppShell`'s `main`, which this editor does not draw,
-   * so it is set on the node for as long as the bar is down and taken off when it goes or the
-   * editor unmounts — the one style this file writes onto an element it does not own.
-   */
-  useEffect(() => {
-    const scroller = editorRef.current ? nearestScroller(editorRef.current) : null;
-    if (!scroller || barClearance === 0) return;
-    // The clearance is measured from the scroller's content edge (a sticky inset always is) and
-    // scroll padding from its top edge, so the scroller's own padding sits between the two —
-    // `main`'s 20px. Without it the padding would be 41 while the docked bar's foot stands 53
-    // below the top edge, so a card scrolled to would land 12px under the bar.
-    const edge = parseFloat(getComputedStyle(scroller).paddingTop) || 0;
-    scroller.style.scrollPaddingTop = `${edge + barClearance}px`;
-    return () => {
-      scroller.style.scrollPaddingTop = "";
-    };
-  }, [barClearance]);
+  /** A caret the page scrolls to must not land under the bar (WCAG 2.4.11) — see the hook. */
+  useScrollPaddingTop(editorRef, barClearance);
   /**
    * How wide the desk row is — **width only, and the height that used to sit beside it is gone**
    * (2026-08-14).

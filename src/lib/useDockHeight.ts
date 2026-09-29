@@ -192,6 +192,11 @@ export function useDockHeight(
       if (frame !== 0) cancelAnimationFrame(frame);
       scroller.removeEventListener("scroll", schedule);
       observer.disconnect();
+      // The height this wiring wrote goes with it. A caller that stops handing a dock over — the
+      // Tags page's rail in table view — lays that box out with flex again, and an inline height
+      // left behind would pin it at a number the flex layout cannot override. A rewire onto the
+      // same box writes a fresh one before paint, so nothing flashes.
+      dockEl.style.height = "";
     };
   });
 
