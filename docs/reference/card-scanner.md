@@ -52,6 +52,7 @@ Tesseract.
 | `serve` | `cli` | The live camera page, with the whole pipeline visible per frame and every threshold on a slider. |
 | `build-hashes` | `builder` | Build the reference bundle from `corpus.db` — or, since 2026-09-15, from Scryfall's bulk file (`--bulk`) — and Scryfall's images. Incremental. |
 | `eval` | `builder` | The synthetic evaluation of both scan modes (§10), added 2026-09-15. |
+| `ocr-bench` | `builder` | Both OCR readers timed and scored on `eval`'s synthetic bands — the old detection path and the current one back to back on every band (§4), added 2026-09-30. |
 
 `cli` = `clap` + `tiny_http` + `corpus` + `ocr`; `builder` = `clap` + `ureq` + `rayon` +
 `corpus` + `ocr` — **`ocr` joined `builder` on 2026-09-15 for `eval`**, whose Exact passes are
@@ -487,9 +488,9 @@ Each answers a different question, and the weights encode which question each is
 | Tier | What it reads | Card weight | Printing weight | Cost |
 | --- | --- | --- | --- | --- |
 | **Appearance** | a nearest neighbour in the bundle | 1.0 | 1.0 | ~22 ms hashing, ~3.5 ms searching |
-| **Name**, clean read | the title band | **6.0** | **0** | ~340 ms, release, 2026-09-08 |
+| **Name**, clean read | the title band | **6.0** | **0** | ~340 ms, release, 2026-09-08; **5.9× less** since #707 (below) |
 | **Name**, needed correcting | the same, at edit distance ≥ 1 | 3.0 | 0 | — |
-| **Collector** | the set code and number, bottom left | **2.0** | **20.0** | ~650 ms, release, 2026-09-08 |
+| **Collector** | the set code and number, bottom left | **2.0** | **20.0** | ~650 ms, release, 2026-09-08; **6.8× less** since #707 |
 
 **Not every signal is equal evidence, and treating them as equal was a real bug.** Measured live
 on a foil: the hash offered a different near-random neighbour every frame at 55–66 bits
@@ -586,6 +587,82 @@ resolved confidently to a card that was not in frame. That is why the split exis
 weak evidence about *which card* (2.0, where appearance is 1.0 and can outweigh it over frames)
 and decisive about *which printing of it* (20.0, because nothing else can tell two printings
 apart at all). The art decides the card; the number narrows it down within that card.
+
+### Reading without text detection (#707)
+
+**A read runs no detection model any more.** `ocrs`'s `get_text` is three stages — `detect_words`,
+`find_text_lines`, `recognize_text` — and the first runs a detection model over the whole band to
+find where the text is, which is the one thing a band cropped to where the text is already knows.
+It was most of the cost: the model takes a **fixed-size input**, so every band was padded out to it
+and the model paid for the padding. `ocrs` exposes all three stages, so no fork: `ocr::text_lines`
+finds the lines and each goes to `recognize_text` as one box. `RotatedRect` is not re-exported by
+`ocrs`, so the crate takes `rten-imageproc` at `ocrs`'s own `0.26` — a second version would be a
+second, incompatible type.
+
+**`text_lines` is a row projection of the horizontal gradient.** Letterforms are vertical strokes;
+the frame's rules are horizontal and barely register. Rows above a cut between the band's quiet
+floor and its peak are a line, and each line is cut to its columns. It returns **every** line, in
+reading order, because the collector corner is two — `U 0232` over `LTR • EN` — and a recogniser
+handed both as one line reads neither. The title keeps its two strongest lines and the one with
+more letters wins. Each rule in it came from a band that read wrong without it:
+
+| Rule | The band it came from |
+| --- | --- |
+| A thin cluster at the band's side, a word space clear of the rest, is the frame, not text | 4ED Sorceress Queen: a box that reached the band's left edge read `\|Ser`; from 30 px in, `Sorceres Qucen` |
+| Only at the *side* — a thin cluster mid-line is a letter | BLB Manifold Mouse's rarity `R`, a word space from `0318` |
+| Half a line's height of room above, 0.3 below | STH Honor Guard read `onor uar` with the capitals' tops cut off |
+| 0.6 of a line's height of room either side | `R 0318` read `0318` when the box started on the `R` |
+| The column cut is 12% of floor-to-peak, not 25% | THB Oread of Mountain's Blaze stopped at `Mour`: the frame edge set the peak and the lighter half of the name fell under it |
+| The line grows from its strongest cluster across gaps up to four line-heights, and no further | the mana cost at the end of a title bar read as a trailing `0` |
+| "Nothing here" is relative to the floor, not an absolute margin | a soft LTR `Plains` peaked at 2.7 over a floor of 0.9 and was called blank |
+
+**The collector's recogniser answers only ` 0-9A-Z/*`** (`allowed_chars`) — a second engine over a
+second copy of the recognition model, because `ocrs` takes the restriction per engine, so **+9.7 MB
+resident**. `O/0` and `I/1` stay the parse's problem, and the card's `•` and `★` are not in the
+model's alphabet at all. The detection model is still loaded, for `TitleReader::set_text_detection`,
+which `ocr-bench` uses to run the old path beside the new one; nothing else should call it.
+
+**Measured by `ocr-bench`**: `eval`'s 160 printings, seed 7, frames 0 and 6 of each burst — 305
+bands, after 15 frames the detector did not find — each band read **by both paths back to back, in
+alternating order**, because the machine was at 100% CPU from other scanner work the whole day and
+only a paired comparison is fair under that. **The absolute milliseconds below are inflated by that
+load and are not a latency**; the ratios are the finding. Windows, release, 2026-09-30, base
+`9a0ba706`. Scored against the corpus as #700 defines a reader's rates.
+
+| | detection (before) | projection (after) |
+| --- | ---: | ---: |
+| title ms, median / p90, under load | 1,542 / 3,004 | 257 / 669 |
+| collector ms, median / p90, under load | 2,811 / 6,100 | 386 / 1,095 |
+| paired speed-up, median (p10) | — | title **5.9×** (2.7×), collector **6.8×** (3.7×) |
+| titles exact / corrected / wrong / junk | 73 / 53 / 1 / 178 | **75 / 75 / 3 / 152** |
+| collector resolved / conflicting / none | 3 / 3 / 299 | **3 / 0** / 302 |
+
+**The honest line in that table is the wrong titles, 1 → 3.** Per band, 35 titles became usable
+and 11 stopped being. All three wrong reads are short, truncated reads the fuzzy name lookup then
+placed on a neighbour: `aims` → Alms at one edit; `Swam` → Swat, *tied* at one edit with Swamp;
+`mrock Knight` → Black Knight at three, because Rimrock Knight is indexed under its whole adventure
+name. The reader's share is the lost first letter; a tie resolved rather than refused, and an
+adventure's face missing from the index, are the name index's (#709).
+
+**The collector numbers are too small to rank anything by** — a synthetic render at 25–70% of a
+720 px frame leaves the collector line a few pixels tall, which is #708's subject. Every conflict the
+detection path produced was a misread digit; the projection path produced none on this run.
+
+What was measured and not kept:
+
+- **Beam search on the title** (`DecodeMethod::BeamSearch`). Width 5: 152 usable and 3 wrong against
+  greedy's 149 and 4, at the same cost; width 10: one more usable read at twice the cost. An
+  eight-point grid over `text_lines`'s own constants moved the same counts by 2–4 bands of 305, so a
+  3-band difference is inside the noise, and **greedy stays**.
+- **The full alphabet on the collector**: 3 resolved and **1 conflicting** (a PBRO `163/207` misread)
+  against the narrowed alphabet's 3 and 0. Kept narrowed.
+
+**Still to do.** Exact's resolve now starts from the way up the hash chose (§10), but Fast's
+rescue read still reads the title **both ways**, and so does `ocr-bench` — its ratios are for a
+`read_title`, not a `read_title_first`. A read is now cheap enough that the ratio `session::OCR_EVERY`
+was derived from (~340 ms a read against a ~350 ms frame) no longer holds, and #705 kept the cadence
+as it was; nobody has re-derived it. **Nobody has timed a read on a quiet machine** since this
+change: take one before quoting a latency.
 
 ## 5. The tracker
 
@@ -933,7 +1010,7 @@ of the table: **the ~100 ms figures elsewhere in this crate are release figures.
 | Frame | Release | Debug |
 | --- | --- | --- |
 | One locked frame, no reader running | **~350 ms** wall | ~580 ms on the cheapest path (frozen decision, no extra framings, no OCR) |
-| A frame that runs both readers | **~1.3 s** wall — OCR title ~340 ms, collector ~650 ms | — |
+| A frame that runs both readers | **~1.3 s** wall — OCR title ~340 ms, collector ~650 ms. **Superseded by #707**: §4 measured both reads 5.9× and 6.8× cheaper, paired, on 2026-09-30 | — |
 | Detect-only, 960 px in, no quad found | **145–180 ms** | — |
 | JPEG decode of a 960 px frame | 3–4 ms | **230 ms** |
 | JPEG decode of a 5 MB full-resolution photo | — | **4.1–4.5 s** |
@@ -1009,8 +1086,9 @@ cycle with the card never leaving the lens**.
    nothing inside `max_normalized` is a miss.
 4. **`IMG20260823055008.jpg` never detects a quad** — one corpus frame that produces no candidate
    at either Canny rung, on either detector (2026-09-08).
-5. **OCR reads on one frame in four**, and only while the tracker is uncommitted. That is the
-   right trade at ~340 ms a title read against a ~350 ms frame, but it means the tier that saves
+5. **OCR reads on one frame in four**, and only while the tracker is uncommitted. That was the
+   right trade at ~340 ms a title read against a ~350 ms frame — a read #707 made roughly six times
+   cheaper (§4) without anyone re-deriving the cadence — but it means the tier that saves
    foils contributes at a quarter of the rate the tier it is rescuing does — which is the
    arithmetic that produced the `Suplex` commit before the weights were split.
 6. **The collector fallback crops are a guess about frame layouts, not a model of them.** Two
