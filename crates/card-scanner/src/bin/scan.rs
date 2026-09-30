@@ -199,7 +199,7 @@ fn main() -> std::process::ExitCode {
             .map_err(|e| eprintln!("bundle {}: {e}", path.display()))
             .ok()?;
         eprintln!(
-            "bundle: {} printings, {} artworks, {} at {} bits",
+            "bundle: {} card faces, {} artworks, {} at {} bits",
             bundle.cards.len(),
             bundle.arts.len(),
             bundle.kind.as_str(),
@@ -292,7 +292,7 @@ fn main() -> std::process::ExitCode {
             found += 1;
 
             if let Some(reader) = &reader {
-                let c = reader.read_collector(&rgb, &flipped);
+                let c = reader.read_collector(&card_scanner::ocr::BandSource::Rectified { upright: &rgb, flipped: &flipped });
                 println!(
                     "      COL {:.0}ms {}[{}] -> {}",
                     c.elapsed_ms,
@@ -306,7 +306,7 @@ fn main() -> std::process::ExitCode {
                         None => format!("no printing ({} pairings tried)", c.candidates.len()),
                     }
                 );
-                let read = reader.read_title(&rgb, &flipped);
+                let read = reader.read_title(&card_scanner::ocr::BandSource::Rectified { upright: &rgb, flipped: &flipped });
                 let hit = read
                     .is_usable()
                     .then(|| r.lookup_by_name(&read.normalized))

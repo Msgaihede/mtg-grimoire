@@ -488,6 +488,12 @@ struct CardResult {
     frames_to_decision: Option<usize>,
     frames_fed: usize,
     ms: f64,
+    /// Frames that reached the whole-card match — trusted, with a card detected.
+    matched_frames: usize,
+    /// Descriptors those frames computed, summed. See `MatchReport::hashes`.
+    hashes: usize,
+    /// Hashing plus searching over those frames, summed.
+    match_ms: f64,
 }
 
 impl CardResult {
@@ -530,6 +536,11 @@ fn run_pass(
         }
         out.ms += ms;
         out.frames_fed += 1;
+        if let Some(m) = &v.r#match {
+            out.matched_frames += 1;
+            out.hashes += m.hashes;
+            out.match_ms += f64::from(m.hash_ms + m.search_ms);
+        }
         if v.resolution.as_ref().is_some_and(|r| r.outcome == Outcome::NotFound) {
             out.not_found = true;
         }
@@ -685,8 +696,18 @@ fn row(pass: &str, mode: ScanMode, stratum: &str, results: &[&CardResult]) -> St
     };
     let fed: usize = results.iter().map(|r| r.frames_fed).sum();
     let ms: f64 = results.iter().map(|r| r.ms).sum();
+    let matched: usize = results.iter().map(|r| r.matched_frames).sum();
+    let hashes: usize = results.iter().map(|r| r.hashes).sum();
+    let match_ms: f64 = results.iter().map(|r| r.match_ms).sum();
+    let per_match = |x: f64, decimals: usize| {
+        if matched == 0 {
+            "—".to_string()
+        } else {
+            format!("{:.*}", decimals, x / matched as f64)
+        }
+    };
     format!(
-        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
         pass,
         stratum,
         n,
@@ -701,6 +722,8 @@ fn row(pass: &str, mode: ScanMode, stratum: &str, results: &[&CardResult]) -> St
         if exact { pct(count(|r| r.not_found), n) } else { "—".to_string() },
         median,
         if fed == 0 { "—".to_string() } else { format!("{:.0}", ms / fed as f64) },
+        per_match(hashes as f64, 2),
+        per_match(match_ms, 1),
     )
 }
 
@@ -882,7 +905,8 @@ fn run(args: Args) -> Result<(), String> {
          ambiguous decision is judged on its first choice; the bracket is the share of the \
          ambiguous whose choices held the true printing. Mean ms is \
          wall time per frame fed with that many cards running at once — a figure under load, \
-         not a latency.\n\n",
+         not a latency. Hashes and match ms are per frame that reached the whole-card match; \
+         match ms is hashing plus searching, under the same load.\n\n",
         cards.len(),
         synth.frames,
         synth.long_edge,
@@ -890,9 +914,12 @@ fn run(args: Args) -> Result<(), String> {
     );
     md.push_str(
         "| pass | stratum | n | decided % | card ✓ % | printing ✓ % | \
-         ambiguous % (true in choices %) | not found % | median frames | mean ms |\n",
+         ambiguous % (true in choices %) | not found % | median frames | mean ms | \
+         hashes / match | match ms |\n",
     );
-    md.push_str("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
+    md.push_str(
+        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n",
+    );
     for (p, &(name, mode, _)) in passes.iter().enumerate() {
         let all: Vec<&CardResult> = results[p].iter().flatten().collect();
         md.push_str(&row(name, mode, "all", &all));

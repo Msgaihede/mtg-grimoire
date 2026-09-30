@@ -140,12 +140,9 @@ pub fn collector_band(rectified: &RgbImage) -> RgbImage {
 
 fn band(rectified: &RgbImage, at: (f32, f32, f32, f32), scale: u32) -> RgbImage {
     let (w, h) = (rectified.width() as f32, rectified.height() as f32);
-    let (x0, y0, x1, y1) = at;
+    let (x0, y0, _, _) = at;
     let (cx, cy) = ((x0 * w) as u32, (y0 * h) as u32);
-    // Clamped once, here, rather than at the crop alone — a degenerate input made the crop
-    // safe and then asked `resize` for a zero-height image, which panics.
-    let cw = (((x1 - x0) * w) as u32).max(1);
-    let ch = (((y1 - y0) * h) as u32).max(1);
+    let (cw, ch) = band_extent(at, rectified.width(), rectified.height());
     let crop = image::imageops::crop_imm(rectified, cx, cy, cw, ch).to_image();
     image::imageops::resize(
         &crop,
@@ -153,6 +150,107 @@ fn band(rectified: &RgbImage, at: (f32, f32, f32, f32), scale: u32) -> RgbImage 
         ch * scale,
         image::imageops::FilterType::Lanczos3,
     )
+}
+
+/// A band's size on a `w`×`h` card, before any scale.
+///
+/// Clamped once, here, rather than at the crop alone — a degenerate input made the crop safe
+/// and then asked `resize` for a zero-height image, which panics. Shared by both ways of
+/// producing a band, so a band warped from the frame is exactly the size of the one cropped
+/// from the rectified card and the recogniser cannot tell them apart by shape.
+fn band_extent(at: (f32, f32, f32, f32), w: u32, h: u32) -> (u32, u32) {
+    let (x0, y0, x1, y1) = at;
+    let cw = (((x1 - x0) * w as f32) as u32).max(1);
+    let ch = (((y1 - y0) * h as f32) as u32).max(1);
+    (cw, ch)
+}
+
+/// A card as the frame holds it: the pixels, and where the canonical card sits in them.
+///
+/// **Why the bands are warped from here and not cropped from the rectified card.** The
+/// rectification is 488×680, warped with a bilinear filter, then trimmed and resized back to
+/// 488×680, and a band cropped out of that is upscaled again with Lanczos3 — three resamples
+/// before the recogniser sees a pixel, the last two adding nothing but blur. Worse, the
+/// rectification is only as sharp as the frame it came from, and the frame the page sends is
+/// downscaled to `send px` first. A band warped straight out of the frame is one resample of
+/// real pixels — and out of a *detail* frame at the camera's own resolution, it is the
+/// collector line's actual strokes rather than an interpolation of a few pixels of them.
+#[derive(Debug, Clone)]
+pub struct CardPixels {
+    image: RgbImage,
+    /// The quad the rectification warped — the inset already applied — in `image` coordinates,
+    /// upright.
+    warped: crate::detect::Quad,
+    /// The trim the rectification applied to the upright card, in rectified pixels; already
+    /// [`crate::trim::effective`], so a margin the trim declined moves nothing here either.
+    margin: crate::trim::Margin,
+}
+
+impl CardPixels {
+    /// `warped` is the quad the upright rectification used, inset included, in `image`'s
+    /// coordinates; `margin` the trim measured on that rectification.
+    pub fn new(image: RgbImage, warped: crate::detect::Quad, margin: crate::trim::Margin) -> Self {
+        let margin = crate::trim::effective(margin, crate::RECTIFIED_W, crate::RECTIFIED_H);
+        CardPixels { image, warped, margin }
+    }
+
+    /// The frame the bands are warped from.
+    pub fn image(&self) -> &RgbImage {
+        &self.image
+    }
+
+    /// The band `at` — fractions of the trimmed canonical card, the same rectangles
+    /// [`title_band`] and [`collector_band`] crop — warped out of the frame at `scale` times
+    /// its size on a 488×680 card. `rotated` reads it from the 180° view.
+    ///
+    /// `None` only for a quad that admits no homography.
+    pub fn band(&self, at: (f32, f32, f32, f32), scale: u32, rotated: bool) -> Option<RgbImage> {
+        use imageproc::geometric_transformations::Projection;
+        let (quad, m) = if rotated {
+            (self.warped.flipped(), self.margin.rotated_180())
+        } else {
+            (self.warped, self.margin)
+        };
+        let (w, h) = (crate::RECTIFIED_W as f32, crate::RECTIFIED_H as f32);
+        // The rectification maps the quad onto the 488×680 rectangle; its inverse, built the
+        // other way round, maps a rectified pixel back into the frame.
+        let to_frame =
+            Projection::from_control_points([(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)], quad.corners)?;
+        // A fraction of the trimmed card is a point inside the margin on the untrimmed one:
+        // `trim::apply` crops the margin away and stretches what is left back to 488×680.
+        let (left, top) = (m.left as f32, m.top as f32);
+        let (cw, ch) = (w - left - m.right as f32, h - top - m.bottom as f32);
+        let at_card = |u: f32, v: f32| to_frame * (left + u * cw, top + v * ch);
+        let (x0, y0, x1, y1) = at;
+        let q = crate::detect::Quad {
+            corners: [at_card(x0, y0), at_card(x1, y0), at_card(x1, y1), at_card(x0, y1)],
+        };
+        let (bw, bh) = band_extent(at, crate::RECTIFIED_W, crate::RECTIFIED_H);
+        crate::detect::rectify_to(&self.image, &q, bw * scale, bh * scale)
+    }
+}
+
+/// Where a reader gets its bands.
+pub enum BandSource<'a> {
+    /// The rectified card, both ways up — what a still image, a test, or a frame with no
+    /// [`CardPixels`] to hand gives.
+    Rectified { upright: &'a RgbImage, flipped: &'a RgbImage },
+    /// The frame itself. See [`CardPixels`] for why this is the better one.
+    Frame(&'a CardPixels),
+}
+
+impl BandSource<'_> {
+    /// The band `at` at `scale`, from the upright view or the 180° one.
+    pub fn band(&self, at: (f32, f32, f32, f32), scale: u32, rotated: bool) -> RgbImage {
+        match self {
+            BandSource::Rectified { upright, flipped } => {
+                band(if rotated { flipped } else { upright }, at, scale)
+            }
+            // A degenerate quad reads as an empty band rather than failing the frame: the
+            // reader then finds nothing, which is what a card it cannot see should produce.
+            BandSource::Frame(p) => p.band(at, scale, rotated).unwrap_or_else(|| RgbImage::new(1, 1)),
+        }
+    }
 }
 
 /// One line of text inside a band, in the band's own pixels, bottom and right exclusive.
@@ -403,34 +501,42 @@ pub struct CollectorRead {
 /// a two-letter fragment that happens to collide with a real set.
 pub fn collector_candidates(raw: &str) -> Vec<(String, String)> {
     let mut words: Vec<String> = Vec::new();
-    for w in raw.split(|c: char| !c.is_ascii_alphanumeric()) {
-        // **Split where the character class changes.** The separators on the card — a space,
-        // a bullet, a brush glyph — are exactly what OCR drops, so `C 0035` comes back as
-        // `C0035` and `HOB * EN` as `HOBEN`. Measured over the corpus this was the dominant
-        // failure by a distance: most reads had the digits present and legible and produced
-        // *zero* pairings, because no token began with one.
-        let mut cur = String::new();
-        for ch in w.chars() {
-            if !cur.is_empty()
-                && cur.chars().last().is_some_and(|p| p.is_ascii_digit()) != ch.is_ascii_digit()
-            {
-                words.push(std::mem::take(&mut cur));
+    // The numbers whose set size [`end_word`] dropped, by their index in `words`.
+    let mut totals: Vec<usize> = Vec::new();
+    let mut cur = String::new();
+    // Whether a `/` has been seen since the last token ended.
+    let mut slash = false;
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            // **Split where the character class changes.** The separators on the card — a
+            // space, a bullet, a brush glyph — are exactly what OCR drops, so `C 0035` comes
+            // back as `C0035` and `HOB * EN` as `HOBEN`. Measured over the corpus this was the
+            // dominant failure by a distance: most reads had the digits present and legible and
+            // produced *zero* pairings, because no token began with one.
+            if cur.chars().last().is_some_and(|p| p.is_ascii_digit() != ch.is_ascii_digit()) {
+                end_word(&mut words, &mut totals, &mut cur, &mut slash);
             }
             cur.push(ch);
-        }
-        if !cur.is_empty() {
-            words.push(cur);
+        } else {
+            end_word(&mut words, &mut totals, &mut cur, &mut slash);
+            slash |= ch == '/';
         }
     }
+    end_word(&mut words, &mut totals, &mut cur, &mut slash);
 
     // **A collector number is printed zero-padded, and that is a usable filter.** Every
     // number this read correctly over the corpus came back four digits — `0001`, `0232`,
     // `0193`. A one- or two-digit token is a fragment of something else: measured, a garbage
     // read of `... D 6 T K A ...` produced a confident `LTR 6` against a true `LTR 590`.
+    let digits = |t: &str| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit());
+    // **A number straight after another number is the set's total** when OCR lost the slash
+    // between them — `end_word` drops it when the slash survived. It is never a collector
+    // number: GRN 259 is a real card, so offering it would be a confident wrong printing.
+    let is_total = |i: usize| i > 0 && digits(&words[i - 1]);
     let numbers: Vec<(usize, String)> = words
         .iter()
         .enumerate()
-        .filter(|(_, t)| t.len() >= 3 && t.chars().all(|c| c.is_ascii_digit()))
+        .filter(|(i, t)| t.len() >= 3 && digits(t) && !is_total(*i))
         .map(|(i, t)| (i, t.to_ascii_lowercase()))
         .collect();
 
@@ -452,9 +558,27 @@ pub fn collector_candidates(raw: &str) -> Vec<(String, String)> {
         // resolved to nothing, so the search reached the *next* word — an artist's surname
         // whose first three letters are a real set — and answered INV 4 with full confidence.
         // Wrong and certain is worse than absent, so it now answers nothing there.
+        // **One exception, and it is a layout rather than a loosening.** The 2015–2022 frames
+        // print `226/259 U` over `GRN • EN`, so the set sits past the total and a one-letter
+        // rarity — measured on `read_eval`'s detail crops (2026-09-30), those lines came back
+        // legible and paired with nothing. The reach extends to that one slot and only when a
+        // total follows the number — dropped by `end_word`, or kept because OCR lost the slash —
+        // so it can land on the set, the language or nothing, and never on the artist after them.
+        let kept_total = words.get(ni + 1).is_some_and(|t| digits(t));
+        let past_total = (kept_total || totals.contains(ni)).then(|| {
+            let after = if kept_total { ni + 2 } else { ni + 1 };
+            let rarity = words
+                .get(after)
+                .is_some_and(|t| t.len() == 1 && t.chars().all(|c| c.is_ascii_alphabetic()));
+            if rarity {
+                after + 1
+            } else {
+                after
+            }
+        });
         let mut near: Vec<&String> = alpha
             .iter()
-            .filter(|(i, _)| i.abs_diff(*ni) <= 1)
+            .filter(|(i, _)| i.abs_diff(*ni) <= 1 || Some(*i) == past_total)
             .map(|(_, t)| *t)
             .collect();
         near.sort_by_key(|t| std::cmp::Reverse(t.len()));
@@ -483,6 +607,32 @@ pub fn collector_candidates(raw: &str) -> Vec<(String, String)> {
     }
     out.dedup();
     out
+}
+
+/// Close the token being built in [`collector_candidates`], unless it is a set's size.
+///
+/// **A number after a slash that follows a number is the set size, not a collector number.**
+/// A modern frame prints `051/302`: the card, then how many cards the set has. Kept
+/// as a token, the denominator is a three-digit number like any other and is offered as a
+/// collector number beside the real one — live on 2026-09-15, Disruption Protocol NEO 51
+/// resolved to `NEO 302`, which is a Forest. Dropped from the stream rather than only from the
+/// numbers, so it does not sit between the collector number and the set code either and push
+/// the set out of the one-word reach the pairing allows.
+fn end_word(words: &mut Vec<String>, totals: &mut Vec<usize>, cur: &mut String, slash: &mut bool) {
+    if cur.is_empty() {
+        return;
+    }
+    let digits = |t: &str| t.chars().all(|c| c.is_ascii_digit());
+    let set_size = *slash && digits(cur) && words.last().is_some_and(|w| digits(w));
+    let word = std::mem::take(cur);
+    if set_size {
+        // Remembered against the number it followed, so the pairing still knows the frame
+        // printed `number/total` and can reach past the rarity to the set.
+        totals.push(words.len() - 1);
+    } else {
+        words.push(word);
+    }
+    *slash = false;
 }
 
 #[cfg(feature = "ocr")]
@@ -646,9 +796,9 @@ mod engine {
         /// band contains the collector line and the artist credit, which OCR reads perfectly
         /// well — so "did it return text" cannot decide it. The longer alphabetic result wins,
         /// because a name is longer than a set code and a collector number.
-        pub fn read_title(&self, upright: &RgbImage, flipped: &RgbImage) -> TitleRead {
+        pub fn read_title(&self, src: &BandSource<'_>) -> TitleRead {
             let started = std::time::Instant::now();
-            let (ba, bb) = (title_band(upright), title_band(flipped));
+            let (ba, bb) = (src.band(TITLE_BAND, 2, false), src.band(TITLE_BAND, 2, true));
             let a = self.read_band(&ba, Band::Title).unwrap_or_default();
             let b = self.read_band(&bb, Band::Title).unwrap_or_default();
 
@@ -674,21 +824,18 @@ mod engine {
         /// rule.
         pub fn read_title_first(
             &self,
-            upright: &RgbImage,
-            flipped: &RgbImage,
+            src: &BandSource<'_>,
             flipped_first: bool,
             edits: &dyn Fn(&str) -> Option<u32>,
         ) -> TitleRead {
             let started = std::time::Instant::now();
-            let (first, second) =
-                if flipped_first { (flipped, upright) } else { (upright, flipped) };
-            let band_a = title_band(first);
+            let band_a = src.band(TITLE_BAND, 2, flipped_first);
             let a = self.read_band(&band_a, Band::Title).unwrap_or_default();
             let a_edits = edits(&normalize(&a));
             if a_edits == Some(0) {
                 return title_read(band_a, a, flipped_first, started);
             }
-            let band_b = title_band(second);
+            let band_b = src.band(TITLE_BAND, 2, !flipped_first);
             let b = self.read_band(&band_b, Band::Title).unwrap_or_default();
             let b_edits = edits(&normalize(&b));
             let rank = |e: Option<u32>| match e {
@@ -734,8 +881,8 @@ mod engine {
         /// Which way up is settled by which read yields *resolvable* pairings, so unlike the
         /// title there is no heuristic here — the caller checks each candidate against the
         /// corpus and an upside-down read simply produces none that resolve.
-        pub fn read_collector(&self, upright: &RgbImage, flipped: &RgbImage) -> CollectorRead {
-            self.read_collector_first(upright, flipped, false)
+        pub fn read_collector(&self, src: &BandSource<'_>) -> CollectorRead {
+            self.read_collector_first(src, false)
         }
 
         /// The same, starting from the way up the hash chose rather than always from upright.
@@ -744,26 +891,23 @@ mod engine {
         /// nothing, so it always paid for two reads. The hash already knows which way up won.
         pub fn read_collector_first(
             &self,
-            upright: &RgbImage,
-            flipped: &RgbImage,
+            src: &BandSource<'_>,
             flipped_first: bool,
         ) -> CollectorRead {
             let started = std::time::Instant::now();
-            let (first, second) =
-                if flipped_first { (flipped, upright) } else { (upright, flipped) };
             // **The first crop settles which way up, and the fallbacks only ever try that
             // one.** Both orientations of every crop is six reads at ~130 ms each, and the
             // cost lands exactly the wrong way round: a card that reads resolves on the first
             // attempt, while a card that cannot be read pays for all six. Deciding the
             // orientation once takes the worst case from 785 ms to roughly half that.
-            let mut shown = band(first, COLLECTOR_BAND, 4);
+            let mut shown = src.band(COLLECTOR_BAND, 4, flipped_first);
             let up = self.read_band(&shown, Band::Collector).unwrap_or_default();
             let mut candidates = collector_candidates(&up);
             let mut raw = up;
             let mut from_second = false;
 
             if candidates.is_empty() {
-                let flip = band(second, COLLECTOR_BAND, 4);
+                let flip = src.band(COLLECTOR_BAND, 4, !flipped_first);
                 let down = self.read_band(&flip, Band::Collector).unwrap_or_default();
                 let found = collector_candidates(&down);
                 // Digits decide it, not length: upside-down, this band holds the *title*,
@@ -781,9 +925,8 @@ mod engine {
 
             // Wider, then higher — only in the orientation already chosen.
             if candidates.is_empty() {
-                let source = if rotated { flipped } else { upright };
                 for at in COLLECTOR_FALLBACKS {
-                    let crop = band(source, at, 4);
+                    let crop = src.band(at, 4, rotated);
                     let text = self.read_band(&crop, Band::Collector).unwrap_or_default();
                     let found = collector_candidates(&text);
                     if !found.is_empty() {
@@ -870,11 +1013,71 @@ mod tests {
     }
 
     #[test]
+    fn a_numbered_frame_reaches_its_set_past_the_total_and_the_rarity() {
+        // The 2015–2022 frames print `226/259 U` over `GRN • EN`, so the set code is three
+        // tokens from the number. Real reads from `read_eval`'s detail crops (2026-09-30), every
+        // one legible and every one producing no pairing at all before this.
+        for (raw, set, number) in [
+            ("226/259 U GRNEN OMITRY", "grn", "226"),
+            ("084/249 C IMASEN SHS", "ima", "84"),
+            ("221/ 259 RNA EN S RAN", "rna", "221"),
+            ("272/280 L ZNREN SAM BU", "znr", "272"),
+            ("004/012 P FNM FNM*EN IASON", "fnm", "4"),
+            // The same line with the slash lost: the total is then a token of its own.
+            ("226 259 U GRNEN OMITRY", "grn", "226"),
+        ] {
+            let c = collector_candidates(raw);
+            assert!(c.contains(&(set.into(), number.into())), "{raw}: got {c:?}");
+        }
+    }
+
+    #[test]
+    fn the_total_is_never_offered_as_a_collector_number() {
+        // `226/259`: GRN 259 is a real card, so offering the set's total as a number is a
+        // confident wrong printing — the failure the adjacency rule exists to prevent.
+        for raw in ["226/259 U GRNEN OMITRY", "226 259 U GRNEN OMITRY"] {
+            let c = collector_candidates(raw);
+            assert!(!c.iter().any(|(_, n)| n == "259"), "{raw}: the total was offered: {c:?}");
+        }
+    }
+
+    #[test]
+    fn past_the_total_the_search_still_stops_at_the_set() {
+        // With no set code where it belongs, the next words are the language and the artist,
+        // and an artist is exactly what `a_word_beyond_the_set_code_is_not_reachable` fences.
+        let c = collector_candidates("226/259 U EN INVEK");
+        assert!(!c.iter().any(|(s, _)| s.starts_with("inv")), "reached the artist: {c:?}");
+    }
+
+    #[test]
     fn the_language_is_never_offered_as_a_set() {
         // `EN` is on every English card and would otherwise be the most common set code in
         // the corpus by a wide margin.
         let c = collector_candidates("U 0232 EN");
         assert!(!c.iter().any(|(s, _)| s == "en"), "got {c:?}");
+    }
+
+    #[test]
+    fn a_set_size_is_not_offered_as_a_collector_number() {
+        // Disruption Protocol, NEO 51, live on 2026-09-15: the read resolved to `NEO 302`,
+        // which is a Forest, and the tier that names a printing contributed nothing. The raw
+        // string was not kept — §8 item 16 records the printed `051/302` and the NEO pairing
+        // it produced, and `NEO 302` resolving means the set code sat beside the denominator.
+        let c = collector_candidates("051/302 NEO EN");
+        assert!(c.contains(&("neo".into(), "51".into())), "got {c:?}");
+        assert!(!c.iter().any(|(_, n)| n == "302"), "the set size was offered: {c:?}");
+
+        // Spaces round the slash do not hide it.
+        let c = collector_candidates("051 / 302 NEO");
+        assert_eq!(c.first(), Some(&("neo".into(), "51".into())), "got {c:?}");
+    }
+
+    #[test]
+    fn a_slash_with_no_number_before_it_drops_nothing() {
+        // Only a number that follows a number and a slash is a set size. A slash OCR invented
+        // in front of the only number on the line must not cost the read its collector number.
+        let c = collector_candidates("U /0232 LTR EN");
+        assert!(c.contains(&("ltr".into(), "232".into())), "got {c:?}");
     }
 
     #[test]
@@ -1049,5 +1252,79 @@ mod tests {
             "the far mark was taken into the line: {:?}",
             lines[0]
         );
+    }
+
+    /// A 488×680 card with structure everywhere — smooth enough that two resamplers agree, varied
+    /// enough that a band landing a few pixels off does not.
+    fn patterned_card() -> RgbImage {
+        RgbImage::from_fn(crate::RECTIFIED_W, crate::RECTIFIED_H, |x, y| {
+            let (fx, fy) = (x as f32, y as f32);
+            image::Rgb([
+                (128.0 + 100.0 * (fx / 23.0).sin()) as u8,
+                (128.0 + 100.0 * (fy / 17.0).cos()) as u8,
+                ((x + y) % 256) as u8,
+            ])
+        })
+    }
+
+    fn mean_diff(a: &RgbImage, b: &RgbImage) -> f64 {
+        assert_eq!(a.dimensions(), b.dimensions(), "the bands are different sizes");
+        let sum: f64 = a
+            .pixels()
+            .zip(b.pixels())
+            .map(|(p, q)| p.0.iter().zip(q.0).map(|(x, y)| (f64::from(*x) - f64::from(y)).abs()).sum::<f64>())
+            .sum();
+        sum / f64::from(a.width() * a.height() * 3)
+    }
+
+    /// `card` placed in a larger frame at `k` times its size, and the quad it sits at.
+    fn in_a_frame(card: &RgbImage, k: u32) -> (RgbImage, crate::detect::Quad) {
+        let (w, h) = (card.width() * k, card.height() * k);
+        let big = image::imageops::resize(card, w, h, image::imageops::FilterType::Triangle);
+        let mut frame = RgbImage::from_pixel(w + 200, h + 120, image::Rgb([20, 20, 20]));
+        image::imageops::replace(&mut frame, &big, 100, 60);
+        let (x0, y0, x1, y1) = (100.0, 60.0, 100.0 + w as f32, 60.0 + h as f32);
+        (frame, crate::detect::Quad { corners: [(x0, y0), (x1, y0), (x1, y1), (x0, y1)] })
+    }
+
+    #[test]
+    fn a_band_warped_from_the_frame_is_the_band_cropped_from_the_card() {
+        // The whole of the geometry in one comparison: the band's corners, carried through the
+        // quad's homography into the frame, land on the pixels the rectified crop reads — both
+        // ways up. A band a few pixels off would not agree with it on this pattern.
+        let card = patterned_card();
+        let flipped = image::imageops::rotate180(&card);
+        let (frame, quad) = in_a_frame(&card, 2);
+        let pixels = CardPixels::new(frame, quad, crate::trim::Margin::default());
+        let rectified = BandSource::Rectified { upright: &card, flipped: &flipped };
+        let from_frame = BandSource::Frame(&pixels);
+        for rotated in [false, true] {
+            for (at, scale) in [(TITLE_BAND, 2), (COLLECTOR_BAND, 4)] {
+                let d = mean_diff(&from_frame.band(at, scale, rotated), &rectified.band(at, scale, rotated));
+                assert!(d < 6.0, "band {at:?} rotated {rotated}: mean diff {d:.2}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_band_warped_from_the_frame_honours_the_trim() {
+        // The rectified card a band is cropped from was trimmed and stretched back to 488×680, so
+        // a fraction of it is a point inside the margin on the untrimmed card. Reading the frame
+        // without that mapping lands every band on background.
+        let card = patterned_card();
+        let m = crate::trim::Margin { left: 12, top: 20, right: 30, bottom: 8 };
+        let trimmed = crate::trim::apply(&card, m).expect("a margin the trim accepts");
+        let trimmed_180 = crate::trim::apply(&image::imageops::rotate180(&card), m.rotated_180())
+            .expect("a margin the trim accepts");
+        let (frame, quad) = in_a_frame(&card, 1);
+        let pixels = CardPixels::new(frame, quad, m);
+        let rectified = BandSource::Rectified { upright: &trimmed, flipped: &trimmed_180 };
+        for rotated in [false, true] {
+            let d = mean_diff(
+                &BandSource::Frame(&pixels).band(TITLE_BAND, 2, rotated),
+                &rectified.band(TITLE_BAND, 2, rotated),
+            );
+            assert!(d < 8.0, "rotated {rotated}: mean diff {d:.2}");
+        }
     }
 }

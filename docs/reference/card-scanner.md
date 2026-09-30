@@ -431,7 +431,9 @@ every set that drops it scores 10/11 rather than 11/11 while looking identical o
 photographed upside-down rectifies perfectly and then matches nothing; an implementation that
 skips this fails on roughly half of hand-held scans for no visible reason. Which orientation won
 is reported, because a scan that consistently says `rotated` is a card being held upside-down
-and that is invisible in the overlay.
+and that is invisible in the overlay. **Both, but only until the stretch has said which** — see
+*The held orientation* below: once a frame matches plainly one way up, the frames after it hash
+that half alone.
 
 ### Hash — `dhash-chroma32`, 256 bits
 
@@ -481,7 +483,8 @@ and ask which parts are redder than the rest of the same card.
 straight from a 488×680 rectification to a 15×8 grid is the most expensive thing in the frame —
 its kernel support scales with the ratio, so a 30-to-80× reduction reads the whole source
 several times over. Measured on a 720 px frame: **32 ms of hashing against 3.5 ms of searching
-113,375 cards**, and the multi-framing search pays it six times a frame rather than twice.
+113,375 cards**, and the multi-framing search pays it six times a frame rather than twice — three,
+since 2026-09-30, once a stretch holds its orientation (below).
 
 | pre-scale | hashing, a 720 px frame | over the labelled corpus |
 | --- | --- | --- |
@@ -544,6 +547,63 @@ nothing changed, which is the useful kind of answer.
 The sweep exposed a real bug on the way: `match_views` chose between orientations and framings
 on raw `distance` while the ranking used `normalized`, so a field search picked a different
 framing than its own ranking would have. It compares the score the ranking actually used now.
+
+### The held orientation — three descriptors a frame, not six (#704)
+
+**A card held in front of the lens does not turn over, so the orientation is asked once per
+stretch rather than once per frame.** `Reference::match_views_held` takes the orientation the
+session holds and the tracker's `max_normalized` (0.30) as a gate. A held frame hashes its three
+framings in that orientation only; if the best of them comes in under the gate the frame is
+done, and if not it **widens** to the other three and chooses exactly as an unheld match does,
+reusing the three it already searched. A hold that went wrong costs one frame of six hashes and
+never a card. The session holds an orientation once a frame's winner is under the gate **and**
+the other orientation's best is at least `ORIENTATION_GAP` (0.05, 13 bits) worse. An upside-down
+card scores what two unrelated printings do, ~0.39, so a real card clears that by a wide margin,
+and a card whose two orientations come that close keeps searching both. The hold clears with the
+stretch (the lock no longer trusted) and with everything else `forget_card` forgets.
+
+**Whatever still has to be hashed is hashed in parallel** — `std::thread::scope`, because the app
+build carries no rayon — and `hash_ms` and `search_ms` are the two phases' wall time rather than
+a sum of work done side by side. `MatchReport::hashes` counts the descriptors a frame actually
+computed; `eval` reports it as *hashes / match*.
+
+**The framing is not held, and that was measured rather than assumed.** Holding framing and
+orientation both — one descriptor a frame — was built first. The per-frame A/B below had it at a
+third of the old cost, and the evaluation kept every card-correct figure. But it moved which
+*printing* Fast named on nine cards — two of them the noise §10 describes — and changed
+frames-to-decision on twenty-one more, because
+reprints sit a few bits apart and the framing a frame is matched in decides between them — §3's
+warning about the tightest framing, in a new place. With the orientation alone held, a replay of
+Soul Snuffers — one of the two cards whose printing changed between runs — produced **identical
+per-frame matches** held and unheld, and it and Greenwood Sentinel split between the same two
+printings in the same 4-to-2 proportion over six runs either way. The framing can be revisited once the corners are exact (#703).
+
+Measured 2026-09-30, Windows, release. The per-frame figures are an interleaved A/B, the four
+arms timed on the same 341 detected frames of 30 cards (the synthetic bursts of the first 30
+cached renders), at high priority on a machine other sessions held at 100% CPU. Two runs:
+
+| per matched frame | median | p90 |
+| --- | ---: | ---: |
+| six views, sequential — before | 51.6 / 48.6 ms | 54.0 / 51.2 |
+| six views, parallel | 39.7 / 42.6 ms | 59.0 / 62.1 |
+| **held orientation, three views, parallel — after** | **20.7 / 22.1 ms** | 29.7 / 32.2 |
+| held orientation, three views, sequential | 25.9 / 24.6 ms | 27.2 / 26.7 |
+
+The held orientation stood on 333 of 341 frames and named the same top-1 as the full search on
+all 333. **The hold is most of the win and the parallelism is the small, uncertain part**: on
+this machine it took about a tenth off the median and added to the tail, because its threads
+were competing with every other core's work. At normal priority on the same saturated machine
+the parallel arms were *slower* than sequential — 278 against 126 ms — so a figure for it taken
+anywhere but an idle machine is a figure about the load.
+
+Over the evaluation (160 printings, seed 7, 8 workers), hashes per matched frame went **6.00 →
+3.55 in Fast and 6.00 → 4.15 in Exact**: six on a stretch's first matched frame and three after,
+averaged over the few frames before a decision. Every accuracy column of both Exact passes is
+identical to the baseline in every stratum, and every Fast accuracy column but *printing ✓* is too — **basic lands
+included**, the stratum the chroma half exists for. Fast's printing figure read 75.6% before and
+74.4% after, two cards, and both are the evaluation's own noise: see the reproducibility note in
+§10. The resolve's own whole-card tier still hashes its burst both ways up, once per card; it
+reads its views from `StoredView`, not from the session's hold.
 
 **The art section is built but not matched against.** Its hashes are of Scryfall's isolated art
 crop and a rectified photograph is a whole card; using it needs an art-window extractor, which
@@ -733,6 +793,97 @@ was derived from (~340 ms a read against a ~350 ms frame) no longer holds, and #
 as it was; nobody has re-derived it. **Nobody has timed a read on a quiet machine** since this
 change: take one before quoting a latency.
 
+### Where the bands come from (issue #708, 2026-09-30)
+
+**Until #708 a band was three resamples of a downscaled frame.** The page sends every frame at
+`send px` (960 by default); the card was warped out of that to 488×680, trimmed and stretched
+back, and the band cropped out of it was upscaled 2× or 4× with Lanczos3. None of the last three
+steps adds information, and on a card filling half of a 960 px frame the collector line is a few
+pixels tall before any of them.
+
+- **`ocr::CardPixels` warps each band straight out of the frame.** A band is still a rectangle of
+  the trimmed canonical card — the same fractions as before — and its four corners go through the
+  trim (`trim::effective`, so a margin the trim declined moves nothing) and the inset quad's
+  homography into frame coordinates; `detect::rectify_to` then warps just that band, at the size
+  the recogniser got before. Readers take a `BandSource`: the rectified card (a still, a test,
+  `ocr-bench`, a frame with no pixels kept) or the frame, and the orientation #717's readers try
+  first is its `rotated` flag.
+- **A detail frame, only on a frame that will read.** The verdict's `wants_detail` says the next
+  frame's readers are expected to run — Fast one frame ahead of each rescue read, Exact until the
+  card's resolve has run, because the resolve reads whichever burst views are most card-like — and
+  the page then sends that frame at the camera's resolution behind the usual JPEG (§9's IPC seam).
+  Detection, the lock and the hash never see it, so the lock's coordinates never change scale; the
+  quad is scaled onto it by the width ratio, and it is decoded only when a read runs. `detail` on
+  the verdict names the frame a read used. **Warping from the 960 px frame alone changed nothing
+  measurable** (the first table below): the resolution is what helps, and only the detail frame
+  carries it.
+- **The 2015–2022 collector format needed the parse, not the pixels.** Those frames print
+  `226/259 U` over `GRN • EN`, so the set code is three tokens from the number and the
+  touching-only rule above never reached it. Before the detail frames the line was never legible
+  enough for that to show; with them, reads like `226/259 U GRNEN`, `084/249 C IMASEN` and
+  `272/280 L ZNREN` came back clean and paired with nothing. `collector_candidates` now reaches
+  the one slot past a total and a one-letter rarity, and only when a total follows the number —
+  so it lands on the set, the language or nothing, never the artist — and never offers the total
+  itself (GRN 259 is a real card; §8 item 16, which #709 fixed for the slash-kept case).
+- **#708 also built a line crop, and #707 made it redundant the same day.** Before #707 landed,
+  the read was `get_text` with its detection model, and cutting the title band to its line first
+  (a row projection of `|∂I/∂x|`) was the largest single gain in the first two tables below; a
+  collector *layout* crop found the two-line block and still resolved fewer printings, so it was
+  never switched on. `text_lines` does the same job inside every read, per line and per column,
+  so at the merge both were removed — one line finder, not two.
+
+**`read_eval` is the labelled set.** It renders each of `eval`'s 160 printings into a burst at
+**1920 px** (a 1080p camera), downscales to **960 px** through JPEG 0.72 for detection as the page
+does, and JPEGs the camera frame at 0.85 as a detail. Every read in every configuration is from the
+same detection and is scored against the corpus label: the title exact (normalized, either face of
+a `//` name), the title resolving to the right card, the collector resolving to the right printing
+over the printings from 2015 on (the only ones with the line), and a resolve to any other printing
+counted as wrong. `--dump` writes the shipped configuration's crops and a `labels.jsonl` of what
+each should read and did. Synthetic, like `eval`: a regression fence, never a camera claim.
+
+**On the merged tree — #707's reader in both rows, so the difference is the pixels.** Windows,
+release, 2026-09-30, 160 printings × 2 frames, seed 7, 8 workers; the detector found a card on 286
+of 320 frames and only those are read:
+
+| bands from | title exact % | title → card % | title wrong card | collector → printing % (179 reads, 2015+) | collector wrong | ms / title, under load | ms / collector, under load |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| the rectified 960 px frame (before) | 21.7 | 45.1 | 5 | 0.6 | 2 | 883 | 1,221 |
+| **the detail frame (shipped)** | **45.1** | **72.4** | 4 | **12.3** | 9 | 1,034 | 1,216 |
+
+**The machine was at 100% from other sessions' benchmarks for every run here**, so the ms columns
+are means under load, not latencies. Within one run both rows read the same detections in turn, so
+the comparison holds: a title read about 17% dearer, a collector read the same. The code #708 adds
+— one warp of about a hundred thousand pixels — is milliseconds, so what the rest would be, if it
+is not load, is the recogniser reading more text out of a band it can now see. **A release timing
+on a quiet machine is still owed.**
+
+The collector's wrong count rising with its right count is the tier reading at all. In Exact every
+collector answer is checked against the survivors of the tiers before it (`conflict: … not among
+survivors`), which is what a wrong printing of the right card meets. Two strata are worth knowing,
+both read off the dumped crops rather than guessed. **Basic lands** read worst of the frames with a
+title: a basic's name is one short word, and a read that keeps whichever orientation read *more
+letters* can lose to the upside-down band's copyright line — the orientation contest, which reading
+the way up the hash chose (#704, #717) is for. **Adventure and double-faced titles read exactly and
+still resolve to no card** — `Realm-Cloaked Giant`, `Fell Horseman` — because the band shows one
+face's name and the name index holds the whole `A // B`; that is a lookup gap, §8 item 12 and
+issue #709's.
+
+Before the merge, on `get_text` with detection (the same run shape): the first run, at `a3701068`,
+and the second with the parse change.
+
+| config | title exact % | title → card % | title wrong card | collector → printing % (179 reads, 2015+) | collector wrong |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| cropped from the rectified 960 px frame (before) | 25.2 | 41.3 | 4 | 0.0 | 2 |
+| warped from the 960 px frame | 23.4 | 41.3 | 2 | 0.0 | 1 |
+| warped from the detail frame | 33.6 | 45.5 | 3 | 12.3 | 11 |
+| detail + title line + collector layout | 51.4 | 63.3 | 4 | 10.1 | 8 |
+| *second run:* before | 25.2 | 42.0 | 2 | 0.0 | 2 |
+| *second run:* detail + title line + the parse change | 51.4 | 63.3 | 4 | 20.7 | 13 |
+| *second run:* the same + collector layout | 51.4 | 63.3 | 4 | 17.9 | 9 |
+
+**The baseline moved by two reads between two runs of identical code**, so read a difference of a
+couple of reads as noise — §10's caveat about `eval` holding here too.
+
 ## 5. The tracker
 
 Matching is stateless: every frame is decided from scratch, and at ~12 detections a second a
@@ -779,6 +930,18 @@ lucky frame captured the slot permanently: `Gandalf, Spark Starter` came up corr
 203, one frame favoured HOB 97 by a bit or two, and it stayed there however many frames
 afterwards preferred the right one. Reprints of one card differ by far less than two different
 cards do, so the printing needed decay and hysteresis *more* rather than less.
+
+**An exact tie goes to the lower printing id** (`track::strongest`, 2026-09-30). Reprints that
+share art hash identically, so their member evidence ties to the last bit, and the pick used to be
+`max_by` over a `HashMap` — the last of equals in an iteration order seeded per map, so which of
+two tied printings Fast named changed from run to run (§10, *#705 found why*). The lower id
+because it is the order the index already ranks a tie in: the bundle is written in id order and
+`Bundle::search` keeps the earlier of two equal distances, so the frame's own top-1 among
+art-identical reprints is the lowest id and the tracker now agrees with it. Newest release was
+considered and refused — the tracker holds no dates, and identical art means the image prefers
+neither printing, so any fixed order is as right as another. The card's leader and the order of
+the standings break ties the same way. Exact never meets the tie: `commit_to` seeds the resolved
+member at `1e6`.
 
 **The reported leader is sticky.** A challenger needs 30% more evidence than the incumbent
 before the readout changes — hysteresis on the reported leader only, with the accumulator
@@ -1183,21 +1346,28 @@ cycle with the card never leaving the lens**.
     (`needless_range_loop`), and `serve.rs:519` (`unnecessary_get_then_check`, in the server's
     own tests). Adding either gate is a tidy-up commit rather than a CI change; both would go
     red on day one for something the test step is not about.
-11. **The bundle holds no `transform` or `modal_dfc` printing, so a real double-faced card can
-    never be recognised by appearance.** `build-hashes` keeps only rows with a top-level
-    `image_uris`, and those two layouts carry their images under `card_faces` instead — 1,065
-    and 328 printings in the corpus (counted 2026-09-15 while building §10's evaluation). Its
-    "double-faced" stratum is therefore meld front faces, the one physically double-faced layout
-    with top-level images, and a 100% there says nothing about a Delver of Secrets. A builder
-    limitation that predates §10; the fix is hashing each face.
-12. **Split and adventure face names are not in the name index.** `Reference`'s `by_name` holds
-    the full `a // b` name, so an exact read of a front face never matches exactly and falls
-    through to the fuzzy search. Before 2026-09-15 that fell through to a wrong card —
-    `virtue of knowledge` resolved to Price of Knowledge at four edits and Exact decided it; since
-    §10's corrected-read rule it is ignored when that card is not among the survivors, so the
-    read now confirms nothing rather than naming the wrong card. Indexing face names would let it
-    confirm the right one. (`by_name` also keeps one oracle per normalized name, so a masked lookup
-    answers `None` on a collision whose first oracle the filters exclude.)
+11. **Fixed 2026-09-30 (#709) in the builder; the evaluation still cannot see it.** The bundle
+    held no `transform` or `modal_dfc` printing — `build-hashes` kept only rows with a top-level
+    `image_uris`, and those layouts carry theirs under `card_faces`, 1,065 and 328 printings
+    (counted 2026-09-15). **It now hashes each face**, both under the printing's id: a dry run
+    over the dev corpus on 2026-09-30 read **118,448 printings, 4,084 of them with a second
+    face — 122,532 images** against 114,364 before, every one of the 4,084 a printing that had
+    no entry at all. The entry layout is unchanged, so `FORMAT_VERSION` stays 3; a face past the
+    first is cached under `card#1` so it cannot overwrite the front's row, and
+    `Bundle::search` keeps one hit per id, so a printing's two faces never fill two slots or
+    read as each other's runner-up. **What stays open**: `eval` renders `image_uris.display`
+    only, so its "double-faced" stratum is still meld fronts, and a 100% there still says
+    nothing about a Delver of Secrets until the evaluation reads a face's render too.
+12. **Fixed 2026-09-30 (#709).** Split and adventure face names were not in the name index:
+    `by_name` held the full `a // b` name, so `virtue of knowledge` missed the exact lookup and
+    fell to the fuzzy one — Price of Knowledge at four edits before 2026-09-15, nothing since
+    §10's corrected-read rule. **Every face of an `a // b` name is now indexed too**, and a
+    whole name outranks a face: 2,153 cards in the corpus have a face named what another card is
+    named whole, 2,065 of them art-series cards like `Memory Lapse // Memory Lapse`, and a read
+    of `memory lapse` means the one that is played. **A name now keeps every oracle that bears
+    it** rather than the first — 244 normalized names belong to more than one (Ornithopter is a
+    9ED card and a DMU token), and a masked lookup whose first oracle the filters excluded used
+    to answer `None` for a card they permit. Both counted 2026-09-30 over the dev corpus.
 13. **A commit can file into a stale folder when the folder list fails to load.** The page treats
     a stored `folderId` that is gone or not the reader's own as the root, but it can only decide
     that once `useCollectionFolderList` has answered; the commit refetches, and if the list still
@@ -1219,16 +1389,20 @@ cycle with the card never leaving the lens**.
     `cards.finishes`, while the tray's per-row finish offers all three. A foil row for a
     nonfoil-only printing commits silently as a foil collection row. `AddToCollection` narrows the
     choice to the target's finishes; the tray does not yet.
-16. **The collector parse offers a modern card's set size as its number.** A post-2015 line prints
-    `051/302`, and `ocr::collector_candidates` splits on the slash and keeps both as
-    three-digit number tokens, so the set-size denominator is offered as a collector number beside
-    the real one. Live on 2026-09-15 a read of Disruption Protocol NEO 51 resolved to `NEO 302`,
-    which is a Forest. The tier refused it — `conflict: NEO 302 is Forest, not among survivors`,
-    the guard that predates round 4 — so nothing wrong was decided, but the one tier that names a
-    printing named the wrong one and contributed nothing. Had a Forest been standing, round 4's
-    margin rule is what would have had to catch it: the pin is only as safe as the survivors are
-    unlike the misread. The fix is in the parse — a number followed by `/` is the number, the one
-    after it is not.
+16. **Fixed 2026-09-30 (#709).** The collector parse offered a modern card's set size as its
+    number: a post-2015 line prints `051/302`, and `ocr::collector_candidates` kept both sides
+    of the slash as three-digit number tokens. Live on 2026-09-15 a read of Disruption Protocol
+    NEO 51 resolved to `NEO 302`, which is a Forest; the tier refused it — `conflict: NEO 302 is
+    Forest, not among survivors` — so nothing wrong was decided, but the one tier that names a
+    printing contributed nothing. **A number after a slash that follows a number is now dropped
+    from the token stream** — not only from the numbers, so it no longer sits between the
+    collector number and a set code printed after it. The raw string of that read was not kept,
+    so the test rebuilds the line from the two facts recorded here.
+    **#708 extended it the same day**: the 2015–2022 line prints `226/259 U` over `GRN • EN`, so
+    with the total gone the set is still two tokens past the number, behind the rarity. The
+    pairing now reaches that one slot when a total followed the number — dropped here, or kept
+    as a token of its own because OCR lost the slash, which is then also never offered — and
+    never further (§4's *Where the bands come from*).
 17. **Filtering to a set the card is not in answers `ambiguous`, not `not_found`.** Live on
     2026-09-15, an LEA-only filter over that NEO card left 295 printings, 13 inside the whole-card
     gate, and a resolve of **six LEA cards at 0.246–0.266 normalized** — every one inside the 0.30
@@ -1427,6 +1601,19 @@ the JPEG as `InvokeBody::Raw` with `FrameOptions` as JSON in an `x-scanner-optio
 `scanner_capture` takes the JPEG raw with the sidecar as JSON in an `x-scanner-capture` header.
 Each is read by one payload function per command, and a JSON body is refused there with a
 sentence. The base64 JSON leg existed for the Android build and went with it on 2026-09-27.
+
+**A frame's body can carry a second JPEG behind the first** (issue #708, 2026-09-30). With an
+`x-scanner-detail` header, the header is the frame's byte length and everything after it is the
+**detail**: the same video frame at the camera's own resolution (long edge capped at 2560, JPEG
+0.85), which `Session::frame_with_detail` warps the title and collector bands out of — see §4's
+*Where the bands come from*. One request rather than two because the pair must be one video
+frame: the crate scales the quad it found in the small image onto the large one, so a detail one
+frame later is a card that has moved. The page sends one only on the frame after a verdict with
+`wants_detail`, and draws the video once, deriving the small frame from that canvas rather than
+from the video a second time. **A detail header that cannot split the body is refused**, not
+defaulted — not a number, zero, or reaching the end of the body — because a mis-split hands the
+decoder half a JPEG as the frame. The crate refuses a detail of its own accord too, falling back to
+the frame, when it is smaller than the frame or of another aspect.
 
 **The two headers fail differently, and the asymmetry is the point.** A malformed or absent
 `x-scanner-options` falls back to `FrameOptions::default()` — a defaulted slider costs one frame
@@ -2185,7 +2372,7 @@ Storybook's `scannerHandlers` answers the new commands from `FakeDb.scannerPrefs
 the pipeline and a silent regression in either mode. It sits behind `builder`. For each of the 160
 Scryfall ids in `crates/card-scanner/eval/printings.txt` — 15 per frame era across five eras, 20
 basic lands (one of each basic from HOB, LTR, 7ED and ZNR), 15 borderless or full-art, 10 split or
-adventure, 10 double-faced (meld fronts, §8 item 11), 20 reprints and 10 random, all English and
+adventure, 10 double-faced (meld fronts still, §8 item 11), 20 reprints and 10 random, all English and
 non-digital — it fetches the render once into a cache, makes a burst, and feeds it to three passes:
 **Fast**, **Exact**, and **Exact filtered to the printing's own set**, each stopping at the first
 frame whose `decision_seq` moved.
@@ -2280,9 +2467,15 @@ And after round 4 by stratum (same run):
 
 **Fast's printing figure moved 73.8% → 75.6% between the two runs with no change to the Fast path**
 — Fast never calls `resolve` — while HEAD gained the evaluation's own commit and a merge of `main`.
-Three cards moved and nobody has found which change moved them, so **the evaluation's reproducibility
-is unverified**: until a same-HEAD double run agrees with itself, read a difference of a few cards
-between two runs as noise rather than as a regression or a fix.
+Three cards moved and nobody had found which change moved them. **Found 2026-09-30: nothing
+moved them — Fast's printing column is not reproducible across processes.** The tracker picks a
+standing's `best_member` with a `max_by` over a `HashMap`, so two reprints at exactly equal scores
+(they share art, and tie often) resolve in hash order, which Rust seeds per process. One binary
+replaying Soul Snuffers' burst six times named EVE 45 four times and PLST EVE-45 twice; Greenwood
+Sentinel split the same way between ANB 97 and M19 187. **Every figure in this section was taken
+while the tie-break was still seeded**, so read a difference of a few cards in Fast's printing
+column *between any two of them* as noise; every other accuracy column agreed exactly across three
+runs on 2026-09-30.
 
 **#705 found why, and it is Fast's printing alone.** Two runs of #705's branch that differed only
 in a guard no card reached made every decision on the same frame with the same card, and eleven
@@ -2293,6 +2486,16 @@ iteration order, and a `HashMap`'s iteration order is seeded per process. So whi
 printings a Fast decision names changes from run to run — in the app as much as in the evaluation.
 Decided, card ✓ and median frames were identical to the digit across both runs; they do not read
 the member map.
+
+**Fixed 2026-09-30: an exact tie now goes to the lower printing id** (§5, `track::strongest`), and
+the card's leader and the standings' order break ties the same way. The fence is
+`tied_reprints_report_the_same_printing_in_every_tracker` — a hundred fresh trackers are a hundred
+map seeds — which fails on the old code. **Two agreeing evaluation
+runs have not been taken yet** — the fix was written in a Linux container that cannot reach
+Scryfall, and every figure here is Windows — so the first two `--fast-only` runs after it, on one
+build and one seed, should agree in every column but mean ms; a printing figure that still moves
+between them is a second source of nondeterminism, not this one. The printing figures in the tables
+above will not reproduce exactly on a build with the fix: every tied card now lands on one side.
 
 **After #705** — Fast's early decision and quick lock (§5, §3). Windows, release, 2026-09-30, 160
 printings, 12 frames at 1280 px, 12 workers, against the same 113,494-printing bundle; before and after
@@ -2325,7 +2528,8 @@ decided by the vote bar at a 2-bit gap in both, a frame sooner now only because 
 matched one more frame; the early rule never fired on it. Printing moved both ways by a card or two
 per row and rose overall on two seeds of three: an early decision reports the best printing after
 two or three frames rather than eight, which is Fast's promise — the card now, its printing
-provisional. **Read the printing column as noisy by a few cards** — *#705 found why*, above, is the reason.
+provisional. **The printing column in these tables is noisy by a few cards** — *#705 found why*,
+above, is the reason, and the tie-break it names is deterministic since.
 
 **Re-run after main's #701 (rectify a frame once) and #717 (Exact's resolve off the frame path)
 merged into the branch**, against the same merged tree with both of #705's switches turned off:

@@ -119,6 +119,7 @@ const baseVerdict: ScannerVerdict = {
     rotated: false,
     view: 0,
     views: 4,
+    hashes: 8,
     candidates: [plainsCandidate, hierarchCandidate],
     hash_ms: 2.3,
     margin: 0.031,
@@ -127,6 +128,8 @@ const baseVerdict: ScannerVerdict = {
   tracked: null,
   collector: null,
   ocr: null,
+  wants_detail: false,
+  detail: null,
 };
 
 const votingTracked: ScannerTracked = {
@@ -171,6 +174,7 @@ const decided: ScannerVerdict = {
     rotated: false,
     view: 0,
     views: 4,
+    hashes: 8,
     candidates: [{ id: "storm-of-saruman-ltr-72", distance: 30, normalized: 0.11, label: saruman, printings: 1 }],
     hash_ms: 2.1,
     margin: null,
@@ -271,6 +275,8 @@ const noCard: ScannerVerdict = {
   tracked: null,
   collector: null,
   ocr: null,
+  wants_detail: false,
+  detail: null,
 };
 
 const panicked: ScannerVerdict = {
@@ -302,6 +308,8 @@ const panicked: ScannerVerdict = {
   tracked: null,
   collector: null,
   ocr: null,
+  wants_detail: false,
+  detail: null,
 };
 
 /* ---------------------------------------------------------------------------- Exact ---- */
@@ -420,6 +428,7 @@ const exactResolved: ScannerVerdict = {
     rotated: false,
     view: 0,
     views: 4,
+    hashes: 8,
     candidates: [{ id: lotusChoice.id, distance: 31, normalized: 0.121, label: lotusLea, printings: 2 }],
     hash_ms: 2.2,
     margin: null,
@@ -440,6 +449,7 @@ const exactAmbiguous: ScannerVerdict = {
     rotated: false,
     view: 0,
     views: 4,
+    hashes: 8,
     candidates: boltChoices.map((c) => ({
       id: c.id,
       distance: Math.round((c.distance ?? 0) * 256),
