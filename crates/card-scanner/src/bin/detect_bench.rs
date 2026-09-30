@@ -81,6 +81,54 @@ fn pct(xs: &[f64], p: f64) -> Option<f64> {
     Some(v[rank.min(v.len()) - 1])
 }
 
+/// This process's CPU time so far, user and kernel, in ms — every thread's, summed.
+///
+/// **The figure that survives a busy machine.** Wall time per frame swung ±30% between two
+/// identical runs while other sessions held every core, which no before/after can be read
+/// through; CPU time counts the work whatever else is running. Windows only, like every figure
+/// in this repo, and ticked at the scheduler's ~15.6 ms, so it is read as a mean over many
+/// frames and never per frame.
+#[cfg(windows)]
+fn cpu_ms() -> f64 {
+    #[repr(C)]
+    #[derive(Default)]
+    struct FileTime {
+        low: u32,
+        high: u32,
+    }
+    extern "system" {
+        fn GetCurrentProcess() -> *mut std::ffi::c_void;
+        fn GetProcessTimes(
+            process: *mut std::ffi::c_void,
+            creation: *mut FileTime,
+            exit: *mut FileTime,
+            kernel: *mut FileTime,
+            user: *mut FileTime,
+        ) -> i32;
+    }
+    let (mut c, mut e, mut k, mut u) = Default::default();
+    // SAFETY: the pseudo-handle needs no closing, and all four out-pointers are live locals.
+    let ok = unsafe { GetProcessTimes(GetCurrentProcess(), &mut c, &mut e, &mut k, &mut u) };
+    let ticks = |t: &FileTime| (u64::from(t.high) << 32 | u64::from(t.low)) as f64;
+    if ok == 0 {
+        return 0.0;
+    }
+    (ticks(&k) + ticks(&u)) / 10_000.0
+}
+
+#[cfg(not(windows))]
+fn cpu_ms() -> f64 {
+    0.0
+}
+
+fn mean(xs: &[f64]) -> f64 {
+    if xs.is_empty() {
+        0.0
+    } else {
+        xs.iter().sum::<f64>() / xs.len() as f64
+    }
+}
+
 fn show(xs: &[f64]) -> String {
     let f = |o: Option<f64>| o.map_or("—".to_string(), |x| format!("{x:.1}"));
     let mean = if xs.is_empty() {
@@ -146,6 +194,9 @@ fn run(args: Args) -> Result<(), String> {
     // Per frame, less its JPEG decode — the decode is the same work either way and is not
     // detection's to own.
     let (mut locked, mut acquiring) = (Vec::<f64>::new(), Vec::<f64>::new());
+    // CPU ms per frame, and the verdict's own stage timings, for frames arriving locked.
+    let (mut locked_cpu, mut acquiring_cpu) = (Vec::<f64>::new(), Vec::<f64>::new());
+    let mut stages: [Vec<f64>; 5] = Default::default();
     let (mut to_lock_frames, mut to_lock_ms) = (Vec::<f64>::new(), Vec::<f64>::new());
     let mut never_locked = 0usize;
     let mut lost = 0usize;
@@ -168,19 +219,28 @@ fn run(args: Args) -> Result<(), String> {
         let mut elapsed = 0.0f64;
         let mut first_lock: Option<(usize, f64)> = None;
         for (i, jpeg) in frames.iter().enumerate() {
-            let t = Instant::now();
+            let (t, cpu) = (Instant::now(), cpu_ms());
             let v = session.frame(jpeg, &opts);
             let ms = t.elapsed().as_secs_f64() * 1000.0;
+            let cpu = cpu_ms() - cpu;
             elapsed += ms;
             let json = serde_json::to_value(&v).map_err(|e| e.to_string())?;
             let work = ms - f64::from(v.decode_ms);
             if was_locked {
                 locked.push(work);
+                locked_cpu.push(cpu);
+                if let Some(t) = v.timings {
+                    let parts = [t.resize_ms, t.mask_ms, t.contour_ms, t.rectify_ms, t.total_ms];
+                    for (all, x) in stages.iter_mut().zip(parts) {
+                        all.push(f64::from(x));
+                    }
+                }
                 if let Some(s) = json.get("search").and_then(|s| s.as_str()) {
                     *searches.entry(s.to_string()).or_default() += 1;
                 }
             } else {
                 acquiring.push(work);
+                acquiring_cpu.push(cpu);
             }
             let now_locked = json.pointer("/lock/phase").and_then(|p| p.as_str()) == Some("locked");
             if args.trace {
@@ -231,6 +291,16 @@ fn run(args: Args) -> Result<(), String> {
     println!(
         "frame ms less decode, arriving unlocked  {}",
         show(&acquiring)
+    );
+    println!(
+        "CPU ms a frame, decode included: arriving locked {:.1}, unlocked {:.1}",
+        mean(&locked_cpu),
+        mean(&acquiring_cpu)
+    );
+    let m: Vec<f64> = stages.iter().map(|x| mean(x)).collect();
+    println!(
+        "locked, the verdict's stage means: resize {:.1}  mask {:.1}  contour {:.1}  rectify {:.1}  total {:.1}",
+        m[0], m[1], m[2], m[3], m[4]
     );
     println!(
         "frames to lock                           {}",
