@@ -950,6 +950,48 @@ weak evidence about *which card* (2.0, where appearance is 1.0 and can outweigh 
 and decisive about *which printing of it* (20.0, because nothing else can tell two printings
 apart at all). The art decides the card; the number narrows it down within that card.
 
+### The finish — the printing's own finishes, then the separator (2026-10-01)
+
+**Two facts, and the page draws the conclusion.** A decision carries `finishes`, the decided
+printing's finishes from the corpus's `finishes` column (`Reference::finishes_of`), and
+`finish_mark`, the collector line's separator measured for that printing
+(`ocr::finish_mark`). The page's **Detect** finish takes a printing that exists in one finish as
+that finish, a confident separator reading that the printing exists in as that, and anything
+else as **Unknown** for the reader to settle in the tray.
+
+**The printing alone settles more than half the corpus.** Counted on 2026-10-01 over 118,610
+printings: 48,239 non-foil only, 13,548 foil only, 892 etched only — no pixel is read for any of
+them.
+
+**The separator is measured, not read.** Modern collector lines print `LTR • EN` on a non-foil and
+`LTR ★ EN` on a foil. The recogniser was asked first, on a live pass (OnePlus 12 as a 1280×720
+virtual camera, seven non-foils and five foils from LTR and HOB): it returned the star as `*` once
+in five, as `M` and `Y` once each and dropped it twice, and turned a non-foil's dot into `C` once.
+The mark itself is plain — a star is a bold blob nearly a letter tall, a dot a speck — so
+`finish_mark` finds the second line (the lower of the band's two strongest, measured on its left
+60% like the reader), binarizes it at its Otsu level, keeps the connected marks centred on the
+line's own rows (the padded box catches slivers of the line above), skips as many letter-height
+marks as the printing's set code has letters, and measures the next one against the letter
+height:
+
+| separator | height ÷ letter height | area ÷ letter height² | solidity (area ÷ hull) |
+| --- | ---: | ---: | ---: |
+| non-foil dot (7 crops) | 0.41–0.62 | 0.12–0.17 | 1.04–1.12 |
+| foil star (5 crops) | 0.80–0.84 | 0.33–0.44 | 0.91–0.99 |
+
+A star is height ≥ 0.72, area 0.26–0.60 and solidity ≤ 1.02; a dot is height ≤ 0.68 and area
+0.06–0.22; anything else, a separator that could not be found, or a letter-height mark where the
+separator should be, is **unknown**. The ceiling and the floor came from Lenovo 500 crops of
+non-foils: a band cut off at the bottom measured a 1.34 "separator", and a dot that mostly did not
+survive the binarization 0.01. **Shape is the weak vote at this resolution** — the star is six or
+seven camera pixels across and its points smear, so solidity separates partly by how a small blob's
+pixel count compares to its hull; it confirms a star and never makes one.
+
+**Every cut is a first calibration from twelve crops of two sets on one camera**, and the rule has
+never seen a borderless card, a showcase frame, a white-bordered set or a foil under glare. All
+twelve and the Lenovo crops are classified correctly (`the_separator_is_measured_as_a_star_a_dot_or_nothing_known`
+fences the rule on synthetic bands); widening the sample is what should move the numbers.
+
 ### Reading without text detection (#707)
 
 **A read runs no detection model any more.** `ocrs`'s `get_text` is three stages — `detect_words`,

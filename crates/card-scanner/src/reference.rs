@@ -141,6 +141,9 @@ pub struct Reference {
     /// Lower-cased and with leading zeros stripped on both sides, because the card prints
     /// `0232` and Scryfall stores `232`.
     by_set_number: HashMap<(String, String), [u8; ID_LEN]>,
+    /// Which finishes each printing exists in, as the corpus's `finishes` column lists them —
+    /// `nonfoil`, `foil`, `etched`. See [`Reference::finishes_of`].
+    finishes: HashMap<[u8; ID_LEN], Vec<String>>,
 }
 
 /// The shortest read [`Reference::lookup_cards_masked`] will take as the start of a longer name.
@@ -173,6 +176,7 @@ impl Reference {
             oracle_printings: HashMap::new(),
             by_name: HashMap::new(),
             by_set_number: HashMap::new(),
+            finishes: HashMap::new(),
         }
     }
 
@@ -192,7 +196,7 @@ impl Reference {
     pub fn load_labels(&mut self, corpus: &rusqlite::Connection) -> rusqlite::Result<usize> {
         let mut stmt = corpus.prepare(
             "SELECT id, illustration_id, name, set_code, collector_number, lang, released_at,
-                    oracle_id
+                    oracle_id, finishes
              FROM cards",
         )?;
         let rows = stmt.query_map([], |r| {
@@ -207,13 +211,15 @@ impl Reference {
                     released: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
                 },
                 r.get::<_, Option<String>>(7)?,
+                r.get::<_, Option<String>>(8)?,
             ))
         })?;
 
         let mut n = 0;
         for row in rows.flatten() {
-            let (id, illustration_id, label, oracle_id) = row;
+            let (id, illustration_id, label, oracle_id, finishes) = row;
             if let Some(raw) = crate::index::parse_uuid(&id) {
+                self.set_finishes(raw, parse_finishes(finishes.as_deref().unwrap_or("")));
                 self.add_label(
                     raw,
                     oracle_id.as_deref().and_then(crate::index::parse_uuid),
@@ -224,6 +230,25 @@ impl Reference {
             }
         }
         Ok(n)
+    }
+
+    /// The finishes a printing exists in — `nonfoil`, `foil`, `etched` — or none when the
+    /// corpus did not say.
+    ///
+    /// **A fact the page draws a conclusion from, never one this crate acts on.** More than half
+    /// the corpus exists in one finish (counted 2026-10-01: 48,239 non-foil only, 13,548 foil
+    /// only, 892 etched only, of 118,610), and for those the tray's finish needs no reading at
+    /// all; for the rest, [`crate::ocr::finish_mark`] is what can say which.
+    pub fn finishes_of(&self, printing: &[u8; ID_LEN]) -> &[String] {
+        self.finishes.get(printing).map_or(&[], Vec::as_slice)
+    }
+
+    /// Record a printing's finishes — [`Reference::load_labels`]' own, public for a caller with
+    /// no SQLite.
+    pub fn set_finishes(&mut self, printing: [u8; ID_LEN], finishes: Vec<String>) {
+        if !finishes.is_empty() {
+            self.finishes.insert(printing, finishes);
+        }
     }
 
     /// Attach one printing's label — the body of [`Reference::load_labels`], public so a
@@ -850,6 +875,18 @@ fn set_number_key(set: &str, number: &str) -> (String, String) {
 ///
 /// The early exit is what makes this affordable: a full matrix over 30,000 names per frame is
 /// not, and almost every name differs from the read in its first few characters.
+/// The corpus's `finishes` column — a JSON array such as `["nonfoil","foil"]` — as the finish
+/// names it holds. Unknown words are dropped rather than failing the row, and an absent or
+/// unreadable column is no finishes, which [`Reference::finishes_of`] reports as "not said".
+#[cfg_attr(not(feature = "corpus"), allow(dead_code))]
+fn parse_finishes(column: &str) -> Vec<String> {
+    column
+        .split(|c: char| !c.is_ascii_alphabetic())
+        .filter(|w| matches!(*w, "nonfoil" | "foil" | "etched"))
+        .map(String::from)
+        .collect()
+}
+
 fn bounded_edit_distance(a: &str, b: &str, max: u32) -> Option<u32> {
     let (a, b) = (a.as_bytes(), b.as_bytes());
     if a.len().abs_diff(b.len()) as u32 > max {
@@ -1189,6 +1226,15 @@ mod tests {
         let r = three();
         assert_eq!(r.lookup_by_name("forest"), Some((id(1), 0)));
         assert_eq!(r.lookup_by_name("shock"), Some((id(3), 0)));
+    }
+
+    #[test]
+    fn the_finishes_column_reads_as_the_finish_names_it_holds() {
+        assert_eq!(parse_finishes(r#"["nonfoil","foil"]"#), ["nonfoil", "foil"]);
+        assert_eq!(parse_finishes(r#"["etched"]"#), ["etched"]);
+        assert!(parse_finishes("[]").is_empty());
+        assert!(parse_finishes("").is_empty(), "an absent column is not said");
+        assert!(parse_finishes(r#"["glossy"]"#).is_empty(), "a word this app does not know is dropped");
     }
 
     #[test]
