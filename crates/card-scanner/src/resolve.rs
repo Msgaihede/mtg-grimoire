@@ -83,6 +83,10 @@ pub struct BurstView<'a> {
     pub flipped: &'a RgbImage,
     pub alternates: &'a [(RgbImage, RgbImage)],
     pub cardness: f32,
+    /// The frame this view was rectified from, when the session kept it — what the readers warp
+    /// their bands out of. `None` reads them from `upright` and `flipped` instead. See
+    /// [`crate::ocr::CardPixels`].
+    pub pixels: Option<&'a crate::ocr::CardPixels>,
 }
 
 impl BurstView<'_> {
@@ -458,6 +462,7 @@ mod tests {
                 flipped,
                 alternates: &[],
                 cardness,
+                pixels: None,
             })
             .collect()
     }

@@ -32,6 +32,7 @@ use crate::reference::{Label, MatchReport, Reference};
 use crate::resolve::{BurstView, NoReaders};
 pub use crate::resolve::{ChoiceView, Outcome, ResolutionView, TierView};
 use crate::track::{CommitRule, Observation, Tracked, Tracker, TrackerOptions};
+use crate::ocr::{BandSource, CardPixels};
 use crate::trim::Margin;
 use image::RgbImage;
 use std::collections::VecDeque;
@@ -201,7 +202,7 @@ impl FrameOptions {
     }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub struct FrameSize {
     pub w: u32,
     pub h: u32,
@@ -353,6 +354,18 @@ pub struct Verdict {
     pub decision: Option<DecisionView>,
     /// On the frame an Exact resolve ran, what it came to and what each tier did.
     pub resolution: Option<ResolutionView>,
+    /// **Send the next frame with a detail image** — the same frame at the camera's own
+    /// resolution — because the session expects to read its bands on it. See
+    /// [`Session::frame_with_detail`].
+    ///
+    /// Asked of the session rather than decided by the page because only the session knows
+    /// when a read is next: a Fast rescue reads one eligible frame in [`OCR_EVERY`], and Exact
+    /// may read any frame its burst keeps until the card is resolved.
+    pub wants_detail: bool,
+    /// The detail frame this frame's readers warped their bands from, when one was sent and
+    /// used. `None` on a frame that read nothing, and on one that read from the detection frame
+    /// because no detail came or it was not the same frame.
+    pub detail: Option<FrameSize>,
 }
 
 impl Verdict {
@@ -392,6 +405,8 @@ impl Verdict {
             tracked: None,
             collector: None,
             ocr: None,
+            wants_detail: false,
+            detail: None,
         }
     }
 }
@@ -426,12 +441,42 @@ fn fast_reader_due(mode: ScanMode, leaderless_locked: u32, seq: &mut u64, commit
     due(seq, committed)
 }
 
+/// [`Session::wants_detail`]'s rule, as a free function for [`due`]'s reason — and so it can be
+/// driven with no models loaded, which is the only way a test can reach it.
+///
+/// `can_read` is "readers are loaded, and there is a card in view to read". Fast predicts
+/// [`fast_reader_due`] one frame ahead without advancing the cadence; Exact wants one until
+/// the card's resolve has run.
+fn detail_due(
+    mode: ScanMode,
+    can_read: bool,
+    committed: bool,
+    leaderless_locked: u32,
+    seq: u64,
+    attempted: bool,
+) -> bool {
+    if !can_read {
+        return false;
+    }
+    match mode {
+        ScanMode::Fast => {
+            !committed
+                && leaderless_locked + 1 >= FAST_RESCUE_AFTER
+                && seq.is_multiple_of(OCR_EVERY)
+        }
+        ScanMode::Exact => !attempted,
+    }
+}
+
 /// One locked frame's views, owned, so an Exact resolve can read over the last few of them.
 struct StoredView {
     rectified: RgbImage,
     rectified_180: RgbImage,
     alternates: Vec<(RgbImage, RgbImage)>,
     cardness: f32,
+    /// The frame the readers warp this view's bands from — kept only while a resolve may still
+    /// read it. See [`CardPixels`].
+    pixels: Option<CardPixels>,
 }
 
 impl StoredView {
@@ -441,7 +486,63 @@ impl StoredView {
             flipped: &self.rectified_180,
             alternates: &self.alternates,
             cardness: self.cardness,
+            pixels: self.pixels.as_ref(),
         }
+    }
+}
+
+/// Where one frame's readers get their pixels: the detail image when one came and is the same
+/// frame, otherwise the detection frame itself — and built only if something asks.
+///
+/// **Lazy because a detail image costs a decode**, a 1080p JPEG being four times the pixels of
+/// the frame detection ran on, and a frame whose readers do not run should not pay it. The
+/// quad is the one the rectification used — the lock's when the frame was re-rectified from
+/// it — so the bands come from the card that was matched and not from a sliver the detector
+/// found on this frame alone.
+struct FramePixels<'a> {
+    frame: &'a image::DynamicImage,
+    detail: Option<&'a [u8]>,
+    /// The rectification's quad before the inset, in the detection frame's coordinates.
+    quad: crate::detect::Quad,
+    inset: f32,
+    margin: Margin,
+    built: std::cell::OnceCell<Option<CardPixels>>,
+    /// The detail frame's size, once one has been decoded and used.
+    used: std::cell::Cell<Option<FrameSize>>,
+}
+
+impl FramePixels<'_> {
+    /// Built once, on first use, and kept for the rest of the frame.
+    fn get(&self) -> Option<&CardPixels> {
+        self.built.get_or_init(|| self.build()).as_ref()
+    }
+
+    fn build(&self) -> Option<CardPixels> {
+        let warped = self.quad.scaled(self.inset);
+        if let Some(p) = self.detail.and_then(|bytes| self.from_detail(bytes, warped)) {
+            return Some(p);
+        }
+        Some(CardPixels::new(self.frame.to_rgb8(), warped, self.margin))
+    }
+
+    /// The detail image, with the quad carried into its coordinates — or `None` when it does
+    /// not decode or cannot be the same frame.
+    ///
+    /// **Refused on shape, not trusted on arrival.** The quad is scaled by the ratio of the two
+    /// widths, which is only right for the same picture at another size; a detail smaller than
+    /// the frame, or of another aspect, is some other image, and warping the bands out of it
+    /// would read a card that is not there. Falling back to the detection frame costs
+    /// resolution, never correctness.
+    fn from_detail(&self, bytes: &[u8], warped: crate::detect::Quad) -> Option<CardPixels> {
+        let img = image::load_from_memory(bytes).ok()?.into_rgb8();
+        let (fw, fh) = (self.frame.width().max(1) as f32, self.frame.height().max(1) as f32);
+        let (kx, ky) = (img.width() as f32 / fw, img.height() as f32 / fh);
+        if kx < 1.0 || (kx - ky).abs() > 0.02 * kx {
+            return None;
+        }
+        let q = crate::detect::Quad { corners: warped.corners.map(|(x, y)| (x * kx, y * ky)) };
+        self.used.set(Some(FrameSize { w: img.width(), h: img.height() }));
+        Some(CardPixels::new(img, q, self.margin))
     }
 }
 
@@ -746,7 +847,23 @@ impl Session {
     /// one slider drag killed every worker thread and exited the server. A tool that dies
     /// while you are adjusting it is worse than one that reports the failure and carries on.
     pub fn frame(&mut self, jpeg: &[u8], opts: &FrameOptions) -> Verdict {
-        self.guarded(|s| s.frame_inner(jpeg, opts))
+        self.frame_with_detail(jpeg, None, opts)
+    }
+
+    /// One frame, with the same frame at a higher resolution for the readers.
+    ///
+    /// **Detection, the lock and the hash never see `detail`**; they run on `jpeg` exactly as
+    /// [`Session::frame`] does, so the lock's coordinates do not change scale between a frame
+    /// that carried one and a frame that did not. Only the OCR bands are warped out of it, and
+    /// only on a frame whose readers run — any other frame ignores it undecoded. The page sends
+    /// one when the previous verdict's [`Verdict::wants_detail`] asked for it.
+    pub fn frame_with_detail(
+        &mut self,
+        jpeg: &[u8],
+        detail: Option<&[u8]>,
+        opts: &FrameOptions,
+    ) -> Verdict {
+        self.guarded(|s| s.frame_inner(jpeg, detail, opts))
     }
 
     /// The guard itself, taking the body rather than being written inline in [`Session::frame`].
@@ -772,7 +889,7 @@ impl Session {
         }
     }
 
-    fn frame_inner(&mut self, jpeg: &[u8], opts: &FrameOptions) -> Verdict {
+    fn frame_inner(&mut self, jpeg: &[u8], detail: Option<&[u8]>, opts: &FrameOptions) -> Verdict {
         // A mode switch forgets the card before anything reads the session, so even a frame
         // that fails to decode reports the mode it was judged in.
         self.set_mode(opts.mode);
@@ -920,6 +1037,21 @@ impl Session {
 
                 // ---- match, readers, track -------------------------------------------------
                 if trusted && matcher {
+                    // The quad the rectification above came from: the lock's when it
+                    // re-rectified, this frame's own otherwise.
+                    let quad = match (&relocked, held_quad) {
+                        (Some(_), Some(q)) => q,
+                        _ => d.quad,
+                    };
+                    let pixels = FramePixels {
+                        frame: &source,
+                        detail,
+                        quad,
+                        inset: opts.detect_options(method, settled).inset,
+                        margin,
+                        built: std::cell::OnceCell::new(),
+                        used: std::cell::Cell::new(None),
+                    };
                     tracked = self.match_locked(
                         &mut v,
                         rectified,
@@ -927,7 +1059,9 @@ impl Session {
                         alternates,
                         d.cardness.score,
                         settled,
+                        Some(&pixels),
                     );
+                    v.detail = pixels.used.get();
                 } else if matcher {
                     // Detected but not yet trusted: tell the tracker nothing was seen, so a
                     // box that never locks can never accumulate a name.
@@ -964,7 +1098,33 @@ impl Session {
         }
 
         self.conclude(&mut v, tracked.as_ref());
+        v.wants_detail = self.wants_detail(v.quad.is_some());
         v
+    }
+
+    /// Will the next frame's readers run, if it looks like this one? See
+    /// [`Verdict::wants_detail`].
+    ///
+    /// **A prediction, and a wrong one costs little either way.** Asking for a detail the next
+    /// frame does not read costs the page one larger encode and the session nothing — an unread
+    /// detail is never decoded. Not asking when a read then runs costs only that read's
+    /// resolution: it warps from the detection frame, as every read did before details existed.
+    ///
+    /// Fast mirrors [`fast_reader_due`] one frame ahead: the next locked frame counts one more
+    /// leaderless frame, and the cadence reads when the counter is at a multiple of
+    /// [`OCR_EVERY`]. Exact asks for as long as the card is unresolved, because the resolve
+    /// reads whichever two of its [`EXACT_BURST`] views are the most card-like, and which those
+    /// are is not known until it runs.
+    fn wants_detail(&self, card_in_view: bool) -> bool {
+        let readers = self.reader.is_some() && self.reference.is_some();
+        detail_due(
+            self.mode,
+            readers && card_in_view,
+            self.tracker.last_committed(),
+            self.leaderless_locked,
+            self.seq,
+            self.attempted,
+        )
     }
 
     /// A trusted frame with a card in it, against the reference: the match, the mode's readers
@@ -972,6 +1132,7 @@ impl Session {
     ///
     /// Separate from `frame_inner` so the per-mode logic can be driven with rectified images
     /// directly — nothing a test can build gets through the detector and the lock.
+    #[allow(clippy::too_many_arguments)]
     fn match_locked(
         &mut self,
         v: &mut Verdict,
@@ -980,6 +1141,7 @@ impl Session {
         alternates: &[(RgbImage, RgbImage)],
         cardness: f32,
         settled: bool,
+        pixels: Option<&FramePixels<'_>>,
     ) -> Option<Tracked> {
         let r = self.reference.as_ref()?;
         // Both orientations are hashed inside the match, because a card is 180°-symmetric and
@@ -1019,7 +1181,11 @@ impl Session {
                     fast_reader_due(self.mode, self.leaderless_locked, &mut self.seq, settled);
                 #[cfg(feature = "ocr")]
                 if let Some(reader) = self.reader.as_ref().filter(|_| eligible) {
-                    let (ocr, obs) = read_title(reader, r, &self.mask, rectified, rectified_180);
+                    let src = match pixels.and_then(FramePixels::get) {
+                        Some(p) => BandSource::Frame(p),
+                        None => BandSource::Rectified { upright: rectified, flipped: rectified_180 },
+                    };
+                    let (ocr, obs) = read_title(reader, r, &self.mask, &src);
                     if let Some(o) = obs {
                         observations.insert(0, o);
                     }
@@ -1027,6 +1193,8 @@ impl Session {
                 }
                 #[cfg(not(feature = "ocr"))]
                 let _ = eligible;
+                #[cfg(not(feature = "ocr"))]
+                let _ = BandSource::Rectified { upright: rectified, flipped: rectified_180 };
             }
             // No per-frame reader. The last few locked frames are kept, and once the lock has
             // held long enough a resolve reads over all of them — once, until a re-arm is taken
@@ -1035,11 +1203,15 @@ impl Session {
             // stretch does not re-arm it; after a break, a resolved card's freeze releasing is
             // what does.
             ScanMode::Exact => {
+                // The frame's pixels only while a resolve may still read this view: after the
+                // resolve a view is kept for nothing but its place in the ring.
+                let readable = self.reader.is_some() && !self.attempted;
                 self.burst.push_back(StoredView {
                     rectified: rectified.clone(),
                     rectified_180: rectified_180.clone(),
                     alternates: alternates.to_vec(),
                     cardness,
+                    pixels: pixels.filter(|_| readable).and_then(|p| p.get().cloned()),
                 });
                 while self.burst.len() > EXACT_BURST {
                     self.burst.pop_front();
@@ -1139,15 +1311,24 @@ struct SessionReaders<'a> {
 #[cfg(feature = "ocr")]
 impl crate::resolve::Readers for SessionReaders<'_> {
     fn title(&self, view: &BurstView<'_>) -> Option<String> {
-        let read = self.reader.read_title(view.upright, view.flipped);
+        let read = self.reader.read_title(&bands_of(view));
         self.ocr.replace(Some(title_view(&read, self.r, self.mask).0));
         read.is_usable().then_some(read.normalized)
     }
 
     fn collector(&self, view: &BurstView<'_>) -> Vec<(String, String)> {
-        let col = self.reader.read_collector(view.upright, view.flipped);
+        let col = self.reader.read_collector(&bands_of(view));
         self.collector.replace(Some(collector_view(&col, self.r, self.mask)));
         col.candidates
+    }
+}
+
+/// Where a burst view's bands come from: its kept frame, else its rectification.
+#[cfg(feature = "ocr")]
+fn bands_of<'a>(view: &BurstView<'a>) -> BandSource<'a> {
+    match view.pixels {
+        Some(p) => BandSource::Frame(p),
+        None => BandSource::Rectified { upright: view.upright, flipped: view.flipped },
     }
 }
 
@@ -1193,10 +1374,9 @@ fn read_title(
     reader: &Reader,
     r: &Reference,
     mask: &Mask,
-    rectified: &image::RgbImage,
-    rectified_180: &image::RgbImage,
+    src: &BandSource<'_>,
 ) -> (OcrView, Option<Observation>) {
-    title_view(&reader.read_title(rectified, rectified_180), r, mask)
+    title_view(&reader.read_title(src), r, mask)
 }
 
 /// A title read as the page shows it, and the observation it makes — resolved under the mask,
@@ -1597,6 +1777,7 @@ mod tests {
             rectified_180: blank,
             alternates: Vec::new(),
             cardness: 0.5,
+            pixels: None,
         });
         s.attempted = true;
         s.last_resolution = Some(ResolutionView {
@@ -1633,6 +1814,7 @@ mod tests {
             rectified_180: image::RgbImage::new(4, 4),
             alternates: Vec::new(),
             cardness: 0.5,
+            pixels: None,
         });
         s.count_stretch(true, false, false);
         assert_eq!((s.steady, s.leaderless_locked), (3, 3), "a missed detection counted or reset");
@@ -1820,7 +2002,7 @@ mod tests {
         s.count_stretch(true, true, settled);
         let mut v =
             Verdict::failed(String::new(), FrameSize { w: 0, h: 0 }, 0.0, true, s.mode, s.decision_seq);
-        let t = s.match_locked(&mut v, card, card, &[], 0.5, settled);
+        let t = s.match_locked(&mut v, card, card, &[], 0.5, settled, None);
         s.conclude(&mut v, t.as_ref());
         v
     }
@@ -2287,5 +2469,106 @@ mod tests {
         s.reset();
         let v = s.frame(&blank_jpeg(), &FrameOptions::default());
         assert_eq!(v.lock.as_ref().map(|l| l.misses), Some(1));
+    }
+
+    #[test]
+    fn a_detail_is_asked_for_exactly_the_frame_a_fast_rescue_will_read() {
+        // Walk the Fast cadence the way the frames do, and check that the frame after every
+        // `wants_detail` is one `fast_reader_due` reads — and that no read goes unasked.
+        let (mut seq, mut leaderless) = (0u64, 0u32);
+        let mut asked = false;
+        for _ in 0..40 {
+            leaderless += 1;
+            let reads = fast_reader_due(ScanMode::Fast, leaderless, &mut seq, false);
+            assert_eq!(asked, reads, "asked {asked} for a frame that read {reads} (frame {leaderless})");
+            asked = detail_due(ScanMode::Fast, true, false, leaderless, seq, false);
+        }
+    }
+
+    #[test]
+    fn no_detail_is_asked_for_without_readers_a_card_or_a_question() {
+        // No readers, or nothing in view: nothing will read.
+        assert!(!detail_due(ScanMode::Fast, false, false, 50, 0, false));
+        assert!(!detail_due(ScanMode::Exact, false, false, 0, 0, false));
+        // A decided card is not read again, and a resolved one has had its resolve.
+        assert!(!detail_due(ScanMode::Fast, true, true, 50, 0, false));
+        assert!(!detail_due(ScanMode::Exact, true, false, 0, 0, true));
+        // Before the rescue stretch, Fast is the hash alone.
+        assert!(!detail_due(ScanMode::Fast, true, false, 0, 0, false));
+        // An unresolved Exact card may be read on any frame the burst keeps.
+        assert!(detail_due(ScanMode::Exact, true, false, 0, 3, false));
+    }
+
+    #[test]
+    fn a_session_with_no_readers_never_asks_for_a_detail() {
+        // The shipped build without models loaded: the page must never pay a full-size encode
+        // for a read that cannot happen.
+        let mut s = Session::new(Some(labelled()), None, 5);
+        for mode in [ScanMode::Fast, ScanMode::Exact] {
+            let v = s.frame(&blank_jpeg(), &FrameOptions { mode, ..Default::default() });
+            assert!(!v.wants_detail, "{mode:?} asked for a detail with no reader");
+            assert!(v.detail.is_none());
+        }
+    }
+
+    /// A frame and a detail image of it for [`FramePixels`], `k` times the size, as PNG bytes.
+    fn frame_and_detail(k: u32) -> (image::DynamicImage, Vec<u8>) {
+        let frame = RgbImage::from_fn(120, 90, |x, y| image::Rgb([(x * 2) as u8, (y * 2) as u8, 90]));
+        let big = image::imageops::resize(&frame, 120 * k, 90 * k, image::imageops::FilterType::Triangle);
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgb8(big)
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .expect("png");
+        (image::DynamicImage::ImageRgb8(frame), png)
+    }
+
+    fn pixels_for<'a>(frame: &'a image::DynamicImage, detail: Option<&'a [u8]>) -> FramePixels<'a> {
+        FramePixels {
+            frame,
+            detail,
+            quad: crate::detect::Quad { corners: [(20.0, 10.0), (80.0, 10.0), (80.0, 80.0), (20.0, 80.0)] },
+            inset: 1.0,
+            margin: Margin::default(),
+            built: std::cell::OnceCell::new(),
+            used: std::cell::Cell::new(None),
+        }
+    }
+
+    #[test]
+    fn a_detail_of_the_same_frame_is_read_with_the_quad_scaled_onto_it() {
+        let (frame, detail) = frame_and_detail(3);
+        let p = pixels_for(&frame, Some(&detail));
+        let got = p.get().expect("pixels");
+        assert_eq!(p.used.get().map(|s| (s.w, s.h)), Some((360, 270)));
+        assert_eq!(got.image().dimensions(), (360, 270));
+        // The same band out of the frame and out of the detail: the quad landed on the same
+        // pixels, so the two agree to within resampling.
+        let from_frame = pixels_for(&frame, None);
+        let a = got.band((0.1, 0.1, 0.9, 0.3), 2, false).expect("band");
+        let b = from_frame.get().expect("pixels").band((0.1, 0.1, 0.9, 0.3), 2, false).expect("band");
+        assert_eq!(a.dimensions(), b.dimensions());
+        let diff: f64 = a.pixels().zip(b.pixels())
+            .map(|(p, q)| p.0.iter().zip(q.0).map(|(x, y)| (*x as f64 - y as f64).abs()).sum::<f64>())
+            .sum::<f64>() / (a.width() * a.height() * 3) as f64;
+        assert!(diff < 4.0, "the detail's band is not the frame's band: mean diff {diff:.2}");
+    }
+
+    #[test]
+    fn a_detail_that_cannot_be_the_same_frame_is_refused_for_the_frame_itself() {
+        let (frame, _) = frame_and_detail(1);
+        // Another aspect: some other picture, so the quad would land on a card that is not there.
+        let other = {
+            let mut png = Vec::new();
+            image::DynamicImage::ImageRgb8(RgbImage::new(240, 240))
+                .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+                .expect("png");
+            png
+        };
+        for bytes in [other.as_slice(), b"not a jpeg".as_slice()] {
+            let p = pixels_for(&frame, Some(bytes));
+            let got = p.get().expect("the frame is still there to read from");
+            assert_eq!(got.image().dimensions(), (120, 90), "read from a refused detail");
+            assert!(p.used.get().is_none(), "a refused detail was reported as used");
+        }
     }
 }

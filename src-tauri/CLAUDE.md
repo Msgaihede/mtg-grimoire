@@ -3039,6 +3039,12 @@ The whole record, including the pipeline the crate implements:
   malformed header is a shrug and defaults; a capture's _present but
   unreadable_ one is a refusal** — a defaulted slider costs one frame, a defaulted sidecar
   writes an unlabelled capture the reader believes they labelled.
+  **A frame's body may be two JPEGs** (issue #708): when `x-scanner-detail` is present it is the
+  first one's byte length, and the rest is the same video frame at the camera's resolution, which
+  the crate warps the OCR bands out of and detects on never. That header is a **refusal** when it
+  cannot split the body — a mis-split is half a JPEG decoded as the frame — and absent it the body
+  is one JPEG exactly as before. The page sends one only on a frame after a verdict's
+  `wants_detail`.
   **A page putting JSON in either header must escape every non-ASCII character as `\uXXXX`** —
   `HeaderValue::to_str` refuses anything outside visible ASCII and a browser sends 0x80–0xFF as
   Latin-1, so `Æther Vial` in a sidecar is otherwise a refusal or mojibake. `src/lib/ipc.ts`'s

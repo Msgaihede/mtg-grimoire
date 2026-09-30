@@ -7729,6 +7729,20 @@ export interface ScannerVerdict {
   tracked: ScannerTracked | null;
   collector: ScannerCollector | null;
   ocr: ScannerOcr | null;
+  /**
+   * The **next** frame should carry a detail image — the same video frame at the camera's own
+   * resolution, for the title and collector reads (issue #708). True only on a frame after which
+   * the session expects to read; the loop latches it and pays for the full-size encode on that
+   * one frame, never on every frame.
+   */
+  wants_detail: boolean;
+  /**
+   * The size of the detail image this frame's readers warped their bands from, when one was sent
+   * **and used**. `null` on a frame that read nothing, and on one that read from the 960 px frame
+   * because no detail came or it was not the same frame — so a panel can tell a full-resolution
+   * read from a fallback one.
+   */
+  detail: ScannerFrameSize | null;
 }
 
 /**
@@ -10813,11 +10827,29 @@ export const ipc = {
   /**
    * `scanner::scanner_frame`. The JPEG is the body and the options ride in a header, because a
    * frame is bytes with no fields to name.
+   *
+   * **A `detail` image rides in the same body, behind the frame**, and `x-scanner-detail` is the
+   * frame's byte length — the one fact the far end needs to split the two. It is the same video
+   * frame at full resolution, which the crate warps the title and collector bands out of, so the
+   * pair has to arrive in one request: two would let a second frame's pixels stand in for the
+   * first's quad. With no detail (or an empty one) the call is byte for byte what it was before
+   * the detail existed — no second header, no copy — because the far end refuses an empty detail
+   * in words and every frame but the one before a read carries none.
    */
-  scannerFrame: (jpeg: Uint8Array, options: ScannerOptions) =>
-    invoke<ScannerVerdict>("scanner_frame", jpeg, {
-      headers: { "x-scanner-options": asciiJson(options) },
-    }),
+  scannerFrame: (jpeg: Uint8Array, options: ScannerOptions, detail?: Uint8Array | null) => {
+    const optionsHeader = asciiJson(options);
+    if (detail == null || detail.length === 0) {
+      return invoke<ScannerVerdict>("scanner_frame", jpeg, {
+        headers: { "x-scanner-options": optionsHeader },
+      });
+    }
+    const body = new Uint8Array(jpeg.length + detail.length);
+    body.set(jpeg, 0);
+    body.set(detail, jpeg.length);
+    return invoke<ScannerVerdict>("scanner_frame", body, {
+      headers: { "x-scanner-options": optionsHeader, "x-scanner-detail": String(jpeg.length) },
+    });
+  },
   /** `scanner::scanner_reset`. The reader pressed reset, or the next card is coming. */
   scannerReset: () => invoke<void>("scanner_reset"),
   /** `scanner::scanner_capture`. The same shape as {@link ipc.scannerFrame}: the JPEG is the

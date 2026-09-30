@@ -1217,6 +1217,19 @@ the JPEG as `InvokeBody::Raw` with `FrameOptions` as JSON in an `x-scanner-optio
 Each is read by one payload function per command, and a JSON body is refused there with a
 sentence. The base64 JSON leg existed for the Android build and went with it on 2026-09-27.
 
+**A frame's body can carry a second JPEG behind the first** (issue #708, 2026-09-30). With an
+`x-scanner-detail` header, the header is the frame's byte length and everything after it is the
+**detail**: the same video frame at the camera's own resolution (long edge capped at 2560, JPEG
+0.85), which `Session::frame_with_detail` warps the title and collector bands out of — see §4's
+*Where the bands come from*. One request rather than two because the pair must be one video
+frame: the crate scales the quad it found in the small image onto the large one, so a detail one
+frame later is a card that has moved. The page sends one only on the frame after a verdict with
+`wants_detail`, and draws the video once, deriving the small frame from that canvas rather than
+from the video a second time. **A detail header that cannot split the body is refused**, not
+defaulted — not a number, zero, or reaching the end of the body — because a mis-split hands the
+decoder half a JPEG as the frame. The crate refuses a detail of its own accord too, falling back to
+the frame, when it is smaller than the frame or of another aspect.
+
 **The two headers fail differently, and the asymmetry is the point.** A malformed or absent
 `x-scanner-options` falls back to `FrameOptions::default()` — a defaulted slider costs one frame
 out of thirty and the next one corrects it. An `x-scanner-capture` that is **present and

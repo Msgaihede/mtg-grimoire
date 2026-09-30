@@ -126,6 +126,8 @@ const baseVerdict: ScannerVerdict = {
   tracked: null,
   collector: null,
   ocr: null,
+  wants_detail: false,
+  detail: null,
 };
 
 const votingTracked: ScannerTracked = {
@@ -265,6 +267,8 @@ const noCard: ScannerVerdict = {
   tracked: null,
   collector: null,
   ocr: null,
+  wants_detail: false,
+  detail: null,
 };
 
 const panicked: ScannerVerdict = {
@@ -295,6 +299,8 @@ const panicked: ScannerVerdict = {
   tracked: null,
   collector: null,
   ocr: null,
+  wants_detail: false,
+  detail: null,
 };
 
 /* ---------------------------------------------------------------------------- Exact ---- */

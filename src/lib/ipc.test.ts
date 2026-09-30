@@ -3714,6 +3714,34 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
   });
 
+  /**
+   * **The detail image is the frame's tail, and the header is the only thing that says where the
+   * frame ends.** `scanner::split_detail` cuts the body at `x-scanner-detail`'s number, so a
+   * length counted off the wrong array — the detail's, or the concatenation's — hands the decoder
+   * half a JPEG. Nothing type-checks it, for the options header's reason above.
+   */
+  it("scanner_frame puts a detail image behind the frame, with the frame's length in a header", async () => {
+    const jpeg = new Uint8Array([1, 2, 3]);
+    const detail = new Uint8Array([7, 8, 9, 10]);
+    await ipc.scannerFrame(jpeg, DEFAULT_SCANNER_OPTIONS, detail);
+    expect(invoke).toHaveBeenCalledWith("scanner_frame", new Uint8Array([1, 2, 3, 7, 8, 9, 10]), {
+      headers: {
+        "x-scanner-options": JSON.stringify(DEFAULT_SCANNER_OPTIONS),
+        "x-scanner-detail": "3",
+      },
+    });
+  });
+
+  it("scanner_frame with a null or empty detail is the plain call, with no detail header", async () => {
+    const jpeg = new Uint8Array([1, 2, 3]);
+    const plain = { headers: { "x-scanner-options": JSON.stringify(DEFAULT_SCANNER_OPTIONS) } };
+    await ipc.scannerFrame(jpeg, DEFAULT_SCANNER_OPTIONS, null);
+    expect(invoke).toHaveBeenLastCalledWith("scanner_frame", jpeg, plain);
+    // The far end refuses an empty detail in words, so the page must never send one.
+    await ipc.scannerFrame(jpeg, DEFAULT_SCANNER_OPTIONS, new Uint8Array());
+    expect(invoke).toHaveBeenLastCalledWith("scanner_frame", jpeg, plain);
+  });
+
   it("scanner_capture carries the sidecar the same way", async () => {
     const sidecar = { expected: "Plains", reported: "", confidence: "", votes: "8.0", distance: "74" };
     await ipc.scannerCapture(new Uint8Array([9]), sidecar);
