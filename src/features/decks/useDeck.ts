@@ -23,7 +23,8 @@ import { departureFrom, type PaneDeparture } from "@/features/card/cardReturn";
 // default drift the first time either changes.
 import { MENU_CONDITION } from "@/lib/conditions";
 import { invalidateOwnedWrite, refreshCardSearches } from "@/lib/searchMarks";
-import { autoCategoryFor } from "./autoCategory";
+import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
+import { defaultPileFor } from "./defaultCategory";
 import { sameDeckSlot } from "./deckWalk";
 
 /**
@@ -392,6 +393,37 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
 
   const detailKey = ["decks", "detail", id, variant, marketplace.id];
 
+  /**
+   * The pile `decks.default_category_id` names on **this** list, or `null` for Auto — what an
+   * add with {@link addCard}'s `deckDefault` files into (issue #693).
+   *
+   * **Read through the cache under the keys the editor already uses**, so an add from a menu
+   * while that deck is open costs nothing, and one from anywhere else is the one `deck_get` the
+   * caller's own `useDeck` was about to make anyway (`fetchQuery` shares the flight). `fetchQuery`
+   * rather than `ensureQueryData`: every deck write — Deck settings' among them — invalidates
+   * `["decks"]`, and a stale answer here would be a setting changed a moment ago being ignored.
+   *
+   * The Theory list is resolved by name through the live list's piles, which is
+   * {@link defaultPileFor}'s whole reason and the same second read `DeckEditor` makes. A deck
+   * that has gone answers Auto; `deck_add_card` then refuses it in words.
+   */
+  const defaultPileOf = async (deckId: number): Promise<number | null> => {
+    const detail = await queryClient.fetchQuery({
+      queryKey: ["decks", "detail", deckId, variant, marketplace.id],
+      queryFn: () => ipc.deckGet(deckId, variant, marketplace.id),
+    });
+    if (detail === null || detail.deck.defaultCategoryId === AUTO_CATEGORY) return null;
+    const livePiles =
+      variant === "theory"
+        ? await queryClient.fetchQuery({
+            queryKey: ["decks", "categories", deckId, "live", marketplace.id],
+            queryFn: () => ipc.deckCategoryList(deckId, "live", marketplace.id),
+          })
+        : undefined;
+    const pile = defaultPileFor(detail.deck.defaultCategoryId, detail.categories, livePiles);
+    return pile === AUTO_CATEGORY ? null : pile;
+  };
+
   const query = useQuery({
     queryKey: detailKey,
     queryFn: () => ipc.deckGet(opened(id), variant, marketplace.id),
@@ -699,12 +731,37 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     mutationFn: async ({
       cardId,
       categoryId = null,
+      deckDefault = false,
       typeLine,
       finish = null,
       quantity,
     }: {
       cardId: string;
       categoryId?: number | null;
+      /**
+       * **File an add that names no pile where the deck says its adds land** —
+       * `decks.default_category_id`, the setting Deck settings asks once (issue #693).
+       *
+       * Set by the surfaces that add to a deck from **outside its editor** — the card menu's
+       * `Add to → Deck`, the card modal's picker, the cabinet's `Decks` rows (all three through
+       * `useCardToDeck`) and the sidebar's Decks entry. The editor resolves the setting itself,
+       * against piles it already has on screen, and hands a real `categoryId` down; a surface
+       * with no editor has nothing on screen to resolve it against, so the read is done here, on
+       * the deck this hook is open on. Until it was, every one of those adds took the Auto arm
+       * below whatever the deck said, and a deck pointed at its Sideboard filled its main piles.
+       *
+       * **Opt-in rather than the rule for every add with no category, and the reason is the
+       * quick zones' `Auto`.** That drop is the reader *choosing* Auto over the deck's setting —
+       * the editor's one gesture that names the rule rather than a pile — and it sends the same
+       * `{ cardId, typeLine }` shape. Reading the setting for it would turn an explicit choice
+       * back into the default.
+       *
+       * Ignored when `categoryId` is given — a caller that named a pile has already answered. A
+       * setting of {@link AUTO_CATEGORY}, or one that names no pile on this list, falls through
+       * to the Auto arm exactly as before: {@link defaultPileFor} is the editor's own rule, so
+       * the two can never disagree about where an add lands.
+       */
+      deckDefault?: boolean;
       /**
        * Which object to add — the regular copy unless a caller says otherwise.
        *
@@ -734,17 +791,19 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       // Before anything is asked about the card: a write with no deck open is refused here and
       // not one round trip later.
       const deckId = opened(id);
+      const pileId =
+        categoryId === null && deckDefault ? await defaultPileOf(deckId) : categoryId;
       // The `await` sits inside the one arm that needs it, so the other two cost exactly what
       // they always did — a named category and a caller with nothing to say each make one IPC
       // call in total. A land still pays the read: the Land pin lives inside `autoCategoryFor`,
       // and short-circuiting it here would be a second copy of that rule.
       const categoryName =
-        categoryId !== null
+        pileId !== null
           ? null
           : typeLine === undefined
             ? DEFAULT_CATEGORY_NAME
             : autoCategoryFor({ typeLine, oracleTags: await oracleTagsFor(cardId) });
-      return ipc.deckAddCard(deckId, cardId, categoryId, categoryName, variant, finish, quantity);
+      return ipc.deckAddCard(deckId, cardId, pileId, categoryName, variant, finish, quantity);
     },
     // **{@link invalidate} for every add, on success and on refusal alike.** This write touches
     // `deck_cards` — **or, for a token, the deck's token entries and nothing in `deck_cards`**

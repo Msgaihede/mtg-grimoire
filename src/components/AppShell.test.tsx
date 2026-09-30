@@ -1065,8 +1065,17 @@ describe("the sidebar's drop targets", () => {
    * data (the client's `staleTime` is 30 s) so the name is there on the first render — no
    * `deck_get` needed, exactly as with an editor already up. Only the name is read.
    */
-  const openDeck = (id: number, name: string) => {
-    const detail = { deck: { id, name }, cards: [] } as unknown as DeckDetail;
+  const openDeck = (
+    id: number,
+    name: string,
+    // Where the deck says an unfiled add lands — Auto (`0`) unless a case points it at a pile.
+    { defaultCategoryId = 0, categories = [] as { id: number; name: string }[] } = {},
+  ) => {
+    const detail = {
+      deck: { id, name, defaultCategoryId },
+      cards: [],
+      categories,
+    } as unknown as DeckDetail;
     useAppStore.setState({ openDeckId: id });
     queryClient.setQueryData(["decks", "detail", id], detail);
     deckGet.mockResolvedValue(detail);
@@ -1198,6 +1207,26 @@ describe("the sidebar's drop targets", () => {
     await waitFor(() => expect(report("Decks")).toHaveTextContent("Added to Burn."));
     expect(deckAddCard).toHaveBeenCalledWith(...addedToDeck(7));
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+  });
+
+  /** The deck's own add location, as the editor's Add button honours it (issue #693): a deck
+   *  pointed at its Sideboard files a card dropped on Decks into the Sideboard, not by type. */
+  it("files a card off a wall where the open deck says its adds land", async () => {
+    openDeck(7, "Burn", {
+      defaultCategoryId: 3,
+      categories: [
+        { id: 2, name: "Instant" },
+        { id: 3, name: "Sideboard" },
+      ],
+    });
+    const held = await pickUp();
+
+    await held.over(boxedEntry("Decks"));
+    await held.drop();
+
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt", 3, null, "live", null, 1),
+    );
   });
 
   /**

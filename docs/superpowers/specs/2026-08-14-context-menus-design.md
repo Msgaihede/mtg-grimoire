@@ -235,6 +235,9 @@ finish and condition have to come from somewhere; every other field takes its de
 **Live / Theory**. Four cascade levels at the deepest. The card is filed by `autoCategoryFor`,
 the app's single rule that a plain add, a drag with no column under it and an imported line all
 share — an add naming no category is filed by what the card *does*.
+*(Amended 2026-09-30, issue #693: that is the answer for a deck on **Auto**. A deck whose settings
+name an add location — `decks.default_category_id` — files a menu add there, exactly as the
+editor's own Add button does; see `useDeck.addCard`'s `deckDefault`.)*
 
 The whole subtree is `lazy`: the folders and decks are fetched when **Add to → Deck** is
 expanded, never when the menu opens.

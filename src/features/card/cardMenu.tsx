@@ -1222,11 +1222,15 @@ export function useCardToDeck(): CardToDeck {
     if (pending === null || written.current === pending) return;
     written.current = pending;
     /**
-     * **No `categoryId`, so `autoCategoryFor` files the card by what it does** — the app's one
-     * rule, shared by a plain add, a drag with no column under it and an imported line. The type
-     * line travels as the fallback (`null` where the surface has none); it is deliberately not
-     * *absent*, which is the arm that files everything under `DEFAULT_CATEGORY_NAME` without
-     * consulting the card at all.
+     * **No `categoryId`, and `deckDefault`, so the card lands where the deck says its adds land**
+     * — `decks.default_category_id`, the pile the editor's own Add button files into (issue
+     * #693). Only a deck on Auto, which is what every deck is born on, falls through to
+     * `autoCategoryFor` and files the card by what it does — the app's one rule, shared by a plain
+     * add, a drag with no column under it and an imported line. Until #693 this sent no
+     * `deckDefault`, so a deck pointed at its Sideboard had every menu add filed as though it were
+     * on Auto. The type line travels as the fallback (`null` where the surface has none); it is
+     * deliberately not *absent*, which is the arm that files everything under
+     * `DEFAULT_CATEGORY_NAME` without consulting the card at all.
      *
      * The per-call callbacks are this surface's reporting, exactly as `dropOnDecks` attaches
      * its sentences; the `["decks"]` invalidation that carries a `GONE` back to the editor's
@@ -1236,6 +1240,7 @@ export function useCardToDeck(): CardToDeck {
     add(
       {
         cardId: pending.target.cardId,
+        deckDefault: true,
         typeLine: pending.target.typeLine ?? null,
         quantity: 1,
       },

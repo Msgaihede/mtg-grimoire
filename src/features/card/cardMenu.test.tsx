@@ -44,6 +44,7 @@ vi.mock("@/lib/externalLinks", async (original) => ({
 const deckList = vi.fn();
 const deckFolderList = vi.fn();
 const deckGet = vi.fn();
+const deckCategoryList = vi.fn();
 const deckAddCard = vi.fn();
 const oracleTagsForPrintings = vi.fn();
 /**
@@ -66,6 +67,7 @@ vi.mock("@/lib/ipc", async (original) => ({
     deckList: () => deckList(),
     deckFolderList: () => deckFolderList(),
     deckGet: (...args: unknown[]) => deckGet(...args),
+    deckCategoryList: (...args: unknown[]) => deckCategoryList(...args),
     deckAddCard: (...args: unknown[]) => deckAddCard(...args),
     oracleTagsForPrintings: (ids: string[]) => oracleTagsForPrintings(ids),
     // `useDeck` reads the selected marketplace, because a deck is priced at it. Answered so the
@@ -1628,7 +1630,7 @@ describe("DeckTargetSubmenu", () => {
   beforeEach(() => {
     deckList.mockResolvedValue([deck({ id: 7, name: "Burn" })]);
     deckFolderList.mockResolvedValue([]);
-    deckGet.mockResolvedValue({ deck: { id: 7, name: "Burn" }, cards: [], categories: [] });
+    deckGet.mockResolvedValue({ deck: { id: 7, name: "Burn", defaultCategoryId: 0 }, cards: [], categories: [] });
     deckAddCard.mockResolvedValue(undefined);
     oracleTagsForPrintings.mockResolvedValue([]);
   });
@@ -1692,7 +1694,7 @@ describe("useCardToDeck", () => {
   }
 
   beforeEach(() => {
-    deckGet.mockResolvedValue({ deck: { id: 7, name: "Burn" }, cards: [], categories: [] });
+    deckGet.mockResolvedValue({ deck: { id: 7, name: "Burn", defaultCategoryId: 0 }, cards: [], categories: [] });
     deckAddCard.mockResolvedValue(undefined);
     oracleTagsForPrintings.mockResolvedValue([]);
   });
@@ -1707,6 +1709,45 @@ describe("useCardToDeck", () => {
       expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", null, "Instant", "theory", null, 1),
     );
     expect(result.current.error).toBeNull();
+  });
+
+  it("lands in the deck's own add location when the deck names one (issue #693)", async () => {
+    // Deck settings pointed this deck at its Sideboard. The editor's Add button honours that, and
+    // an add from a card menu anywhere else in the app has to honour it too — it used to file
+    // the card by what it does, as though the deck were on Auto.
+    deckGet.mockResolvedValue({
+      deck: { id: 7, name: "Burn", defaultCategoryId: 3 },
+      cards: [],
+      categories: [
+        { id: 2, name: "Instant" },
+        { id: 3, name: "Sideboard" },
+      ],
+    });
+    const { result } = arm();
+    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "live"));
+
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", 3, null, "live", null, 1),
+    );
+  });
+
+  it("carries the add location to the plan's pile of the same name (issue #693)", async () => {
+    // The setting names a *live* pile; the plan has piles of its own, so the answer there is the
+    // pile called the same thing — `defaultPileFor`, exactly as the editor's Theory tab reads it.
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve({
+        deck: { id: 7, name: "Burn", defaultCategoryId: 3 },
+        cards: [],
+        categories: variant === "theory" ? [{ id: 13, name: "Sideboard" }] : [],
+      }),
+    );
+    deckCategoryList.mockResolvedValue([{ id: 3, name: "Sideboard" }]);
+    const { result } = arm();
+    act(() => result.current.addToDeck({ ...BOLT, typeLine: "Instant" }, 7, "theory"));
+
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(7, "bolt-lea", 13, null, "theory", null, 1),
+    );
   });
 
   it("keeps what a refused add said, for the surface to draw", async () => {
@@ -1855,7 +1896,7 @@ describe("the deck picker inside the real cascade", () => {
     vi.spyOn(document.documentElement, "clientHeight", "get").mockReturnValue(800);
     deckList.mockResolvedValue([KRENKO]);
     deckFolderList.mockResolvedValue([COMMANDER]);
-    deckGet.mockResolvedValue({ deck: { id: 7, name: "Krenko" }, cards: [], categories: [] });
+    deckGet.mockResolvedValue({ deck: { id: 7, name: "Krenko", defaultCategoryId: 0 }, cards: [], categories: [] });
     deckAddCard.mockResolvedValue(undefined);
     oracleTagsForPrintings.mockResolvedValue([]);
   });
