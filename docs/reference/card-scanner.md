@@ -2511,6 +2511,24 @@ three scenes are in §3 *Edges*.
 **And one went the other way**: Super Shredder TMT 295 was decided by Exact at frame 12 and is now
 undecided in every pass, its corners 4.6% → 7.0% h. So the list is six long, not five.
 
+**Against the `main` it merged into.** Seven scanner PRs landed while this was measured —
+#704's three views and held orientation, #705's early Fast decision, #701's single rectification
+among them — so the tables above compare against the tree this branch started from. The same
+evaluation on `main` at `0c3c1ce0` and on the merge, back to back, same machine, 12 workers:
+
+| pass | decided % | card ✓ % | wrong card | printing ✓ % | median frames | mean ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fast, `main` | 93.8 | 93.8 | 0 | 80.6 | 4 | 912 |
+| **Fast, merged** | **96.2** | **96.2** | **0** | **84.4** | 4 | 940 |
+| Exact, `main` | 95.0 | 95.0 | 0 | 81.9 | 5 | 1900 |
+| **Exact, merged** | **96.2** | **96.2** | **0** | 81.9 | 5 | 2035 |
+| Exact + own set, `main` | 95.0 | 95.0 | 0 | 91.9 | 5 | 1793 |
+| **Exact + own set, merged** | **96.2** | **96.2** | **0** | **93.1** | 5 | 1891 |
+
+Basic lands go 90 → 100% decided in Fast, borderless/full-art 66.7 → 80%. The one card `main`
+decides that the merge does not is Super Shredder again. Mean ms is 3–7% higher, under load, and
+not separated from the noise of a shared machine.
+
 ### Measured in the app
 
 Taken 2026-09-15 on Windows under `npm run tauri dev` — a **debug** build with the manifest's
