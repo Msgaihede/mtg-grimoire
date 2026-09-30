@@ -343,7 +343,13 @@ vi.mock("./NoteEditor", () => ({
   }) => <textarea aria-label={ariaLabel} value={value} onChange={(e) => onChange(e.target.value)} />,
 }));
 
-import { DeckEditor, exportFileName, exportSubject, layerMatches } from "./DeckEditor";
+import {
+  DeckEditor,
+  exportFileName,
+  exportSubject,
+  layerMatches,
+  NOTES_TODOS_COLUMN,
+} from "./DeckEditor";
 import { useAppStore, type CardWalkStop } from "@/lib/store";
 
 /** The change the Undo button would reverse — a history row like any other, because that is
@@ -2142,9 +2148,10 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **The To-do band is mounted, under the price strip and under the Notes band** (issue #672).
-   * It renders last in `DeckEditor.tsx`; what this asserts is the two orderings that matter, not
-   * that nothing follows it.
+   * **The To-do band is mounted, under the price strip and after the Notes band** (issue #672),
+   * in one row with it since issue #685 — beside it when the row is wide, under it when it is not.
+   * It renders last in `DeckEditor.tsx`; what this asserts is the two orderings that matter and
+   * the row's shape, not that nothing follows it.
    *
    * This is the call-site fence the Notes band's card-menu rows taught this file to want: the
    * band's own suite stands it up with every prop handed in by hand, so only a test *here* can say
@@ -2155,7 +2162,7 @@ describe("DeckEditor", () => {
    * reason one test up: "notes before to-dos" alone would stay green if both were moved above the
    * strip together, which is the one arrangement that costs a reader a drop.
    */
-  it("draws the to-do band under the price strip and under the notes band, over this deck's list", async () => {
+  it("draws the to-do band under the price strip, in one row after the notes band, over this deck's list", async () => {
     deckTodoLists.mockResolvedValue([
       {
         id: 7,
@@ -2177,6 +2184,19 @@ describe("DeckEditor", () => {
     expect(notes.compareDocumentPosition(todos) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(todos.tagName).toBe("SECTION");
     expect(todos.classList).toContain("shrink-0");
+
+    // Issue #685: one row, two columns when it is wide and one when it is not. jsdom lays nothing
+    // out, so the fold itself is a browser's to show; what can be pinned is that both bands are
+    // the tracks of one grid that counts its own columns — never a `@container` box, which would
+    // trap both bands' dialogs — and that the row, not the sections, is the editor's flex item.
+    const row = notes.parentElement;
+    expect(todos.parentElement).toBe(row);
+    expect(row?.classList).toContain("grid");
+    expect(row?.classList).toContain("shrink-0");
+    expect(row?.className).not.toMatch(/@container/);
+    expect(row?.style.gridTemplateColumns).toBe(
+      `repeat(auto-fit, minmax(min(100%, ${NOTES_TODOS_COLUMN}), 1fr))`,
+    );
 
     expect(deckTodoLists).toHaveBeenCalledWith(4);
     expect(await within(todos).findByText("1 open · 1 done")).toBeInTheDocument();
