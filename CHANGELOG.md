@@ -30,6 +30,55 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.37.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.36.0...v0.37.0) (2026-09-30)
+
+
+### Features
+
+* **scanner:** count descriptors per match, and report them in eval ([bb3ea86](https://github.com/Msgaihede/mtg-grimoire/commit/bb3ea866ff34f2e554fac884345098ed41c7e472))
+* **scanner:** detect-bench reports CPU time and the verdict's stage means ([cdeaaaa](https://github.com/Msgaihede/mtg-grimoire/commit/cdeaaaa1838d8dd60b0dcc4c488b974cf8c96b18))
+* **scanner:** find the card's outer edge and exact corners ([2d0f2f8](https://github.com/Msgaihede/mtg-grimoire/commit/2d0f2f86c925a08a8e703c9cfa81ba7b4cd16afe))
+* **scanner:** find the card's outer edge and exact corners ([#703](https://github.com/Msgaihede/mtg-grimoire/issues/703)) ([46bfec9](https://github.com/Msgaihede/mtg-grimoire/commit/46bfec93259b46262cbfb909b051f9226ed41a60))
+* **scanner:** hold a stretch's orientation and hash three views, not six ([#704](https://github.com/Msgaihede/mtg-grimoire/issues/704)) ([f6e1a75](https://github.com/Msgaihede/mtg-grimoire/commit/f6e1a75df48c09d6a7fefca73fe09a04442e215b))
+* **scanner:** hold a stretch's orientation and hash three views, not six ([#704](https://github.com/Msgaihede/mtg-grimoire/issues/704)) ([9c3db87](https://github.com/Msgaihede/mtg-grimoire/commit/9c3db878e1f86bb653985120e1c35f64ecf37542))
+* **scanner:** let Fast decide in fewer frames when the match is clear ([6abc8bb](https://github.com/Msgaihede/mtg-grimoire/commit/6abc8bb6461f06fe08c1b96657add3f917b6f1c3))
+* **scanner:** let Fast decide in fewer frames when the match is clear ([54b64e0](https://github.com/Msgaihede/mtg-grimoire/commit/54b64e083ca808dc0f19b1a037c9d5e0407fecdf)), closes [#705](https://github.com/Msgaihede/mtg-grimoire/issues/705)
+* **scanner:** read the title and collector bands from full-resolution pixels ([9d473c7](https://github.com/Msgaihede/mtg-grimoire/commit/9d473c7faac146195364a934cc1248c4e47e7a66))
+* **scanner:** read the title and collector bands from full-resolution pixels ([a370106](https://github.com/Msgaihede/mtg-grimoire/commit/a370106835a1770681c362bce277f12661ce0ca9))
+* **scanner:** search a locked card's window with the mask that found it ([2b52918](https://github.com/Msgaihede/mtg-grimoire/commit/2b5291821a8327bc725bbc9a7321210ebc7fea98))
+* **scanner:** track the locked card in a window instead of re-detecting the frame ([238915a](https://github.com/Msgaihede/mtg-grimoire/commit/238915a8b4288cdffcb0ff46c91425b8e91635ae))
+
+
+### Bug Fixes
+
+* **decks:** draw the token band's controls as the card stack's column ([af5691e](https://github.com/Msgaihede/mtg-grimoire/commit/af5691ec49c993da2a6ec18e346a9c7eb3c232e6))
+* **decks:** draw the token band's controls as the card stack's column ([6ae7088](https://github.com/Msgaihede/mtg-grimoire/commit/6ae7088301848af7f476b333ffb03f187d4f535e)), closes [#711](https://github.com/Msgaihede/mtg-grimoire/issues/711)
+* **decks:** fade a token at 0 to 40% on the Tokens & Emblems band ([36a2e90](https://github.com/Msgaihede/mtg-grimoire/commit/36a2e90f1f57729bd4c8f8d8ea14fc8ce4d7ac33))
+* **decks:** fade a token at 0 to 40% on the Tokens & Emblems band ([321436f](https://github.com/Msgaihede/mtg-grimoire/commit/321436fe1fa1644b4892a115a83f3d721cd44e60)), closes [#712](https://github.com/Msgaihede/mtg-grimoire/issues/712)
+* **scanner:** a card a false change forgot is a second opinion when it returns ([4e22d98](https://github.com/Msgaihede/mtg-grimoire/commit/4e22d98362afad63341d2a4230f50d375a0380a4))
+* **scanner:** a quad named from its other end keeps the lock ([bac50a4](https://github.com/Msgaihede/mtg-grimoire/commit/bac50a49549cc906658a41eeb9bb26d1cc1f1900))
+* **scanner:** break exact evidence ties on the lower id in the tracker ([257cebe](https://github.com/Msgaihede/mtg-grimoire/commit/257cebeb16dd56c3c683bd9517e525cdce7651fb))
+* **scanner:** break exact evidence ties on the lower id in the tracker ([4c73aeb](https://github.com/Msgaihede/mtg-grimoire/commit/4c73aeb2ca024208c8677d762c03a0924b41ad6f))
+* **scanner:** four OCR and name-index accuracy bugs ([0c3c1ce](https://github.com/Msgaihede/mtg-grimoire/commit/0c3c1ce0e2fb8321421fc1eb3a50e26622e65891))
+* **scanner:** four OCR and name-index accuracy bugs ([3c45931](https://github.com/Msgaihede/mtg-grimoire/commit/3c4593134d3ba0ae072e1bd62ae5948cd7096e0f)), closes [#709](https://github.com/Msgaihede/mtg-grimoire/issues/709)
+* **scanner:** make the window reproduce the full sweep's quad ([262934a](https://github.com/Msgaihede/mtg-grimoire/commit/262934a160a753ef24f7d8ec3dff44d0882e7eb3))
+* **scanner:** reach the set past a collector line's total, and ship the measured defaults ([c0144d4](https://github.com/Msgaihede/mtg-grimoire/commit/c0144d46cf23bde56947224ddbce133aae5b2928))
+* **scanner:** run Exact's resolve off the frame path ([7b98116](https://github.com/Msgaihede/mtg-grimoire/commit/7b98116f5a53c4b47c3a5d218cbd1d0af6792623))
+* **scanner:** run Exact's resolve off the frame path ([489f971](https://github.com/Msgaihede/mtg-grimoire/commit/489f971e8df8744766e43cdccd709c05dc07b114)), closes [#706](https://github.com/Msgaihede/mtg-grimoire/issues/706)
+* **scanner:** see a card stacked on a decided one ([#710](https://github.com/Msgaihede/mtg-grimoire/issues/710)) ([f4b3b47](https://github.com/Msgaihede/mtg-grimoire/commit/f4b3b47276d5682b3b650ea8ae5fbfcc8de26be5))
+* **scanner:** see a card stacked on a decided one ([#710](https://github.com/Msgaihede/mtg-grimoire/issues/710)) ([2328148](https://github.com/Msgaihede/mtg-grimoire/commit/23281488c35f23b69d7e6e4e6f8d39a8d2386c34))
+* **scanner:** tell a card back after a false change by its ring or its printing ([cadfa92](https://github.com/Msgaihede/mtg-grimoire/commit/cadfa92b88ed535051a6383a48f372f6956a6115))
+* **scanner:** the window answers only with what the lock would accept ([c0f7eac](https://github.com/Msgaihede/mtg-grimoire/commit/c0f7eac5c43bdcb2c0c8832287c04c5fe78024fc))
+* **scanner:** three frames at rest in Exact, and keep an unanswered memory ([0cff4cb](https://github.com/Msgaihede/mtg-grimoire/commit/0cff4cb2e7c3cd484e30d0b25c3771f2a14fb83a))
+
+
+### Performance Improvements
+
+* **scanner:** read OCR bands without running text detection ([8bb6dca](https://github.com/Msgaihede/mtg-grimoire/commit/8bb6dca821c2be4a97524d73474a6dc5df8c8932))
+* **scanner:** read OCR bands without running text detection ([0395017](https://github.com/Msgaihede/mtg-grimoire/commit/0395017c868f0d369769d423b7c5b8ebb25de87a)), closes [#707](https://github.com/Msgaihede/mtg-grimoire/issues/707)
+* **scanner:** rectify a frame once, and build previews only on request ([a0da30d](https://github.com/Msgaihede/mtg-grimoire/commit/a0da30da97bd802b5c1a2b8874eaf20541c506d6))
+* **scanner:** rectify a frame once, and build previews only on request ([d7d78b0](https://github.com/Msgaihede/mtg-grimoire/commit/d7d78b04d4b6321541aada12ce5bc1da91fbd6e1)), closes [#701](https://github.com/Msgaihede/mtg-grimoire/issues/701)
+
 ## [0.36.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.35.0...v0.36.0) (2026-09-30)
 
 
