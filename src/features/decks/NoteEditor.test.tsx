@@ -20,6 +20,7 @@ import NoteEditor, {
   TODO_PLACEHOLDER,
 } from "./NoteEditor";
 import source from "./NoteEditor.tsx?raw";
+import { noteToPlainText, parseNoteBody } from "./noteMarkdown";
 import { parseTodoBody, parseTodos, type TodoBlock, type TodoItem } from "./todoMarkdown";
 
 /**
@@ -114,6 +115,16 @@ function roundTrip(markdown: string): string {
   return out;
 }
 
+/** A text node, with marks, as `setContent` takes one. */
+function text(words: string, marks?: object[]): object {
+  return { type: "text", text: words, ...(marks ? { marks } : {}) };
+}
+
+/** A paragraph of one text node. */
+function para(words: string): object {
+  return { type: "paragraph", content: [text(words)] };
+}
+
 describe("the note dialect", () => {
   it("round-trips every construct without rewriting it", () => {
     // The two renderers agree only as long as this holds: Tiptap's markdown out must equal the
@@ -156,6 +167,69 @@ describe("the note dialect", () => {
     expect(roundTrip("a * b")).toBe("a \\* b");
     expect(roundTrip("a_b_c")).toBe("a\\_b\\_c");
     expect(roundTrip("A line with a\\# hash")).toBe("A line with a# hash");
+  });
+
+  /**
+   * ⚠️ **`<`, `>` and `&` are written as `&lt;`, `&gt;` and `&amp;`** — in every block, inside a
+   * mark and inside a link's words — and never inside a code span or an href. `"` and `'` are
+   * written as themselves. Measured 2026-09-30; `noteMarkdown.ts`' `ENTITIES` is sized to exactly
+   * this, and the read-only renderer has to draw each body back as the words that were typed.
+   */
+  it("writes the three entities in text and nowhere else, and the reader draws the characters", () => {
+    const cases: { doc: object[]; written: string; read: string }[] = [
+      { doc: [para("a < b & c > d")], written: "a &lt; b &amp; c &gt; d", read: "a < b & c > d" },
+      { doc: [para("> not a quote")], written: "&gt; not a quote", read: "> not a quote" },
+      { doc: [para(`"q" and 'q'`)], written: `"q" and 'q'`, read: `"q" and 'q'` },
+      { doc: [para("typed &lt;")], written: "typed &amp;lt;", read: "typed &lt;" },
+      {
+        doc: [{ type: "heading", attrs: { level: 2 }, content: [text("R&D")] }],
+        written: "## R&amp;D",
+        read: "R&D",
+      },
+      {
+        doc: [{ type: "blockquote", content: [para("a < b")] }],
+        written: "> a &lt; b",
+        read: "a < b",
+      },
+      {
+        doc: [{ type: "bulletList", content: [{ type: "listItem", content: [para("a & b")] }] }],
+        written: "- a &amp; b",
+        read: "a & b",
+      },
+      {
+        doc: [{ type: "paragraph", content: [text("a < b", [{ type: "bold" }])] }],
+        written: "**a &lt; b**",
+        read: "a < b",
+      },
+      {
+        doc: [{ type: "paragraph", content: [text("a < b & c", [{ type: "code" }])] }],
+        written: "`a < b & c`",
+        read: "a < b & c",
+      },
+      {
+        doc: [
+          {
+            type: "paragraph",
+            content: [text("R&D", [{ type: "link", attrs: { href: "https://x.test/?a=1&b=2" } }])],
+          },
+        ],
+        written: "[R&amp;D](https://x.test/?a=1&b=2)",
+        read: "R&D",
+      },
+    ];
+    const wrong = cases.flatMap(({ doc, written, read }) => {
+      const editor = new Editor({ element: document.createElement("div"), extensions: NOTE_EXTENSIONS });
+      editor.commands.setContent({ type: "doc", content: doc });
+      const body = editor.getMarkdown();
+      editor.destroy();
+      const drawn = noteToPlainText(body);
+      return body === written && drawn === read ? [] : [`${JSON.stringify(body)} → ${JSON.stringify(drawn)}`];
+    });
+    expect(wrong).toEqual([]);
+    // The href keeps its `&`, which is the one place in a link the reader must not decode.
+    expect(parseNoteBody("[R&amp;D](https://x.test/?a=1&b=2)")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "link", text: "R&D", href: "https://x.test/?a=1&b=2" }] },
+    ]);
   });
 
   /**
@@ -726,6 +800,12 @@ const CHECKLIST_CORPUS: { body: string; blocks: string[]; todos: TodoShape[] }[]
   },
   // A paragraph whose words are `- [ ] literal`: escaped on the way out, and never a box.
   { body: "\\- \\[ \\] literal", blocks: ["p: - [ ] literal"], todos: [] },
+  // `<`, `>` and `&` are written as entities in a to-do's line and in text, and read as characters.
+  {
+    body: "## R&amp;D\n\n- [ ] a &lt; b &amp; c\n\n&gt; not a quote",
+    blocks: ["h2: R&D", "todos: 1", "p: > not a quote"],
+    todos: [todo("a < b & c", false, 2)],
+  },
 ];
 
 /** One trip through the checklist editor: markdown in, document, markdown out. */
@@ -829,6 +909,8 @@ describe("the to-do dialect", () => {
     ["2024 was a year", "2024 was a year"],
     // Entities and the inline escapes, which the writer applies anywhere in a line.
     ["> quoted", "&gt; quoted"],
+    ["a < b && c", "a &lt; b &amp;&amp; c"],
+    ["typed &lt; and <b>", "typed &amp;lt; and &lt;b&gt;"],
     ["* star", "\\* star"],
     ["[x] box", "\\[x\\] box"],
     // Four spaces in would be an indented code block, which this dialect would drop too.
@@ -849,14 +931,9 @@ describe("the to-do dialect", () => {
     expect(back.state.doc.firstChild?.textContent).toBe(words.trimStart());
     expect(back.getMarkdown()).toBe(body);
     back.destroy();
-    // And the card's reader draws it as the words too, never as a box or a heading. ⚠️ Not asked
-    // of an entity: the writer spells `<`, `>` and `&` as `&lt;` `&gt;` `&amp;` — in a note and a
-    // to-do's line alike, measured — and `noteMarkdown.ts`' `parseInlines` decodes none of them,
-    // on the stated belief that Tiptap does not write them. That is the readers' to settle, and
-    // is older than #688; what is asserted above is that the *editor* reads them back.
-    if (!written.includes("&")) {
-      expect(blocksOf(parseTodoBody(body))).toEqual([`p: ${words.trimStart()}`]);
-    }
+    // And the card's reader draws it as the words too, never as a box, a heading or an entity: the
+    // writer spells `<`, `>` and `&` as `&lt;` `&gt;` `&amp;`, and `parseInlines` decodes them.
+    expect(blocksOf(parseTodoBody(body))).toEqual([`p: ${words.trimStart()}`]);
   });
 
   /**

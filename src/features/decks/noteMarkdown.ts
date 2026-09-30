@@ -168,6 +168,41 @@ const INLINE =
  */
 const ASCII_PUNCTUATION = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~";
 
+/**
+ * The three entities the editor writes, and nothing else.
+ *
+ * ⚠️ **Tiptap's markdown writer spells `<`, `>` and `&` in text as `&lt;`, `&gt;` and `&amp;`**,
+ * wherever they fall — a paragraph, a heading, a list item, a quote, a to-do, inside a mark and
+ * inside a link's words. So a note reading *a > b* is stored as `a &gt; b`, and a line the reader
+ * began with `>` is stored `&gt; …`, which is also what keeps it a paragraph rather than a quote.
+ * Measured 2026-09-30 against `NOTE_EXTENSIONS` and `CHECKLIST_EXTENSIONS` alike, and pinned in
+ * `NoteEditor.test.tsx`.
+ *
+ * **Three and not `releaseNotes.ts`' five**, because the same measurement found the editor writes
+ * `"` and `'` as themselves and never as `&quot;` or `&#39;`, and writes no numeric entity at all.
+ * A decoder wider than the writer would rewrite a note whose reader typed `&#39;` on purpose — the
+ * editor stores that as `&amp;#39;`, which this reads back as the six characters they typed.
+ */
+const ENTITIES: Record<string, string> = {
+  "&lt;": "<",
+  "&gt;": ">",
+  "&amp;": "&",
+};
+
+/**
+ * One left-to-right pass, which is what makes `&amp;lt;` — a reader who typed `&lt;` — come out as
+ * those four characters rather than as `<`: the scan consumes `&amp;`, emits `&`, and resumes after
+ * it, so the `lt;` behind is never re-read as a second entity. `releaseNotes.ts`' rule, and the
+ * editor's own reader reads it the same way.
+ *
+ * Only ever handed plain text between matches. A code span keeps its entities, because the editor
+ * writes a code span verbatim (`` `a < b` ``) and reads `` `&lt;` `` back as four characters; and a
+ * link's href is never decoded, because the editor writes `?a=1&b=2` as it is.
+ */
+function decodeEntities(text: string): string {
+  return text.replace(/&(?:lt|gt|amp);/g, (m) => ENTITIES[m] ?? m);
+}
+
 /** What a note may link to. Everything else keeps its words and loses its link. */
 const OPENABLE = ["https://", "http://"];
 
@@ -224,9 +259,11 @@ function pushText(out: Inline[], text: string): void {
 /**
  * Split one line into its runs.
  *
- * Entities are **not** decoded, which is the other difference from the sibling: release-please
- * escapes angle brackets on its way out and Tiptap does not, so a `&lt;` in a note body is four
- * characters the reader typed and decoding them would rewrite what their note says.
+ * `&lt;`, `&gt;` and `&amp;` are decoded in plain text — {@link ENTITIES} says why these three —
+ * and the answer is always a text run, drawn by React as text and never as markup. A `<b>` a reader
+ * typed is stored `&lt;b&gt;` and comes back as the three characters `<b>`, not as bold. The words
+ * of a mark and of a link are decoded too, because they are read through this same function; a code
+ * span and an href are not.
  *
  * Exported because `todoMarkdown.ts` reads a to-do's text through it too, so a to-do and a note
  * are one inline dialect rather than two that agree today.
@@ -237,7 +274,7 @@ export function parseInlines(line: string): Inline[] {
   let at = 0;
   let m: RegExpExecArray | null;
   while ((m = scanner.exec(line)) !== null) {
-    if (m.index > at) pushText(out, line.slice(at, m.index));
+    if (m.index > at) pushText(out, decodeEntities(line.slice(at, m.index)));
     const [, escaped, code, strike, strongStars, strongScores, emStars, emScores, linkText, href] =
       m;
     // The two spellings of each mark are one branch: which delimiter a reader used is a fact
@@ -263,7 +300,7 @@ export function parseInlines(line: string): Inline[] {
     }
     at = m.index + m[0].length;
   }
-  if (at < line.length) pushText(out, line.slice(at));
+  if (at < line.length) pushText(out, decodeEntities(line.slice(at)));
   return out;
 }
 
