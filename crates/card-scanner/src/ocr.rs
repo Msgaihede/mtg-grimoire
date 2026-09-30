@@ -177,25 +177,26 @@ pub struct CollectorRead {
 /// a two-letter fragment that happens to collide with a real set.
 pub fn collector_candidates(raw: &str) -> Vec<(String, String)> {
     let mut words: Vec<String> = Vec::new();
-    for w in raw.split(|c: char| !c.is_ascii_alphanumeric()) {
-        // **Split where the character class changes.** The separators on the card — a space,
-        // a bullet, a brush glyph — are exactly what OCR drops, so `C 0035` comes back as
-        // `C0035` and `HOB * EN` as `HOBEN`. Measured over the corpus this was the dominant
-        // failure by a distance: most reads had the digits present and legible and produced
-        // *zero* pairings, because no token began with one.
-        let mut cur = String::new();
-        for ch in w.chars() {
-            if !cur.is_empty()
-                && cur.chars().last().is_some_and(|p| p.is_ascii_digit()) != ch.is_ascii_digit()
-            {
-                words.push(std::mem::take(&mut cur));
+    let mut cur = String::new();
+    // Whether a `/` has been seen since the last token ended.
+    let mut slash = false;
+    for ch in raw.chars() {
+        if ch.is_ascii_alphanumeric() {
+            // **Split where the character class changes.** The separators on the card — a
+            // space, a bullet, a brush glyph — are exactly what OCR drops, so `C 0035` comes
+            // back as `C0035` and `HOB * EN` as `HOBEN`. Measured over the corpus this was the
+            // dominant failure by a distance: most reads had the digits present and legible and
+            // produced *zero* pairings, because no token began with one.
+            if cur.chars().last().is_some_and(|p| p.is_ascii_digit() != ch.is_ascii_digit()) {
+                end_word(&mut words, &mut cur, &mut slash);
             }
             cur.push(ch);
-        }
-        if !cur.is_empty() {
-            words.push(cur);
+        } else {
+            end_word(&mut words, &mut cur, &mut slash);
+            slash |= ch == '/';
         }
     }
+    end_word(&mut words, &mut cur, &mut slash);
 
     // **A collector number is printed zero-padded, and that is a usable filter.** Every
     // number this read correctly over the corpus came back four digits — `0001`, `0232`,
@@ -257,6 +258,28 @@ pub fn collector_candidates(raw: &str) -> Vec<(String, String)> {
     }
     out.dedup();
     out
+}
+
+/// Close the token being built in [`collector_candidates`], unless it is a set's size.
+///
+/// **A number after a slash that follows a number is the set size, not a collector number.**
+/// A modern frame prints `051/302`: the card, then how many cards the set has. Kept
+/// as a token, the denominator is a three-digit number like any other and is offered as a
+/// collector number beside the real one — live on 2026-09-15, Disruption Protocol NEO 51
+/// resolved to `NEO 302`, which is a Forest. Dropped from the stream rather than only from the
+/// numbers, so it does not sit between the collector number and the set code either and push
+/// the set out of the one-word reach the pairing allows.
+fn end_word(words: &mut Vec<String>, cur: &mut String, slash: &mut bool) {
+    if cur.is_empty() {
+        return;
+    }
+    let digits = |t: &str| t.chars().all(|c| c.is_ascii_digit());
+    let set_size = *slash && digits(cur) && words.last().is_some_and(|w| digits(w));
+    let word = std::mem::take(cur);
+    if !set_size {
+        words.push(word);
+    }
+    *slash = false;
 }
 
 #[cfg(feature = "ocr")]
@@ -469,6 +492,29 @@ mod tests {
         // the corpus by a wide margin.
         let c = collector_candidates("U 0232 EN");
         assert!(!c.iter().any(|(s, _)| s == "en"), "got {c:?}");
+    }
+
+    #[test]
+    fn a_set_size_is_not_offered_as_a_collector_number() {
+        // Disruption Protocol, NEO 51, live on 2026-09-15: the read resolved to `NEO 302`,
+        // which is a Forest, and the tier that names a printing contributed nothing. The raw
+        // string was not kept — §8 item 16 records the printed `051/302` and the NEO pairing
+        // it produced, and `NEO 302` resolving means the set code sat beside the denominator.
+        let c = collector_candidates("051/302 NEO EN");
+        assert!(c.contains(&("neo".into(), "51".into())), "got {c:?}");
+        assert!(!c.iter().any(|(_, n)| n == "302"), "the set size was offered: {c:?}");
+
+        // Spaces round the slash do not hide it.
+        let c = collector_candidates("051 / 302 NEO");
+        assert_eq!(c.first(), Some(&("neo".into(), "51".into())), "got {c:?}");
+    }
+
+    #[test]
+    fn a_slash_with_no_number_before_it_drops_nothing() {
+        // Only a number that follows a number and a slash is a set size. A slash OCR invented
+        // in front of the only number on the line must not cost the read its collector number.
+        let c = collector_candidates("U /0232 LTR EN");
+        assert!(c.contains(&("ltr".into(), "232".into())), "got {c:?}");
     }
 
     #[test]

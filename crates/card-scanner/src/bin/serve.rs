@@ -396,7 +396,7 @@ fn load_reference(args: &Args) -> Option<Reference> {
         }
     };
     eprintln!(
-        "  bundle: {} printings, {} artworks, {} at {} bits",
+        "  bundle: {} card faces, {} artworks, {} at {} bits",
         bundle.cards.len(),
         bundle.arts.len(),
         bundle.kind.as_str(),

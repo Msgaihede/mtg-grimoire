@@ -139,44 +139,88 @@ struct Job {
     /// Raw 16-byte id — the printing's for [`Section::Card`], the illustration's for
     /// [`Section::Art`].
     id: [u8; ID_LEN],
+    /// Which of the printing's faces this is: `0` for a card with one image, and each face of
+    /// a double-faced one in `card_faces` order. Both faces go into the bundle under the
+    /// printing's id, since either can be the one lying face up.
+    face: u8,
     url: String,
+}
+
+impl Job {
+    /// The `section` column this job is cached under.
+    ///
+    /// **A face past the first gets a key of its own**, because the cache is keyed on
+    /// `(section, id)` and a double-faced printing's two faces share the id — the back would
+    /// overwrite the front. The first face keeps the bare section name, so every row cached
+    /// before faces were hashed is still the row it was, and a double-faced printing's front —
+    /// which had no row, having no top-level image — cannot collide with one.
+    fn key(&self) -> String {
+        match self.face {
+            0 => self.section.as_str().to_string(),
+            n => format!("{}#{n}", self.section.as_str()),
+        }
+    }
+}
+
+/// The [`Section`] a cached row's `section` column names — see [`Job::key`].
+fn section_of(key: &str) -> Section {
+    match key.split('#').next() {
+        Some("card") => Section::Card,
+        _ => Section::Art,
+    }
 }
 
 fn parse_uuid(s: &str) -> Option<[u8; ID_LEN]> {
     card_scanner::index::parse_uuid(s)
 }
 
-/// One printing as the builder reads it: `(id, illustration_id, image_uris)`, the last as the
-/// JSON text the app's `cards.image_uris` column holds. Both sources yield exactly this, so
-/// nothing downstream of [`collect_jobs`] can tell which one a run was built from.
-type Row = (String, Option<String>, String);
+/// One printing as the builder reads it: `(id, illustration_id, image_uris, face_image_uris)`,
+/// the last two as the JSON text the app's `cards.image_uris` and `cards.face_image_uris`
+/// columns hold — the top-level image object, and an array of one per face (`null` for a face
+/// with none). Both sources yield exactly this, so nothing downstream of [`collect_jobs`] can
+/// tell which one a run was built from.
+type Row = (String, Option<String>, Option<String>, Option<String>);
 
-/// The corpus source: the query `build-hashes` has always run.
+/// The corpus source.
 fn rows_from_corpus(corpus: &Connection) -> rusqlite::Result<Vec<Row>> {
     let mut stmt = corpus.prepare(
-        "SELECT id, illustration_id, image_uris FROM cards
-         WHERE image_uris IS NOT NULL",
+        "SELECT id, illustration_id, image_uris, face_image_uris FROM cards
+         WHERE image_uris IS NOT NULL OR face_image_uris IS NOT NULL",
     )?;
-    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+    let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
     rows.collect()
 }
 
-/// The three fields of a Scryfall card object the bundle needs. Every other field is skipped
-/// by the parser without being built.
+/// The fields of a Scryfall card object the bundle needs. Every other field is skipped by the
+/// parser without being built.
 #[derive(serde::Deserialize)]
 struct BulkCard {
     id: String,
     illustration_id: Option<String>,
     image_uris: Option<serde_json::Value>,
+    card_faces: Option<Vec<BulkFace>>,
+}
+
+/// One of `card_faces`, for its images alone.
+#[derive(serde::Deserialize)]
+struct BulkFace {
+    image_uris: Option<serde_json::Value>,
 }
 
 impl BulkCard {
-    /// `None` for a card with no top-level `image_uris` — a double-faced card keeps its images
-    /// on `card_faces` — which is the row the corpus query's `IS NOT NULL` leaves out too: the
-    /// app's ingest stores only the top-level object in that column.
+    /// `None` for a card with no images anywhere — the row the corpus query leaves out too.
+    ///
+    /// The faces become an array with a `null` for a face that has no images, and nothing at
+    /// all when no face has any: the rule `src-tauri/src/card_row.rs` writes the corpus's
+    /// `face_image_uris` by, so a split card's two imageless faces are not a column here either.
     fn into_row(self) -> Option<Row> {
-        let uris = self.image_uris?;
-        Some((self.id, self.illustration_id, uris.to_string()))
+        let faces = self.card_faces.and_then(|faces| {
+            let per: Vec<serde_json::Value> =
+                faces.into_iter().map(|f| f.image_uris.unwrap_or_default()).collect();
+            per.iter().any(|f| !f.is_null()).then(|| serde_json::Value::Array(per).to_string())
+        });
+        let uris = self.image_uris.map(|u| u.to_string());
+        (uris.is_some() || faces.is_some()).then_some((self.id, self.illustration_id, uris, faces))
     }
 }
 
@@ -287,31 +331,59 @@ impl Iterator for BulkRows {
 /// The art section is keyed by `illustration_id` and deduplicated here: 117,619 printings
 /// share 50,963 artworks, so fetching per printing would move 2.3× the bytes for exactly the
 /// same set of hashes.
+///
+/// **A printing with no top-level image is hashed once per face.** `transform` and
+/// `modal_dfc` keep their images on `card_faces` — 1,065 and 328 printings (counted
+/// 2026-09-15) — and reading only the top level left every one of them out of the bundle, so
+/// no real double-faced card could be recognised by appearance. Faces feed the card section
+/// alone: a double-faced printing has no top-level `illustration_id` to key an artwork by, and
+/// the art section is searched by nothing (card-scanner.md §8 item 7).
 fn collect_jobs<E>(
     rows: impl IntoIterator<Item = Result<Row, E>>,
     sections: SectionArg,
 ) -> Result<Vec<Job>, E> {
     let mut jobs = Vec::new();
     let mut seen_art = std::collections::HashSet::new();
+    let parse = |text: Option<String>| {
+        text.and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+            .filter(|v| !v.is_null())
+    };
 
     for row in rows {
-        let (id, illustration_id, uris) = row?;
-        let Ok(uris) = serde_json::from_str::<serde_json::Value>(&uris) else { continue };
+        let (id, illustration_id, uris, faces) = row?;
+        let uris = parse(uris);
+        // The top level is the whole card when there is one; faces only stand in for it.
+        let images: Vec<(u8, serde_json::Value)> = match &uris {
+            Some(top) => vec![(0, top.clone())],
+            None => match parse(faces) {
+                Some(serde_json::Value::Array(faces)) => {
+                    (0u8..).zip(faces).filter(|(_, f)| !f.is_null()).collect()
+                }
+                _ => Vec::new(),
+            },
+        };
 
         if matches!(sections, SectionArg::Card | SectionArg::Both) {
             // `thumb` — 146×204, ~8 KB, and a *whole card*. A perceptual hash downsamples to
             // 32×32 regardless, so this is already more resolution than the descriptor
             // consumes, and it needs no art window to be located.
-            if let (Some(raw), Some(url)) = (parse_uuid(&id), uris["thumb"].as_str()) {
-                jobs.push(Job { section: Section::Card, id: raw, url: url.to_string() });
+            if let Some(raw) = parse_uuid(&id) {
+                for (face, images) in &images {
+                    if let Some(url) = images["thumb"].as_str() {
+                        let url = url.to_string();
+                        jobs.push(Job { section: Section::Card, id: raw, face: *face, url });
+                    }
+                }
             }
         }
 
         if matches!(sections, SectionArg::Art | SectionArg::Both) {
-            if let (Some(ill), Some(url)) = (illustration_id.as_deref(), uris["art"].as_str()) {
+            let art = uris.as_ref().and_then(|u| u["art"].as_str());
+            if let (Some(ill), Some(url)) = (illustration_id.as_deref(), art) {
                 if let Some(raw) = parse_uuid(ill) {
                     if seen_art.insert(raw) {
-                        jobs.push(Job { section: Section::Art, id: raw, url: url.to_string() });
+                        let url = url.to_string();
+                        jobs.push(Job { section: Section::Art, id: raw, face: 0, url });
                     }
                 }
             }
@@ -475,8 +547,13 @@ fn main() -> std::process::ExitCode {
         }
     };
     let n_card = jobs.iter().filter(|j| j.section == Section::Card).count();
+    let n_back = jobs.iter().filter(|j| j.section == Section::Card && j.face > 0).count();
     let n_art = jobs.len() - n_card;
-    eprintln!("  {n_card} printings, {n_art} artworks — {} images in the bundle", jobs.len());
+    eprintln!(
+        "  {} printings ({n_back} with a second face), {n_art} artworks — {} images in the bundle",
+        n_card - n_back,
+        jobs.len()
+    );
     // **An empty source is a failure, not a small bundle.** The emit below keeps only ids the
     // source names, so a source naming none writes a valid, empty bundle — and CI would publish
     // it over the real one, leaving every release build a scanner that recognises nothing.
@@ -543,7 +620,7 @@ fn main() -> std::process::ExitCode {
     let mut todo: Vec<Job> = jobs
         .iter()
         .filter(|j| {
-            let key = (j.section.as_str().to_string(), j.id.to_vec());
+            let key = (j.key(), j.id.to_vec());
             if gone.contains(&key) {
                 return false;
             }
@@ -555,7 +632,7 @@ fn main() -> std::process::ExitCode {
     // Anything whose bytes are cached at the current URI can be hashed without the network.
     let (local, remote): (Vec<Job>, Vec<Job>) = todo.into_iter().partition(|j| {
         cached_images
-            .get(&(j.section.as_str().to_string(), j.id.to_vec()))
+            .get(&(j.key(), j.id.to_vec()))
             .is_some_and(|uri| uri == &j.url)
     });
     todo = remote;
@@ -584,7 +661,7 @@ fn main() -> std::process::ExitCode {
                 let bytes: Option<Vec<u8>> = cache
                     .query_row(
                         "SELECT bytes FROM images WHERE section = ?1 AND id = ?2",
-                        rusqlite::params![job.section.as_str(), &job.id[..]],
+                        rusqlite::params![job.key(), &job.id[..]],
                         |r| r.get(0),
                     )
                     .ok();
@@ -600,7 +677,7 @@ fn main() -> std::process::ExitCode {
                     "INSERT OR REPLACE INTO hashes (section, id, algo, bits, image_uri, hash)
                      VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     rusqlite::params![
-                        job.section.as_str(),
+                        job.key(),
                         &job.id[..],
                         algo,
                         args.bits,
@@ -661,7 +738,7 @@ fn main() -> std::process::ExitCode {
                                 "INSERT OR REPLACE INTO images (section, id, image_uri, bytes)
                                  VALUES (?1, ?2, ?3, ?4)",
                                 rusqlite::params![
-                                    job.section.as_str(),
+                                    job.key(),
                                     &job.id[..],
                                     job.url,
                                     raw
@@ -672,7 +749,7 @@ fn main() -> std::process::ExitCode {
                             "INSERT OR REPLACE INTO hashes (section, id, algo, bits, image_uri, hash)
                              VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                             rusqlite::params![
-                                job.section.as_str(),
+                                job.key(),
                                 &job.id[..],
                                 algo,
                                 args.bits,
@@ -684,7 +761,7 @@ fn main() -> std::process::ExitCode {
                     Fetched::Gone { job, status } => {
                         let _ = tx.execute(
                             "INSERT OR REPLACE INTO gone (section, id, status) VALUES (?1, ?2, ?3)",
-                            rusqlite::params![job.section.as_str(), &job.id[..], status],
+                            rusqlite::params![job.key(), &job.id[..], status],
                         );
                     }
                     Fetched::Transient { .. } => {
@@ -765,7 +842,7 @@ fn main() -> std::process::ExitCode {
     // cache — re-fetching it later would be free — but must not reach the bundle.
     let wanted: std::collections::HashSet<(String, Vec<u8>)> = jobs
         .iter()
-        .map(|j| (j.section.as_str().to_string(), j.id.to_vec()))
+        .map(|j| (j.key(), j.id.to_vec()))
         .collect();
 
     let mut skipped = 0usize;
@@ -781,8 +858,7 @@ fn main() -> std::process::ExitCode {
             skipped += 1;
             continue;
         };
-        let section = if section == "card" { Section::Card } else { Section::Art };
-        builder.push(section, raw, &descriptor);
+        builder.push(section_of(&section), raw, &descriptor);
     }
 
     let built_at = std::time::SystemTime::now()
@@ -856,7 +932,86 @@ mod tests {
         let rows: Vec<_> = rows_from_bulk(json.as_bytes()).collect::<Result<_, _>>().unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].0, "00000000-0000-0000-0000-000000000001");
-        assert!(rows[0].2.contains("cards.scryfall.io/small"));
+        assert!(rows[0].2.as_deref().is_some_and(|u| u.contains("cards.scryfall.io/small")));
+        assert_eq!(rows[0].3, None, "a card with no faces has no face images");
+    }
+
+    /// Delver of Secrets, ISD 51, as the dev corpus holds it (2026-09-30): no top-level
+    /// images, one set per face. The URLs are the corpus's own.
+    const DELVER: &str = "11bf83bb-c95b-4b4f-9a56-ce7a1816307a";
+    fn delver_face(side: &str) -> String {
+        format!(
+            "https://cards.scryfall.io/thumb/{side}/1/1/{DELVER}.webp?1783940984"
+        )
+    }
+
+    /// §8 item 11: the builder kept only rows with a top-level `image_uris`, so the 1,393
+    /// `transform` and `modal_dfc` printings — whose images are on `card_faces` — were never in
+    /// the bundle. Each face is now a job of its own, under the printing's id.
+    #[test]
+    fn a_double_faced_printing_is_hashed_once_per_face() {
+        let line = format!(
+            r#"{{"id":"{DELVER}","name":"Delver of Secrets // Insectile Aberration","layout":"transform","card_faces":[{{"name":"Delver of Secrets","image_uris":{{"thumb":"{}"}}}},{{"name":"Insectile Aberration","image_uris":{{"thumb":"{}"}}}}]}}"#,
+            delver_face("front"),
+            delver_face("back"),
+        );
+        let rows: Vec<_> = rows_from_bulk(std::io::Cursor::new(line.into_bytes()))
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(rows.len(), 1, "a card with images only on its faces is a row");
+        assert_eq!(rows[0].2, None);
+
+        let jobs = collect_jobs(rows.into_iter().map(Ok::<_, ()>), SectionArg::Both).unwrap();
+        assert_eq!(jobs.len(), 2, "two faces, no artwork: {jobs:?}");
+        let id = parse_uuid(DELVER).unwrap();
+        assert!(jobs.iter().all(|j| j.section == Section::Card && j.id == id));
+        assert_eq!(jobs[0].url, delver_face("front"));
+        assert_eq!(jobs[1].url, delver_face("back"));
+        // One printing, two cache rows: the back must not overwrite the front.
+        assert_eq!((jobs[0].key(), jobs[1].key()), ("card".to_string(), "card#1".to_string()));
+        assert!(jobs.iter().all(|j| section_of(&j.key()) == Section::Card));
+    }
+
+    /// The corpus spells the same thing as the `face_image_uris` column, `null` standing in
+    /// for a face with no images — which must not shift the next face's index.
+    #[test]
+    fn corpus_face_images_yield_the_same_jobs_and_keep_their_index() {
+        let faces = format!(
+            r#"[{{"thumb":"{}","art":"a0"}},{{"thumb":"{}","art":"a1"}}]"#,
+            delver_face("front"),
+            delver_face("back")
+        );
+        let half = format!(r#"[null,{{"thumb":"{}"}}]"#, delver_face("back"));
+        let rows = [
+            (DELVER.to_string(), None, None, Some(faces)),
+            ("00000000-0000-0000-0000-000000000002".to_string(), None, None, Some(half)),
+        ];
+        let jobs = collect_jobs(rows.into_iter().map(Ok::<_, ()>), SectionArg::Card).unwrap();
+        let faces: Vec<u8> = jobs.iter().map(|j| j.face).collect();
+        assert_eq!(faces, [0, 1, 1], "{jobs:?}");
+        assert_eq!(jobs[2].key(), "card#1");
+    }
+
+    /// A top-level image is the whole card, so faces never add to it — a split card's faces
+    /// have no images anyway, and a printing is never hashed twice for one side.
+    #[test]
+    fn a_top_level_image_is_the_only_one_taken() {
+        let rows = [(
+            DELVER.to_string(),
+            None,
+            Some(r#"{"thumb":"top"}"#.to_string()),
+            Some(r#"[{"thumb":"f0"},{"thumb":"f1"}]"#.to_string()),
+        )];
+        let jobs = collect_jobs(rows.into_iter().map(Ok::<_, ()>), SectionArg::Card).unwrap();
+        assert_eq!(jobs.len(), 1);
+        assert_eq!((jobs[0].url.as_str(), jobs[0].face), ("top", 0));
+    }
+
+    #[test]
+    fn a_cached_section_names_its_section() {
+        assert_eq!(section_of("card"), Section::Card);
+        assert_eq!(section_of("card#1"), Section::Card);
+        assert_eq!(section_of("art"), Section::Art);
     }
 
     /// The shape Scryfall actually serves: its bulk descriptor has only a `jsonl_download_uri`,

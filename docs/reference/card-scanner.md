@@ -972,21 +972,28 @@ cycle with the card never leaving the lens**.
     (`needless_range_loop`), and `serve.rs:519` (`unnecessary_get_then_check`, in the server's
     own tests). Adding either gate is a tidy-up commit rather than a CI change; both would go
     red on day one for something the test step is not about.
-11. **The bundle holds no `transform` or `modal_dfc` printing, so a real double-faced card can
-    never be recognised by appearance.** `build-hashes` keeps only rows with a top-level
-    `image_uris`, and those two layouts carry their images under `card_faces` instead — 1,065
-    and 328 printings in the corpus (counted 2026-09-15 while building §10's evaluation). Its
-    "double-faced" stratum is therefore meld front faces, the one physically double-faced layout
-    with top-level images, and a 100% there says nothing about a Delver of Secrets. A builder
-    limitation that predates §10; the fix is hashing each face.
-12. **Split and adventure face names are not in the name index.** `Reference`'s `by_name` holds
-    the full `a // b` name, so an exact read of a front face never matches exactly and falls
-    through to the fuzzy search. Before 2026-09-15 that fell through to a wrong card —
-    `virtue of knowledge` resolved to Price of Knowledge at four edits and Exact decided it; since
-    §10's corrected-read rule it is ignored when that card is not among the survivors, so the
-    read now confirms nothing rather than naming the wrong card. Indexing face names would let it
-    confirm the right one. (`by_name` also keeps one oracle per normalized name, so a masked lookup
-    answers `None` on a collision whose first oracle the filters exclude.)
+11. **Fixed 2026-09-30 (#709) in the builder; the evaluation still cannot see it.** The bundle
+    held no `transform` or `modal_dfc` printing — `build-hashes` kept only rows with a top-level
+    `image_uris`, and those layouts carry theirs under `card_faces`, 1,065 and 328 printings
+    (counted 2026-09-15). **It now hashes each face**, both under the printing's id: a dry run
+    over the dev corpus on 2026-09-30 read **118,448 printings, 4,084 of them with a second
+    face — 122,532 images** against 114,364 before, every one of the 4,084 a printing that had
+    no entry at all. The entry layout is unchanged, so `FORMAT_VERSION` stays 3; a face past the
+    first is cached under `card#1` so it cannot overwrite the front's row, and
+    `Bundle::search` keeps one hit per id, so a printing's two faces never fill two slots or
+    read as each other's runner-up. **What stays open**: `eval` renders `image_uris.display`
+    only, so its "double-faced" stratum is still meld fronts, and a 100% there still says
+    nothing about a Delver of Secrets until the evaluation reads a face's render too.
+12. **Fixed 2026-09-30 (#709).** Split and adventure face names were not in the name index:
+    `by_name` held the full `a // b` name, so `virtue of knowledge` missed the exact lookup and
+    fell to the fuzzy one — Price of Knowledge at four edits before 2026-09-15, nothing since
+    §10's corrected-read rule. **Every face of an `a // b` name is now indexed too**, and a
+    whole name outranks a face: 2,153 cards in the corpus have a face named what another card is
+    named whole, 2,065 of them art-series cards like `Memory Lapse // Memory Lapse`, and a read
+    of `memory lapse` means the one that is played. **A name now keeps every oracle that bears
+    it** rather than the first — 244 normalized names belong to more than one (Ornithopter is a
+    9ED card and a DMU token), and a masked lookup whose first oracle the filters excluded used
+    to answer `None` for a card they permit. Both counted 2026-09-30 over the dev corpus.
 13. **A commit can file into a stale folder when the folder list fails to load.** The page treats
     a stored `folderId` that is gone or not the reader's own as the root, but it can only decide
     that once `useCollectionFolderList` has answered; the commit refetches, and if the list still
@@ -1008,16 +1015,15 @@ cycle with the card never leaving the lens**.
     `cards.finishes`, while the tray's per-row finish offers all three. A foil row for a
     nonfoil-only printing commits silently as a foil collection row. `AddToCollection` narrows the
     choice to the target's finishes; the tray does not yet.
-16. **The collector parse offers a modern card's set size as its number.** A post-2015 line prints
-    `051/302`, and `ocr::collector_candidates` splits on the slash and keeps both as
-    three-digit number tokens, so the set-size denominator is offered as a collector number beside
-    the real one. Live on 2026-09-15 a read of Disruption Protocol NEO 51 resolved to `NEO 302`,
-    which is a Forest. The tier refused it — `conflict: NEO 302 is Forest, not among survivors`,
-    the guard that predates round 4 — so nothing wrong was decided, but the one tier that names a
-    printing named the wrong one and contributed nothing. Had a Forest been standing, round 4's
-    margin rule is what would have had to catch it: the pin is only as safe as the survivors are
-    unlike the misread. The fix is in the parse — a number followed by `/` is the number, the one
-    after it is not.
+16. **Fixed 2026-09-30 (#709).** The collector parse offered a modern card's set size as its
+    number: a post-2015 line prints `051/302`, and `ocr::collector_candidates` kept both sides
+    of the slash as three-digit number tokens. Live on 2026-09-15 a read of Disruption Protocol
+    NEO 51 resolved to `NEO 302`, which is a Forest; the tier refused it — `conflict: NEO 302 is
+    Forest, not among survivors` — so nothing wrong was decided, but the one tier that names a
+    printing contributed nothing. **A number after a slash that follows a number is now dropped
+    from the token stream** — not only from the numbers, so it no longer sits between the
+    collector number and a set code printed after it. The raw string of that read was not kept,
+    so the test rebuilds the line from the two facts recorded here.
 17. **Filtering to a set the card is not in answers `ambiguous`, not `not_found`.** Live on
     2026-09-15, an LEA-only filter over that NEO card left 295 printings, 13 inside the whole-card
     gate, and a resolve of **six LEA cards at 0.246–0.266 normalized** — every one inside the 0.30
@@ -1924,7 +1930,7 @@ Storybook's `scannerHandlers` answers the new commands from `FakeDb.scannerPrefs
 the pipeline and a silent regression in either mode. It sits behind `builder`. For each of the 160
 Scryfall ids in `crates/card-scanner/eval/printings.txt` — 15 per frame era across five eras, 20
 basic lands (one of each basic from HOB, LTR, 7ED and ZNR), 15 borderless or full-art, 10 split or
-adventure, 10 double-faced (meld fronts, §8 item 11), 20 reprints and 10 random, all English and
+adventure, 10 double-faced (meld fronts still, §8 item 11), 20 reprints and 10 random, all English and
 non-digital — it fetches the render once into a cache, makes a burst, and feeds it to three passes:
 **Fast**, **Exact**, and **Exact filtered to the printing's own set**, each stopping at the first
 frame whose `decision_seq` moved.
