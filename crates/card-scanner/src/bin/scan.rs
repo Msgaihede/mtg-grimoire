@@ -50,7 +50,7 @@ struct Args {
     #[arg(long, default_value_t = 22.0)]
     max_angle_error_deg: f32,
     /// Scale the quad about its centre before warping. See DetectOptions::inset.
-    #[arg(long, default_value_t = 1.07)]
+    #[arg(long, default_value_t = 1.0)]
     inset: f32,
     /// Keep any background margin the rectification picked up. See the `trim` module.
     #[arg(long)]

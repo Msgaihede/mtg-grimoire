@@ -34,7 +34,7 @@
 //! **`--detect-only` is the fast loop for working on the detector.** It builds no session and
 //! reads no bundle and no models: every frame of every burst goes through
 //! [`card_scanner::detect::detect`] with Canny and with Otsu and keeps the one with the higher
-//! card-likeness, which is exactly what `Session::frame` does, and only the corner columns are
+//! `Detection::rank` — card-likeness and edge evidence — which is exactly what `Session::frame` does, and only the corner columns are
 //! reported. **`--scene`** puts every card in a sleeve or on a stack ([`Scene`]), each with the
 //! same pose it has bare. **`--only`** narrows the run to printings whose shown name contains
 //! the text, and **`--dump`** writes every frame with its truth quad in green and the detected
@@ -767,7 +767,7 @@ fn probe(frame: &SynthFrame) -> Result<Probe, String> {
     for method in METHODS {
         let (result, _trace) = detect(&image, &DetectOptions { method, ..Default::default() });
         if let Ok(d) = result {
-            if best.as_ref().is_none_or(|(_, b)| d.cardness.score > b.cardness.score) {
+            if best.as_ref().is_none_or(|(_, b)| d.rank() > b.rank()) {
                 best = Some((method, d));
             }
         }

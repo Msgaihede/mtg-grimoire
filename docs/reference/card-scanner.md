@@ -197,12 +197,17 @@ Six findings are baked in as gates, each of which looked like success first:
 - **`approximate_polygon_dp` must not be required to return exactly four points.** A card's
   corners are rounded, so its hull is a rounded rectangle and the tolerance sweep steps
   6 → 5 → 3 without landing on 4. Five of 18 frames produced **zero** candidates for this
-  reason. `min_area_rect` is the fallback; it ignores perspective, so it is tried second and
-  what it returns still has to pass every gate.
+  reason. `min_area_rect` is the fallback; it ignores perspective. **Since 2026-09-30 (#703)
+  neither is the answer, only the seed**: `edges::fit_sides` gives each contour point to the side
+  it lies along, leaves out the arcs and anything well off the line, fits a line per side and
+  puts the corners where the lines cross — see *Edges* below.
 - **A card contains its art window; an art window never contains a card.** A modern card's art
   box is itself a clean high-contrast quadrilateral and passes every shape test — a legible
   Forest returned exactly one candidate, the art box, at aspect 0.748 and 1.5° of corner error.
-  Containment is a **filter applied before ranking**, not a term within it.
+  Containment is a **filter applied before ranking**, not a term within it. **It drops a nested
+  quad only below 60% of its container's area since #703** — an art window is ~43% of its card, a
+  text box ~25% — because the rule used to drop *every* nested quad 1.2× smaller, and a stack's
+  top card is 70–90% of the stack's outline.
 - **Corner ordering is by angle about the centroid, not the sum/difference trick.** `min(x+y)`
   names the top-left only while the card is roughly axis-aligned; at 30–40° of rotation it
   silently names the wrong corner, and a hand-held scan is rotated more often than it is
@@ -246,6 +251,87 @@ time with the gate on. Resolution was the obvious suspect and is not the cause: 
 at 70–72% from 720 px to 4096 px. `MIN_SCORE` is 0.0; `GOOD_SCORE` keeps the measured 0.45 for
 callers that want to weigh it, and `--min-cardness` and a slider keep the gate available.
 
+### Edges — fitted sides, the outer edge, and four things that look like a card's edge
+
+Added 2026-09-30 for #703, in `crates/card-scanner/src/edges.rs`. Until then the quad was the
+contour's, and **the contour was usually the inner edge of the black border** — Canny's strongest
+gradient on a card — so every quad sat ~3 mm inside the card and `inset: 1.07` papered over it on
+average. The synthetic evaluation can now say how far: against `synth`'s true quad, the old
+detector's mean corner error was **4.46% of the card's height**, which is a 3 mm inset on every
+side almost exactly.
+
+Three steps replace it, each with the failure that shaped it:
+
+- **Fit the sides** (`fit_sides`, at the working scale). The hull's Douglas–Peucker vertices sit on
+  a rounded card's arcs, and `min_area_rect` ignores perspective; either is now only the seed that
+  says which contour point belongs to which side. Each side is a least-squares line over its own
+  points with the ends (the arcs) and anything more than 3% of the card's width off the line (a
+  thumb, a sleeve lip) left out; the corners are where adjacent lines cross — sub-pixel, on the
+  card's sharp corners, true under perspective. `QuadSource::Lines` says it ran.
+- **Find the outer edge** (`refine`, at **full resolution**). Each side is crossed by 32 short
+  colour-gradient profiles from 6% of the card's width inside to 13% outside, and a *line* is an
+  offset at least half the profiles agree on — so texture, uneven tables and a card's own art make
+  peaks and no lines. The quad moves to each side's outermost line. **13% and not the 9% a border
+  needs**: a full-art basic's black bottom band is ~6% wide below its frame line (Plains HOB 320,
+  9 px off on every frame at 9%). The tilt a line may take against its seed is 7%, not 4%, for the
+  same card: a contour along that band leaned 3–5% off the card's edge.
+- **Refuse a side that ran away.** Beyond a card's edge there can be another straight line — a
+  **sleeve**'s lip, a **shadow**, a seam in the **table**, the card **beneath** in a stack — and
+  each sits beyond one or two sides, never all four. So opposite sides are held to the same
+  outward move, and when they disagree **colour decides which is wrong**, not distance: if what
+  lies just beyond the nearer side is the colour of the farther side's border band, the border
+  carries on past it — a black border on the black border of the card underneath, invisible —
+  and the nearer side moves out (Dark Privilege MGB 3, stacked: 26 px off before this). Otherwise
+  the farther side comes back, onto a real edge at the right move or a virtual line there. **A
+  lopsided seed is exempt**: a contour can follow the outer edge down one side and the inner edge
+  down the other, which the colour just beyond the seed shows, and two chosen edges that look
+  alike inside and out are then two outer edges of one card.
+
+Four detector changes came out of reading the dumps of the always-undecided cards rather than out
+of the plan:
+
+- **A side with no straight edge near it is not a side of anything** — a fitted quad with one
+  corner halfway down Phyrexian Gargantua 9ED 153's left edge had a fourth side across the card's
+  face. Such a candidate is dropped unless it is the only one.
+- **Card-likeness is weighed with edge evidence** (`Detection::rank`: card-likeness + 0.3 × the
+  mean side support, a virtual side counting nothing). Card-likeness alone preferred that crop,
+  0.97, to the card, 0.90. The session picks between Canny and Otsu by the same `rank`.
+- **Half a card is card-shaped** — 63 × 44 mm is 0.698 against 0.716 — and Otsu split Tyrranax Rex
+  ONE 457 across its middle on 11 frames of 12. The two best candidates propose the whole card
+  they could be half of; a proposal is believed only when every side lands on a real edge and no
+  corner lies over the table.
+- **A frame with no candidate at all gets two more Canny rungs on a blurred image**, σ 2.5 then 5
+  at the working scale. The frames where nothing survived were dominated by a fine-striped table
+  where every contour of the card's edge leaked into the stripes and ran off the frame. They cost
+  nothing on a frame that found anything.
+
+And **a stack's outline is not its top card.** The containment filter now keeps both; the outline
+wins on card-likeness (it rectifies into the top card, stretched), so an outline with an **empty
+corner** — its corner lies over the table, beyond one card on one axis and the other on the other
+(`edges::empty_corners`) — gives way to the card-sized quad inside it that has none.
+
+Measured with `eval --detect-only` (both detectors, the better `rank` kept, as a session does),
+Windows, release, 2026-09-30, 160 printings × 12 frames at 1280 px, seed 7 — the same 1,920 frames
+before and after:
+
+| scene | detected % | mean corner err | p90 | off-card % |
+| --- | ---: | ---: | ---: | ---: |
+| plain, before | 95.8 | 15.9 px (4.46% h) | 28.9 px | 3.6 |
+| **plain, after** | **96.9** | **3.1 px (0.92% h)** | **9.3 px** | **1.1** |
+| sleeved, before | 98.1 | 13.0 px (3.77% h) | 26.8 px | 2.7 |
+| sleeved, after | 98.5 | 8.9 px (2.62% h) | 13.0 px | 0.6 |
+| stacked, before | 96.0 | 18.7 px (5.32% h) | 30.3 px | 5.0 |
+| stacked, after | 97.7 | 11.5 px (3.37% h) | 19.3 px | 2.6 |
+| borderless/full-art (plain), before | 81.7 | 18.8 px (4.75% h) | 62.9 px | 10.9 |
+| borderless/full-art (plain), after | 86.1 | 9.6 px (2.59% h) | 16.7 px | 7.1 |
+
+**What is still open.** A **sleeve** is found by its outline, not the card inside: its margin is
+~1.5 mm a side, the error above is that margin, and it is let through on purpose — framed a little
+wide beats cut into, and the framings absorb it. A **stack** is two to three times worse than a
+bare card: where the lower card peeks out along a whole side with no step at the corner, the
+outline has no empty corner and still wins. And the fine-striped table still hides Tobias Andrion
+LEG 264 and Elektra MSH 326 on most frames.
+
 ### Lock — a filter, not a gate
 
 A card and a card-shaped thing are indistinguishable in a single frame. What a card does that a
@@ -265,13 +351,28 @@ The card being hashed was a strip of black border, going into the tracker with t
 of a real observation. `from_lock` is reported per frame, because a stream that says true
 constantly is a detector failing behind a lock that is covering for it.
 
+**A quad named from its other end is the same quad** (fixed 2026-09-30, #703). A card is
+180°-symmetric, so which corner the detector calls the top-left depends on which of two near-equal
+orderings wins, and jitter flips it. The lock blended corners **by index**, so a flipped quad
+averaged each corner with its opposite and the held quad collapsed towards its centre — the
+session then rectified from a sliver (`from_lock` true), and the next frame disagreed on area and
+knocked the lock back to acquiring. It was latent for as long as the lock has existed; sharp,
+steady corners made it common. Measured on Graf Rats INR 113: locked on four frames of twelve,
+never decided in any mode, with the corners 1% of the card's height from the truth. The candidate
+is now rotated to line up with the held quad before it is compared or blended.
+
 ### Rectify — the 7% expand, the trim, and the alternate framings
 
 One homography handles deskew, rotation and scale at once; the output is 488×680, which matches
 Scryfall's `grid` variant exactly so a rectification and a reference render differ in content
 rather than in geometry.
 
-**The quad is expanded by 7% about its centre before warping, and it is worth more than any
+> **Since 2026-09-30 the inset is 1.0**, because the quad is now the card's own outer edge (§3
+> *Edges*). The record below is how 1.07 was earned against the inner-edge quad, and it still
+> carries the warning about going too wide. On a 25-card session subset — every basic land and the
+> cards that had regressed — 1.00, 1.02 and 1.04 decided the same cards.
+
+**The quad was expanded by 7% about its centre before warping, and it was worth more than any
 other single number in the crate.** Canny's strongest gradient on a card is the *inner* edge of
 the black border, so the quad tracks the frame rather than the card; a ~3 mm border on a 63 mm
 card is 4–5% per side. Swept against ground truth over the corpus:
@@ -944,7 +1045,9 @@ cycle with the card never leaving the lens**.
    `reset_after_misses` counter through the gathering path, where a frame with candidates but
    nothing inside `max_normalized` is a miss.
 4. **`IMG20260823055008.jpg` never detects a quad** — one corpus frame that produces no candidate
-   at either Canny rung, on either detector (2026-09-08).
+   at either Canny rung, on either detector (2026-09-08). **It cannot be re-checked**: it went with
+   the corpus (item 2). The blurred rungs of 2026-09-30 (§3 *Edges*) are aimed at the synthetic
+   frames that fail the same way, and whether they reach this one is unknown.
 5. **OCR reads on one frame in four**, and only while the tracker is uncommitted. That is the
    right trade at ~340 ms a title read against a ~350 ms frame, but it means the tier that saves
    foils contributes at a quarter of the rate the tier it is rescuing does — which is the
@@ -2022,6 +2125,70 @@ Andrion, Skyknight Legionnaire, Control of the Court, Swamp HOB, Counterbalance 
 Infestation, Tyrranax Rex — the last `not found` in Exact), most likely the detector or the lock on
 hard synthetic poses; nobody has looked. And **the first `--bulk` evaluation is the workflow's first
 scheduled run** — every figure above came through `--corpus`.
+
+#### Corners, scenes and the detector rewrite (2026-09-30, #703)
+
+**`synth` knows where the card is.** `burst_scene` hands back each frame's true card quad beside
+its JPEG — the face's outer corners through the same plane and jitter as the pixels, shifted half a
+pixel for `imageproc`'s pixel-centre convention — and two scenes beside the plain one: **sleeved**
+(66 × 91 mm, clear or opaque-backed with black among nine backs, haze over the face, a sharper
+glare) and **stacked** (one or two cards beneath, offset 1.5–5 mm, turned up to 4°; the truth is
+the top card). **The plain scene is byte-identical to the old `burst`**, checked against eight
+digests before and after; every draw a scene adds comes from a generator of its own, and a card
+keeps its pose, table and light in every scene, so the three are a paired comparison.
+
+`eval` adds, per pass and stratum, **detected %, mean and p90 corner error** (px and % of the
+card's height, under the best of the four cyclic pairings, since the detector's corner order is
+portrait with a 180° ambiguity) and **off-card %** (more than 10% of the height out — another
+object), over the frames each pass fed; the cards **undecided in every pass**; and four switches:
+`--scene`, `--detect-only` (no bundle, no OCR — every frame through both detectors, the better
+`Detection::rank` kept, as the session does: the fast loop for detector work, ~2 minutes where the
+session run is 40), `--only` and `--dump` (every frame with the truth in green and the detection
+in red, and a JSON of per-frame figures). **`synth`'s tests ran in no CI job and no `verify`** —
+the module is `builder`-only and both suites build the library under `cli` — so `ci.yml` gained a
+third line for them.
+
+Before and after, Windows, release, 2026-09-30, 160 printings × 12 frames at 1280 px, seed 7,
+against `card-hashes-v5`, 12 workers — the plain scene; the ms column is omitted because another
+worktree's evaluation shared the machine:
+
+| pass | decided % | card ✓ % | wrong card | printing ✓ % | ambiguous % (true in choices %) | median frames |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fast, before | 90.6 | 90.6 | 0 | 74.4 | — | 10 |
+| **Fast, after** | **93.1** | **93.1** | **0** | **81.2** | — | 10 |
+| Exact, before | 95.0 | 95.0 | 0 | 81.2 | 36.2 (100.0) | 5 |
+| **Exact, after** | **96.2** | **96.2** | **0** | **82.5** | 33.8 (96.3) | 5 |
+| Exact + own set, before | 95.0 | 95.0 | 0 | 91.2 | 7.5 (100.0) | 5 |
+| **Exact + own set, after** | **96.2** | **96.2** | **0** | **93.8** | 6.9 (100.0) | 5 |
+
+The *before* reproduced round 4 above on every decided and card-correct figure, and Fast's
+printing figure within the noise already noted. **Decided and card-correct are unchanged or better
+in every stratum of every pass**; basic lands hold at 90% in Fast and reach 100% in Exact;
+borderless/full-art moves 66.7 → 73.3% (Fast) and 73.3 → 80.0% (Exact). **Exact's unfiltered
+printing figure fell in four small strata** — frame-1993 86.7 → 73.3, frame-2015 80 → 60,
+split/adventure 80 → 70, double-faced 100 → 80 — while Exact + own set held or rose in each, so
+those are reprints of the right card being chosen among, not wrong cards; nobody has looked at
+which.
+
+Corner error over the frames each pass fed, after: Fast **3.4 px, 0.99% of the card's height**
+(p90 9.3 px, 1.4% off-card), against 16.0 px and 4.50% before. The detect-only figures for all
+three scenes are in §3 *Edges*.
+
+**The eight undecided cards**, before → after, all three passes:
+
+| card | before | after | what it was |
+| --- | --- | --- | --- |
+| Swamp HOB 196 | undecided | **decided in all three**, printing ✓ | the inner-edge quad; now 3.3% h |
+| Counterbalance SLD 1220 | undecided | **decided in all three**, printing ✓ | not detected on 8 of 12 frames — the striped table; the blurred rungs find it on 10 |
+| Control of the Court MB2 189 | undecided | **Exact and Exact + own set**, printing ✓ | 7.5% → 2.5% h |
+| Tyrranax Rex ONE 457 | undecided / not found | undecided | Otsu's bright half; 25.1% → 10.3% h, not yet enough |
+| Tobias Andrion LEG 264 | undecided | undecided | a small card on a coarse stripe: found on 1 frame of 12 |
+| Skyknight Legionnaire GTC 197 | undecided | undecided | found on 2 frames of 12, both now within 0.1 px |
+| Elektra MSH 326 | undecided | undecided | the stripe again: found on 2 of 12 |
+| Pest Infestation OTP 30 | undecided | undecided | found on 6 of 12, badly |
+
+**And one went the other way**: Super Shredder TMT 295 was decided by Exact at frame 12 and is now
+undecided in every pass, its corners 4.6% → 7.0% h. So the list is six long, not five.
 
 ### Measured in the app
 

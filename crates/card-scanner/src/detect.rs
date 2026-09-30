@@ -142,13 +142,18 @@ pub struct DetectOptions {
     pub trim_margin: bool,
     /// Scale the winning quad about its centre before warping.
     ///
-    /// **1.07, and it is worth more than any other single number here.** The detected quad is
-    /// systematically *too small*: Canny's strongest gradient on a card is the inner edge of
-    /// the black border, not the border's outer edge against the table, so the quad tracks
-    /// the frame rather than the card. A border of ~3 mm on a 63 mm card is 4-5% per side,
-    /// which is the size of the correction the measurement asks for.
+    /// **1.0 since 2026-09-30 (#703), because the quad is now the card's.** It was 1.07, and
+    /// that was worth more than any other single number here: the detected quad was
+    /// systematically *too small*, because Canny's strongest gradient on a card is the inner
+    /// edge of the black border and the quad tracked the frame rather than the card — ~3 mm on
+    /// a 63 mm card, 4–5% per side. [`crate::edges::refine`] now moves the quad onto the outer
+    /// edge (mean corner error 4.46% → 0.92% of the card's height on the synthetic
+    /// evaluation), so there is nothing left to correct. On a 25-card session subset — every
+    /// basic land and the cards that had regressed — 1.00, 1.02 and 1.04 decided the same
+    /// cards; 1.0 is the value that says what the quad now is.
     ///
-    /// Swept against ground truth read off the rectified images, over the 43 sample scans:
+    /// The old sweep, against ground truth read off the rectified images over the 43 sample
+    /// scans — the inner-edge quad, and still the warning about going too wide:
     ///
     /// | inset | top-1 correct | mean distance | mean margin |
     /// | --- | --- | --- | --- |
@@ -181,7 +186,7 @@ impl Default for DetectOptions {
             trim_margin: true,
             cardness_candidates: 4,
             min_cardness: crate::cardness::MIN_SCORE,
-            inset: 1.07,
+            inset: 1.0,
         }
     }
 }
@@ -288,10 +293,15 @@ impl Quad {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum QuadSource {
-    /// Douglas-Peucker landed on four points. Handles perspective.
+    /// Douglas-Peucker landed on four points, and the sides could not be fitted from them.
     Dp,
-    /// The minimum-area rectangle fallback. Ignores perspective.
+    /// The minimum-area rectangle, and the sides could not be fitted from it. Ignores
+    /// perspective.
     MinAreaRect,
+    /// Four lines fitted to the contour's sides, the corners where they cross — see
+    /// [`crate::edges::fit_sides`]. Either of the two above only seeded it. Handles perspective
+    /// and puts the corners on a rounded card's sharp corners rather than on its arcs.
+    Lines,
 }
 
 impl QuadSource {
@@ -299,6 +309,7 @@ impl QuadSource {
         match self {
             QuadSource::Dp => "dp",
             QuadSource::MinAreaRect => "minrect",
+            QuadSource::Lines => "lines",
         }
     }
 }
@@ -322,6 +333,9 @@ pub struct ScoredQuad {
     /// Card-likeness of this candidate's own rectification, when it was one of the few
     /// evaluated. `None` means it was never rectified, not that it scored zero.
     pub cardness: Option<crate::cardness::Cardness>,
+    /// What the outer-edge search found on each side, when it ran and landed. `None` means the
+    /// quad is the contour's own — see [`crate::edges::refine`].
+    pub edges: Option<[crate::edges::SideEdge; 4]>,
 }
 
 /// A successful detection: the card, flattened, in both possible orientations.
@@ -340,6 +354,17 @@ pub struct Detection {
     /// The same card at other framings, upright and rotated. See
     /// [`DetectOptions::query_insets`]. Empty when only one framing was asked for.
     pub alternates: Vec<(RgbImage, RgbImage)>,
+    /// What the outer-edge search found on each side, when it ran. See [`crate::edges`].
+    pub edges: Option<[crate::edges::SideEdge; 4]>,
+}
+
+impl Detection {
+    /// How good an answer this is, for choosing between two detections of one frame —
+    /// card-likeness and edge evidence, weighted as [`detect`] weighs its own candidates.
+    pub fn rank(&self) -> f32 {
+        self.cardness.score
+            + EDGE_EVIDENCE_WEIGHT * self.edges.map_or(0.5, side_evidence)
+    }
 }
 
 /// Hand-written rather than derived, and the reason is a failing test's output: a derived
@@ -508,36 +533,31 @@ pub fn detect(
     let mut all_contours: Vec<Vec<Point<i32>>> = Vec::new();
 
     for mask in &masks {
-        let contours = find_contours::<i32>(mask);
-        for contour in &contours {
-            examined += 1;
-            if contour.points.len() < 4 {
-                continue;
-            }
-            // **A contour touching the frame edge is not an object in the frame.** It is
-            // the image boundary itself, or a region running off the side of it — and in
-            // either case there is no fourth corner to find. This one rule is what stopped
-            // the detector reporting the photograph as the card; see
-            // [`DetectOptions::max_area_frac`] for the measurement that prompted it. It also
-            // correctly rejects a card shot half out of frame, which could not be rectified
-            // anyway.
-            if touches_border(&contour.points, ww, wh) {
-                continue;
-            }
-            all_contours.push(contour.points.clone());
-            // The hull first, then the approximation. A raw contour of a real card has
-            // concave excursions — a thumb, a sleeve lip, a shadow notch — and
-            // Douglas-Peucker on that converges to five or six vertices however the epsilon
-            // is chosen. On the hull it converges to four.
-            let hull = convex_hull(contour.points.clone());
-            if hull.len() < 4 {
-                continue;
-            }
-            let Some((quad, via)) = quad_from_hull(&hull) else { continue };
-            let Some(score) = score_quad(&quad, frame_area, opts, via) else { continue };
-            candidates.push(ScoredQuad { quad, score, cardness: None });
-        }
+        collect_candidates(mask, (ww, wh), opts, &mut candidates, &mut examined, &mut all_contours);
     }
+
+    // **A last rung for a frame that offered nothing: Canny on a blurred image.** Measured on
+    // the synthetic evaluation, the frames where no quad survives are dominated by one table —
+    // a fine stripe, a period of ten pixels or so at the working scale — where every contour of
+    // the card's edge leaks into the stripes beside it and runs off the frame, so
+    // `touches_border` rightly throws it away. A Gaussian of σ 2.5 all but flattens a stripe
+    // that fine and leaves a card's edge — a step thirty times wider than the blur — standing.
+    // Only on a frame with no candidate at all, so it costs nothing on the frames that work.
+    // A coarser stripe needs a wider blur, and a wider blur costs a small card its corners, so
+    // the second is tried only when the first found nothing either.
+    for sigma in STRIPE_BLUR {
+        if !candidates.is_empty() || opts.method != EdgeMethod::Canny {
+            break;
+        }
+        let t = std::time::Instant::now();
+        let soft = imageproc::filter::gaussian_blur_f32(&gray, sigma);
+        let (lo, hi) = canny_pair(opts.canny_low * 0.375, opts.canny_high * 0.45);
+        let mask =
+            imageproc::morphology::close(&imageproc::edges::canny(&soft, lo, hi), Norm::LInf, 2);
+        timings.mask_ms += ms(t);
+        collect_candidates(&mask, (ww, wh), opts, &mut candidates, &mut examined, &mut all_contours);
+    }
+
 
     // **A card contains its art window; an art window never contains a card.** That
     // asymmetry is worth more than any score, so it is applied as a filter before ranking
@@ -549,9 +569,13 @@ pub fn detect(
     // clean, high-contrast quadrilateral, so it will always compete; nothing about *its own*
     // shape says it is the wrong one. Only its relationship to a larger quad does.
     //
-    // Largest first, then drop anything wholly inside something already kept. The 1.2 factor
-    // keeps two detections of the same boundary — one from each mask in the pool — from
-    // eliminating each other.
+    // Largest first, then drop anything wholly inside something already kept **and much
+    // smaller than it**. An art window is ~43% of its card's area and a text box less, so
+    // both go; but a card-sized quad inside a slightly larger one is kept, because that is
+    // what the *top card of a stack* looks like inside the stack's outline — 70–90% of it.
+    // The rule used to drop every nested quad more than 1.2× smaller, and on a stack whose
+    // lower cards peek out that preferred the outline to the card (#703). Which of the two is
+    // the card is decided below, once both have been moved onto their outer edges.
     candidates.sort_by(|a, b| {
         b.quad.area().partial_cmp(&a.quad.area()).unwrap_or(std::cmp::Ordering::Equal)
     });
@@ -559,7 +583,7 @@ pub fn detect(
     for c in candidates {
         let nested = outermost
             .iter()
-            .any(|k| k.quad.area() > c.quad.area() * 1.2 && k.quad.contains(&c.quad));
+            .any(|k| c.quad.area() < k.quad.area() * NESTED_CARD && k.quad.contains(&c.quad));
         if !nested {
             outermost.push(c);
         }
@@ -571,6 +595,92 @@ pub fn detect(
     });
     candidates.dedup_by(|a, b| (a.score.total - b.score.total).abs() < 1e-4);
     candidates.truncate(opts.max_candidates);
+
+    // ── Stage 5b: onto the outer edge, at full resolution ──────────────────────────
+    //
+    // Every surviving candidate is moved onto the card's outer edge — see
+    // `crate::edges::refine` for the search and the guard that keeps a sleeve lip, a shadow or
+    // the card underneath from pulling one side out. At full resolution because that is where
+    // the corners are wanted: the working image is ~1024 px, a camera frame can be four times
+    // that, and a corner found at the working scale is up to two source pixels coarse before
+    // anything else goes wrong. A candidate whose refined quad fails the shape gates keeps its
+    // contour quad. The time is counted in `contour_ms`.
+    let rgb = source.to_rgb8();
+    let mut blind = vec![false; candidates.len()];
+    for (c, blind) in candidates.iter_mut().zip(blind.iter_mut()) {
+        let Some(r) = crate::edges::refine(&rgb, &to_source(&c.quad, scale)) else { continue };
+        // **A side with no straight edge anywhere near it is not a side of anything.** Measured
+        // on Phyrexian Gargantua 9ED 153: a contour fitted into a quad with one corner halfway
+        // down the card's left edge, whose fourth side ran diagonally across the card's face —
+        // shape gates passed, card-likeness did not object, and the scan was wrong. A card's
+        // own border gives every true side at least one edge, even on a stack (the inner edge),
+        // so such a candidate goes, unless it is the only one there is.
+        *blind = r.sides.iter().any(|e| e.lines == 0);
+        let moved = Quad { corners: r.quad.corners.map(|(x, y)| (x / scale, y / scale)) };
+        if let Some(score) = score_quad(&moved, frame_area, opts, c.score.via) {
+            c.quad = moved;
+            c.score = score;
+            c.edges = Some(r.sides);
+        }
+    }
+    if blind.iter().any(|b| !b) {
+        let mut keep = blind.iter().map(|b| !b);
+        candidates.retain(|_| keep.next().unwrap_or(true));
+    }
+
+    // ── Half a card is card-shaped ─────────────────────────────────────────────────
+    //
+    // 63 × 44 mm is an aspect of 0.698 against a card's 0.716, so a card split across its
+    // middle — by Otsu, at the strong horizontal edge every frame has between art and text —
+    // passes every shape gate as a card of its own. Measured on the synthetic evaluation:
+    // Tyrranax Rex ONE 457 was found as its bright lower half on 11 frames of 12, ~100 px off.
+    // So the best few candidates also propose the whole card they would be half of, one each
+    // way. A proposal is believed only on evidence a half of a real card could not fake: every
+    // side of it lands on a real edge, none of its corners lies over the table, and it still
+    // passes the gates. A real card's proposal runs out over the table and fails the first two.
+    let mut wholes: Vec<ScoredQuad> = Vec::new();
+    for c in candidates.iter().take(HALF_CARD_PROPOSALS) {
+        for whole in doubled(&c.quad) {
+            let Some(q) = order_corners(&whole.corners) else { continue };
+            if score_quad(&q, frame_area, opts, c.score.via).is_none() {
+                continue;
+            }
+            let Some(r) = crate::edges::refine(&rgb, &to_source(&q, scale)) else { continue };
+            if r.sides.iter().any(|e| e.is_virtual || e.lines == 0)
+                || crate::edges::empty_corners(&rgb, &r.quad) > 0
+            {
+                continue;
+            }
+            let moved = Quad { corners: r.quad.corners.map(|(x, y)| (x / scale, y / scale)) };
+            let Some(score) = score_quad(&moved, frame_area, opts, c.score.via) else { continue };
+            wholes.push(ScoredQuad { quad: moved, score, cardness: None, edges: Some(r.sides) });
+        }
+    }
+    if !wholes.is_empty() {
+        candidates.extend(wholes);
+        // The half a whole was built from is inside it and half its size — the art-window
+        // rule, applied again now that there is something for it to be inside.
+        let kept: Vec<Quad> = candidates.iter().map(|c| c.quad).collect();
+        candidates.retain(|c| {
+            !kept.iter().any(|k| c.quad.area() < k.area() * NESTED_CARD && k.scaled(1.02).contains(&c.quad))
+        });
+    }
+
+    // The inner edge of a border and the outer edge of the same card now land on one quad;
+    // keep the first, which is the better scored.
+    let mut distinct: Vec<ScoredQuad> = Vec::with_capacity(candidates.len());
+    for c in candidates {
+        let tol = SAME_QUAD * crate::edges::scale(&c.quad);
+        let twin = distinct.iter().any(|k| {
+            k.quad.corners.iter().zip(&c.quad.corners).all(|(a, b)| {
+                ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt() <= tol
+            })
+        });
+        if !twin {
+            distinct.push(c);
+        }
+    }
+    let mut candidates = distinct;
 
     timings.contour_ms = ms(t_contour);
     timings.total_ms = ms(t_start);
@@ -585,27 +695,71 @@ pub fn detect(
     // every card has, and *that* picks the winner. Over the sample corpus, gating on it kept
     // all 24 good matches while rejecting 10 of the 15 bad ones — geometry alone was right 62%
     // of the time, card-likeness 83%.
-    let rgb = source.to_rgb8();
-    let considered = opts.cardness_candidates.min(candidates.len());
-    for c in candidates.iter_mut().take(considered) {
+    let cardness_of = |q: &Quad| {
         // **Candidate quads are in work-image coordinates; the source is full resolution.**
         // Warping one against the other rectifies a small corner of the photograph, which
         // scores as featureless and rejects every real card — measured, it took the sample
         // corpus from 39 detections to 2 while looking like a threshold problem.
-        let warped =
-            Quad { corners: c.quad.corners.map(|(x, y)| (x * scale, y * scale)) }
-                .scaled(opts.inset);
+        let warped = to_source(q, scale).scaled(opts.inset);
         let small = rectify_to(&rgb, &warped, crate::cardness::W, crate::cardness::H);
         let flipped =
             rectify_to(&rgb, &warped.flipped(), crate::cardness::W, crate::cardness::H);
-        if let (Some(a), Some(b)) = (small, flipped) {
-            c.cardness = Some(crate::cardness::cardness_oriented(&a, &b).0);
+        match (small, flipped) {
+            (Some(a), Some(b)) => Some(crate::cardness::cardness_oriented(&a, &b).0),
+            _ => None,
         }
+    };
+    let considered = opts.cardness_candidates.min(candidates.len());
+    for c in candidates.iter_mut().take(considered) {
+        c.cardness = cardness_of(&c.quad);
     }
+    // **Card-likeness, and how well the four sides are backed by edges.** Card-likeness alone
+    // picked, on Phyrexian Gargantua 9ED 153, a quad with one side across the card's face (0.97)
+    // over the card itself (0.90) — the crop had the stronger bands. Its sides told the truth:
+    // one virtual, one with half the side agreeing, where the card's four were each backed
+    // along their whole length. The weight is small enough that card-likeness still decides
+    // between two quads the edges back equally.
     candidates.sort_by(|a, b| {
-        let key = |c: &ScoredQuad| c.cardness.map(|k| k.score).unwrap_or(-1.0);
+        let key = |c: &ScoredQuad| {
+            c.cardness.map(|k| k.score).unwrap_or(-1.0) + EDGE_EVIDENCE_WEIGHT * edge_evidence(c)
+        };
         key(b).partial_cmp(&key(a)).unwrap_or(std::cmp::Ordering::Equal)
     });
+
+    // ── A stack's outline is not its top card ──────────────────────────────────────
+    //
+    // With the containment filter now keeping a card-sized quad inside a larger one, a stack
+    // offers both its outline and its top card, and card-likeness cannot choose: the outline
+    // rectifies into the top card stretched by a few percent. What can is the outline's
+    // corners — where the lower cards peek out diagonally, two of them lie over the table,
+    // beyond one card on one axis and the other card on the other (`edges::empty_corners`).
+    // A real card is card right into each corner. So an outline with an empty corner gives way
+    // to the best card-sized quad inside it that has none, unless that quad looks much less
+    // like a card.
+    if let Some(best) = candidates.first() {
+        if crate::edges::empty_corners(&rgb, &to_source(&best.quad, scale)) > 0 {
+            let outline = best.quad.scaled(1.03);
+            let (outer_area, outer_card) =
+                (best.quad.area(), best.cardness.map_or(0.0, |k| k.score));
+            let inner = (1..candidates.len()).find(|&i| {
+                let c = &candidates[i];
+                c.quad.area() >= outer_area * NESTED_CARD
+                    && c.quad.area() < outer_area * 0.98
+                    && outline.contains(&c.quad)
+                    && crate::edges::empty_corners(&rgb, &to_source(&c.quad, scale)) == 0
+            });
+            if let Some(i) = inner {
+                if candidates[i].cardness.is_none() {
+                    candidates[i].cardness = cardness_of(&candidates[i].quad);
+                }
+                let card = candidates[i].cardness.map_or(0.0, |k| k.score);
+                if card >= outer_card - STACK_CARDNESS_SLACK {
+                    let top = candidates.remove(i);
+                    candidates.insert(0, top);
+                }
+            }
+        }
+    }
 
     let trace = DetectTrace {
         timings,
@@ -658,9 +812,116 @@ pub fn detect(
             rectified_180,
             margin,
             alternates,
+            edges: best.edges,
         }),
         Some(trace),
     )
+}
+
+/// The blurs, at the working scale, of the last Canny rungs — see the stripe note in [`detect`].
+const STRIPE_BLUR: [f32; 2] = [2.5, 5.0];
+
+/// A quad nested inside another is dropped only when it is smaller than this share of it.
+///
+/// An art window is ~43% of its card's area and a text box ~25%, so both still go. A card's
+/// own inner-border quad is ~85% of its outer one, a card in a sleeve ~94% of the sleeve, and
+/// the top card of a stack offset a few millimetres each way 70–90% of the stack's outline —
+/// all of which have to survive to be compared.
+const NESTED_CARD: f32 = 0.6;
+
+/// Two refined quads are one if every corner agrees to within this fraction of the card's
+/// width.
+const SAME_QUAD: f32 = 0.015;
+
+/// How much less card-like a stack's top card may look than the stack's outline and still be
+/// preferred to it. The outline's rectification is the top card, stretched by a few percent,
+/// so the two score close; a much lower score means the inner quad is something else.
+const STACK_CARDNESS_SLACK: f32 = 0.25;
+
+/// How many of the best-scored candidates propose the whole card they could be half of.
+const HALF_CARD_PROPOSALS: usize = 2;
+
+/// The two quads `q` is half of: `q` extended across its short edges, one way and the other.
+/// `q` is portrait-ordered, so its first edge is a short one.
+fn doubled(q: &Quad) -> [Quad; 2] {
+    let [a, b, c, d] = q.corners;
+    let (top, bottom) = ((b.0 - a.0, b.1 - a.1), (c.0 - d.0, c.1 - d.1));
+    [
+        Quad { corners: [a, (b.0 + top.0, b.1 + top.1), (c.0 + bottom.0, c.1 + bottom.1), d] },
+        Quad { corners: [(a.0 - top.0, a.1 - top.1), b, c, (d.0 - bottom.0, d.1 - bottom.1)] },
+    ]
+}
+
+/// How much edge evidence counts beside card-likeness in choosing the winner — see its use.
+const EDGE_EVIDENCE_WEIGHT: f32 = 0.3;
+
+/// The share of a quad's four sides backed by a straight edge: each side's support, a virtual
+/// side counting nothing. A candidate the outer-edge search never ran on is given the middle.
+fn edge_evidence(c: &ScoredQuad) -> f32 {
+    c.edges.map_or(0.5, side_evidence)
+}
+
+fn side_evidence(e: [crate::edges::SideEdge; 4]) -> f32 {
+    e.iter().map(|s| if s.is_virtual { 0.0 } else { s.support }).sum::<f32>() / 4.0
+}
+
+/// A working-image quad in source coordinates.
+fn to_source(q: &Quad, scale: f32) -> Quad {
+    Quad { corners: q.corners.map(|(x, y)| (x * scale, y * scale)) }
+}
+
+/// Every card-shaped quad in one mask, fitted and scored, onto `candidates`.
+///
+/// Separate from [`detect`] because a mask can arrive late — see the blurred rung there.
+fn collect_candidates(
+    mask: &GrayImage,
+    (ww, wh): (u32, u32),
+    opts: &DetectOptions,
+    candidates: &mut Vec<ScoredQuad>,
+    examined: &mut usize,
+    all_contours: &mut Vec<Vec<Point<i32>>>,
+) {
+    let frame_area = (ww * wh) as f32;
+    let contours = find_contours::<i32>(mask);
+    for contour in &contours {
+        *examined += 1;
+        if contour.points.len() < 4 {
+            continue;
+        }
+        // **A contour touching the frame edge is not an object in the frame.** It is
+        // the image boundary itself, or a region running off the side of it — and in
+        // either case there is no fourth corner to find. This one rule is what stopped
+        // the detector reporting the photograph as the card; see
+        // [`DetectOptions::max_area_frac`] for the measurement that prompted it. It also
+        // correctly rejects a card shot half out of frame, which could not be rectified
+        // anyway.
+        if touches_border(&contour.points, ww, wh) {
+            continue;
+        }
+        all_contours.push(contour.points.clone());
+        // The hull first, then the approximation. A raw contour of a real card has
+        // concave excursions — a thumb, a sleeve lip, a shadow notch — and
+        // Douglas-Peucker on that converges to five or six vertices however the epsilon
+        // is chosen. On the hull it converges to four.
+        let hull = convex_hull(contour.points.clone());
+        if hull.len() < 4 {
+            continue;
+        }
+        let Some((seed, via)) = quad_from_hull(&hull) else { continue };
+        // **The seed only says which contour points belong to which side**; the sides
+        // themselves are fitted from the points, and the corners are where they cross. See
+        // `crate::edges` for why a hull's vertices are the wrong answer on a rounded card,
+        // and why `min_area_rect` stops mattering once it is only a seed.
+        let fitted = crate::edges::fit_sides(&contour.points, &seed)
+            .and_then(|q| order_corners(&q.corners))
+            .and_then(|q| Some((q, score_quad(&q, frame_area, opts, QuadSource::Lines)?)));
+        let Some((quad, score)) = fitted
+            .or_else(|| Some((seed, score_quad(&seed, frame_area, opts, via)?)))
+        else {
+            continue;
+        };
+        candidates.push(ScoredQuad { quad, score, cardness: None, edges: None });
+    }
 }
 
 /// Reduce a convex hull to four corners.
@@ -1356,6 +1617,89 @@ mod tests {
                 d.quad.area()
             );
         }
+    }
+
+    /// Draw a black-bordered, banded card with its top-left corner at `(x0, y0)`, over whatever
+    /// is already in `img`, and return its true outer quad.
+    fn lay_card(img: &mut RgbImage, x0: u32, y0: u32, w: u32, shade: u8) -> Quad {
+        let h = (w as f32 / CARD_ASPECT) as u32;
+        let border = (w as f32 * 0.045) as u32;
+        for y in y0..y0 + h {
+            for x in x0..x0 + w {
+                let inside = x >= x0 + border && x < x0 + w - border && y >= y0 + border && y < y0 + h - border;
+                let ry = y as f32 - (y0 as f32 + h as f32 / 2.0);
+                let v = if inside { card_band(ry, h as f32).saturating_sub(shade) } else { 16 };
+                img.put_pixel(x, y, Rgb([v; 3]));
+            }
+        }
+        let (x0, y0, x1, y1) = (x0 as f32, y0 as f32, (x0 + w) as f32, (y0 + h) as f32);
+        Quad { corners: [(x0, y0), (x1, y0), (x1, y1), (x0, y1)] }
+    }
+
+    /// Both detectors, and the more card-like answer — what `Session::frame` does, so a test
+    /// of what the scanner would see is not a test of one detector it may never have used.
+    fn as_the_session_picks(src: &DynamicImage) -> Detection {
+        [EdgeMethod::Canny, EdgeMethod::Otsu]
+            .into_iter()
+            .filter_map(|method| detect(src, &DetectOptions { method, ..Default::default() }).0.ok())
+            .max_by(|a, b| a.rank().partial_cmp(&b.rank()).unwrap())
+            .expect("neither detector found a card")
+    }
+
+    #[test]
+    fn the_top_card_of_a_stack_wins_over_the_stack() {        // **#703's stack.** Two cards under the top one, each offset a few millimetres down and
+        // to the right, so the stack's outline is a card-shaped quad a few percent bigger than
+        // the top card and wholly containing it. The containment filter used to keep exactly
+        // the outline.
+        let (w, h) = (900u32, 900u32);
+        let mut img = RgbImage::from_pixel(w, h, Rgb([120, 104, 88]));
+        lay_card(&mut img, 300, 250, 260, 30);
+        lay_card(&mut img, 290, 240, 260, 60);
+        let top = lay_card(&mut img, 278, 228, 260, 0);
+        let src = DynamicImage::ImageRgb8(img);
+        {
+            let d = as_the_session_picks(&src);
+            let method = "the session's pick";
+            let err = d
+                .quad
+                .corners
+                .iter()
+                .zip(&top.corners)
+                .map(|(a, b)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt())
+                .fold(0.0f32, f32::max);
+            assert!(err < 4.0, "{method:?} is {err:.1} px off the top card: {:?}", d.quad);
+        }
+    }
+
+    #[test]
+    fn the_quad_lands_on_the_outer_edge_not_the_border() {
+        // The inner edge of the black border is the strongest gradient on a card, and the
+        // contour Canny hands over follows it. The refined quad must not.
+        let mut img = RgbImage::from_pixel(800, 800, Rgb([150, 128, 100]));
+        let truth = lay_card(&mut img, 260, 200, 280, 0);
+        let src = DynamicImage::ImageRgb8(img);
+        {
+            let d = as_the_session_picks(&src);
+            let method = "the session's pick";
+            for (a, b) in d.quad.corners.iter().zip(&truth.corners) {
+                let e = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+                assert!(e < 2.0, "{method:?} corner {a:?} is {e:.1} px from {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn half_a_card_proposes_the_card_either_way() {
+        // The lower half of an upright 63 × 88 card, as Otsu hands it over: 63 wide, 44 tall,
+        // portrait-ordered so its first edge is one of the 44 mm ones.
+        let half = order_corners(&[(0.0, 44.0), (63.0, 44.0), (63.0, 88.0), (0.0, 88.0)]).unwrap();
+        assert!((half.aspect() - 44.0 / 63.0).abs() < 1e-3, "{half:?}");
+        let card = Quad { corners: [(0.0, 0.0), (63.0, 0.0), (63.0, 88.0), (0.0, 88.0)] };
+        let found = doubled(&half).iter().any(|w| {
+            let w = order_corners(&w.corners).unwrap();
+            (w.area() - card.area()).abs() < 1e-2 && card.contains(&w) && w.contains(&card)
+        });
+        assert!(found, "neither proposal is the whole card: {:?}", doubled(&half));
     }
 
     #[test]

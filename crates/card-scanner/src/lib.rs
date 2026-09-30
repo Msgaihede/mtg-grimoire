@@ -11,6 +11,7 @@
 pub mod cardness;
 pub mod debug;
 pub mod detect;
+pub mod edges;
 pub mod filters;
 pub mod index;
 pub mod lock;
