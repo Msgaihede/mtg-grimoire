@@ -7591,6 +7591,8 @@ export interface ScannerTracked {
   decide_at: number;
   lead: number | null;
   frozen: boolean;
+  /** Fast decided on a run of clear frames before the tally reached `decide_at`. */
+  early: boolean;
   streak: number;
   frames: number;
   misses: number;
