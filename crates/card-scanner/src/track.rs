@@ -479,6 +479,32 @@ pub struct Tracker {
     clear: Option<([u8; ID_LEN], u32)>,
 }
 
+/// The id holding the most evidence — and on an exact tie, **the lower id**.
+///
+/// **The tie is not hypothetical.** Reprints that share art hash identically, so their member
+/// evidence is equal to the last bit, frame after frame. `max_by` alone keeps the last of equal
+/// elements in iteration order, and a `HashMap`'s order is seeded per map, so which of two tied
+/// printings a Fast decision named changed from run to run: #705 measured 11 cards over two
+/// eval seeds reporting a different printing between builds that differed in nothing they
+/// reached. It is the card's leader as well as its printing, for the same reason.
+///
+/// **The lower id because it is the order the index already ranks a tie in.** The bundle is
+/// written in id order and `Bundle::search` keeps the earlier of two equal distances, so a
+/// frame's own top-1 among art-identical reprints is the lowest id — and the tracker now reports
+/// what the frame said rather than overruling it with a different arbitrary pick. Newest release
+/// was the other candidate and was refused: the tracker holds no dates, and identical art means
+/// the image carries nothing that prefers one printing over another, so any fixed order is as
+/// right as any other and this one costs nothing. Exact never meets the tie — `commit_to` seeds
+/// the resolved member at `1e6`.
+fn strongest(evidence: &HashMap<[u8; ID_LEN], f32>) -> Option<[u8; ID_LEN]> {
+    evidence
+        .iter()
+        .max_by(|a, b| {
+            a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal).then_with(|| b.0.cmp(a.0))
+        })
+        .map(|(id, _)| *id)
+}
+
 impl Default for Tracker {
     fn default() -> Self {
         Tracker::new(TrackerOptions::default())
@@ -740,11 +766,7 @@ impl Tracker {
 
         // The raw best, and then the *sticky* leader: an incumbent keeps the lead until a
         // challenger is clearly ahead, so one or two odd frames cannot swap the answer.
-        let top = self
-            .scores
-            .iter()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal))
-            .map(|(id, _)| *id);
+        let top = strongest(&self.scores);
         let held = self.leader.filter(|cur| self.scores.contains_key(cur));
         let next = match (held, top) {
             (Some(cur), Some(t)) if t != cur => {
@@ -818,17 +840,7 @@ impl Tracker {
             .scores
             .iter()
             .map(|(id, evidence)| {
-                let member = self
-                    .members
-                    .get(id)
-                    .and_then(|m| {
-                        m.iter()
-                            .max_by(|a, b| {
-                                a.1.partial_cmp(b.1).unwrap_or(std::cmp::Ordering::Equal)
-                            })
-                            .map(|(k, _)| *k)
-                    })
-                    .unwrap_or(*id);
+                let member = self.members.get(id).and_then(strongest).unwrap_or(*id);
                 let best_n = self.best_n.get(id).copied().unwrap_or(1.0);
                 Standing {
                     id: *id,
@@ -840,8 +852,13 @@ impl Tracker {
                 }
             })
             .collect();
+        // Ties on the lower id, for the reason `strongest` gives: `scores` is a `HashMap`, and a
+        // stable sort of its iteration order is only as stable as the map's seed.
         standings.sort_by(|a, b| {
-            b.evidence.partial_cmp(&a.evidence).unwrap_or(std::cmp::Ordering::Equal)
+            b.evidence
+                .partial_cmp(&a.evidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.id.cmp(&b.id))
         });
         // The held leader goes first even when it is fractionally behind on raw evidence —
         // otherwise the reported card and the top of the list would disagree, which is the
@@ -1157,6 +1174,51 @@ mod tests {
         t.observe(&[Observation::appearance(id(1), id(20), 0.10)]);
         let r = t.observe(&[Observation::appearance(id(1), id(20), 0.10)]);
         assert_eq!(r.leader().expect("leader").best_member, id(20));
+    }
+
+    #[test]
+    fn tied_reprints_report_the_same_printing_in_every_tracker() {
+        // **Reprints that share art tie exactly**, and the printing used to be picked by
+        // `max_by` over a `HashMap`, which keeps the last of equal elements in an iteration
+        // order seeded per map — so which of two tied printings a decision named changed from
+        // run to run (#705: 11 cards over two eval seeds). Every fresh tracker has fresh maps
+        // with fresh seeds, so a hundred of them is a hundred iteration orders.
+        //
+        // Both arrival orders, so the answer is neither first-seen nor last-seen: the lower id.
+        for frame in [
+            [
+                Observation::appearance(id(1), id(21), 0.10),
+                Observation::appearance(id(1), id(20), 0.10),
+            ],
+            [
+                Observation::appearance(id(1), id(20), 0.10),
+                Observation::appearance(id(1), id(21), 0.10),
+            ],
+        ] {
+            for rule in [CommitRule::Confidence, CommitRule::Votes] {
+                for _ in 0..100 {
+                    let mut t = Tracker::new(TrackerOptions { rule, ..Default::default() });
+                    let mut r = None;
+                    for _ in 0..4 {
+                        r = Some(t.observe(&frame));
+                    }
+                    let r = r.expect("frames were observed");
+                    assert_eq!(r.leader().expect("leader").best_member, id(20), "{rule:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn tied_cards_rank_the_same_way_in_every_tracker() {
+        // The same tie one level up: three cards with identical evidence. The leader and the
+        // order of the standings behind it must not depend on a map's seed either.
+        for _ in 0..100 {
+            let mut t = confidence();
+            let r = t.observe_ids(&[(id(3), 0.10), (id(2), 0.10), (id(4), 0.10)]);
+            let order: Vec<_> = r.standings.iter().map(|s| s.id).collect();
+            assert_eq!(order, vec![id(2), id(3), id(4)]);
+        }
     }
 
     #[test]

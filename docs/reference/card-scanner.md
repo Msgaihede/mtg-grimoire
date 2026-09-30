@@ -771,6 +771,18 @@ lucky frame captured the slot permanently: `Gandalf, Spark Starter` came up corr
 afterwards preferred the right one. Reprints of one card differ by far less than two different
 cards do, so the printing needed decay and hysteresis *more* rather than less.
 
+**An exact tie goes to the lower printing id** (`track::strongest`, 2026-09-30). Reprints that
+share art hash identically, so their member evidence ties to the last bit, and the pick used to be
+`max_by` over a `HashMap` — the last of equals in an iteration order seeded per map, so which of
+two tied printings Fast named changed from run to run (§10, *#705 found why*). The lower id
+because it is the order the index already ranks a tie in: the bundle is written in id order and
+`Bundle::search` keeps the earlier of two equal distances, so the frame's own top-1 among
+art-identical reprints is the lowest id and the tracker now agrees with it. Newest release was
+considered and refused — the tracker holds no dates, and identical art means the image prefers
+neither printing, so any fixed order is as right as another. The card's leader and the order of
+the standings break ties the same way. Exact never meets the tie: `commit_to` seeds the resolved
+member at `1e6`.
+
 **The reported leader is sticky.** A challenger needs 30% more evidence than the incumbent
 before the readout changes — hysteresis on the reported leader only, with the accumulator
 underneath untouched, so a challenger that is really winning still takes over (measured at under
@@ -2282,9 +2294,10 @@ moved them — Fast's printing column is not reproducible across processes.** Th
 standing's `best_member` with a `max_by` over a `HashMap`, so two reprints at exactly equal scores
 (they share art, and tie often) resolve in hash order, which Rust seeds per process. One binary
 replaying Soul Snuffers' burst six times named EVE 45 four times and PLST EVE-45 twice; Greenwood
-Sentinel split the same way between ANB 97 and M19 187. Until that tie-break is deterministic,
-**read a difference of a few cards in Fast's printing column as noise**; every other accuracy
-column agreed exactly across three runs on 2026-09-30.
+Sentinel split the same way between ANB 97 and M19 187. **Every figure in this section was taken
+while the tie-break was still seeded**, so read a difference of a few cards in Fast's printing
+column *between any two of them* as noise; every other accuracy column agreed exactly across three
+runs on 2026-09-30.
 
 **#705 found why, and it is Fast's printing alone.** Two runs of #705's branch that differed only
 in a guard no card reached made every decision on the same frame with the same card, and eleven
@@ -2295,6 +2308,16 @@ iteration order, and a `HashMap`'s iteration order is seeded per process. So whi
 printings a Fast decision names changes from run to run — in the app as much as in the evaluation.
 Decided, card ✓ and median frames were identical to the digit across both runs; they do not read
 the member map.
+
+**Fixed 2026-09-30: an exact tie now goes to the lower printing id** (§5, `track::strongest`), and
+the card's leader and the standings' order break ties the same way. The fence is
+`tied_reprints_report_the_same_printing_in_every_tracker` — a hundred fresh trackers are a hundred
+map seeds — which fails on the old code. **Two agreeing evaluation
+runs have not been taken yet** — the fix was written in a Linux container that cannot reach
+Scryfall, and every figure here is Windows — so the first two `--fast-only` runs after it, on one
+build and one seed, should agree in every column but mean ms; a printing figure that still moves
+between them is a second source of nondeterminism, not this one. The printing figures in the tables
+above will not reproduce exactly on a build with the fix: every tied card now lands on one side.
 
 **After #705** — Fast's early decision and quick lock (§5, §3). Windows, release, 2026-09-30, 160
 printings, 12 frames at 1280 px, 12 workers, against the same 113,494-printing bundle; before and after
@@ -2327,7 +2350,8 @@ decided by the vote bar at a 2-bit gap in both, a frame sooner now only because 
 matched one more frame; the early rule never fired on it. Printing moved both ways by a card or two
 per row and rose overall on two seeds of three: an early decision reports the best printing after
 two or three frames rather than eight, which is Fast's promise — the card now, its printing
-provisional. **Read the printing column as noisy by a few cards** — *#705 found why*, above, is the reason.
+provisional. **The printing column in these tables is noisy by a few cards** — *#705 found why*,
+above, is the reason, and the tie-break it names is deterministic since.
 
 **Re-run after main's #701 (rectify a frame once) and #717 (Exact's resolve off the frame path)
 merged into the branch**, against the same merged tree with both of #705's switches turned off:
