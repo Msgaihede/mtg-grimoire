@@ -30,6 +30,30 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.36.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.35.0...v0.36.0) (2026-09-30)
+
+
+### Features
+
+* **decks:** match token quantity buttons to the deck's own size ([268d9f9](https://github.com/Msgaihede/mtg-grimoire/commit/268d9f9e3b3e5cd263d19be5b5ae439e66fc4bd0))
+* **decks:** match token quantity buttons to the deck's own size ([8a1a20e](https://github.com/Msgaihede/mtg-grimoire/commit/8a1a20efa5f21bd8cbaa2c07caa4b81b0636701c)), closes [#687](https://github.com/Msgaihede/mtg-grimoire/issues/687)
+* **decks:** notes and to-dos side by side in one row ([#685](https://github.com/Msgaihede/mtg-grimoire/issues/685)) ([f93d230](https://github.com/Msgaihede/mtg-grimoire/commit/f93d23021991f90543a7ff6e622c07ae54a533ae))
+* **decks:** notes and to-dos side by side in one row ([#685](https://github.com/Msgaihede/mtg-grimoire/issues/685)) ([32f618f](https://github.com/Msgaihede/mtg-grimoire/commit/32f618f2d9677bb3b12bae608df3c48f6dcd76fa))
+* **decks:** titled to-do lists with free text ([#688](https://github.com/Msgaihede/mtg-grimoire/issues/688)) ([c3c5639](https://github.com/Msgaihede/mtg-grimoire/commit/c3c56392499b33ef7af3038ae875d0d9e7f2fb83))
+* **decks:** titled to-do lists with free text ([#688](https://github.com/Msgaihede/mtg-grimoire/issues/688)) ([99f4c01](https://github.com/Msgaihede/mtg-grimoire/commit/99f4c0172792a6a43b2aa289ed9953780f61a4e6))
+
+
+### Bug Fixes
+
+* **decks:** decode the entities the note editor writes ([7d11faf](https://github.com/Msgaihede/mtg-grimoire/commit/7d11fafa8a826dafebf0a1e31148f9dfc30e8f5a))
+* **decks:** decode the entities the note editor writes ([2c75094](https://github.com/Msgaihede/mtg-grimoire/commit/2c7509481060db4e27db7683f3f4025a367d4bff))
+* **decks:** honour a deck's add location for adds from outside the editor ([93ca3d9](https://github.com/Msgaihede/mtg-grimoire/commit/93ca3d97af6659084dfab457a1bb8b1a9333edee))
+* **decks:** honour a deck's add location for adds from outside the editor ([9222494](https://github.com/Msgaihede/mtg-grimoire/commit/922249445332647390c1af367bfafad3ba6d75bc)), closes [#693](https://github.com/Msgaihede/mtg-grimoire/issues/693)
+* **shell:** never paint nav labels on a collapsed rail ([26f024d](https://github.com/Msgaihede/mtg-grimoire/commit/26f024d831d2e210d079315e6446f1bb4d01d58f))
+* **shell:** never paint nav labels on a collapsed rail ([8eb58ef](https://github.com/Msgaihede/mtg-grimoire/commit/8eb58eff07c955fde9b350ab0bbe57da0d199229)), closes [#694](https://github.com/Msgaihede/mtg-grimoire/issues/694)
+* step onto tokens with the arrow keys in the card and printings modals ([db5fbcb](https://github.com/Msgaihede/mtg-grimoire/commit/db5fbcba6d8bb2dbe1b4790050c66a7539872a44))
+* step onto tokens with the arrow keys in the card and printings modals ([2627615](https://github.com/Msgaihede/mtg-grimoire/commit/26276154e4fd073d34d2c98ee0426adfaa6a3a87)), closes [#686](https://github.com/Msgaihede/mtg-grimoire/issues/686)
+
 ## [0.35.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.34.1...v0.35.0) (2026-09-29)
 
 
