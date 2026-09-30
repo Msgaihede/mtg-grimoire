@@ -1242,6 +1242,17 @@ mod tests {
         assert_eq!(r.collector_among("LTRCN SOG", &all), None);
         assert_eq!(r.collector_among("1XRE SOM", &all), None);
         assert_eq!(r.collector_among("", &all), None);
+
+        // Reported live (2026-10-01): an Oliphaunt's `C 0426 / LTR • EN` read as below, and the
+        // blind parse's eight pairings (TRAEN 426, TRA 0426, TR 426, …) named nothing. Every
+        // printing of the card, from the corpus: the number picks one and `TR` backs its set.
+        let o = labelled(&[
+            (1, 10, "Oliphaunt", "hoc", "199", "2023-06-23"),
+            (2, 10, "Oliphaunt", "ltr", "139", "2023-06-23"),
+            (3, 10, "Oliphaunt", "ltr", "426", "2023-06-23"),
+            (4, 10, "Oliphaunt", "ltr", "590", "2023-06-23"),
+        ]);
+        assert_eq!(o.collector_among("C 0426 TRAEN TVIER", &[id(1), id(2), id(3), id(4)]), Some(id(3)));
     }
 
     #[test]
