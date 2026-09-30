@@ -275,11 +275,17 @@ jobs:
       # a change that broke either — or a test inside them — went red only in
       # `scanner-bundle.yml`'s weekly run, which is the job that publishes what every release
       # embeds. `--bins` because the library's own tests already ran in the first command.
+      #
+      # **And a third, because one library module is `builder`-only** (2026-09-30, #703):
+      # `synth` is `#[cfg(feature = "builder")]`, so neither line above compiled its tests —
+      # including the one that proves the evaluation's frames are something the detector can
+      # see. `--lib synth` runs that module alone rather than the whole library a second time.
       - name: cargo test (card-scanner)
         if: matrix.os == 'ubuntu-22.04'
         run: |
           cargo test --locked --features cli --manifest-path crates/card-scanner/Cargo.toml
           cargo test --locked --features builder --bins --manifest-path crates/card-scanner/Cargo.toml
+          cargo test --locked --features builder --lib synth --manifest-path crates/card-scanner/Cargo.toml
 
   # Branch protection pins required checks by name string, and a matrix job's name embeds
   # its matrix values — so protecting `rust (windows-latest)` would silently stop applying

@@ -1181,9 +1181,9 @@ impl Session {
                     // Otsu from frame to frame, handing back a different quad each time.
                     // Nothing can lock onto a target that changes every frame, and a card that
                     // appears for one frame and vanishes is what that looks like from outside.
-                    if best.as_ref().is_none_or(|(_, b, _): &(_, Located, _)| {
-                        d.cardness.score > b.cardness.score
-                    }) {
+                    // `rank` adds the edge evidence each detector already weighed its own
+                    // candidates by (#703), so the two are compared on the same terms.
+                    if best.as_ref().is_none_or(|(_, b, _): &(_, Located, _)| d.rank() > b.rank()) {
                         best = Some((m, d, trace));
                     }
                 }
