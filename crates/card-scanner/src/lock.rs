@@ -179,6 +179,18 @@ impl QuadLock {
             }
             Some(c) => {
                 self.misses = 0;
+                // **The same card, named from its other end, is the same quad.** A card is
+                // 180°-symmetric, so which corner the detector calls the top-left depends on
+                // which of two near-equal candidates wins — and jitter flips it. Blended corner
+                // by corner, a flipped quad averages each corner with its opposite and the held
+                // quad collapses towards its own centre: the session then rectified from a
+                // sliver, and the next frame disagreed with it on area and knocked the lock
+                // back to acquiring. Measured on Graf Rats INR 113 once corners got sharp
+                // (#703): locked on four frames of twelve, never decided in any mode.
+                let c = match self.quad {
+                    Some(prev) => aligned(&prev, &c),
+                    None => c,
+                };
                 match self.quad {
                     Some(prev) if self.agrees(&prev, &c) => {
                         self.agree += 1;
@@ -209,6 +221,23 @@ impl QuadLock {
             }
         }
     }
+}
+
+/// `candidate`'s corners, rotated to line up with `previous`'s: the cyclic shift that puts each
+/// corner nearest its counterpart. The rectangle is unchanged; only which corner is called first.
+fn aligned(previous: &Quad, candidate: &Quad) -> Quad {
+    let cost = |shift: usize| -> f32 {
+        (0..4)
+            .map(|i| {
+                let (a, b) = (previous.corners[i], candidate.corners[(i + shift) % 4]);
+                (a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)
+            })
+            .sum()
+    };
+    let best = (0..4)
+        .min_by(|&x, &y| cost(x).partial_cmp(&cost(y)).unwrap_or(std::cmp::Ordering::Equal))
+        .unwrap_or(0);
+    Quad { corners: [0, 1, 2, 3].map(|i| candidate.corners[(i + best) % 4]) }
 }
 
 /// Blend `b` towards `a` by `t`. `t = 0` returns `b` unchanged.
@@ -246,6 +275,29 @@ mod tests {
         let s = l.observe(Some(quad(500.0, 400.0, 200.0)));
         assert_eq!(s.phase, Phase::Locked);
         assert!(s.is_trusted());
+    }
+
+    #[test]
+    fn a_quad_named_from_its_other_end_holds_the_lock() {
+        // The detector's top-left flips between the two ends of a card from frame to frame.
+        // Blended index by index, that averaged each corner with its opposite and collapsed the
+        // held quad to a point; the next frame then disagreed on area and the lock dropped.
+        let mut l = QuadLock::default();
+        let card = quad(500.0, 400.0, 200.0);
+        for i in 0..8 {
+            let q = if i % 2 == 0 { card } else { card.flipped() };
+            let s = l.observe(Some(q));
+            if i >= 2 {
+                assert_eq!(s.phase, Phase::Locked, "frame {i} lost the lock");
+                let held = s.quad.expect("a held quad");
+                assert!(
+                    (held.area() - card.area()).abs() < card.area() * 0.01,
+                    "frame {i}: the held quad's area is {:.0}, the card's {:.0}",
+                    held.area(),
+                    card.area()
+                );
+            }
+        }
     }
 
     #[test]
