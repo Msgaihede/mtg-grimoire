@@ -5100,12 +5100,22 @@ already effective, and `viewOf` copies them.
     One helper, so a control added later cannot be the one that forgets a term.
   - **The band's tile draws no name line since [issue #615](https://github.com/Msgaihede/mtg-grimoire/issues/615)**
     (2026-09-28): the picture prints the name on the card, so the tile reads top to bottom as the
-    card and its chin, **the controls row across the tile's full width** (the stepper at `fill`
-    inside a `min-w-0 flex-1` box, Remove printing at the far end), **then the subtitle**, then
-    the source line. The issue asked for the subtitle row to go as well and the owner's comment on
-    it kept it, moved under the controls: it is what separates the two `Wurm`s for the eye. The
-    name stays the first term of every control's accessible name, and `CardArt`'s `name` still
-    draws it on a frame whose picture never loads.
+    card and its chin, **then the subtitle**, then the source line. The issue asked for the
+    subtitle row to go as well and the owner's comment on it kept it: it is what separates the two
+    `Wurm`s for the eye. The name stays the first term of every control's accessible name, and
+    `CardArt`'s `name` still draws it on a frame whose picture never loads.
+  - **The band's controls are the deck stack's own column since [issue #711](https://github.com/Msgaihede/mtg-grimoire/issues/711)**
+    (2026-09-30), where #615 had laid them as a row across the tile under the chin: a vertical
+    `card` stepper at `tone="art"` / `focus="inset"` with Remove printing under it — the pile's
+    `CardRemove` recipe (`BUTTON_OVER_ART`, destructive hover, `FOCUS_INSET`) — in an absolute
+    column over the picture's right edge, a **sibling** of the picture's button. Two differences
+    from the stack, each deliberate. **Always drawn**, where the stack reveals it on the open card
+    and the Grid tile on hover: those print the count on `QuantityTag` at rest, and the band's
+    `CardArt` prints none, so the stepper is the band's only count. **The offset is
+    `calc(2.25rem × --mark-scale)`, not a fixed `top-9`**: `CardArt` draws the finish chip
+    top-right and it scales with the card (~56px at 2×), so a fixed 36px would put a foil entry's
+    `+` on the chip. At 100% the two are the same 36px. Checked in Storybook (`Zoomed`, 1.5×):
+    the column 54px down and 9px in on a 315px card; not driven in the shipped window.
   - **Since v52 a token does not identify a tile either**, because one token is several tiles:
     a Treasure kept as a plain and a foil copy of one printing shares its name *and* its subtitle,
     and only `Nonfoil` against `Foil` separates the two steppers. So the name is
@@ -5124,9 +5134,12 @@ already effective, and `viewOf` copies them.
     entry it sits on (`Remove Treasure, …, TMH3 · 12, Foil`), so a token's plain and foil tiles are
     two presses; `Remove printing` is the pointer's word, the same everywhere. Dismiss, Restore and
     Reset were the token's and went with v55.
-  - **An entry at 0 draws its picture at `opacity-60` on the band** (2026-09-29,
-    [issue #673](https://github.com/Msgaihede/mtg-grimoire/issues/673)) — the switched-off pile's
-    number, since both mean *counts toward nothing*. **The picture only**: the stepper that counts
+  - **An entry at 0 draws its picture at `opacity-40` on the band** (2026-09-29,
+    [issue #673](https://github.com/Msgaihede/mtg-grimoire/issues/673), at 60%; 40% since
+    2026-09-30, [issue #712](https://github.com/Msgaihede/mtg-grimoire/issues/712)). It shipped at
+    the switched-off pile's `opacity-60`, on the argument that both mean *counts toward nothing*,
+    and a reader could not tell it from a counted token: a switched-off pile fades a whole column,
+    this fades one tile in a row of bright ones. **The picture only**: the stepper that counts
     it up, the chin, the subtitle and `NOT MADE BY DECK` stay at full strength. `data-token-uncounted`
     on the art button is the handle. The pile needs no rule — it never draws an entry at 0.
   - **A token nothing in the deck makes is marked the way a rule-break card is** (managed tokens
