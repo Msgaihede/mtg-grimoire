@@ -220,23 +220,51 @@ pub fn trim(img: &RgbImage) -> Option<RgbImage> {
 /// Cut a margin that has already been measured — see [`Margin::rotated_180`] for why the
 /// measuring and the cutting are separate.
 pub fn apply(img: &RgbImage, m: Margin) -> Option<RgbImage> {
-    if m.is_empty() {
-        return None;
-    }
     let (w, h) = (img.width(), img.height());
-    let cw = w.checked_sub(m.left + m.right)?;
-    let ch = h.checked_sub(m.top + m.bottom)?;
-    if cw < w / 2 || ch < h / 2 {
+    if effective(m, w, h).is_empty() {
         return None;
     }
+    let (cw, ch) = (w - m.left - m.right, h - m.top - m.bottom);
     let cropped = image::imageops::crop_imm(img, m.left, m.top, cw, ch).to_image();
     Some(image::imageops::resize(&cropped, w, h, image::imageops::FilterType::Triangle))
+}
+
+/// The margin [`apply`] would actually cut from a `w`×`h` image — `m` itself, or nothing when
+/// `apply` would refuse it.
+///
+/// **For a caller that maps a point through the trim rather than cutting pixels.** The OCR
+/// warps its bands straight out of the frame (see [`crate::ocr::CardPixels`]), so it has to
+/// know where a point of the trimmed card sat before the trim — and a margin `apply` declined
+/// to cut, because it would have kept less than half the card, moved nothing.
+pub fn effective(m: Margin, w: u32, h: u32) -> Margin {
+    let cut = |a: u32, b: u32, of: u32| a.checked_add(b).and_then(|s| of.checked_sub(s));
+    match (cut(m.left, m.right, w), cut(m.top, m.bottom, h)) {
+        (Some(cw), Some(ch)) if !m.is_empty() && cw >= w / 2 && ch >= h / 2 => m,
+        _ => Margin::default(),
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use image::Rgb;
+
+    #[test]
+    fn the_effective_margin_is_the_one_apply_would_cut() {
+        let img = RgbImage::new(488, 680);
+        let fine = Margin { left: 10, top: 12, right: 14, bottom: 16 };
+        assert_eq!(effective(fine, 488, 680), fine);
+        assert!(apply(&img, fine).is_some());
+        // More than half the card, and a margin wider than the card: `apply` declines both,
+        // so a point mapped through either must not move.
+        for refused in [
+            Margin { left: 200, top: 0, right: 100, bottom: 0 },
+            Margin { left: u32::MAX, top: 0, right: 1, bottom: 0 },
+        ] {
+            assert_eq!(effective(refused, 488, 680), Margin::default(), "{refused:?}");
+            assert!(apply(&img, refused).is_none(), "{refused:?}");
+        }
+    }
 
     const TABLE: [u8; 3] = [130, 120, 110];
 

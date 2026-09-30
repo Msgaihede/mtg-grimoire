@@ -59,8 +59,41 @@ export type GrabFrame = (
   quality: number,
 ) => Promise<Uint8Array | null>;
 
+/**
+ * One video frame as the pair a read wants: the usual `longEdge` JPEG the crate detects on, and
+ * the same frame near the camera's own resolution that it warps the title and collector bands out
+ * of. `detail` is `null` where the camera is no larger than the frame, since a detail image the
+ * size of the frame would be the frame twice.
+ */
+export interface GrabbedPair {
+  frame: Uint8Array;
+  detail: Uint8Array | null;
+}
+
+/**
+ * How a frame becomes that pair. A seam of its own beside {@link GrabFrame} rather than a wider
+ * `GrabFrame`, so the capture button's `grab(Infinity, 0.92)` and every test that injects only a
+ * single grab keep the shape they had.
+ */
+export type GrabPair = (
+  video: HTMLVideoElement,
+  longEdge: number,
+  quality: number,
+) => Promise<GrabbedPair | null>;
+
 /** The quality the pump sends at. The capture button uses 0.92 — see {@link ScanLoop.grab}. */
 const PUMP_QUALITY = 0.72;
+/**
+ * The detail image's long edge, at most. A 1920×1080 camera — `useCamera`'s ideal — goes out
+ * whole; a 4K one is brought down to what the band reads can use rather than encoding eight
+ * megapixels on the frame that can least afford the wait.
+ */
+const DETAIL_LONG_EDGE = 2560;
+/**
+ * The detail image's JPEG quality — above {@link PUMP_QUALITY} because it exists to carry the
+ * fine print a 960 px frame has already lost: set symbols, collector numbers, a title's serifs.
+ */
+const DETAIL_QUALITY = 0.85;
 /** The idle wait between two looks at a video that has nothing new, matching the debug page. */
 const IDLE_MS = 16;
 /** How many round trips the rate averages over. */
@@ -84,6 +117,15 @@ function sleep(ms: number): Promise<void> {
  * without tearing down the loop — the next frame simply goes out under the new numbers. That
  * is why the effect is keyed on `live` alone: a dependency on the options object would restart
  * the pump on every drag frame, and the restart is what a reader would see as a stall.
+ *
+ * **One frame in many also carries a detail image, and the session says which** (issue #708). A
+ * verdict with `wants_detail` means the crate expects to read the title and collector bands on
+ * the *next* frame, and those bands lose their fine print at the pump's 960 px. So the next grab
+ * draws the video once at its own resolution and derives the small frame from that canvas —
+ * never from the video a second time, which could be a newer frame than the one the detail
+ * shows — and both go out in one request. Every other frame is the one JPEG it always was: the
+ * full-size encode is the expensive half, and paying it nine times a second for a read that runs
+ * on one frame in four would halve the rate the overlay tracks at.
  */
 export function useScanLoop({
   videoRef,
@@ -91,6 +133,7 @@ export function useScanLoop({
   options,
   sendPx,
   grabFrame = defaultGrabFrame,
+  grabPair = defaultGrabPair,
   onDecision,
 }: {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -98,6 +141,8 @@ export function useScanLoop({
   options: ScannerOptions;
   sendPx: number;
   grabFrame?: GrabFrame;
+  /** The paired grab a frame after `wants_detail` uses. Injectable for {@link GrabFrame}'s reason. */
+  grabPair?: GrabPair;
   /**
    * The session decided on a card — called once per new `decision_seq`, with the decision and
    * the number, and never for a repeat.
@@ -146,11 +191,13 @@ export function useScanLoop({
   const optionsRef = useRef(options);
   const sendPxRef = useRef(sendPx);
   const grabRef = useRef(grabFrame);
+  const grabPairRef = useRef(grabPair);
   const onDecisionRef = useRef(onDecision);
   useLayoutEffect(() => {
     optionsRef.current = options;
     sendPxRef.current = sendPx;
     grabRef.current = grabFrame;
+    grabPairRef.current = grabPair;
     onDecisionRef.current = onDecision;
   });
 
@@ -162,6 +209,17 @@ export function useScanLoop({
    * draws it, and it has to be current for the very next answer rather than for the next render.
    */
   const lastSeqRef = useRef<number | null>(null);
+  /**
+   * The last verdict's `wants_detail`: whether the next frame goes out as a pair. A ref for
+   * `lastSeqRef`'s reason — nothing draws it, and the pump reads it on its very next iteration.
+   *
+   * **Consumed by the grab that reads it, whatever that grab comes to.** A pair that fails — a
+   * 2560 px canvas refused under memory pressure, a `toBlob` that answers nothing — leaves the
+   * latch down, so the frame after it is an ordinary one and the scanner goes on tracking at
+   * 960 px. A latch left up would retry the same failing grab on every iteration, and the pump
+   * would send nothing at all: a lost read is worth less than a frozen overlay.
+   */
+  const wantsDetailRef = useRef(false);
 
   const grab = useCallback(
     async (longEdge: number, quality: number): Promise<Uint8Array | null> => {
@@ -175,8 +233,10 @@ export function useScanLoop({
   useEffect(() => {
     if (!live) return;
     let stopped = false;
-    // A camera that has just started has seen no number yet; see `lastSeqRef`.
+    // A camera that has just started has seen no number yet; see `lastSeqRef`. Nor has it been
+    // asked for a detail image — a latch left from the last stream belongs to a card it saw.
     lastSeqRef.current = null;
+    wantsDetailRef.current = false;
 
     async function pump() {
       while (!stopped) {
@@ -193,8 +253,18 @@ export function useScanLoop({
         // never updates again, and nothing anywhere saying why. Its own block rather than
         // the request's below, because a frame that never became bytes was never in flight.
         let bytes: Uint8Array | null;
+        let detail: Uint8Array | null = null;
+        // Read and lowered in one step, before the grab can throw — see `wantsDetailRef`.
+        const paired = wantsDetailRef.current;
+        wantsDetailRef.current = false;
         try {
-          bytes = await grabRef.current(video, sendPxRef.current, PUMP_QUALITY);
+          if (paired) {
+            const pair = await grabPairRef.current(video, sendPxRef.current, PUMP_QUALITY);
+            bytes = pair?.frame ?? null;
+            detail = pair?.detail ?? null;
+          } else {
+            bytes = await grabRef.current(video, sendPxRef.current, PUMP_QUALITY);
+          }
         } catch (e) {
           if (!stopped) setError(ipcError(e));
           await sleep(IDLE_MS);
@@ -208,12 +278,20 @@ export function useScanLoop({
         inFlightRef.current = true;
         const t0 = performance.now();
         try {
-          const answer = await ipc.scannerFrame(bytes, optionsRef.current);
+          // Two arities rather than a trailing `null`, so a frame with no detail is the very
+          // call it was before the detail existed.
+          const answer =
+            detail === null
+              ? await ipc.scannerFrame(bytes, optionsRef.current)
+              : await ipc.scannerFrame(bytes, optionsRef.current, detail);
           const ms = performance.now() - t0;
           const trips = tripsRef.current;
           trips.push(ms);
           if (trips.length > WINDOW) trips.shift();
           if (stopped) return;
+          // `=== true` rather than the field itself: a far end that predates the field sends no
+          // key, and `undefined` must mean "no" rather than whatever a truthiness test makes of it.
+          wantsDetailRef.current = answer.wants_detail === true;
           setRoundTripMs(ms);
           setRate((1000 * trips.length) / trips.reduce((a, b) => a + b, 0));
           setVerdict(answer);
@@ -296,6 +374,62 @@ async function defaultGrabFrame(
   const ctx = canvas.getContext("2d");
   if (ctx === null) return null;
   ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  return jpegOf(canvas, quality);
+}
+
+/** The detail image's canvas — {@link scratch}'s reason, and never the same canvas as it. */
+let detailScratch: HTMLCanvasElement | null = null;
+
+/**
+ * Video → the frame and its detail image, out of **one** draw of the video.
+ *
+ * The video is drawn once, at its own size capped at {@link DETAIL_LONG_EDGE}, and the frame is
+ * drawn *from that canvas*: a second `drawImage(video)` reads whatever frame the element holds at
+ * that moment, which at 30–60 fps can already be the next one, and the crate scales the quad it
+ * found in the frame straight onto the detail image — so a pair from two video frames is a quad
+ * laid over a card that has moved.
+ *
+ * Both encodes are started before either is awaited. `toBlob` takes its copy of the bitmap when it
+ * is called, so neither result depends on what later draws do to the two shared canvases; the
+ * capture button's grab can reuse {@link scratch} the moment this function has returned a promise.
+ */
+async function defaultGrabPair(
+  video: HTMLVideoElement,
+  longEdge: number,
+  quality: number,
+): Promise<GrabbedPair | null> {
+  const w = video.videoWidth;
+  const h = video.videoHeight;
+  if (w === 0 || h === 0) return null;
+  const big = (detailScratch ??= document.createElement("canvas"));
+  const bigScale = Math.min(1, DETAIL_LONG_EDGE / Math.max(w, h));
+  big.width = Math.round(w * bigScale);
+  big.height = Math.round(h * bigScale);
+  const bigCtx = big.getContext("2d");
+  if (bigCtx === null) return null;
+  bigCtx.drawImage(video, 0, 0, big.width, big.height);
+
+  const small = (scratch ??= document.createElement("canvas"));
+  const scale = Math.min(1, longEdge / Math.max(big.width, big.height));
+  small.width = Math.round(big.width * scale);
+  small.height = Math.round(big.height * scale);
+  const ctx = small.getContext("2d");
+  if (ctx === null) return null;
+  ctx.drawImage(big, 0, 0, small.width, small.height);
+
+  // A camera no larger than the frame has no finer print to give: the detail would be the frame
+  // again at a higher quality, costing an encode and a body twice the size for nothing.
+  const worthIt = big.width > small.width;
+  const [frame, detail] = await Promise.all([
+    jpegOf(small, quality),
+    worthIt ? jpegOf(big, DETAIL_QUALITY) : Promise.resolve(null),
+  ]);
+  if (frame === null) return null;
+  return { frame, detail };
+}
+
+/** A canvas's pixels as JPEG bytes, or `null` where the browser produced no blob. */
+async function jpegOf(canvas: HTMLCanvasElement, quality: number): Promise<Uint8Array | null> {
   const blob = await new Promise<Blob | null>((resolve) =>
     canvas.toBlob(resolve, "image/jpeg", quality),
   );

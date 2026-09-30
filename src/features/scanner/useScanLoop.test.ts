@@ -3,18 +3,26 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import { READS, VERDICTS } from "./fixtures";
 import type { ScannerOptions, ScannerVerdict } from "./types";
-import { useScanLoop } from "./useScanLoop";
+import { useScanLoop, type GrabbedPair } from "./useScanLoop";
 
-const scannerFrame = vi.fn<(jpeg: Uint8Array, options: ScannerOptions) => Promise<ScannerVerdict>>();
+const scannerFrame =
+  vi.fn<(jpeg: Uint8Array, options: ScannerOptions, detail?: Uint8Array | null) => Promise<ScannerVerdict>>();
 
 // Only `scannerFrame` is replaced. `ipcError` stays the real one, because what the error path
-// owes is *its* sentence — a stub of it would let the hook return anything and still pass.
+// owes is *its* sentence — a stub of it would let the hook return anything and still pass. The
+// arguments are forwarded as they came, so a plain frame's call is two arguments and a paired
+// frame's three — the difference the detail tests below assert on.
 vi.mock("@/lib/ipc", async (original) => ({
   ...(await original<typeof import("@/lib/ipc")>()),
-  ipc: { scannerFrame: (jpeg: Uint8Array, options: ScannerOptions) => scannerFrame(jpeg, options) },
+  ipc: {
+    scannerFrame: (...args: [Uint8Array, ScannerOptions, (Uint8Array | null)?]) => scannerFrame(...args),
+  },
 }));
 
 const BYTES = new Uint8Array([0xff, 0xd8, 0xff]);
+/** The paired grab's two halves — distinct from {@link BYTES}, so a test can tell which grab ran. */
+const PAIR_FRAME = new Uint8Array([0xff, 0xd8, 0x01]);
+const PAIR_DETAIL = new Uint8Array([0xff, 0xd8, 0x02, 0x03]);
 
 /** A video the loop is willing to read: `readyState` 2 is `HAVE_CURRENT_DATA`. */
 function readyVideo(): HTMLVideoElement {
@@ -55,16 +63,20 @@ function deferred<T>() {
 
 function mount(over: Partial<Parameters<typeof useScanLoop>[0]> = {}) {
   const grabFrame = vi.fn(async () => BYTES);
+  const grabPair = vi.fn(
+    async (): Promise<GrabbedPair | null> => ({ frame: PAIR_FRAME, detail: PAIR_DETAIL }),
+  );
   const args = {
     videoRef: { current: readyVideo() },
     live: true,
     options: DEFAULT_SCANNER_OPTIONS,
     sendPx: DEFAULT_SEND_PX,
     grabFrame,
+    grabPair,
     ...over,
   };
   const hook = renderHook(() => useScanLoop(args));
-  return { ...hook, grabFrame, args };
+  return { ...hook, grabFrame, grabPair, args };
 }
 
 beforeEach(() => {
@@ -404,6 +416,80 @@ describe("useScanLoop", () => {
 
     act(() => result.current.clearReads());
     expect(result.current.lastResolution).toBeNull();
+  });
+
+  /**
+   * **A detail image goes out on the one frame the session asked for it, and on no other**
+   * (issue #708). The full-size encode is the expensive half of a grab, so the loop pays for it
+   * only on the frame after a verdict that set `wants_detail` — and that frame's two JPEGs come
+   * out of one paired grab, never a plain grab plus a second look at the video.
+   */
+  it("sends a detail image on the frame after wants_detail, and only then", async () => {
+    const answers: ScannerVerdict[] = [
+      { ...VERDICTS.voting, wants_detail: true },
+      { ...VERDICTS.voting, wants_detail: false },
+    ];
+    const gates = answers.map(() => deferred<ScannerVerdict>());
+    let n = 0;
+    scannerFrame.mockImplementation(() => gates[n++]?.promise ?? deferred<ScannerVerdict>().promise);
+    const { grabFrame, grabPair } = mount({ sendPx: 720 });
+    await tick();
+
+    // The first frame of a stream: nothing has asked for a detail yet.
+    expect(scannerFrame).toHaveBeenCalledTimes(1);
+    expect(scannerFrame.mock.calls[0]).toEqual([BYTES, DEFAULT_SCANNER_OPTIONS]);
+    expect(grabPair).not.toHaveBeenCalled();
+
+    // `wants_detail: true` — the next frame is the paired grab's, carrying its detail.
+    await act(async () => gates[0].resolve(answers[0]));
+    expect(scannerFrame).toHaveBeenCalledTimes(2);
+    expect(scannerFrame.mock.calls[1]).toEqual([PAIR_FRAME, DEFAULT_SCANNER_OPTIONS, PAIR_DETAIL]);
+    expect(grabPair).toHaveBeenCalledTimes(1);
+    expect(grabPair).toHaveBeenLastCalledWith(expect.anything(), 720, 0.72);
+    // …and it was the pair's frame that went out, not a plain grab beside it.
+    expect(grabFrame).toHaveBeenCalledTimes(1);
+
+    // `wants_detail: false` — back to the one plain JPEG.
+    await act(async () => gates[1].resolve(answers[1]));
+    expect(scannerFrame).toHaveBeenCalledTimes(3);
+    expect(scannerFrame.mock.calls[2]).toEqual([BYTES, DEFAULT_SCANNER_OPTIONS]);
+    expect(grabPair).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * A pair that cannot be grabbed must not stop the scanner. The latch is consumed by the attempt,
+   * so a failing full-size grab costs that one read and the next frame is an ordinary one — a latch
+   * left up would retry the failing grab forever and send nothing at all.
+   */
+  it("shows a failed paired grab's sentence and goes back to plain frames", async () => {
+    const first = deferred<ScannerVerdict>();
+    scannerFrame.mockReturnValueOnce(first.promise).mockReturnValue(deferred<ScannerVerdict>().promise);
+    const grabPair = vi.fn(async (): Promise<GrabbedPair | null> => {
+      throw new Error("the detail canvas is too large");
+    });
+    const { result, grabFrame } = mount({ grabPair });
+    await tick();
+
+    await act(async () => first.resolve({ ...VERDICTS.voting, wants_detail: true }));
+    await tick();
+    expect(grabPair).toHaveBeenCalledTimes(1);
+    expect(result.current.error).toBe("the detail canvas is too large");
+    // The pump carried on with a plain frame rather than asking for the pair again.
+    expect(scannerFrame).toHaveBeenCalledTimes(2);
+    expect(scannerFrame.mock.calls[1]).toEqual([BYTES, DEFAULT_SCANNER_OPTIONS]);
+    expect(grabFrame).toHaveBeenCalledTimes(2);
+  });
+
+  /** A camera no larger than the frame gives a pair with no detail, which is the plain call. */
+  it("sends a pair with no detail as the plain two-argument call", async () => {
+    const first = deferred<ScannerVerdict>();
+    scannerFrame.mockReturnValueOnce(first.promise).mockReturnValue(deferred<ScannerVerdict>().promise);
+    const grabPair = vi.fn(async (): Promise<GrabbedPair | null> => ({ frame: PAIR_FRAME, detail: null }));
+    mount({ grabPair });
+    await tick();
+    await act(async () => first.resolve({ ...VERDICTS.voting, wants_detail: true }));
+    expect(scannerFrame).toHaveBeenCalledTimes(2);
+    expect(scannerFrame.mock.calls[1]).toEqual([PAIR_FRAME, DEFAULT_SCANNER_OPTIONS]);
   });
 
   it("exposes the same grab for a full-resolution capture", async () => {

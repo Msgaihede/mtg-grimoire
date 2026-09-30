@@ -86,6 +86,10 @@ pub struct BurstView<'a> {
     /// [`crate::reference::MatchReport::rotated`] for this frame: the orientation a reader
     /// tries first.
     pub rotated: bool,
+    /// The frame this view was rectified from, when the session kept it — what the readers warp
+    /// their bands out of. `None` reads them from `upright` and `flipped` instead. See
+    /// [`crate::ocr::CardPixels`].
+    pub pixels: Option<&'a crate::ocr::CardPixels>,
 }
 
 impl BurstView<'_> {
@@ -492,6 +496,7 @@ mod tests {
                 alternates: &[],
                 cardness,
                 rotated: false,
+                pixels: None,
             })
             .collect()
     }

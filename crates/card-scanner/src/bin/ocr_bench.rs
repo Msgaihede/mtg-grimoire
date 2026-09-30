@@ -181,8 +181,9 @@ fn run(args: Args) -> Result<(), String> {
     );
     for &finder in &args.finders {
         reader.set_text_detection(finder == Finder::Detection);
-        let _ = reader.read_title(&warm, &warm);
-        let _ = reader.read_collector(&warm, &warm);
+        let warm = card_scanner::ocr::BandSource::Rectified { upright: &warm, flipped: &warm };
+        let _ = reader.read_title(&warm);
+        let _ = reader.read_collector(&warm);
     }
 
     let mut bands: Vec<Band> = Vec::new();
@@ -219,8 +220,9 @@ fn run(args: Args) -> Result<(), String> {
             }
             for finder in order {
                 reader.set_text_detection(finder == Finder::Detection);
-                let title = reader.read_title(&upright, &flipped);
-                let collector = reader.read_collector(&upright, &flipped);
+                let src = card_scanner::ocr::BandSource::Rectified { upright: &upright, flipped: &flipped };
+                let title = reader.read_title(&src);
+                let collector = reader.read_collector(&src);
                 let band = Band {
                     id: format_uuid(&truth.id),
                     name: truth.name.clone(),
