@@ -41,6 +41,18 @@ import { useEffect, useState } from "react";
  * **The initial value is the state itself, not `false`.** A shell that opens expanded has to
  * open with its words, and a hook that started every mount narrow would fade all six labels in
  * 180ms after launch — a delay whose whole justification is a tween that never ran.
+ *
+ * **"No words while collapsed" is in the return value, not in the effect's cleanup** — issue
+ * #694, words on a collapsed rail after launch. The shell mounts expanded because the stored
+ * fold has not been read yet, which arms a reveal. The read then collapses the rail. That
+ * commit's `clearTimeout` is a passive-effect cleanup, and React flushes those synchronously
+ * only for a sync-lane render. The stored `true` can land in an ordinary one instead: any other
+ * shell update that reads the query's fresh snapshot before TanStack's batched notify does. On
+ * a busy launch the reveal is already due and runs before that cleanup. This hook used to clear
+ * `shown` on the press and trust the cleanup for the rest, so that late reveal set it back on,
+ * and with `wasCollapsed` already caught up nothing ever cleared it again. So the answer is
+ * `shown && !collapsed`, and `shown` is reset when the rail *opens*, not when it closes. That way
+ * a reveal left over from an earlier opening cannot skip the wait on this one.
  */
 export function useNavLabels(collapsed: boolean, delayMs: number): boolean {
   const [shown, setShown] = useState(!collapsed);
@@ -48,9 +60,9 @@ export function useNavLabels(collapsed: boolean, delayMs: number): boolean {
 
   if (wasCollapsed !== collapsed) {
     setWasCollapsed(collapsed);
-    // Only ever *down* from here, in the same commit as the press. Coming back up is the
-    // timer's job below, because that is the half that has to wait for the rail.
-    if (collapsed) setShown(false);
+    // Opening: the words wait for this opening's own timer below, whatever an earlier one's
+    // did. Closing needs nothing here — the `!collapsed` in the return drops them in this commit.
+    if (!collapsed) setShown(false);
   }
 
   useEffect(() => {
@@ -59,5 +71,5 @@ export function useNavLabels(collapsed: boolean, delayMs: number): boolean {
     return () => clearTimeout(timer);
   }, [collapsed, delayMs]);
 
-  return shown;
+  return shown && !collapsed;
 }

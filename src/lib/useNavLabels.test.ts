@@ -61,6 +61,30 @@ describe("useNavLabels", () => {
     expect(result.current).toBe(false);
   });
 
+  /**
+   * Issue #694: words on a collapsed rail after launch. The shell mounts expanded — the stored
+   * fold has not been read yet — which arms a reveal; the read then collapses it. That commit's
+   * `clearTimeout` is a passive-effect cleanup, and React defers those to a scheduler task for
+   * any render that is not sync-lane. A reveal already due runs first. The neutered
+   * `clearTimeout` is that ordering, made deterministic.
+   */
+  it("never paints a word on a collapsed rail, even when a reveal outlives its cleanup", () => {
+    const { result, rerender } = labels(false);
+    const clear = vi.spyOn(globalThis, "clearTimeout").mockImplementation(() => {});
+    rerender({ collapsed: true });
+    clear.mockRestore();
+
+    act(() => void vi.advanceTimersByTime(TWEEN));
+    expect(result.current).toBe(false);
+
+    // And the stale reveal must not carry into the next opening either, or the words land on
+    // a 68px rail at the press — the 2026-08-22 overflow.
+    rerender({ collapsed: false });
+    expect(result.current).toBe(false);
+    act(() => void vi.advanceTimersByTime(TWEEN));
+    expect(result.current).toBe(true);
+  });
+
   it("re-arms for the next opening", () => {
     const { result, rerender } = labels(true);
     rerender({ collapsed: false });
