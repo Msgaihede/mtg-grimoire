@@ -231,6 +231,14 @@ Full record, with every measurement and the provenance of each rung:
   governed — the toolbar's quick-add field — drew no control at all, so the only way to find out
   where a quick add would land was to read that field's label. The editor now derives
   `targetCategoryId` from the row and the panel takes it read-only.
+- **The setting governs adds from _outside_ the editor too** (issue #693, 2026-09-30). The card
+  menu's `Add to → Deck`, the card modal's picker, the cabinet's `Decks` rows (all
+  `useCardToDeck`) and the sidebar's Decks drop pass **`deckDefault: true`** to `useDeck.addCard`,
+  which reads the deck's row through the cache and resolves it with `defaultPileFor` — the
+  editor's own rule, Theory's name lookup included. Until then they sent a bare type line and
+  took the Auto arm whatever the deck said. **It is opt-in, not the rule for every add with no
+  category**, because the quick zones' `Auto` sends that same shape as an explicit choice of Auto
+  over the setting.
 - **`AUTO_CATEGORY` is `0`, it lives in `autoCategory.ts`, and that zero fixed a real bug** — a
   deck's seeded categories are in `PREDEFINED_CATEGORIES` order, so a clamp to `categories[0]`
   put every quick add on a fresh deck into **Commander**. Zero now _means_ auto and nothing

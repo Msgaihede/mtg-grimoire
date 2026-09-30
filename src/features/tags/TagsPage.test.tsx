@@ -1367,7 +1367,12 @@ describe("dragging a tile", () => {
 
   it("adds a tile dropped on the sidebar's Decks entry to the open deck", async () => {
     useAppStore.setState({ openDeckId: 7 });
-    queryClient.setQueryData(["decks", "detail", 7], { deck: { id: 7, name: "Burn" }, cards: [] });
+    // On Auto (`defaultCategoryId: 0`), and answered by `deck_get` as well as seeded: the drop
+    // reads the deck's own add location before it writes (issue #693), and Auto is what sends
+    // it on to `autoCategoryFor` below.
+    const burn = { deck: { id: 7, name: "Burn", defaultCategoryId: 0 }, cards: [], categories: [] };
+    queryClient.setQueryData(["decks", "detail", 7], burn);
+    deckGet.mockResolvedValue(burn);
     deckAddCard.mockResolvedValue({ id: 1, quantity: 1 });
     const { container } = wrapInShell(<TagsPage />);
     await screen.findByRole("button", { name: "Lightning Bolt" });
@@ -1384,7 +1389,7 @@ describe("dragging a tile", () => {
     await held.drop();
 
     // Filed by what the card does — no category id, because a nav item several views away from
-    // the deck has no column the reader can have pointed at.
+    // the deck has no column the reader can have pointed at, and this deck names no add location.
     await waitFor(() =>
       expect(deckAddCard).toHaveBeenCalledWith(7, "c-bolt-lea", null, "Instant", "live", null, 1),
     );

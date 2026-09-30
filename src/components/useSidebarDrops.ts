@@ -140,9 +140,10 @@ export function useSidebarDrops() {
       writeToDeck(
         // **One copy, and the pile is whatever the payload knows.** A sidebar entry is a
         // destination rather than a form: it is a nav item several views away from the deck, so
-        // for a card off a wall there is no column here a reader could have pointed at, and the
-        // deck's own columns are where somebody who means the sideboard drops one. So that card
-        // names no category and rides its **type line** instead, which `useDeck`'s `addCard`
+        // for a card off a wall there is no column here a reader could have pointed at. So that
+        // card names no category and lands where **the deck** says its adds land —
+        // `deckDefault`, the setting the editor's own Add button honours (issue #693) — and on a
+        // deck left on Auto it rides its **type line** instead, which `useDeck`'s `addCard`
         // files through `autoCategoryFor` — a Ramp artifact dropped here lands under Artifact,
         // found or created. The line comes from the payload rather than a lookup, which is what
         // keeps this a gesture and not a query: every source that carries a `"card"` has it in
@@ -156,7 +157,12 @@ export function useSidebarDrops() {
         // extra copy into the main deck.
         payload.kind === "deck-card"
           ? { cardId: payload.cardId, categoryId: payload.fromCategoryId, quantity: 1 }
-          : { cardId: payload.cardId, typeLine: payload.typeLine, quantity: 1 },
+          : {
+              cardId: payload.cardId,
+              deckDefault: true,
+              typeLine: payload.typeLine,
+              quantity: 1,
+            },
         {
           // The fallback is the sliver where the editor's read has not landed yet — the drop
           // still writes, and the sentence says what it can.
