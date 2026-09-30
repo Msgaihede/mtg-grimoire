@@ -205,6 +205,21 @@ impl CardPixels {
     ///
     /// `None` only for a quad that admits no homography.
     pub fn band(&self, at: (f32, f32, f32, f32), scale: u32, rotated: bool) -> Option<RgbImage> {
+        let q = self.band_quad(at, rotated)?;
+        let (bw, bh) = band_extent(at, crate::RECTIFIED_W, crate::RECTIFIED_H);
+        crate::detect::rectify_to(&self.image, &q, bw * scale, bh * scale)
+    }
+
+    /// How many of the frame's own pixels the band `at` covers, width by height — the
+    /// resolution a read of it actually had, whatever size the band is then warped to.
+    pub fn band_span(&self, at: (f32, f32, f32, f32), rotated: bool) -> Option<(u32, u32)> {
+        let [a, b, _, d] = self.band_quad(at, rotated)?.corners;
+        let len = |p: (f32, f32), q: (f32, f32)| (p.0 - q.0).hypot(p.1 - q.1).round() as u32;
+        Some((len(a, b), len(a, d)))
+    }
+
+    /// The band `at` as a quad in the frame's coordinates.
+    fn band_quad(&self, at: (f32, f32, f32, f32), rotated: bool) -> Option<crate::detect::Quad> {
         use imageproc::geometric_transformations::Projection;
         let (quad, m) = if rotated {
             (self.warped.flipped(), self.margin.rotated_180())
@@ -222,12 +237,28 @@ impl CardPixels {
         let (cw, ch) = (w - left - m.right as f32, h - top - m.bottom as f32);
         let at_card = |u: f32, v: f32| to_frame * (left + u * cw, top + v * ch);
         let (x0, y0, x1, y1) = at;
-        let q = crate::detect::Quad {
+        Some(crate::detect::Quad {
             corners: [at_card(x0, y0), at_card(x1, y0), at_card(x1, y1), at_card(x0, y1)],
-        };
-        let (bw, bh) = band_extent(at, crate::RECTIFIED_W, crate::RECTIFIED_H);
-        crate::detect::rectify_to(&self.image, &q, bw * scale, bh * scale)
+        })
     }
+}
+
+/// What a band was read from: the image, and how much of it the band covered.
+///
+/// **The answer to "was that read at full resolution?"**, which the crop alone cannot give —
+/// every band is warped to the same size, so a line spanning 60 source pixels and one spanning
+/// 250 come out looking alike apart from their blur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct BandOrigin {
+    /// `true` for a frame from the camera — the detail frame when one came, else the detection
+    /// frame — and `false` for the 488×680 rectification.
+    pub frame: bool,
+    /// The size of the image the band was warped or cropped from.
+    pub width: u32,
+    pub height: u32,
+    /// The band's own extent in that image's pixels.
+    pub span_width: u32,
+    pub span_height: u32,
 }
 
 /// Where a reader gets its bands.
@@ -249,6 +280,33 @@ impl BandSource<'_> {
             // A degenerate quad reads as an empty band rather than failing the frame: the
             // reader then finds nothing, which is what a card it cannot see should produce.
             BandSource::Frame(p) => p.band(at, scale, rotated).unwrap_or_else(|| RgbImage::new(1, 1)),
+        }
+    }
+
+    /// Where the band `at` comes from, for [`BandOrigin`]'s reason. `None` for a frame quad
+    /// that admits no homography, which [`BandSource::band`] reads as an empty band.
+    pub fn origin(&self, at: (f32, f32, f32, f32), rotated: bool) -> Option<BandOrigin> {
+        match self {
+            BandSource::Rectified { upright, .. } => {
+                let (span_width, span_height) = band_extent(at, upright.width(), upright.height());
+                Some(BandOrigin {
+                    frame: false,
+                    width: upright.width(),
+                    height: upright.height(),
+                    span_width,
+                    span_height,
+                })
+            }
+            BandSource::Frame(p) => {
+                let (span_width, span_height) = p.band_span(at, rotated)?;
+                Some(BandOrigin {
+                    frame: true,
+                    width: p.image.width(),
+                    height: p.image.height(),
+                    span_width,
+                    span_height,
+                })
+            }
         }
     }
 }
@@ -287,6 +345,12 @@ pub struct TextLine {
 /// Empty when nothing stands out from the floor: a blank band has no text to read, and saying
 /// so costs nothing, where reading it cost a detection pass.
 pub fn text_lines(band: &RgbImage) -> Vec<TextLine> {
+    text_lines_at(band, LINE_CUT, 1.0)
+}
+
+/// [`text_lines`] with the line cut as a fraction of the way from the band's floor to its
+/// strongest row.
+pub fn text_lines_at(band: &RgbImage, line_cut: f32, measured: f32) -> Vec<TextLine> {
     let (w, h) = (band.width() as usize, band.height() as usize);
     if w < 16 || h < 8 {
         return Vec::new();
@@ -301,8 +365,9 @@ pub fn text_lines(band: &RgbImage) -> Vec<TextLine> {
     }
     let grad = |y: usize, x: usize| u32::from(px[y * w + x].abs_diff(px[y * w + x + step]));
 
+    let span = ((w as f32 * measured.clamp(0.1, 1.0)) as usize).clamp(1, w - step);
     let rows: Vec<f32> = (0..h)
-        .map(|y| (0..w - step).map(|x| grad(y, x)).sum::<u32>() as f32 / w as f32)
+        .map(|y| (0..span).map(|x| grad(y, x)).sum::<u32>() as f32 / span as f32)
         .collect();
     // A little smoothing, so one noisy row can neither split a line nor make one.
     let rows = smoothed(&rows, (h / 60).max(1));
@@ -316,7 +381,7 @@ pub fn text_lines(band: &RgbImage) -> Vec<TextLine> {
     }
     // One line's own gaps — the rows between an ascender and the x-height — are bridged; the
     // gap between two lines is wider than a quarter of either, and is not.
-    let lines = runs(&rows, floor + LINE_CUT * (peak - floor), |tall| {
+    let lines = runs(&rows, floor + line_cut * (peak - floor), |tall| {
         (tall / 4).max(1)
     });
 
@@ -486,6 +551,8 @@ pub struct CollectorRead {
     /// often be shown a different image than the one the text came from — which is worse than
     /// showing nothing, because it looks like an answer.
     pub band: Option<RgbImage>,
+    /// Where `band` came from and how many real pixels it covered. See [`BandOrigin`].
+    pub origin: Option<BandOrigin>,
 }
 
 /// Every plausible (set code, collector number) pairing in a collector-line read.
@@ -635,6 +702,119 @@ fn end_word(words: &mut Vec<String>, totals: &mut Vec<usize>, cur: &mut String, 
     *slash = false;
 }
 
+/// How well a collector-line read fits one printing, best highest. See [`collector_fit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CollectorFit(u8);
+
+/// Does a collector-line read fit the printing `set` / `number`, and how well?
+///
+/// **A test against a known answer, not a parse**, for a line too blurry to parse:
+/// [`crate::reference::Reference::collector_among`] asks it of each printing of a card already
+/// named, so a fit only ever chooses *among* those. Three grades, best first:
+///
+/// - **number and set** — a token reads as the number, and a token is within one edit of the
+///   set code;
+/// - **number alone** — a token of at least three characters, with at least one real digit in
+///   it, reads as the number. Modern lines print the number zero-padded to four digits, so a
+///   one- or two-character token is too easily noise;
+/// - **set alone, exactly** — a token contains the set code letter for letter, and no token
+///   reads cleanly as some *other* number.
+///
+/// A token reads as a number once the letters OCR confuses with digits are mapped back
+/// (`O Q D` → 0, `I L` → 1, `Z` → 2, `S` → 5, `G` → 6, `B` → 8) and leading zeros are stripped,
+/// with the rarity letter a line prints before the number (`U0014`) allowed to stick to it.
+/// Measured live on 2026-09-30, `U 0014 / LTR • EN` read as `OO14 TRCN S`: `OO14` is 14 and
+/// `TR` is one edit from `LTR`, which the blind parse could never have paired.
+pub fn collector_fit(raw: &str, set: &str, number: &str) -> Option<CollectorFit> {
+    let set = set.to_ascii_uppercase();
+    let number = number.trim_start_matches('0').to_ascii_lowercase();
+    let tokens: Vec<String> = raw
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+    // The token as read, and without a rarity letter stuck to its front (`U0014`).
+    let tails = |t: &str| {
+        let stuck = t.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
+        [Some(t.to_string()), stuck.then(|| t[1..].to_string())].into_iter().flatten()
+    };
+    let number_read = !number.is_empty()
+        && tokens.iter().any(|t| tails(t).any(|n| read_number(&n).is_some_and(|d| d == number)));
+    // Live on 2026-09-30, Exact read Faramir's line as `U0014 L8EH SOR/`: the number plain,
+    // the set past recognising, and no fit until the stuck `U` was allowed here too.
+    let long_number_read = !number.is_empty()
+        && tokens.iter().any(|t| {
+            tails(t).any(|n| {
+                n.len() >= 3
+                    && n.chars().any(|c| c.is_ascii_digit())
+                    && read_number(&n).is_some_and(|d| d == number)
+            })
+        });
+    // A number read cleanly that is not this printing's says the line is some other printing's,
+    // so the set alone is then no evidence for this one.
+    let other_number = tokens.iter().any(|t| t.len() >= 3 && read_number(t).is_some());
+    let set_edits = tokens.iter().filter_map(|t| set_distance(t, &set)).min();
+    match (number_read, set_edits) {
+        (true, Some(e)) if e <= 1 => Some(CollectorFit(3)),
+        _ if long_number_read => Some(CollectorFit(2)),
+        (false, Some(0)) if !other_number => Some(CollectorFit(1)),
+        _ => None,
+    }
+}
+
+/// A token as a collector number, confusable letters mapped to digits and leading zeros
+/// stripped — `None` unless every character is then a digit and at least one was one to start.
+fn read_number(token: &str) -> Option<String> {
+    if !token.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let mapped: String = token
+        .chars()
+        .map(|c| match c {
+            'O' | 'Q' | 'D' => '0',
+            'I' | 'L' => '1',
+            'Z' => '2',
+            'S' => '5',
+            'G' => '6',
+            'B' => '8',
+            c => c,
+        })
+        .collect();
+    let digits = mapped.trim_start_matches('0');
+    (mapped.chars().all(|c| c.is_ascii_digit()) && !digits.is_empty()).then(|| digits.to_string())
+}
+
+/// The fewest edits between `set` and any stretch of `token` within one character of its
+/// length. `None` for a token or set too short to say anything.
+fn set_distance(token: &str, set: &str) -> Option<u32> {
+    let (t, s) = (token.as_bytes(), set.as_bytes());
+    if t.len() < 2 || s.len() < 2 {
+        return None;
+    }
+    let mut best: Option<u32> = None;
+    for len in s.len().saturating_sub(1).max(2)..=(s.len() + 1).min(t.len()) {
+        for window in t.windows(len) {
+            let d = levenshtein(window, s);
+            best = Some(best.map_or(d, |b| b.min(d)));
+        }
+    }
+    best
+}
+
+fn levenshtein(a: &[u8], b: &[u8]) -> u32 {
+    let mut row: Vec<u32> = (0..=b.len() as u32).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i as u32 + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cur = row[j + 1];
+            row[j + 1] = if ca == cb { prev } else { 1 + prev.min(row[j]).min(cur) };
+            prev = cur;
+        }
+    }
+    row[b.len()]
+}
+
 #[cfg(feature = "ocr")]
 mod engine {
     use super::*;
@@ -659,6 +839,16 @@ mod engine {
     /// How many of a collector band's lines are read — both printed lines, and one more for a
     /// crop that caught the bottom of the text box.
     const COLLECTOR_LINES: usize = 3;
+    /// The share of a collector band's width, from the left, whose strokes decide where its
+    /// lines are ([`super::text_lines_at`]).
+    ///
+    /// **The whole width drowned the line that carries the number.** `U 0026` fills the left
+    /// third of the band and `LTR • EN` runs on into the artist credit to the far edge, so
+    /// averaged across the band the first line was under a third of the second's strength and
+    /// under the cut: measured on eighteen crops from a live 1080p pass (2026-09-30), the
+    /// number's line was found on 1 of the 5 that showed it, and those reads came back as
+    /// `TREN SI` and `ERNIS`. Over the left 60% both lines are found on all five at the same cut.
+    const COLLECTOR_MEASURED: f32 = 0.6;
 
     /// A loaded OCR engine. Construction reads ~22 MB of model, so build one and keep it.
     pub struct TitleReader {
@@ -752,11 +942,11 @@ mod engine {
                 return self.title.get_text(&input).ok();
             }
 
-            let (engine, keep) = match what {
-                Band::Title => (&self.title, TITLE_LINES),
-                Band::Collector => (&self.collector, COLLECTOR_LINES),
+            let (engine, keep, measured) = match what {
+                Band::Title => (&self.title, TITLE_LINES, 1.0),
+                Band::Collector => (&self.collector, COLLECTOR_LINES, COLLECTOR_MEASURED),
             };
-            let mut lines = text_lines(band);
+            let mut lines = text_lines_at(band, LINE_CUT, measured);
             if lines.is_empty() {
                 return Some(String::new());
             }
@@ -881,6 +1071,13 @@ mod engine {
         /// Which way up is settled by which read yields *resolvable* pairings, so unlike the
         /// title there is no heuristic here — the caller checks each candidate against the
         /// corpus and an upside-down read simply produces none that resolve.
+        /// One collector band as the recogniser reads it — no crop, no orientation, no
+        /// fallbacks. For probing a band a session showed, which is the only way to put the
+        /// exact pixels of a failed live read back in front of the recogniser.
+        pub fn read_collector_band(&self, band: &RgbImage) -> String {
+            self.read_band(band, Band::Collector).unwrap_or_default()
+        }
+
         pub fn read_collector(&self, src: &BandSource<'_>) -> CollectorRead {
             self.read_collector_first(src, false)
         }
@@ -901,6 +1098,7 @@ mod engine {
             // attempt, while a card that cannot be read pays for all six. Deciding the
             // orientation once takes the worst case from 785 ms to roughly half that.
             let mut shown = src.band(COLLECTOR_BAND, 4, flipped_first);
+            let mut shown_at = COLLECTOR_BAND;
             let up = self.read_band(&shown, Band::Collector).unwrap_or_default();
             let mut candidates = collector_candidates(&up);
             let mut raw = up;
@@ -933,6 +1131,7 @@ mod engine {
                         candidates = found;
                         raw = text;
                         shown = crop;
+                        shown_at = at;
                         break;
                     }
                 }
@@ -942,6 +1141,7 @@ mod engine {
                 raw: raw.split_whitespace().collect::<Vec<_>>().join(" "),
                 candidates,
                 band: Some(shown),
+                origin: src.origin(shown_at, rotated),
                 rotated,
                 elapsed_ms: started.elapsed().as_secs_f32() * 1000.0,
             }
@@ -968,6 +1168,24 @@ mod tests {
     fn a_clean_collector_line_resolves_to_its_set_and_number() {
         let c = collector_candidates("U 0232 LTR EN");
         assert!(c.contains(&("ltr".into(), "232".into())), "got {c:?}");
+    }
+
+    /// The reads are verbatim from the 2026-09-30 live pass on a 1080p webcam, where the whole
+    /// line spanned about 136×69 source pixels.
+    #[test]
+    fn a_blurry_collector_read_fits_the_printing_it_shows() {
+        let both = collector_fit("OO14 TRCN S", "ltr", "14");
+        let number = collector_fit("U OO14", "ltr", "14");
+        let set = collector_fit("LTRCN SOG", "ltr", "14");
+        assert!(both > number && number > set && set.is_some(), "{both:?} {number:?} {set:?}");
+        assert_eq!(collector_fit("U0014 LTR", "ltr", "14"), both, "a rarity letter stuck on");
+        assert_eq!(collector_fit("U0014 L8EH SOR/", "ltr", "14"), number, "stuck, set unreadable");
+        // Nothing that reads as its number or its set.
+        assert_eq!(collector_fit("1XRE SOM", "ltr", "14"), None);
+        assert_eq!(collector_fit("1", "ltr", "1"), None, "one character is noise");
+        assert_eq!(collector_fit("IL LTR", "ltr", "11"), set, "letters alone are not a number");
+        // A clean number of another printing takes the set's word away.
+        assert_eq!(collector_fit("U 0426 LTR EN", "ltr", "14"), None);
     }
 
     #[test]

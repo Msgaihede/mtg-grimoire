@@ -533,6 +533,8 @@ const collector: ScannerCollector = {
   ],
   more: 3,
   band: "data:image/png;base64,iVBORw0KGgo=",
+  // No detail frame came: the line spanned a few dozen of the detection frame's pixels.
+  origin: { frame: true, width: 960, height: 540, span_width: 62, span_height: 23 },
   matched: null,
 };
 

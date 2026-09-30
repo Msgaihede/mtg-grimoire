@@ -34,11 +34,19 @@ function aspectOk(v: ScannerVerdict): boolean {
   return v.ok && v.score !== null && Math.abs(v.score.aspect - CARD_ASPECT) / CARD_ASPECT < 0.08;
 }
 
-/** The word over the video: the decided card, else what the frame is. */
+/**
+ * The word over the video: the decided card, else what the frame is.
+ *
+ * **The decision's name before the tracker's leader.** A Fast title read that names a card
+ * overrides the hash, so the leader can be one card while the decision — what the tray adds — is
+ * another; the headline names the one being added. The leader stands in only on a committed
+ * frame with no decision yet, which in Fast is the one frame waiting on its confirming read.
+ */
 export function headline(v: ScannerVerdict | null): string {
   if (v === null) return "looking…";
   const lead = v.tracked?.standings[0];
-  if (v.tracked?.committed && lead?.label) return lead.label.name;
+  const name = v.decision?.label?.name ?? lead?.label?.name;
+  if (v.tracked?.committed && name) return name;
   if (!v.ok) return "no card";
   return aspectOk(v) ? "card located" : "suspect shape";
 }

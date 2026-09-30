@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { VERDICTS, STATUS } from "./fixtures";
-import type { ScannerStatus } from "./types";
+import type { ScannerStatus, ScannerVerdict } from "./types";
 import {
   barFill,
   bundleSentence,
@@ -28,6 +28,16 @@ describe("the headline", () => {
     expect(headline(VERDICTS.voting)).toBe("card located");
     expect(headline(VERDICTS.noCard)).toBe("no card");
     expect(headline(null)).toBe("looking…");
+  });
+
+  it("names the decision, not the hash's leader, when a title read overrode it", () => {
+    const decision = VERDICTS.decided.decision;
+    if (decision === null || decision.label === null) throw new Error("the premise: a decision");
+    const overridden: ScannerVerdict = {
+      ...VERDICTS.decided,
+      decision: { ...decision, label: { ...decision.label, name: "Strider, Ranger of the North" } },
+    };
+    expect(headline(overridden)).toBe("Strider, Ranger of the North");
   });
 });
 

@@ -1279,14 +1279,48 @@ fn collect_candidates(
 /// `min_area_rect` assumes a rotated rectangle and therefore ignores perspective, so it is
 /// strictly the worse answer when Douglas-Peucker succeeds. It is tried second for exactly
 /// that reason, and what it returns still has to pass every gate in [`score_quad`].
+///
+/// **Every vertex the sweep is forced to keep is a corner** (fixed 2026-09-30). Douglas–Peucker
+/// keeps whatever it is told is an end, and `approximate_polygon_dp` run closed is told two: the
+/// curve's first point, and wherever its first split lands, which is the point farthest from the
+/// line through the first point and the last — for a card, anywhere along the side opposite. And
+/// `convex_hull` starts at the leftmost pixel of the topmost row, which on a card lying almost
+/// level with its top edge rising a pixel or two to the right is tens of pixels along that edge
+/// from the corner. The only four-point answer left kept the stray point and dropped the corner,
+/// and the right side ran diagonally across the card's face; `fit_sides` could not recover it,
+/// because the seed is what says which points belong to which side. Measured on the live frame
+/// (Faramir LTR 14 at 960×540): the hull began at (567, 123) with the corner at (626, 122), and
+/// both detectors returned an aspect of 0.61 against a card's 0.716 on every frame, which the
+/// lock then held for 1,441 frames. So the hull is split, open, between two points each farthest
+/// from the one before — the farthest point from anywhere on a convex outline is one of its
+/// corners, and the farthest from a corner is the one diagonally opposite.
 fn quad_from_hull(hull: &[Point<i32>]) -> Option<(Quad, QuadSource)> {
     let perimeter = imageproc::geometry::arc_length(hull, true) as f32;
     if perimeter <= f32::EPSILON {
         return None;
     }
+    let farthest = |from: Point<i32>| {
+        let d2 = |p: &Point<i32>| {
+            let (dx, dy) = (i64::from(p.x - from.x), i64::from(p.y - from.y));
+            dx * dx + dy * dy
+        };
+        (0..hull.len()).max_by_key(|&i| d2(&hull[i])).unwrap_or(0)
+    };
+    let a = farthest(*hull.first()?);
+    let b = farthest(hull[a]);
+    // The hull from one index round to another, both ends included.
+    let chain = |from: usize, to: usize| -> Vec<Point<i32>> {
+        let n = hull.len();
+        (0..=(to + n - from) % n).map(|k| hull[(from + k) % n]).collect()
+    };
+    let (there, back) = (chain(a, b), chain(b, a));
     for step in 1..=24 {
-        let epsilon = perimeter * (step as f32) * 0.004;
-        let approx = imageproc::geometry::approximate_polygon_dp(hull, epsilon as f64, true);
+        let epsilon = f64::from(perimeter * (step as f32) * 0.004);
+        let mut approx = imageproc::geometry::approximate_polygon_dp(&there, epsilon, false);
+        approx.pop();
+        let mut rest = imageproc::geometry::approximate_polygon_dp(&back, epsilon, false);
+        rest.pop();
+        approx.extend(rest);
         if approx.len() == 4 {
             let pts: Vec<(f32, f32)> =
                 approx.iter().map(|p| (p.x as f32, p.y as f32)).collect();
@@ -1556,6 +1590,66 @@ thread_local! {
     pub(crate) static WARPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// A 960×540 frame — the page's size — of a black-bordered, round-cornered card lying almost
+/// level on a light table, its top edge rising `rise` pixels from left to right, and the card's
+/// true corners. The shape of the live failure in [`quad_from_hull`]: the hull's first point is
+/// the leftmost of the topmost row, which on such a card is well along the top edge from the
+/// corner it belongs to.
+#[cfg(test)]
+pub(crate) fn level_card_frame(rise: f32) -> (RgbImage, Quad) {
+    let (w, cx, cy) = (256.0f32, 500.0f32, 300.0f32);
+    let h = w / CARD_ASPECT;
+    let (s, c) = (-rise / w).atan().sin_cos();
+    let (radius, border) = (0.05 * w, 0.045 * w);
+    let (hx, hy) = (w / 2.0, h / 2.0);
+    let shade = |px: f32, py: f32| -> f32 {
+        let (dx, dy) = (px - cx, py - cy);
+        let (u, v) = (dx * c + dy * s, -dx * s + dy * c);
+        let (ex, ey) = (u.abs() - (hx - radius), v.abs() - (hy - radius));
+        let rounded_off = ex > 0.0 && ey > 0.0 && ex * ex + ey * ey > radius * radius;
+        if u.abs() > hx || v.abs() > hy || rounded_off {
+            return 205.0;
+        }
+        if u.abs() > hx - border || v.abs() > hy - border {
+            return 22.0;
+        }
+        match (v + hy) / h {
+            t if t < 0.10 => 235.0,
+            t if t < 0.55 => 90.0,
+            t if t < 0.62 => 235.0,
+            t if t < 0.92 => 215.0,
+            _ => 30.0,
+        }
+    };
+    // Supersampled 3×3, so the edges are anti-aliased as a camera's are.
+    let img = RgbImage::from_fn(960, 540, |x, y| {
+        let mut sum = 0.0;
+        for k in 0..9 {
+            let (sx, sy) = ((k % 3) as f32 / 3.0 + 1.0 / 6.0, (k / 3) as f32 / 3.0 + 1.0 / 6.0);
+            sum += shade(x as f32 + sx, y as f32 + sy);
+        }
+        Rgb([(sum / 9.0).round() as u8; 3])
+    });
+    let corner = |u: f32, v: f32| (cx + u * c - v * s, cy + u * s + v * c);
+    let truth = [corner(-hx, -hy), corner(hx, -hy), corner(hx, hy), corner(-hx, hy)];
+    (img, Quad { corners: truth })
+}
+
+/// The worst corner's distance from `truth`, read from whichever end `q` was named from.
+#[cfg(test)]
+pub(crate) fn corner_error(q: &Quad, truth: &Quad) -> f32 {
+    [*q, q.flipped()]
+        .iter()
+        .map(|q| {
+            q.corners
+                .iter()
+                .zip(&truth.corners)
+                .map(|(a, b)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt())
+                .fold(0.0, f32::max)
+        })
+        .fold(f32::MAX, f32::min)
+}
+
 /// Flatten `quad` out of `source` into a canonical [`RECTIFIED_W`]×[`RECTIFIED_H`] card.
 ///
 /// The control points run source-then-destination because `imageproc`'s projection maps the
@@ -1762,6 +1856,35 @@ mod tests {
                 "at {angle}° the aspect came out {}",
                 d.score.aspect
             );
+        }
+    }
+
+    #[test]
+    fn a_card_lying_almost_level_keeps_all_four_corners() {
+        // **The live failure (2026-09-30, Faramir LTR 14 on a webcam).** A card whose top edge
+        // rises a pixel or two to the right has a long topmost row, and the hull starts at its
+        // leftmost pixel — tens of pixels along the edge from the corner. Douglas–Peucker keeps
+        // a curve's first point whatever the tolerance, so its only four-point answer dropped
+        // the top-right corner for that point, and the right side ran diagonally across the
+        // card's face: 17–53 px off, both detectors, with every gate passed. Three pixels is
+        // the rise that caught the second forced point, the first split: a sweep that only
+        // started from a corner still put Otsu's top-right 68 px along the top edge there.
+        for rise in [1.0, 2.0, 3.0, 6.0] {
+            let (img, truth) = level_card_frame(rise);
+            let frame = DynamicImage::ImageRgb8(img);
+            let rgb = rgb_of(&frame);
+            for method in [EdgeMethod::Canny, EdgeMethod::Otsu] {
+                let opts = DetectOptions { method, ..Default::default() };
+                let d = locate(&frame, &rgb, &opts)
+                    .0
+                    .unwrap_or_else(|e| panic!("{method:?} found no card at rise {rise}: {e}"));
+                let err = corner_error(&d.quad, &truth);
+                assert!(
+                    err < 2.0,
+                    "{method:?}, top edge rising {rise} px: a corner is {err:.1} px off, {:?}",
+                    d.quad.corners
+                );
+            }
         }
     }
 

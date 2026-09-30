@@ -222,6 +222,77 @@ Six findings are baked in as gates, each of which looked like success first:
   result **not at all** — 39 detections, 19 at d≤51, median 55, identical in every figure — and
   is kept because the corpus is single stills, which cannot exercise the case it is for.
 
+**Douglas–Peucker is only ever handed corners to keep** (fixed 2026-09-30, `quad_from_hull`). Live
+on a webcam, Faramir, Field Commander LTR 14 lay still and the app drew a quad whose top-right
+corner sat 25–40 px inside the card (at the page's 960 px), the right side running diagonally
+across the card's face — with the lock `locked`, agreeing for 1,441 frames, through a swap from
+the card before it. The lock, the window and the ranking were each suspected and none was at
+fault. Replayed offline through a `Session` — the saved 1920×1080 frame downscaled to 960×540
+and encoded at q72, as the page sends it — **both** detectors returned the same wrong quad on
+**every** frame, full sweep and window alike: Canny's top-right at (567, 123) and Otsu's at
+(565, 123) against the card's (626, 122), aspect 0.62 and 0.61, 9° off square. The lock was
+holding what every frame agreed on, which is its job; the shape gates admit it because they are
+loose for perspective (0.587–0.845 of aspect, 22° of corner) and loosening them is what lets a
+tilted card in. (The `scan` CLI found the right quad on the 1920 px original only because refine,
+at full resolution, happened to rescue one Otsu contour; at 960 px nothing did.)
+
+The quad was wrong before `refine` and before `fit_sides` — in the seed. `convex_hull` starts at
+the leftmost pixel of the topmost row, and `approximate_polygon_dp` keeps a curve's first point
+whatever the tolerance, and — run closed — its first split as well, which is the point farthest
+from the line through the first point and the last: for a card, anywhere along the opposite side.
+A card lying almost level, its top edge rising a pixel or two to the right, has a long topmost
+row, so the hull began at (567, 123), 59 px along the edge from the corner. The only four-point
+answer the sweep could reach kept that point and dropped the corner, and `fit_sides` could not
+recover it, because the seed is what tells it which contour points belong to which side. The
+hull is now split, open, between two points each farthest from the one before — the farthest
+point from anywhere on a convex outline is one of its corners, and the farthest from a corner is
+the one opposite — so both ends Douglas–Peucker is made to keep are corners. Starting from a
+corner alone was built first and fixed the live frame, and the synthetic sweep below still found
+Otsu's top-right 68 px along the top edge at a rise of 3 px: the first split was the second
+stray point. On the live frame both detectors now return (626.5, 121.4) for that corner, aspect
+0.717, 1.5° off square, and the session holds it from the first frame. A card rising **left**
+never showed it — the topmost row's leftmost pixel is then at the top-left corner already —
+which is why it could hide: **it takes a card nearly square to the camera and tilted one way**,
+which is how a card lies on a mat under a webcam and almost never how the synthetic evaluation
+poses one.
+
+`level_card_frame` draws that card for the tests, and at rises of 1, 2, 3 and 6 px, before the
+fix, both detectors were 17–53 px off (68 at 3 px for Otsu after the first half of it) and the
+session held 35 px of error from its first frame; after it every one is under a pixel. The
+evaluation moved as below (`eval --detect-only`, 160 printings × 12 frames at 1280 px, seed 7,
+Windows, release, the same frames before and after in each scene):
+
+| scene, `quad_from_hull` | detected % | mean err | mean % h | p90 | off-card % |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| plain, before | 96.9 | 3.1 px | 0.92 | 9.3 px | 1.1 |
+| **plain, after** | **98.3** | **2.7 px** | **0.75** | **6.6 px** | 1.6 |
+| sleeved, before | 98.5 | 8.9 px | 2.62 | 13.0 px | 0.6 |
+| sleeved, after | 99.6 | 8.3 px | 2.43 | 12.3 px | 0.5 |
+| stacked, before | 97.7 | 11.5 px | 3.37 | 19.3 px | 2.6 |
+| stacked, after | 98.9 | 9.6 px | 2.85 | 15.9 px | 1.3 |
+
+Every *before* row is exactly the matching "after" row of §3 *Edges*' table, so the base
+reproduced. Most plain cards that moved came in by several pixels — Goblin Tinkerer MIR 180
+17.2 → 0.0, Swamp HOB 196 12.6 → 0.1, Steel Wall MRD 248 11.6 → 0.0 — and the plain off-card share
+rose on two cards the evaluation already could not decide. **Tyrranax Rex ONE 457** went from 43.7 px on 11 frames to
+92.4 on 12: its half-card rescue (§3 *Edges*) was landing only on frames whose half the old seed
+happened to cut short, and a whole proposed by doubling a half that runs 25 px past the middle
+overshoots the card by 50, beyond the 6% `refine` looks inward. **Elektra MSH 326**, on the
+fine-striped table, is found on 9 frames of 12 rather than 2, all of them off. Neither was decided
+before in any mode. A full evaluation of the 16 printings whose corners moved most, all three
+passes, against the 114,169-printing bundle: every decision the base made, the fix makes, the same
+card and printing. Frames to decide moved on five, more often down (Plains ZNR 268 and Nissa KLD
+163 in Fast, two frames sooner each) than up (Graf Rats INR 113 and Narset MAT 217 in Fast, one
+later), and Tyrranax and Elektra go from `undecided` to `not found` in Exact.
+
+**A card-shaped whole proposal was built and removed.** Proposing the whole as the half's kept edge
+carried on to a card's aspect, rather than doubled, lands Tyrranax on every frame (6.6 px) and
+decides it and Super Shredder TMT 295 in all three passes — and on the same 16 turns Plains ZNR 268
+from `printing ✓` to `wrong` in Exact and `undecided` in Fast, and Island 7ED 332 from 4 frames to
+10. On a striped table the whole-proposal gate — every side on an edge, no empty corner — passes a
+landscape "whole" built from a real card, and the containment rule then drops the real card as the
+half it came from. That gate, not the proposal's length, is what to fix next; see §8.
+
 **Detection runs at 1024 px on the long edge, swept rather than guessed:** 640 found 35 cards,
 **1024 found 39**, 1600 found 37. Below it, a card occupying a tenth of the frame is ~150 px
 wide and the morphological close welds its edge to the background; above it, the card's own art
@@ -378,6 +449,24 @@ knocked the lock back to acquiring. It was latent for as long as the lock has ex
 steady corners made it common. Measured on Graf Rats INR 113: locked on four frames of twelve,
 never decided in any mode, with the corners 1% of the card's height from the truth. The candidate
 is now rotated to line up with the held quad before it is compared or blended.
+
+**A lock that holds a wrong quad for a thousand frames is usually holding what every frame said.**
+Faramir LTR 14 (2026-09-30) was locked on a quad 25–40 px inside the card for 1,441 frames, and
+through the swap from the card before it, which is #710's design: the new card lay where the old
+one had. Replayed through a `Session`, window and sweep, Canny and Otsu all returned that quad on
+every frame, so there was never a better one for the lock to move to — the fault was the seed, in
+§3 *Detect*. Blending at 0.6 still reaches a corrected quad within a few frames once the detector
+offers one.
+
+**That rotation is a half-turn at most (2026-09-30).** `lock::aligned` chose among all four cyclic
+shifts, and the detector orders every quad portrait, a short edge first — so a quarter-turn is
+never a relabelling, it calls a long edge the top and rectifies the card sideways, where neither
+way up matches. And the shift is taken against the *held* quad, so one that got in was inherited
+by every later frame. Live: an upright Dwarven Mauler held with its first corner at the
+bottom-left for 575 frames, both detectors offering the correctly ordered quad on every one, the
+title band a sideways strip and the whole-card tier finding no printing. The detector is not
+involved — `scan` on the saved frame orders the corners top-left first with both methods. Only
+shifts 0 and 2 are tried now (`a_held_quarter_turn_is_never_passed_on`).
 
 ### Track — a locked card is searched where it is
 
@@ -953,7 +1042,8 @@ pixels tall before any of them.
   `ocr-bench`, a frame with no pixels kept) or the frame, and the orientation #717's readers try
   first is its `rotated` flag.
 - **A detail frame, only on a frame that will read.** The verdict's `wants_detail` says the next
-  frame's readers are expected to run — Fast one frame ahead of each rescue read, Exact until the
+  frame's readers are expected to run — Fast one frame ahead of each rescue read and on the frame a
+  commit waits for its confirming read (§10, *Fast*), Exact until the
   card's resolve has run, because the resolve reads whichever burst views are most card-like — and
   the page then sends that frame at the camera's resolution behind the usual JPEG (§9's IPC seam).
   Detection, the lock and the hash never see it, so the lock's coordinates never change scale; the
@@ -961,6 +1051,20 @@ pixels tall before any of them.
   the verdict names the frame a read used. **Warping from the 960 px frame alone changed nothing
   measurable** (the first table below): the resolution is what helps, and only the detail frame
   carries it.
+- **The Readouts panel says which pixels the collector line came from (2026-09-30).**
+  `CollectorView::origin` (`ocr::BandOrigin`) is the image the band was warped out of and the
+  band's own extent in it — `1920×1080 frame · band 190×70 px` from a detail frame, a few dozen
+  pixels from the 960 px one — because every band is warped to the same size and the crop alone
+  cannot say. The crop itself is now sent at the size the recogniser read it, JPEG 90: the 360 px,
+  q70 thumbnail it used to be looked unreadable on lines the recogniser could read.
+- **A collector band's lines are found on its left 60% (2026-09-30).** `text_lines` averaged each
+  row across the whole band, and `U 0026` fills the left third while `LTR • EN` runs on into the
+  artist credit to the far edge, so the number's line fell under the cut and was never read. On
+  eighteen crops from a live 1080p pass, the number's line was found on 1 of the 5 that showed it
+  and the reads were `TREN SI`, `TEN SIDA`, `ERNIS`; measured over the left 60%
+  (`COLLECTOR_MEASURED`, through `text_lines_at`) both lines were found on all five, and the
+  number read on all five — four right (`0014`, `0014`, `00014`, `0020`), one wrong (`00010` for
+  `0026`). The title band still measures across its whole width.
 - **The 2015–2022 collector format needed the parse, not the pixels.** Those frames print
   `226/259 U` over `GRN • EN`, so the set code is three tokens from the number and the
   touching-only rule above never reached it. Before the detail frames the line was never legible
@@ -1584,6 +1688,14 @@ cycle with the card never leaving the lens**.
     forgotten card nor named its printing. Three rules have already cut it from 7; the next step is
     printing which piles they are, which `stacking sequence` does not do yet. `main` itself adds 4
     in the same sessions, untraced.
+21. **A proposed whole card can erase the real one on a striped table** (found 2026-09-30, §3
+    *Detect*). `locate`'s half-card rule believes a proposed whole when every side lands on an edge
+    and no corner is empty, then drops anything inside it at under 60% of its area — the half it
+    came from. On a table striped finely enough, a landscape "whole" built from a real card passes
+    both tests, and the real card is dropped: measured by proposing card-shaped wholes, which
+    turned Plains ZNR 268 wrong in Exact. Doubling (what ships) is rarely accepted there, which is
+    also why it rescues Tyrranax Rex ONE 457 on no frame since `quad_from_hull` was fixed. The gate
+    needs a test a card's half can pass and a whole card cannot — not a different length.
 
 Struck 2026-09-08: the two doc comments that quoted a title read at ~250 ms against a ~80 ms
 frame — `session::OCR_EVERY` and `ocr.rs`'s `COLLECTOR_FALLBACKS` — where §4 and §7 measured
@@ -2216,11 +2328,60 @@ reached the session. The debug page gained a sets field and two dates posting to
 only until `FAST_RESCUE_AFTER` (8) consecutive trusted frames with a detection and no commit; after
 that `OCR_EVERY` applies as before. A common card decides on the hash in about eight frames, so a
 reader running from the first locked frame spent a third of a second per read on cards that never
-needed one. **Only the title reader runs in Fast** — pinning the printing is what Exact is for — so
-the collector panel fills only on an Exact resolve frame. The counter resets on a commit and when
-the stretch breaks (below). The decision's printing is the tracker's best member; a card decided on
-title reads alone has none, because a name abstains on the printing (§4), so the decision takes the
-card's first permitted printing rather than passing an oracle id off as one.
+needed one. The counter resets on a commit and when the stretch breaks (below).
+
+**Every Fast decision reads both bands before it is announced (2026-09-30).** Until then only the
+title reader ran in Fast, and only as the rescue — so a card the hash decided in eight frames had
+neither band read, the collector panel stayed at *(nothing read)* on every Fast card, and the
+printing was whichever reprint the hash liked best. Now (`Session::settle_fast_decision`):
+
+- **A commit with readers loaded is held for one frame** (`decision_read_due`). That frame's verdict
+  asks for the detail frame (`wants_detail`, a certainty here rather than a prediction), and the next
+  locked frame reads the title and the collector line **at the same time** (`fast_reads`), from the
+  detail frame at the camera's resolution. Only then does `decision_seq` move — **one frame after
+  the commit**, so a clear card that commits in two frames (below) is announced on its third. A
+  rescue read on the committing frame has already read both, and settles at once. Every rescue read
+  now reads the collector line beside the title. Without models loaded nothing is held back.
+- **A binding title read limits the decision to the cards it names** (`resolve::title_binds`, or a
+  prefix — below): an exact read, or a corrected one of at least 10 characters with at most one
+  correction per 8. **The dhash is then compared against those cards' printings alone**, on the
+  frame that read them (`title_pick`), and the nearest is what the decision names — the reader's
+  rule, 2026-09-30. Whatever the hash leads with over the whole bundle, a decision never names a
+  card with another title than the one read off it; the tracker's standings may still show the
+  hash's card, but the decision, and so the tray row, is the title's.
+- **A read names a set of cards, not one** (`Reference::lookup_cards_masked`): every card bearing
+  an exact name; else every card a read of at least 12 characters is the exact start of — a title
+  read stops where the band does, and live "faramir field comma" named nothing, because the fuzzy
+  rung skips names more than three characters longer than the read; else every card at the
+  smallest edit distance. A read naming one card still votes in the tracker; one naming several
+  only limits the decision.
+- **The collector line chooses among the cards in play first** — the title's, else the leader's.
+  Its blind parse when that names one of their printings; else **a fit of the raw read against
+  their printings** (`Reference::collector_among`, `ocr::collector_fit`): a token that reads as the
+  number once `O`/`D`→0, `I`/`L`→1, `S`→5 and the like are mapped back, a token within one edit of
+  the set code. Live on a 1080p webcam the line spans about 136×69 source pixels and
+  `U 0014 / LTR • EN` read as `OO14 TRCN S` — no pair for the parse, and a clean fit to LTR 14
+  once the card is known. A read naming any other card is a misread digit and is ignored, as in
+  Exact's collector tier. Otherwise the title's dhash pick, or the leader's best member — a card
+  decided on title reads alone has none, because a name abstains on the printing (§4), so it takes
+  the card's first permitted printing rather than passing an oracle id off as one. Exact's
+  collector tier falls back to the same fit, against the title's surviving printings or the
+  nearest card's — also when the blind parse's pairing was a conflict, which used to end the
+  tier (Dwarven Mauler's `0095` read as `009` paired HOB 9, Dwarven Provisioner).
+- **Exact reads the sharpest views, and waits for one (2026-09-30).** Live, every resolve after the
+  first read a collector band spanning 130×48 pixels — the 488×680 rectification — and came back
+  empty. A card laid on a decided one keeps the lock (#710), and the frames it lay at rest in were
+  kept while the old card's resolve had run, which keeps no pixels, and resolved at once. Now the
+  resolve waits for a burst view whose pixels came from a detail frame, at most
+  `EXACT_DETAIL_WAIT` (4) frames past `EXACT_STEADY_FRAMES` — a camera no larger than the frame
+  sends none — and its readers take views by the size of the image they kept, then by
+  card-likeness.
+
+**The two binding numbers are a choice, not a measurement.** They are twice as strict as the name
+lookup's own budget (one in four), which is what let "datn" name Damn on the evaluation; the
+evaluation is what should move them. Exact's title tier uses the same rule: a binding corrected
+read not among the survivors now replaces them as an exact one does, where it was ignored before.
+So is `PREFIX_MIN_READ` (12): "lightning b" is still a dozen cards, "faramir field comma" is one.
 
 **A clear card decides in two frames rather than eight** (§5, *The early decision*), and a clean
 quad locks in two rather than three (§3, *Lock*) — both Fast's alone, both #705. `FAST_RESCUE_AFTER`

@@ -29,6 +29,29 @@ pub const EXACT_MAX_CHOICES: usize = 12;
 
 type Id = [u8; ID_LEN];
 
+/// The shortest normalized read a corrected title may bind at. See [`title_binds`].
+pub const BINDING_READ_LEN: usize = 10;
+/// Characters of read per correction a binding corrected title may carry. See [`title_binds`].
+pub const BINDING_CHARS_PER_EDIT: usize = 8;
+
+/// Does a title read that named a card with `edits` corrections settle **which card** — so no
+/// decision, in either mode, may name a card with another title?
+///
+/// **An exact read always does.** A name read off the card letter for letter is as close to
+/// proof as this pipeline gets, and a hash that prefers another card is the hash being wrong.
+///
+/// **A corrected read only when it is long and lightly corrected.** The name lookup's own
+/// budget is one edit in four, and it is what let "datn" name Damn for a Plains and "torm"
+/// Worm on the synthetic evaluation — short, garbled reads that name a real card nothing else
+/// suggested. So binding asks for twice the lookup's strictness and a read of some length:
+/// "strider ranger of the north" (27 characters) binds with up to three slips, a 4-character
+/// read binds only exact. **These two numbers are a choice made 2026-09-30, not a measurement**;
+/// the evaluation is what should move them.
+pub fn title_binds(read: &str, edits: u32) -> bool {
+    let len = read.chars().count();
+    edits == 0 || (len >= BINDING_READ_LEN && edits as usize * BINDING_CHARS_PER_EDIT <= len)
+}
+
 /// What a resolve came to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -110,6 +133,12 @@ pub trait Readers: Sync {
     fn title(&self, view: &BurstView<'_>) -> Option<String>;
     /// The collector line's (set, number) parse candidates.
     fn collector(&self, view: &BurstView<'_>) -> Vec<(String, String)>;
+    /// The collector line as read, and its parse candidates — the raw text is what the
+    /// collector tier matches against the survivors when the parse pairs nothing
+    /// ([`Reference::collector_among`]). Defaults to no text, for readers that have none.
+    fn collector_text(&self, view: &BurstView<'_>) -> (String, Vec<(String, String)>) {
+        (String::new(), self.collector(view))
+    }
 }
 
 /// No readers at all — no models loaded, or the `ocr` feature is off. Both reader tiers then
@@ -147,22 +176,34 @@ pub fn resolve(
 
     // The readers look at the most card-like view, and at the next one only when the first
     // yields nothing — a read costs a third of a second (§4), and one good read is the point.
+    //
+    // **The sharpest pixels first, then the most card-like.** A view's bands are warped from
+    // the image it kept — a detail frame at the camera's resolution, the detection frame, or
+    // nothing but its 488×680 rectification — and a burst can hold all three: a card laid on a
+    // decided one keeps the frames it lay at rest in, which kept no pixels. Chosen by
+    // card-likeness alone, the readers read those.
+    let source = |v: &BurstView<'_>| v.pixels.map_or(0, |p| p.image().width());
     let mut order: Vec<&BurstView<'_>> = burst.iter().collect();
-    order.sort_by(|a, b| b.cardness.total_cmp(&a.cardness));
+    order.sort_by(|a, b| source(b).cmp(&source(a)).then(b.cardness.total_cmp(&a.cardness)));
 
     // **The whole-card search and the two reads run at once.** None of the three needs another's
     // answer: the title and the collector line are different bands of the same views, and the
     // search reads neither. What each tier *does* with its answer still happens below, in order,
     // so running them together changes the time and nothing else.
-    let (mut best, title_read, pairs) = std::thread::scope(|s| {
+    let (mut best, title_read, (collector_raw, pairs)) = std::thread::scope(|s| {
         let title = s.spawn(|| order.iter().take(2).find_map(|v| readers.title(v)));
+        // The first read that pairs anything; failing that, the first read's text, which the
+        // collector tier can still match against the survivors.
         let collector = s.spawn(|| {
-            order
-                .iter()
-                .take(2)
-                .map(|v| readers.collector(v))
-                .find(|c| !c.is_empty())
-                .unwrap_or_default()
+            let mut first: Option<(String, Vec<(String, String)>)> = None;
+            for v in order.iter().take(2) {
+                let read = readers.collector_text(v);
+                if !read.1.is_empty() {
+                    return read;
+                }
+                first.get_or_insert(read);
+            }
+            first.unwrap_or_default()
         });
         let best = whole_card(r, mask, burst, max_normalized);
         (best, joined(title), joined(collector))
@@ -185,39 +226,55 @@ pub fn resolve(
     // real card the hash never suggested, and replacing the survivors with it made Exact wrong
     // about the card five times in 160 where Fast was never wrong. So a corrected read keeps
     // the survivors that are that card, and is ignored when none are — unless the whole-card
-    // tier found nothing at all, where the read is the only evidence there is.
-    // The card the title settled on, which the collector tier then has to agree with.
-    let mut title_card: Option<Id> = None;
+    // tier found nothing at all, where the read is the only evidence there is, **or the read
+    // binds** ([`title_binds`]): a long, lightly corrected name replaces the survivors exactly
+    // as an exact one does, because no decision may name a card with a different title.
+    //
+    // **A read names a set of cards, not one** ([`Reference::lookup_cards_masked`]): a name
+    // several oracles share, a fuzzy read that ties two names, or a truncated read that starts
+    // one. Every printing of every one of them survives, and the re-rank below lets the dhash
+    // choose among them — the survivors are *limited* to the title's cards, never chosen by it.
+    // The cards the title settled on, which the collector tier then has to agree with.
+    let mut title_cards: Vec<Id> = Vec::new();
     let detail = match title_read {
         None => "no read".to_string(),
-        Some(text) => match r.lookup_by_name_masked(&text, mask) {
-            Some((card, edits)) => {
-                let permitted: Vec<Id> = r
-                    .printings_of(&card)
+        Some(text) => match r.lookup_cards_masked(&text, mask) {
+            Some(hits) => {
+                let permitted: Vec<Id> = hits
+                    .cards
                     .iter()
-                    .copied()
+                    .flat_map(|card| r.printings_of(card).iter().copied())
                     .filter(|p| mask.permits(p))
                     .collect();
-                let name = permitted
-                    .first()
-                    .and_then(named)
-                    .map_or_else(|| format_uuid(&card), |l| l.name);
-                let read = format!("read \"{text}\" → {name} (edits {edits})");
+                let name_of = |card: &Id| {
+                    r.printings_of(card)
+                        .iter()
+                        .find(|p| mask.permits(p))
+                        .and_then(named)
+                        .map_or_else(|| format_uuid(card), |l| l.name)
+                };
+                let mut names: Vec<String> = hits.cards.iter().map(name_of).collect();
+                names.sort();
+                names.dedup();
+                let how = if hits.prefix {
+                    "prefix".to_string()
+                } else {
+                    format!("edits {}", hits.edits)
+                };
+                let read = format!("read \"{text}\" → {} ({how})", names.join(", "));
                 let narrowed: Vec<Id> = survivors
                     .iter()
                     .copied()
-                    .filter(|p| r.oracle_for(p) == card)
+                    .filter(|p| hits.cards.contains(&r.oracle_for(p)))
                     .collect();
-                if edits > 0 && !survivors.is_empty() && narrowed.is_empty() {
+                let binds = hits.prefix || title_binds(&text, hits.edits);
+                if !binds && !survivors.is_empty() && narrowed.is_empty() {
                     format!("{read}, not among survivors — ignored")
                 } else {
-                    survivors = if edits == 0 || survivors.is_empty() {
-                        permitted
-                    } else {
-                        narrowed
-                    };
+                    let replace = hits.edits == 0 || survivors.is_empty() || narrowed.is_empty();
+                    survivors = if replace { permitted } else { narrowed };
                     by_distance(&mut survivors, &best);
-                    title_card = Some(card);
+                    title_cards = hits.cards;
                     read
                 }
             }
@@ -235,8 +292,36 @@ pub fn resolve(
     // tier together, so a Swamp ZNR 272 misread as 280 named a Forest that was among the
     // survivors and pinned it. The pinned card must also be the one the title settled on, or —
     // with no title — the nearest card among the survivors or within the margin of it.
+    //
+    // **When the parse pairs nothing, the raw read is matched against the card already
+    // standing** ([`Reference::collector_among`]): the title's cards, else the nearest card.
+    // A fit can only choose among that card's own surviving printings, so it needs none of the
+    // conflict checks a blind pairing does — **and a blind pairing that is a conflict does not
+    // stop it**: live on 2026-09-30 Dwarven Mauler's `0095` read as `009`, the parse named
+    // HOB 9 (Dwarven Provisioner), and the tier ended there without asking the card's own
+    // printings.
+    let standing: Vec<Id> = match (title_cards.is_empty(), survivors.first()) {
+        (false, _) => survivors.clone(),
+        (true, Some(lead)) => {
+            let card = r.oracle_for(lead);
+            survivors.iter().copied().filter(|p| r.oracle_for(p) == card).collect()
+        }
+        (true, None) => Vec::new(),
+    };
+    let fitted = r.collector_among(&collector_raw, &standing);
+    let fits = |printing: Id| {
+        let shown = named(&printing).map_or_else(|| format_uuid(&printing), |l| l.display());
+        format!("read \"{collector_raw}\" fits {shown}")
+    };
     let detail = match r.lookup_collector_masked(&pairs, mask) {
-        None => "no read".to_string(),
+        None => match fitted {
+            Some(printing) => {
+                survivors = vec![printing];
+                fits(printing)
+            }
+            None if collector_raw.is_empty() => "no read".to_string(),
+            None => format!("read \"{collector_raw}\", no printing fits"),
+        },
         Some(printing) => {
             let at = pairs
                 .iter()
@@ -257,27 +342,39 @@ pub fn resolve(
                 (Some(d), Some(lead)) => Some(d - lead),
                 _ => None,
             };
-            let agrees = match title_card {
-                Some(t) => t == card,
-                None => behind.is_some_and(|b| b < EXACT_MARGIN_BITS as f32),
+            let titled = !title_cards.is_empty();
+            let agrees = if titled {
+                title_cards.contains(&card)
+            } else {
+                behind.is_some_and(|b| b < EXACT_MARGIN_BITS as f32)
             };
-            if !survivors.iter().any(|p| r.oracle_for(p) == card) {
-                format!("conflict: {at} is {name}, not among survivors")
+            let conflict = if !survivors.iter().any(|p| r.oracle_for(p) == card) {
+                Some(format!("conflict: {at} is {name}, not among survivors"))
             } else if !agrees {
-                match (title_card, behind) {
-                    (Some(_), _) => {
+                Some(match (titled, behind) {
+                    (true, _) => {
                         format!("conflict: {at} is {name}, not the card the title read")
                     }
-                    (None, Some(b)) => {
+                    (false, Some(b)) => {
                         format!("conflict: {at} is {name}, {b} bits behind the nearest card")
                     }
-                    (None, None) => format!("conflict: {at} is {name}, which has no distance"),
-                }
+                    (false, None) => format!("conflict: {at} is {name}, which has no distance"),
+                })
             } else {
-                survivors = vec![printing];
-                let shown =
-                    named(&printing).map_or_else(|| format_uuid(&printing), |l| l.display());
-                format!("{at} → {shown}")
+                None
+            };
+            match (conflict, fitted) {
+                (None, _) => {
+                    survivors = vec![printing];
+                    let shown =
+                        named(&printing).map_or_else(|| format_uuid(&printing), |l| l.display());
+                    format!("{at} → {shown}")
+                }
+                (Some(conflict), Some(fit)) => {
+                    survivors = vec![fit];
+                    format!("{conflict}; {}", fits(fit))
+                }
+                (Some(conflict), None) => conflict,
             }
         }
     };
@@ -504,6 +601,8 @@ mod tests {
     struct FakeReaders {
         title: Option<String>,
         collector: Vec<(String, String)>,
+        /// The collector line as read, for the fit the tier falls back to.
+        raw: String,
     }
 
     impl Readers for FakeReaders {
@@ -512,6 +611,9 @@ mod tests {
         }
         fn collector(&self, _: &BurstView<'_>) -> Vec<(String, String)> {
             self.collector.clone()
+        }
+        fn collector_text(&self, _: &BurstView<'_>) -> (String, Vec<(String, String)>) {
+            (self.raw.clone(), self.collector.clone())
         }
     }
 
@@ -522,7 +624,58 @@ mod tests {
                 .iter()
                 .map(|(s, n)| (s.to_string(), n.to_string()))
                 .collect(),
+            raw: String::new(),
         }
+    }
+
+    #[test]
+    fn a_conflicting_parse_still_lets_the_read_fit_the_titles_printings() {
+        // Live on 2026-09-30: Dwarven Mauler's `0095` read with its last digit lost, the parse
+        // paired HOB 9 — Dwarven Provisioner — and the tier stopped at the conflict. The read
+        // below keeps the number whole and adds the stray pairing, which must not end the tier.
+        let r = reference(&[
+            (1, 10, 5, "Dwarven Mauler", "hob", "95"),
+            (2, 10, 5, "Dwarven Mauler", "sld", "7"),
+            (3, 30, 3, "Dwarven Provisioner", "hob", "9"),
+        ]);
+        let (up, down) = (img(5), img(99));
+        let mut readers = reads(Some("dwarven mauler"), &[("hob", "9")]);
+        readers.raw = "U 0095 HOBEN 9".into();
+        let v = resolve(&r, &Mask::all(), &burst(&up, &down), &readers, GATE);
+        assert!(v.tiers[3].detail.starts_with("conflict"), "{:?}", v.tiers[3]);
+        assert!(v.tiers[3].detail.contains("fits"), "{:?}", v.tiers[3]);
+        assert_eq!(ids(&v), [format_uuid(&id(1))]);
+    }
+
+    #[test]
+    fn the_readers_take_the_view_with_pixels_before_a_more_card_like_one_without() {
+        // A card laid on a decided one keeps the frames it lay at rest in, which kept no pixels.
+        struct First(Mutex<Vec<f32>>);
+        impl Readers for First {
+            fn title(&self, v: &BurstView<'_>) -> Option<String> {
+                self.0.lock().expect("lock").push(v.cardness);
+                None
+            }
+            fn collector(&self, _: &BurstView<'_>) -> Vec<(String, String)> {
+                Vec::new()
+            }
+        }
+        let r = eight_cards();
+        let (up, down) = (img(5), img(99));
+        let quad = crate::detect::Quad { corners: [(0.0, 0.0), (200.0, 0.0), (200.0, 280.0), (0.0, 280.0)] };
+        let pixels = crate::ocr::CardPixels::new(img(5), quad, crate::trim::Margin::default());
+        let view = |cardness, pixels| BurstView {
+            upright: &up,
+            flipped: &down,
+            alternates: &[],
+            cardness,
+            rotated: false,
+            pixels,
+        };
+        let burst = [view(0.9, None), view(0.4, Some(&pixels)), view(0.7, None)];
+        let readers = First(Mutex::new(Vec::new()));
+        resolve(&r, &Mask::all(), &burst, &readers, GATE);
+        assert_eq!(*readers.0.lock().expect("lock"), [0.4, 0.9], "pixels first, then card-likeness");
     }
 
     /// Tight enough that only an exact image clears it: about five bits at 256.
@@ -725,6 +878,35 @@ mod tests {
         );
         assert_eq!(v.tiers[2].detail, "read \"card 2x\" → Card 2 (edits 1)");
         assert_eq!(ids(&v), [format_uuid(&id(3))]);
+    }
+
+    #[test]
+    fn a_binding_corrected_read_replaces_survivors_of_another_title() {
+        // "took reapor" is Took Reaper at one edit in eleven characters — long enough to bind.
+        // The hash found only the Plains, and a decision may not name a card with another title
+        // than the one read, so the read replaces the survivors as an exact one would.
+        let r = eight_cards();
+        let (up, down) = (img(5), img(99));
+        let v = resolve(
+            &r,
+            &Mask::all(),
+            &burst(&up, &down),
+            &reads(Some("took reapor"), &[]),
+            TIGHT,
+        );
+        assert_eq!(v.tiers[1].survivors, 1, "the premise: the hash found the Plains");
+        assert_eq!(v.tiers[2].detail, "read \"took reapor\" → Took Reaper (edits 1)");
+        assert_eq!(ids(&v), [format_uuid(&id(3))]);
+    }
+
+    #[test]
+    fn title_binds_on_an_exact_read_and_a_long_lightly_corrected_one() {
+        assert!(title_binds("shock", 0), "an exact read always binds");
+        assert!(!title_binds("shocc", 1), "a short corrected read never does");
+        assert!(title_binds("took reapor", 1));
+        assert!(!title_binds("took reapxr", 2), "two slips in eleven is too many");
+        assert!(title_binds("strider ranger of the nurth", 3));
+        assert!(!title_binds("strider ranger of the nurth", 4));
     }
 
     #[test]
