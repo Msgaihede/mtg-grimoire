@@ -176,8 +176,15 @@ pub fn resolve(
 
     // The readers look at the most card-like view, and at the next one only when the first
     // yields nothing — a read costs a third of a second (§4), and one good read is the point.
+    //
+    // **The sharpest pixels first, then the most card-like.** A view's bands are warped from
+    // the image it kept — a detail frame at the camera's resolution, the detection frame, or
+    // nothing but its 488×680 rectification — and a burst can hold all three: a card laid on a
+    // decided one keeps the frames it lay at rest in, which kept no pixels. Chosen by
+    // card-likeness alone, the readers read those.
+    let source = |v: &BurstView<'_>| v.pixels.map_or(0, |p| p.image().width());
     let mut order: Vec<&BurstView<'_>> = burst.iter().collect();
-    order.sort_by(|a, b| b.cardness.total_cmp(&a.cardness));
+    order.sort_by(|a, b| source(b).cmp(&source(a)).then(b.cardness.total_cmp(&a.cardness)));
 
     // **The whole-card search and the two reads run at once.** None of the three needs another's
     // answer: the title and the collector line are different bands of the same views, and the
@@ -289,7 +296,10 @@ pub fn resolve(
     // **When the parse pairs nothing, the raw read is matched against the card already
     // standing** ([`Reference::collector_among`]): the title's cards, else the nearest card.
     // A fit can only choose among that card's own surviving printings, so it needs none of the
-    // conflict checks a blind pairing does.
+    // conflict checks a blind pairing does — **and a blind pairing that is a conflict does not
+    // stop it**: live on 2026-09-30 Dwarven Mauler's `0095` read as `009`, the parse named
+    // HOB 9 (Dwarven Provisioner), and the tier ended there without asking the card's own
+    // printings.
     let standing: Vec<Id> = match (title_cards.is_empty(), survivors.first()) {
         (false, _) => survivors.clone(),
         (true, Some(lead)) => {
@@ -298,18 +308,16 @@ pub fn resolve(
         }
         (true, None) => Vec::new(),
     };
-    let fitted = r
-        .lookup_collector_masked(&pairs, mask)
-        .is_none()
-        .then(|| r.collector_among(&collector_raw, &standing))
-        .flatten();
+    let fitted = r.collector_among(&collector_raw, &standing);
+    let fits = |printing: Id| {
+        let shown = named(&printing).map_or_else(|| format_uuid(&printing), |l| l.display());
+        format!("read \"{collector_raw}\" fits {shown}")
+    };
     let detail = match r.lookup_collector_masked(&pairs, mask) {
         None => match fitted {
             Some(printing) => {
                 survivors = vec![printing];
-                let shown =
-                    named(&printing).map_or_else(|| format_uuid(&printing), |l| l.display());
-                format!("read \"{collector_raw}\" fits {shown}")
+                fits(printing)
             }
             None if collector_raw.is_empty() => "no read".to_string(),
             None => format!("read \"{collector_raw}\", no printing fits"),
@@ -340,10 +348,10 @@ pub fn resolve(
             } else {
                 behind.is_some_and(|b| b < EXACT_MARGIN_BITS as f32)
             };
-            if !survivors.iter().any(|p| r.oracle_for(p) == card) {
-                format!("conflict: {at} is {name}, not among survivors")
+            let conflict = if !survivors.iter().any(|p| r.oracle_for(p) == card) {
+                Some(format!("conflict: {at} is {name}, not among survivors"))
             } else if !agrees {
-                match (titled, behind) {
+                Some(match (titled, behind) {
                     (true, _) => {
                         format!("conflict: {at} is {name}, not the card the title read")
                     }
@@ -351,12 +359,22 @@ pub fn resolve(
                         format!("conflict: {at} is {name}, {b} bits behind the nearest card")
                     }
                     (false, None) => format!("conflict: {at} is {name}, which has no distance"),
-                }
+                })
             } else {
-                survivors = vec![printing];
-                let shown =
-                    named(&printing).map_or_else(|| format_uuid(&printing), |l| l.display());
-                format!("{at} → {shown}")
+                None
+            };
+            match (conflict, fitted) {
+                (None, _) => {
+                    survivors = vec![printing];
+                    let shown =
+                        named(&printing).map_or_else(|| format_uuid(&printing), |l| l.display());
+                    format!("{at} → {shown}")
+                }
+                (Some(conflict), Some(fit)) => {
+                    survivors = vec![fit];
+                    format!("{conflict}; {}", fits(fit))
+                }
+                (Some(conflict), None) => conflict,
             }
         }
     };
@@ -583,6 +601,8 @@ mod tests {
     struct FakeReaders {
         title: Option<String>,
         collector: Vec<(String, String)>,
+        /// The collector line as read, for the fit the tier falls back to.
+        raw: String,
     }
 
     impl Readers for FakeReaders {
@@ -591,6 +611,9 @@ mod tests {
         }
         fn collector(&self, _: &BurstView<'_>) -> Vec<(String, String)> {
             self.collector.clone()
+        }
+        fn collector_text(&self, _: &BurstView<'_>) -> (String, Vec<(String, String)>) {
+            (self.raw.clone(), self.collector.clone())
         }
     }
 
@@ -601,7 +624,58 @@ mod tests {
                 .iter()
                 .map(|(s, n)| (s.to_string(), n.to_string()))
                 .collect(),
+            raw: String::new(),
         }
+    }
+
+    #[test]
+    fn a_conflicting_parse_still_lets_the_read_fit_the_titles_printings() {
+        // Live on 2026-09-30: Dwarven Mauler's `0095` read with its last digit lost, the parse
+        // paired HOB 9 — Dwarven Provisioner — and the tier stopped at the conflict. The read
+        // below keeps the number whole and adds the stray pairing, which must not end the tier.
+        let r = reference(&[
+            (1, 10, 5, "Dwarven Mauler", "hob", "95"),
+            (2, 10, 5, "Dwarven Mauler", "sld", "7"),
+            (3, 30, 3, "Dwarven Provisioner", "hob", "9"),
+        ]);
+        let (up, down) = (img(5), img(99));
+        let mut readers = reads(Some("dwarven mauler"), &[("hob", "9")]);
+        readers.raw = "U 0095 HOBEN 9".into();
+        let v = resolve(&r, &Mask::all(), &burst(&up, &down), &readers, GATE);
+        assert!(v.tiers[3].detail.starts_with("conflict"), "{:?}", v.tiers[3]);
+        assert!(v.tiers[3].detail.contains("fits"), "{:?}", v.tiers[3]);
+        assert_eq!(ids(&v), [format_uuid(&id(1))]);
+    }
+
+    #[test]
+    fn the_readers_take_the_view_with_pixels_before_a_more_card_like_one_without() {
+        // A card laid on a decided one keeps the frames it lay at rest in, which kept no pixels.
+        struct First(Mutex<Vec<f32>>);
+        impl Readers for First {
+            fn title(&self, v: &BurstView<'_>) -> Option<String> {
+                self.0.lock().expect("lock").push(v.cardness);
+                None
+            }
+            fn collector(&self, _: &BurstView<'_>) -> Vec<(String, String)> {
+                Vec::new()
+            }
+        }
+        let r = eight_cards();
+        let (up, down) = (img(5), img(99));
+        let quad = crate::detect::Quad { corners: [(0.0, 0.0), (200.0, 0.0), (200.0, 280.0), (0.0, 280.0)] };
+        let pixels = crate::ocr::CardPixels::new(img(5), quad, crate::trim::Margin::default());
+        let view = |cardness, pixels| BurstView {
+            upright: &up,
+            flipped: &down,
+            alternates: &[],
+            cardness,
+            rotated: false,
+            pixels,
+        };
+        let burst = [view(0.9, None), view(0.4, Some(&pixels)), view(0.7, None)];
+        let readers = First(Mutex::new(Vec::new()));
+        resolve(&r, &Mask::all(), &burst, &readers, GATE);
+        assert_eq!(*readers.0.lock().expect("lock"), [0.4, 0.9], "pixels first, then card-likeness");
     }
 
     /// Tight enough that only an exact image clears it: about five bits at 256.

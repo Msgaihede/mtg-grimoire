@@ -100,6 +100,9 @@ pub const FAST_CLEAN_ANGLE: f32 = 5.0;
 pub const EXACT_STEADY_FRAMES: u32 = 3;
 /// How many locked frames an Exact resolve reads over — the ring buffer's length.
 pub const EXACT_BURST: usize = 3;
+/// The most frames past `EXACT_STEADY_FRAMES` an Exact resolve waits for a detail frame to reach
+/// its burst. See the resolve's start in `match_locked`.
+pub const EXACT_DETAIL_WAIT: u32 = 4;
 /// A locked card gets the whole frame again after this many frames searched in its window.
 ///
 /// The window can only ever find the card it is centred on, so this is what lets anything
@@ -685,6 +688,8 @@ struct StoredView {
     /// The frame the readers warp this view's bands from — kept only while a resolve may still
     /// read it. See [`CardPixels`].
     pixels: Option<CardPixels>,
+    /// `pixels` came from a detail frame at the camera's resolution, not the detection frame.
+    detail: bool,
 }
 
 impl StoredView {
@@ -1801,6 +1806,7 @@ impl Session {
                     cardness,
                     rotated: report.rotated,
                     pixels: pixels.filter(|_| readable).and_then(|p| p.get().cloned()),
+                    detail: readable && pixels.is_some_and(|p| p.used.get().is_some()),
                 });
                 while self.burst.len() > EXACT_BURST {
                     self.burst.pop_front();
@@ -1810,9 +1816,21 @@ impl Session {
                 // that got there first cannot block it, and a card decided by a resolve is held
                 // off by `attempted` alone until a re-arm is taken. A resolve still running has
                 // set `attempted` too, so a second one never starts beside it.
+                // **And not before a detail frame is in the burst, for a while.** A card laid on
+                // a decided one keeps the lock (#710), and the frames it lay at rest in were
+                // pushed while the old card's resolve had run — no pixels, and the page sends no
+                // detail frame then. Resolved at once, the readers had only the 488×680
+                // rectification: live on 2026-09-30 every resolve after the first read a band
+                // spanning 130×48 pixels and the collector line came back empty. The next frame
+                // asks for a detail (`wants_detail`), so this waits a frame or two — and at most
+                // `EXACT_DETAIL_WAIT`, for a camera no larger than the frame, which sends none.
+                let sharp = self.reader.is_none()
+                    || self.burst.iter().any(|v| v.detail)
+                    || self.steady >= EXACT_STEADY_FRAMES + EXACT_DETAIL_WAIT;
                 if self.steady >= EXACT_STEADY_FRAMES
                     && !self.attempted
                     && self.burst.len() == EXACT_BURST
+                    && sharp
                 {
                     self.start_resolve();
                     // Inline, the answer is already there. In the background it lands on a
@@ -2641,6 +2659,7 @@ mod tests {
             cardness: 0.5,
             rotated: false,
             pixels: None,
+            detail: false,
         });
         s.attempted = true;
         s.last_resolution = Some(ResolutionView {
@@ -2679,6 +2698,7 @@ mod tests {
             cardness: 0.5,
             rotated: false,
             pixels: None,
+            detail: false,
         });
         s.count_stretch(true, false, false);
         assert_eq!((s.steady, s.leaderless_locked), (3, 3), "a missed detection counted or reset");

@@ -2366,7 +2366,16 @@ printing was whichever reprint the hash liked best. Now (`Session::settle_fast_d
   decided on title reads alone has none, because a name abstains on the printing (§4), so it takes
   the card's first permitted printing rather than passing an oracle id off as one. Exact's
   collector tier falls back to the same fit, against the title's surviving printings or the
-  nearest card's.
+  nearest card's — also when the blind parse's pairing was a conflict, which used to end the
+  tier (Dwarven Mauler's `0095` read as `009` paired HOB 9, Dwarven Provisioner).
+- **Exact reads the sharpest views, and waits for one (2026-09-30).** Live, every resolve after the
+  first read a collector band spanning 130×48 pixels — the 488×680 rectification — and came back
+  empty. A card laid on a decided one keeps the lock (#710), and the frames it lay at rest in were
+  kept while the old card's resolve had run, which keeps no pixels, and resolved at once. Now the
+  resolve waits for a burst view whose pixels came from a detail frame, at most
+  `EXACT_DETAIL_WAIT` (4) frames past `EXACT_STEADY_FRAMES` — a camera no larger than the frame
+  sends none — and its readers take views by the size of the image they kept, then by
+  card-likeness.
 
 **The two binding numbers are a choice, not a measurement.** They are twice as strict as the name
 lookup's own budget (one in four), which is what let "datn" name Damn on the evaluation; the
