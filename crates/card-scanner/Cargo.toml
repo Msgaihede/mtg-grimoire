@@ -108,6 +108,12 @@ name = "read_eval"
 path = "src/bin/read_eval.rs"
 required-features = ["builder"]
 
+# The measurements behind the appearance watch (#710), beside `eval` so CI's `--bins` builds it.
+[[bin]]
+name = "stacking"
+path = "src/bin/stacking.rs"
+required-features = ["builder"]
+
 [profile.release]
 opt-level = 3
 

@@ -41,6 +41,7 @@ pub use crate::resolve::{ChoiceView, Outcome, ResolutionView, TierView};
 use crate::track::{CommitRule, Observation, Tracked, Tracker, TrackerOptions};
 use crate::ocr::{BandSource, CardPixels};
 use crate::trim::Margin;
+use crate::watch::{self, CardWatch, Seen};
 use image::RgbImage;
 use std::collections::VecDeque;
 use std::sync::mpsc::{Receiver, TryRecvError};
@@ -104,6 +105,13 @@ pub const EXACT_BURST: usize = 3;
 /// lock at all. Eight is a little over a second and a half at the app's measured 5 frames a
 /// second, and costs one full sweep in nine.
 pub const FULL_SWEEP_EVERY: u32 = 8;
+
+/// Consecutive frames, far from the decided card and agreeing with each other, that make a new
+/// card at rest in Fast (#710). See [`crate::watch`].
+pub const FAST_AT_REST: usize = 2;
+/// The same in Exact, one more: a false change there costs a whole re-resolve, and a burst
+/// cannot resolve before its third frame anyway, so the third costs a stacked card nothing.
+pub const EXACT_AT_REST: usize = 3;
 
 /// Where an Exact resolve runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -740,10 +748,30 @@ pub struct Session {
     /// `(decision_seq, replaces_previous)` for the decision now standing, so every frame of one
     /// decision reports the answer its first frame was given.
     standing: (u64, bool),
+    /// What the card a decision stands on looks like — how a card stacked on it is seen, when
+    /// the lock never lets go (#710). See [`crate::watch`] and [`Session::card_changed`].
+    watch: CardWatch,
+    /// The observations of the far frames the watch is holding, one list per frame of the run,
+    /// so the frames a new card first lay at rest still vote for it once the run is long enough.
+    stacked: Vec<Vec<Observation>>,
+    /// The card the last change forgot, until the next decision says whether it was that card
+    /// back. See [`Session::card_changed`] and [`Session::replaces_previous`].
+    laid_over: Option<LaidOver>,
+    /// The printing the last emitted decision named, beside `previous_card` and cleared with
+    /// it — what a change hands to `laid_over`.
+    previous_printing: Option<String>,
     /// Which way up this stretch's card matched, once a frame made it plain — `true` for the
     /// 180° rectification — so later frames hash three views rather than six. See
     /// [`Reference::match_views_held`]. Cleared with the stretch and by [`Session::forget_card`].
     held_rotated: Option<bool>,
+}
+
+/// The card a change forgot: what the watch held of it, and what its decision named. See
+/// [`Session::replaces_previous`].
+struct LaidOver {
+    card: watch::Remembered,
+    oracle: Option<String>,
+    printing: Option<String>,
 }
 
 impl Session {
@@ -772,6 +800,10 @@ impl Session {
             rearm_pending: false,
             previous_card: None,
             standing: (0, false),
+            watch: CardWatch::default(),
+            stacked: Vec::new(),
+            laid_over: None,
+            previous_printing: None,
             held_rotated: None,
         }
     }
@@ -865,6 +897,7 @@ impl Session {
         self.lock.reset();
         self.windowed = 0;
         self.previous_card = None;
+        self.previous_printing = None;
     }
 
     /// What a settings change forgets: the tracker's evidence, the burst, the stretch counters,
@@ -885,8 +918,53 @@ impl Session {
         self.was_committed = false;
         self.last_resolution = None;
         self.rearm_pending = false;
+        self.watch.clear();
+        self.stacked.clear();
+        self.laid_over = None;
         self.held_rotated = None;
         self.drop_pending_resolve();
+    }
+
+    /// A different card has come to rest where the decided one lay, and the lock never let go
+    /// (#710). Nothing else would forget the decided card: this is [`Session::forget_card`] —
+    /// the lock kept, since the geometry is still right — plus the previous decision, so the
+    /// card on top is added rather than replacing the one under it.
+    ///
+    /// **The frames the new card lay at rest before the one that confirmed it are kept as its
+    /// first**, rather than lost to the at-rest rule: their burst views stay in Exact's burst
+    /// and their observations are counted again under the fresh tally, so a stacked card needs
+    /// no more frames than a fresh one once the lock holds. The frame that confirmed it is
+    /// counted by the caller, as usual.
+    ///
+    /// **The card it forgot is remembered until the next decision** (`laid_over`: what the
+    /// watch held of it, and what its decision named). Two frames of a hand held still over the
+    /// decided card, or that card's own worst frames, are a card at rest too, and once the hand
+    /// lifts the same card is decided again — [`Session::replaces_previous`] tells it back.
+    ///
+    /// **Until the next decision, and a resolve that found nothing is not one.** A hand still
+    /// long enough for Exact makes a burst of nothing but hand, which resolves `not_found` and is
+    /// watched in turn; the card coming back is then a second change, and remembering the hand
+    /// over the card it covered added that card twice. So a memory nothing has answered yet is
+    /// kept over the newer one.
+    fn card_changed(&mut self) {
+        let card = self.watch.forgotten();
+        let first_votes = std::mem::take(&mut self.stacked);
+        let first: Vec<StoredView> =
+            self.burst.drain(self.burst.len().saturating_sub(first_votes.len())..).collect();
+        let (oracle, printing) = (self.previous_card.take(), self.previous_printing.take());
+        let unanswered = self.laid_over.take();
+        self.forget_card();
+        self.laid_over =
+            unanswered.or_else(|| card.map(|card| LaidOver { card, oracle, printing }));
+        // This frame, and the ones before it that anything was kept of — their views in Exact,
+        // their votes in either mode. A burst guard still waits for a full burst in Exact.
+        let kept = first.len().max(first_votes.len()) as u32;
+        self.steady = 1 + kept;
+        self.leaderless_locked = self.steady;
+        self.burst.extend(first);
+        for votes in &first_votes {
+            self.tracker.observe(votes);
+        }
     }
 
     /// Throw away the resolve still running, so it decides nothing when it lands.
@@ -895,7 +973,8 @@ impl Session {
     /// saw**: a stretch break (the lock stopped trusting its quad), and a mode switch, a filter
     /// change or a Reset through [`Session::forget_card`]. A result that lands after any of them
     /// answers a question nobody is asking any more, and deciding it would add the card that
-    /// left. #710's "a different card stacked on this one" belongs here too.
+    /// left — and a different card come to rest over the decided one ([`Session::card_changed`],
+    /// #710), which goes through `forget_card`.
     ///
     /// It does not clear `attempted` itself. Nothing was applied, so `last_resolution` is still
     /// `None`, and the re-arm a break arms is taken on the same frame
@@ -938,6 +1017,8 @@ impl Session {
             // second opinion on the last one — and a resolve still reading the old burst is
             // about a card that may not be here.
             self.previous_card = None;
+            self.previous_printing = None;
+            self.laid_over = None;
             // And may come back the other way up.
             self.held_rotated = None;
             self.drop_pending_resolve();
@@ -972,6 +1053,11 @@ impl Session {
             self.attempted = false;
             self.last_resolution = None;
             self.rearm_pending = false;
+        }
+        // Nothing holds a card any more — it left, or its freeze was lifted — so there is no
+        // decision for a card laid on top to end.
+        if !committed && !self.attempted {
+            self.watch.clear();
         }
         self.was_committed = committed;
     }
@@ -1023,11 +1109,31 @@ impl Session {
     ///
     /// The first frame of a decision is the first frame carrying one whose `decision_seq` is not
     /// the standing one. It compares against the previous card and then becomes it.
+    ///
+    /// **A card a change forgot, decided again, is that card back** (#710): a second opinion
+    /// that replaces the row, not a second copy. Either of two things says so. Its look — the
+    /// frame the watch now keeps for it is near what the watch held of the forgotten card, the
+    /// anchor and the recent frames alike. Or its printing — the same one the forgotten decision
+    /// named, which settles it whatever the look: two copies of one printing look alike and
+    /// never make a change at all. A second printing of the same card differs on both, so a
+    /// Forest laid on a Forest from another set still adds. Measured on the synthetic stacking
+    /// sequence, the look alone left Exact adding a held card twice in 9 piles of 160 that
+    /// `main` did not (card-scanner.md §10).
     fn replaces_previous(&mut self, d: &DecisionView) -> bool {
         if self.standing.0 != self.decision_seq {
+            if let Some(laid) = self.laid_over.take() {
+                let looks_back = self
+                    .watch
+                    .anchor()
+                    .is_some_and(|now| laid.card.distance_to(&now.upright) < watch::CHANGED_BITS);
+                if looks_back || laid.printing.as_deref() == Some(d.printing.as_str()) {
+                    self.previous_card = laid.oracle;
+                }
+            }
             let replaces =
                 d.oracle_id.is_some() && self.previous_card.as_deref() == d.oracle_id.as_deref();
             self.previous_card = d.oracle_id.clone();
+            self.previous_printing = Some(d.printing.clone());
             self.standing = (self.decision_seq, replaces);
         }
         self.standing.1
@@ -1167,9 +1273,9 @@ impl Session {
                     // Otsu from frame to frame, handing back a different quad each time.
                     // Nothing can lock onto a target that changes every frame, and a card that
                     // appears for one frame and vanishes is what that looks like from outside.
-                    if best.as_ref().is_none_or(|(_, b, _): &(_, Located, _)| {
-                        d.cardness.score > b.cardness.score
-                    }) {
+                    // `rank` adds the edge evidence each detector already weighed its own
+                    // candidates by (#703), so the two are compared on the same terms.
+                    if best.as_ref().is_none_or(|(_, b, _): &(_, Located, _)| d.rank() > b.rank()) {
                         best = Some((m, d, trace));
                     }
                 }
@@ -1408,13 +1514,24 @@ impl Session {
         rectified_180: &RgbImage,
         alternates: &[(RgbImage, RgbImage)],
         cardness: f32,
-        settled: bool,
+        mut settled: bool,
         pixels: Option<&FramePixels<'_>>,
     ) -> Option<Tracked> {
-        // A clone of the handle rather than a borrow of the field, so starting a resolve below
-        // can take `&mut self` while this frame is still matched against it.
+        // A clone of the handle rather than a borrow of the field, so starting a resolve below —
+        // or forgetting a card that changed, just below — can take `&mut self` while this frame
+        // is still matched against it.
         let r = Arc::clone(self.reference.as_ref()?);
         let r = &*r;
+        // ---- is the decided card still the one in frame? (#710) ---------------------------
+        // Asked before anything counts this frame, so the frame that confirms a stacked card
+        // is already the new card's.
+        let rest = if self.mode == ScanMode::Exact { EXACT_AT_REST } else { FAST_AT_REST };
+        let seen =
+            self.watch.see(watch::descriptor(rectified), || watch::descriptor(rectified_180), rest);
+        if seen == Seen::Changed {
+            self.card_changed();
+            settled = false;
+        }
         // Every framing both ways up is offered, because a card is 180°-symmetric, the quad
         // cannot say which end is the top, and the right framing depends on the frame — see
         // `DetectOptions::query_insets`. **Only a stretch's first frames hash both ways up.**
@@ -1510,7 +1627,20 @@ impl Session {
             }
         }
 
+        // A far frame may be one of a new card at rest; its votes wait with the run.
+        if seen == Seen::Moved {
+            if self.watch.at_rest() == 1 {
+                self.stacked.clear();
+            }
+            self.stacked.push(observations.clone());
+        }
         let t = self.tracker.observe(&observations);
+        // The frame that decided is the anchor: what the decided card looks like. A resolve
+        // that found nothing leaves `attempted` set and nothing to re-arm it while the lock
+        // holds, so a card laid over that one is watched for too.
+        if !self.watch.is_watching() && (t.committed || self.attempted) {
+            self.watch.watch(watch::look(rectified, rectified_180));
+        }
         v.tracked = Some(tracked_view(&t, Some(r)));
         v.r#match = Some(report);
         Some(t)
@@ -2578,18 +2708,33 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_vote_freeze_after_a_not_found_does_not_hold_back_the_next_stretch() {
-        // Spec §6.4: "NotFound commits nothing; the next steady stretch tries again." The card
-        // was badly framed for the burst, then steadied, and the tracker's own votes committed
-        // and froze on it. That freeze was not made by a resolve, so it must not keep the card
-        // undecided for as long as it is held: one lock break, and the next stretch resolves.
+    /// Two views of one card the appearance watch cannot tell apart — `card_image(1)` and
+    /// `card_image(3)`, a few bits apart — and a one-entry bundle only the second matches
+    /// inside the gate: the first is a burst of a badly framed card that finds nothing, the
+    /// second the card steadied. The entry is the second view's descriptor with 76 bits turned
+    /// where the two views agree, so the second is 76 bits from it — inside the gate, which
+    /// admits under 30% of 256 — and the first is 76 plus the gap between them.
+    fn a_view_the_gate_refuses_and_one_it_admits() -> (Reference, RgbImage, RgbImage) {
         use crate::hash::{hash_rgb, HashKind};
         use crate::index::{BundleBuilder, Section};
-        let card = card_image(3);
-        let mut b = BundleBuilder::new(HashKind::DHash, 256);
-        b.push(Section::Card, id(3), &hash_rgb(&card, HashKind::DHash, 256));
-        let mut r = Reference::new(b.finish(0));
+        let (badly, steadied) = (card_image(1), card_image(3));
+        let (x, y) =
+            (hash_rgb(&badly, HashKind::DHash, 256), hash_rgb(&steadied, HashKind::DHash, 256));
+        assert_ne!(x, y, "the premise: the two views hash apart, so the entry can split them");
+        let apart = watch::look(&badly, &badly).distance(&watch::look(&steadied, &steadied));
+        assert!(
+            apart < watch::CHANGED_BITS,
+            "the premise: the watch calls the two views {apart} bits apart — two cards"
+        );
+        let mut entry = y;
+        let agree =
+            (0..256usize).filter(|&b| (x.words[b / 64] ^ y.words[b / 64]) >> (b % 64) & 1 == 0);
+        for b in agree.take(76) {
+            entry.words[b / 64] ^= 1 << (b % 64);
+        }
+        let mut builder = BundleBuilder::new(HashKind::DHash, 256);
+        builder.push(Section::Card, id(3), &entry);
+        let mut r = Reference::new(builder.finish(0));
         let label = Label {
             name: "Card 20".into(),
             set: "hob".into(),
@@ -2598,18 +2743,27 @@ mod tests {
             released: "2025-01-01".into(),
         };
         r.add_label(id(3), Some(id(20)), None, label);
+        (r, badly, steadied)
+    }
+
+    #[test]
+    fn a_vote_freeze_after_a_not_found_does_not_hold_back_the_next_stretch() {
+        // Spec §6.4: "NotFound commits nothing; the next steady stretch tries again." The card
+        // was badly framed for the burst, then steadied, and the tracker's own votes committed
+        // and froze on it. That freeze was not made by a resolve, so it must not keep the card
+        // undecided for as long as it is held: one lock break, and the next stretch resolves.
+        //
+        // The two views look alike to the appearance watch, so nothing in the stretch re-arms
+        // the resolve and the lock break is what does. (It was the card and its negative until
+        // the watch existed — a pair the watch now rightly calls a different card at rest, which
+        // is the next test.)
+        let (r, badly, card) = a_view_the_gate_refuses_and_one_it_admits();
         let mut s = inline(r);
         s.mode = ScanMode::Exact;
 
-        // The burst sees the card's negative: every gradient comparison flipped, nothing inside
-        // the gate.
-        let negative = RgbImage::from_fn(card.width(), card.height(), |x, y| {
-            let p = card.get_pixel(x, y).0;
-            image::Rgb([255 - p[0], 255 - p[1], 255 - p[2]])
-        });
-        let mut v = locked_frame(&mut s, &negative);
+        let mut v = locked_frame(&mut s, &badly);
         for _ in 1..EXACT_STEADY_FRAMES {
-            v = locked_frame(&mut s, &negative);
+            v = locked_frame(&mut s, &badly);
         }
         let res = v.resolution.as_ref().expect("the burst resolved");
         assert_eq!(res.outcome, Outcome::NotFound, "the premise: {:?}", res.tiers);
@@ -2633,6 +2787,28 @@ mod tests {
         for _ in 0..10 {
             assert_eq!(locked_frame(&mut s, &card).decision_seq, 1);
         }
+    }
+
+    #[test]
+    fn a_card_laid_over_one_nothing_matched_resolves_while_the_lock_holds() {
+        // A resolve that found nothing leaves the card attempted, and only a stretch break used
+        // to re-arm it — so a card laid over an unrecognised one waited for the detector to lose
+        // the pile. The watch guards an attempted card as it guards a decided one.
+        let (r, card, negative) = one_card_only();
+        let mut s = inline(r);
+        s.mode = ScanMode::Exact;
+        let mut v = locked_frame(&mut s, &negative);
+        for _ in 1..EXACT_STEADY_FRAMES {
+            v = locked_frame(&mut s, &negative);
+        }
+        let res = v.resolution.as_ref().expect("the burst resolved");
+        assert_eq!(res.outcome, Outcome::NotFound, "the premise: {:?}", res.tiers);
+
+        let (f, v) = frames_to_decide(&mut s, &card, 40)
+            .expect("the card laid on top was never resolved while the lock held");
+        assert_eq!(f, EXACT_STEADY_FRAMES, "resolved on frame {f}");
+        assert_eq!(v.resolution.expect("a resolve").outcome, Outcome::Resolved);
+        assert_eq!(v.decision_seq, 1);
     }
 
     #[test]
@@ -2842,6 +3018,34 @@ mod tests {
         let res = v.resolution.as_ref().expect("the next stretch resolved");
         assert_eq!(v.decision_seq, 1);
         assert_ne!(res.choices.first().map(|c| c.id.clone()), Some(format_uuid(&id(3))));
+    }
+
+    #[test]
+    fn a_card_come_to_rest_over_one_still_resolving_drops_that_resolve() {
+        // #710 with #706: the old card's resolve answers for a card that is now under another
+        // one. Deciding it would freeze the session on the card underneath, so it lands nowhere,
+        // and the card on top is resolved on its own burst.
+        let (r, card, negative) = two_far_cards();
+        let mut s = inline(r);
+        s.mode = ScanMode::Exact;
+        locked_frame(&mut s, &card);
+        locked_frame(&mut s, &card);
+        let tx = pending_on(&mut s);
+        // The frame the resolve is running over is the one the watch keeps.
+        assert!(locked_frame(&mut s, &card).decision.is_none(), "the premise: still resolving");
+        assert!(s.watch.is_watching(), "the premise: a running resolve is watched");
+
+        for _ in 0..EXACT_AT_REST {
+            locked_frame(&mut s, &negative);
+        }
+        assert!(!s.resolving(), "a card laid over it kept waiting on the old burst");
+        assert!(
+            tx.send(resolved_as(3, 20)).is_err(),
+            "the old card's result still had somewhere to land"
+        );
+        let v = locked_frame(&mut s, &negative);
+        assert_eq!(v.decision_seq, 1, "the card on top was not resolved on its own burst");
+        assert_eq!(v.decision.and_then(|d| d.oracle_id), Some(format_uuid(&id(30))));
     }
 
     #[test]
@@ -3078,6 +3282,327 @@ mod tests {
         assert!(s.previous_card.is_none(), "a Reset press kept the card a decision could replace");
         let v = s.frame(&blank_jpeg(), &exact);
         assert!(!v.lock.as_ref().is_some_and(LockState::is_trusted), "reset kept the lock");
+    }
+
+    // ---- A card stacked on the decided one (#710) --------------------------------------------
+    //
+    // A pile is scanned by laying each card on the last, in the same place. The quad lock
+    // judges geometry alone, so it never lets go: every frame below is trusted, and the stretch
+    // never breaks. What changes is what the card looks like.
+
+    /// Locked frames of `card` until `decision_seq` moves: how many it took, and that frame.
+    /// `None` if `limit` frames never moved it.
+    fn frames_to_decide(s: &mut Session, card: &RgbImage, limit: u32) -> Option<(u32, Verdict)> {
+        let before = s.decision_seq;
+        (1..=limit).find_map(|f| {
+            let v = locked_frame(s, card);
+            (v.decision_seq != before).then_some((f, v))
+        })
+    }
+
+    #[test]
+    fn fast_decides_a_card_stacked_on_a_decided_one_without_ten_frames_of_misses() {
+        // **Measured headless before this existed (§7):** the old decision held nine frames of
+        // the new card and ended on the tenth, and the new card decided seven frames after that.
+        // Two frames at rest are what say the card changed, and the first of them still votes,
+        // so the stacked card decides on its eighth frame — what a fresh card takes once the
+        // lock holds.
+        let (r, card, negative) = two_far_cards();
+        let mut s = Session::new(Some(r), None, 5);
+        until_decided(&mut s, &card);
+        // Its two frames at rest are both leaderless locked frames of a new card, so the title
+        // rescue comes when a fresh card's would.
+        locked_frame(&mut s, &negative);
+        locked_frame(&mut s, &negative);
+        assert_eq!(s.leaderless_locked, 2, "the rescue count missed the first frame at rest");
+        let (f, v) = frames_to_decide(&mut s, &negative, 40)
+            .map(|(f, v)| (f + 2, v))
+            .expect("the stacked card was never decided while the lock held");
+        assert_eq!(f, 8, "the stacked card decided on frame {f}, not the eighth");
+        let d = v.decision.expect("a decision on the deciding frame");
+        assert_eq!(d.oracle_id, Some(format_uuid(&id(30))), "the premise: the other card");
+        assert!(!d.replaces_previous, "a different card stacked on the last replaced it");
+        // Held there, it is one decision, and the card under it is not decided again.
+        for f in 0..20 {
+            assert_eq!(
+                locked_frame(&mut s, &negative).decision_seq,
+                2,
+                "decided again on frame {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn with_the_early_decision_a_clear_stacked_card_decides_on_its_second_frame_at_rest() {
+        // #705's early decision needs two clear frames in a row, and the first frame at rest is
+        // kept under the fresh tally — so the frame that confirms the change is the second, and
+        // a card the hash is sure of decides there, as a fresh card does on its second frame.
+        let (r, card, negative) = two_far_cards();
+        let mut s = Session::new(Some(r), None, 5);
+        s.tracker.set_options(FrameOptions::default().tracker_options());
+        assert_eq!(s.tracker.options().early_frames, FAST_EARLY_FRAMES, "the premise: Fast's own");
+        let (f, _) = frames_to_decide(&mut s, &card, 40).expect("the premise: the first decides");
+        assert_eq!(f, FAST_EARLY_FRAMES, "the premise: a clear fresh card decides early");
+        let (f, v) =
+            frames_to_decide(&mut s, &negative, 40).expect("the stacked card never decided");
+        assert_eq!(f, FAST_EARLY_FRAMES, "the stacked card decided on frame {f}");
+        assert_eq!(v.decision.and_then(|d| d.oracle_id), Some(format_uuid(&id(30))));
+    }
+
+    /// `card_image(3)` alone in the bundle, as oracle 20 — so its negative, which matches
+    /// nothing inside the gate, is a card the hash cannot place at all: a foil under a lamp.
+    fn one_card_only() -> (Reference, RgbImage, RgbImage) {
+        use crate::hash::{hash_rgb, HashKind};
+        use crate::index::{BundleBuilder, Section};
+        let (_, card, negative) = two_far_cards();
+        let mut b = BundleBuilder::new(HashKind::DHash, 256);
+        b.push(Section::Card, id(3), &hash_rgb(&card, HashKind::DHash, 256));
+        let mut r = Reference::new(b.finish(0));
+        let label = Label {
+            name: "Card 20".into(),
+            set: "hob".into(),
+            number: "3".into(),
+            lang: "en".into(),
+            released: "2025-01-01".into(),
+        };
+        r.add_label(id(3), Some(id(20)), None, label);
+        (r, card, negative)
+    }
+
+    #[test]
+    fn a_stacked_card_the_hash_cannot_place_still_ends_the_decision() {
+        // Under a freeze a frame with candidates but none inside the gate is not a miss — the
+        // fix for the Plains that reset itself (§5). So a card nothing matches, stacked on a
+        // decided one, used to hold the old decision for as long as it lay there: the old card
+        // stayed on screen as the answer for a card that is not it.
+        let (r, card, negative) = one_card_only();
+        let mut s = Session::new(Some(r), None, 5);
+        until_decided(&mut s, &card);
+        let ended = (1..=40).find(|_| locked_frame(&mut s, &negative).decision.is_none());
+        assert_eq!(ended, Some(2), "the old decision outlived the card stacked over it");
+        // And nothing is decided for it, however long it is held — least of all the old card.
+        for f in 0..40 {
+            let v = locked_frame(&mut s, &negative);
+            assert_eq!(v.decision_seq, 1, "decided something on frame {f}");
+            assert!(v.decision.is_none(), "frame {f} named a card for one nothing matches");
+        }
+    }
+
+    #[test]
+    fn exact_resolves_a_card_stacked_on_a_decided_one_while_the_lock_holds() {
+        // A resolve re-arms only after a stretch break, and a stacked card never breaks the
+        // stretch — so the card on top was never resolved until the detector lost it.
+        let (r, card, negative) = two_far_cards();
+        let mut s = inline(r);
+        s.mode = ScanMode::Exact;
+        assert!(until_decided(&mut s, &card).resolution.is_some(), "the premise: resolved");
+        let (f, v) = frames_to_decide(&mut s, &negative, 40)
+            .expect("the stacked card was never resolved while the lock held");
+        let res = v.resolution.as_ref().expect("an Exact decision is a resolve");
+        assert_eq!(res.choices[0].id, format_uuid(&id(4)), "{:?}", res.tiers);
+        // Its first frame at rest is the first of its burst, so it resolves when a fresh
+        // card's stretch would.
+        assert_eq!(f, EXACT_STEADY_FRAMES, "resolved on frame {f}");
+        assert!(!v.decision.expect("decision").replaces_previous);
+        for f in 0..20 {
+            let v = locked_frame(&mut s, &negative);
+            assert!(v.resolution.is_none(), "the held card resolved again on frame {f}");
+            assert_eq!(v.decision_seq, 2);
+        }
+    }
+
+    /// A checkerboard: nothing like either card in `two_far_cards` to the watch, and nothing the
+    /// bundle matches inside the gate — a hand carrying a card, on the frames the hand is all
+    /// the detector framed.
+    fn checker() -> RgbImage {
+        RgbImage::from_fn(60, 84, |x, y| {
+            image::Rgb([if (x / 6 + y / 6) % 2 == 0 { 40 } else { 210 }; 3])
+        })
+    }
+
+    #[test]
+    fn a_card_decided_on_the_move_is_not_decided_again_when_it_comes_to_rest() {
+        // **The watch ends with the decision it guards.** One card decided and taken away — ten
+        // lost frames end its freeze — and the next carried in, the hash naming it on every
+        // other frame while its look never holds still, so the votes decide it before the
+        // watch has seen it at rest. Still watching the first card's look, the second at rest
+        // would read as a card laid over the first, and be decided a second time.
+        let (r, card, negative) = two_far_cards();
+        let hand = checker();
+        let (b, h) = (watch::look(&negative, &negative), watch::descriptor(&hand));
+        assert!(b.distance_to(&h) > watch::AGREE_BITS, "the premise: the hand and the card agree");
+        // Against the bundle's own 256-bit hash, which is what the gate is applied to.
+        let bundled = |i: &RgbImage| crate::hash::hash_rgb(i, crate::hash::HashKind::DHash, 256);
+        let outside = |d: Option<u32>| {
+            d.unwrap_or(0) as f32 / 256.0 >= TrackerOptions::default().max_normalized
+        };
+        let hand_hash = bundled(&hand);
+        assert!(
+            outside(hand_hash.distance(&bundled(&card)))
+                && outside(hand_hash.distance(&bundled(&negative))),
+            "the premise: the hand matched a card"
+        );
+
+        let mut s = Session::new(Some(r), None, 5);
+        until_decided(&mut s, &card);
+        for _ in 0..10 {
+            lost_frame(&mut s);
+        }
+        assert!(!s.tracker.last_committed(), "the premise: the first card's freeze ended");
+        let on_the_move = (0..40).find(|f| {
+            locked_frame(&mut s, if f % 2 == 0 { &negative } else { &hand }).decision_seq == 2
+        });
+        assert!(on_the_move.is_some(), "the premise: the second card was decided on the move");
+        for f in 0..20 {
+            assert_eq!(
+                locked_frame(&mut s, &negative).decision_seq,
+                2,
+                "decided again at rest, frame {f}"
+            );
+        }
+    }
+
+    #[test]
+    fn exact_wants_three_frames_at_rest_and_still_resolves_on_the_third() {
+        // **Measured on the stacking sequence against `main`:** with two frames, Exact still
+        // added a card twice in 4 more piles of 160 — a false change there costs a whole
+        // re-resolve. Exact cannot resolve before its burst holds three frames anyway, so a third
+        // frame at rest costs it nothing: the two before are kept as the burst's first two.
+        let (r, card, negative) = two_far_cards();
+        let hand = checker();
+        let mut s = inline(r);
+        s.mode = ScanMode::Exact;
+        until_decided(&mut s, &card);
+        for _ in 0..EXACT_AT_REST - 1 {
+            locked_frame(&mut s, &hand);
+        }
+        assert!(s.tracker.last_committed(), "Exact changed on fewer than {EXACT_AT_REST} frames");
+        locked_frame(&mut s, &card);
+        assert!(s.tracker.last_committed(), "the hand lifted and the card is still decided");
+        let (f, v) = frames_to_decide(&mut s, &negative, 40).expect("the stacked card resolved");
+        assert_eq!(f, EXACT_STEADY_FRAMES, "resolved on frame {f}");
+        assert_eq!(v.decision.and_then(|d| d.oracle_id), Some(format_uuid(&id(30))));
+    }
+
+    #[test]
+    fn a_hand_that_stops_on_the_decided_card_and_lifts_is_not_a_second_copy() {
+        // **Measured on the synthetic stacking sequence:** two frames of a hand held still over
+        // the decided card are a card at rest to the watch, so the card is forgotten — and once
+        // the hand lifts it is decided again. That decision's own look is the card the change
+        // forgot, so it is a second opinion on it, not a second copy: it replaces the row.
+        for mode in [ScanMode::Fast, ScanMode::Exact] {
+            let (r, card, _) = two_far_cards();
+            let hand = checker();
+            let mut s = inline(r);
+            s.mode = mode;
+            let first = until_decided(&mut s, &card).decision.expect("decision");
+            let rest = if mode == ScanMode::Exact { EXACT_AT_REST } else { FAST_AT_REST };
+            for _ in 0..rest {
+                locked_frame(&mut s, &hand);
+            }
+            assert!(!s.tracker.last_committed(), "the premise ({mode:?}): the hand was a change");
+            let again = until_decided(&mut s, &card).decision.expect("decision");
+            assert_eq!(again.oracle_id, first.oracle_id, "the premise ({mode:?}): the same card");
+            assert!(again.replaces_previous, "a hand that lifted added the card twice ({mode:?})");
+        }
+    }
+
+    #[test]
+    fn a_resolve_naming_the_printing_a_change_forgot_is_not_a_second_copy() {
+        // **Measured on the synthetic stacking sequence:** after a change the watch made in
+        // error, the frame a re-resolve starts on can still be the far one — under the hand, or
+        // the card's own worst frame — so its look is not the forgotten card's. The printing
+        // settles what the look cannot: two copies of one printing look alike and never make a
+        // change at all, so a change followed by that same printing is the card back.
+        let (r, card, _) = two_far_cards();
+        let hand = checker();
+        let mut s = inline(r);
+        s.mode = ScanMode::Exact;
+        let first = until_decided(&mut s, &card).decision.expect("decision");
+        assert_eq!(first.printing, format_uuid(&id(3)), "the premise: printing 3");
+        for _ in 0..EXACT_AT_REST {
+            locked_frame(&mut s, &hand);
+        }
+        assert!(!s.tracker.last_committed(), "the premise: the hand was a change");
+        // A resolve is running, and the frame the watch keeps for it is the hand.
+        let tx = pending_on(&mut s);
+        locked_frame(&mut s, &hand);
+        tx.send(resolved_as(3, 20)).expect("the session is still waiting");
+        let again = locked_frame(&mut s, &hand).decision.expect("the resolve landed");
+        assert_eq!(again.printing, first.printing, "the premise: the same printing");
+        assert!(again.replaces_previous, "the same printing after a change was added twice");
+    }
+
+    #[test]
+    fn the_card_back_under_another_printing_is_told_by_its_look() {
+        // Fast's printing is the tally's best member, and a card decided again after a change
+        // made in error can come back as a reprint the hash likes a bit better this time. The
+        // printing no longer says it is the same card; the look still does.
+        use crate::hash::{hash_rgb, HashKind};
+        use crate::index::{BundleBuilder, Section};
+        let a = card_image(3);
+        let mut a2 = a.clone();
+        for x in 0..12 {
+            for y in 60..72 {
+                a2.put_pixel(x, y, image::Rgb([250, 250, 250]));
+            }
+        }
+        let apart = watch::look(&a, &a).distance(&watch::look(&a2, &a2));
+        assert!(apart < watch::CHANGED_BITS, "the premise: {apart} bits is not one look");
+        let mut b = BundleBuilder::new(HashKind::DHash, 256);
+        b.push(Section::Card, id(5), &hash_rgb(&a, HashKind::DHash, 256));
+        b.push(Section::Card, id(6), &hash_rgb(&a2, HashKind::DHash, 256));
+        let mut r = Reference::new(b.finish(0));
+        for (n, set) in [(5u8, "hob"), (6, "ltr")] {
+            let label = Label {
+                name: "Card 50".into(),
+                set: set.into(),
+                number: n.to_string(),
+                lang: "en".into(),
+                released: "2025-01-01".into(),
+            };
+            r.add_label(id(n), Some(id(50)), None, label);
+        }
+        let mut s = Session::new(Some(r), None, 5);
+        let first = until_decided(&mut s, &a).decision.expect("decision");
+        assert_eq!(first.printing, format_uuid(&id(5)), "the premise: the first printing");
+        locked_frame(&mut s, &checker());
+        locked_frame(&mut s, &checker());
+        assert!(!s.tracker.last_committed(), "the premise: the hand was a change");
+        let again = until_decided(&mut s, &a2).decision.expect("decision");
+        assert_eq!(again.printing, format_uuid(&id(6)), "the premise: the other printing");
+        assert!(again.replaces_previous, "the card back as another printing was added twice");
+    }
+
+    #[test]
+    fn a_second_printing_of_the_decided_card_stacked_on_it_is_a_second_copy() {
+        // **Sorting basics.** A Forest from one set laid on a Forest from another is a second
+        // card, and the tray must add it. Under the freeze it never even counted as a miss —
+        // the hash names the same oracle card, which is the decided one.
+        use crate::hash::{hash_rgb, HashKind};
+        use crate::index::{BundleBuilder, Section};
+        let (_, card, negative) = two_far_cards();
+        let mut b = BundleBuilder::new(HashKind::DHash, 256);
+        b.push(Section::Card, id(3), &hash_rgb(&card, HashKind::DHash, 256));
+        b.push(Section::Card, id(4), &hash_rgb(&negative, HashKind::DHash, 256));
+        let mut r = Reference::new(b.finish(0));
+        for (n, set) in [(3u8, "hob"), (4, "ltr")] {
+            let label = Label {
+                name: "Forest".into(),
+                set: set.into(),
+                number: n.to_string(),
+                lang: "en".into(),
+                released: "2025-01-01".into(),
+            };
+            r.add_label(id(n), Some(id(20)), None, label);
+        }
+        let mut s = Session::new(Some(r), None, 5);
+        until_decided(&mut s, &card);
+        let (_, v) = frames_to_decide(&mut s, &negative, 40)
+            .expect("the second printing was never decided while the lock held");
+        let d = v.decision.expect("decision");
+        assert_eq!(d.printing, format_uuid(&id(4)));
+        assert!(!d.replaces_previous, "a second Forest replaced the first instead of adding");
     }
 
     #[test]

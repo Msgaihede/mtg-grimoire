@@ -2,11 +2,14 @@
 //!
 //! ## Why there is a margin at all
 //!
-//! [`crate::detect::DetectOptions::inset`] expands the winning quad by 7% before warping,
-//! because Canny tracks the *inner* edge of a card's black border and the raw quad is
-//! systematically too small. 1.07 is the value that wins on average — which means that on the
-//! frames where the detector already found the true outer edge, it overshoots by the full 7%
-//! and the rectification comes back with a ring of table around the card.
+//! [`crate::detect::DetectOptions::inset`] expanded the winning quad by 7% before warping until
+//! 2026-09-30, because Canny tracks the *inner* edge of a card's black border and the raw quad
+//! was systematically too small. 1.07 won on average — which meant that on the frames where the
+//! detector had already found the true outer edge, it overshot by the full 7% and the
+//! rectification came back with a ring of table around the card. The quad is moved onto the
+//! outer edge now ([`crate::edges`]) and the inset is 1.0, so the ring this module cuts comes
+//! from what that search lets through on purpose — a **sleeve**'s margin, ~1.5 mm a side — and
+//! from the wider of the matcher's alternate framings.
 //!
 //! That ring is not merely untidy. **Every reference hash in the bundle is a Scryfall `grid`
 //! image, which is exactly the card and nothing else.** A rectification carrying 3% of

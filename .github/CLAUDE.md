@@ -110,7 +110,9 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   2026-09-08. One step, Linux leg, `--features cli` to match `verify` — **and a second command
   in it since 2026-09-15, `--features builder --bins`**, because `cli` does not compile
   `build-hashes` or `eval` and a break in either was otherwise first seen by
-  `scanner-bundle.yml`, the job that publishes what every release embeds. **No `fmt --check` and
+  `scanner-bundle.yml`, the job that publishes what every release embeds. **A third since
+  2026-09-30, `--features builder --lib synth`**, because `synth` is the one library module
+  behind `builder` and neither earlier line compiled its tests. **No `fmt --check` and
   no `clippy -D warnings` for that package**: it is not rustfmt-clean and carries four
   pre-existing clippy warnings, both measured and listed in
   [card-scanner.md](../docs/reference/card-scanner.md) §8, so either gate would go red on day

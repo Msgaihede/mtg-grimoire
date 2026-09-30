@@ -199,12 +199,17 @@ Six findings are baked in as gates, each of which looked like success first:
 - **`approximate_polygon_dp` must not be required to return exactly four points.** A card's
   corners are rounded, so its hull is a rounded rectangle and the tolerance sweep steps
   6 → 5 → 3 without landing on 4. Five of 18 frames produced **zero** candidates for this
-  reason. `min_area_rect` is the fallback; it ignores perspective, so it is tried second and
-  what it returns still has to pass every gate.
+  reason. `min_area_rect` is the fallback; it ignores perspective. **Since 2026-09-30 (#703)
+  neither is the answer, only the seed**: `edges::fit_sides` gives each contour point to the side
+  it lies along, leaves out the arcs and anything well off the line, fits a line per side and
+  puts the corners where the lines cross — see *Edges* below.
 - **A card contains its art window; an art window never contains a card.** A modern card's art
   box is itself a clean high-contrast quadrilateral and passes every shape test — a legible
   Forest returned exactly one candidate, the art box, at aspect 0.748 and 1.5° of corner error.
-  Containment is a **filter applied before ranking**, not a term within it.
+  Containment is a **filter applied before ranking**, not a term within it. **It drops a nested
+  quad only below 60% of its container's area since #703** — an art window is ~43% of its card, a
+  text box ~25% — because the rule used to drop *every* nested quad 1.2× smaller, and a stack's
+  top card is 70–90% of the stack's outline.
 - **Corner ordering is by angle about the centroid, not the sum/difference trick.** `min(x+y)`
   names the top-left only while the card is roughly axis-aligned; at 30–40° of rotation it
   silently names the wrong corner, and a hand-held scan is rotated more often than it is
@@ -248,6 +253,87 @@ time with the gate on. Resolution was the obvious suspect and is not the cause: 
 at 70–72% from 720 px to 4096 px. `MIN_SCORE` is 0.0; `GOOD_SCORE` keeps the measured 0.45 for
 callers that want to weigh it, and `--min-cardness` and a slider keep the gate available.
 
+### Edges — fitted sides, the outer edge, and four things that look like a card's edge
+
+Added 2026-09-30 for #703, in `crates/card-scanner/src/edges.rs`. Until then the quad was the
+contour's, and **the contour was usually the inner edge of the black border** — Canny's strongest
+gradient on a card — so every quad sat ~3 mm inside the card and `inset: 1.07` papered over it on
+average. The synthetic evaluation can now say how far: against `synth`'s true quad, the old
+detector's mean corner error was **4.46% of the card's height**, which is a 3 mm inset on every
+side almost exactly.
+
+Three steps replace it, each with the failure that shaped it:
+
+- **Fit the sides** (`fit_sides`, at the working scale). The hull's Douglas–Peucker vertices sit on
+  a rounded card's arcs, and `min_area_rect` ignores perspective; either is now only the seed that
+  says which contour point belongs to which side. Each side is a least-squares line over its own
+  points with the ends (the arcs) and anything more than 3% of the card's width off the line (a
+  thumb, a sleeve lip) left out; the corners are where adjacent lines cross — sub-pixel, on the
+  card's sharp corners, true under perspective. `QuadSource::Lines` says it ran.
+- **Find the outer edge** (`refine`, at **full resolution**). Each side is crossed by 32 short
+  colour-gradient profiles from 6% of the card's width inside to 13% outside, and a *line* is an
+  offset at least half the profiles agree on — so texture, uneven tables and a card's own art make
+  peaks and no lines. The quad moves to each side's outermost line. **13% and not the 9% a border
+  needs**: a full-art basic's black bottom band is ~6% wide below its frame line (Plains HOB 320,
+  9 px off on every frame at 9%). The tilt a line may take against its seed is 7%, not 4%, for the
+  same card: a contour along that band leaned 3–5% off the card's edge.
+- **Refuse a side that ran away.** Beyond a card's edge there can be another straight line — a
+  **sleeve**'s lip, a **shadow**, a seam in the **table**, the card **beneath** in a stack — and
+  each sits beyond one or two sides, never all four. So opposite sides are held to the same
+  outward move, and when they disagree **colour decides which is wrong**, not distance: if what
+  lies just beyond the nearer side is the colour of the farther side's border band, the border
+  carries on past it — a black border on the black border of the card underneath, invisible —
+  and the nearer side moves out (Dark Privilege MGB 3, stacked: 26 px off before this). Otherwise
+  the farther side comes back, onto a real edge at the right move or a virtual line there. **A
+  lopsided seed is exempt**: a contour can follow the outer edge down one side and the inner edge
+  down the other, which the colour just beyond the seed shows, and two chosen edges that look
+  alike inside and out are then two outer edges of one card.
+
+Four detector changes came out of reading the dumps of the always-undecided cards rather than out
+of the plan:
+
+- **A side with no straight edge near it is not a side of anything** — a fitted quad with one
+  corner halfway down Phyrexian Gargantua 9ED 153's left edge had a fourth side across the card's
+  face. Such a candidate is dropped unless it is the only one.
+- **Card-likeness is weighed with edge evidence** (`Detection::rank`: card-likeness + 0.3 × the
+  mean side support, a virtual side counting nothing). Card-likeness alone preferred that crop,
+  0.97, to the card, 0.90. The session picks between Canny and Otsu by the same `rank`.
+- **Half a card is card-shaped** — 63 × 44 mm is 0.698 against 0.716 — and Otsu split Tyrranax Rex
+  ONE 457 across its middle on 11 frames of 12. The two best candidates propose the whole card
+  they could be half of; a proposal is believed only when every side lands on a real edge and no
+  corner lies over the table.
+- **A frame with no candidate at all gets two more Canny rungs on a blurred image**, σ 2.5 then 5
+  at the working scale. The frames where nothing survived were dominated by a fine-striped table
+  where every contour of the card's edge leaked into the stripes and ran off the frame. They cost
+  nothing on a frame that found anything.
+
+And **a stack's outline is not its top card.** The containment filter now keeps both; the outline
+wins on card-likeness (it rectifies into the top card, stretched), so an outline with an **empty
+corner** — its corner lies over the table, beyond one card on one axis and the other on the other
+(`edges::empty_corners`) — gives way to the card-sized quad inside it that has none.
+
+Measured with `eval --detect-only` (both detectors, the better `rank` kept, as a session does),
+Windows, release, 2026-09-30, 160 printings × 12 frames at 1280 px, seed 7 — the same 1,920 frames
+before and after:
+
+| scene | detected % | mean corner err | p90 | off-card % |
+| --- | ---: | ---: | ---: | ---: |
+| plain, before | 95.8 | 15.9 px (4.46% h) | 28.9 px | 3.6 |
+| **plain, after** | **96.9** | **3.1 px (0.92% h)** | **9.3 px** | **1.1** |
+| sleeved, before | 98.1 | 13.0 px (3.77% h) | 26.8 px | 2.7 |
+| sleeved, after | 98.5 | 8.9 px (2.62% h) | 13.0 px | 0.6 |
+| stacked, before | 96.0 | 18.7 px (5.32% h) | 30.3 px | 5.0 |
+| stacked, after | 97.7 | 11.5 px (3.37% h) | 19.3 px | 2.6 |
+| borderless/full-art (plain), before | 81.7 | 18.8 px (4.75% h) | 62.9 px | 10.9 |
+| borderless/full-art (plain), after | 86.1 | 9.6 px (2.59% h) | 16.7 px | 7.1 |
+
+**What is still open.** A **sleeve** is found by its outline, not the card inside: its margin is
+~1.5 mm a side, the error above is that margin, and it is let through on purpose — framed a little
+wide beats cut into, and the framings absorb it. A **stack** is two to three times worse than a
+bare card: where the lower card peeks out along a whole side with no step at the corner, the
+outline has no empty corner and still wins. And the fine-striped table still hides Tobias Andrion
+LEG 264 and Elektra MSH 326 on most frames.
+
 ### Lock — a filter, not a gate
 
 A card and a card-shaped thing are indistinguishable in a single frame. What a card does that a
@@ -282,6 +368,16 @@ down its left edge, and `Detection::rectified` is warped from the frame's own qu
 The card being hashed was a strip of black border, going into the tracker with the full weight
 of a real observation. `from_lock` is reported per frame, because a stream that says true
 constantly is a detector failing behind a lock that is covering for it.
+
+**A quad named from its other end is the same quad** (fixed 2026-09-30, #703). A card is
+180°-symmetric, so which corner the detector calls the top-left depends on which of two near-equal
+orderings wins, and jitter flips it. The lock blended corners **by index**, so a flipped quad
+averaged each corner with its opposite and the held quad collapsed towards its centre — the
+session then rectified from a sliver (`from_lock` true), and the next frame disagreed on area and
+knocked the lock back to acquiring. It was latent for as long as the lock has existed; sharp,
+steady corners made it common. Measured on Graf Rats INR 113: locked on four frames of twelve,
+never decided in any mode, with the corners 1% of the card's height from the truth. The candidate
+is now rotated to line up with the held quad before it is compared or blended.
 
 ### Track — a locked card is searched where it is
 
@@ -357,7 +453,12 @@ One homography handles deskew, rotation and scale at once; the output is 488×68
 Scryfall's `grid` variant exactly so a rectification and a reference render differ in content
 rather than in geometry.
 
-**The quad is expanded by 7% about its centre before warping, and it is worth more than any
+> **Since 2026-09-30 the inset is 1.0**, because the quad is now the card's own outer edge (§3
+> *Edges*). The record below is how 1.07 was earned against the inner-edge quad, and it still
+> carries the warning about going too wide. On a 25-card session subset — every basic land and the
+> cards that had regressed — 1.00, 1.02 and 1.04 decided the same cards.
+
+**The quad was expanded by 7% about its centre before warping, and it was worth more than any
 other single number in the crate.** Canny's strongest gradient on a card is the *inner* edge of
 the black border, so the quad tracks the frame rather than the card; a ~3 mm border on a 63 mm
 card is 4–5% per side. Swept against ground truth over the corpus:
@@ -1041,10 +1142,17 @@ before the bar on 371 of 480 bursts, on a wrong card never, and moves the median
 
 ### What ends a freeze
 
-Four things: **ten frames without the decided card**, a **reset**, a **bar raised above the
-tally**, or switching to the confidence rule. Lowering the bar under a frozen tally changes
-nothing — it was decided, and it still is. **An early decision (below) is not thawed by a raised
-bar**, because it was short of the bar on purpose; the other three end it as they end any freeze.
+Five things: **ten frames without the decided card**, **a different card come to rest where it
+lay**, a **reset**, a **bar raised above the tally**, or switching to the confidence rule.
+Lowering the bar under a frozen tally changes nothing — it was decided, and it still is. **An early
+decision (below) is not thawed by a raised bar**, because it was short of the bar on purpose; the
+other four end it as they end any freeze.
+
+The second is not the tracker's at all. A card stacked on the decided one is the same quad to the
+lock, and to the hash it may be the same other card each frame (ten frames), nothing inside the
+gate (never), or another printing of the decided card (never). So the session watches what the
+decided card *looks like* and forgets it when a different card has come to rest over it — §10
+*A card laid on the last*, and `watch.rs`.
 
 **A miss under a freeze is not the same as a miss while gathering**, and that shape came from a
 measured self-reset found on 2026-09-08. Once decided, the server drops the extra framings it no
@@ -1067,6 +1175,7 @@ every foil after its read stands down, and that is not a card being swapped in.
 | Printing decays and is sticky | `Gandalf, Spark Starter` latched to HOB 97 after one lucky frame, correct answer HOB 203 |
 | Per-kind ranking, and tier weights | a foil committing to **`Suplex`** while OCR read the title right on all 400 runs |
 | Freeze counts presence, not the gate | the Plains 74 → 84-bit self-reset oscillation, 2026-09-08 |
+| A different card at rest ends a freeze the lock never let go of | a card stacked on a decided one held the old decision nine frames and decided seven after (§7); one the hash could not place, or a second printing of the same card, never ended it (#710) |
 
 ## 6. The debug page and the server
 
@@ -1317,7 +1426,9 @@ cycle with the card never leaving the lens**.
    `reset_after_misses` counter through the gathering path, where a frame with candidates but
    nothing inside `max_normalized` is a miss.
 4. **`IMG20260823055008.jpg` never detects a quad** — one corpus frame that produces no candidate
-   at either Canny rung, on either detector (2026-09-08).
+   at either Canny rung, on either detector (2026-09-08). **It cannot be re-checked**: it went with
+   the corpus (item 2). The blurred rungs of 2026-09-30 (§3 *Edges*) are aimed at the synthetic
+   frames that fail the same way, and whether they reach this one is unknown.
 5. **OCR reads on one frame in four**, and only while the tracker is uncommitted. That was the
    right trade at ~340 ms a title read against a ~350 ms frame — a read #707 made roughly six times
    cheaper (§4) without anyone re-deriving the cadence — but it means the tier that saves
@@ -1424,6 +1535,12 @@ cycle with the card never leaving the lens**.
     typing `neo` or `kamigawa` finds it, and *Show 50 more* walks to every set. The live pass read
     the first page and nothing else. Kept here, struck through by this sentence, so the next reader
     who counts a short list does not file it again.
+20. **Exact adds a card twice in 2 more stacking piles of 160 than `main` does** (§10 *A card
+    laid on the last*, measured 2026-09-30): one while the card was held, one after a hand lifted
+    off it. Each is a change the watch made in error whose next decision neither looked like the
+    forgotten card nor named its printing. Three rules have already cut it from 7; the next step is
+    printing which piles they are, which `stacking sequence` does not do yet. `main` itself adds 4
+    in the same sessions, untraced.
 
 Struck 2026-09-08: the two doc comments that quoted a title read at ~250 ms against a ~80 ms
 frame — `session::OCR_EVERY` and `ocr.rs`'s `COLLECTOR_FALLBACKS` — where §4 and §7 measured
@@ -2184,6 +2301,7 @@ rule below is a failure the code before it shipped.** A *stretch* is the run of 
 | A break **arms** `rearm_pending` rather than clearing the attempt, and a resolve's own freeze holds the re-arm back | after round 1 made a break re-arm directly, a two-frame lock blip — one degenerate quad — re-resolved a decided card and put a duplicate row in the tray |
 | The re-arm is taken when `rearm_pending && (!committed \|\| last_resolution.is_none())` | round 2's `!committed` alone held it back behind a freeze the **votes** made after a `not_found`, so that card was never decided until it left |
 | One place takes the re-arm (`record_decision`) | round 2 kept a second copy just before the resolve condition, untested; keeping the two in step is how the regression round 3 fixed came about, so the copy was deleted |
+| A different card **at rest** forgets the card inside the stretch (`card_changed`, by its look — never by the freeze lifting), and that clears `attempted` | a card stacked on a resolved one was never resolved: only a lock break re-arms, and a stacked card never breaks the lock (#710, *A card laid on the last* below) |
 
 **A row this table used to carry is gone: "the resolve clears `rearm_pending`".** It was round 2's
 fix for a flaky lock leaving the flag set before the first resolve, and round 3's placement made it
@@ -2217,6 +2335,165 @@ stored filters every time the Scanner mounts, and the loop waits for that; a res
 decided card still on the mat before the first frame, the card decided again, and — past
 `useScanLoop`'s baseline guard, which the moved `decision_seq` defeated — was added a second time.
 Mocked IPC never resets, which is why no page test saw it.
+
+### A card laid on the last
+
+**A pile is scanned by laying each card on the one before, in the same place, and until
+2026-09-30 the second card was not seen** (#710). The quad lock judges geometry alone — centre
+drift within 35% of the short edge, area within 1.6× — so a card stacked where the decided one
+lay is the same quad and the lock never lets go. Everything that ended a decision keyed off the
+lock letting go or the hash naming someone else. Four failing tests at `9a0ba706`, all through
+the session's frame path with the lock trusted on every frame:
+
+| Stacked on a decided card | What happened |
+| --- | --- |
+| a different card, Fast | decided on its **17th** frame: nine frames held, the freeze lifted on the tenth, seven more votes — §7's headless swap exactly |
+| a card the hash cannot place | the old decision **never** ended: under a freeze a frame with candidates but none inside the gate is not a miss (§5), so a foil left the old card as the answer |
+| a different card, Exact | **never** resolved: only a lock that stops being trusted arms a second resolve |
+| a second printing of the decided card | **never** decided: the hash names the same oracle card, so under the freeze it is not even a miss — a Forest laid on a Forest from another set was never added |
+
+**So the session watches what the decided card looks like** (`watch.rs`). The frame that
+decided — a Fast commit, or an Exact resolve of any outcome, `not_found` included — is the
+**anchor**, and every trusted frame while that decision stands is compared with the anchor and
+with the last three frames that were the same card; the nearest decides. A frame at least
+`CHANGED_BITS` from all of them is not the decided card, and a run of such frames, each within
+`AGREE_BITS` of the one before, is a card **at rest** — a new card: **two frames in Fast
+(`FAST_AT_REST`), three in Exact (`EXACT_AT_REST`)**, below. One far frame is a hand passing
+over; far frames that disagree with each other are a hand moving. The recent frames are
+admitted only while they are within `CHANGED_BITS` of the anchor itself, so the set cannot walk
+away from the decided card a frame at a time. Every distance is the nearer of the two relative
+turns, because `order_corners` breaks the 180° tie by the corner nearest the frame's origin and a
+stacked card may lie the other way round.
+
+**A new card at rest is forgotten into, not waited out** — `Session::card_changed`, which is
+`forget_card` (the tracker, the burst, the counters, the resolve — **the lock kept**, since the
+geometry is still right) plus the previous decision, so the card on top is *added*, never a
+`replaces_previous` of the one under it. **The frames at rest before the one that confirmed it
+are kept as the new card's first**: their observations are counted again under the fresh tally
+and their views stay in Exact's burst. A stacked card therefore decides exactly when a fresh card
+would with the lock already held — Fast on its **8th** frame by votes (9 without the keep),
+Exact resolving on its **3rd**, the confirming frame itself, its burst the three frames at rest —
+which the tests assert to the frame. **With Fast's early decision** (two clear frames in a row,
+above), the kept frame is the first of the two, so a card the hash is sure of decides on its
+**2nd** frame at rest, where it would otherwise need a 3rd.
+
+**A change the watch makes in error is a second opinion, not a second copy.** Two frames of a
+hand held still over the decided card, or the card's own worst frames, are a card at rest too;
+the card is forgotten, and once the hand lifts it is decided again. So `card_changed` remembers
+what it forgot (`laid_over`: what the watch held of the card — the anchor and the recent frames —
+and what its decision named), and the next decision **replaces** the row instead of adding one
+when either its look is near that card's or it names the same **printing**. The printing settles
+it whatever the look, because two copies of one printing look alike and never make a change at
+all; a second printing of the same card differs on both and adds. The memory lasts **until the
+next decision**, and a `not_found` is not one: three still frames of a hand make an Exact burst of
+nothing but hand, which resolves `not_found` and is watched in turn, and the card coming back was
+then a second change that overwrote the card with the hand.
+
+**Exact wants a third frame at rest because a false change costs it a whole re-resolve**, and
+the third costs a stacked card nothing: a burst cannot resolve before it holds three frames, and
+the two kept frames plus the confirming one are that burst. The measured case for each of these
+rules is the stacking sequence below — each was added because the run before it showed the
+double add it prevents.
+
+**The watch ends with the decision it guards** (`record_decision`: nothing committed and nothing
+attempted clears it). Without that, a card decided while still moving — carried in, the hash
+naming it on alternate frames, never at rest — was decided a second time when it came to rest,
+read as a card laid over the one before it.
+
+#### The threshold, measured
+
+`stacking gap` (`src/bin/stacking.rs`) — release, Windows, 2026-09-30, `claude/scanner-stacking-detection`.
+The eval's 160 cached renders through `synth::burst` (seed 7, 12 frames each), the session's own
+detector sweep and quad lock; the card on top is the next printing of the same stratum posed on
+the first card's seed — same pose, glare and background. 157 cards reached two trusted frames.
+Every figure is the nearest of the decided card's last four frames (`K = 4`), in **bits of 128**:
+
+| distribution | n | p1 | p5 | p50 | p95 | p99 | max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| the same card, a later frame | 1336 | 1 | 2 | 8 | 19 | **28** | 65 |
+| a different card on top | 1751 | 5 | 14 | **41** | 60 | 70 | 78 |
+| … a basic land on another basic | 227 | 23 | 30 | 48 | 70 | 76 | 78 |
+| the same basic from another set | 162 | 36 | 37 | 49 | 63 | 68 | 71 |
+| the card on top, frame to frame | 1597 | 1 | 3 | 11 | **28** | 41 | 64 |
+| a hand over 5% of the decided card | 1488 | 4 | 7 | 18 | 42 | 63 | 68 |
+| … 10% | 1160 | 8 | 10 | 19 | 52 | 64 | 68 |
+| … 20% | 942 | 10 | 12 | 20 | 54 | 64 | 69 |
+| … 35% | 892 | 14 | 16 | 26 | 45 | 60 | 68 |
+
+`CHANGED_BITS` is **32**, over the held card's p99; `AGREE_BITS` is **28**, the card on top's own
+frame-to-frame p95. The synthetic jitter — up to 1.5% of the short edge and a degree of turn per
+frame — is a hand holding the card, harsher than a card lying on a table.
+
+**The descriptor was chosen on the same run, and the obvious one lost.** On a 0–256 scale
+(bits × 2 for 128), `K = 4`:
+
+| descriptor | held card p95 / p99 | different card p5 / p50 | basic on basic p5 | same basic, another set, min |
+| --- | ---: | ---: | ---: | ---: |
+| dHash 256, the bundle's width | 58 / 83 | 40 / 92 | 78 | 89 |
+| **dHash 128** | **38 / 56** | **28 / 82** | **60** | **70** |
+| correlation, gray 16×22 | 22 / 46 | 7 / 42 | 19 | 31 |
+| correlation, gray 8×11 | 11 / 29 | 3 / 36 | 17 | 31 |
+| correlation, RGB 12×17 | 14 / 33 | 6 / 45 | 20 | 39 |
+
+The coarser hash has the widest gap between a held card's worst frames and a different card's
+typical one, and it alone keeps basics apart. The correlations are the tightest on one card and
+the worst at two: every card shares its frame, so two different cards correlate well. Against a
+single anchor rather than the nearest of four, 256-bit dHash put a held card's p99 at 106 against
+a different card's median of 98 — any threshold would have added a held card twice now and then,
+which is the one mistake the tray cannot absorb quietly. The colour dHash the bundle uses was
+within a few bits of the grayscale one on every row.
+
+**The closest "different" cards are mostly one card**: of the twelve nearest stacked pairs, ten
+were two printings of the same card — Runaway Steam-Kin GRN on its promo nearest, at a median of
+12 bits of 256 — which is the second-copy limit below under another name. The other two were
+Blight Rot on Faunsbane Troll and Assault // Battery on Illusion // Reality.
+
+#### The stacking sequence, measured
+
+`stacking sequence` — release, Windows, 2026-09-30. Whole sessions against the 113,494-printing
+bundle, the corpus labels and both readers, resolving inline as the evaluation does: for each of
+the 160 printings, that card held for 30 frames, a hand over it for 3 (10%, 35%, 20% of the card
+in turn), then the next printing of its stratum laid on top, at the same pose, for 30. A second
+session per pile lifts the hand again with nothing on top, for 10 frames. **Before** is `main` at
+`9d473c7f` with only the tool added; **after** is this branch at `0cff4cb2`, the same `main` with
+the watch — so the difference is the watch and nothing else. A row *added* is a decision that
+does not `replaces_previous`.
+
+| | Fast before | Fast after | Exact before | Exact after |
+| --- | ---: | ---: | ---: | ---: |
+| the card on top decided within 30 frames | 78.8% | **86.2%** | 23.1% | **79.4%** |
+| frames to it from its first, p50 / p90 | 11 / 18 | **3 / 11** | 13 / 17 | **3 / 6** |
+| the held card added twice | 0 | 0 | 1 | 2 |
+| the card on top added again | 0 | 0 | 0 | 0 |
+| the held card added twice after a hand lifted | 1 | 1 | 3 | 4 |
+| a false change caught as a second opinion | — | 1 | — | 2 |
+
+`main` adds rows twice on its own in these sessions, before any watch existed — nobody has
+traced those — and Fast adds none beyond them. **Exact adds 2 more in 160 piles than `main`,
+and that residue is open (§8 item 20).** It took three rules to get there, each added because the run
+before it showed the double add: comparing only with the forgotten anchor left 7 more than
+`main`; comparing with its ring or its printing, 4; a third frame at rest in Exact, 2. Twelve of
+the piles lay a reprint of the same card on top, which "decided" counts and a card check cannot
+judge. The synthetic hand is a flat blob inside the card's outline and the per-frame jitter a card
+held in a hand, not one lying on a table — a fence, not a claim about a camera.
+
+#### What it cannot see
+
+- **A second copy of the same printing.** Nothing about it looks different. Lifting the first
+  away and laying the second down breaks the lock, and the stretch break counts it; the tray's
+  quantity stepper is the other answer. (Options (b), a hand then settling as a new copy, and
+  (c), the stepper alone, were weighed in #710; (a) and (c) is what shipped.)
+- **A hand that stops on the card, as such.** The at-rest rule rejects a moving hand; a hand held
+  still over enough of the card for the run is a card at rest, and the card is forgotten. What
+  keeps that from costing a row is the second-opinion rule above, not the watch. The table's
+  hand rows are a still hand inside the card's outline.
+
+**A resolve still running when a card comes to rest over its card is dropped** (#706's
+`drop_pending_resolve`, reached through `forget_card`; the test is
+`a_card_come_to_rest_over_one_still_resolving_drops_that_resolve`). Deciding it would freeze the
+session on the card underneath while the one on top is in frame. The cost is the card underneath:
+**a card covered before its Exact resolve lands is never added**, so a pile scanned in Exact is
+scanned one decision at a time — wait for the row, then lay the next card.
 
 ### `decision_seq` and `decision`
 
@@ -2545,6 +2822,88 @@ Andrion, Skyknight Legionnaire, Control of the Court, Swamp HOB, Counterbalance 
 Infestation, Tyrranax Rex — the last `not found` in Exact), most likely the detector or the lock on
 hard synthetic poses; nobody has looked. And **the first `--bulk` evaluation is the workflow's first
 scheduled run** — every figure above came through `--corpus`.
+
+#### Corners, scenes and the detector rewrite (2026-09-30, #703)
+
+**`synth` knows where the card is.** `burst_scene` hands back each frame's true card quad beside
+its JPEG — the face's outer corners through the same plane and jitter as the pixels, shifted half a
+pixel for `imageproc`'s pixel-centre convention — and two scenes beside the plain one: **sleeved**
+(66 × 91 mm, clear or opaque-backed with black among nine backs, haze over the face, a sharper
+glare) and **stacked** (one or two cards beneath, offset 1.5–5 mm, turned up to 4°; the truth is
+the top card). **The plain scene is byte-identical to the old `burst`**, checked against eight
+digests before and after; every draw a scene adds comes from a generator of its own, and a card
+keeps its pose, table and light in every scene, so the three are a paired comparison.
+
+`eval` adds, per pass and stratum, **detected %, mean and p90 corner error** (px and % of the
+card's height, under the best of the four cyclic pairings, since the detector's corner order is
+portrait with a 180° ambiguity) and **off-card %** (more than 10% of the height out — another
+object), over the frames each pass fed; the cards **undecided in every pass**; and four switches:
+`--scene`, `--detect-only` (no bundle, no OCR — every frame through both detectors, the better
+`Detection::rank` kept, as the session does: the fast loop for detector work, ~2 minutes where the
+session run is 40), `--only` and `--dump` (every frame with the truth in green and the detection
+in red, and a JSON of per-frame figures). **`synth`'s tests ran in no CI job and no `verify`** —
+the module is `builder`-only and both suites build the library under `cli` — so `ci.yml` gained a
+third line for them.
+
+Before and after, Windows, release, 2026-09-30, 160 printings × 12 frames at 1280 px, seed 7,
+against `card-hashes-v5`, 12 workers — the plain scene; the ms column is omitted because another
+worktree's evaluation shared the machine:
+
+| pass | decided % | card ✓ % | wrong card | printing ✓ % | ambiguous % (true in choices %) | median frames |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fast, before | 90.6 | 90.6 | 0 | 74.4 | — | 10 |
+| **Fast, after** | **93.1** | **93.1** | **0** | **81.2** | — | 10 |
+| Exact, before | 95.0 | 95.0 | 0 | 81.2 | 36.2 (100.0) | 5 |
+| **Exact, after** | **96.2** | **96.2** | **0** | **82.5** | 33.8 (96.3) | 5 |
+| Exact + own set, before | 95.0 | 95.0 | 0 | 91.2 | 7.5 (100.0) | 5 |
+| **Exact + own set, after** | **96.2** | **96.2** | **0** | **93.8** | 6.9 (100.0) | 5 |
+
+The *before* reproduced round 4 above on every decided and card-correct figure, and Fast's
+printing figure within the noise already noted. **Decided and card-correct are unchanged or better
+in every stratum of every pass**; basic lands hold at 90% in Fast and reach 100% in Exact;
+borderless/full-art moves 66.7 → 73.3% (Fast) and 73.3 → 80.0% (Exact). **Exact's unfiltered
+printing figure fell in four small strata** — frame-1993 86.7 → 73.3, frame-2015 80 → 60,
+split/adventure 80 → 70, double-faced 100 → 80 — while Exact + own set held or rose in each, so
+those are reprints of the right card being chosen among, not wrong cards; nobody has looked at
+which.
+
+Corner error over the frames each pass fed, after: Fast **3.4 px, 0.99% of the card's height**
+(p90 9.3 px, 1.4% off-card), against 16.0 px and 4.50% before. The detect-only figures for all
+three scenes are in §3 *Edges*.
+
+**The eight undecided cards**, before → after, all three passes:
+
+| card | before | after | what it was |
+| --- | --- | --- | --- |
+| Swamp HOB 196 | undecided | **decided in all three**, printing ✓ | the inner-edge quad; now 3.3% h |
+| Counterbalance SLD 1220 | undecided | **decided in all three**, printing ✓ | not detected on 8 of 12 frames — the striped table; the blurred rungs find it on 10 |
+| Control of the Court MB2 189 | undecided | **Exact and Exact + own set**, printing ✓ | 7.5% → 2.5% h |
+| Tyrranax Rex ONE 457 | undecided / not found | undecided | Otsu's bright half; 25.1% → 10.3% h, not yet enough |
+| Tobias Andrion LEG 264 | undecided | undecided | a small card on a coarse stripe: found on 1 frame of 12 |
+| Skyknight Legionnaire GTC 197 | undecided | undecided | found on 2 frames of 12, both now within 0.1 px |
+| Elektra MSH 326 | undecided | undecided | the stripe again: found on 2 of 12 |
+| Pest Infestation OTP 30 | undecided | undecided | found on 6 of 12, badly |
+
+**And one went the other way**: Super Shredder TMT 295 was decided by Exact at frame 12 and is now
+undecided in every pass, its corners 4.6% → 7.0% h. So the list is six long, not five.
+
+**Against the `main` it merged into.** Seven scanner PRs landed while this was measured —
+#704's three views and held orientation, #705's early Fast decision, #701's single rectification
+among them — so the tables above compare against the tree this branch started from. The same
+evaluation on `main` at `0c3c1ce0` and on the merge, back to back, same machine, 12 workers:
+
+| pass | decided % | card ✓ % | wrong card | printing ✓ % | median frames | mean ms |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Fast, `main` | 93.8 | 93.8 | 0 | 80.6 | 4 | 912 |
+| **Fast, merged** | **96.2** | **96.2** | **0** | **84.4** | 4 | 940 |
+| Exact, `main` | 95.0 | 95.0 | 0 | 81.9 | 5 | 1900 |
+| **Exact, merged** | **96.2** | **96.2** | **0** | 81.9 | 5 | 2035 |
+| Exact + own set, `main` | 95.0 | 95.0 | 0 | 91.9 | 5 | 1793 |
+| **Exact + own set, merged** | **96.2** | **96.2** | **0** | **93.1** | 5 | 1891 |
+
+Basic lands go 90 → 100% decided in Fast, borderless/full-art 66.7 → 80%. The one card `main`
+decides that the merge does not is Super Shredder again. Mean ms is 3–7% higher, under load, and
+not separated from the noise of a shared machine.
 
 ### Measured in the app
 

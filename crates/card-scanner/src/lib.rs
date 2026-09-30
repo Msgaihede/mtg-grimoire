@@ -11,6 +11,7 @@
 pub mod cardness;
 pub mod debug;
 pub mod detect;
+pub mod edges;
 pub mod filters;
 pub mod index;
 pub mod lock;
@@ -22,6 +23,7 @@ pub mod session;
 pub mod synth;
 pub mod track;
 pub mod trim;
+pub mod watch;
 pub mod hash;
 
 /// A Magic card's aspect ratio: 63 mm × 88 mm.
