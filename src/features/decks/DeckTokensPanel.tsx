@@ -645,12 +645,15 @@ function TokenTile({
             // the reader has not counted, so it is on the band to be found and left off every
             // stack. Only the picture fades — the stepper that counts it up, the chin and the
             // lines under it stay at full strength, and so does `NOT MADE BY DECK`, which is a
-            // warning rather than a picture. 60% is the switched-off pile's own `opacity-60`
-            // (`StackView`), the deck's one word for "counts toward nothing".
+            // warning rather than a picture. **40%, deliberately fainter than the switched-off
+            // pile's `opacity-60`** (issue #712): 60% was that pile's number, and on this band it
+            // read as barely dimmer than the counted token beside it. A switched-off pile fades a
+            // whole column the eye already knows is parked; this fades one tile in a row of
+            // bright ones, and that tile has to read as not counted at a glance.
             className={cn(
               "transition-opacity duration-[var(--duration-fast)] ease-standard",
               "motion-reduce:transition-none",
-              view.quantity === 0 && "opacity-60",
+              view.quantity === 0 && "opacity-40",
             )}
           />
           {/* Where a rule-break card wears `RULE BREAK`, in its style — `DeckCardFace`'s own
