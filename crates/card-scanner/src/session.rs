@@ -1921,6 +1921,18 @@ impl Session {
             return;
         };
         v.ocr = ocr;
+        // The panel's `matched` is the blind parse's, which a blurry line rarely pairs; a read
+        // the collector tier fitted to the resolved printing says so instead of "no printing".
+        let mut collector = collector;
+        if let (Some(c), Some(r), Some(p)) = (
+            collector.as_mut().filter(|c| c.matched.is_none()),
+            self.reference.as_deref(),
+            resolution.choices.first().and_then(|c| parse_uuid(&c.id)),
+        ) {
+            if r.collector_among(&c.raw, &[p]) == Some(p) {
+                c.matched = r.label_for(&p).map(|l| l.display());
+            }
+        }
         v.collector = collector;
         // Committed before this frame's observation, so the frame that resolved is already the
         // decided one. An ambiguous outcome commits on its best printing's card: the freeze only
