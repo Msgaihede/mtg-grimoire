@@ -22,7 +22,7 @@
 use crate::cardness::Cardness;
 use crate::detect::{
     locate, locate_near, rectify_views, rgb_of, DetectError, DetectOptions, DetectTimings,
-    DetectTrace, EdgeMethod, EdgePass, Located, QuadScore,
+    DetectTrace, EdgeMethod, Located, QuadScore,
 };
 use crate::filters::ScanFilters;
 use crate::hash::{hash, HashKind};
@@ -325,24 +325,22 @@ pub enum Search {
 /// One detector's answer for one frame, with its trace either way.
 type Attempt = (Result<Located, DetectError>, Option<DetectTrace>);
 
-/// Every method located over the whole frame, each on a thread of its own when there is more
-/// than one, in `methods` order. `rgb` is the frame's one RGB view — see `detect::rgb_of`.
+/// `attempt` for every method, each on a thread of its own when there is more than one, in
+/// `methods` order — the whole frame's sweep and a locked card's window alike.
 ///
 /// A panic on a method's thread is carried back to this one, where [`Session::frame`]'s guard
 /// catches it as it always has.
-fn sweep(
-    source: &image::DynamicImage,
-    rgb: &RgbImage,
+fn each_method(
     methods: &[EdgeMethod],
-    options: impl Fn(EdgeMethod) -> DetectOptions + Sync,
+    attempt: impl Fn(EdgeMethod) -> Attempt + Sync,
 ) -> Vec<(EdgeMethod, Attempt)> {
     if let [only] = methods {
-        return vec![(*only, locate(source, rgb, &options(*only)))];
+        return vec![(*only, attempt(*only))];
     }
-    let options = &options;
+    let attempt = &attempt;
     std::thread::scope(|s| {
         let handles: Vec<_> =
-            methods.iter().map(|&m| (m, s.spawn(move || locate(source, rgb, &options(m))))).collect();
+            methods.iter().map(|&m| (m, s.spawn(move || attempt(m)))).collect();
         handles
             .into_iter()
             .map(|(m, h)| (m, h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))))
@@ -519,9 +517,6 @@ pub struct Session {
     reader: Option<Reader>,
     tracker: Tracker,
     lock: QuadLock,
-    /// The mask whose detection last reached the lock, and the Otsu level it split at — what a
-    /// locked frame's window runs.
-    focus: Option<(EdgePass, Option<u8>)>,
     /// Locked frames searched in the window since the last full sweep.
     windowed: u32,
     /// Whether a trusted lock's frame searches its window at all. See [`Session::set_tracking`].
@@ -572,7 +567,6 @@ impl Session {
             reader,
             tracker: Tracker::default(),
             lock: QuadLock::default(),
-            focus: None,
             windowed: 0,
             tracking: true,
             seq: 0,
@@ -670,7 +664,6 @@ impl Session {
     pub fn reset(&mut self) {
         self.forget_card();
         self.lock.reset();
-        self.focus = None;
         self.windowed = 0;
         self.previous_card = None;
     }
@@ -890,11 +883,12 @@ impl Session {
 
         // ---- locate: where the card is, else the sweep over the methods ------------------
         //
-        // **A trusted lock already knows where the card is**, so its frame searches the window
-        // around the held quad with the one mask that found it — see `locate_near`. A miss
-        // there, a card that is not locked yet, and every `FULL_SWEEP_EVERY`th locked frame get
-        // the whole frame with every method, exactly as before, so nothing about *finding* a
-        // card changed and a card that moved or was swapped is found again.
+        // **A trusted lock already knows where the card is**, so its frame searches only the
+        // window around the held quad — every method, every mask, built to land where the whole
+        // frame's sweep would (see `locate_near`). A miss there, a card that is not locked yet,
+        // and every `FULL_SWEEP_EVERY`th locked frame get the whole frame, exactly as before, so
+        // nothing about *finding* a card changed and a card that moved or was swapped is found
+        // again.
         //
         // **Locate only; nothing is flattened until the winner is known** (issue #701). Each
         // method used to rectify its own winner — six full-size warps apiece — and a locked
@@ -907,31 +901,27 @@ impl Session {
         let mut error = None;
         let methods = opts.method.edge_methods();
         let mut search = Search::Full;
-        if let (true, Some(held), Some((pass, otsu_level))) =
-            (self.tracking, self.lock.trusted_quad(), self.focus)
-        {
-            if self.windowed < FULL_SWEEP_EVERY && methods.contains(&pass.method()) {
-                let detect_opts = DetectOptions {
-                    only_pass: Some(pass),
-                    otsu_level,
-                    ..opts.detect_options(pass.method(), settled)
-                };
-                let (result, trace) =
-                    locate_near(&source, &held, self.lock.options(), &detect_opts);
-                if let Ok(d) = result {
-                    best = Some((pass.method(), d, trace));
+        let mut attempts = Vec::new();
+        if let (true, Some(held)) = (self.tracking, self.lock.trusted_quad()) {
+            if self.windowed < FULL_SWEEP_EVERY {
+                let lock = self.lock.options();
+                let near = each_method(&methods, |m| {
+                    locate_near(&source, &held, lock, &opts.detect_options(m, settled))
+                });
+                if near.iter().any(|(_, (result, _))| result.is_ok()) {
+                    attempts = near;
                     search = Search::Window;
                 }
             }
         }
-        let swept = if best.is_none() {
-            self.windowed = 0;
-            sweep(&source, &rgb, &methods, |m| opts.detect_options(m, settled))
-        } else {
+        if search == Search::Window {
             self.windowed += 1;
-            Vec::new()
-        };
-        for (m, (result, trace)) in swept {
+        } else {
+            self.windowed = 0;
+            attempts =
+                each_method(&methods, |m| locate(&source, &rgb, &opts.detect_options(m, settled)));
+        }
+        for (m, (result, trace)) in attempts {
             match result {
                 Ok(d) => {
                     // **Card-likeness picks the method, not the geometric score.** Measured, it
@@ -953,10 +943,6 @@ impl Session {
                     }
                 }
             }
-        }
-
-        if let Some((_, d, _)) = &best {
-            self.focus = Some((d.pass, d.otsu_level));
         }
 
         let mut v =

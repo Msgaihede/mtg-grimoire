@@ -69,7 +69,7 @@ impl EdgeMethod {
     }
 
     /// The masks this method builds, in the order their candidates are pooled.
-    pub fn passes(self) -> [EdgePass; 2] {
+    fn passes(self) -> [EdgePass; 2] {
         match self {
             EdgeMethod::Canny => [EdgePass::CannyStrict, EdgePass::CannyLoose],
             EdgeMethod::Otsu => [EdgePass::OtsuLight, EdgePass::OtsuDark],
@@ -79,14 +79,13 @@ impl EdgeMethod {
 
 /// One of the four masks a full sweep builds: a Canny rung or an Otsu polarity.
 ///
-/// **Named so a locked card can keep the one that found it.** Which mask wins is a property of
-/// the table and the lamp, and neither changes between two frames of a card lying still — so
-/// once a lock is trusted, the three masks that did not produce it are three quarters of the
-/// mask stage spent re-proving a negative. A [`Detection`] says which pass it came from, and
-/// [`DetectOptions::only_pass`] runs that pass alone.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EdgePass {
+/// Named so each can run on a thread of its own — see [`locate`]. **Not so a locked card can
+/// keep the one that found it**, which was built and measured: the pass that won last frame is
+/// not the one the sweep would pick on this one about three frames in ten, and running it alone
+/// moved the quad a mean 1.5% of the card's width from the sweep's — enough to turn one card of
+/// the synthetic evaluation from right to wrong in Exact.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EdgePass {
     /// Canny at the caller's own pair — 40/100 by default.
     CannyStrict,
     /// Canny at the low rung, 0.375 and 0.45 of the caller's pair. See the ladder in [`detect`].
@@ -95,24 +94,6 @@ pub enum EdgePass {
     OtsuLight,
     /// Otsu inverted: a card darker than what it sits on.
     OtsuDark,
-}
-
-impl EdgePass {
-    pub fn method(self) -> EdgeMethod {
-        match self {
-            EdgePass::CannyStrict | EdgePass::CannyLoose => EdgeMethod::Canny,
-            EdgePass::OtsuLight | EdgePass::OtsuDark => EdgeMethod::Otsu,
-        }
-    }
-
-    pub fn as_str(self) -> &'static str {
-        match self {
-            EdgePass::CannyStrict => "canny_strict",
-            EdgePass::CannyLoose => "canny_loose",
-            EdgePass::OtsuLight => "otsu_light",
-            EdgePass::OtsuDark => "otsu_dark",
-        }
-    }
 }
 
 #[derive(Debug, Clone)]
@@ -209,21 +190,25 @@ pub struct DetectOptions {
     /// Tuning this on distance alone makes the scanner worse while making the numbers look
     /// better — correctness and margin are the metrics, and mean distance is a decoy.
     pub inset: f32,
-    /// Build only this one of [`DetectOptions::method`]'s masks. `None` builds both.
-    ///
-    /// For a card already locked — see [`EdgePass`]. A pass of the other method is a caller
-    /// contradicting itself, and is read as `None` rather than as "build nothing".
-    pub only_pass: Option<EdgePass>,
     /// Split Otsu's masks at this level rather than at the one this image's histogram gives.
     ///
     /// **For [`locate_near`], and a measured failure is why.** Otsu's level is a property of the
     /// pixels it is handed, and a window is mostly card where the frame was mostly table: on a
     /// synthetic card the frame split at 92 and its window at 135, which cut the card itself in
-    /// two and found no card in the window on any frame. A locked card keeps the level that
-    /// found it — [`Detection::otsu_level`] — for as long as it keeps the pass.
+    /// two and found no card in the window on any frame. The window splits at the whole
+    /// frame's level instead.
     pub otsu_level: Option<u8>,
+    /// What share of the frame's area the searched image is: 1.0 for a whole frame, and a
+    /// window's own share in [`locate_near`].
+    ///
+    /// **Every area in this module is a fraction of the frame, whatever was searched** — the
+    /// gates, and the score's area term, which saturates at a quarter of the frame. Measured
+    /// without this: in a window a seventh of the frame the card and every sizeable fragment of
+    /// it saturated together, the geometric ranking reshuffled, a different four reached
+    /// card-likeness, and the window's quad sat a mean 3.6% of the card's width from the full
+    /// sweep's on the same frame.
+    pub window_share: f32,
 }
-
 
 impl Default for DetectOptions {
     fn default() -> Self {
@@ -242,8 +227,8 @@ impl Default for DetectOptions {
             cardness_candidates: 4,
             min_cardness: crate::cardness::MIN_SCORE,
             inset: 1.07,
-            only_pass: None,
             otsu_level: None,
+            window_share: 1.0,
         }
     }
 }
@@ -391,19 +376,12 @@ pub struct ScoredQuad {
     /// Card-likeness of this candidate's own rectification, when it was one of the few
     /// evaluated. `None` means it was never rectified, not that it scored zero.
     pub cardness: Option<crate::cardness::Cardness>,
-    /// The mask whose contour this quad came from.
-    pub pass: EdgePass,
 }
 
 /// A successful detection: the card, flattened, in both possible orientations.
 pub struct Detection {
     pub quad: Quad,
     pub score: QuadScore,
-    /// The mask that found it — what a locked card's next frame runs alone.
-    pub pass: EdgePass,
-    /// The level Otsu's masks split at — `None` for Canny. What a locked card's next frame
-    /// splits at too; see [`DetectOptions::otsu_level`].
-    pub otsu_level: Option<u8>,
     /// How card-like the chosen rectification is. See [`crate::cardness`].
     pub cardness: crate::cardness::Cardness,
     /// [`crate::RECTIFIED_W`]×[`crate::RECTIFIED_H`], warped from the **full-resolution**
@@ -426,7 +404,6 @@ impl std::fmt::Debug for Detection {
         f.debug_struct("Detection")
             .field("quad", &self.quad)
             .field("score", &self.score)
-            .field("pass", &self.pass)
             .field("cardness", &self.cardness)
             .field("rectified", &format_args!("{}x{}", RECTIFIED_W, RECTIFIED_H))
             .field("margin", &self.margin)
@@ -489,10 +466,6 @@ pub struct Located {
     pub quad: Quad,
     pub score: QuadScore,
     pub cardness: crate::cardness::Cardness,
-    /// The mask that found it — what a locked card's next frame runs alone.
-    pub pass: EdgePass,
-    /// The level Otsu's masks split at — `None` for Canny. See [`DetectOptions::otsu_level`].
-    pub otsu_level: Option<u8>,
 }
 
 /// The frame as RGB, borrowed when it already is — which a decoded JPEG always is.
@@ -541,8 +514,6 @@ pub fn detect(
         Ok(Detection {
             quad: located.quad,
             score: located.score,
-            pass: located.pass,
-            otsu_level: located.otsu_level,
             cardness: located.cardness,
             rectified,
             rectified_180,
@@ -591,15 +562,7 @@ pub fn locate(
     // and the pool is merged afterwards **in pass order**, which is the order the serial loop
     // pooled them in — the ranking below is a stable sort, so the answer is the one a single
     // thread would have given, only sooner.
-    let passes: Vec<EdgePass> = opts
-        .method
-        .passes()
-        .into_iter()
-        .filter(|p| match opts.only_pass {
-            Some(only) if only.method() == opts.method => only == *p,
-            _ => true,
-        })
-        .collect();
+    let passes = opts.method.passes();
     let t_passes = std::time::Instant::now();
     let mut masks: Vec<GrayImage> = Vec::with_capacity(passes.len());
     let mut candidates: Vec<ScoredQuad> = Vec::new();
@@ -718,8 +681,6 @@ pub fn locate(
         Ok(Located {
             quad: source_quad,
             score: best.score,
-            pass: best.pass,
-            otsu_level: otsu,
             cardness: best.cardness.unwrap_or(crate::cardness::Cardness {
                 title: 0.0,
                 type_line: 0.0,
@@ -730,16 +691,6 @@ pub fn locate(
         Some(trace),
     )
 }
-
-/// How many pixels a locked card's short edge spans in [`locate_near`]'s working image.
-///
-/// Near what a full sweep gives the typical card: at 1024 px a card whose height is half the
-/// frame's short edge is ~205 px across, and one filling the frame ~290. The ceiling in
-/// [`DetectOptions::work_long_edge`]'s sweep was the card's own art resolving into contours of
-/// its own, which is a matter of how many pixels the *card* spans, not the frame — so a card
-/// is searched at the size it was found at, and a card close to the lens is no longer searched
-/// at more pixels than it needs.
-pub const WINDOW_CARD_PX: f32 = 240.0;
 
 /// A rectangle of the source frame, in source pixels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -784,16 +735,48 @@ impl Window {
             h: (y1 - y0) as u32,
         })
     }
+    /// The same window grown outward onto the grid a `src`→`work` resize samples on, along each
+    /// axis: an edge lands where a source pixel boundary and a working pixel boundary coincide,
+    /// so resizing the crop by the same ratio reproduces the working pixels the whole frame's
+    /// resize made there. Left alone on an axis whose grid is too coarse to be worth it.
+    pub fn snapped(self, src_w: u32, work_w: u32, src_h: u32, work_h: u32) -> Window {
+        fn gcd(a: u32, b: u32) -> u32 {
+            if b == 0 { a } else { gcd(b, a % b) }
+        }
+        let axis = |at: u32, len: u32, src: u32, work: u32| -> (u32, u32) {
+            let step = src / gcd(src, work.max(1)).max(1);
+            if step <= 1 || step > src / 8 {
+                return (at, len);
+            }
+            let lo = at / step * step;
+            let hi = (at + len).div_ceil(step) * step;
+            (lo, hi.min(src) - lo)
+        };
+        let (x, w) = axis(self.x, self.w, src_w, work_w);
+        let (y, h) = axis(self.y, self.h, src_h, work_h);
+        Window { x, y, w, h }
+    }
 }
 
 /// [`locate`], but only where a locked card can be — the search a trusted lock gets.
 ///
 /// **A locked card's position is already known to within a few pixels**, and a full sweep
 /// spends almost all of its time re-finding it. So this searches [`Window::around`] the held
-/// quad, at a working resolution where the card spans [`WINDOW_CARD_PX`] on its short edge —
-/// **never finer than the full sweep's own**, so a small card is never searched at a resolution
-/// nobody tuned the morphology for. Pair it with [`DetectOptions::only_pass`] and one mask runs
-/// over a fraction of the pixels.
+/// quad and nothing else — every mask, as the sweep does, over a fifth of the pixels or so.
+///
+/// **It is built to give the sweep's answer, not a cheaper one**, because the lock's smoothed
+/// quad is what gets rectified and hashed, and the synthetic evaluation turned a card from
+/// right to wrong over a quad that moved a fraction of a pixel. Measured over 406 locked frames
+/// of 40 cards, against the sweep's own quad on the same frame: this search lands a mean 0.14%
+/// of the card's width away, over 1% on four frames. Three things it does to get there, each
+/// measured on the way:
+///
+/// - **The sweep's own scale, and the window snapped onto its pixel grid** ([`Window::snapped`]),
+///   so the working image is the sweep's pixels rather than a resample of them at another phase.
+///   An unsnapped window was 3.4% away, at the sweep's scale or at a card-sized one alike.
+/// - **Otsu at the whole frame's level**, which costs one resize of the frame and no masks. The
+///   window's own histogram split one card in two; the last frame's level was 0.28% away.
+/// - **Areas in the frame's terms** — see [`DetectOptions::window_share`] and below.
 ///
 /// The quad comes back in **source** coordinates, like [`locate`]'s, ready for the one
 /// rectification the caller makes from the whole frame. **The trace does not**: its images and
@@ -822,24 +805,48 @@ pub fn locate_near(
     let Some(window) = Window::around(held, lock.max_drift, sw, sh) else {
         return (Err(DetectError::NoCard { examined: 0 }), None);
     };
+    // The full sweep's own working size, and the window snapped onto its pixel grid, so the
+    // window's working image is the same pixels as the middle of the sweep's rather than a
+    // resample of them at another phase.
     let full_scale = (sw.max(sh) as f32 / opts.work_long_edge.max(1) as f32).max(1.0);
-    let scale = (held.short_edge() / WINDOW_CARD_PX).max(full_scale);
-    let work_long_edge = ((window.w.max(window.h) as f32 / scale).round() as u32).max(1);
+    let (ww, wh) = (
+        ((sw as f32 / full_scale).round() as u32).max(1),
+        ((sh as f32 / full_scale).round() as u32).max(1),
+    );
+    let window = window.snapped(sw, ww, sh, wh);
+    let work_long_edge = if window.w >= window.h {
+        (window.w as u64 * ww as u64 / sw as u64) as u32
+    } else {
+        (window.h as u64 * wh as u64 / sh as u64) as u32
+    }
+    .max(1);
     let (frame_area, window_area) = (sw as f32 * sh as f32, window.w as f32 * window.h as f32);
     let ratio = lock.max_area_ratio.max(1.0);
-    let min_area_frac =
-        (held.area() / ratio).max(opts.min_area_frac * frame_area) / window_area;
-    let max_area_frac = (held.area() * ratio / window_area).min(opts.max_area_frac);
+    let min_area_frac = (held.area() / ratio / frame_area).max(opts.min_area_frac);
+    let max_area_frac = (held.area() * ratio / frame_area).min(opts.max_area_frac);
+    let window_share = window_area / frame_area;
+    // Split Otsu where the sweep would — the whole frame's working image, made exactly as
+    // `locate` makes it, and no masks over it.
+    let otsu = match (opts.method, opts.otsu_level) {
+        (EdgeMethod::Otsu, None) => Some(otsu_level(
+            &source.resize_exact(ww, wh, image::imageops::FilterType::Triangle).to_luma8(),
+        )),
+        (_, level) => level,
+    };
     // A crop of an RGB frame is RGB, so `rgb_of` borrows it: the window is copied once.
     let crop = source.crop_imm(window.x, window.y, window.w, window.h);
-    let near = DetectOptions { work_long_edge, min_area_frac, max_area_frac, ..opts.clone() };
+    let near = DetectOptions {
+        work_long_edge,
+        min_area_frac,
+        max_area_frac,
+        window_share,
+        otsu_level: otsu,
+        ..opts.clone()
+    };
     let (result, trace) = locate(&crop, &rgb_of(&crop), &near);
     let (dx, dy) = (window.x as f32, window.y as f32);
-    // The area fraction too: "frame area" in a readout means the frame's, and the window's
-    // would read the same card as three times the size whenever the lock is trusted.
     let result = result.map(|mut d| {
         d.quad = Quad { corners: d.quad.corners.map(|(x, y)| (x + dx, y + dy)) };
-        d.score.area_frac *= window_area / frame_area;
         d
     });
     (result, trace)
@@ -946,7 +953,8 @@ fn run_pass(gray: &GrayImage, pass: EdgePass, otsu: Option<u8>, opts: &DetectOpt
     let mask_ms = started.elapsed().as_secs_f32() * 1000.0;
 
     // ── Stages 3-5: contours, polygon approximation, scoring ──────────────────────
-    let frame_area = (ww * wh) as f32;
+    // The whole frame's area in this image's pixels — see `DetectOptions::window_share`.
+    let frame_area = (ww * wh) as f32 / opts.window_share.clamp(f32::EPSILON, 1.0);
     let mut candidates: Vec<ScoredQuad> = Vec::new();
     let mut examined = 0usize;
     let mut contours_kept: Vec<Vec<Point<i32>>> = Vec::new();
@@ -977,7 +985,7 @@ fn run_pass(gray: &GrayImage, pass: EdgePass, otsu: Option<u8>, opts: &DetectOpt
         }
         let Some((quad, via)) = quad_from_hull(&hull) else { continue };
         let Some(score) = score_quad(&quad, frame_area, opts, via) else { continue };
-        candidates.push(ScoredQuad { quad, score, cardness: None, pass });
+        candidates.push(ScoredQuad { quad, score, cardness: None });
     }
     PassOutput { mask, contours: contours_kept, candidates, examined, mask_ms }
 }
@@ -1713,31 +1721,6 @@ mod tests {
     }
 
     #[test]
-    fn a_detection_names_its_pass_and_one_pass_can_run_alone() {
-        let frame = synth(800, 600, 300.0, 0.0);
-        for method in [EdgeMethod::Canny, EdgeMethod::Otsu] {
-            let opts = DetectOptions { method, ..Default::default() };
-            let full = detect(&frame, &opts).0.expect("the full sweep finds the card");
-            assert!(method.passes().contains(&full.pass), "{method:?} named {:?}", full.pass);
-
-            // The pass that found it, alone, finds it again — the locked frame's whole premise.
-            let alone = DetectOptions { only_pass: Some(full.pass), ..opts.clone() };
-            let (result, trace) = detect(&frame, &alone);
-            let d = result.unwrap_or_else(|e| panic!("{:?} alone found nothing: {e}", full.pass));
-            assert_eq!(d.pass, full.pass);
-            assert!(trace.expect("a trace").candidates.iter().all(|c| c.pass == full.pass));
-        }
-        // A pass of the other method is ignored rather than building nothing.
-        let crossed = DetectOptions {
-            method: EdgeMethod::Canny,
-            only_pass: Some(EdgePass::OtsuLight),
-            ..Default::default()
-        };
-        let d = detect(&frame, &crossed).0.expect("Canny still runs");
-        assert_eq!(d.pass.method(), EdgeMethod::Canny);
-    }
-
-    #[test]
     fn a_window_grows_by_the_drift_and_stops_at_the_frame() {
         // A 100×140 box: short edge 100, so 0.35 of drift grows it 35 px a side.
         let q = Quad { corners: [(100.0, 100.0), (200.0, 100.0), (200.0, 240.0), (100.0, 240.0)] };
@@ -1755,24 +1738,25 @@ mod tests {
     }
 
     #[test]
-    fn a_window_finds_the_held_card_in_source_coordinates() {
-        // 220 px is searched at the full sweep's own scale; 400 px is past `WINDOW_CARD_PX`
-        // and searched coarser. Both have to land where the full sweep did.
-        for card_w in [220.0, 400.0] {
-            let frame = synth(1280, 720, card_w, 12.0);
-            let opts = DetectOptions { method: EdgeMethod::Otsu, ..Default::default() };
-            let full = detect(&frame, &opts).0.expect("the full sweep finds the card");
-            // The lock's quad is smoothed and a few pixels behind, never exactly this frame's.
-            let held = Quad { corners: full.quad.corners.map(|(x, y)| (x + 12.0, y - 8.0)) };
-            let alone = DetectOptions { only_pass: Some(full.pass), ..opts };
-            let near = locate_near(&frame, &held, &crate::lock::LockOptions::default(), &alone)
-                .0
-                .unwrap_or_else(|e| panic!("the window lost a {card_w} px card: {e}"));
-            for (a, b) in near.quad.corners.iter().zip(full.quad.corners.iter()) {
-                let off = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
-                assert!(off < 6.0, "{card_w} px: a corner is {off:.1} px from the full sweep's");
+    fn a_window_lands_where_the_full_sweep_does() {
+        // **The window's whole contract**: the sweep's answer, in source coordinates, for less.
+        // 1280 px works at 1.25, so this is the case where an unsnapped crop resamples at
+        // another phase — measured, that alone put the quad 3.4% of the card's width away.
+        for method in [EdgeMethod::Canny, EdgeMethod::Otsu] {
+            for card_w in [220.0, 400.0] {
+                let frame = synth(1280, 720, card_w, 12.0);
+                let opts = DetectOptions { method, ..Default::default() };
+                let full = detect(&frame, &opts).0.expect("the full sweep finds the card");
+                // The lock's quad is smoothed and a few pixels behind, never exactly this frame's.
+                let held = Quad { corners: full.quad.corners.map(|(x, y)| (x + 12.0, y - 8.0)) };
+                let near = locate_near(&frame, &held, &crate::lock::LockOptions::default(), &opts)
+                    .0
+                    .unwrap_or_else(|e| panic!("{method:?} lost a {card_w} px card: {e}"));
+                for (a, b) in near.quad.corners.iter().zip(full.quad.corners.iter()) {
+                    let off = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+                    assert!(off < 0.5, "{method:?}, {card_w} px: a corner is {off:.2} px off");
+                }
             }
-            assert_eq!(near.pass, full.pass);
         }
     }
 
@@ -1810,17 +1794,17 @@ mod tests {
     }
 
     #[test]
-    fn otsu_splits_at_the_level_it_is_given_and_says_which() {
+    fn otsu_splits_at_the_level_it_is_given() {
+        // 800 px is under the working edge, so the working image is the frame itself.
         let frame = synth(800, 600, 300.0, 0.0);
         let opts = DetectOptions { method: EdgeMethod::Otsu, ..Default::default() };
         let found = detect(&frame, &opts).0.expect("a card");
-        let level = found.otsu_level.expect("an Otsu detection names its level");
-        let again = DetectOptions { otsu_level: Some(level), ..opts.clone() };
-        assert_eq!(detect(&frame, &again).0.expect("the same card").quad, found.quad);
-        // Above every band of the fixture's card: nothing is foreground, so nothing is a card.
-        let blind = DetectOptions { otsu_level: Some(250), only_pass: Some(EdgePass::OtsuLight), ..opts };
+        let own = otsu_level(&frame.to_luma8());
+        let given = DetectOptions { otsu_level: Some(own), ..opts.clone() };
+        assert_eq!(detect(&frame, &given).0.expect("the same card").quad, found.quad);
+        // Above every band of the fixture's card, so the light polarity sees nothing and the
+        // dark one sees the whole frame, which touches the border: no card either way.
+        let blind = DetectOptions { otsu_level: Some(250), ..opts };
         assert!(detect(&frame, &blind).0.is_err(), "the given level was not the one used");
-        let canny = DetectOptions { method: EdgeMethod::Canny, ..Default::default() };
-        assert_eq!(detect(&frame, &canny).0.expect("a card").otsu_level, None);
     }
 }
