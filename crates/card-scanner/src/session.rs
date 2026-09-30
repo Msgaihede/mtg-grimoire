@@ -2160,11 +2160,20 @@ fn title_view(
     // The printing that stands for a read name is the card's first one the filters permit. A
     // name says nothing about which printing, and `Observation::from_ocr` gives it no vote there.
     let first = |card: &Id| r.printings_of(card).iter().find(|p| mask.permits(p)).copied();
-    let names: Vec<String> = hits
+    // Each name once, as its title bar prints it: a card whose name is `a // b` shows `a`, so
+    // Faramir, Field Commander and the card named `Faramir, Field Commander // Faramir, Field
+    // Commander` read as the one name they share on the panel rather than three.
+    let mut names: Vec<String> = Vec::new();
+    for name in hits
         .iter()
         .flat_map(|h| h.cards.iter())
         .filter_map(|c| first(c).and_then(|p| r.label_for(&p)).map(|l| l.name))
-        .collect();
+    {
+        let front = name.split(" // ").next().unwrap_or(&name).to_string();
+        if !names.contains(&front) {
+            names.push(front);
+        }
+    }
     let view = OcrView {
         raw: read.raw.clone(),
         normalized: read.normalized.clone(),
