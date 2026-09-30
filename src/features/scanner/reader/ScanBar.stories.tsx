@@ -2,8 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
 import type { Condition } from "@/lib/conditions";
-import type { Finish } from "@/lib/finish";
-import type { ScanFilters, ScanMode } from "@/lib/ipc";
+import type { ScanFilters, ScanMode, ScannerFinishPref } from "@/lib/ipc";
 import { ScanBar, type ScanBarProps } from "./ScanBar";
 
 /**
@@ -17,7 +16,7 @@ import { ScanBar, type ScanBarProps } from "./ScanBar";
 function Held(args: ScanBarProps) {
   const [mode, setMode] = useState<ScanMode>(args.mode);
   const [filters, setFilters] = useState<ScanFilters>(args.filters);
-  const [finish, setFinish] = useState<Finish>(args.finish);
+  const [finish, setFinish] = useState<ScannerFinishPref>(args.finish);
   const [condition, setCondition] = useState<Condition>(args.condition);
   const [developer, setDeveloper] = useState(args.developer);
   return (
@@ -64,7 +63,7 @@ const meta = {
     onFilters: fn(),
     filterError: null,
     filtersDisabled: null,
-    finish: "nonfoil",
+    finish: "detect",
     onFinish: fn(),
     condition: "NONE",
     onCondition: fn(),
@@ -86,11 +85,35 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** What a reader opens the view on: Fast, no narrowing, the tray's plain defaults, panels off. */
+/**
+ * What a reader opens the view on: Fast, no narrowing, the finish detected per card, no condition,
+ * panels off.
+ */
 export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("button", { name: "Filters: Any set" })).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: "Defaults: Detect finish · Condition not set" }),
+    ).toBeInTheDocument();
+  },
+};
+
+/**
+ * The Defaults popover open on **Detect**: the one finish choice that is not a finish, first in the
+ * list, and a caption that says what becomes of a card it cannot read — the reader meets `Unknown`
+ * in the tray already knowing why.
+ */
+export const DefaultsDetect: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Defaults: Detect finish · Condition not set" }));
+    await expect(
+      await canvas.findByText("The scanner reads each card's finish. A card it can't tell waits in the tray for you to pick."),
+    ).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: "Finish" }));
+    const options = canvas.getAllByRole("option").map((o) => o.textContent);
+    await expect(options.slice(0, 4)).toEqual(["Detect", "Nonfoil", "Foil", "Etched"]);
   },
 };
 

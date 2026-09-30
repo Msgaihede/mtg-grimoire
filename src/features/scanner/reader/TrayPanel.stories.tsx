@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, within } from "storybook/test";
 import type { ScannerTrayRow } from "@/lib/ipc";
-import { TRAY_ROWS, VERDICTS } from "../fixtures";
+import { NEEDS_A_FINISH_ROW, TRAY_ROWS, VERDICTS } from "../fixtures";
 import { rowFromDecision } from "./tray";
 import { TrayPanel, type TrayPanelProps } from "./TrayPanel";
 
@@ -114,6 +114,38 @@ export const NeedsPick: Story = {
       "aria-disabled",
       "true",
     );
+  },
+};
+
+/**
+ * A card whose finish the scanner could not read, at the head of a resolved tray: its finish reads
+ * `Unknown` on a gold border, and Add files the other five copies and says it is leaving this one —
+ * the row stays behind, marked, until the reader picks.
+ */
+export const NeedsFinish: Story = {
+  args: {
+    rows: [NEEDS_A_FINISH_ROW, ...TRAY_ROWS.filter((row) => row.choices.length === 0)],
+    flashKey: NEEDS_A_FINISH_ROW.key,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("button", { name: "Finish of Lightning Bolt — STA 105" })).toHaveTextContent(
+      "Unknown",
+    );
+    await expect(
+      canvas.getByRole("button", { name: "Add 5 to collection · 1 needs a finish" }),
+    ).not.toHaveAttribute("aria-disabled");
+  },
+};
+
+/** Every card still waiting on a finish: nothing Add could file, so it refuses and says why. */
+export const AllNeedFinish: Story = {
+  args: { rows: [NEEDS_A_FINISH_ROW, { ...NEEDS_A_FINISH_ROW, key: "second", addedAt: 1 }] },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(
+      canvas.getByRole("button", { name: "Add 0 to collection · 2 need a finish" }),
+    ).toHaveAttribute("aria-disabled", "true");
   },
 };
 

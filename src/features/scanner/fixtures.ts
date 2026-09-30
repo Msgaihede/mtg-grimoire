@@ -3,6 +3,7 @@ import type {
   ScannerChoice,
   ScannerCollector,
   ScannerDecision,
+  ScannerFinishMark,
   ScannerLabel,
   ScannerOcr,
   ScannerPrefs,
@@ -75,6 +76,20 @@ const hierarchCandidate: ScannerCandidate = {
   label: hierarch,
   printings: 4,
 };
+
+/**
+ * The collector line's separator, measured three ways — `ocr::finish_mark`'s three answers.
+ *
+ * The figures sit inside the ranges the crate's first calibration measured (2026-10-01, twelve
+ * crops of LTR and HOB cards): a non-foil's dot at height 0.41–0.62 and area 0.12–0.17 of the
+ * letter height, solidity 1.04–1.12; a foil's star at 0.80–0.84 and 0.33–0.44, solidity 0.91–0.99.
+ * `unmeasured` is no separator found at all — every figure `null`, which is a different fact from
+ * a mark found and measured between the two.
+ */
+const dotMark: ScannerFinishMark = { reading: "nonfoil", height: 0.52, area: 0.14, solidity: 1.08 };
+const starMark: ScannerFinishMark = { reading: "foil", height: 0.84, area: 0.44, solidity: 0.95 };
+const unmeasuredMark: ScannerFinishMark = { reading: "unknown", height: null, area: null, solidity: null };
+export const MARKS = { dot: dotMark, star: starMark, unmeasured: unmeasuredMark };
 
 /** The release-build timings a frame that reaches matching actually costs, measured once. */
 const timings = { resize_ms: 2.1, mask_ms: 88.8, contour_ms: 5.3, rectify_ms: 47.8, total_ms: 144 };
@@ -168,6 +183,8 @@ const decided: ScannerVerdict = {
     outcome: "resolved",
     choices: [],
     replaces_previous: false,
+    finishes: ["nonfoil", "foil"],
+    finish_mark: dotMark,
   },
   match: {
     section: "full",
@@ -224,6 +241,8 @@ const confidence: ScannerVerdict = {
     outcome: "resolved",
     choices: [],
     replaces_previous: false,
+    finishes: ["nonfoil", "foil"],
+    finish_mark: dotMark,
   },
 };
 
@@ -407,13 +426,23 @@ const committedOn = (standing: ScannerStanding): ScannerTracked => ({
   standings: [standing],
 });
 
-const exactDecision = (resolution: ScannerResolution): ScannerDecision => ({
+/**
+ * The decision an Exact resolve commits. `finishes` and `finish_mark` are the printing's and the
+ * collector line's, which the resolution does not carry, so each fixture says them.
+ */
+const exactDecision = (
+  resolution: ScannerResolution,
+  finishes: string[],
+  finish_mark: ScannerFinishMark | null,
+): ScannerDecision => ({
   printing: resolution.choices[0].id,
   oracle_id: resolution.choices[0].oracle_id,
   label: resolution.choices[0].label,
   outcome: resolution.outcome,
   choices: resolution.choices,
   replaces_previous: false,
+  finishes,
+  finish_mark,
 });
 
 /** The frame an Exact resolve ran on and came to one printing. */
@@ -421,7 +450,9 @@ const exactResolved: ScannerVerdict = {
   ...baseVerdict,
   mode: "exact",
   decision_seq: 1,
-  decision: exactDecision(resolvedResolution),
+  // Alpha was printed in one finish, so the finish needs no read — and an Alpha card has no
+  // collector line to read one from anyway.
+  decision: exactDecision(resolvedResolution, ["nonfoil"], null),
   resolution: resolvedResolution,
   match: {
     section: "full",
@@ -442,7 +473,8 @@ const exactAmbiguous: ScannerVerdict = {
   ...baseVerdict,
   mode: "exact",
   decision_seq: 2,
-  decision: exactDecision(ambiguousResolution),
+  // The collector tier read nothing (`no read` above), so there is no separator to measure.
+  decision: exactDecision(ambiguousResolution, ["nonfoil", "foil"], null),
   resolution: ambiguousResolution,
   match: {
     section: "full",
@@ -536,6 +568,9 @@ const collector: ScannerCollector = {
   // No detail frame came: the line spanned a few dozen of the detection frame's pixels.
   origin: { frame: true, width: 960, height: 540, span_width: 62, span_height: 23 },
   matched: null,
+  // The line did not pair with a printing, and its separator still measured: the mark is cut out of
+  // the band's second line whether or not the recogniser made sense of the first.
+  mark: dotMark,
 };
 
 export const READS = { ocr, collector };
@@ -652,13 +687,13 @@ export const STATUS = { present, embedded, missing, noModels, corrupt, unlabelle
 
 /**
  * What `scanner_prefs` answers for a row never written — `ScannerPrefs::default()` in
- * `scanner.rs`, verbatim: Fast, no filters, a nonfoil ungraded copy filed at the root, developer
- * panels hidden.
+ * `scanner.rs`, verbatim: Fast, no filters, the finish detected per card, an ungraded copy filed
+ * at the root, developer panels hidden.
  */
 export const DEFAULT_SCANNER_PREFS: ScannerPrefs = {
   mode: "fast",
   filters: { sets: [], released_from: null, released_to: null },
-  finish: "nonfoil",
+  finish: "detect",
   condition: "NONE",
   folderId: null,
   developer: false,
@@ -728,3 +763,21 @@ export const TRAY_ROWS: ScannerTrayRow[] = [
     addedAt: 1_757_901_060_000,
   },
 ];
+
+/**
+ * A row the scanner could not settle the finish of — Detect's `unknown`, waiting for the reader.
+ * **Not a fifth row of {@link TRAY_ROWS}**, whose four shapes and their copy counts half the
+ * scanner's tests and stories count on; a surface that wants the fifth shape adds this one.
+ */
+export const NEEDS_A_FINISH_ROW: ScannerTrayRow = {
+  key: "9b2e5d71-3c84-4f0a-b6d9-1e7a4c8f2b53",
+  cardId: boltChoices[1].id,
+  oracleId: BOLT_ORACLE,
+  name: "Lightning Bolt",
+  setCode: "sta",
+  collectorNumber: "105",
+  finish: "unknown",
+  quantity: 1,
+  choices: [],
+  addedAt: 1_757_901_300_000,
+};

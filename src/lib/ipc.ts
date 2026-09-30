@@ -50,6 +50,7 @@
  * `ScannerStages`/`ScannerStanding`/`ScannerTracked`/
  * `ScannerCollectorTry`/`ScannerCollector`/`ScannerOcr`/
  * `ScannerDecision`                                — `crates/card-scanner/src/session.rs`
+ * `ScannerFinishMark`/`ScannerMarkReading`         — `crates/card-scanner/src/ocr.rs`
  * `ScannerChoice`/`ScannerTier`/`ScannerResolution` — `crates/card-scanner/src/resolve.rs`
  * `ScanFilters`                                    — `crates/card-scanner/src/filters.rs`
  * `ScannerLabel`/`ScannerCandidate`/`ScannerMatch`  — `crates/card-scanner/src/reference.rs`
@@ -7630,6 +7631,30 @@ export interface ScannerBandOrigin {
   span_height: number;
 }
 
+/**
+ * What the collector line's separator says about the finish — `MarkReading` in `ocr.rs`,
+ * snake-cased by serde. A foil prints a ★ between the set code and the language and a non-foil a
+ * •; `unknown` is no separator found, or one that measured between the two.
+ *
+ * **Two finishes and never three**: the mark knows star from dot and nothing else, so no reading
+ * here is ever `etched`.
+ */
+export type ScannerMarkReading = "foil" | "nonfoil" | "unknown";
+
+/**
+ * The separator, measured — `FinishMark` in `ocr.rs`. Every figure is `null` when no mark was
+ * found at all, which is a different fact from a mark that was found and measured ambiguous.
+ */
+export interface ScannerFinishMark {
+  reading: ScannerMarkReading;
+  /** The mark's height over the line's letter height. */
+  height: number | null;
+  /** The mark's area over the letter height squared. */
+  area: number | null;
+  /** The mark's area over its convex hull's — near 1 for a dot, lower for a star's points. */
+  solidity: number | null;
+}
+
 /** The collector-line tier — `CollectorView` in `session.rs`. */
 export interface ScannerCollector {
   raw: string;
@@ -7642,6 +7667,8 @@ export interface ScannerCollector {
   band: string | null;
   origin: ScannerBandOrigin | null;
   matched: string | null;
+  /** The separator measured on this read's band; `null` when there was none to measure. */
+  mark: ScannerFinishMark | null;
 }
 
 /** The title-band tier — `OcrView` in `session.rs`. */
@@ -7693,6 +7720,20 @@ export interface ScannerDecision {
    * adding one. `false` after the card left the frame, so a second copy still adds.
    */
   replaces_previous: boolean;
+  /**
+   * The decided printing's finishes, from the corpus — `["nonfoil", "foil"]`, `["foil"]`,
+   * `["nonfoil", "foil", "etched"]` — as Scryfall spells them. **Empty when the corpus did not
+   * say**, which is not the same as a printing that exists in no finish: the page reads an empty
+   * list as "no constraint", never as "nothing is possible".
+   *
+   * A `string[]` rather than `Finish[]` for {@link CollectionFolder.kind}'s reason: the words come
+   * from Scryfall through the corpus, and a fourth finish is a word the page compares and falls
+   * through on rather than a type error.
+   */
+  finishes: string[];
+  /** The separator reading for the decided printing, or `null` when no collector band was read
+   *  for it. `reader/trayFinish.ts` is what turns this and {@link finishes} into a row's finish. */
+  finish_mark: ScannerFinishMark | null;
 }
 
 /** One tier of an Exact resolve and what it left — `TierView` in `resolve.rs`. */
@@ -7792,13 +7833,32 @@ export interface ScannerVerdict {
 export interface ScannerPrefs {
   mode: ScanMode;
   filters: ScanFilters;
-  finish: Finish;
+  /** A fixed finish every new row takes, or `detect` — the default — for the scanner's own read.
+   *  See {@link ScannerFinishPref}. */
+  finish: ScannerFinishPref;
   condition: Condition;
   /** The folder a commit files into; `null` is the collection's root. */
   folderId: number | null;
   /** Whether the developer panels are showing. */
   developer: boolean;
 }
+
+/**
+ * What the Defaults popover's finish can say: one of the collection's three finishes, stamped on
+ * every new row as it lands, or **`detect`** — `scanner::DETECT_FINISH` — which asks the scanner.
+ *
+ * `detect` is a *policy* and never a finish, so it can never reach a tray row or the collection:
+ * `reader/trayFinish.ts` turns it into a {@link ScannerTrayFinish} per card, and a stored row
+ * written before it existed keeps the fixed finish it holds.
+ */
+export type ScannerFinishPref = Finish | "detect";
+
+/**
+ * A tray row's finish: one of the collection's three, or **`unknown`** — a card the scanner could
+ * not read the finish of, waiting for the reader. An `unknown` row stays in the tray when the rest
+ * commits; the collection never sees the word.
+ */
+export type ScannerTrayFinish = Finish | "unknown";
 
 /** One printing a tray row could be — `ScannerTrayChoice` in `scanner.rs`. */
 export interface ScannerTrayChoice {
@@ -7815,7 +7875,8 @@ export interface ScannerTrayChoice {
  *
  * `key` is the page's own stable id for the row. `choices` is non-empty only while the row is
  * still a choice to make. `addedAt` is the page's clock, in milliseconds. The write refuses a
- * `quantity` below one and a tray longer than 5,000 rows, in words.
+ * `quantity` below one and a tray longer than 5,000 rows, in words. `finish` may be `unknown`
+ * ({@link ScannerTrayFinish}); the store keeps it as a string and checks nothing about it.
  */
 export interface ScannerTrayRow {
   key: string;
@@ -7824,7 +7885,7 @@ export interface ScannerTrayRow {
   name: string;
   setCode: string;
   collectorNumber: string;
-  finish: Finish;
+  finish: ScannerTrayFinish;
   quantity: number;
   choices: ScannerTrayChoice[];
   addedAt: number;

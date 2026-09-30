@@ -32,6 +32,8 @@ export type {
   ScannerStanding,
   ScannerTracked,
   ScannerCollectorTry,
+  ScannerMarkReading,
+  ScannerFinishMark,
   ScannerCollector,
   ScannerOcr,
   ScannerOutcome,
@@ -41,6 +43,8 @@ export type {
   ScannerResolution,
   ScannerVerdict,
   ScannerPrefs,
+  ScannerFinishPref,
+  ScannerTrayFinish,
   ScannerTrayChoice,
   ScannerTrayRow,
 } from "@/lib/ipc";
