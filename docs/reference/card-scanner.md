@@ -1363,6 +1363,12 @@ cycle with the card never leaving the lens**.
     typing `neo` or `kamigawa` finds it, and *Show 50 more* walks to every set. The live pass read
     the first page and nothing else. Kept here, struck through by this sentence, so the next reader
     who counts a short list does not file it again.
+20. **Exact adds a card twice in 2 more stacking piles of 160 than `main` does** (§10 *A card
+    laid on the last*, measured 2026-09-30): one while the card was held, one after a hand lifted
+    off it. Each is a change the watch made in error whose next decision neither looked like the
+    forgotten card nor named its printing. Three rules have already cut it from 7; the next step is
+    printing which piles they are, which `stacking sequence` does not do yet. `main` itself adds 4
+    in the same sessions, untraced.
 
 Struck 2026-09-08: the two doc comments that quoted a title read at ~250 ms against a ~80 ms
 frame — `session::OCR_EVERY` and `ocr.rs`'s `COLLECTOR_FALLBACKS` — where §4 and §7 measured
@@ -2178,8 +2184,9 @@ the session's frame path with the lock trusted on every frame:
 decided — a Fast commit, or an Exact resolve of any outcome, `not_found` included — is the
 **anchor**, and every trusted frame while that decision stands is compared with the anchor and
 with the last three frames that were the same card; the nearest decides. A frame at least
-`CHANGED_BITS` from all of them is not the decided card, and a second such frame within
-`AGREE_BITS` of the first is a card **at rest** — a new card. One far frame is a hand passing
+`CHANGED_BITS` from all of them is not the decided card, and a run of such frames, each within
+`AGREE_BITS` of the one before, is a card **at rest** — a new card: **two frames in Fast
+(`FAST_AT_REST`), three in Exact (`EXACT_AT_REST`)**, below. One far frame is a hand passing
 over; far frames that disagree with each other are a hand moving. The recent frames are
 admitted only while they are within `CHANGED_BITS` of the anchor itself, so the set cannot walk
 away from the decided card a frame at a time. Every distance is the nearer of the two relative
@@ -2189,13 +2196,32 @@ stacked card may lie the other way round.
 **A new card at rest is forgotten into, not waited out** — `Session::card_changed`, which is
 `forget_card` (the tracker, the burst, the counters, the resolve — **the lock kept**, since the
 geometry is still right) plus the previous decision, so the card on top is *added*, never a
-`replaces_previous` of the one under it. **The first frame at rest is kept as the new card's
-first**: its observations are counted again under the fresh tally and its view stays in Exact's
-burst. A stacked card therefore decides exactly when a fresh card would with the lock already
-held — Fast on its **8th** frame by votes, Exact resolving on its **3rd** — which the tests assert
-to the frame; without the keep they read 9 and 4. **With Fast's early decision** (two clear frames
-in a row, above), the kept frame is the first of the two, so a card the hash is sure of decides on
-its **2nd** frame at rest, where it would otherwise need a 3rd.
+`replaces_previous` of the one under it. **The frames at rest before the one that confirmed it
+are kept as the new card's first**: their observations are counted again under the fresh tally
+and their views stay in Exact's burst. A stacked card therefore decides exactly when a fresh card
+would with the lock already held — Fast on its **8th** frame by votes (9 without the keep),
+Exact resolving on its **3rd**, the confirming frame itself, its burst the three frames at rest —
+which the tests assert to the frame. **With Fast's early decision** (two clear frames in a row,
+above), the kept frame is the first of the two, so a card the hash is sure of decides on its
+**2nd** frame at rest, where it would otherwise need a 3rd.
+
+**A change the watch makes in error is a second opinion, not a second copy.** Two frames of a
+hand held still over the decided card, or the card's own worst frames, are a card at rest too;
+the card is forgotten, and once the hand lifts it is decided again. So `card_changed` remembers
+what it forgot (`laid_over`: what the watch held of the card — the anchor and the recent frames —
+and what its decision named), and the next decision **replaces** the row instead of adding one
+when either its look is near that card's or it names the same **printing**. The printing settles
+it whatever the look, because two copies of one printing look alike and never make a change at
+all; a second printing of the same card differs on both and adds. The memory lasts **until the
+next decision**, and a `not_found` is not one: three still frames of a hand make an Exact burst of
+nothing but hand, which resolves `not_found` and is watched in turn, and the card coming back was
+then a second change that overwrote the card with the hand.
+
+**Exact wants a third frame at rest because a false change costs it a whole re-resolve**, and
+the third costs a stacked card nothing: a burst cannot resolve before it holds three frames, and
+the two kept frames plus the confirming one are that burst. The measured case for each of these
+rules is the stacking sequence below — each was added because the run before it showed the
+double add it prevents.
 
 **The watch ends with the decision it guards** (`record_decision`: nothing committed and nothing
 attempted clears it). Without that, a card decided while still moving — carried in, the hash
@@ -2250,15 +2276,45 @@ were two printings of the same card — Runaway Steam-Kin GRN on its promo neare
 12 bits of 256 — which is the second-copy limit below under another name. The other two were
 Blight Rot on Faunsbane Troll and Assault // Battery on Illusion // Reality.
 
+#### The stacking sequence, measured
+
+`stacking sequence` — release, Windows, 2026-09-30. Whole sessions against the 113,494-printing
+bundle, the corpus labels and both readers, resolving inline as the evaluation does: for each of
+the 160 printings, that card held for 30 frames, a hand over it for 3 (10%, 35%, 20% of the card
+in turn), then the next printing of its stratum laid on top, at the same pose, for 30. A second
+session per pile lifts the hand again with nothing on top, for 10 frames. **Before** is `main` at
+`9d473c7f` with only the tool added; **after** is this branch at `0cff4cb2`, the same `main` with
+the watch — so the difference is the watch and nothing else. A row *added* is a decision that
+does not `replaces_previous`.
+
+| | Fast before | Fast after | Exact before | Exact after |
+| --- | ---: | ---: | ---: | ---: |
+| the card on top decided within 30 frames | 78.8% | **86.2%** | 23.1% | **79.4%** |
+| frames to it from its first, p50 / p90 | 11 / 18 | **3 / 11** | 13 / 17 | **3 / 6** |
+| the held card added twice | 0 | 0 | 1 | 2 |
+| the card on top added again | 0 | 0 | 0 | 0 |
+| the held card added twice after a hand lifted | 1 | 1 | 3 | 4 |
+| a false change caught as a second opinion | — | 1 | — | 2 |
+
+`main` adds rows twice on its own in these sessions, before any watch existed — nobody has
+traced those — and Fast adds none beyond them. **Exact adds 2 more in 160 piles than `main`,
+and that residue is open (§8 item 20).** It took three rules to get there, each added because the run
+before it showed the double add: comparing only with the forgotten anchor left 7 more than
+`main`; comparing with its ring or its printing, 4; a third frame at rest in Exact, 2. Twelve of
+the piles lay a reprint of the same card on top, which "decided" counts and a card check cannot
+judge. The synthetic hand is a flat blob inside the card's outline and the per-frame jitter a card
+held in a hand, not one lying on a table — a fence, not a claim about a camera.
+
 #### What it cannot see
 
 - **A second copy of the same printing.** Nothing about it looks different. Lifting the first
   away and laying the second down breaks the lock, and the stretch break counts it; the tray's
   quantity stepper is the other answer. (Options (b), a hand then settling as a new copy, and
   (c), the stepper alone, were weighed in #710; (a) and (c) is what shipped.)
-- **A hand that stops on the card.** The at-rest rule rejects a moving hand; two frames of a
-  hand held still over enough of the card are a card at rest. The table's hand rows are a still
-  hand inside the card's outline.
+- **A hand that stops on the card, as such.** The at-rest rule rejects a moving hand; a hand held
+  still over enough of the card for the run is a card at rest, and the card is forgotten. What
+  keeps that from costing a row is the second-opinion rule above, not the watch. The table's
+  hand rows are a still hand inside the card's outline.
 
 **A resolve still running when a card comes to rest over its card is dropped** (#706's
 `drop_pending_resolve`, reached through `forget_card`; the test is

@@ -60,8 +60,10 @@
 //! to see; lifting the first away and laying the second down breaks the lock, and the stretch
 //! break is what counts it. The tray's quantity stepper is the other answer.
 //!
-//! **A hand that stops on the card.** Two frames of a hand held still over the decided card are
-//! a card at rest, and a large enough hand is far from it. One frame of a moving hand is not.
+//! **A hand that stops on the card.** A hand held still over the decided card for the run is a
+//! card at rest, and a large enough hand is far from it; one frame of a moving hand is not. The
+//! session answers for that one — the card decided again when the hand lifts is a second
+//! opinion on it (`Session::card_changed`), not a second copy.
 
 use crate::hash::{hash, Descriptor, HashKind};
 use image::RgbImage;
