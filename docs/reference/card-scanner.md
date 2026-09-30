@@ -1047,6 +1047,14 @@ pixels tall before any of them.
   pixels from the 960 px one — because every band is warped to the same size and the crop alone
   cannot say. The crop itself is now sent at the size the recogniser read it, JPEG 90: the 360 px,
   q70 thumbnail it used to be looked unreadable on lines the recogniser could read.
+- **A collector band's lines are found on its left 60% (2026-09-30).** `text_lines` averaged each
+  row across the whole band, and `U 0026` fills the left third while `LTR • EN` runs on into the
+  artist credit to the far edge, so the number's line fell under the cut and was never read. On
+  eighteen crops from a live 1080p pass, the number's line was found on 1 of the 5 that showed it
+  and the reads were `TREN SI`, `TEN SIDA`, `ERNIS`; measured over the left 60%
+  (`COLLECTOR_MEASURED`, through `text_lines_at`) both lines were found on all five, and the
+  number read on all five — four right (`0014`, `0014`, `00014`, `0020`), one wrong (`00010` for
+  `0026`). The title band still measures across its whole width.
 - **The 2015–2022 collector format needed the parse, not the pixels.** Those frames print
   `226/259 U` over `GRN • EN`, so the set code is three tokens from the number and the
   touching-only rule above never reached it. Before the detail frames the line was never legible

@@ -345,6 +345,12 @@ pub struct TextLine {
 /// Empty when nothing stands out from the floor: a blank band has no text to read, and saying
 /// so costs nothing, where reading it cost a detection pass.
 pub fn text_lines(band: &RgbImage) -> Vec<TextLine> {
+    text_lines_at(band, LINE_CUT, 1.0)
+}
+
+/// [`text_lines`] with the line cut as a fraction of the way from the band's floor to its
+/// strongest row.
+pub fn text_lines_at(band: &RgbImage, line_cut: f32, measured: f32) -> Vec<TextLine> {
     let (w, h) = (band.width() as usize, band.height() as usize);
     if w < 16 || h < 8 {
         return Vec::new();
@@ -359,8 +365,9 @@ pub fn text_lines(band: &RgbImage) -> Vec<TextLine> {
     }
     let grad = |y: usize, x: usize| u32::from(px[y * w + x].abs_diff(px[y * w + x + step]));
 
+    let span = ((w as f32 * measured.clamp(0.1, 1.0)) as usize).clamp(1, w - step);
     let rows: Vec<f32> = (0..h)
-        .map(|y| (0..w - step).map(|x| grad(y, x)).sum::<u32>() as f32 / w as f32)
+        .map(|y| (0..span).map(|x| grad(y, x)).sum::<u32>() as f32 / span as f32)
         .collect();
     // A little smoothing, so one noisy row can neither split a line nor make one.
     let rows = smoothed(&rows, (h / 60).max(1));
@@ -374,7 +381,7 @@ pub fn text_lines(band: &RgbImage) -> Vec<TextLine> {
     }
     // One line's own gaps — the rows between an ascender and the x-height — are bridged; the
     // gap between two lines is wider than a quarter of either, and is not.
-    let lines = runs(&rows, floor + LINE_CUT * (peak - floor), |tall| {
+    let lines = runs(&rows, floor + line_cut * (peak - floor), |tall| {
         (tall / 4).max(1)
     });
 
@@ -827,6 +834,16 @@ mod engine {
     /// How many of a collector band's lines are read — both printed lines, and one more for a
     /// crop that caught the bottom of the text box.
     const COLLECTOR_LINES: usize = 3;
+    /// The share of a collector band's width, from the left, whose strokes decide where its
+    /// lines are ([`super::text_lines_at`]).
+    ///
+    /// **The whole width drowned the line that carries the number.** `U 0026` fills the left
+    /// third of the band and `LTR • EN` runs on into the artist credit to the far edge, so
+    /// averaged across the band the first line was under a third of the second's strength and
+    /// under the cut: measured on eighteen crops from a live 1080p pass (2026-09-30), the
+    /// number's line was found on 1 of the 5 that showed it, and those reads came back as
+    /// `TREN SI` and `ERNIS`. Over the left 60% both lines are found on all five at the same cut.
+    const COLLECTOR_MEASURED: f32 = 0.6;
 
     /// A loaded OCR engine. Construction reads ~22 MB of model, so build one and keep it.
     pub struct TitleReader {
@@ -920,11 +937,11 @@ mod engine {
                 return self.title.get_text(&input).ok();
             }
 
-            let (engine, keep) = match what {
-                Band::Title => (&self.title, TITLE_LINES),
-                Band::Collector => (&self.collector, COLLECTOR_LINES),
+            let (engine, keep, measured) = match what {
+                Band::Title => (&self.title, TITLE_LINES, 1.0),
+                Band::Collector => (&self.collector, COLLECTOR_LINES, COLLECTOR_MEASURED),
             };
-            let mut lines = text_lines(band);
+            let mut lines = text_lines_at(band, LINE_CUT, measured);
             if lines.is_empty() {
                 return Some(String::new());
             }
@@ -1049,6 +1066,13 @@ mod engine {
         /// Which way up is settled by which read yields *resolvable* pairings, so unlike the
         /// title there is no heuristic here — the caller checks each candidate against the
         /// corpus and an upside-down read simply produces none that resolve.
+        /// One collector band as the recogniser reads it — no crop, no orientation, no
+        /// fallbacks. For probing a band a session showed, which is the only way to put the
+        /// exact pixels of a failed live read back in front of the recogniser.
+        pub fn read_collector_band(&self, band: &RgbImage) -> String {
+            self.read_band(band, Band::Collector).unwrap_or_default()
+        }
+
         pub fn read_collector(&self, src: &BandSource<'_>) -> CollectorRead {
             self.read_collector_first(src, false)
         }
