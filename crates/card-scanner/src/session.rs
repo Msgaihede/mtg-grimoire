@@ -99,6 +99,13 @@ pub const EXACT_STEADY_FRAMES: u32 = 3;
 /// How many locked frames an Exact resolve reads over — the ring buffer's length.
 pub const EXACT_BURST: usize = 3;
 
+/// Consecutive frames, far from the decided card and agreeing with each other, that make a new
+/// card at rest in Fast (#710). See [`crate::watch`].
+pub const FAST_AT_REST: usize = 2;
+/// The same in Exact, one more: a false change there costs a whole re-resolve, and a burst
+/// cannot resolve before its third frame anyway, so the third costs a stacked card nothing.
+pub const EXACT_AT_REST: usize = 3;
+
 /// Where an Exact resolve runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ResolveOn {
@@ -691,9 +698,9 @@ pub struct Session {
     /// What the card a decision stands on looks like — how a card stacked on it is seen, when
     /// the lock never lets go (#710). See [`crate::watch`] and [`Session::card_changed`].
     watch: CardWatch,
-    /// The observations of the far frame the watch is holding, so the frame a new card first
-    /// lay at rest still votes for it once the next frame confirms it.
-    stacked: Vec<Observation>,
+    /// The observations of the far frames the watch is holding, one list per frame of the run,
+    /// so the frames a new card first lay at rest still vote for it once the run is long enough.
+    stacked: Vec<Vec<Observation>>,
     /// The card the last change forgot, until the next decision says whether it was that card
     /// back. See [`Session::card_changed`] and [`Session::replaces_previous`].
     laid_over: Option<LaidOver>,
@@ -859,30 +866,40 @@ impl Session {
     /// the lock kept, since the geometry is still right — plus the previous decision, so the
     /// card on top is added rather than replacing the one under it.
     ///
-    /// **The first frame the new card lay at rest is kept as its first**, rather than lost to
-    /// the at-rest rule: its burst view stays in Exact's burst and its observations are counted
-    /// again under the fresh tally, so a stacked card needs no more frames than a fresh one
-    /// once the lock holds. The frame that confirmed it is counted by the caller, as usual.
+    /// **The frames the new card lay at rest before the one that confirmed it are kept as its
+    /// first**, rather than lost to the at-rest rule: their burst views stay in Exact's burst
+    /// and their observations are counted again under the fresh tally, so a stacked card needs
+    /// no more frames than a fresh one once the lock holds. The frame that confirmed it is
+    /// counted by the caller, as usual.
     ///
     /// **The card it forgot is remembered until the next decision** (`laid_over`: what the
     /// watch held of it, and what its decision named). Two frames of a hand held still over the
     /// decided card, or that card's own worst frames, are a card at rest too, and once the hand
     /// lifts the same card is decided again — [`Session::replaces_previous`] tells it back.
+    ///
+    /// **Until the next decision, and a resolve that found nothing is not one.** A hand still
+    /// long enough for Exact makes a burst of nothing but hand, which resolves `not_found` and is
+    /// watched in turn; the card coming back is then a second change, and remembering the hand
+    /// over the card it covered added that card twice. So a memory nothing has answered yet is
+    /// kept over the newer one.
     fn card_changed(&mut self) {
         let card = self.watch.forgotten();
-        let first = self.burst.pop_back();
         let first_votes = std::mem::take(&mut self.stacked);
+        let first: Vec<StoredView> =
+            self.burst.drain(self.burst.len().saturating_sub(first_votes.len())..).collect();
         let (oracle, printing) = (self.previous_card.take(), self.previous_printing.take());
+        let unanswered = self.laid_over.take();
         self.forget_card();
-        self.laid_over = card.map(|card| LaidOver { card, oracle, printing });
-        // This frame, and the one before it when anything of it was kept — its view in Exact,
-        // its votes in either mode. A burst guard still waits for a full burst in Exact.
-        let kept = first.is_some() || !first_votes.is_empty();
-        self.steady = 1 + u32::from(kept);
+        self.laid_over =
+            unanswered.or_else(|| card.map(|card| LaidOver { card, oracle, printing }));
+        // This frame, and the ones before it that anything was kept of — their views in Exact,
+        // their votes in either mode. A burst guard still waits for a full burst in Exact.
+        let kept = first.len().max(first_votes.len()) as u32;
+        self.steady = 1 + kept;
         self.leaderless_locked = self.steady;
         self.burst.extend(first);
-        if !first_votes.is_empty() {
-            self.tracker.observe(&first_votes);
+        for votes in &first_votes {
+            self.tracker.observe(votes);
         }
     }
 
@@ -1415,8 +1432,9 @@ impl Session {
         // ---- is the decided card still the one in frame? (#710) ---------------------------
         // Asked before anything counts this frame, so the frame that confirms a stacked card
         // is already the new card's.
+        let rest = if self.mode == ScanMode::Exact { EXACT_AT_REST } else { FAST_AT_REST };
         let seen =
-            self.watch.see(watch::descriptor(rectified), || watch::descriptor(rectified_180));
+            self.watch.see(watch::descriptor(rectified), || watch::descriptor(rectified_180), rest);
         if seen == Seen::Changed {
             self.card_changed();
             settled = false;
@@ -1516,9 +1534,12 @@ impl Session {
             }
         }
 
-        // A far frame may be the first of a new card at rest; its votes wait with it.
+        // A far frame may be one of a new card at rest; its votes wait with the run.
         if seen == Seen::Moved {
-            self.stacked = observations.clone();
+            if self.watch.at_rest() == 1 {
+                self.stacked.clear();
+            }
+            self.stacked.push(observations.clone());
         }
         let t = self.tracker.observe(&observations);
         // The frame that decided is the anchor: what the decided card looks like. A resolve
@@ -2921,8 +2942,9 @@ mod tests {
         assert!(locked_frame(&mut s, &card).decision.is_none(), "the premise: still resolving");
         assert!(s.watch.is_watching(), "the premise: a running resolve is watched");
 
-        locked_frame(&mut s, &negative);
-        locked_frame(&mut s, &negative);
+        for _ in 0..EXACT_AT_REST {
+            locked_frame(&mut s, &negative);
+        }
         assert!(!s.resolving(), "a card laid over it kept waiting on the old burst");
         assert!(
             tx.send(resolved_as(3, 20)).is_err(),
@@ -3348,6 +3370,28 @@ mod tests {
     }
 
     #[test]
+    fn exact_wants_three_frames_at_rest_and_still_resolves_on_the_third() {
+        // **Measured on the stacking sequence against `main`:** with two frames, Exact still
+        // added a card twice in 4 more piles of 160 — a false change there costs a whole
+        // re-resolve. Exact cannot resolve before its burst holds three frames anyway, so a third
+        // frame at rest costs it nothing: the two before are kept as the burst's first two.
+        let (r, card, negative) = two_far_cards();
+        let hand = checker();
+        let mut s = inline(r);
+        s.mode = ScanMode::Exact;
+        until_decided(&mut s, &card);
+        for _ in 0..EXACT_AT_REST - 1 {
+            locked_frame(&mut s, &hand);
+        }
+        assert!(s.tracker.last_committed(), "Exact changed on fewer than {EXACT_AT_REST} frames");
+        locked_frame(&mut s, &card);
+        assert!(s.tracker.last_committed(), "the hand lifted and the card is still decided");
+        let (f, v) = frames_to_decide(&mut s, &negative, 40).expect("the stacked card resolved");
+        assert_eq!(f, EXACT_STEADY_FRAMES, "resolved on frame {f}");
+        assert_eq!(v.decision.and_then(|d| d.oracle_id), Some(format_uuid(&id(30))));
+    }
+
+    #[test]
     fn a_hand_that_stops_on_the_decided_card_and_lifts_is_not_a_second_copy() {
         // **Measured on the synthetic stacking sequence:** two frames of a hand held still over
         // the decided card are a card at rest to the watch, so the card is forgotten — and once
@@ -3359,8 +3403,10 @@ mod tests {
             let mut s = inline(r);
             s.mode = mode;
             let first = until_decided(&mut s, &card).decision.expect("decision");
-            locked_frame(&mut s, &hand);
-            locked_frame(&mut s, &hand);
+            let rest = if mode == ScanMode::Exact { EXACT_AT_REST } else { FAST_AT_REST };
+            for _ in 0..rest {
+                locked_frame(&mut s, &hand);
+            }
             assert!(!s.tracker.last_committed(), "the premise ({mode:?}): the hand was a change");
             let again = until_decided(&mut s, &card).decision.expect("decision");
             assert_eq!(again.oracle_id, first.oracle_id, "the premise ({mode:?}): the same card");
@@ -3381,8 +3427,9 @@ mod tests {
         s.mode = ScanMode::Exact;
         let first = until_decided(&mut s, &card).decision.expect("decision");
         assert_eq!(first.printing, format_uuid(&id(3)), "the premise: printing 3");
-        locked_frame(&mut s, &hand);
-        locked_frame(&mut s, &hand);
+        for _ in 0..EXACT_AT_REST {
+            locked_frame(&mut s, &hand);
+        }
         assert!(!s.tracker.last_committed(), "the premise: the hand was a change");
         // A resolve is running, and the frame the watch keeps for it is the hand.
         let tx = pending_on(&mut s);

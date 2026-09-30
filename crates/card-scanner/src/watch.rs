@@ -23,10 +23,11 @@
 //! What the card looks like. The frame that decided is the **anchor**, and every trusted frame
 //! while the decision stands is compared with it and with the last few frames that were the
 //! same card — the nearest of them decides. A frame at least [`CHANGED_BITS`] from all of them
-//! is not the decided card; a second such frame within [`AGREE_BITS`] of the first is a card
-//! **at rest**, and that is a new card, where one far frame alone is a hand passing over. Two
-//! frames, because a hand moving across the card differs from itself frame to frame and a card
-//! set down does not.
+//! is not the decided card; a run of such frames, each within [`AGREE_BITS`] of the one before,
+//! is a card **at rest**, and that is a new card, where one far frame alone is a hand passing
+//! over. How long a run is the caller's to say — two frames in Fast, three in Exact, where a
+//! change made in error costs a whole re-resolve — because a hand moving across the card
+//! differs from itself frame to frame and a card set down does not.
 //!
 //! **The nearest of several, because one card's frames scatter more than one would guess.** On
 //! the synthetic evaluation's frames (card-scanner.md §10, *A card laid on the last*), a held
@@ -124,11 +125,11 @@ pub enum Seen {
     Unwatched,
     /// Near enough the decided card to be it.
     Same,
-    /// Far from the decided card, and not yet a card at rest — the first such frame, or one
-    /// that disagrees with the frame before it.
+    /// Far from the decided card, and not yet a card at rest — a run of far frames shorter than
+    /// the caller asked for. [`CardWatch::at_rest`] says how long it is so far.
     Moved,
-    /// A second far frame that agrees with the one before it: a different card has come to
-    /// rest. The watch has stopped and holds what it watched for [`CardWatch::forgotten`]; the
+    /// A far frame that agrees with the one before it and makes the run as long as the caller
+    /// asked for: a different card has come to rest. The watch has stopped and holds what it watched for [`CardWatch::forgotten`]; the
     /// caller forgets the card and watches the next one when it is decided.
     Changed,
 }
@@ -158,14 +159,15 @@ fn nearest<'a>(
     recent.map(|r| bits_between(r, upright)).fold(anchor.distance_to(upright), u32::min)
 }
 
-/// The decided card's looks, and the far frame waiting for a second to agree with it.
+/// The decided card's looks, and the run of far frames waiting to be long enough.
 #[derive(Debug, Default)]
 pub struct CardWatch {
     anchor: Option<Look>,
     /// The last frames that were the decided card, upright only: a card that has not moved
     /// comes out the same way up frame to frame, and the anchor covers it when it does not.
     recent: VecDeque<Descriptor>,
-    pending: Option<Look>,
+    /// Consecutive far frames, each agreeing with the one before it.
+    pending: Vec<Look>,
     /// What the last change stopped watching, until [`CardWatch::forgotten`] takes it.
     forgot: Option<Remembered>,
 }
@@ -181,7 +183,7 @@ impl CardWatch {
     pub fn clear(&mut self) {
         self.anchor = None;
         self.recent.clear();
-        self.pending = None;
+        self.pending.clear();
         self.forgot = None;
     }
 
@@ -200,19 +202,30 @@ impl CardWatch {
         Some(nearest(&self.anchor?, self.recent.iter(), upright))
     }
 
+    /// How many far frames in a row, the last one included, the watch has seen so far.
+    pub fn at_rest(&self) -> usize {
+        self.pending.len()
+    }
+
     /// The card the last [`Seen::Changed`] stopped watching — taken, so it is handed over once.
     pub fn forgotten(&mut self) -> Option<Remembered> {
         self.forgot.take()
     }
 
     /// Judge one trusted frame by its upright descriptor. `turned` is asked for only when the
-    /// frame is far from the decided card, because only then is it kept. See [`Seen`].
-    pub fn see(&mut self, upright: Descriptor, turned: impl FnOnce() -> Descriptor) -> Seen {
+    /// frame is far from the decided card, because only then is it kept. `rest` is how many far
+    /// frames in a row make a card at rest — never fewer than two. See [`Seen`].
+    pub fn see(
+        &mut self,
+        upright: Descriptor,
+        turned: impl FnOnce() -> Descriptor,
+        rest: usize,
+    ) -> Seen {
         let (Some(anchor), Some(near)) = (self.anchor, self.distance_to(&upright)) else {
             return Seen::Unwatched;
         };
         if near < CHANGED_BITS {
-            self.pending = None;
+            self.pending.clear();
             if anchor.distance_to(&upright) < CHANGED_BITS {
                 if self.recent.len() == RING - 1 {
                     self.recent.pop_front();
@@ -222,15 +235,17 @@ impl CardWatch {
             return Seen::Same;
         }
         let frame = Look { upright, turned: turned() };
-        match self.pending.replace(frame) {
-            Some(before) if before.distance(&frame) <= AGREE_BITS => {
-                let recent = self.recent.drain(..).collect();
-                self.clear();
-                self.forgot = Some(Remembered { anchor, recent });
-                Seen::Changed
-            }
-            _ => Seen::Moved,
+        if !self.pending.last().is_some_and(|before| before.distance(&frame) <= AGREE_BITS) {
+            self.pending.clear();
         }
+        self.pending.push(frame);
+        if self.pending.len() < rest.max(2) {
+            return Seen::Moved;
+        }
+        let recent = self.recent.drain(..).collect();
+        self.clear();
+        self.forgot = Some(Remembered { anchor, recent });
+        Seen::Changed
     }
 }
 
@@ -254,9 +269,9 @@ mod tests {
         Look { upright: bits(n), turned: Descriptor { words: turned.words.map(|w| !w), ..turned } }
     }
 
-    /// Show the watch one frame.
+    /// Show the watch one frame, asking for two at rest.
     fn see(w: &mut CardWatch, frame: Look) -> Seen {
-        w.see(frame.upright, || frame.turned)
+        w.see(frame.upright, || frame.turned, 2)
     }
 
     fn watching(anchor: Look) -> CardWatch {
@@ -331,7 +346,7 @@ mod tests {
         // A frame near the decided card is compared by its upright half alone; the turned half
         // is a second descriptor per frame, paid only by a frame that might be a new card.
         let mut w = watching(up(0));
-        let seen = w.see(bits(3), || panic!("asked to turn a frame that is the decided card"));
+        let seen = w.see(bits(3), || panic!("asked to turn a frame that is the decided card"), 2);
         assert_eq!(seen, Seen::Same);
     }
 
@@ -366,6 +381,24 @@ mod tests {
         }
         // `up(20)` has been pushed out, so a frame near only it is judged by the rest.
         assert_eq!(w.distance_to(&bits(20 + CHANGED_BITS - 1)), Some(20 + CHANGED_BITS - 1 - 3));
+    }
+
+    #[test]
+    fn a_run_is_as_long_as_the_caller_asks_and_a_disagreeing_frame_restarts_it() {
+        let mut w = watching(up(0));
+        let far = up(CHANGED_BITS + 10);
+        assert_eq!(w.see(far.upright, || far.turned, 3), Seen::Moved);
+        assert_eq!(w.see(far.upright, || far.turned, 3), Seen::Moved);
+        assert_eq!(w.at_rest(), 2);
+        // A frame that disagrees starts a run of its own rather than ending the watch.
+        let other = up(CHANGED_BITS + AGREE_BITS + 11);
+        assert_eq!(w.see(other.upright, || other.turned, 3), Seen::Moved);
+        assert_eq!(w.at_rest(), 1, "a disagreeing frame joined the run");
+        assert_eq!(w.see(other.upright, || other.turned, 3), Seen::Moved);
+        assert_eq!(w.see(other.upright, || other.turned, 3), Seen::Changed);
+        // And never fewer than two, whatever is asked.
+        let mut w = watching(up(0));
+        assert_eq!(w.see(far.upright, || far.turned, 1), Seen::Moved);
     }
 
     #[test]
