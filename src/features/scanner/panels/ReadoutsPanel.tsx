@@ -17,6 +17,17 @@ import { FIGURES, Panel, Row } from "./Panel";
  */
 const NOTHING_READ = "(nothing read)";
 
+/**
+ * Where a band came from, in pixels: the image it was warped out of, and how much of that image
+ * it covered. The second number is the line's real resolution — the crop above it is always
+ * warped to one size, so a read from 60 source pixels and one from 250 look alike but for blur.
+ */
+function originText(origin: ScannerCollector["origin"]): string {
+  if (origin === null) return "—";
+  const from = origin.frame ? "frame" : "rectified card";
+  return `${origin.width}×${origin.height} ${from} · band ${origin.span_width}×${origin.span_height} px`;
+}
+
 /** A band the recogniser read from, or the space one would have taken. */
 function Band({ src, alt }: { src: string | null; alt: string }) {
   return src === null ? (
@@ -102,6 +113,7 @@ export function ReadoutsPanel({
       />
       <dl className={FIGURES}>
         <Row label="raw" value={collector === null ? "—" : collector.raw || NOTHING_READ} />
+        <Row label="source" value={collector === null ? "—" : originText(collector.origin)} />
         <Row
           label="matched"
           value={collector === null ? "—" : (collector.matched ?? "no printing")}

@@ -205,6 +205,21 @@ impl CardPixels {
     ///
     /// `None` only for a quad that admits no homography.
     pub fn band(&self, at: (f32, f32, f32, f32), scale: u32, rotated: bool) -> Option<RgbImage> {
+        let q = self.band_quad(at, rotated)?;
+        let (bw, bh) = band_extent(at, crate::RECTIFIED_W, crate::RECTIFIED_H);
+        crate::detect::rectify_to(&self.image, &q, bw * scale, bh * scale)
+    }
+
+    /// How many of the frame's own pixels the band `at` covers, width by height — the
+    /// resolution a read of it actually had, whatever size the band is then warped to.
+    pub fn band_span(&self, at: (f32, f32, f32, f32), rotated: bool) -> Option<(u32, u32)> {
+        let [a, b, _, d] = self.band_quad(at, rotated)?.corners;
+        let len = |p: (f32, f32), q: (f32, f32)| (p.0 - q.0).hypot(p.1 - q.1).round() as u32;
+        Some((len(a, b), len(a, d)))
+    }
+
+    /// The band `at` as a quad in the frame's coordinates.
+    fn band_quad(&self, at: (f32, f32, f32, f32), rotated: bool) -> Option<crate::detect::Quad> {
         use imageproc::geometric_transformations::Projection;
         let (quad, m) = if rotated {
             (self.warped.flipped(), self.margin.rotated_180())
@@ -222,12 +237,28 @@ impl CardPixels {
         let (cw, ch) = (w - left - m.right as f32, h - top - m.bottom as f32);
         let at_card = |u: f32, v: f32| to_frame * (left + u * cw, top + v * ch);
         let (x0, y0, x1, y1) = at;
-        let q = crate::detect::Quad {
+        Some(crate::detect::Quad {
             corners: [at_card(x0, y0), at_card(x1, y0), at_card(x1, y1), at_card(x0, y1)],
-        };
-        let (bw, bh) = band_extent(at, crate::RECTIFIED_W, crate::RECTIFIED_H);
-        crate::detect::rectify_to(&self.image, &q, bw * scale, bh * scale)
+        })
     }
+}
+
+/// What a band was read from: the image, and how much of it the band covered.
+///
+/// **The answer to "was that read at full resolution?"**, which the crop alone cannot give —
+/// every band is warped to the same size, so a line spanning 60 source pixels and one spanning
+/// 250 come out looking alike apart from their blur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct BandOrigin {
+    /// `true` for a frame from the camera — the detail frame when one came, else the detection
+    /// frame — and `false` for the 488×680 rectification.
+    pub frame: bool,
+    /// The size of the image the band was warped or cropped from.
+    pub width: u32,
+    pub height: u32,
+    /// The band's own extent in that image's pixels.
+    pub span_width: u32,
+    pub span_height: u32,
 }
 
 /// Where a reader gets its bands.
@@ -249,6 +280,33 @@ impl BandSource<'_> {
             // A degenerate quad reads as an empty band rather than failing the frame: the
             // reader then finds nothing, which is what a card it cannot see should produce.
             BandSource::Frame(p) => p.band(at, scale, rotated).unwrap_or_else(|| RgbImage::new(1, 1)),
+        }
+    }
+
+    /// Where the band `at` comes from, for [`BandOrigin`]'s reason. `None` for a frame quad
+    /// that admits no homography, which [`BandSource::band`] reads as an empty band.
+    pub fn origin(&self, at: (f32, f32, f32, f32), rotated: bool) -> Option<BandOrigin> {
+        match self {
+            BandSource::Rectified { upright, .. } => {
+                let (span_width, span_height) = band_extent(at, upright.width(), upright.height());
+                Some(BandOrigin {
+                    frame: false,
+                    width: upright.width(),
+                    height: upright.height(),
+                    span_width,
+                    span_height,
+                })
+            }
+            BandSource::Frame(p) => {
+                let (span_width, span_height) = p.band_span(at, rotated)?;
+                Some(BandOrigin {
+                    frame: true,
+                    width: p.image.width(),
+                    height: p.image.height(),
+                    span_width,
+                    span_height,
+                })
+            }
         }
     }
 }
@@ -486,6 +544,8 @@ pub struct CollectorRead {
     /// often be shown a different image than the one the text came from — which is worse than
     /// showing nothing, because it looks like an answer.
     pub band: Option<RgbImage>,
+    /// Where `band` came from and how many real pixels it covered. See [`BandOrigin`].
+    pub origin: Option<BandOrigin>,
 }
 
 /// Every plausible (set code, collector number) pairing in a collector-line read.
@@ -901,6 +961,7 @@ mod engine {
             // attempt, while a card that cannot be read pays for all six. Deciding the
             // orientation once takes the worst case from 785 ms to roughly half that.
             let mut shown = src.band(COLLECTOR_BAND, 4, flipped_first);
+            let mut shown_at = COLLECTOR_BAND;
             let up = self.read_band(&shown, Band::Collector).unwrap_or_default();
             let mut candidates = collector_candidates(&up);
             let mut raw = up;
@@ -933,6 +994,7 @@ mod engine {
                         candidates = found;
                         raw = text;
                         shown = crop;
+                        shown_at = at;
                         break;
                     }
                 }
@@ -942,6 +1004,7 @@ mod engine {
                 raw: raw.split_whitespace().collect::<Vec<_>>().join(" "),
                 candidates,
                 band: Some(shown),
+                origin: src.origin(shown_at, rotated),
                 rotated,
                 elapsed_ms: started.elapsed().as_secs_f32() * 1000.0,
             }

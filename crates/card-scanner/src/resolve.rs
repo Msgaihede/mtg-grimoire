@@ -29,6 +29,29 @@ pub const EXACT_MAX_CHOICES: usize = 12;
 
 type Id = [u8; ID_LEN];
 
+/// The shortest normalized read a corrected title may bind at. See [`title_binds`].
+pub const BINDING_READ_LEN: usize = 10;
+/// Characters of read per correction a binding corrected title may carry. See [`title_binds`].
+pub const BINDING_CHARS_PER_EDIT: usize = 8;
+
+/// Does a title read that named a card with `edits` corrections settle **which card** — so no
+/// decision, in either mode, may name a card with another title?
+///
+/// **An exact read always does.** A name read off the card letter for letter is as close to
+/// proof as this pipeline gets, and a hash that prefers another card is the hash being wrong.
+///
+/// **A corrected read only when it is long and lightly corrected.** The name lookup's own
+/// budget is one edit in four, and it is what let "datn" name Damn for a Plains and "torm"
+/// Worm on the synthetic evaluation — short, garbled reads that name a real card nothing else
+/// suggested. So binding asks for twice the lookup's strictness and a read of some length:
+/// "strider ranger of the north" (27 characters) binds with up to three slips, a 4-character
+/// read binds only exact. **These two numbers are a choice made 2026-09-30, not a measurement**;
+/// the evaluation is what should move them.
+pub fn title_binds(read: &str, edits: u32) -> bool {
+    let len = read.chars().count();
+    edits == 0 || (len >= BINDING_READ_LEN && edits as usize * BINDING_CHARS_PER_EDIT <= len)
+}
+
 /// What a resolve came to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -185,7 +208,9 @@ pub fn resolve(
     // real card the hash never suggested, and replacing the survivors with it made Exact wrong
     // about the card five times in 160 where Fast was never wrong. So a corrected read keeps
     // the survivors that are that card, and is ignored when none are — unless the whole-card
-    // tier found nothing at all, where the read is the only evidence there is.
+    // tier found nothing at all, where the read is the only evidence there is, **or the read
+    // binds** ([`title_binds`]): a long, lightly corrected name replaces the survivors exactly
+    // as an exact one does, because no decision may name a card with a different title.
     // The card the title settled on, which the collector tier then has to agree with.
     let mut title_card: Option<Id> = None;
     let detail = match title_read {
@@ -208,10 +233,11 @@ pub fn resolve(
                     .copied()
                     .filter(|p| r.oracle_for(p) == card)
                     .collect();
-                if edits > 0 && !survivors.is_empty() && narrowed.is_empty() {
+                let binds = title_binds(&text, edits);
+                if !binds && !survivors.is_empty() && narrowed.is_empty() {
                     format!("{read}, not among survivors — ignored")
                 } else {
-                    survivors = if edits == 0 || survivors.is_empty() {
+                    survivors = if edits == 0 || survivors.is_empty() || narrowed.is_empty() {
                         permitted
                     } else {
                         narrowed
@@ -725,6 +751,35 @@ mod tests {
         );
         assert_eq!(v.tiers[2].detail, "read \"card 2x\" → Card 2 (edits 1)");
         assert_eq!(ids(&v), [format_uuid(&id(3))]);
+    }
+
+    #[test]
+    fn a_binding_corrected_read_replaces_survivors_of_another_title() {
+        // "took reapor" is Took Reaper at one edit in eleven characters — long enough to bind.
+        // The hash found only the Plains, and a decision may not name a card with another title
+        // than the one read, so the read replaces the survivors as an exact one would.
+        let r = eight_cards();
+        let (up, down) = (img(5), img(99));
+        let v = resolve(
+            &r,
+            &Mask::all(),
+            &burst(&up, &down),
+            &reads(Some("took reapor"), &[]),
+            TIGHT,
+        );
+        assert_eq!(v.tiers[1].survivors, 1, "the premise: the hash found the Plains");
+        assert_eq!(v.tiers[2].detail, "read \"took reapor\" → Took Reaper (edits 1)");
+        assert_eq!(ids(&v), [format_uuid(&id(3))]);
+    }
+
+    #[test]
+    fn title_binds_on_an_exact_read_and_a_long_lightly_corrected_one() {
+        assert!(title_binds("shock", 0), "an exact read always binds");
+        assert!(!title_binds("shocc", 1), "a short corrected read never does");
+        assert!(title_binds("took reapor", 1));
+        assert!(!title_binds("took reapxr", 2), "two slips in eleven is too many");
+        assert!(title_binds("strider ranger of the nurth", 3));
+        assert!(!title_binds("strider ranger of the nurth", 4));
     }
 
     #[test]

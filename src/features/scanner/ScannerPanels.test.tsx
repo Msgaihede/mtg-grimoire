@@ -213,6 +213,8 @@ describe("the folded panels", () => {
     expect(within(readouts).getByText("5torm of 5aruman!")).toBeInTheDocument();
     expect(within(readouts).getByText("no name")).toBeInTheDocument();
     expect(within(readouts).getByText("no printing")).toBeInTheDocument();
+    // Which pixels the collector line was read from — the answer to "was it full resolution?".
+    expect(within(readouts).getByText("960×540 frame · band 62×23 px")).toBeInTheDocument();
     expect(within(readouts).getByText("LTR 72 → —")).toBeInTheDocument();
     expect(within(readouts).getByText("+3 more pairings not shown")).toBeInTheDocument();
   });

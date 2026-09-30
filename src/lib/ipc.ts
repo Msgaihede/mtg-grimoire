@@ -7616,6 +7616,20 @@ export interface ScannerCollectorTry {
   matched: string | null;
 }
 
+/**
+ * What a band was read from — `BandOrigin` in `ocr.rs`. The answer to "was that read at full
+ * resolution?", which the crop cannot give: every band is warped to the same size.
+ */
+export interface ScannerBandOrigin {
+  /** A camera frame (the detail frame when one came), rather than the 488×680 rectification. */
+  frame: boolean;
+  width: number;
+  height: number;
+  /** The band's own extent in that image's pixels. */
+  span_width: number;
+  span_height: number;
+}
+
 /** The collector-line tier — `CollectorView` in `session.rs`. */
 export interface ScannerCollector {
   raw: string;
@@ -7624,7 +7638,9 @@ export interface ScannerCollector {
   pairings: number;
   tried: ScannerCollectorTry[];
   more: number;
+  /** The crop the recogniser read, at the size it read it. */
   band: string | null;
+  origin: ScannerBandOrigin | null;
   matched: string | null;
 }
 

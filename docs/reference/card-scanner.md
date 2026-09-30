@@ -953,7 +953,8 @@ pixels tall before any of them.
   `ocr-bench`, a frame with no pixels kept) or the frame, and the orientation #717's readers try
   first is its `rotated` flag.
 - **A detail frame, only on a frame that will read.** The verdict's `wants_detail` says the next
-  frame's readers are expected to run — Fast one frame ahead of each rescue read, Exact until the
+  frame's readers are expected to run — Fast one frame ahead of each rescue read and on the frame a
+  commit waits for its confirming read (§10, *Fast*), Exact until the
   card's resolve has run, because the resolve reads whichever burst views are most card-like — and
   the page then sends that frame at the camera's resolution behind the usual JPEG (§9's IPC seam).
   Detection, the lock and the hash never see it, so the lock's coordinates never change scale; the
@@ -961,6 +962,12 @@ pixels tall before any of them.
   the verdict names the frame a read used. **Warping from the 960 px frame alone changed nothing
   measurable** (the first table below): the resolution is what helps, and only the detail frame
   carries it.
+- **The Readouts panel says which pixels the collector line came from (2026-09-30).**
+  `CollectorView::origin` (`ocr::BandOrigin`) is the image the band was warped out of and the
+  band's own extent in it — `1920×1080 frame · band 190×70 px` from a detail frame, a few dozen
+  pixels from the 960 px one — because every band is warped to the same size and the crop alone
+  cannot say. The crop itself is now sent at the size the recogniser read it, JPEG 90: the 360 px,
+  q70 thumbnail it used to be looked unreadable on lines the recogniser could read.
 - **The 2015–2022 collector format needed the parse, not the pixels.** Those frames print
   `226/259 U` over `GRN • EN`, so the set code is three tokens from the number and the
   touching-only rule above never reached it. Before the detail frames the line was never legible
@@ -2216,11 +2223,33 @@ reached the session. The debug page gained a sets field and two dates posting to
 only until `FAST_RESCUE_AFTER` (8) consecutive trusted frames with a detection and no commit; after
 that `OCR_EVERY` applies as before. A common card decides on the hash in about eight frames, so a
 reader running from the first locked frame spent a third of a second per read on cards that never
-needed one. **Only the title reader runs in Fast** — pinning the printing is what Exact is for — so
-the collector panel fills only on an Exact resolve frame. The counter resets on a commit and when
-the stretch breaks (below). The decision's printing is the tracker's best member; a card decided on
-title reads alone has none, because a name abstains on the printing (§4), so the decision takes the
-card's first permitted printing rather than passing an oracle id off as one.
+needed one. The counter resets on a commit and when the stretch breaks (below).
+
+**Every Fast decision reads both bands before it is announced (2026-09-30).** Until then only the
+title reader ran in Fast, and only as the rescue — so a card the hash decided in eight frames had
+neither band read, the collector panel stayed at *(nothing read)* on every Fast card, and the
+printing was whichever reprint the hash liked best. Now (`Session::settle_fast_decision`):
+
+- **A commit with readers loaded is held for one frame** (`decision_read_due`). That frame's verdict
+  asks for the detail frame (`wants_detail`, a certainty here rather than a prediction), and the next
+  locked frame reads the title and the collector line **at the same time** (`fast_reads`), from the
+  detail frame at the camera's resolution. Only then does `decision_seq` move — **one frame after
+  the commit**, so a clear card that commits in two frames (below) is announced on its third. A
+  rescue read on the committing frame has already read both, and settles at once. Every rescue read
+  now reads the collector line beside the title. Without models loaded nothing is held back.
+- **A binding title read names the card** (`resolve::title_binds`): an exact read, or a corrected
+  one of at least 10 characters with at most one correction per 8. Whatever the hash leads with, a
+  decision never names a card with another title than the one read off it — the tracker's standings
+  may still show the hash's card, but the decision, and so the tray row, is the title's.
+- **A collector read of that card names the printing**; one naming any other card is a misread
+  digit and is ignored, as in Exact's collector tier. Otherwise the leader's best member — a card
+  decided on title reads alone has none, because a name abstains on the printing (§4), so it takes
+  the card's first permitted printing rather than passing an oracle id off as one.
+
+**The two binding numbers are a choice, not a measurement.** They are twice as strict as the name
+lookup's own budget (one in four), which is what let "datn" name Damn on the evaluation; the
+evaluation is what should move them. Exact's title tier uses the same rule: a binding corrected
+read not among the survivors now replaces them as an exact one does, where it was ignored before.
 
 **A clear card decides in two frames rather than eight** (§5, *The early decision*), and a clean
 quad locks in two rather than three (§3, *Lock*) — both Fast's alone, both #705. `FAST_RESCUE_AFTER`
