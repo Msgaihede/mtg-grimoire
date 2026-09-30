@@ -10,7 +10,6 @@ import {
   modelsSentence,
   shareLine,
   standingValue,
-  verdictWord,
 } from "./verdictText";
 
 /**
@@ -54,7 +53,6 @@ describe("the vote rule's numbers", () => {
     tracked.standings = [{ ...tracked.standings[0], evidence: 2 }];
     expect(barFill(tracked)).toBe(1);
     expect(shareLine(tracked)).toBe("2.0/8 · clear · 8f");
-    expect(verdictWord(tracked)).toBe("decided");
   });
 
   it("writes the tally, the frames and the lead the way the debug page does", () => {
@@ -63,9 +61,6 @@ describe("the vote rule's numbers", () => {
     expect(leadLine(VERDICTS.voting.tracked)).toBe("×4.0");
     expect(leadLine(VERDICTS.decided.tracked)).toBe("unopposed");
     expect(leadLine(VERDICTS.confidence.tracked)).toBe("—");
-    expect(verdictWord(VERDICTS.decided.tracked)).toBe("decided");
-    expect(verdictWord(VERDICTS.voting.tracked)).toBe("voting");
-    expect(verdictWord(VERDICTS.confidence.tracked)).toBe("confirmed");
     expect(standingValue(VERDICTS.voting.tracked!.standings[0], "votes")).toBe("5.0");
     expect(standingValue(VERDICTS.confidence.tracked!.standings[0], "confidence")).toBe("90%");
   });

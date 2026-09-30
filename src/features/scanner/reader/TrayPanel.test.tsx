@@ -5,6 +5,7 @@ import type { ReactElement } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { ScannerTrayRow } from "@/lib/ipc";
+import { pickOption } from "@/test-dropdown";
 
 /**
  * The folder picker's one read. Two of the reader's drawers and a deck group — the group is there
@@ -48,6 +49,10 @@ const older: ScannerTrayRow = {
   addedAt: 1,
 };
 
+/**
+ * The panel's props, **in the list layout** unless a test says otherwise — the cases written before
+ * the grid existed are about the list, and keep proving it. {@link grid} is the other door.
+ */
 function props(over: Partial<TrayPanelProps> = {}): TrayPanelProps {
   return {
     rows: [newer, older],
@@ -59,8 +64,15 @@ function props(over: Partial<TrayPanelProps> = {}): TrayPanelProps {
     commitError: null,
     onMorePrintings: vi.fn(),
     flashKey: null,
+    layout: "list",
+    onLayout: vi.fn(),
     ...over,
   };
+}
+
+/** The same props in the grid layout — the page's default. */
+function grid(over: Partial<TrayPanelProps> = {}): TrayPanelProps {
+  return props({ layout: "grid", ...over });
 }
 
 /** What the panel's first edit makes of `rows` — `onRows` is handed an updater, never an array. */
@@ -243,6 +255,178 @@ describe("TrayPanel", () => {
 
   it("flashes only the row it is told to", () => {
     const { container } = wrap(<TrayPanel {...props({ flashKey: "older" })} />);
+    const flashes = container.querySelectorAll("[data-tray-flash]");
+    expect(flashes).toHaveLength(1);
+    expect(flashes[0].closest("li")).toHaveTextContent("Honored Hierarch");
+  });
+});
+
+describe("TrayPanel's grid", () => {
+  /** The tray's tiles, found inside the region so nothing else on the page can be counted. */
+  function tiles(): HTMLElement[] {
+    return within(screen.getByRole("region", { name: "Scanned cards" })).getAllByRole("listitem");
+  }
+
+  it("draws a tile per card, newest first, each card a press named for the printings it opens", () => {
+    wrap(<TrayPanel {...grid()} />);
+    const items = tiles();
+    expect(items).toHaveLength(2);
+    expect(
+      within(items[0]).getByRole("button", { name: "More printings of Storm of Saruman — LTR 72" }),
+    ).toBeInTheDocument();
+    expect(items[0]).toHaveTextContent("LTR 72");
+    expect(
+      within(items[1]).getByRole("button", { name: "More printings of Honored Hierarch — ORI 17" }),
+    ).toBeInTheDocument();
+    expect(items[1]).toHaveTextContent("ORI 17");
+  });
+
+  it("draws each tile as a whole card, at a size larger than the row's thumbnail", () => {
+    const { container } = wrap(<TrayPanel {...grid({ rows: [newer] })} />);
+    const images = Array.from(container.querySelectorAll("img"));
+    expect(images).toHaveLength(1);
+    expect(images[0].getAttribute("src")).toContain("/grid/");
+    expect(images[0].getAttribute("src")).not.toContain("/art/");
+  });
+
+  it("opens more printings from the card, with the tile's own row", async () => {
+    const user = userEvent.setup();
+    const onMorePrintings = vi.fn();
+    wrap(<TrayPanel {...grid({ onMorePrintings })} />);
+    await user.click(screen.getByRole("button", { name: "More printings of Honored Hierarch — ORI 17" }));
+    expect(onMorePrintings).toHaveBeenCalledTimes(1);
+    expect(onMorePrintings).toHaveBeenCalledWith(expect.objectContaining({ key: "older" }));
+  });
+
+  it("draws no card to press for a row with no oracle id, and keeps the rest of its tile", () => {
+    const orphan: ScannerTrayRow = { ...older, oracleId: null };
+    wrap(<TrayPanel {...grid({ rows: [newer, orphan] })} />);
+    const items = tiles();
+    expect(within(items[1]).queryByRole("button", { name: /^More printings of/ })).not.toBeInTheDocument();
+    expect(
+      within(items[1]).getByRole("button", { name: "Remove Honored Hierarch — ORI 17" }),
+    ).toBeInTheDocument();
+    expect(
+      within(items[1]).getByRole("button", { name: "Increase Quantity of Honored Hierarch — ORI 17" }),
+    ).toBeInTheDocument();
+  });
+
+  it("marks a foil copy and a count of more than one on the card, and neither on a single plain one", () => {
+    wrap(<TrayPanel {...grid({ rows: [{ ...newer, finish: "foil", quantity: 3 }, older] })} />);
+    const items = tiles();
+    // `CardArt`'s own chip, which is what says the finish on every wall.
+    expect(items[0].querySelector("[data-card-marks]")).not.toBeNull();
+    expect(items[1].querySelector("[data-card-marks]")).toBeNull();
+    // The count tag draws the bare number; a single copy draws none.
+    expect(within(items[0]).getByText("3")).toBeInTheDocument();
+    expect(within(items[1]).queryByText("1")).not.toBeInTheDocument();
+  });
+
+  it("says which layout is drawn, and asks for the other one", async () => {
+    const user = userEvent.setup();
+    const onLayout = vi.fn();
+    wrap(<TrayPanel {...grid({ onLayout })} />);
+    const toggle = screen.getByRole("group", { name: "Tray layout" });
+    const gridButton = within(toggle).getByRole("button", { name: "Grid" });
+    const listButton = within(toggle).getByRole("button", { name: "List" });
+    expect(gridButton).toHaveAttribute("aria-pressed", "true");
+    expect(listButton).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(listButton);
+    expect(onLayout).toHaveBeenCalledWith("list");
+    // The layout already drawn is a press that asks for nothing, so it writes nothing.
+    await user.click(gridButton);
+    expect(onLayout).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers the same toggle in the list, pressed the other way", async () => {
+    const user = userEvent.setup();
+    const onLayout = vi.fn();
+    wrap(<TrayPanel {...props({ onLayout })} />);
+    const toggle = screen.getByRole("group", { name: "Tray layout" });
+    expect(within(toggle).getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
+    await user.click(within(toggle).getByRole("button", { name: "Grid" }));
+    expect(onLayout).toHaveBeenCalledWith("grid");
+  });
+
+  it("offers the toggle on an empty tray, under the sentence saying where cards will appear", () => {
+    wrap(<TrayPanel {...grid({ rows: [] })} />);
+    expect(screen.getByText("Cards you scan appear here.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Grid" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Add 0 to collection" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  /**
+   * A tile's controls are the row's, down to the reducer call: each edit is a function of the rows
+   * as they are when the page applies it, so a card the pump added after this render survives.
+   */
+  it("steps, refinishes and removes a tile through the reducer, against the latest rows", async () => {
+    const user = userEvent.setup();
+    const onRows = vi.fn();
+    wrap(<TrayPanel {...grid({ onRows })} />);
+    const justScanned: ScannerTrayRow = { ...base, key: "just-scanned", name: "Lightning Bolt", addedAt: 3 };
+
+    await user.click(screen.getByRole("button", { name: "Increase Quantity of Storm of Saruman — LTR 72" }));
+    expect(edit(onRows, [justScanned, newer, older]).map((r) => [r.key, r.quantity])).toEqual([
+      ["just-scanned", 1],
+      ["newer", 2],
+      ["older", 1],
+    ]);
+
+    onRows.mockClear();
+    await pickOption(user, "Finish of Storm of Saruman — LTR 72", "Foil");
+    expect(edit(onRows, [justScanned, newer, older]).map((r) => [r.key, r.finish])).toEqual([
+      ["just-scanned", "nonfoil"],
+      ["newer", "foil"],
+      ["older", "nonfoil"],
+    ]);
+
+    onRows.mockClear();
+    await user.click(screen.getByRole("button", { name: "Remove Honored Hierarch — ORI 17" }));
+    expect(edit(onRows, [justScanned, newer, older]).map((r) => r.key)).toEqual(["just-scanned", "newer"]);
+  });
+
+  it("asks for a pick on a waiting tile — its candidates the whole question — and a press settles it", async () => {
+    const user = userEvent.setup();
+    const onRows = vi.fn();
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    wrap(<TrayPanel {...grid({ rows: [waiting, newer], onRows })} />);
+
+    const choices = screen.getByRole("group", { name: `Printings of ${waiting.name}` });
+    expect(within(choices).getAllByRole("button")).toHaveLength(waiting.choices.length);
+    const tile = choices.closest("li")!;
+    expect(within(tile).getByText("Pick a printing")).toBeInTheDocument();
+    // Nothing on a waiting tile acts on a card it might not be.
+    expect(within(tile).queryByRole("button", { name: /^Increase Quantity of/ })).not.toBeInTheDocument();
+    expect(within(tile).queryByRole("button", { name: /^Finish of/ })).not.toBeInTheDocument();
+    expect(within(tile).queryByRole("button", { name: /^More printings of/ })).not.toBeInTheDocument();
+
+    const choice = waiting.choices[1];
+    await user.click(
+      within(choices).getByRole("button", {
+        name: `${choice.name} — ${choice.setCode.toUpperCase()} ${choice.collectorNumber}`,
+      }),
+    );
+    const next = edit(onRows, [waiting, newer]);
+    expect(next[0].cardId).toBe(choice.cardId);
+    expect(next[0].choices).toEqual([]);
+    expect(next[1]).toBe(newer);
+  });
+
+  it("removes a waiting tile by the card's name", async () => {
+    const user = userEvent.setup();
+    const onRows = vi.fn();
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    wrap(<TrayPanel {...grid({ rows: [waiting, newer], onRows })} />);
+    await user.click(screen.getByRole("button", { name: `Remove ${waiting.name}` }));
+    expect(edit(onRows, [waiting, newer]).map((r) => r.key)).toEqual(["newer"]);
+  });
+
+  it("flashes only the tile it is told to", () => {
+    const { container } = wrap(<TrayPanel {...grid({ flashKey: "older" })} />);
     const flashes = container.querySelectorAll("[data-tray-flash]");
     expect(flashes).toHaveLength(1);
     expect(flashes[0].closest("li")).toHaveTextContent("Honored Hierarch");

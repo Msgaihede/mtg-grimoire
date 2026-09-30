@@ -10,6 +10,7 @@ import {
   setPrinting,
   setQuantity,
   totalCopies,
+  trayLayoutOf,
   unresolvedCount,
 } from "./tray";
 import { VERDICTS } from "../fixtures";
@@ -203,5 +204,13 @@ describe("tray", () => {
     const rows = addDecision(addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows, resolved, { finish: "nonfoil" }, 2, "b").rows;
     expect(totalCopies(rows)).toBe(2);
     expect(removeRow(rows, "a")).toHaveLength(0);
+  });
+
+  it("reads the stored layout word, taking anything but list as the grid", () => {
+    expect(trayLayoutOf("list")).toBe("list");
+    expect(trayLayoutOf("grid")).toBe("grid");
+    // A word another build wrote, and the empty string a hand-edited row could hold, still draw a tray.
+    expect(trayLayoutOf("stacks")).toBe("grid");
+    expect(trayLayoutOf("")).toBe("grid");
   });
 });
