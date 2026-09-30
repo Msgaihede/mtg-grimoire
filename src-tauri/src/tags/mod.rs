@@ -2048,6 +2048,11 @@ mod tests {
         assert_eq!(stats.taggings, 2 * cards.len() as u64);
     }
 
+    /// The most transactions [`crate::db::lock_background`] lets a bounded ask wait behind with
+    /// two ingests running: the one holding the connection when the ask arrives, and the other
+    /// ingest's, already parked in `lock()` before the ask registered.
+    const MOST_BATCHES_BEHIND: usize = 2;
+
     /// **Two ingests at once must not starve a user write**, which is the case the per-batch
     /// release alone could not answer (issue #551). One ingest lets go between batches and a
     /// polling writer eventually lands in the gap; two ingests hand the connection straight to
@@ -2061,14 +2066,48 @@ mod tests {
     /// running**: an ask made after one of them finished is the single-ingest case, which
     /// already worked.
     ///
-    /// **On Linux this passes with or without [`crate::db::lock_background`]**, and that is
-    /// measured rather than assumed: a debug build parses JSON slowly enough, with no lock held,
-    /// that two ingests leave gaps a poll lands in (worst wait ~400 ms over a 4.5 s overlap
-    /// before the fix, 2026-09-28). Whether they saturate the connection is a ratio of parse
-    /// speed to commit speed, which is a fact about the machine; `db::tests::
-    /// a_bounded_asker_gets_its_turn_between_two_batch_loops` takes the parse out and is the test
-    /// that fails without the fix. This one is the fence over the real ingest path, on whichever
-    /// runner's ratio does saturate.
+    /// # It counts transactions, not milliseconds
+    ///
+    /// "About a batch, not an ingest" is a statement about **how many batches** an ask waits
+    /// behind, and that is what is asserted: a `commit_hook` counts every transaction the
+    /// connection commits, and each ask records how many landed between it beginning and it
+    /// being answered. [`crate::db::lock_background`] makes the answer at most
+    /// [`MOST_BATCHES_BEHIND`] by construction — the batch in hand when the ask arrives, and
+    /// the other ingest's, already parked in `lock()` before the ask registered; after those
+    /// both loops stand aside. How long each of those takes is a fact about the machine, and it
+    /// is not bounded at all: a swap rebuilds every index over the fixture in one transaction.
+    ///
+    /// **It was a wall-clock bound until 2026-09-30**, `worst < WRITE_LOCK_WAIT / 2`, and that
+    /// was wrong in both directions. On a loaded `windows-latest` runner it failed a PR that
+    /// touched no Rust (run 36704904751, attempt 1): one ask waited 4.72 s, with 39 asks over a
+    /// 7.17 s overlap and none refused, and the re-run passed. And on Linux it passed *with the
+    /// fix removed*, because a debug build parses slowly enough to leave gaps a poll lands in.
+    /// Measured on Linux (debug), 2026-09-30:
+    ///
+    /// | tree | worst ask, transactions behind | worst wall wait |
+    /// | --- | --- | --- |
+    /// | as shipped, 3 runs | 2 | 181 ms |
+    /// | as shipped, 12 spinning threads on 4 cores, 10 runs, ~830 asks | 2 | ≥ 540 ms |
+    /// | every loop here on `lock_blocking`, 3 runs | 37–52 | 242–363 ms |
+    /// | only `flush_closure` on `lock_blocking`, 3 runs | 29–53 | — |
+    /// | only `write_taggings` on `lock_blocking`, 6 runs | 3–5 | — |
+    ///
+    /// So under load the wall wait swelled while the count did not move, and every reverted
+    /// tree fails the count where the old bound passed it. **The taggings row is the one that
+    /// still depends on the machine**: that loop parses between batches with no lock held, so
+    /// how far a regression in it gets is the parse-to-commit ratio again. Its lowest run
+    /// reached 3, which a bound of 3 would have passed, and that is why the bound has no slack
+    /// above what the rule allows. The closure loop writes from memory and parses nothing
+    /// between batches, so two of them saturate the connection on any machine. The tag and
+    /// edge loops are the same shape but barely run here — the fixture's tags have no parents
+    /// and fit one batch. `db::tests::a_bounded_asker_gets_its_turn_between_two_batch_loops`
+    /// takes the parse out entirely and remains the test of the discipline itself.
+    ///
+    /// **No refusal is asserted either**, for the same reason: an ask told busy behind two slow
+    /// transactions is a slow machine, and one told busy because the loops ignored it has
+    /// dozens behind it and fails the count. Each ask is still made with
+    /// [`crate::db::WRITE_LOCK_WAIT`], the production call, and a refusal is marked in the
+    /// failure's table.
     #[test]
     fn a_bounded_writer_gets_its_turn_while_two_ingests_run_at_once() {
         use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -2101,9 +2140,30 @@ mod tests {
         let oracle = fixture(&crate::tags::oracle::ORACLE);
         let art = fixture(&crate::tags::art::ART);
 
+        // Every transaction the connection commits, whoever took the lock for it and however.
+        // Counted by SQLite rather than by the ingest's own progress callback, so a loop that
+        // reports nothing — or one written tomorrow — is still counted.
+        let commits = std::sync::Arc::new(AtomicUsize::new(0));
+        {
+            let commits = commits.clone();
+            crate::db::lock_blocking(&db)
+                .commit_hook(Some(move || {
+                    commits.fetch_add(1, Ordering::SeqCst);
+                    false
+                }))
+                .unwrap();
+        }
+
+        struct Ask {
+            waited: Duration,
+            got: bool,
+            /// Transactions the ingests committed between the ask beginning and it being
+            /// answered — the batches it waited behind.
+            behind: usize,
+        }
         let running = AtomicUsize::new(2);
         let started = [AtomicBool::new(false), AtomicBool::new(false)];
-        let mut asks: Vec<(Duration, bool)> = Vec::new();
+        let mut asks: Vec<Ask> = Vec::new();
         let mut overlap = Duration::ZERO;
         std::thread::scope(|scope| {
             let jobs = [
@@ -2135,37 +2195,49 @@ mod tests {
             }
             let overlap_began = Instant::now();
             while running.load(Ordering::SeqCst) == 2 {
+                let before = commits.load(Ordering::SeqCst);
                 let asked = Instant::now();
-                let got = crate::db::lock_for(&db, crate::db::WRITE_LOCK_WAIT).is_some();
-                asks.push((asked.elapsed(), got));
+                let guard = crate::db::lock_for(&db, crate::db::WRITE_LOCK_WAIT);
+                let waited = asked.elapsed();
+                // Read with the guard still held, so nothing can commit between the answer and
+                // the count.
+                let behind = commits.load(Ordering::SeqCst) - before;
+                let got = guard.is_some();
+                drop(guard);
+                asks.push(Ask {
+                    waited,
+                    got,
+                    behind,
+                });
                 std::thread::sleep(Duration::from_millis(20));
             }
             overlap = overlap_began.elapsed();
         });
 
+        let table = asks
+            .iter()
+            .map(|a| {
+                format!(
+                    "{:?}/{}{}",
+                    a.waited,
+                    a.behind,
+                    if a.got { "" } else { " BUSY" }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
         assert!(
             asks.len() >= 3,
             "the two ingests overlapped for only {overlap:?} ({} asks) — too short to prove \
              anything; make the fixture larger",
             asks.len()
         );
-        let refused = asks.iter().filter(|(_, got)| !got).count();
-        let worst = asks.iter().map(|(w, _)| *w).max().unwrap_or_default();
-        assert_eq!(
-            refused,
-            0,
-            "{refused} of {} asks were told busy while two ingests ran ({overlap:?} overlap)",
-            asks.len()
-        );
-        // Half the refusal wait rather than a batch's worth, because one hold here is
-        // legitimately long: each swap drops the live tables, renames staging and rebuilds
-        // their indexes in one transaction, and an ask that lands behind it waits for all of
-        // it (~1 s over this fixture in a debug build). A batch is ~60–100 ms.
+        let most = asks.iter().map(|a| a.behind).max().unwrap_or_default();
         assert!(
-            worst < crate::db::WRITE_LOCK_WAIT / 2,
-            "a user write waited {worst:?} for the connection while two ingests ran \
-             ({overlap:?} overlap, {} asks); it must wait about a batch, not an ingest",
-            asks.len()
+            most <= MOST_BATCHES_BEHIND,
+            "an ask waited behind {most} ingest transactions while two ingests ran; \
+             the priority rule allows {MOST_BATCHES_BEHIND}. Every ask as wait/transactions \
+             behind ({overlap:?} overlap): {table}"
         );
     }
 }
