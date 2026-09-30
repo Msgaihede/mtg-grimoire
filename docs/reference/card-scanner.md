@@ -254,6 +254,22 @@ conjured out of a glare appears for a frame or two somewhere else and is gone. `
 therefore rejects nothing on appearance and asks only that a quad still be there next frame —
 three agreeing frames to lock, five missing frames to drop, corners blended at 0.6 once locked.
 
+**In Fast, a clean quad locks in two** (`LockOptions::quick_agree`, #705, 2026-09-30). The
+caller says whether each frame's quad is clean — in Fast, card-likeness at least `GOOD_SCORE`
+(0.45) and every corner within 5° of square — and two agreeing clean frames in a row are trusted
+a frame early. A flicker is what the third frame outlasts, and a flicker is rarely a quad that
+rectifies into a title band and a type line with square corners. The quick lock is latched, so a
+less clean third frame does not un-trust it, and it dies with the quad. **It changes when a quad is
+trusted and nothing about how it is drawn**: smoothing still starts at the third agreeing frame, so
+from there the held quad is the one the three-frame lock would hold and the only difference is one
+more frame matched. The first version smoothed from the quick lock, and the evaluation caught it —
+every later quad moved a pixel or two, and on Oko, Thief of Crowns (OTP) and Graf Rats (INR), whose
+hashes flip between a good frame and a bad one, a 36-bit match became a 56-bit wrong one and both
+ran out of burst short of the bar: two cards undecided that had decided before. **Exact keeps three**: its
+resolve counts steady frames from the lock, and its timing is #706's. Synthetic frames have no
+spurious quads, so the evaluation cannot measure what this lets through — the 0.45 is the level
+the real corpus measured to lose no good match, and the tracker's own rule still stands behind it.
+
 Two things came out of it. **Both `scan` and `serve` had to pick between Canny and Otsu by
 card-likeness rather than geometric score**: the geometric winner alternated between methods
 frame to frame and handed back a different quad each time, and nothing can lock onto a target
@@ -667,11 +683,60 @@ made a vote worth 0.47 at 41 bits and 0.13 at 66, so the bar read in no unit any
 picture and a far-but-consistent card climbed to it several times slower than a close one. A
 vote is worth the same anywhere inside the gate, and the gate is what rejects noise.
 
+### The early decision (Fast only)
+
+**Eight votes is the same wait for a card nobody could mistake as for one at the gate's edge.**
+Fast's median was 10 frames — 3 to lock, 8 to vote — and most of those votes confirmed what the
+first two frames already said. So the vote rule has a second way to decide
+(`TrackerOptions::early_frames`, #705, 2026-09-30): **two trusted frames in a row, each *clear*
+about the held leader**, where a clear frame's best appearance candidate is within **0.20** (51
+bits) and leads the nearest candidate naming a **different card** by **15 bits**. Anything short of
+that on any one frame — a marginal distance, a close rival, an empty frame, a lost lock — breaks the
+run and the card goes back to the bar. The tally is then short of `decide_at` on purpose; `early`
+on the tracked view says so, and both the app's panel and `live.html` draw a full bar with
+`· clear` beside the tally.
+
+- **Another card, not another candidate.** Reprints pool on the oracle id, so two printings of one
+  card a bit apart are one answer. When every candidate in a frame names the same card, the rival is
+  somewhere past the last of them and that distance is used — a floor under the gap, never an
+  overstatement. A basic land with a hundred near-identical printings still decides early whenever
+  its nearest five include another card, which is most frames: its median gap in the trace is 30
+  bits.
+- **The margin still applies.** The early path waives the bar, not `lead_margin`: the held leader
+  can keep the lead while a rival's marginal frames have it fractionally behind, and two clear
+  frames do not decide a card the tally has not yet put ahead by 1.3.
+- **Appearance only.** A read name enters at distance zero with no rival of its kind, so it would be
+  clear on every frame it appeared in, and one read deciding alone is what the bar prevents.
+- **Fast only.** An early vote commit in Exact would drop the extra framings from the frames its
+  resolve's burst is still collecting — changing what Exact reads, not just when.
+
+**The thresholds are the evaluation's, not a guess.** `eval --trace` on the unchanged pipeline
+(Windows, release, 2026-09-30, seeds 7, 1 and 2, 160 printings × 12 frames each), trusted frames
+with a match:
+
+| frames | n | best, bits: min / p5 / p50 / p95 | gap to the nearest other card, bits: p5 / p50 / p95 / **max** |
+| --- | ---: | --- | --- |
+| true card on top | 4,234 | 3 / 15 / 32 / 57 | 6 / 25 / 49 / 70 |
+| wrong card on top | 231 | 41 / 48 / 66 / 84 | 0 / 2 / 6 / **10** |
+| true card on top, basic lands | 545 | 8 / 17 / 33 / 62 | 8 / 30 / 54 / 65 |
+| wrong card on top, basic lands | 32 | 48 / 52 / 73 / 81 | 0 / 2 / 6 / **10** |
+
+**The margin is what keeps wrong frames out**: none led by more than 10 bits — a basic land and a
+split card reached it, every other stratum stopped at 9 or under — and 15 is half again that. The
+basic lands were the worry, since a HOB Plains and a HOB Forest are 44 bits apart (§3) and a gap only
+colour explains is the one this must not fire on; their wrong frames sit exactly where every other
+stratum's do. The distance keeps the rule to matches well inside the gate, and would not have been
+enough alone — one seed put a wrong card at 41 bits. Simulated over the three traces, the rule fires
+before the bar on 371 of 480 bursts, on a wrong card never, and moves the median decision from frame
+10 to 4; three frames rather than two only reaches 5 and guards against nothing the traces show.
+
 ### What ends a freeze
 
 Five things: **ten frames without the decided card**, **a different card come to rest where it
 lay**, a **reset**, a **bar raised above the tally**, or switching to the confidence rule.
-Lowering the bar under a frozen tally changes nothing — it was decided, and it still is.
+Lowering the bar under a frozen tally changes nothing — it was decided, and it still is. **An early
+decision (below) is not thawed by a raised bar**, because it was short of the bar on purpose; the
+other four end it as they end any freeze.
 
 The second is not the tracker's at all. A card stacked on the decided one is the same quad to the
 lock, and to the hash it may be the same other card each frame (ten frames), nothing inside the
@@ -1671,6 +1736,11 @@ the stretch breaks (below). The decision's printing is the tracker's best member
 title reads alone has none, because a name abstains on the printing (§4), so the decision takes the
 card's first permitted printing rather than passing an oracle id off as one.
 
+**A clear card decides in two frames rather than eight** (§5, *The early decision*), and a clean
+quad locks in two rather than three (§3, *Lock*) — both Fast's alone, both #705. `FAST_RESCUE_AFTER`
+did not move: a card still undecided after eight locked frames is one that never had two clear
+frames in a row about its leader.
+
 ### Exact
 
 **The same detect, lock and tracker loop, plus a resolve.** The tracker still decides *which card*
@@ -1857,8 +1927,10 @@ geometry is still right) plus the previous decision, so the card on top is *adde
 `replaces_previous` of the one under it. **The first frame at rest is kept as the new card's
 first**: its observations are counted again under the fresh tally and its view stays in Exact's
 burst. A stacked card therefore decides exactly when a fresh card would with the lock already
-held — Fast on its **8th** frame, Exact resolving on its **3rd** — which the tests assert to the
-frame; without the keep they read 9 and 4.
+held — Fast on its **8th** frame by votes, Exact resolving on its **3rd** — which the tests assert
+to the frame; without the keep they read 9 and 4. **With Fast's early decision** (two clear frames
+in a row, above), the kept frame is the first of the two, so a card the hash is sure of decides on
+its **2nd** frame at rest, where it would otherwise need a 3rd.
 
 **The watch ends with the decision it guards** (`record_decision`: nothing committed and nothing
 attempted clears it). Without that, a card decided while still moving — carried in, the hash
@@ -2111,6 +2183,14 @@ frame whose `decision_seq` moved.
   have been: **it reports and does not gate**, so an unreachable image host or a panic cannot skip
   the weekly publish of a bundle that built fine. CI fetches the 160 renders on every run; nothing
   caches `eval-cache` there.
+- **`--trace <file>` writes one JSON line per Fast frame** (#705): the lock's agreement and trust,
+  card-likeness and worst corner, and for a matched frame the best candidate's distance in bits,
+  whether it is the true card, and the distance of the nearest candidate naming a *different* card
+  (`rival_floor` when every candidate named the same one, so the figure is a floor). Tracing feeds
+  Fast the whole burst rather than stopping at its decision; the frames after it are left out of
+  the table and its mean ms, though they still take a core from the other workers. **`--fast-only`**
+  runs Fast alone, a third of the time. §5's early-decision thresholds were
+  read off these traces.
 
 **Before round 4** — Windows, release, 2026-09-15, HEAD `68917fa1`, 160 printings, 12 frames each at
 1280 px, seed 7, against the 113,494-printing bundle, 12 workers, renders cached, 383 s wall.
@@ -2175,9 +2255,59 @@ Three cards moved and nobody has found which change moved them, so **the evaluat
 is unverified**: until a same-HEAD double run agrees with itself, read a difference of a few cards
 between two runs as noise rather than as a regression or a fix.
 
-Three things the tables cannot say. **Fast's decided rate is partly the burst length**: its median is
-10 frames of 12 — three to lock, eight votes — so the evaluation cannot tell "needed a thirteenth
-frame" from "wrong". **Eight cards were undecided in every pass** of the pre-round-4 run (Tobias
+**#705 found why, and it is Fast's printing alone.** Two runs of #705's branch that differed only
+in a guard no card reached made every decision on the same frame with the same card, and eleven
+cards over two seeds still reported a different printing (seed 7's printing 80.0 → 79.4, seed 2's
+77.5 → 76.2). `Tracker::snapshot` picks a card's printing with `max_by` over a `HashMap` of
+per-printing evidence; reprints that share art tie *exactly*, `max_by` keeps the last of equals in
+iteration order, and a `HashMap`'s iteration order is seeded per process. So which of two tied
+printings a Fast decision names changes from run to run — in the app as much as in the evaluation.
+Decided, card ✓ and median frames were identical to the digit across both runs; they do not read
+the member map.
+
+**After #705** — Fast's early decision and quick lock (§5, §3). Windows, release, 2026-09-30, 160
+printings, 12 frames at 1280 px, 12 workers, against the same 113,494-printing bundle; before and after
+are the same machine and the same day, with the baseline built from `9a0ba706` plus the `--trace` flag
+alone. Mean ms is omitted: other agents' evaluations shared the machine, and it read 1,100–11,000.
+
+| seed 7 | decided % | card ✓ % | wrong card | printing ✓ % | median frames |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fast, before | 90.6 | 90.6 | 0 | 73.8 | 10 |
+| **Fast, after** | **94.4** | **94.4** | **0** | 79.4 | **4** |
+| Exact, before and after | 95.0 | 95.0 | 0 | 81.2 | 5 |
+| Exact + own set, before and after | 95.0 | 95.0 | 0 | 91.2 | 5 |
+
+**Exact's rows are identical in every stratum**, which is the Fast-only gate doing its job. Seeds 1
+and 2, Fast only, against their own baselines:
+
+| Fast | decided % | card ✓ % | wrong card | printing ✓ % | median frames |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| seed 1, before | 93.1 | 92.5 | 1 | 81.2 | 10 |
+| **seed 1, after** | **95.6** | **95.0** | **1** | 80.6 | **4** |
+| seed 2, before | 86.9 | 86.9 | 0 | 71.9 | 10 |
+| **seed 2, after** | **90.6** | **90.6** | **0** | 76.2 | **4** |
+
+**Card-correct fell in none of the 33 stratum rows across the three seeds, and no card that decided
+before is undecided after**: every outcome that moved is an undecided card now deciding — 16 of
+them, in bursts that used to end before the eighth vote. Every stratum's median is 3–5 frames except
+seed 2's frame-2015 at 7; basic lands went 10 → 4 on every seed with card-correct up on all three.
+**The one wrong card is Flower // Flourish (GRN) on seed 1, and it is wrong in the baseline too** —
+decided by the vote bar at a 2-bit gap in both, a frame sooner now only because the quick lock
+matched one more frame; the early rule never fired on it. Printing moved both ways by a card or two
+per row and rose overall on two seeds of three: an early decision reports the best printing after
+two or three frames rather than eight, which is Fast's promise — the card now, its printing
+provisional. **Read the printing column as noisy by a few cards** — *#705 found why*, above, is the reason.
+
+**Re-run after main's #701 (rectify a frame once) and #717 (Exact's resolve off the frame path)
+merged into the branch**, against the same merged tree with both of #705's switches turned off:
+every decided, card ✓ and median-frames figure in both tables above came out identical to the digit
+on all three seeds — the same sixteen cards newly decided, the same Flower // Flourish — and only
+the printing column moved, by the tie noise.
+
+Three things the tables cannot say. **Fast's decided rate is partly the burst length**: before #705
+its median was 10 frames of 12 — three to lock, eight votes — so the evaluation could not tell
+"needed a thirteenth frame" from "wrong". At a median of 4 that is true only of the cards that are
+never clear, which are exactly the ones still undecided. **Eight cards were undecided in every pass** of the pre-round-4 run (Tobias
 Andrion, Skyknight Legionnaire, Control of the Court, Swamp HOB, Counterbalance SLD, Elektra, Pest
 Infestation, Tyrranax Rex — the last `not found` in Exact), most likely the detector or the lock on
 hard synthetic poses; nobody has looked. And **the first `--bulk` evaluation is the workflow's first
