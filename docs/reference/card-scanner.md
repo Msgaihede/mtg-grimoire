@@ -52,6 +52,7 @@ Tesseract.
 | `serve` | `cli` | The live camera page, with the whole pipeline visible per frame and every threshold on a slider. |
 | `build-hashes` | `builder` | Build the reference bundle from `corpus.db` — or, since 2026-09-15, from Scryfall's bulk file (`--bulk`) — and Scryfall's images. Incremental. |
 | `eval` | `builder` | The synthetic evaluation of both scan modes (§10), added 2026-09-15. |
+| `detect-bench` | `builder` | Per-frame cost of detection before and after a lock, on `eval`'s own bursts, one card at a time (§3 *Track*). Added 2026-09-30. |
 
 `cli` = `clap` + `tiny_http` + `corpus` + `ocr`; `builder` = `clap` + `ureq` + `rayon` +
 `corpus` + `ocr` — **`ocr` joined `builder` on 2026-09-15 for `eval`**, whose Exact passes are
@@ -264,6 +265,43 @@ down its left edge, and `Detection::rectified` is warped from the frame's own qu
 The card being hashed was a strip of black border, going into the tracker with the full weight
 of a real observation. `from_lock` is reported per frame, because a stream that says true
 constantly is a detector failing behind a lock that is covering for it.
+
+### Track — a locked card is searched where it is, with the mask that found it
+
+**Added 2026-09-30 (#702).** Until then every frame ran the whole detector from scratch: two
+Canny rungs and two Otsu polarities over the whole working image, their contours, and the
+card-likeness warps. That happened even when the card had lain locked in one place for seconds
+and its position was known to within a few pixels. Three changes, all gated on a lock that is
+**already trusted when the frame arrives** (`QuadLock::trusted_quad`), so nothing about
+*finding* a card changed:
+
+- **The window.** `detect::detect_near` crops the source to `Window::around` the held quad. That
+  is its bounding box grown on every side by the lock's own `max_drift` (0.35) × its short edge,
+  so the window cannot hide a card the lock would still have agreed with. It detects in that
+  crop at a scale where the card's short edge spans `WINDOW_CARD_PX` (240). **The scale is never
+  finer than the full sweep's own**, so a small card is never searched at a resolution the
+  morphology was not tuned at. The quad and `area_frac` are mapped back to the frame, and the
+  rectification is the source's own pixels because the crop is a crop, not a resample. The
+  trace is not mapped back: a debug view of a window frame shows the window.
+- **The mask that is working.** `EdgePass` names the four masks (`canny_strict`, `canny_loose`,
+  `otsu_light`, `otsu_dark`), and every `ScoredQuad` and `Detection` carries the one it came
+  from. A locked frame runs only the pass that last reached the lock
+  (`DetectOptions::only_pass`), because which mask wins depends on the table and the lamp, and
+  neither changes between two frames of a card lying still.
+- **Back to the full sweep** on a window miss, on a card that is not locked, and on every
+  `FULL_SWEEP_EVERY` (8)th locked frame. The window can only ever find the card it is centred
+  on, so that ninth frame is what lets anything else — a second card, a better quad — reach
+  the lock. `Verdict::search` says which search ran (`full` / `window`). It is shown as the
+  *search* row in the app's Rectified panel and on the debug page.
+
+**And more than one core.** The masks inside one `detect` call and the methods inside one frame
+are independent, so they run under `std::thread::scope` (no new dependency). Candidates merge in
+pass order and the ranking is a stable sort, so the answer is the one the serial loop gave. A
+panic on a worker thread is resumed on the caller's, where `Session::frame`'s guard catches it as
+before. Because the masks overlap, `DetectTimings::mask_ms` is now the **slowest** mask's time
+rather than the sum, and `contour_ms` is the rest of the threaded stage's wall clock.
+
+MEASURED_TRACK
 
 ### Rectify — the 7% expand, the trim, and the alternate framings
 
