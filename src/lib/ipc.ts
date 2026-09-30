@@ -7566,6 +7566,8 @@ export interface ScannerMatch {
   rotated: boolean;
   view: number;
   views: number;
+  /** Descriptors computed — one per framing and orientation searched. What the match costs. */
+  hashes: number;
   candidates: ScannerCandidate[];
   hash_ms: number;
   /** Bits between the best and second-best answer. */

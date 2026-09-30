@@ -67,6 +67,11 @@ pub struct MatchReport {
     pub view: usize,
     /// How many framings were searched.
     pub views: usize,
+    /// Descriptors computed for this report — one per framing and orientation searched.
+    ///
+    /// The cost the view lock exists to cut: hashing is ~22 ms a view in release against ~3.5 ms
+    /// to search every printing, so this count, not `views`, is what the match costs.
+    pub hashes: usize,
     pub candidates: Vec<Candidate>,
     /// Computing the two descriptors, which is a Lanczos3 downsample of a 488x680 card to a
     /// 17x8 grid and back — separated from the search because they scale with completely
@@ -483,6 +488,7 @@ impl Reference {
             rotated: use_rotated,
             view,
             views: views.len(),
+            hashes: 2 * views.len(),
             candidates: winner.iter().map(|m| self.candidate(Section::Card, m)).collect(),
             margin,
             hash_ms,
