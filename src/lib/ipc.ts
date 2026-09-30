@@ -7567,10 +7567,15 @@ export interface ScannerCandidate {
 export interface ScannerMatch {
   /** `Section`: which part of the card was hashed. */
   section: string;
-  /** Whether the 180°-rotated rectification won. A card is symmetric, so both are hashed. */
+  /**
+   * Whether the 180°-rotated rectification won. A card is symmetric, so both are hashed until a
+   * stretch has matched plainly one way up; after that, only the held one.
+   */
   rotated: boolean;
   view: number;
   views: number;
+  /** Descriptors computed — one per framing and orientation searched. What the match costs. */
+  hashes: number;
   candidates: ScannerCandidate[];
   hash_ms: number;
   /** Bits between the best and second-best answer. */
