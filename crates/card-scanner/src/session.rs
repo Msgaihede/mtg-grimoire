@@ -38,7 +38,7 @@ use crate::lock::{LockState, QuadLock};
 use crate::reference::{Label, MatchReport, Reference};
 use crate::resolve::{BurstView, NoReaders};
 pub use crate::resolve::{ChoiceView, Outcome, ResolutionView, TierView};
-use crate::track::{CommitRule, Evidence, Observation, Standing, Tracked, Tracker, TrackerOptions};
+use crate::track::{CommitRule, Observation, Standing, Tracked, Tracker, TrackerOptions};
 use crate::ocr::{BandSource, CardPixels};
 use crate::trim::Margin;
 use crate::watch::{self, CardWatch, Seen};
@@ -623,37 +623,55 @@ fn leader_printing(r: Option<&Reference>, mask: &Mask, best_member: Id) -> Id {
         .unwrap_or(best_member)
 }
 
-/// The printing a Fast decision names, from the tracker's leader and what this stretch read.
-///
-/// **The card is the title's when a binding title read named one** — whatever the hash
-/// prefers, a decision never names a card with another title than the one read off it. **The
-/// printing is the collector line's when it names a printing of that card**; a collector read
-/// of any other card is a misread digit naming a different real printing, and is ignored as
-/// Exact's collector tier ignores it. Otherwise the leader's own printing when the card is the
-/// leader, else the title card's nearest printing in this frame's hash candidates, else its
-/// first permitted one.
-fn fast_printing(
-    r: &Reference,
-    mask: &Mask,
-    leader: &Standing,
-    title: Option<Id>,
+/// What a Fast stretch read off the card, as [`fast_printing`] weighs it.
+struct StretchReads<'a> {
+    /// The cards a binding title read named; empty for none.
+    title_cards: &'a [Id],
+    /// The printing of `title_cards` nearest by dhash, on the frame that read them.
+    title_pick: Option<Id>,
+    /// The collector line's blind parse, resolved under the mask.
     pin: Option<Id>,
-    observations: &[Observation],
-) -> Id {
-    let card = title.unwrap_or(leader.id);
-    if let Some(p) = pin.filter(|p| r.oracle_for(p) == card) {
-        return p;
+    /// The collector line as read.
+    collector_raw: Option<&'a str>,
+}
+
+/// The printing a Fast decision names, from the tracker's leader and what this stretch read —
+/// and whether the collector line is what chose it.
+///
+/// **The cards in play are the title's when a binding title read named any** — whatever the
+/// hash prefers, a decision never names a card with another title than the one read off it —
+/// and the leader's card otherwise. **Among them the collector line chooses first**: its blind
+/// parse when that names a printing of a card in play, else a fit of the raw read against those
+/// cards' printings ([`Reference::collector_among`]). A collector read of any other card is a
+/// misread digit naming a different real printing, and is ignored as Exact's collector tier
+/// ignores it. **Then the dhash, limited to the cards in play**: the title's nearest printing
+/// by dhash among its own cards (`title_pick`), or the leader's own best member.
+fn fast_printing(r: &Reference, mask: &Mask, leader: &Standing, reads: &StretchReads) -> (Id, bool) {
+    let cards: Vec<Id> =
+        if reads.title_cards.is_empty() { vec![leader.id] } else { reads.title_cards.to_vec() };
+    if let Some(p) = reads.pin.filter(|p| cards.contains(&r.oracle_for(p))) {
+        return (p, true);
     }
-    if card == leader.id {
-        return leader_printing(Some(r), mask, leader.best_member);
-    }
-    observations
+    let printings: Vec<Id> = cards
         .iter()
-        .filter(|o| o.kind == Evidence::Appearance && o.key == card)
-        .min_by(|a, b| a.normalized.total_cmp(&b.normalized))
-        .map(|o| o.member)
-        .or_else(|| r.printings_of(&card).iter().find(|p| mask.permits(p)).copied())
-        .unwrap_or_else(|| leader_printing(Some(r), mask, leader.best_member))
+        .flat_map(|c| r.printings_of(c).iter().copied())
+        .filter(|p| mask.permits(p))
+        .collect();
+    if let Some(p) = reads.collector_raw.and_then(|raw| r.collector_among(raw, &printings)) {
+        return (p, true);
+    }
+    if reads.title_cards.is_empty() {
+        return (leader_printing(Some(r), mask, leader.best_member), false);
+    }
+    let printing = reads
+        .title_pick
+        .filter(|p| printings.contains(p))
+        .or_else(|| {
+            cards.contains(&leader.id).then(|| leader_printing(Some(r), mask, leader.best_member))
+        })
+        .or_else(|| printings.first().copied())
+        .unwrap_or_else(|| leader_printing(Some(r), mask, leader.best_member));
+    (printing, false)
 }
 
 /// One locked frame's views, owned, so an Exact resolve can read over the last few of them.
@@ -816,13 +834,19 @@ pub struct Session {
     /// 180° rectification — so later frames hash three views rather than six. See
     /// [`Reference::match_views_held`]. Cleared with the stretch and by [`Session::forget_card`].
     held_rotated: Option<bool>,
-    /// The card this stretch's last binding title read named ([`crate::resolve::title_binds`]),
-    /// in Fast — the card a decision must name. Cleared with the stretch and by
+    /// The cards this stretch's last binding title read named ([`crate::resolve::title_binds`],
+    /// or a prefix), in Fast — the set a decision is limited to. Cleared with the stretch and by
     /// [`Session::forget_card`].
-    title_card: Option<Id>,
+    title_cards: Vec<Id>,
+    /// The printing of `title_cards` nearest by dhash on the frame that read them — the hash
+    /// compared against those cards' printings alone. Cleared with `title_cards`.
+    title_pick: Option<Id>,
     /// The printing this stretch's last collector read resolved to under the mask, in Fast.
-    /// Cleared with `title_card`.
+    /// Cleared with `title_cards`.
     collector_pin: Option<Id>,
+    /// This stretch's last collector read as text, matched against the decided card's printings
+    /// when its blind parse paired nothing ([`Reference::collector_among`]). Cleared likewise.
+    collector_raw: Option<String>,
     /// `(leader, printing)`: the printing the standing Fast decision names, and the tracker's
     /// leader when it was settled. See [`Session::settle_fast_decision`].
     fast_decided: Option<(Id, Id)>,
@@ -871,8 +895,10 @@ impl Session {
             laid_over: None,
             previous_printing: None,
             held_rotated: None,
-            title_card: None,
+            title_cards: Vec::new(),
+            title_pick: None,
             collector_pin: None,
+            collector_raw: None,
             fast_decided: None,
             decision_read_due: false,
         }
@@ -992,11 +1018,19 @@ impl Session {
         self.stacked.clear();
         self.laid_over = None;
         self.held_rotated = None;
-        self.title_card = None;
-        self.collector_pin = None;
+        self.forget_reads();
         self.fast_decided = None;
         self.decision_read_due = false;
         self.drop_pending_resolve();
+    }
+
+    /// Forget what this stretch read off the card — the title's cards and pick, the collector
+    /// line — because the card they were read off may not be the one in frame any more.
+    fn forget_reads(&mut self) {
+        self.title_cards.clear();
+        self.title_pick = None;
+        self.collector_pin = None;
+        self.collector_raw = None;
     }
 
     /// A different card has come to rest where the decided one lay, and the lock never let go
@@ -1096,8 +1130,7 @@ impl Session {
             // And may come back the other way up — and what was read off it is about a card
             // that may not be here.
             self.held_rotated = None;
-            self.title_card = None;
-            self.collector_pin = None;
+            self.forget_reads();
             self.drop_pending_resolve();
         } else if detected {
             self.steady += 1;
@@ -1199,31 +1232,34 @@ impl Session {
     /// frame — and that frame reads both bands. A rescue read on the committing frame itself
     /// already has, and settles at once.
     ///
-    /// Then [`fast_printing`]: a binding title read names the card, and a collector read of
-    /// that card names the printing.
-    fn settle_fast_decision(
-        &mut self,
-        t: &Tracked,
-        r: &Reference,
-        observations: &[Observation],
-        read: bool,
-    ) {
+    /// Then [`fast_printing`]: a binding title read limits the decision to the cards it named,
+    /// and a collector read of one of those names the printing.
+    ///
+    /// Answers the printing when it was the collector line that chose it, so the frame's
+    /// collector view can say what it matched — which the blind parse alone often cannot.
+    fn settle_fast_decision(&mut self, t: &Tracked, r: &Reference, read: bool) -> Option<Id> {
         let Some(leader) = t.leader().filter(|_| t.committed) else {
             self.fast_decided = None;
             self.decision_read_due = false;
-            return;
+            return None;
         };
         if self.fast_decided.is_some() {
-            return;
+            return None;
         }
         if cfg!(feature = "ocr") && self.reader.is_some() && !read {
             self.decision_read_due = true;
-            return;
+            return None;
         }
         self.decision_read_due = false;
-        let printing =
-            fast_printing(r, &self.mask, leader, self.title_card, self.collector_pin, observations);
+        let reads = StretchReads {
+            title_cards: &self.title_cards,
+            title_pick: self.title_pick,
+            pin: self.collector_pin,
+            collector_raw: self.collector_raw.as_deref(),
+        };
+        let (printing, by_collector) = fast_printing(r, &self.mask, leader, &reads);
         self.fast_decided = Some((leader.id, printing));
+        by_collector.then_some(printing)
     }
 
     /// Whether the standing decision replaces the one before it — decided on its first frame
@@ -1715,11 +1751,29 @@ impl Session {
                     if let Some(o) = reads.observation {
                         observations.insert(0, o);
                     }
-                    if reads.title_card.is_some() {
-                        self.title_card = reads.title_card;
+                    // **The title limits the hash to its own cards** (the reader's rule,
+                    // 2026-09-30): the dhash is compared against those cards' printings alone,
+                    // on this frame's views, and the nearest is what a decision names.
+                    if !reads.title_cards.is_empty() {
+                        let only: Vec<Id> = reads
+                            .title_cards
+                            .iter()
+                            .flat_map(|c| r.printings_of(c).iter().copied())
+                            .filter(|p| self.mask.permits(p))
+                            .collect();
+                        let only = Mask::allow_only(only);
+                        self.title_pick = r
+                            .match_views(&views, 1, &only)
+                            .candidates
+                            .first()
+                            .and_then(|c| parse_uuid(&c.id));
+                        self.title_cards = reads.title_cards;
                     }
                     if reads.pin.is_some() {
                         self.collector_pin = reads.pin;
+                    }
+                    if !reads.collector_raw.is_empty() {
+                        self.collector_raw = Some(reads.collector_raw);
                     }
                     v.ocr = Some(reads.ocr);
                     v.collector = Some(reads.collector);
@@ -1777,7 +1831,13 @@ impl Session {
         }
         let t = self.tracker.observe(&observations);
         if self.mode == ScanMode::Fast {
-            self.settle_fast_decision(&t, r, &observations, read);
+            // A printing the collector line chose by fitting its read to the decided card says
+            // so on the frame's collector view, which the blind parse left at "no printing".
+            if let Some(p) = self.settle_fast_decision(&t, r, read) {
+                if let Some(c) = v.collector.as_mut() {
+                    c.matched = r.label_for(&p).map(|l| l.display());
+                }
+            }
         }
         // The frame that decided is the anchor: what the decided card looks like. A resolve
         // that found nothing leaves `attempted` set and nothing to re-arm it while the lock
@@ -1933,7 +1993,7 @@ struct SessionReaders<'a> {
 #[cfg(feature = "ocr")]
 impl crate::resolve::Readers for SessionReaders<'_> {
     fn title(&self, view: &BurstView<'_>) -> Option<String> {
-        let edits = |text: &str| self.r.lookup_by_name_masked(text, self.mask).map(|(_, e)| e);
+        let edits = |text: &str| self.r.lookup_cards_masked(text, self.mask).map(|h| h.edits);
         let read = self.reader.read_title_first(&bands_of(view), view.rotated, &edits);
         *self.ocr.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some(title_view(&read, self.r, self.mask).0);
@@ -1941,10 +2001,14 @@ impl crate::resolve::Readers for SessionReaders<'_> {
     }
 
     fn collector(&self, view: &BurstView<'_>) -> Vec<(String, String)> {
+        self.collector_text(view).1
+    }
+
+    fn collector_text(&self, view: &BurstView<'_>) -> (String, Vec<(String, String)>) {
         let col = self.reader.read_collector_first(&bands_of(view), view.rotated);
         *self.collector.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some(collector_view(&col, self.r, self.mask));
-        col.candidates
+        (col.raw, col.candidates)
     }
 }
 
@@ -2000,12 +2064,15 @@ fn collector_view(col: &crate::ocr::CollectorRead, r: &Reference, mask: &Mask) -
 #[cfg(feature = "ocr")]
 struct FastReads {
     ocr: OcrView,
-    /// The title read as evidence for the tracker, when it named a card.
+    /// The title read as evidence for the tracker, when it named exactly one card.
     observation: Option<Observation>,
-    /// The card the title read named, when it binds ([`crate::resolve::title_binds`]).
-    title_card: Option<Id>,
+    /// The cards the title read named, when the read binds ([`crate::resolve::title_binds`], or
+    /// a prefix) — empty otherwise. See [`Reference::lookup_cards_masked`].
+    title_cards: Vec<Id>,
     collector: CollectorView,
-    /// The printing the collector line resolved to under the mask.
+    /// The collector line as read, for [`Reference::collector_among`] once the card is known.
+    collector_raw: String,
+    /// The printing the collector line's blind parse resolved to under the mask.
     pin: Option<Id>,
 }
 
@@ -2031,49 +2098,59 @@ fn fast_reads(
         let title = if rescue {
             reader.read_title(src)
         } else {
-            let edits = |text: &str| r.lookup_by_name_masked(text, mask).map(|(_, e)| e);
+            let edits = |text: &str| r.lookup_cards_masked(text, mask).map(|h| h.edits);
             reader.read_title_first(src, rotated, &edits)
         };
         (title, col.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
     });
-    let (ocr, observation) = title_view(&title, r, mask);
-    let title_card = observation
-        .filter(|_| ocr.edits.is_some_and(|e| crate::resolve::title_binds(&title.normalized, e)))
-        .map(|o| o.key);
+    let (ocr, observation, hits) = title_view(&title, r, mask);
+    let title_cards = hits
+        .filter(|h| h.prefix || crate::resolve::title_binds(&title.normalized, h.edits))
+        .map(|h| h.cards)
+        .unwrap_or_default();
     FastReads {
         ocr,
         observation,
-        title_card,
+        title_cards,
         pin: r.lookup_collector_masked(&col.candidates, mask),
         collector: collector_view(&col, r, mask),
+        collector_raw: col.raw,
     }
 }
 
-/// A title read as the page shows it, and the observation it makes — resolved under the mask,
-/// so a read cannot name a card the filters exclude.
+/// A title read as the page shows it, the observation it makes, and every card it named —
+/// resolved under the mask, so a read cannot name a card the filters exclude.
 #[cfg(feature = "ocr")]
 fn title_view(
     read: &crate::ocr::TitleRead,
     r: &Reference,
     mask: &Mask,
-) -> (OcrView, Option<Observation>) {
-    let hit = read.is_usable().then(|| r.lookup_by_name_masked(&read.normalized, mask)).flatten();
+) -> (OcrView, Option<Observation>, Option<crate::reference::NameHits>) {
+    let hits = read.is_usable().then(|| r.lookup_cards_masked(&read.normalized, mask)).flatten();
     // The printing that stands for a read name is the card's first one the filters permit. A
     // name says nothing about which printing, and `Observation::from_ocr` gives it no vote there.
-    let named = hit.and_then(|(card, edits)| {
-        r.printings_of(&card).iter().find(|p| mask.permits(p)).map(|p| (card, *p, edits))
-    });
+    let first = |card: &Id| r.printings_of(card).iter().find(|p| mask.permits(p)).copied();
+    let names: Vec<String> = hits
+        .iter()
+        .flat_map(|h| h.cards.iter())
+        .filter_map(|c| first(c).and_then(|p| r.label_for(&p)).map(|l| l.name))
+        .collect();
     let view = OcrView {
         raw: read.raw.clone(),
         normalized: read.normalized.clone(),
         rotated: read.rotated,
         elapsed_ms: read.elapsed_ms,
         band: read.band.as_ref().and_then(|b| preview_uri(b, 360, 70)),
-        matched: named.and_then(|(_, p, _)| r.label_for(&p)).map(|l| l.name),
-        edits: named.map(|(_, _, edits)| edits),
+        matched: (!names.is_empty()).then(|| names.join(" / ")),
+        edits: hits.as_ref().map(|h| h.edits),
     };
-    let obs = named.map(|(card, p, edits)| Observation::from_ocr(card, p, edits));
-    (view, obs)
+    // Evidence for the tracker only when the read names one card: a vote split across several
+    // would be a vote for none of them, and the limit the read sets is applied at the decision.
+    let obs = hits
+        .as_ref()
+        .filter(|h| h.cards.len() == 1)
+        .and_then(|h| first(&h.cards[0]).map(|p| Observation::from_ocr(h.cards[0], p, h.edits)));
+    (view, obs, hits)
 }
 
 /// The tracker deals in ids; a page needs names. Resolved here rather than inside `track`,
@@ -2758,7 +2835,7 @@ mod tests {
     /// `pin` as this stretch's reads.
     fn fast_settled(title: Option<u8>, pin: Option<u8>) -> DecisionView {
         let mut s = inline(labelled());
-        s.title_card = title.map(id);
+        s.title_cards = title.map(id).into_iter().collect();
         s.collector_pin = pin.map(id);
         let obs = [Observation::appearance(id(10), id(2), 0.16)];
         let mut t = None;
@@ -2768,7 +2845,7 @@ mod tests {
         let t = t.expect("frames");
         assert!(t.committed, "the premise: eight clean frames decide");
         let r = Arc::clone(s.reference.as_ref().expect("reference"));
-        s.settle_fast_decision(&t, &r, &obs, false);
+        s.settle_fast_decision(&t, &r, false);
         s.decision_view(&t).expect("a settled commit has a decision")
     }
 
@@ -2796,6 +2873,50 @@ mod tests {
         assert_eq!(fast_settled(Some(20), Some(1)).printing, format_uuid(&id(3)));
     }
 
+    /// [`fast_settled`], with the reads set by hand: `title` cards, the dhash pick among them,
+    /// and the collector line's raw text.
+    fn fast_settled_with(title: &[u8], pick: Option<u8>, raw: Option<&str>) -> (DecisionView, Option<Id>) {
+        let mut s = inline(labelled());
+        s.title_cards = title.iter().copied().map(id).collect();
+        s.title_pick = pick.map(id);
+        s.collector_raw = raw.map(String::from);
+        let obs = [Observation::appearance(id(10), id(2), 0.16)];
+        let mut t = None;
+        for _ in 0..8 {
+            t = Some(s.tracker.observe(&obs));
+        }
+        let t = t.expect("frames");
+        let r = Arc::clone(s.reference.as_ref().expect("reference"));
+        let by_collector = s.settle_fast_decision(&t, &r, false);
+        (s.decision_view(&t).expect("decision"), by_collector)
+    }
+
+    #[test]
+    fn a_blurry_collector_read_is_fitted_to_the_decided_cards_printings() {
+        // The blind parse paired nothing; the read still fits printing 1 (HOB 1) of the leader's
+        // card, `OO01` read with the letter-for-digit slips a 1080p webcam makes.
+        let (d, by) = fast_settled_with(&[], None, Some("U OO01 HO8 EN"));
+        assert_eq!(d.printing, format_uuid(&id(1)));
+        assert_eq!(by, Some(id(1)), "the collector line chose it");
+        // Printing 3 (HOB 3) is another card, so a read of it is never fitted to this one.
+        let (d, by) = fast_settled_with(&[], None, Some("U 0003 HOB EN"));
+        assert_eq!(d.printing, format_uuid(&id(2)));
+        assert_eq!(by, None);
+    }
+
+    #[test]
+    fn a_title_naming_several_cards_takes_the_dhash_pick_among_them() {
+        // The read named cards 10 and 20; the hash, limited to their printings, liked 3 best.
+        let (d, _) = fast_settled_with(&[10, 20], Some(3), None);
+        assert_eq!(d.printing, format_uuid(&id(3)));
+        // A pick outside the title's cards is not one: the leader's own printing stands.
+        let (d, _) = fast_settled_with(&[10], Some(3), None);
+        assert_eq!(d.printing, format_uuid(&id(2)));
+        // And the collector line outranks the dhash among the title's cards.
+        let (d, _) = fast_settled_with(&[10, 20], Some(3), Some("U 0001 HOB EN"));
+        assert_eq!(d.printing, format_uuid(&id(1)));
+    }
+
     #[test]
     fn a_fast_decision_waiting_on_its_read_is_announced_once_the_read_has_run() {
         let mut s = inline(labelled());
@@ -2813,8 +2934,8 @@ mod tests {
         assert!(s.decision_view(&t).is_none(), "a decision before its read");
 
         // The next frame read both bands — the title named card 20.
-        s.title_card = Some(id(20));
-        s.settle_fast_decision(&t, &r, &obs, true);
+        s.title_cards = vec![id(20)];
+        s.settle_fast_decision(&t, &r, true);
         assert!(!s.decision_read_due);
         s.record_decision(t.committed);
         assert_eq!(s.decision_seq, 1);

@@ -133,6 +133,12 @@ pub trait Readers: Sync {
     fn title(&self, view: &BurstView<'_>) -> Option<String>;
     /// The collector line's (set, number) parse candidates.
     fn collector(&self, view: &BurstView<'_>) -> Vec<(String, String)>;
+    /// The collector line as read, and its parse candidates — the raw text is what the
+    /// collector tier matches against the survivors when the parse pairs nothing
+    /// ([`Reference::collector_among`]). Defaults to no text, for readers that have none.
+    fn collector_text(&self, view: &BurstView<'_>) -> (String, Vec<(String, String)>) {
+        (String::new(), self.collector(view))
+    }
 }
 
 /// No readers at all — no models loaded, or the `ocr` feature is off. Both reader tiers then
@@ -177,15 +183,20 @@ pub fn resolve(
     // answer: the title and the collector line are different bands of the same views, and the
     // search reads neither. What each tier *does* with its answer still happens below, in order,
     // so running them together changes the time and nothing else.
-    let (mut best, title_read, pairs) = std::thread::scope(|s| {
+    let (mut best, title_read, (collector_raw, pairs)) = std::thread::scope(|s| {
         let title = s.spawn(|| order.iter().take(2).find_map(|v| readers.title(v)));
+        // The first read that pairs anything; failing that, the first read's text, which the
+        // collector tier can still match against the survivors.
         let collector = s.spawn(|| {
-            order
-                .iter()
-                .take(2)
-                .map(|v| readers.collector(v))
-                .find(|c| !c.is_empty())
-                .unwrap_or_default()
+            let mut first: Option<(String, Vec<(String, String)>)> = None;
+            for v in order.iter().take(2) {
+                let read = readers.collector_text(v);
+                if !read.1.is_empty() {
+                    return read;
+                }
+                first.get_or_insert(read);
+            }
+            first.unwrap_or_default()
         });
         let best = whole_card(r, mask, burst, max_normalized);
         (best, joined(title), joined(collector))
@@ -211,39 +222,52 @@ pub fn resolve(
     // tier found nothing at all, where the read is the only evidence there is, **or the read
     // binds** ([`title_binds`]): a long, lightly corrected name replaces the survivors exactly
     // as an exact one does, because no decision may name a card with a different title.
-    // The card the title settled on, which the collector tier then has to agree with.
-    let mut title_card: Option<Id> = None;
+    //
+    // **A read names a set of cards, not one** ([`Reference::lookup_cards_masked`]): a name
+    // several oracles share, a fuzzy read that ties two names, or a truncated read that starts
+    // one. Every printing of every one of them survives, and the re-rank below lets the dhash
+    // choose among them — the survivors are *limited* to the title's cards, never chosen by it.
+    // The cards the title settled on, which the collector tier then has to agree with.
+    let mut title_cards: Vec<Id> = Vec::new();
     let detail = match title_read {
         None => "no read".to_string(),
-        Some(text) => match r.lookup_by_name_masked(&text, mask) {
-            Some((card, edits)) => {
-                let permitted: Vec<Id> = r
-                    .printings_of(&card)
+        Some(text) => match r.lookup_cards_masked(&text, mask) {
+            Some(hits) => {
+                let permitted: Vec<Id> = hits
+                    .cards
                     .iter()
-                    .copied()
+                    .flat_map(|card| r.printings_of(card).iter().copied())
                     .filter(|p| mask.permits(p))
                     .collect();
-                let name = permitted
-                    .first()
-                    .and_then(named)
-                    .map_or_else(|| format_uuid(&card), |l| l.name);
-                let read = format!("read \"{text}\" → {name} (edits {edits})");
+                let name_of = |card: &Id| {
+                    r.printings_of(card)
+                        .iter()
+                        .find(|p| mask.permits(p))
+                        .and_then(named)
+                        .map_or_else(|| format_uuid(card), |l| l.name)
+                };
+                let mut names: Vec<String> = hits.cards.iter().map(name_of).collect();
+                names.sort();
+                names.dedup();
+                let how = if hits.prefix {
+                    "prefix".to_string()
+                } else {
+                    format!("edits {}", hits.edits)
+                };
+                let read = format!("read \"{text}\" → {} ({how})", names.join(", "));
                 let narrowed: Vec<Id> = survivors
                     .iter()
                     .copied()
-                    .filter(|p| r.oracle_for(p) == card)
+                    .filter(|p| hits.cards.contains(&r.oracle_for(p)))
                     .collect();
-                let binds = title_binds(&text, edits);
+                let binds = hits.prefix || title_binds(&text, hits.edits);
                 if !binds && !survivors.is_empty() && narrowed.is_empty() {
                     format!("{read}, not among survivors — ignored")
                 } else {
-                    survivors = if edits == 0 || survivors.is_empty() || narrowed.is_empty() {
-                        permitted
-                    } else {
-                        narrowed
-                    };
+                    let replace = hits.edits == 0 || survivors.is_empty() || narrowed.is_empty();
+                    survivors = if replace { permitted } else { narrowed };
                     by_distance(&mut survivors, &best);
-                    title_card = Some(card);
+                    title_cards = hits.cards;
                     read
                 }
             }
@@ -261,8 +285,35 @@ pub fn resolve(
     // tier together, so a Swamp ZNR 272 misread as 280 named a Forest that was among the
     // survivors and pinned it. The pinned card must also be the one the title settled on, or —
     // with no title — the nearest card among the survivors or within the margin of it.
+    //
+    // **When the parse pairs nothing, the raw read is matched against the card already
+    // standing** ([`Reference::collector_among`]): the title's cards, else the nearest card.
+    // A fit can only choose among that card's own surviving printings, so it needs none of the
+    // conflict checks a blind pairing does.
+    let standing: Vec<Id> = match (title_cards.is_empty(), survivors.first()) {
+        (false, _) => survivors.clone(),
+        (true, Some(lead)) => {
+            let card = r.oracle_for(lead);
+            survivors.iter().copied().filter(|p| r.oracle_for(p) == card).collect()
+        }
+        (true, None) => Vec::new(),
+    };
+    let fitted = r
+        .lookup_collector_masked(&pairs, mask)
+        .is_none()
+        .then(|| r.collector_among(&collector_raw, &standing))
+        .flatten();
     let detail = match r.lookup_collector_masked(&pairs, mask) {
-        None => "no read".to_string(),
+        None => match fitted {
+            Some(printing) => {
+                survivors = vec![printing];
+                let shown =
+                    named(&printing).map_or_else(|| format_uuid(&printing), |l| l.display());
+                format!("read \"{collector_raw}\" fits {shown}")
+            }
+            None if collector_raw.is_empty() => "no read".to_string(),
+            None => format!("read \"{collector_raw}\", no printing fits"),
+        },
         Some(printing) => {
             let at = pairs
                 .iter()
@@ -283,21 +334,23 @@ pub fn resolve(
                 (Some(d), Some(lead)) => Some(d - lead),
                 _ => None,
             };
-            let agrees = match title_card {
-                Some(t) => t == card,
-                None => behind.is_some_and(|b| b < EXACT_MARGIN_BITS as f32),
+            let titled = !title_cards.is_empty();
+            let agrees = if titled {
+                title_cards.contains(&card)
+            } else {
+                behind.is_some_and(|b| b < EXACT_MARGIN_BITS as f32)
             };
             if !survivors.iter().any(|p| r.oracle_for(p) == card) {
                 format!("conflict: {at} is {name}, not among survivors")
             } else if !agrees {
-                match (title_card, behind) {
-                    (Some(_), _) => {
+                match (titled, behind) {
+                    (true, _) => {
                         format!("conflict: {at} is {name}, not the card the title read")
                     }
-                    (None, Some(b)) => {
+                    (false, Some(b)) => {
                         format!("conflict: {at} is {name}, {b} bits behind the nearest card")
                     }
-                    (None, None) => format!("conflict: {at} is {name}, which has no distance"),
+                    (false, None) => format!("conflict: {at} is {name}, which has no distance"),
                 }
             } else {
                 survivors = vec![printing];

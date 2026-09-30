@@ -695,6 +695,114 @@ fn end_word(words: &mut Vec<String>, totals: &mut Vec<usize>, cur: &mut String, 
     *slash = false;
 }
 
+/// How well a collector-line read fits one printing, best highest. See [`collector_fit`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub struct CollectorFit(u8);
+
+/// Does a collector-line read fit the printing `set` / `number`, and how well?
+///
+/// **A test against a known answer, not a parse**, for a line too blurry to parse:
+/// [`crate::reference::Reference::collector_among`] asks it of each printing of a card already
+/// named, so a fit only ever chooses *among* those. Three grades, best first:
+///
+/// - **number and set** — a token reads as the number, and a token is within one edit of the
+///   set code;
+/// - **number alone** — a token of at least three characters, with at least one real digit in
+///   it, reads as the number. Modern lines print the number zero-padded to four digits, so a
+///   one- or two-character token is too easily noise;
+/// - **set alone, exactly** — a token contains the set code letter for letter, and no token
+///   reads cleanly as some *other* number.
+///
+/// A token reads as a number once the letters OCR confuses with digits are mapped back
+/// (`O Q D` → 0, `I L` → 1, `Z` → 2, `S` → 5, `G` → 6, `B` → 8) and leading zeros are stripped,
+/// with the rarity letter a line prints before the number (`U0014`) allowed to stick to it.
+/// Measured live on 2026-09-30, `U 0014 / LTR • EN` read as `OO14 TRCN S`: `OO14` is 14 and
+/// `TR` is one edit from `LTR`, which the blind parse could never have paired.
+pub fn collector_fit(raw: &str, set: &str, number: &str) -> Option<CollectorFit> {
+    let set = set.to_ascii_uppercase();
+    let number = number.trim_start_matches('0').to_ascii_lowercase();
+    let tokens: Vec<String> = raw
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|t| !t.is_empty())
+        .map(str::to_ascii_uppercase)
+        .collect();
+    let number_read = !number.is_empty()
+        && tokens.iter().any(|t| {
+            let stuck = t.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
+            let tails = [Some(t.as_str()), stuck.then(|| &t[1..])];
+            tails.into_iter().flatten().any(|n| read_number(n).is_some_and(|d| d == number))
+        });
+    let long_number_read = !number.is_empty()
+        && tokens.iter().any(|t| {
+            t.len() >= 3
+                && t.chars().any(|c| c.is_ascii_digit())
+                && read_number(t).is_some_and(|d| d == number)
+        });
+    // A number read cleanly that is not this printing's says the line is some other printing's,
+    // so the set alone is then no evidence for this one.
+    let other_number = tokens.iter().any(|t| t.len() >= 3 && read_number(t).is_some());
+    let set_edits = tokens.iter().filter_map(|t| set_distance(t, &set)).min();
+    match (number_read, set_edits) {
+        (true, Some(e)) if e <= 1 => Some(CollectorFit(3)),
+        _ if long_number_read => Some(CollectorFit(2)),
+        (false, Some(0)) if !other_number => Some(CollectorFit(1)),
+        _ => None,
+    }
+}
+
+/// A token as a collector number, confusable letters mapped to digits and leading zeros
+/// stripped — `None` unless every character is then a digit and at least one was one to start.
+fn read_number(token: &str) -> Option<String> {
+    if !token.chars().any(|c| c.is_ascii_digit()) {
+        return None;
+    }
+    let mapped: String = token
+        .chars()
+        .map(|c| match c {
+            'O' | 'Q' | 'D' => '0',
+            'I' | 'L' => '1',
+            'Z' => '2',
+            'S' => '5',
+            'G' => '6',
+            'B' => '8',
+            c => c,
+        })
+        .collect();
+    let digits = mapped.trim_start_matches('0');
+    (mapped.chars().all(|c| c.is_ascii_digit()) && !digits.is_empty()).then(|| digits.to_string())
+}
+
+/// The fewest edits between `set` and any stretch of `token` within one character of its
+/// length. `None` for a token or set too short to say anything.
+fn set_distance(token: &str, set: &str) -> Option<u32> {
+    let (t, s) = (token.as_bytes(), set.as_bytes());
+    if t.len() < 2 || s.len() < 2 {
+        return None;
+    }
+    let mut best: Option<u32> = None;
+    for len in s.len().saturating_sub(1).max(2)..=(s.len() + 1).min(t.len()) {
+        for window in t.windows(len) {
+            let d = levenshtein(window, s);
+            best = Some(best.map_or(d, |b| b.min(d)));
+        }
+    }
+    best
+}
+
+fn levenshtein(a: &[u8], b: &[u8]) -> u32 {
+    let mut row: Vec<u32> = (0..=b.len() as u32).collect();
+    for (i, ca) in a.iter().enumerate() {
+        let mut prev = row[0];
+        row[0] = i as u32 + 1;
+        for (j, cb) in b.iter().enumerate() {
+            let cur = row[j + 1];
+            row[j + 1] = if ca == cb { prev } else { 1 + prev.min(row[j]).min(cur) };
+            prev = cur;
+        }
+    }
+    row[b.len()]
+}
+
 #[cfg(feature = "ocr")]
 mod engine {
     use super::*;
@@ -1031,6 +1139,23 @@ mod tests {
     fn a_clean_collector_line_resolves_to_its_set_and_number() {
         let c = collector_candidates("U 0232 LTR EN");
         assert!(c.contains(&("ltr".into(), "232".into())), "got {c:?}");
+    }
+
+    /// The reads are verbatim from the 2026-09-30 live pass on a 1080p webcam, where the whole
+    /// line spanned about 136×69 source pixels.
+    #[test]
+    fn a_blurry_collector_read_fits_the_printing_it_shows() {
+        let both = collector_fit("OO14 TRCN S", "ltr", "14");
+        let number = collector_fit("U OO14", "ltr", "14");
+        let set = collector_fit("LTRCN SOG", "ltr", "14");
+        assert!(both > number && number > set && set.is_some(), "{both:?} {number:?} {set:?}");
+        assert_eq!(collector_fit("U0014 LTR", "ltr", "14"), both, "a rarity letter stuck on");
+        // Nothing that reads as its number or its set.
+        assert_eq!(collector_fit("1XRE SOM", "ltr", "14"), None);
+        assert_eq!(collector_fit("1", "ltr", "1"), None, "one character is noise");
+        assert_eq!(collector_fit("IL LTR", "ltr", "11"), set, "letters alone are not a number");
+        // A clean number of another printing takes the set's word away.
+        assert_eq!(collector_fit("U 0426 LTR EN", "ltr", "14"), None);
     }
 
     #[test]

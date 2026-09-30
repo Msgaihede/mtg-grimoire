@@ -143,6 +143,23 @@ pub struct Reference {
     by_set_number: HashMap<(String, String), [u8; ID_LEN]>,
 }
 
+/// The shortest read [`Reference::lookup_cards_masked`] will take as the start of a longer name.
+///
+/// Long enough that a prefix is a name rather than a word: "lightning b" (11) is still a
+/// dozen cards, "faramir field comma" (19) is one.
+pub const PREFIX_MIN_READ: usize = 12;
+
+/// What a title read named. See [`Reference::lookup_cards_masked`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NameHits {
+    /// Oracle ids (a printing's own id where the corpus has none), sorted.
+    pub cards: Vec<[u8; ID_LEN]>,
+    /// The corrections the read needed — 0 for an exact read and for a prefix.
+    pub edits: u32,
+    /// The read is the start of each name rather than the whole of it.
+    pub prefix: bool,
+}
+
 impl Reference {
     pub fn new(bundle: Bundle) -> Self {
         let bundle_printings =
@@ -424,6 +441,107 @@ impl Reference {
             }
         }
         best
+    }
+
+    /// **Every** card a title read names, under the mask — the set a read limits the hash to.
+    ///
+    /// [`Reference::lookup_by_name_masked`] answers one card, which is the right shape for a
+    /// vote and the wrong one for a limit: a read that ties two names, or a name several
+    /// oracles share, has to keep all of them in play and let the dhash choose among their
+    /// printings. Three rungs, the first that finds anything wins:
+    ///
+    /// 1. **Exact** — every permitted card bearing the name.
+    /// 2. **Prefix** — a read of at least [`PREFIX_MIN_READ`] characters that the start of one or
+    ///    more names spells exactly. A title read is cut short when the band ends before the
+    ///    name does, and measured live on 2026-09-30 "faramir field comma" named nothing: every
+    ///    name more than three characters longer than a read is skipped by the fuzzy rung, and
+    ///    Faramir, Field Commander is four longer. **Before the fuzzy rung**, because within
+    ///    reach it counts the missing letters as edits and names whichever one completion is
+    ///    shortest — "lightning bolt st" became one of the two cards it starts, at three edits.
+    /// 3. **Fuzzy** — every card at the *smallest* edit distance, within the lookup's budget.
+    ///
+    /// Cards are sorted, because the name index is a `HashMap` and a tie must not change with
+    /// its iteration order.
+    pub fn lookup_cards_masked(&self, read: &str, mask: &Mask) -> Option<NameHits> {
+        if read.len() < 4 {
+            return None;
+        }
+        if let Some(entries) = self.by_name.get(read) {
+            let cards = self.named_cards(entries, mask);
+            return (!cards.is_empty()).then_some(NameHits { cards, edits: 0, prefix: false });
+        }
+
+        let mut cards: Vec<[u8; ID_LEN]> = Vec::new();
+        if read.chars().count() >= PREFIX_MIN_READ {
+            for (name, entries) in &self.by_name {
+                if name.len() > read.len() && name.starts_with(read) {
+                    cards.extend(self.named_cards(entries, mask));
+                }
+            }
+            cards.sort_unstable();
+            cards.dedup();
+            if !cards.is_empty() {
+                return Some(NameHits { cards, edits: 0, prefix: true });
+            }
+        }
+
+        let budget = (read.len() / 4).clamp(1, 6) as u32;
+        let mut best = budget + 1;
+        for (name, entries) in &self.by_name {
+            if name.len().abs_diff(read.len()) > 3 {
+                continue;
+            }
+            let Some(d) = bounded_edit_distance(name, read, best.min(budget)) else { continue };
+            let named = self.named_cards(entries, mask);
+            if named.is_empty() {
+                continue;
+            }
+            if d < best {
+                best = d;
+                cards.clear();
+            }
+            cards.extend(named);
+        }
+        if !cards.is_empty() {
+            cards.sort_unstable();
+            cards.dedup();
+            return Some(NameHits { cards, edits: best, prefix: false });
+        }
+        None
+    }
+
+    /// Every card in `entries` with a printing the mask permits.
+    fn named_cards(&self, entries: &[NameEntry], mask: &Mask) -> Vec<[u8; ID_LEN]> {
+        entries.iter().map(|e| e.card).filter(|card| self.card_permitted(card, mask)).collect()
+    }
+
+    /// The one printing among `printings` a collector-line read fits, when exactly one does.
+    ///
+    /// **Matching against a known set rather than parsing blind.** Measured live on
+    /// 2026-09-30 (a 1080p webcam, the line about 136×69 source pixels): `U 0014 / LTR • EN`
+    /// read as `OO14 TRCN S`, `LTRCN SOG` and `1XRE SOM` — near enough for a person, and not
+    /// one of them a clean `(set, number)` pair for [`crate::ocr::collector_candidates`]. The
+    /// card is already known by then (the title or the hash named it), so the question is
+    /// only *which of its printings*, and that is a much easier one: see
+    /// [`crate::ocr::collector_fit`] for what a fit is.
+    ///
+    /// A printing whose number and set both fit beats one whose number alone does; a number
+    /// alone is accepted only when no other candidate shares it. `None` when nothing fits or
+    /// two printings fit equally.
+    pub fn collector_among(&self, raw: &str, printings: &[[u8; ID_LEN]]) -> Option<[u8; ID_LEN]> {
+        let mut fits: Vec<([u8; ID_LEN], crate::ocr::CollectorFit)> = printings
+            .iter()
+            .filter_map(|p| {
+                let l = self.labels.get(p)?;
+                crate::ocr::collector_fit(raw, &l.set, &l.number).map(|f| (*p, f))
+            })
+            .collect();
+        fits.sort_by_key(|(_, f)| std::cmp::Reverse(*f));
+        match fits.as_slice() {
+            [] => None,
+            [(p, _)] => Some(*p),
+            [(p, a), (_, b), ..] => (a > b).then_some(*p),
+        }
     }
 
     fn candidate(&self, section: Section, m: &Match) -> Candidate {
@@ -1071,6 +1189,59 @@ mod tests {
         let r = three();
         assert_eq!(r.lookup_by_name("forest"), Some((id(1), 0)));
         assert_eq!(r.lookup_by_name("shock"), Some((id(3), 0)));
+    }
+
+    #[test]
+    fn a_truncated_title_read_names_the_card_it_starts() {
+        // Measured live 2026-09-30: the band ended before the name did, and "faramir field
+        // comma" named nothing — four characters short is past the fuzzy rung's reach.
+        let r = labelled(&[
+            (1, 10, "Faramir, Field Commander", "ltr", "14", "2023-06-23"),
+            (2, 20, "Faramir, Prince of Ithilien", "ltr", "199", "2023-06-23"),
+            (3, 30, "Simulacrum Shaper", "fra", "113", "2025-01-01"),
+        ]);
+        assert_eq!(r.lookup_by_name_masked("faramir field comma", &Mask::all()), None);
+        let hits = r.lookup_cards_masked("faramir field comma", &Mask::all()).expect("a prefix");
+        assert_eq!(hits.cards, vec![id(10)]);
+        assert!(hits.prefix);
+        // A prefix two names share keeps both in play, for the dhash to choose between.
+        let hits = r.lookup_cards_masked("faramir pri", &Mask::all());
+        assert_eq!(hits, None, "eleven characters is too short to be a name");
+        let both = labelled(&[
+            (1, 10, "Lightning Bolt Strike", "aaa", "1", "2020-01-01"),
+            (2, 20, "Lightning Bolt Storm", "bbb", "2", "2020-01-01"),
+        ]);
+        let hits = both.lookup_cards_masked("lightning bolt st", &Mask::all()).expect("prefix");
+        assert_eq!(hits.cards, vec![id(10), id(20)]);
+    }
+
+    #[test]
+    fn a_fuzzy_read_keeps_every_card_at_the_nearest_distance() {
+        let r = labelled(&[
+            (1, 10, "Shock", "m21", "159", "2020-07-03"),
+            (2, 20, "Shack", "aaa", "1", "2020-01-01"),
+            (3, 30, "Smoke", "bbb", "2", "2020-01-01"),
+        ]);
+        // "shick" is one edit from both Shock and Shack, and two from Smoke.
+        let hits = r.lookup_cards_masked("shick", &Mask::all()).expect("a fuzzy hit");
+        assert_eq!((hits.cards, hits.edits, hits.prefix), (vec![id(10), id(20)], 1, false));
+    }
+
+    #[test]
+    fn a_blurry_collector_read_is_fitted_among_a_known_cards_printings() {
+        // Faramir's own printings: the read below is verbatim from the 2026-09-30 live pass.
+        let r = labelled(&[
+            (1, 10, "Faramir, Field Commander", "ltr", "14", "2023-06-23"),
+            (2, 10, "Faramir, Field Commander", "ltr", "426", "2023-06-23"),
+            (3, 10, "Faramir, Field Commander", "pltr", "14p", "2023-06-23"),
+        ]);
+        let all = [id(1), id(2), id(3)];
+        assert_eq!(r.collector_among("OO14 TRCN S", &all), Some(id(1)));
+        assert_eq!(r.collector_among("U 0426 LTR EN", &all), Some(id(2)));
+        // The set alone is two printings of LTR: no answer rather than a guess.
+        assert_eq!(r.collector_among("LTRCN SOG", &all), None);
+        assert_eq!(r.collector_among("1XRE SOM", &all), None);
+        assert_eq!(r.collector_among("", &all), None);
     }
 
     #[test]

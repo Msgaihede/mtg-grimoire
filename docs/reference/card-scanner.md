@@ -2237,19 +2237,37 @@ printing was whichever reprint the hash liked best. Now (`Session::settle_fast_d
   the commit**, so a clear card that commits in two frames (below) is announced on its third. A
   rescue read on the committing frame has already read both, and settles at once. Every rescue read
   now reads the collector line beside the title. Without models loaded nothing is held back.
-- **A binding title read names the card** (`resolve::title_binds`): an exact read, or a corrected
-  one of at least 10 characters with at most one correction per 8. Whatever the hash leads with, a
-  decision never names a card with another title than the one read off it — the tracker's standings
-  may still show the hash's card, but the decision, and so the tray row, is the title's.
-- **A collector read of that card names the printing**; one naming any other card is a misread
-  digit and is ignored, as in Exact's collector tier. Otherwise the leader's best member — a card
+- **A binding title read limits the decision to the cards it names** (`resolve::title_binds`, or a
+  prefix — below): an exact read, or a corrected one of at least 10 characters with at most one
+  correction per 8. **The dhash is then compared against those cards' printings alone**, on the
+  frame that read them (`title_pick`), and the nearest is what the decision names — the reader's
+  rule, 2026-09-30. Whatever the hash leads with over the whole bundle, a decision never names a
+  card with another title than the one read off it; the tracker's standings may still show the
+  hash's card, but the decision, and so the tray row, is the title's.
+- **A read names a set of cards, not one** (`Reference::lookup_cards_masked`): every card bearing
+  an exact name; else every card a read of at least 12 characters is the exact start of — a title
+  read stops where the band does, and live "faramir field comma" named nothing, because the fuzzy
+  rung skips names more than three characters longer than the read; else every card at the
+  smallest edit distance. A read naming one card still votes in the tracker; one naming several
+  only limits the decision.
+- **The collector line chooses among the cards in play first** — the title's, else the leader's.
+  Its blind parse when that names one of their printings; else **a fit of the raw read against
+  their printings** (`Reference::collector_among`, `ocr::collector_fit`): a token that reads as the
+  number once `O`/`D`→0, `I`/`L`→1, `S`→5 and the like are mapped back, a token within one edit of
+  the set code. Live on a 1080p webcam the line spans about 136×69 source pixels and
+  `U 0014 / LTR • EN` read as `OO14 TRCN S` — no pair for the parse, and a clean fit to LTR 14
+  once the card is known. A read naming any other card is a misread digit and is ignored, as in
+  Exact's collector tier. Otherwise the title's dhash pick, or the leader's best member — a card
   decided on title reads alone has none, because a name abstains on the printing (§4), so it takes
-  the card's first permitted printing rather than passing an oracle id off as one.
+  the card's first permitted printing rather than passing an oracle id off as one. Exact's
+  collector tier falls back to the same fit, against the title's surviving printings or the
+  nearest card's.
 
 **The two binding numbers are a choice, not a measurement.** They are twice as strict as the name
 lookup's own budget (one in four), which is what let "datn" name Damn on the evaluation; the
 evaluation is what should move them. Exact's title tier uses the same rule: a binding corrected
 read not among the survivors now replaces them as an exact one does, where it was ignored before.
+So is `PREFIX_MIN_READ` (12): "lightning b" is still a dozen cards, "faramir field comma" is one.
 
 **A clear card decides in two frames rather than eight** (§5, *The early decision*), and a clean
 quad locks in two rather than three (§3, *Lock*) — both Fast's alone, both #705. `FAST_RESCUE_AFTER`
