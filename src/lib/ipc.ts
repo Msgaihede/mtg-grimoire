@@ -7730,6 +7730,12 @@ export interface ScannerVerdict {
   trim: ScannerTrim | null;
   /** Whether this frame's card came from the lock's quad rather than its own. */
   from_lock: boolean;
+  /**
+   * Where the detector looked: `window` is the one mask that found the card, around a trusted
+   * lock's quad; `full` is every method over the whole frame — every frame before a lock, a
+   * window's miss, and every ninth locked frame.
+   */
+  search: "full" | "window";
   score: ScannerScore | null;
   /** The primary view's 256-bit dHash, for display. `null` unless the frame asked for `previews`. */
   hash: string | null;

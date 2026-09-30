@@ -92,6 +92,11 @@ path = "src/bin/eval.rs"
 required-features = ["builder"]
 
 [[bin]]
+name = "detect-bench"
+path = "src/bin/detect_bench.rs"
+required-features = ["builder"]
+
+[[bin]]
 name = "ocr-bench"
 path = "src/bin/ocr_bench.rs"
 required-features = ["builder"]

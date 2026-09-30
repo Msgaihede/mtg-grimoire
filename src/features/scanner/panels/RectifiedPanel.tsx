@@ -38,6 +38,7 @@ export function RectifiedPanel({ verdict }: { verdict: ScannerVerdict | null }) 
             value={score === null ? "—" : `${score.max_angle_error.toFixed(1)}°`}
           />
           <Row label="detector" value={verdict?.method ?? "—"} />
+          <Row label="search" value={verdict?.ok ? verdict.search : "—"} />
           <Row label="geometry" value={score?.via ?? "—"} />
           <Row label="dhash" value={verdict?.hash?.slice(0, 12) ?? "—"} />
         </dl>

@@ -52,6 +52,7 @@ Tesseract.
 | `serve` | `cli` | The live camera page, with the whole pipeline visible per frame and every threshold on a slider. |
 | `build-hashes` | `builder` | Build the reference bundle from `corpus.db` — or, since 2026-09-15, from Scryfall's bulk file (`--bulk`) — and Scryfall's images. Incremental. |
 | `eval` | `builder` | The synthetic evaluation of both scan modes (§10), added 2026-09-15. |
+| `detect-bench` | `builder` | Per-frame cost of detection before and after a lock, on `eval`'s own bursts, one card at a time (§3 *Track*). Added 2026-09-30. |
 | `ocr-bench` | `builder` | Both OCR readers timed and scored on `eval`'s synthetic bands — the old detection path and the current one back to back on every band (§4), added 2026-09-30. |
 
 `cli` = `clap` + `tiny_http` + `corpus` + `ocr`; `builder` = `clap` + `ureq` + `rayon` +
@@ -377,6 +378,117 @@ knocked the lock back to acquiring. It was latent for as long as the lock has ex
 steady corners made it common. Measured on Graf Rats INR 113: locked on four frames of twelve,
 never decided in any mode, with the corners 1% of the card's height from the truth. The candidate
 is now rotated to line up with the held quad before it is compared or blended.
+
+### Track — a locked card is searched where it is
+
+**Added 2026-09-30 (#702).** Until then every frame ran the whole detector from scratch: two
+Canny rungs and two Otsu polarities over the whole working image, their contours, and the
+card-likeness warps. It did this even when the card had lain locked in one place for seconds,
+with its position known to within a few pixels. Now a frame that **arrives to a trusted lock**
+(`QuadLock::trusted_quad`) is searched only in the window the card can have reached. Nothing
+about *finding* a card changed: a card that is not locked yet gets the full sweep exactly as
+before.
+
+- **The window.** `detect::locate_near` crops the frame to `Window::around` the held quad. That
+  is its bounding box grown on every side by the lock's own `max_drift` (0.35) × its short
+  edge, so the window cannot hide a card the lock would still have agreed with. It runs every
+  method and every mask there, and card-likeness picks the winner, exactly as in the sweep.
+- **Back to the full sweep** on a window miss (nothing the lock would accept) and on every
+  `FULL_SWEEP_EVERY` (8)th locked frame. The window can only ever find the card it is centred
+  on, so that ninth frame is what lets anything else — a second card, a better quad — reach
+  the lock. `Verdict::search` says which ran (`full` / `window`); it is the *search* row in the
+  app's Rectified panel and on the debug page.
+- **More than one core.** The masks inside one `locate` and the methods inside one frame are
+  independent, so they run under `std::thread::scope` (no new dependency). Candidates merge in
+  pass order and the ranking is a stable sort, so the answer is the serial one. A panic on a
+  worker thread is resumed on the caller's, where `Session::frame`'s guard catches it as before.
+  Because the masks overlap, `DetectTimings::mask_ms` is now the **slowest** mask's time, not
+  the sum.
+
+**The window is built to give the sweep's answer, not a cheaper one**, and that is the finding
+that shaped it. The lock's smoothed quad is what gets rectified and hashed, so any systematic
+difference in where the window puts the corners moves every descriptor. The first build moved
+enough to lose cards. Three causes were found, each by tracing frames with the window on and off
+(`detect-bench --trace --only <id> [--no-track]`):
+
+1. **Area gates are fractions of the image searched.** In a window a seventh of the frame, the
+   2% floor admitted fragments of 0.6% and 1.3% of the frame, with card-likeness 0.00. The lock
+   refused them as a different card and dropped, and two cards went undecided in every mode.
+   The window now gates on the held quad's area within the lock's `max_area_ratio` and never
+   below the sweep's floor, and every area — gates and the score's area term — is stated in the
+   frame's terms (`DetectOptions::window_share`).
+2. **Otsu's level comes from the pixels it is handed.** One card's frame split at 92 and its
+   window at 135, which cut the card in two. The window splits at the **whole frame's** level,
+   which costs one resize of the frame and no masks (`DetectOptions::otsu_level`).
+3. **An unsnapped crop resamples at another phase.** The evaluation's 1280 px frames work at
+   1.25, and a crop resized from its own origin is not the sweep's pixels. `Window::snapped`
+   grows the crop onto the grid where a source and a working pixel boundary coincide.
+
+Measured over 406 locked frames of 40 evaluation cards, as the mean distance of the window's
+corners from the sweep's quad on the same frame, as a fraction of the card's short edge:
+
+| window | mean | frames > 1% |
+| --- | ---: | ---: |
+| one pass kept from last frame, card searched at 240 px (the first build) | 3.62% | 188 |
+| the same at the sweep's own scale | 3.59% | 190 |
+| every method, picked by card-likeness | 3.39% | 182 |
+| **every method, snapped to the sweep's grid — what ships** | **0.14%** | **4** |
+| the same, Otsu at last frame's level rather than this frame's | 0.28% | 11 |
+| *no window:* the whole frame, only last frame's pass | 2.06% | 68 |
+
+**The issue proposed keeping the method, rung and polarity that produced the lock, and that
+was built and removed.** The pass that won last frame is not the one the sweep picks about
+three frames in ten, and running it alone drifts the quad 1.5–2% even over the whole frame.
+That drift turned Sangromancer C17 from right to wrong in Exact. **Scale was never the
+problem**: the 240 px search looked guilty and measured the same as the sweep's scale. The
+window therefore works at the sweep's own scale, and its saving is the pixels outside it. A test
+pins the contract: the window's quad lands within 0.5 px of the sweep's, for both methods, at
+1280 px. It fails at 0.89 px with the snap removed.
+
+**Measured 2026-09-30, Windows, release, on a quiet machine** (load 0–6% either side of every
+run). `detect-bench --frames 24 --limit 60`: `eval`'s own bursts of the first 60 renders at
+1280 px, one card at a time, through a session with no reference and no reader, so what is
+left is decode, detection, the lock and the rectification. Three interleaved rounds each, which
+agreed within 2%. `main` is `46bfec93`; the branch is #702 merged into it; *window off* is the
+same binary with `Session::set_tracking(false)`, so the threads without the window:
+
+| a frame arriving … | `main` | window off | **window on** |
+| --- | ---: | ---: | ---: |
+| locked, wall ms less decode, p50 | 167–170 | 101 | **75** |
+| locked, CPU ms, every thread, decode included | 171–175 | 174 | **121** |
+| unlocked, wall ms less decode, p50 | 169–172 | 102 | 102 |
+| time to the first lock, p50 (decode included) | 357–366 | 222 | **222** |
+
+And where a locked frame's time goes, from the verdict's own timings (mean ms):
+
+| | resize | mask | contour | rectify | total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `main` | 13.5 | 51.6 | 8.0 | 47.6 | 122.2 |
+| window on | 5.7 | 11.9 | 3.8 | 47.5 | 70.5 |
+
+- **A locked frame costs 55% less wall and 30% less CPU.** The threads buy the latency and spend
+  no CPU doing it (window off: 174 against `main`'s 172). The window then removes most of the
+  mask stage.
+- **Finding a card got faster too**, 357–366 → 222 ms to the first lock, from the threads alone.
+  Frames to lock are unchanged, as they must be, since an unlocked frame gets the same sweep.
+- 1,097 of 1,266 locked frames were searched in the window. 169 were the ninth-frame sweep or a
+  miss. Locks lost mid-burst went 3 → 2.
+- **Rectification is now two thirds of a locked frame**: six 488×680 warps a frame, which no
+  search can shrink. That is #704's to take.
+- **On a loaded machine none of this reads cleanly.** With other sessions holding every core,
+  wall time per frame swung ±30% between two identical runs of one binary, and `main` measured
+  both faster and slower than the branch on different rounds. Hence the CPU column and the
+  quiet-machine rule: take these figures again with the machine idle, or read CPU only.
+
+**Accuracy is unchanged, and that was the bar.** `eval` at seed 7, 160 printings × 12 frames at
+1280 px, on the same two trees: all 36 rows of the session table — every pass, every stratum —
+match `main` in decided, card ✓, printing ✓, ambiguous, not found and median frames
+(Fast 96.2 / 96.2 / 84.4, Exact 96.2 / 96.2 / 82.5, Exact + own set 96.2 / 96.2 / 93.1).
+Detected % in the corner table matches too. Mean corner error moved 4.4 → 4.3 px in Fast and
+1.12 → 1.13% of the card's height in Exact, and the same six cards stayed undecided in every
+pass. Getting there took the three fixes above. The first build lost 4.4 points of Fast's
+decided % and put a wrong card into Exact, and the second, with only the area gates fixed, still
+turned one card from right to wrong.
 
 ### Rectify — the 7% expand, the trim, and the alternate framings
 

@@ -162,6 +162,17 @@ impl QuadLock {
         self.agree >= self.opts.min_agree || self.quick
     }
 
+    /// The held quad, while the lock is trusted — the same test [`LockState::is_trusted`] makes
+    /// after a frame, asked before one. A caller that knows where the card is can then search
+    /// only there.
+    pub fn trusted_quad(&self) -> Option<Quad> {
+        self.quad.filter(|_| self.agree >= self.opts.min_agree)
+    }
+
+    pub fn options(&self) -> &LockOptions {
+        &self.opts
+    }
+
     /// Is `candidate` plausibly the same physical card as `previous`?
     fn agrees(&self, previous: &Quad, candidate: &Quad) -> bool {
         let (px, py) = centre(previous);
