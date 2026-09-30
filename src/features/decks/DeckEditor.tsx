@@ -339,6 +339,21 @@ const DESK_GAP = 16;
  */
 const DECK_HEIGHT_FLOOR = "min-h-96";
 
+/**
+ * The narrowest column the Notes and To-do bands are drawn in side by side (issue #685). The row
+ * holding them fits two columns only when it is at least twice this plus its `gap-x-6`, and one
+ * full-width column otherwise, so this is the whole of where the fold happens — **1048px of row**.
+ *
+ * 32rem because each band's own card grid holds one 280px track of cards and grows a second at
+ * **568px** (280 twice plus its 8px gutter — `NOTE_GAP` and `TODO_LIST_GAP` agree), so a column
+ * this wide shows each band one comfortable track at the fold and two a little past it. Much
+ * narrower and a band at the fold is one card squeezed toward its floor; much wider and a window
+ * with room for both bands side by side would still stack them. A CSS length rather than a pixel
+ * count because the template is a string, spelled in an inline `style` rather than an arbitrary
+ * Tailwind value for Tailwind's whole-class-name rule.
+ */
+export const NOTES_TODOS_COLUMN = "32rem";
+
 /** Stable identity for "no label chip is pressed", so the memo below does not re-run on every
  *  render. The other half of that filter — the ledger's `Game Changers` chip — is a boolean and
  *  needs no such identity. */
@@ -6012,77 +6027,103 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       )}
 
       {row && (
-        // What the reader has written down about this deck — many notes, each managed and
-        // deleted on its own, each free to name any number of cards (issue #447, schema v43).
+        // **The Notes and To-do bands share one row: two columns when there is room, one above
+        // the other when there is not** (issue #685). Each keeps its own header, disclosure,
+        // count and New button, so the row is placement and nothing else — on a wide monitor a
+        // reader reads what they wrote beside what is left to do, rather than under a wall of it.
         //
-        // **After `DeckStats`, and above only the To-do band** — which renders after it since
-        // issue #672; this said "last on the page" until then. Neither this band nor the two
-        // above it may go between the deck and `PriceStrip`: the remove tray is drawn on that
-        // strip for the length of a drag, at `-top-3` reaching up into this column's own `gap-3`,
-        // so anything inserted between them would leave a reader dragging a card past a wall of
-        // prose to reach the one drop that takes it out. Below the strip, the bands are only ever
-        // ordered against each other, and the reader's reason for this one coming after the other
-        // two is that a notebook is opened deliberately: the tokens wall is a list of cards the
-        // deck is about to want and the stats band is four charts read at a glance, where a note
-        // is read by somebody who came here to read it.
+        // **An intrinsic grid, never `@container` and never a viewport breakpoint.** Both bands
+        // mount their dialogs inside their own `<section>`, and a container box is the containing
+        // block for every `fixed` descendant, so `Dialog`'s scrim would stretch to this row rather
+        // than to the window (`src/CLAUDE.md`'s `@container` rule). A viewport breakpoint answers
+        // about the window, and this app has no viewport branch: every fold answers its own box.
+        // So the template counts its own tracks — `auto-fit` over a `NOTES_TODOS_COLUMN` floor
+        // fits two only when the row holds two of them and the gap, and `min(100%, …)` keeps the
+        // single track from overflowing a row narrower than that floor. Each band's own card grid
+        // then answers its own column, as it always has.
         //
-        // **A `section` and `shrink-0`** for the two reasons the bands above spell out in full —
-        // a second complementary landmark answered `getByRole("complementary")` and broke five of
-        // `App.test.tsx`'s pane assertions, and `shrink-0` on the bands below the desk is the
-        // whole of why this editor scrolls. Both live on the panel's own root, so this mount
-        // cannot get either wrong.
-        //
-        // **The cards go down as a prop and the band mounts no second `useDeck`.** It did, for
-        // the attach picker's card names — `CategoriesDialog`'s arrangement, and free only while
-        // the deck query is *fresh*: this band is gated on `row`, so it mounts after the first
-        // read settles, and a second observer arriving on a stale query is a second `deck_get`.
-        // Which of the deck's two lists these are is this file's answer, which is also why
-        // `useDeckNotes` takes no variant — `deck_notes` has no such column, and a note written
-        // against the plan shows on the actual list too because both hold the same oracle ids.
-        //
-        // `notesOpen` is the deck's own column (`decks.notes_open`, schema v43) rather than
-        // editor state, for `tokensOpen`'s reason one band up: whether a reader wants their notes
-        // in front of them is an answer about a *particular* deck, and a `useState` here would
-        // ask it again every time they opened one. The column is `DEFAULT 0` and not `1` —
-        // v37's answer rather than v42's — because this band is new and no deck has ever shown
-        // one, so a shut default takes nothing from anybody.
-        <DeckNotesPanel
-          deckId={deckId}
-          cards={deck.cards}
-          open={row.notesOpen}
-          onToggle={(next) => deck.update.mutate({ notesOpen: next })}
-          // The card menu's two rows, honoured here — see `addNote` above. The band clears the
-          // request as it takes it, which is what stops a standing instruction being re-run on
-          // every render of a deck the reader is editing.
-          request={noteRequest}
-          onRequestHandled={clearNoteRequest}
-        />
-      )}
+        // `items-start`, so a shut band is not stretched to its open neighbour's height, and its
+        // top rule stays on its own header. `shrink-0` here as well as on the two sections: this
+        // row is now the flex item of the editor's column, and `shrink-0` on the bands below the
+        // desk is the whole of why this editor scrolls.
+        <div
+          className="grid shrink-0 items-start gap-x-6 gap-y-3"
+          style={{
+            gridTemplateColumns: `repeat(auto-fit, minmax(min(100%, ${NOTES_TODOS_COLUMN}), 1fr))`,
+          }}
+        >
+          {/* What the reader has written down about this deck — many notes, each managed and
+              deleted on its own, each free to name any number of cards (issue #447, schema v43).
 
-      {row && (
-        // The deck's to-do list — one checklist to a deck, edited in place and saved as it is
-        // typed (issue #672, `decks.todos`). ⚠️ **Not a note**: it borrows the notes band's header
-        // and the notes' editor and nothing else.
-        //
-        // **Directly after the notes band, and so last on the page.** It inherits every reason
-        // the three bands above it are where they are — below `PriceStrip` and never between it
-        // and the deck, whose remove tray reaches up into this column's `gap-3` for the length of
-        // a drag — and the reader's reason for this order is the spec's: what there is still to
-        // do about a deck sits under what they wrote about it.
-        //
-        // **A `section` and `shrink-0`**, both on the panel's own root, for the notes band's two
-        // reasons: a second complementary landmark broke `App.test.tsx`'s pane assertions, and
-        // `shrink-0` on the bands below the desk is the whole of why this editor scrolls.
-        //
-        // `todosOpen` is the deck's own column (`decks.todos_open`), `notesOpen`'s twin one column
-        // along and `DEFAULT 0` for its reason — the band is new, so a shut default takes nothing
-        // from anybody. No `cards` and no request: the list names no card, and nothing else in
-        // the editor asks this band for anything.
-        <DeckTodosPanel
-          deckId={deckId}
-          open={row.todosOpen}
-          onToggle={(next) => deck.update.mutate({ todosOpen: next })}
-        />
+              **After `DeckStats`, and before only the To-do band** — beside it or above it since
+              issue #685, and ahead of it in the page's order either way. Neither this band nor
+              the two above it may go between the deck and `PriceStrip`: the remove tray is drawn
+              on that strip for the length of a drag, at `-top-3` reaching up into this column's
+              own `gap-3`, so anything inserted between them would leave a reader dragging a card
+              past a wall of prose to reach the one drop that takes it out. Below the strip, the
+              bands are only ever ordered against each other, and the reader's reason for this
+              one coming after the other two is that a notebook is opened deliberately: the tokens
+              wall is a list of cards the deck is about to want and the stats band is four charts
+              read at a glance, where a note is read by somebody who came here to read it.
+
+              **A `section` and `shrink-0`** for the two reasons the bands above spell out in full
+              — a second complementary landmark answered `getByRole("complementary")` and broke
+              five of `App.test.tsx`'s pane assertions, and `shrink-0` on the bands below the desk
+              is the whole of why this editor scrolls. Both live on the panel's own root, so this
+              mount cannot get either wrong.
+
+              **The cards go down as a prop and the band mounts no second `useDeck`.** It did, for
+              the attach picker's card names — `CategoriesDialog`'s arrangement, and free only
+              while the deck query is *fresh*: this band is gated on `row`, so it mounts after the
+              first read settles, and a second observer arriving on a stale query is a second
+              `deck_get`. Which of the deck's two lists these are is this file's answer, which is
+              also why `useDeckNotes` takes no variant — `deck_notes` has no such column, and a
+              note written against the plan shows on the actual list too because both hold the
+              same oracle ids.
+
+              `notesOpen` is the deck's own column (`decks.notes_open`, schema v43) rather than
+              editor state, for `tokensOpen`'s reason one band up: whether a reader wants their
+              notes in front of them is an answer about a *particular* deck, and a `useState` here
+              would ask it again every time they opened one. The column is `DEFAULT 0` and not `1`
+              — v37's answer rather than v42's — because this band is new and no deck has ever
+              shown one, so a shut default takes nothing from anybody. */}
+          <DeckNotesPanel
+            deckId={deckId}
+            cards={deck.cards}
+            open={row.notesOpen}
+            onToggle={(next) => deck.update.mutate({ notesOpen: next })}
+            // The card menu's two rows, honoured here — see `addNote` above. The band clears the
+            // request as it takes it, which is what stops a standing instruction being re-run on
+            // every render of a deck the reader is editing.
+            request={noteRequest}
+            onRequestHandled={clearNoteRequest}
+          />
+
+          {/* The deck's to-do lists — many titled lists to a deck, each edited in its own dialog
+              (issues #672 and #688, `deck_todo_lists`). ⚠️ **Not a note**: it borrows the notes
+              band's header and the notes' editor and nothing else.
+
+              **After the notes band, and so last on the page** — beside it on a wide row, under
+              it on a narrow one. It inherits every reason the three bands above it are where they
+              are — below `PriceStrip` and never between it and the deck, whose remove tray reaches
+              up into this column's `gap-3` for the length of a drag — and the reader's reason for
+              this order is the spec's: what there is still to do about a deck follows what they
+              wrote about it.
+
+              **A `section` and `shrink-0`**, both on the panel's own root, for the notes band's
+              two reasons: a second complementary landmark broke `App.test.tsx`'s pane assertions,
+              and `shrink-0` on the bands below the desk is the whole of why this editor scrolls.
+
+              `todosOpen` is the deck's own column (`decks.todos_open`), `notesOpen`'s twin one
+              column along and `DEFAULT 0` for its reason — the band is new, so a shut default
+              takes nothing from anybody. No `cards` and no request: the list names no card, and
+              nothing else in the editor asks this band for anything. */}
+          <DeckTodosPanel
+            deckId={deckId}
+            open={row.todosOpen}
+            onToggle={(next) => deck.update.mutate({ todosOpen: next })}
+          />
+        </div>
       )}
 
       {/* The overlays, mounted **at the editor's top level and as siblings of the layout

@@ -1831,7 +1831,8 @@ layer.
     the component's own root now. So is the placement: below the price strip, below Tokens &
     emblems — and above `DeckNotesPanel`, which renders after it in `DeckEditor.tsx` since user
     schema v43, and the To-do band, which renders after that since v58 and is the band that is
-    last on the page. (This read "last on the page" until 2026-09-28, long after the notes band
+    last on the page — the two sharing one row since issue #685, side by side when it is wide
+    enough. (This read "last on the page" until 2026-09-28, long after the notes band
     landed under it, and then named the notes band as last until the To-do band landed under that.)
   - **No bar in the band is a control.** The design it was built from makes every bar a button
     that narrows the deck list; that is a cross-component feature reaching into all four views and
@@ -5361,6 +5362,17 @@ The storage side, the eight commands and the undo `Op` are
   every consumer tests a card's `oracleId` against it. **A card with a `null` `oracleId` is never
   noted** — `cardControl.tsx`'s `deckCardNoted` is the one place that guard lives, so an orphan
   printing cannot be marked by four views each remembering.
+- **It shares one row with the To-do band, two columns when the row is wide and one above the
+  other when it is not** ([issue #685](https://github.com/Msgaihede/mtg-grimoire/issues/685),
+  2026-09-30). `DeckEditor` wraps both bands in one `grid shrink-0 items-start` whose template is
+  `repeat(auto-fit, minmax(min(100%, NOTES_TODOS_COLUMN), 1fr))`, `NOTES_TODOS_COLUMN` being
+  `32rem` — so the fold is at **1048px of row** (two columns and the `gap-x-6`), with no media
+  query and no JavaScript. Each band keeps its own header, disclosure, count and New button; the
+  row is placement only. **⚠️ Never make that row a `@container`**: both bands mount their
+  dialogs inside their own `<section>`, and a container box is the containing block for a `fixed`
+  descendant, so every one of their scrims would stretch to the row instead of the window
+  (`src/CLAUDE.md`'s rule). The intrinsic template is what answers the row's own width without
+  one. `DeckEditor.test.tsx` pins the shape; jsdom cannot show the fold.
 - **The band is the third collapsible section**, after `DeckStats`, wearing `DeckTokensPanel`'s
   grammar character for character and remembering itself in `decks.notes_open`. Unlike
   `DeckTokensPanel` it **keeps its disclosure at zero notes** — and the redesign (2026-09-20)
@@ -5453,8 +5465,10 @@ band's autosave moved with it intact.
   edits one; `useDeckTodos.ts` owns the read, the tick, the delete and the save; and
   `todoMarkdown.ts` draws every conclusion about the text.
 - **The last band on the page**: `DeckEditor` mounts it directly after `DeckNotesPanel`, gated on
-  `row`. A `<section aria-label="To-do">`, never an `<aside>`, and `shrink-0` on its own root, both
-  for the Notes band's reasons. **Shut by default**, through `decks.todos_open` and the ordinary
+  `row`, **in one row with it** since [issue #685](https://github.com/Msgaihede/mtg-grimoire/issues/685)
+  — beside it when the row is at least 1048px, under it when it is not (*The Notes band* has the
+  template and why the row is never a `@container`). A `<section aria-label="To-do">`, never an
+  `<aside>`, and `shrink-0` on its own root, both for the Notes band's reasons. **Shut by default**, through `decks.todos_open` and the ordinary
   `deck.update`. The header is the Notes band's grammar: the disclosure with `aria-expanded` and a
   turning chevron, a mono `N open · M done` summed over **every list** (nothing when there is no
   to-do), and **New to-do list** at the far end in `META_SUBMIT` — #672's *New to-do*, renamed —
