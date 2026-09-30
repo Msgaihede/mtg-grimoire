@@ -87,6 +87,11 @@ name = "eval"
 path = "src/bin/eval.rs"
 required-features = ["builder"]
 
+[[bin]]
+name = "detect-bench"
+path = "src/bin/detect_bench.rs"
+required-features = ["builder"]
+
 [profile.release]
 opt-level = 3
 

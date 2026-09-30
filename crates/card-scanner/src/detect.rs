@@ -67,6 +67,52 @@ impl EdgeMethod {
             EdgeMethod::Otsu => "otsu",
         }
     }
+
+    /// The masks this method builds, in the order their candidates are pooled.
+    pub fn passes(self) -> [EdgePass; 2] {
+        match self {
+            EdgeMethod::Canny => [EdgePass::CannyStrict, EdgePass::CannyLoose],
+            EdgeMethod::Otsu => [EdgePass::OtsuLight, EdgePass::OtsuDark],
+        }
+    }
+}
+
+/// One of the four masks a full sweep builds: a Canny rung or an Otsu polarity.
+///
+/// **Named so a locked card can keep the one that found it.** Which mask wins is a property of
+/// the table and the lamp, and neither changes between two frames of a card lying still — so
+/// once a lock is trusted, the three masks that did not produce it are three quarters of the
+/// mask stage spent re-proving a negative. A [`Detection`] says which pass it came from, and
+/// [`DetectOptions::only_pass`] runs that pass alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EdgePass {
+    /// Canny at the caller's own pair — 40/100 by default.
+    CannyStrict,
+    /// Canny at the low rung, 0.375 and 0.45 of the caller's pair. See the ladder in [`detect`].
+    CannyLoose,
+    /// Otsu with the light side as foreground: a card lighter than what it sits on.
+    OtsuLight,
+    /// Otsu inverted: a card darker than what it sits on.
+    OtsuDark,
+}
+
+impl EdgePass {
+    pub fn method(self) -> EdgeMethod {
+        match self {
+            EdgePass::CannyStrict | EdgePass::CannyLoose => EdgeMethod::Canny,
+            EdgePass::OtsuLight | EdgePass::OtsuDark => EdgeMethod::Otsu,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            EdgePass::CannyStrict => "canny_strict",
+            EdgePass::CannyLoose => "canny_loose",
+            EdgePass::OtsuLight => "otsu_light",
+            EdgePass::OtsuDark => "otsu_dark",
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -163,7 +209,13 @@ pub struct DetectOptions {
     /// Tuning this on distance alone makes the scanner worse while making the numbers look
     /// better — correctness and margin are the metrics, and mean distance is a decoy.
     pub inset: f32,
+    /// Build only this one of [`DetectOptions::method`]'s masks. `None` builds both.
+    ///
+    /// For a card already locked — see [`EdgePass`]. A pass of the other method is a caller
+    /// contradicting itself, and is read as `None` rather than as "build nothing".
+    pub only_pass: Option<EdgePass>,
 }
+
 
 impl Default for DetectOptions {
     fn default() -> Self {
@@ -182,6 +234,7 @@ impl Default for DetectOptions {
             cardness_candidates: 4,
             min_cardness: crate::cardness::MIN_SCORE,
             inset: 1.07,
+            only_pass: None,
         }
     }
 }
@@ -207,6 +260,13 @@ impl Quad {
             return 0.0;
         }
         top_bottom / sides
+    }
+
+    /// The shorter of the two mean edge lengths — the card's width, whichever way it lies.
+    pub fn short_edge(&self) -> f32 {
+        let top_bottom = (self.edge_len(0, 1) + self.edge_len(2, 3)) / 2.0;
+        let sides = (self.edge_len(1, 2) + self.edge_len(3, 0)) / 2.0;
+        top_bottom.min(sides)
     }
 
     /// Shoelace area, always positive.
@@ -322,12 +382,16 @@ pub struct ScoredQuad {
     /// Card-likeness of this candidate's own rectification, when it was one of the few
     /// evaluated. `None` means it was never rectified, not that it scored zero.
     pub cardness: Option<crate::cardness::Cardness>,
+    /// The mask whose contour this quad came from.
+    pub pass: EdgePass,
 }
 
 /// A successful detection: the card, flattened, in both possible orientations.
 pub struct Detection {
     pub quad: Quad,
     pub score: QuadScore,
+    /// The mask that found it — what a locked card's next frame runs alone.
+    pub pass: EdgePass,
     /// How card-like the chosen rectification is. See [`crate::cardness`].
     pub cardness: crate::cardness::Cardness,
     /// [`crate::RECTIFIED_W`]×[`crate::RECTIFIED_H`], warped from the **full-resolution**
@@ -350,6 +414,7 @@ impl std::fmt::Debug for Detection {
         f.debug_struct("Detection")
             .field("quad", &self.quad)
             .field("score", &self.score)
+            .field("pass", &self.pass)
             .field("cardness", &self.cardness)
             .field("rectified", &format_args!("{}x{}", RECTIFIED_W, RECTIFIED_H))
             .field("margin", &self.margin)
@@ -367,9 +432,11 @@ pub struct DetectTimings {
     /// Downscaling the source to `work_long_edge`. Proportional to the *source* pixels, so
     /// this is the stage a 12 MP still pays and a camera frame does not.
     pub resize_ms: f32,
-    /// Canny or Otsu, plus the morphology, across every mask in the pool.
+    /// Canny or Otsu, plus the morphology. **The slowest mask's, not the sum**: the masks run
+    /// on threads of their own, so this is the stage's share of the wall clock.
     pub mask_ms: f32,
-    /// Contours, hulls, polygon approximation and scoring.
+    /// Contours, hulls, polygon approximation and scoring — the rest of the threaded stage's
+    /// wall clock after [`DetectTimings::mask_ms`], plus the merge.
     pub contour_ms: f32,
     /// The two homographies, warped from the full-resolution source.
     pub rectify_ms: f32,
@@ -432,111 +499,33 @@ pub fn detect(
     let gray = work.to_luma8();
     timings.resize_ms = ms(t_resize);
 
-    let t_mask = std::time::Instant::now();
-
-    // ── Stage 2: separate the card from its background ────────────────────────────
-    let masks: Vec<GrayImage> = match opts.method {
-        EdgeMethod::Canny => {
-            // **A ladder of two threshold pairs, not one**, and it is worth the second pass.
-            // Measured on the sample scans: at 40/100 five frames found no card at all, and
-            // three of those five were recovered at 15/45 — including one whose only
-            // accepted quad had been the card's own text box. A card edge that runs along a
-            // dark feature of the background produces a weak gradient, and one fixed pair
-            // cannot be both selective enough to ignore a patterned surface and sensitive
-            // enough to see that edge.
-            //
-            // Pooling rather than choosing: both masks contribute candidates and
-            // [`score_quad`] ranks them together, so the low rung can only add answers.
-            // **Ordered and non-negative before they reach `canny`, which asserts rather
-            // than errors.** `imageproc::edges::canny` panics outright on
-            // `high_threshold < low_threshold`, and these two numbers arrive from a caller —
-            // in the live view, from two independent sliders that can trivially cross. A
-            // panic there took down every worker thread in the debug server the first time
-            // the low slider was dragged past the high one. Swapping them is the sane
-            // reading of a crossed pair, and it means no caller can panic this module by
-            // passing a merely silly value.
-            let rungs = [
-                canny_pair(opts.canny_low, opts.canny_high),
-                canny_pair(opts.canny_low * 0.375, opts.canny_high * 0.45),
-            ];
-            rungs
-                .iter()
-                .map(|(lo, hi)| {
-                    let edges = imageproc::edges::canny(&gray, *lo, *hi);
-                    // Canny leaves gaps, most reliably at the corners — which is precisely
-                    // where a quadrilateral needs continuity. A close (dilate then erode)
-                    // bridges them without fattening the boundary permanently.
-                    imageproc::morphology::close(&edges, Norm::LInf, 2)
-                })
-                .collect()
-        }
-        EdgeMethod::Otsu => {
-            let level = otsu_level(&gray);
-            // Both polarities. See the module note: a card is lighter than a dark playmat
-            // and darker than a white desk, and nothing in the frame says which you have.
-            //
-            // **Open before close, and the order is the whole point.** A global threshold on
-            // an unevenly lit surface throws off a field of single-pixel speckle wherever the
-            // background grazes the threshold. Closing alone — which is what this did at
-            // first — *dilates* that speckle and welds it onto the card, so the card's
-            // contour reaches the frame edge through a chain of noise and
-            // [`touches_border`] correctly rejects it. Measured on the sample scans: a
-            // borderless card on a black surface produced a textbook-clean mask and was
-            // thrown away for exactly this reason, four times.
-            //
-            // Opening (erode then dilate) removes anything thinner than the kernel before
-            // the close can grow it, which separates the card from the noise while leaving
-            // a blob that size untouched.
-            [ThresholdType::Binary, ThresholdType::BinaryInverted]
-                .into_iter()
-                .map(|kind| {
-                    let mask = threshold(&gray, level, kind);
-                    let despeckled = imageproc::morphology::open(&mask, Norm::LInf, 2);
-                    imageproc::morphology::close(&despeckled, Norm::LInf, 2)
-                })
-                .collect()
-        }
-    };
-
-    timings.mask_ms = ms(t_mask);
-
-    // ── Stages 3-5: contours, polygon approximation, scoring ──────────────────────
-    let t_contour = std::time::Instant::now();
-    let frame_area = (ww * wh) as f32;
+    // ── Stages 2-5, one thread per mask ───────────────────────────────────────────
+    //
+    // **The masks do not depend on each other**, and neither do their contours: each reads the
+    // one grey image and writes only its own candidates. So each runs on a thread of its own
+    // and the pool is merged afterwards **in pass order**, which is the order the serial loop
+    // pooled them in — the ranking below is a stable sort, so the answer is the one a single
+    // thread would have given, only sooner.
+    let passes: Vec<EdgePass> = opts
+        .method
+        .passes()
+        .into_iter()
+        .filter(|p| match opts.only_pass {
+            Some(only) if only.method() == opts.method => only == *p,
+            _ => true,
+        })
+        .collect();
+    let t_passes = std::time::Instant::now();
+    let mut masks: Vec<GrayImage> = Vec::with_capacity(passes.len());
     let mut candidates: Vec<ScoredQuad> = Vec::new();
     let mut examined = 0usize;
     let mut all_contours: Vec<Vec<Point<i32>>> = Vec::new();
-
-    for mask in &masks {
-        let contours = find_contours::<i32>(mask);
-        for contour in &contours {
-            examined += 1;
-            if contour.points.len() < 4 {
-                continue;
-            }
-            // **A contour touching the frame edge is not an object in the frame.** It is
-            // the image boundary itself, or a region running off the side of it — and in
-            // either case there is no fourth corner to find. This one rule is what stopped
-            // the detector reporting the photograph as the card; see
-            // [`DetectOptions::max_area_frac`] for the measurement that prompted it. It also
-            // correctly rejects a card shot half out of frame, which could not be rectified
-            // anyway.
-            if touches_border(&contour.points, ww, wh) {
-                continue;
-            }
-            all_contours.push(contour.points.clone());
-            // The hull first, then the approximation. A raw contour of a real card has
-            // concave excursions — a thumb, a sleeve lip, a shadow notch — and
-            // Douglas-Peucker on that converges to five or six vertices however the epsilon
-            // is chosen. On the hull it converges to four.
-            let hull = convex_hull(contour.points.clone());
-            if hull.len() < 4 {
-                continue;
-            }
-            let Some((quad, via)) = quad_from_hull(&hull) else { continue };
-            let Some(score) = score_quad(&quad, frame_area, opts, via) else { continue };
-            candidates.push(ScoredQuad { quad, score, cardness: None });
-        }
+    for out in run_passes(&gray, &passes, opts) {
+        timings.mask_ms = timings.mask_ms.max(out.mask_ms);
+        examined += out.examined;
+        candidates.extend(out.candidates);
+        all_contours.extend(out.contours);
+        masks.push(out.mask);
     }
 
     // **A card contains its art window; an art window never contains a card.** That
@@ -572,7 +561,7 @@ pub fn detect(
     candidates.dedup_by(|a, b| (a.score.total - b.score.total).abs() < 1e-4);
     candidates.truncate(opts.max_candidates);
 
-    timings.contour_ms = ms(t_contour);
+    timings.contour_ms = ms(t_passes) - timings.mask_ms;
     timings.total_ms = ms(t_start);
 
     // ── Card-likeness decides, not geometry ───────────────────────────────────────
@@ -610,7 +599,7 @@ pub fn detect(
     let trace = DetectTrace {
         timings,
         gray: gray.clone(),
-        binary: masks[0].clone(),
+        binary: masks.swap_remove(0),
         contours: draw_contours(&work.to_rgb8(), &all_contours),
         quads: draw_quads(&work.to_rgb8(), &candidates),
         candidates: candidates.clone(),
@@ -648,6 +637,7 @@ pub fn detect(
         Ok(Detection {
             quad: source_quad,
             score: best.score,
+            pass: best.pass,
             cardness: best.cardness.unwrap_or(crate::cardness::Cardness {
                 title: 0.0,
                 type_line: 0.0,
@@ -663,6 +653,232 @@ pub fn detect(
     )
 }
 
+/// How many pixels a locked card's short edge spans in [`detect_near`]'s working image.
+///
+/// Near what a full sweep gives the typical card: at 1024 px a card whose height is half the
+/// frame's short edge is ~205 px across, and one filling the frame ~290. The ceiling in
+/// [`DetectOptions::work_long_edge`]'s sweep was the card's own art resolving into contours of
+/// its own, which is a matter of how many pixels the *card* spans, not the frame — so a card
+/// is searched at the size it was found at, and a card close to the lens is no longer searched
+/// at more pixels than it needs.
+pub const WINDOW_CARD_PX: f32 = 240.0;
+
+/// A rectangle of the source frame, in source pixels.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub struct Window {
+    pub x: u32,
+    pub y: u32,
+    pub w: u32,
+    pub h: u32,
+}
+
+impl Window {
+    /// Where a card held at `held` can be by the next frame: its bounding box grown on every
+    /// side by `drift` of its short edge, clamped to a `frame_w`×`frame_h` frame.
+    ///
+    /// `drift` is the lock's own [`crate::lock::LockOptions::max_drift`], and that is the
+    /// point: a quad that moved further than this would not have agreed with the lock anyway,
+    /// so the window can never hide a card the lock would still have kept. What does not fit is
+    /// a card that moved, and a miss sends the frame to the full sweep.
+    ///
+    /// `None` for a quad with nothing inside the frame to search.
+    pub fn around(held: &Quad, drift: f32, frame_w: u32, frame_h: u32) -> Option<Window> {
+        let grow = held.short_edge() * drift.max(0.0);
+        let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
+        for (x, y) in held.corners {
+            x0 = x0.min(x);
+            y0 = y0.min(y);
+            x1 = x1.max(x);
+            y1 = y1.max(y);
+        }
+        let x0 = (x0 - grow).floor().max(0.0);
+        let y0 = (y0 - grow).floor().max(0.0);
+        let x1 = (x1 + grow).ceil().min(frame_w as f32);
+        let y1 = (y1 + grow).ceil().min(frame_h as f32);
+        // Too small to hold a contour, or wholly off the frame.
+        if !(x1 - x0 >= 16.0 && y1 - y0 >= 16.0) {
+            return None;
+        }
+        Some(Window {
+            x: x0 as u32,
+            y: y0 as u32,
+            w: (x1 - x0) as u32,
+            h: (y1 - y0) as u32,
+        })
+    }
+}
+
+/// [`detect`], but only where a locked card can be — the search a trusted lock gets.
+///
+/// **A locked card's position is already known to within a few pixels**, and a full sweep
+/// spends almost all of its time re-finding it. So this searches [`Window::around`] the held
+/// quad, at a working resolution where the card spans [`WINDOW_CARD_PX`] on its short edge —
+/// **never finer than the full sweep's own**, so a small card is never searched at a resolution
+/// nobody tuned the morphology for. Pair it with [`DetectOptions::only_pass`] and one mask runs
+/// over a fraction of the pixels.
+///
+/// The detection comes back in **source** coordinates, like [`detect`]'s. The rectifications
+/// are the source's own pixels too — the window is a crop, not a resample, and it reaches
+/// further past the card than any framing does. **The trace does not**: its images and
+/// candidates are the window's, which is what a debug view of this search should show.
+///
+/// Every gate still applies, relative to the window: a contour touching its edge is a card
+/// that moved out of it, and is refused exactly as one leaving the frame is.
+pub fn detect_near(
+    source: &DynamicImage,
+    held: &Quad,
+    drift: f32,
+    opts: &DetectOptions,
+) -> (Result<Detection, DetectError>, Option<DetectTrace>) {
+    let (sw, sh) = source.dimensions();
+    let Some(window) = Window::around(held, drift, sw, sh) else {
+        return (Err(DetectError::NoCard { examined: 0 }), None);
+    };
+    let full_scale = (sw.max(sh) as f32 / opts.work_long_edge.max(1) as f32).max(1.0);
+    let scale = (held.short_edge() / WINDOW_CARD_PX).max(full_scale);
+    let work_long_edge = ((window.w.max(window.h) as f32 / scale).round() as u32).max(1);
+    let crop = source.crop_imm(window.x, window.y, window.w, window.h);
+    let (result, trace) = detect(&crop, &DetectOptions { work_long_edge, ..opts.clone() });
+    let (dx, dy) = (window.x as f32, window.y as f32);
+    // The area fraction too: "frame area" in a readout means the frame's, and the window's
+    // would read the same card as three times the size whenever the lock is trusted.
+    let area_ratio = (window.w as f32 * window.h as f32) / (sw as f32 * sh as f32);
+    let result = result.map(|mut d| {
+        d.quad = Quad { corners: d.quad.corners.map(|(x, y)| (x + dx, y + dy)) };
+        d.score.area_frac *= area_ratio;
+        d
+    });
+    (result, trace)
+}
+
+/// What one mask contributed to the pool.
+struct PassOutput {
+    mask: GrayImage,
+    /// Every contour that did not touch the border, for the debug artifact.
+    contours: Vec<Vec<Point<i32>>>,
+    candidates: Vec<ScoredQuad>,
+    examined: usize,
+    mask_ms: f32,
+}
+
+/// Every pass, each on a thread of its own when there is more than one.
+///
+/// A panic on a pass's thread is carried back to the caller's rather than swallowed, so the
+/// session's `catch_unwind` sees exactly what it saw when the passes ran inline.
+fn run_passes(gray: &GrayImage, passes: &[EdgePass], opts: &DetectOptions) -> Vec<PassOutput> {
+    if let [only] = passes {
+        return vec![run_pass(gray, *only, opts)];
+    }
+    std::thread::scope(|s| {
+        let handles: Vec<_> =
+            passes.iter().map(|&p| s.spawn(move || run_pass(gray, p, opts))).collect();
+        handles
+            .into_iter()
+            .map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
+            .collect()
+    })
+}
+
+/// One mask, and the scored quads its contours make.
+fn run_pass(gray: &GrayImage, pass: EdgePass, opts: &DetectOptions) -> PassOutput {
+    let started = std::time::Instant::now();
+    let (ww, wh) = gray.dimensions();
+
+    // ── Stage 2: separate the card from its background ────────────────────────────
+    let mask = match pass {
+        EdgePass::CannyStrict | EdgePass::CannyLoose => {
+            // **A ladder of two threshold pairs, not one**, and it is worth the second pass.
+            // Measured on the sample scans: at 40/100 five frames found no card at all, and
+            // three of those five were recovered at 15/45 — including one whose only
+            // accepted quad had been the card's own text box. A card edge that runs along a
+            // dark feature of the background produces a weak gradient, and one fixed pair
+            // cannot be both selective enough to ignore a patterned surface and sensitive
+            // enough to see that edge.
+            //
+            // Pooling rather than choosing: both masks contribute candidates and
+            // [`score_quad`] ranks them together, so the low rung can only add answers.
+            // **Ordered and non-negative before they reach `canny`, which asserts rather
+            // than errors.** `imageproc::edges::canny` panics outright on
+            // `high_threshold < low_threshold`, and these two numbers arrive from a caller —
+            // in the live view, from two independent sliders that can trivially cross. A
+            // panic there took down every worker thread in the debug server the first time
+            // the low slider was dragged past the high one. Swapping them is the sane
+            // reading of a crossed pair, and it means no caller can panic this module by
+            // passing a merely silly value.
+            let (lo, hi) = match pass {
+                EdgePass::CannyStrict => canny_pair(opts.canny_low, opts.canny_high),
+                _ => canny_pair(opts.canny_low * 0.375, opts.canny_high * 0.45),
+            };
+            let edges = imageproc::edges::canny(gray, lo, hi);
+            // Canny leaves gaps, most reliably at the corners — which is precisely
+            // where a quadrilateral needs continuity. A close (dilate then erode)
+            // bridges them without fattening the boundary permanently.
+            imageproc::morphology::close(&edges, Norm::LInf, 2)
+        }
+        EdgePass::OtsuLight | EdgePass::OtsuDark => {
+            // One of two polarities, and a full sweep runs both. See the module note: a card is
+            // lighter than a dark playmat and darker than a white desk, and nothing in the
+            // frame says which you have.
+            //
+            // **Open before close, and the order is the whole point.** A global threshold on
+            // an unevenly lit surface throws off a field of single-pixel speckle wherever the
+            // background grazes the threshold. Closing alone — which is what this did at
+            // first — *dilates* that speckle and welds it onto the card, so the card's
+            // contour reaches the frame edge through a chain of noise and
+            // [`touches_border`] correctly rejects it. Measured on the sample scans: a
+            // borderless card on a black surface produced a textbook-clean mask and was
+            // thrown away for exactly this reason, four times.
+            //
+            // Opening (erode then dilate) removes anything thinner than the kernel before
+            // the close can grow it, which separates the card from the noise while leaving
+            // a blob that size untouched.
+            let kind = match pass {
+                EdgePass::OtsuLight => ThresholdType::Binary,
+                _ => ThresholdType::BinaryInverted,
+            };
+            let mask = threshold(gray, otsu_level(gray), kind);
+            let despeckled = imageproc::morphology::open(&mask, Norm::LInf, 2);
+            imageproc::morphology::close(&despeckled, Norm::LInf, 2)
+        }
+    };
+    let mask_ms = started.elapsed().as_secs_f32() * 1000.0;
+
+    // ── Stages 3-5: contours, polygon approximation, scoring ──────────────────────
+    let frame_area = (ww * wh) as f32;
+    let mut candidates: Vec<ScoredQuad> = Vec::new();
+    let mut examined = 0usize;
+    let mut contours_kept: Vec<Vec<Point<i32>>> = Vec::new();
+    let contours = find_contours::<i32>(&mask);
+    for contour in &contours {
+        examined += 1;
+        if contour.points.len() < 4 {
+            continue;
+        }
+        // **A contour touching the frame edge is not an object in the frame.** It is
+        // the image boundary itself, or a region running off the side of it — and in
+        // either case there is no fourth corner to find. This one rule is what stopped
+        // the detector reporting the photograph as the card; see
+        // [`DetectOptions::max_area_frac`] for the measurement that prompted it. It also
+        // correctly rejects a card shot half out of frame, which could not be rectified
+        // anyway.
+        if touches_border(&contour.points, ww, wh) {
+            continue;
+        }
+        contours_kept.push(contour.points.clone());
+        // The hull first, then the approximation. A raw contour of a real card has
+        // concave excursions — a thumb, a sleeve lip, a shadow notch — and
+        // Douglas-Peucker on that converges to five or six vertices however the epsilon
+        // is chosen. On the hull it converges to four.
+        let hull = convex_hull(contour.points.clone());
+        if hull.len() < 4 {
+            continue;
+        }
+        let Some((quad, via)) = quad_from_hull(&hull) else { continue };
+        let Some(score) = score_quad(&quad, frame_area, opts, via) else { continue };
+        candidates.push(ScoredQuad { quad, score, cardness: None, pass });
+    }
+    PassOutput { mask, contours: contours_kept, candidates, examined, mask_ms }
+}
 /// Reduce a convex hull to four corners.
 ///
 /// Douglas-Peucker first, sweeping the tolerance — the right epsilon scales with the object,
@@ -1383,5 +1599,78 @@ mod tests {
         let src = RgbImage::from_pixel(100, 100, Rgb([255, 255, 255]));
         let collapsed = Quad { corners: [(0.0, 0.0); 4] };
         assert!(rectify(&src, &collapsed).is_none());
+    }
+
+    #[test]
+    fn a_detection_names_its_pass_and_one_pass_can_run_alone() {
+        let frame = synth(800, 600, 300.0, 0.0);
+        for method in [EdgeMethod::Canny, EdgeMethod::Otsu] {
+            let opts = DetectOptions { method, ..Default::default() };
+            let full = detect(&frame, &opts).0.expect("the full sweep finds the card");
+            assert!(method.passes().contains(&full.pass), "{method:?} named {:?}", full.pass);
+
+            // The pass that found it, alone, finds it again — the locked frame's whole premise.
+            let alone = DetectOptions { only_pass: Some(full.pass), ..opts.clone() };
+            let (result, trace) = detect(&frame, &alone);
+            let d = result.unwrap_or_else(|e| panic!("{:?} alone found nothing: {e}", full.pass));
+            assert_eq!(d.pass, full.pass);
+            assert!(trace.expect("a trace").candidates.iter().all(|c| c.pass == full.pass));
+        }
+        // A pass of the other method is ignored rather than building nothing.
+        let crossed = DetectOptions {
+            method: EdgeMethod::Canny,
+            only_pass: Some(EdgePass::OtsuLight),
+            ..Default::default()
+        };
+        let d = detect(&frame, &crossed).0.expect("Canny still runs");
+        assert_eq!(d.pass.method(), EdgeMethod::Canny);
+    }
+
+    #[test]
+    fn a_window_grows_by_the_drift_and_stops_at_the_frame() {
+        // A 100×140 box: short edge 100, so 0.35 of drift grows it 35 px a side.
+        let q = Quad { corners: [(100.0, 100.0), (200.0, 100.0), (200.0, 240.0), (100.0, 240.0)] };
+        assert_eq!(
+            Window::around(&q, 0.35, 1000, 1000),
+            Some(Window { x: 65, y: 65, w: 170, h: 210 })
+        );
+        assert_eq!(
+            Window::around(&q, 0.35, 220, 1000),
+            Some(Window { x: 65, y: 65, w: 155, h: 210 }),
+            "clamped at the frame's right edge"
+        );
+        let gone = Quad { corners: q.corners.map(|(x, y)| (x + 5000.0, y)) };
+        assert_eq!(Window::around(&gone, 0.35, 1000, 1000), None);
+    }
+
+    #[test]
+    fn a_window_finds_the_held_card_in_source_coordinates() {
+        // 220 px is searched at the full sweep's own scale; 400 px is past `WINDOW_CARD_PX`
+        // and searched coarser. Both have to land where the full sweep did.
+        for card_w in [220.0, 400.0] {
+            let frame = synth(1280, 720, card_w, 12.0);
+            let opts = DetectOptions { method: EdgeMethod::Otsu, ..Default::default() };
+            let full = detect(&frame, &opts).0.expect("the full sweep finds the card");
+            // The lock's quad is smoothed and a few pixels behind, never exactly this frame's.
+            let held = Quad { corners: full.quad.corners.map(|(x, y)| (x + 12.0, y - 8.0)) };
+            let alone = DetectOptions { only_pass: Some(full.pass), ..opts };
+            let near = detect_near(&frame, &held, 0.35, &alone)
+                .0
+                .unwrap_or_else(|e| panic!("the window lost a {card_w} px card: {e}"));
+            for (a, b) in near.quad.corners.iter().zip(full.quad.corners.iter()) {
+                let off = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+                assert!(off < 6.0, "{card_w} px: a corner is {off:.1} px from the full sweep's");
+            }
+            assert_eq!(near.rectified.dimensions(), full.rectified.dimensions());
+        }
+    }
+
+    #[test]
+    fn a_window_where_the_card_is_not_misses() {
+        // The card sits in the middle; the held quad is in the top-left corner, as if the card
+        // had been picked up and put down elsewhere. The window must miss, so the caller sweeps.
+        let frame = synth(1280, 720, 220.0, 0.0);
+        let held = Quad { corners: [(60.0, 40.0), (160.0, 40.0), (160.0, 180.0), (60.0, 180.0)] };
+        assert!(detect_near(&frame, &held, 0.35, &DetectOptions::default()).0.is_err());
     }
 }

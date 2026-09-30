@@ -21,8 +21,8 @@
 
 use crate::cardness::Cardness;
 use crate::detect::{
-    detect, rectify_views, DetectOptions, DetectTimings, DetectTrace, Detection, EdgeMethod,
-    QuadScore,
+    detect, detect_near, rectify_views, DetectError, DetectOptions, DetectTimings, DetectTrace,
+    Detection, EdgeMethod, EdgePass, QuadScore,
 };
 use crate::filters::ScanFilters;
 use crate::hash::{hash, HashKind};
@@ -55,6 +55,13 @@ pub const FAST_RESCUE_AFTER: u32 = 8;
 pub const EXACT_STEADY_FRAMES: u32 = 3;
 /// How many locked frames an Exact resolve reads over — the ring buffer's length.
 pub const EXACT_BURST: usize = 3;
+/// A locked card gets the whole frame again after this many frames searched in its window.
+///
+/// The window can only ever find the card it is centred on, so this is what lets anything
+/// else in the frame — a second card, a hand, a better quad the window cannot see — reach the
+/// lock at all. Eight is a little over a second and a half at the app's measured 5 frames a
+/// second, and costs one full sweep in nine.
+pub const FULL_SWEEP_EVERY: u32 = 8;
 
 /// The two ways a session decides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -299,6 +306,44 @@ pub struct DecisionView {
     pub replaces_previous: bool,
 }
 
+/// Where a frame's detector looked.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Search {
+    /// Every method and every mask, over the whole frame.
+    #[default]
+    Full,
+    /// One mask, in the window around a trusted lock's quad — see `detect::detect_near`.
+    Window,
+}
+
+/// One detector's answer for one frame, with its trace either way.
+type Attempt = (Result<Detection, DetectError>, Option<DetectTrace>);
+
+/// Every method over the whole frame, each on a thread of its own when there is more than one,
+/// in `methods` order.
+///
+/// A panic on a method's thread is carried back to this one, where [`Session::frame`]'s guard
+/// catches it as it always has.
+fn sweep(
+    source: &image::DynamicImage,
+    methods: &[EdgeMethod],
+    options: impl Fn(EdgeMethod) -> DetectOptions + Sync,
+) -> Vec<(EdgeMethod, Attempt)> {
+    if let [only] = methods {
+        return vec![(*only, detect(source, &options(*only)))];
+    }
+    let options = &options;
+    std::thread::scope(|s| {
+        let handles: Vec<_> =
+            methods.iter().map(|&m| (m, s.spawn(move || detect(source, &options(m))))).collect();
+        handles
+            .into_iter()
+            .map(|(m, h)| (m, h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))))
+            .collect()
+    })
+}
+
 /// What one frame came to. The keys are the debug page's — see the module doc.
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct Verdict {
@@ -328,6 +373,10 @@ pub struct Verdict {
     /// `true` constantly is a detector failing behind a lock that is covering for it, which is
     /// worth seeing rather than being rescued from silently.
     pub from_lock: bool,
+    /// Which search found this frame's card: the window around a trusted lock, or the whole
+    /// frame. A locked card that reads `full` on most frames is a window missing the card —
+    /// the cost the window exists to save, spent twice.
+    pub search: Search,
     pub score: Option<QuadScore>,
     pub hash: Option<String>,
     /// The rectified card, always returned when there was one: it is the payload a reader
@@ -382,6 +431,7 @@ impl Verdict {
             rejected_cardness: None,
             trim: None,
             from_lock: false,
+            search: Search::Full,
             score: None,
             hash: None,
             rectified: None,
@@ -460,6 +510,10 @@ pub struct Session {
     reader: Option<Reader>,
     tracker: Tracker,
     lock: QuadLock,
+    /// The mask whose detection last reached the lock — what a locked frame's window runs.
+    focus: Option<EdgePass>,
+    /// Locked frames searched in the window since the last full sweep.
+    windowed: u32,
     /// Frames since the session started, for the reader's cadence.
     seq: u64,
     top: usize,
@@ -506,6 +560,8 @@ impl Session {
             reader,
             tracker: Tracker::default(),
             lock: QuadLock::default(),
+            focus: None,
+            windowed: 0,
             seq: 0,
             top: top.clamp(1, 25),
             mask: Mask::all(),
@@ -593,6 +649,8 @@ impl Session {
     pub fn reset(&mut self) {
         self.forget_card();
         self.lock.reset();
+        self.focus = None;
+        self.windowed = 0;
         self.previous_card = None;
     }
 
@@ -809,12 +867,40 @@ impl Session {
         // same decision.
         let settled = self.tracker.last_committed();
 
-        // ---- detect: the sweep over the methods, card-likeness picks the winner ------------
+        // ---- detect: where the card is, else the sweep over the methods ------------------
+        //
+        // **A trusted lock already knows where the card is**, so its frame searches the window
+        // around the held quad with the one mask that found it — see `detect_near`. A miss
+        // there, a card that is not locked yet, and every `FULL_SWEEP_EVERY`th locked frame get
+        // the whole frame with every method, exactly as before, so nothing about *finding* a
+        // card changed and a card that moved or was swapped is found again.
         let mut best: Option<(EdgeMethod, Detection, Option<DetectTrace>)> = None;
         let mut fallback_trace: Option<DetectTrace> = None;
         let mut error = None;
-        for m in opts.method.edge_methods() {
-            let (result, trace) = detect(&source, &opts.detect_options(m, settled));
+        let methods = opts.method.edge_methods();
+        let mut search = Search::Full;
+        if let (Some(held), Some(pass)) = (self.lock.trusted_quad(), self.focus) {
+            if self.windowed < FULL_SWEEP_EVERY && methods.contains(&pass.method()) {
+                let detect_opts = DetectOptions {
+                    only_pass: Some(pass),
+                    ..opts.detect_options(pass.method(), settled)
+                };
+                let (result, trace) =
+                    detect_near(&source, &held, self.lock.options().max_drift, &detect_opts);
+                if let Ok(d) = result {
+                    best = Some((pass.method(), d, trace));
+                    search = Search::Window;
+                }
+            }
+        }
+        let swept = if best.is_none() {
+            self.windowed = 0;
+            sweep(&source, &methods, |m| opts.detect_options(m, settled))
+        } else {
+            self.windowed += 1;
+            Vec::new()
+        };
+        for (m, (result, trace)) in swept {
             match result {
                 Ok(d) => {
                     // **Card-likeness picks the method, not the geometric score.** Measured, it
@@ -838,10 +924,15 @@ impl Session {
             }
         }
 
+        if let Some((_, d, _)) = &best {
+            self.focus = Some(d.pass);
+        }
+
         let mut v =
             Verdict::failed(String::new(), frame, decode_ms, matcher, self.mode, self.decision_seq);
         v.ok = best.is_some();
         v.error = None;
+        v.search = search;
 
         // ---- lock -------------------------------------------------------------------------
         // The lock decides whether this frame is worth believing. Nothing is rejected on
@@ -2287,5 +2378,65 @@ mod tests {
         s.reset();
         let v = s.frame(&blank_jpeg(), &FrameOptions::default());
         assert_eq!(v.lock.as_ref().map(|l| l.misses), Some(1));
+    }
+
+    /// A banded card on a dark ground, centred at `cx` in a 960×540 frame — the page's size.
+    fn card_jpeg(cx: f32) -> Vec<u8> {
+        let (card_w, cy) = (260.0f32, 270.0f32);
+        let card_h = card_w / crate::CARD_ASPECT;
+        let img = image::RgbImage::from_fn(960, 540, |x, y| {
+            let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+            if dx.abs() > card_w / 2.0 || dy.abs() > card_h / 2.0 {
+                return image::Rgb([20, 20, 24]);
+            }
+            // The title band, art, type line, text box and info line `cardness` looks for.
+            let v = match (dy + card_h / 2.0) / card_h {
+                t if t < 0.10 => 240,
+                t if t < 0.55 => 150,
+                t if t < 0.62 => 240,
+                t if t < 0.92 => 200,
+                _ => 140,
+            };
+            image::Rgb([v; 3])
+        });
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
+            .encode_image(&img)
+            .expect("encode");
+        out
+    }
+
+    #[test]
+    fn a_locked_card_is_searched_in_its_window_and_swept_every_so_often() {
+        let mut s = Session::new(None, None, 5);
+        let jpeg = card_jpeg(480.0);
+        let seen: Vec<Search> = (0..14)
+            .map(|i| {
+                let v = s.frame(&jpeg, &FrameOptions::default());
+                assert!(v.ok, "frame {i} lost the card: {:?}", v.error);
+                v.search
+            })
+            .collect();
+        // Three frames to lock, all swept; then the window, with a full sweep after every
+        // `FULL_SWEEP_EVERY` of them.
+        let mut want = vec![Search::Full; 3];
+        want.extend(std::iter::repeat_n(Search::Window, FULL_SWEEP_EVERY as usize));
+        want.extend([Search::Full, Search::Window, Search::Window]);
+        assert_eq!(seen, want);
+    }
+
+    #[test]
+    fn a_card_that_left_its_window_is_found_by_the_sweep() {
+        let mut s = Session::new(None, None, 5);
+        for _ in 0..4 {
+            s.frame(&card_jpeg(480.0), &FrameOptions::default());
+        }
+        // Moved further than the lock's drift allows: the window around the old place sees
+        // only a card's edge running out of it, and has to hand the frame to the sweep.
+        let v = s.frame(&card_jpeg(200.0), &FrameOptions::default());
+        assert!(v.ok, "the sweep did not find the moved card: {:?}", v.error);
+        assert_eq!(v.search, Search::Full);
+        let x = v.quad_raw.expect("a quad").iter().map(|c| c.0).sum::<f32>() / 4.0;
+        assert!((x - 200.0).abs() < 10.0, "the quad is centred at {x}, not where the card went");
     }
 }

@@ -300,6 +300,7 @@
         <dt>frame area</dt><dd id="m-area">—</dd>
         <dt>corner err</dt><dd id="m-angle">—</dd>
         <dt>detector</dt><dd id="m-method">—</dd>
+        <dt>search</dt><dd id="m-search">—</dd>
         <dt>geometry</dt><dd id="m-via">—</dd>
         <dt>dhash</dt><dd id="m-hash">—</dd>
       </dl>
@@ -591,10 +592,11 @@ function render(j) {
     set('m-area', (j.score.area_frac * 100).toFixed(1) + '%');
     set('m-angle', j.score.max_angle_error.toFixed(1) + '°');
     set('m-method', j.method);
+    set('m-search', j.search);
     set('m-via', j.score.via);
     set('m-hash', j.hash.slice(0, 12));
   } else {
-    for (const id of ['m-aspect', 'm-area', 'm-angle', 'm-method', 'm-via', 'm-hash']) set(id, '—');
+    for (const id of ['m-aspect', 'm-area', 'm-angle', 'm-method', 'm-search', 'm-via', 'm-hash']) set(id, '—');
   }
   // The slot is fixed-size and always in the layout; only its contents swap.
   const rect = j.ok ? j.rectified : null;
