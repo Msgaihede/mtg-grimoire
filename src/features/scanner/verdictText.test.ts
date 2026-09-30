@@ -39,6 +39,14 @@ describe("the vote rule's numbers", () => {
     expect(barFill(null)).toBe(0);
   });
 
+  it("fills the bar and says so when Fast decided on clear frames short of the bar", () => {
+    const tracked = { ...VERDICTS.decided.tracked!, early: true };
+    tracked.standings = [{ ...tracked.standings[0], evidence: 2 }];
+    expect(barFill(tracked)).toBe(1);
+    expect(shareLine(tracked)).toBe("2.0/8 · clear · 8f");
+    expect(verdictWord(tracked)).toBe("decided");
+  });
+
   it("writes the tally, the frames and the lead the way the debug page does", () => {
     expect(shareLine(VERDICTS.voting.tracked)).toBe("5.0/8 · 12f");
     expect(shareLine(VERDICTS.confidence.tracked)).toBe("80% over 12f");

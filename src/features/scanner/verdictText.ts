@@ -49,11 +49,18 @@ export function verdictWord(t: ScannerTracked | null): "decided" | "voting" | "c
   return t.committed ? "confirmed" : "gathering";
 }
 
-/** 0..1. Votes over the bar under the vote rule; the two-way confidence otherwise. */
+/**
+ * 0..1. Votes over the bar under the vote rule; the two-way confidence otherwise. A card Fast
+ * decided on clear frames before the bar is full, because the bar is the question "decided yet?"
+ * and the tally short of it is the answer arriving early rather than a card still being voted on.
+ */
 export function barFill(t: ScannerTracked | null): number {
   if (t === null) return 0;
   const lead = t.standings[0];
-  if (t.rule === "votes") return lead === undefined ? 0 : Math.min(1, lead.evidence / t.decide_at);
+  if (t.rule === "votes") {
+    if (lead === undefined) return 0;
+    return t.early ? 1 : Math.min(1, lead.evidence / t.decide_at);
+  }
   return Math.min(1, t.confidence);
 }
 
@@ -61,7 +68,7 @@ export function shareLine(t: ScannerTracked | null): string {
   if (t === null) return "—";
   if (t.rule === "votes") {
     const tally = t.standings[0]?.evidence ?? 0;
-    return `${tally.toFixed(1)}/${t.decide_at} · ${t.frames}f`;
+    return `${tally.toFixed(1)}/${t.decide_at}${t.early ? " · clear" : ""} · ${t.frames}f`;
   }
   return `${(t.confidence * 100).toFixed(0)}% over ${t.frames}f`;
 }

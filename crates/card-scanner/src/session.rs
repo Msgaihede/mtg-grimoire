@@ -60,6 +60,37 @@ pub const OCR_EVERY: u64 = 4;
 /// first locked frame spent a third of a second per read on cards that never needed one. Past
 /// this, the hash has had its chance and the title read is the rescue it exists to be.
 pub const FAST_RESCUE_AFTER: u32 = 8;
+/// Fast decides before the vote bar after this many trusted frames in a row that are each
+/// clear about the same card — inside [`FAST_EARLY_DISTANCE`] and ahead of the nearest other
+/// card by [`FAST_EARLY_MARGIN`]. See [`TrackerOptions::early_frames`].
+///
+/// **All three came from `eval --trace`** (Windows, release, 2026-09-30, seeds 7, 1 and 2, 160
+/// printings each; `docs/reference/card-scanner.md` §5). Across 231 frames with a wrong card on
+/// top, none led the next card by more than **10 bits** — a basic land and a split card reached
+/// it — while the true card's median frame led by 25 and sat 32 bits away. The margin is
+/// the threshold that keeps wrong frames out; the distance keeps the rule to matches well inside
+/// the gate, and on its own it would not have been enough (one seed had a wrong card at 41 bits).
+///
+/// Two frames rather than three: with these thresholds no wrong frame is clear at all, so a
+/// third frame guards against nothing the eval has seen and costs a frame on every card.
+pub const FAST_EARLY_FRAMES: u32 = 2;
+/// How close a clear frame's best card must be, normalized: 0.20 is 51 bits of 256, well inside
+/// the 26% where §3's margin median is 21 bits.
+pub const FAST_EARLY_DISTANCE: f32 = 0.20;
+/// How far behind a clear frame's best card the nearest *other card* must sit: 15 bits.
+///
+/// **The basic lands were the worry.** A HOB Plains and a HOB Forest are 44 bits apart in the
+/// bundle, and a gap only colour explains is the one this must not fire on; the widest gap a
+/// wrong basic led by in the trace was 10 bits, against a median of 30 for a right one.
+pub const FAST_EARLY_MARGIN: f32 = 15.0 / 256.0;
+/// Card-likeness a Fast frame's quad needs to count as clean for the lock's quick path
+/// ([`crate::lock::LockOptions::quick_agree`]): the level measured on the real corpus to lose no
+/// good match (`cardness::GOOD_SCORE`). The synthetic evaluation has no spurious quads to
+/// measure a rejection against, so this is the one threshold here it could not set.
+pub const FAST_CLEAN_CARDNESS: f32 = crate::cardness::GOOD_SCORE;
+/// The worst corner a clean quad may have, in degrees off square. The upper quartile of real
+/// cards' first three frames in the trace was 4.8°, and the detector's own ceiling is 22°.
+pub const FAST_CLEAN_ANGLE: f32 = 5.0;
 /// Exact mode resolves once the lock has held, with a card detected, for this many frames.
 pub const EXACT_STEADY_FRAMES: u32 = 3;
 /// How many locked frames an Exact resolve reads over — the ring buffer's length.
@@ -203,11 +234,19 @@ impl Default for FrameOptions {
 impl FrameOptions {
     /// The clamps live here rather than at the parse, so a caller that builds a `FrameOptions`
     /// by hand — over IPC, say — cannot hand the tracker a bar it could never reach.
+    ///
+    /// **The early decision is Fast's alone.** Exact decides on its resolve, and a vote commit
+    /// that got there first drops the extra framings from the very frames the resolve's burst is
+    /// still collecting — so an early commit there would change what Exact reads, not just when.
     pub fn tracker_options(&self) -> TrackerOptions {
+        let fast = self.mode == ScanMode::Fast;
         TrackerOptions {
             rule: self.rule,
             decide_at: self.decide_at.clamp(0.5, 100.0),
             lead_margin: self.lead_margin.clamp(1.0, 5.0),
+            early_frames: if fast { FAST_EARLY_FRAMES } else { 0 },
+            early_max_normalized: FAST_EARLY_DISTANCE,
+            early_margin: FAST_EARLY_MARGIN,
             ..Default::default()
         }
     }
@@ -268,6 +307,8 @@ pub struct TrackedView {
     pub decide_at: f32,
     pub lead: Option<f32>,
     pub frozen: bool,
+    /// Decided on a run of clear frames before the tally reached `decide_at`. Fast only.
+    pub early: bool,
     pub streak: u32,
     pub frames: u32,
     pub misses: u32,
@@ -929,7 +970,14 @@ impl Session {
         // ---- lock -------------------------------------------------------------------------
         // The lock decides whether this frame is worth believing. Nothing is rejected on
         // appearance — a quad simply has to still be there next frame.
-        let lock_state = self.lock.observe(best.as_ref().map(|(_, d, _)| d.quad));
+        //
+        // In Fast, a clean quad — card-like, every corner square — locks a frame sooner. Exact
+        // keeps the three: its resolve counts steady frames from the lock, and #706 owns its
+        // timing.
+        let clean = best
+            .as_ref()
+            .is_some_and(|(_, d, _)| clean_quad(self.mode, d.cardness.score, &d.score));
+        let lock_state = self.lock.observe_clean(best.as_ref().map(|(_, d, _)| d.quad), clean);
         v.quad = lock_state.quad.map(|q| q.corners);
         let trusted = lock_state.is_trusted();
         let held_quad = lock_state.quad;
@@ -1271,6 +1319,14 @@ impl Session {
     }
 }
 
+/// Is this frame's quad clean enough for the lock's quick path? Fast only — see
+/// [`FAST_CLEAN_CARDNESS`].
+fn clean_quad(mode: ScanMode, cardness: f32, score: &QuadScore) -> bool {
+    mode == ScanMode::Fast
+        && cardness >= FAST_CLEAN_CARDNESS
+        && score.max_angle_error <= FAST_CLEAN_ANGLE
+}
+
 /// An Exact resolve, with the production readers when models are loaded — and the views they
 /// produced, so the resolving frame's verdict can show what was read.
 fn run_resolve(
@@ -1423,6 +1479,7 @@ fn tracked_view(t: &crate::track::Tracked, reference: Option<&Reference>) -> Tra
         decide_at: t.decide_at,
         lead: t.lead,
         frozen: t.frozen,
+        early: t.early,
         streak: t.streak,
         frames: t.frames,
         misses: t.misses,
@@ -1715,6 +1772,34 @@ mod tests {
         assert_eq!(o.rule, CommitRule::Votes);
         assert_eq!(o.decide_at, 8.0);
         assert_eq!(o.lead_margin, 1.3);
+    }
+
+    #[test]
+    fn only_fast_locks_on_a_clean_quad() {
+        let square = QuadScore {
+            via: crate::detect::QuadSource::Dp,
+            skew: 0.0,
+            aspect: crate::CARD_ASPECT,
+            area_frac: 0.3,
+            max_angle_error: 1.0,
+            total: 1.0,
+        };
+        assert!(clean_quad(ScanMode::Fast, 0.9, &square));
+        assert!(!clean_quad(ScanMode::Exact, 0.9, &square), "Exact keeps its three frames");
+        assert!(!clean_quad(ScanMode::Fast, FAST_CLEAN_CARDNESS - 0.01, &square));
+        let skewed = QuadScore { max_angle_error: FAST_CLEAN_ANGLE + 0.5, ..square };
+        assert!(!clean_quad(ScanMode::Fast, 0.9, &skewed));
+    }
+
+    #[test]
+    fn only_fast_decides_early() {
+        // Exact decides on its resolve, and an early vote commit would drop the extra framings
+        // from the frames its burst is still collecting.
+        let fast = FrameOptions::default().tracker_options();
+        assert_eq!(fast.early_frames, FAST_EARLY_FRAMES);
+        assert!(fast.early_frames > 0);
+        let exact = FrameOptions { mode: ScanMode::Exact, ..Default::default() }.tracker_options();
+        assert_eq!(exact.early_frames, 0);
     }
 
     #[test]
