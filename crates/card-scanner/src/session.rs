@@ -3990,6 +3990,27 @@ mod tests {
     }
 
     #[test]
+    fn a_card_lying_almost_level_is_held_by_its_own_corners() {
+        // **The live failure, 2026-09-30**: Faramir LTR 14 lay still under a webcam and the
+        // lock held a quad whose top-right corner sat ~30 px inside the card for 1,441 frames.
+        // Both detectors found that quad on every frame, window and sweep alike, so nothing the
+        // lock or the ranking did could have let it go — see `detect::quad_from_hull`. The
+        // page's 960×540 at its JPEG quality, through the lock, the window and the sweep.
+        let (img, truth) = crate::detect::level_card_frame(2.0);
+        let mut jpeg = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut jpeg, 72)
+            .encode_image(&img)
+            .expect("encode");
+        let mut s = Session::new(None, None, 5);
+        for i in 0..(FULL_SWEEP_EVERY + 4) {
+            let v = s.frame(&jpeg, &FrameOptions::default());
+            let held = crate::detect::Quad { corners: v.quad.expect("a held quad") };
+            let err = crate::detect::corner_error(&held, &truth);
+            assert!(err < 2.0, "frame {i} ({:?}): the held quad is {err:.1} px off", v.search);
+        }
+    }
+
+    #[test]
     fn a_detail_is_asked_for_exactly_the_frame_a_fast_rescue_will_read() {
         // Walk the Fast cadence the way the frames do, and check that the frame after every
         // `wants_detail` is one `fast_reader_due` reads — and that no read goes unasked.
