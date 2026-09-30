@@ -63,6 +63,10 @@
 //!
 //! ## Two verdicts on one accumulator
 //!
+//! (And a second way for the vote rule to decide: a run of *clear* frames, which waives the bar
+//! but not the margin — see [`TrackerOptions::early_frames`]. Fast turns it on; nothing else
+//! does.)
+//!
 //! Everything above is how evidence is *gathered*. What turns it into an answer is a
 //! [`CommitRule`], and there are two, chosen per session and switchable on a held card:
 //!
@@ -194,6 +198,28 @@ pub struct TrackerOptions {
     /// runners-up; much smaller ones make a genuine near-tie look decided and reintroduce the
     /// flicker one tier up.
     pub relative_falloff: f32,
+    /// Consecutive frames a *clear* match must hold to decide before the bar. 0 turns it off,
+    /// which is the default: Fast turns it on (`FrameOptions::tracker_options`), and nothing
+    /// else does. Vote rule only.
+    ///
+    /// **The bar spends votes on matches that were never in doubt.** Eight votes is the same
+    /// wait for a card at half the gate with its nearest rival sixty bits behind as for one at
+    /// the gate's edge with a rival two bits behind — and the first is most of what a reader
+    /// holds up. A clear frame is one whose best appearance candidate is inside
+    /// `early_max_normalized` and leads the nearest candidate naming a *different card* by
+    /// `early_margin`; this many of them in a row, all naming the held leader, decide it.
+    /// Anything marginal on any one frame breaks the run and falls back to the bar.
+    pub early_frames: u32,
+    /// How close a frame's best appearance candidate must be for the frame to be clear.
+    pub early_max_normalized: f32,
+    /// How far behind that candidate the nearest *other card's* candidate must be, normalized.
+    ///
+    /// Another card, not another candidate: a card's reprints pool on one key, and two
+    /// printings of one card a bit apart are the same answer rather than a contest. When every
+    /// candidate in the frame names the same card the rival is somewhere past the last of
+    /// them, so the last one's distance is used — a floor under the real gap, never an
+    /// overstatement of it.
+    pub early_margin: f32,
 }
 
 impl Default for TrackerOptions {
@@ -211,6 +237,9 @@ impl Default for TrackerOptions {
             top_k: 5,
             relative_falloff: 0.015,
             switch_margin: 1.3,
+            early_frames: 0,
+            early_max_normalized: 0.0,
+            early_margin: 1.0,
         }
     }
 }
@@ -398,6 +427,9 @@ pub struct Tracked {
     /// Decided under the vote rule and the tally no longer moves. Always false under the
     /// confidence rule.
     pub frozen: bool,
+    /// Decided on a run of clear frames before the tally reached the bar — see
+    /// [`TrackerOptions::early_frames`]. The tally is then short of `decide_at` on purpose.
+    pub early: bool,
 }
 
 impl Tracked {
@@ -442,6 +474,9 @@ pub struct Tracker {
     /// Under a freeze, the other card the last frames have been naming instead of the decided
     /// one — a swap in progress, if it keeps naming the same one.
     other: Option<[u8; ID_LEN]>,
+    /// The card the last frames were clear about, and how many in a row. See
+    /// [`TrackerOptions::early_frames`].
+    clear: Option<([u8; ID_LEN], u32)>,
 }
 
 impl Default for Tracker {
@@ -464,6 +499,7 @@ impl Tracker {
             misses: 0,
             frozen: false,
             other: None,
+            clear: None,
         }
     }
 
@@ -478,7 +514,9 @@ impl Tracker {
     /// outlives only the verdict that produced it: raising the bar above a frozen tally, or
     /// switching to the confidence rule, puts the tracker back to gathering with everything
     /// it had. Lowering the bar under a frozen tally changes nothing — it was decided, and
-    /// it still is.
+    /// it still is. **A decision the clear frames took is not the bar's, so raising the bar does
+    /// not thaw it** — it was short of the bar on purpose — while turning `early_frames` off or
+    /// switching rule does.
     pub fn set_options(&mut self, opts: TrackerOptions) {
         self.opts = opts;
         if self.frozen {
@@ -506,6 +544,7 @@ impl Tracker {
         self.misses = 0;
         self.frozen = false;
         self.other = None;
+        self.clear = None;
     }
 
     /// Decide on `key`, reporting `member` as its printing, without gathering a single vote.
@@ -600,6 +639,14 @@ impl Tracker {
             }
             // The frame that ended the decision is the first of the next card's tally.
         }
+
+        // The clear run is judged on the raw candidates, before the gate: a frame with nothing
+        // inside it is not clear, and an empty one breaks the run as surely as a marginal one.
+        self.clear = match (self.clear_card(candidates), self.clear) {
+            (Some(k), Some((run_key, n))) if k == run_key => Some((k, n + 1)),
+            (Some(k), _) => Some((k, 1)),
+            (None, _) => None,
+        };
 
         // **Only an informative frame decays the accumulator.** Decay models "older evidence
         // matters less than newer evidence" — but a frame that saw nothing is not newer
@@ -730,6 +777,41 @@ impl Tracker {
         verdict
     }
 
+    /// The card this frame is clear about, if it is clear about one. See
+    /// [`TrackerOptions::early_frames`].
+    ///
+    /// **Appearance only.** A read name enters at distance zero with no rival of its own kind,
+    /// so it would be clear on every frame it appeared in — and a single read deciding alone is
+    /// what the bar was set to prevent.
+    fn clear_card(&self, candidates: &[Observation]) -> Option<[u8; ID_LEN]> {
+        if self.opts.early_frames == 0 || self.opts.rule != CommitRule::Votes {
+            return None;
+        }
+        let seen: Vec<&Observation> = candidates
+            .iter()
+            .take(self.opts.top_k)
+            .filter(|o| o.kind == Evidence::Appearance)
+            .collect();
+        let best = seen.iter().min_by(|a, b| {
+            a.normalized.partial_cmp(&b.normalized).unwrap_or(std::cmp::Ordering::Equal)
+        })?;
+        if best.normalized > self.opts.early_max_normalized {
+            return None;
+        }
+        let rival = seen
+            .iter()
+            .filter(|o| o.key != best.key)
+            .map(|o| o.normalized)
+            .fold(f32::INFINITY, f32::min);
+        // Every candidate names this card: the rival is past the last of them.
+        let rival = if rival.is_finite() {
+            rival
+        } else {
+            seen.iter().map(|o| o.normalized).fold(best.normalized, f32::max)
+        };
+        (rival - best.normalized >= self.opts.early_margin).then_some(best.key)
+    }
+
     fn snapshot(&self) -> Tracked {
         let total: f32 = self.scores.values().sum();
         let mut standings: Vec<Standing> = self
@@ -793,6 +875,12 @@ impl Tracker {
             _ => None,
         };
 
+        // A run of clear frames, long enough, about the card that holds the lead.
+        let early_run = self.opts.early_frames > 0
+            && self
+                .clear
+                .is_some_and(|(k, n)| n >= self.opts.early_frames && Some(k) == self.leader);
+        let mut early = false;
         let committed = match self.opts.rule {
             CommitRule::Confidence => standings.first().is_some_and(|s| {
                 confidence >= self.opts.commit_confidence
@@ -803,9 +891,15 @@ impl Tracker {
             // *held* one, so a challenger that has just crossed the bar while the incumbent
             // still holds the lead decides nothing until it is clearly ahead — which is the
             // same hysteresis the reported leader already has.
+            //
+            // The early path waives the bar and nothing else: the held leader can keep the lead
+            // while fractionally behind on raw evidence, and two clear frames must not decide a
+            // card the tally has not yet put ahead by the margin.
             CommitRule::Votes => standings.first().is_some_and(|s| {
-                s.evidence >= self.opts.decide_at
-                    && lead.is_none_or(|l| l >= self.opts.lead_margin)
+                let ahead = lead.is_none_or(|l| l >= self.opts.lead_margin);
+                let at_bar = s.evidence >= self.opts.decide_at && ahead;
+                early = early_run && ahead && !at_bar;
+                at_bar || early
             }),
         };
 
@@ -820,6 +914,7 @@ impl Tracker {
             decide_at: self.opts.decide_at,
             lead,
             frozen: self.frozen,
+            early,
         }
     }
 }
@@ -1416,6 +1511,160 @@ mod tests {
             }
         }
         assert_eq!(at, (Some(8), Some(8)), "(close, far) decided at");
+    }
+
+    // ---- The early decision ----------------------------------------------------------------
+
+    /// Fast's options: two clear frames, inside 0.20, fifteen bits ahead of any other card.
+    fn early() -> Tracker {
+        Tracker::new(TrackerOptions {
+            early_frames: 2,
+            early_max_normalized: 0.20,
+            early_margin: 15.0 / 256.0,
+            ..Default::default()
+        })
+    }
+
+    /// A frame with the true card at `best` and a different card at `rival`.
+    fn contest(best: f32, rival: f32) -> [Observation; 2] {
+        [
+            Observation::appearance(id(1), id(1), best),
+            Observation::appearance(id(2), id(2), rival),
+        ]
+    }
+
+    #[test]
+    fn two_clear_frames_decide_short_of_the_bar() {
+        let mut t = early();
+        let r = t.observe(&contest(0.12, 0.30));
+        assert!(!r.committed, "one clear frame decided on its own");
+        let r = t.observe(&contest(0.12, 0.30));
+        assert!(r.committed, "two clear frames did not decide");
+        assert!(r.early && r.frozen);
+        assert_eq!(r.leader().expect("leader").id, id(1));
+        assert!(votes_of(&r, 1) < r.decide_at, "the tally is short of the bar on purpose");
+        // And a decision made early is frozen like any other.
+        let r = t.observe(&contest(0.12, 0.30));
+        assert!(r.committed && r.frozen && r.early);
+    }
+
+    #[test]
+    fn a_marginal_match_keeps_the_bar() {
+        // Too far to be clear, or too close to another card: either way, eight votes.
+        for frame in [contest(0.22, 0.29), contest(0.12, 0.17)] {
+            let mut t = early();
+            let mut at = None;
+            for f in 1..=12 {
+                let r = t.observe(&frame);
+                if r.committed {
+                    at = Some((f, r.early));
+                    break;
+                }
+            }
+            assert_eq!(at, Some((8, false)), "{frame:?}");
+        }
+    }
+
+    #[test]
+    fn a_reprint_is_not_a_rival_but_an_unseen_one_is_only_a_floor() {
+        // Two printings of card 1 a bit apart are one answer, so the gap is measured to card 2.
+        let mut t = early();
+        let frame = [
+            Observation::appearance(id(1), id(1), 0.12),
+            Observation::appearance(id(1), id(9), 0.125),
+            Observation::appearance(id(2), id(2), 0.30),
+        ];
+        t.observe(&frame);
+        assert!(t.observe(&frame).early, "a reprint was counted as a rival");
+
+        // Every candidate is card 1, packed within a few bits: the other cards are somewhere
+        // past the last of them, and a few bits is all that can be claimed.
+        let mut t = early();
+        let packed = [
+            Observation::appearance(id(1), id(1), 0.12),
+            Observation::appearance(id(1), id(8), 0.13),
+            Observation::appearance(id(1), id(9), 0.14),
+        ];
+        for _ in 0..4 {
+            assert!(!t.observe(&packed).committed, "decided on a gap nobody measured");
+        }
+    }
+
+    #[test]
+    fn anything_but_a_clear_frame_breaks_the_run() {
+        // Nothing seen; a marginal frame; and a frame clear about a different card.
+        let other = contest(0.02, 0.30).map(|o| Observation { key: id(2), ..o });
+        for gap in [vec![], contest(0.12, 0.16).to_vec(), other.to_vec()] {
+            let mut t = early();
+            t.observe(&contest(0.12, 0.30));
+            t.observe(&gap);
+            assert!(!t.observe(&contest(0.12, 0.30)).committed, "the run survived {gap:?}");
+            let r = t.observe(&contest(0.12, 0.30));
+            assert!(r.committed, "two clear frames after it did not decide");
+        }
+    }
+
+    #[test]
+    fn a_read_name_is_never_clear() {
+        // A read enters at distance zero with no rival of its kind, and one read deciding
+        // alone is what the bar exists to prevent. Corrected reads, three votes each, so two of
+        // them stay short of the bar and only the early path could decide them.
+        let mut t = early();
+        let read = [Observation::from_ocr(id(1), id(1), 1)];
+        t.observe(&read);
+        let r = t.observe(&read);
+        assert!(votes_of(&r, 1) < r.decide_at);
+        assert!(!r.committed, "two reads decided early");
+        assert!(t.clear.is_none());
+    }
+
+    #[test]
+    fn the_early_decision_waives_the_bar_and_not_the_margin() {
+        // Card 1 holds the lead from the first frame while card 2 out-votes it on marginal
+        // frames, never by the 1.3 it would need to take the lead. Two clear frames for card 1
+        // then must not decide it: the tally has it behind, or ahead by less than the margin.
+        let mut t = early();
+        t.observe(&contest(0.20, 0.205));
+        for _ in 0..4 {
+            t.observe(&[
+                Observation::appearance(id(2), id(2), 0.25),
+                Observation::appearance(id(1), id(1), 0.255),
+            ]);
+        }
+        let r = t.observe(&contest(0.12, 0.30));
+        assert_eq!(r.leader().expect("leader").id, id(1), "the fixture needs card 1 held");
+        let r = t.observe(&contest(0.12, 0.30));
+        assert!(r.lead.is_some_and(|l| l < 1.3), "lead was {:?}", r.lead);
+        assert!(!r.committed, "two clear frames decided a leader short of the margin");
+        // And once the tally has it ahead by the margin, the run still decides.
+        let r = t.observe(&contest(0.12, 0.30));
+        assert!(r.committed && r.early, "lead {:?}", r.lead);
+    }
+
+    #[test]
+    fn the_early_decision_is_the_vote_rules_alone() {
+        let mut t = Tracker::new(TrackerOptions { rule: CommitRule::Confidence, ..early().opts });
+        t.observe(&contest(0.12, 0.30));
+        let r = t.observe(&contest(0.12, 0.30));
+        assert!(!r.committed && !r.early);
+
+        // And off by default, which is every caller but Fast.
+        let mut t = voting();
+        t.observe(&contest(0.12, 0.30));
+        assert!(!t.observe(&contest(0.12, 0.30)).committed);
+    }
+
+    #[test]
+    fn an_early_decision_outlives_the_page_resending_its_options() {
+        // The page sends its options on every frame; a decision taken early, short of the bar,
+        // must not read as "the bar was raised above the tally" and thaw.
+        let mut t = early();
+        t.observe(&contest(0.12, 0.30));
+        t.observe(&contest(0.12, 0.30));
+        t.set_options(early().opts);
+        assert!(t.last_committed());
+        let r = t.observe(&contest(0.30, 0.12));
+        assert!(r.frozen && r.committed, "an early decision thawed");
     }
 
     #[test]
