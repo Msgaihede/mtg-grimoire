@@ -17,6 +17,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { getMarketplace, marketplaceFeedStatus },
 }));
 
+import { BUTTON_OVER_ART } from "@/components/QuantityStepper";
+import { FOCUS_INSET } from "@/lib/focus";
 import type { DeckTokenRow, DeckTokenView } from "./deckTokens";
 import { DeckTokensPanel, TOKENS_HEADING, type DeckTokensPanelProps } from "./DeckTokensPanel";
 import type { DeckTokens } from "./useDeckTokens";
@@ -191,16 +193,11 @@ describe("DeckTokensPanel", () => {
   });
 
   /**
-   * **The tile reads card, controls, subtitle, source — and draws no name line** (issue #615). The
-   * picture prints the token's name on the card, so a line repeating it only pushed the controls
-   * down; it is gone, the controls come straight after the card and span the tile, and the
-   * colour-and-stats line the owner kept on the issue sits under them, the source under that.
-   *
-   * jsdom lays nothing out, so "full width" is pinned as the structure that produces it: the
-   * stepper at `fill` (its group `w-full`, its number box `flex-1`) inside a `flex-1` box that
-   * shares one row with Remove printing.
+   * **The tile reads card, subtitle, source — and draws no name line** (issue #615). The picture
+   * prints the token's name on the card, so a line repeating it is gone, and the colour-and-stats
+   * line the owner kept on the issue sits under the card, the source under that.
    */
-  it("draws the card, then full-width controls, then the subtitle and the source, and no name line", () => {
+  it("draws the card, then the subtitle and the source, and no name line", () => {
     band();
 
     const tile = tileOf(`Change the art for ${TMOM_PLAIN}`);
@@ -216,14 +213,47 @@ describe("DeckTokensPanel", () => {
     expect(precedes(art, stepper)).toBe(true);
     expect(precedes(stepper, subtitle)).toBe(true);
     expect(precedes(subtitle, source)).toBe(true);
+  });
 
-    const group = stepper.parentElement!;
-    expect(stepper.classList.contains("flex-1")).toBe(true);
-    expect(group.classList.contains("w-full")).toBe(true);
-    const grows = group.parentElement!;
-    expect(grows.classList.contains("flex-1")).toBe(true);
+  /**
+   * **The controls are the deck stack's own column, laid over the picture** (issue #711): a
+   * vertical stepper over art with Remove printing under it, in one absolutely positioned column
+   * beside the picture's button rather than a row under the chin. jsdom lays nothing out, so the
+   * column is pinned as the structure that produces it, and the look as the pile's own recipe —
+   * `BUTTON_OVER_ART` on the stepper's buttons and on Remove, the destructive hover, the inset
+   * ring, and no `text-dim`, which is a rank among panel controls and means nothing over art.
+   */
+  it("stands the stepper and Remove printing in a column over the card, styled as the pile's", () => {
+    band();
+
+    const tile = tileOf(`Change the art for ${TMOM_PLAIN}`);
+    const art = within(tile).getByRole("button", { name: `Change the art for ${TMOM_PLAIN}` });
+    const stepper = within(tile).getByRole("spinbutton", { name: `Quantity of ${TMOM_PLAIN}` });
     const remove = within(tile).getByRole("button", { name: `Remove ${TMOM_PLAIN}` });
-    expect(remove.parentElement).toBe(grows.parentElement);
+
+    // Vertical: the group is a column, increase on top.
+    const group = stepper.parentElement!;
+    expect(group.classList.contains("flex-col")).toBe(true);
+    const [first, , last] = Array.from(group.children);
+    expect(first).toHaveAccessibleName(/^Increase/);
+    expect(last).toHaveAccessibleName(/^Decrease/);
+
+    // One column, Remove at its foot, laid over the picture and never inside its button.
+    const column = group.parentElement!;
+    expect(remove.parentElement).toBe(column);
+    expect(column.lastElementChild).toBe(remove);
+    expect(column.classList.contains("absolute")).toBe(true);
+    expect(column.classList.contains("flex-col")).toBe(true);
+    expect(art.contains(column)).toBe(false);
+    expect(column.parentElement).toBe(art.parentElement);
+    expect(art.parentElement!.classList.contains("relative")).toBe(true);
+
+    // Over art: the felt backing on every button, Remove's red hover and inset ring.
+    for (const button of [first as HTMLElement, last as HTMLElement, remove]) {
+      expect(button).toHaveClass(...BUTTON_OVER_ART.split(" "));
+    }
+    expect(remove).toHaveClass("hover:text-destructive", ...FOCUS_INSET.split(" "));
+    expect(remove).not.toHaveClass("text-dim");
   });
 
   /**
