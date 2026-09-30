@@ -76,13 +76,16 @@ pub struct ResolutionView {
     pub elapsed_ms: f32,
 }
 
-/// One locked frame of the burst: the rectified card both ways up, the extra framings, and how
-/// card-like it looked.
+/// One locked frame of the burst: the rectified card both ways up, the extra framings, how
+/// card-like it looked, and which way up the frame's own hash match won.
 pub struct BurstView<'a> {
     pub upright: &'a RgbImage,
     pub flipped: &'a RgbImage,
     pub alternates: &'a [(RgbImage, RgbImage)],
     pub cardness: f32,
+    /// [`crate::reference::MatchReport::rotated`] for this frame: the orientation a reader
+    /// tries first.
+    pub rotated: bool,
 }
 
 impl BurstView<'_> {
@@ -96,7 +99,9 @@ impl BurstView<'_> {
 }
 
 /// What the readers found — injected, so the tiers are testable without models.
-pub trait Readers {
+///
+/// `Sync`, because the title and the collector line are read on two threads at once.
+pub trait Readers: Sync {
     /// The normalized title text when the read is usable.
     fn title(&self, view: &BurstView<'_>) -> Option<String>;
     /// The collector line's (set, number) parse candidates.
@@ -136,29 +141,35 @@ pub fn resolve(
     };
     tiers.push(tier("filters", admitted, detail));
 
+    // The readers look at the most card-like view, and at the next one only when the first
+    // yields nothing — a read costs a third of a second (§4), and one good read is the point.
+    let mut order: Vec<&BurstView<'_>> = burst.iter().collect();
+    order.sort_by(|a, b| b.cardness.total_cmp(&a.cardness));
+
+    // **The whole-card search and the two reads run at once.** None of the three needs another's
+    // answer: the title and the collector line are different bands of the same views, and the
+    // search reads neither. What each tier *does* with its answer still happens below, in order,
+    // so running them together changes the time and nothing else.
+    let (mut best, title_read, pairs) = std::thread::scope(|s| {
+        let title = s.spawn(|| order.iter().take(2).find_map(|v| readers.title(v)));
+        let collector = s.spawn(|| {
+            order
+                .iter()
+                .take(2)
+                .map(|v| readers.collector(v))
+                .find(|c| !c.is_empty())
+                .unwrap_or_default()
+        });
+        let best = whole_card(r, mask, burst, max_normalized);
+        (best, joined(title), joined(collector))
+    });
+
     // ---- 1 whole card ----------------------------------------------------------------------
-    // The best normalized distance each printing reached anywhere in the burst. Kept for every
-    // later tier: the re-rank orders on it and every choice reports it.
-    let mut best: HashMap<Id, f32> = HashMap::new();
-    for view in burst {
-        for c in r.match_views(&view.framings(), EXACT_TOP, mask).candidates {
-            if c.normalized <= max_normalized {
-                if let Some(p) = parse_uuid(&c.id) {
-                    keep_best(&mut best, p, c.normalized);
-                }
-            }
-        }
-    }
     let mut survivors: Vec<Id> = best.keys().copied().collect();
     by_distance(&mut survivors, &best);
     let cards: HashSet<Id> = survivors.iter().map(|p| r.oracle_for(p)).collect();
     let detail = format!("{} printings of {} cards", survivors.len(), cards.len());
     tiers.push(tier("whole_card", survivors.len(), detail));
-
-    // The readers look at the most card-like view, and at the next one only when the first
-    // yields nothing — a read costs a third of a second (§4), and one good read is the point.
-    let mut order: Vec<&BurstView<'_>> = burst.iter().collect();
-    order.sort_by(|a, b| b.cardness.total_cmp(&a.cardness));
 
     // ---- 2 title ---------------------------------------------------------------------------
     // **An exact read replaces the survivors rather than narrowing them.** It is the foil
@@ -173,7 +184,7 @@ pub fn resolve(
     // tier found nothing at all, where the read is the only evidence there is.
     // The card the title settled on, which the collector tier then has to agree with.
     let mut title_card: Option<Id> = None;
-    let detail = match order.iter().take(2).find_map(|v| readers.title(v)) {
+    let detail = match title_read {
         None => "no read".to_string(),
         Some(text) => match r.lookup_by_name_masked(&text, mask) {
             Some((card, edits)) => {
@@ -220,12 +231,6 @@ pub fn resolve(
     // tier together, so a Swamp ZNR 272 misread as 280 named a Forest that was among the
     // survivors and pinned it. The pinned card must also be the one the title settled on, or —
     // with no title — the nearest card among the survivors or within the margin of it.
-    let pairs = order
-        .iter()
-        .take(2)
-        .map(|v| readers.collector(v))
-        .find(|c| !c.is_empty())
-        .unwrap_or_default();
     let detail = match r.lookup_collector_masked(&pairs, mask) {
         None => "no read".to_string(),
         Some(printing) => {
@@ -347,6 +352,33 @@ pub fn resolve(
     }
 }
 
+/// The best normalized distance each printing reached anywhere in the burst, inside the gate.
+/// Kept for every later tier: the re-rank orders on it and every choice reports it.
+fn whole_card(
+    r: &Reference,
+    mask: &Mask,
+    burst: &[BurstView<'_>],
+    max_normalized: f32,
+) -> HashMap<Id, f32> {
+    let mut best: HashMap<Id, f32> = HashMap::new();
+    for view in burst {
+        for c in r.match_views(&view.framings(), EXACT_TOP, mask).candidates {
+            if c.normalized <= max_normalized {
+                if let Some(p) = parse_uuid(&c.id) {
+                    keep_best(&mut best, p, c.normalized);
+                }
+            }
+        }
+    }
+    best
+}
+
+/// A reader thread's answer. A panic in one is carried on to the caller rather than turned into
+/// "no read", so the session's guard reports it as the failure it is.
+fn joined<T>(h: std::thread::ScopedJoinHandle<'_, T>) -> T {
+    h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))
+}
+
 fn tier(name: &str, survivors: usize, detail: impl Into<String>) -> TierView {
     TierView {
         tier: name.to_string(),
@@ -377,7 +409,8 @@ mod tests {
     use crate::hash::{hash_rgb, HashKind};
     use crate::index::{BundleBuilder, Section};
     use image::{ImageBuffer, Rgb};
-    use std::cell::RefCell;
+    use std::sync::{mpsc, Mutex};
+    use std::time::Duration;
 
     fn img(seed: u32) -> RgbImage {
         ImageBuffer::from_fn(200, 280, |x, y| {
@@ -458,6 +491,7 @@ mod tests {
                 flipped,
                 alternates: &[],
                 cardness,
+                rotated: false,
             })
             .collect()
     }
@@ -929,11 +963,11 @@ mod tests {
     fn the_title_is_read_from_the_most_card_like_view_and_once_more_only_on_no_read() {
         struct Recording {
             answer: Option<String>,
-            asked: RefCell<Vec<f32>>,
+            asked: Mutex<Vec<f32>>,
         }
         impl Readers for Recording {
             fn title(&self, view: &BurstView<'_>) -> Option<String> {
-                self.asked.borrow_mut().push(view.cardness);
+                self.asked.lock().expect("lock").push(view.cardness);
                 self.answer.clone()
             }
             fn collector(&self, _: &BurstView<'_>) -> Vec<(String, String)> {
@@ -947,16 +981,69 @@ mod tests {
 
         let silent = Recording {
             answer: None,
-            asked: RefCell::new(Vec::new()),
+            asked: Mutex::new(Vec::new()),
         };
         resolve(&r, &Mask::all(), &views, &silent, GATE);
-        assert_eq!(*silent.asked.borrow(), [0.9, 0.7]);
+        assert_eq!(*silent.asked.lock().expect("lock"), [0.9, 0.7]);
 
         let reading = Recording {
             answer: Some("plains".into()),
-            asked: RefCell::new(Vec::new()),
+            asked: Mutex::new(Vec::new()),
         };
         resolve(&r, &Mask::all(), &views, &reading, GATE);
-        assert_eq!(*reading.asked.borrow(), [0.9]);
+        assert_eq!(*reading.asked.lock().expect("lock"), [0.9]);
+    }
+
+    #[test]
+    fn the_title_and_the_collector_line_are_read_at_the_same_time() {
+        // Each reader announces itself and then waits for the other. Read one after the other,
+        // the first to start waits out its timeout alone and answers that it did.
+        struct Meeting {
+            title_here: Mutex<mpsc::Sender<()>>,
+            collector_here: Mutex<mpsc::Sender<()>>,
+            title_waits: Mutex<mpsc::Receiver<()>>,
+            collector_waits: Mutex<mpsc::Receiver<()>>,
+        }
+        const WAIT: Duration = Duration::from_secs(10);
+        impl Readers for Meeting {
+            fn title(&self, _: &BurstView<'_>) -> Option<String> {
+                let _ = self.title_here.lock().expect("lock").send(());
+                let met = self
+                    .title_waits
+                    .lock()
+                    .expect("lock")
+                    .recv_timeout(WAIT)
+                    .is_ok();
+                Some(if met { "plains" } else { "read alone" }.into())
+            }
+            fn collector(&self, _: &BurstView<'_>) -> Vec<(String, String)> {
+                let _ = self.collector_here.lock().expect("lock").send(());
+                let met = self
+                    .collector_waits
+                    .lock()
+                    .expect("lock")
+                    .recv_timeout(WAIT)
+                    .is_ok();
+                let set = if met { "hob" } else { "alone" };
+                vec![(set.into(), "5".into())]
+            }
+        }
+        let (title_here, collector_waits) = mpsc::channel();
+        let (collector_here, title_waits) = mpsc::channel();
+        let meeting = Meeting {
+            title_here: Mutex::new(title_here),
+            collector_here: Mutex::new(collector_here),
+            title_waits: Mutex::new(title_waits),
+            collector_waits: Mutex::new(collector_waits),
+        };
+        let r = eight_cards();
+        let (up, down) = (img(5), img(99));
+        let v = resolve(&r, &Mask::all(), &burst(&up, &down), &meeting, GATE);
+        assert_eq!(
+            v.tiers[2].detail, "read \"plains\" → Plains (edits 0)",
+            "{:?}",
+            v.tiers
+        );
+        assert_eq!(v.tiers[3].detail, "HOB 5 → Plains — HOB 5", "{:?}", v.tiers);
     }
 }

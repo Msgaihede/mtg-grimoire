@@ -327,17 +327,79 @@ mod engine {
             let a = self.read_band(&ba).unwrap_or_default();
             let b = self.read_band(&bb).unwrap_or_default();
 
-            let letters = |s: &str| s.chars().filter(|c| c.is_ascii_alphabetic()).count();
             let rotated = letters(&b) > letters(&a);
-            let raw = if rotated { b } else { a };
-
-            TitleRead {
-                band: Some(if rotated { bb } else { ba }),
-                normalized: normalize(&raw),
-                raw: raw.split_whitespace().collect::<Vec<_>>().join(" "),
-                rotated,
-                elapsed_ms: started.elapsed().as_secs_f32() * 1000.0,
+            if rotated {
+                title_read(bb, b, true, started)
+            } else {
+                title_read(ba, a, false, started)
             }
+        }
+
+        /// Read the title the way up the hash chose first, and the other way only when that
+        /// read is not an exact name.
+        ///
+        /// **The second read is kept, and that is deliberate.** The title reader earns its
+        /// cost on a foil under a lamp, where the hash's candidates are noise, so the
+        /// orientation it chose is close to a coin flip. What the clean case saves is the
+        /// second read when the first already names a card with no edits. `edits` answers how
+        /// far a normalized read is from a card name, or `None` for no card.
+        ///
+        /// When both are read, an exact name beats a corrected one beats none. Between two
+        /// equal reads, the one with more letters wins, which is [`TitleReader::read_title`]'s
+        /// rule.
+        pub fn read_title_first(
+            &self,
+            upright: &RgbImage,
+            flipped: &RgbImage,
+            flipped_first: bool,
+            edits: &dyn Fn(&str) -> Option<u32>,
+        ) -> TitleRead {
+            let started = std::time::Instant::now();
+            let (first, second) =
+                if flipped_first { (flipped, upright) } else { (upright, flipped) };
+            let band_a = title_band(first);
+            let a = self.read_band(&band_a).unwrap_or_default();
+            let a_edits = edits(&normalize(&a));
+            if a_edits == Some(0) {
+                return title_read(band_a, a, flipped_first, started);
+            }
+            let band_b = title_band(second);
+            let b = self.read_band(&band_b).unwrap_or_default();
+            let b_edits = edits(&normalize(&b));
+            let rank = |e: Option<u32>| match e {
+                Some(0) => 2,
+                Some(_) => 1,
+                None => 0,
+            };
+            let take_b = match rank(b_edits).cmp(&rank(a_edits)) {
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Less => false,
+                std::cmp::Ordering::Equal => letters(&b) > letters(&a),
+            };
+            if take_b {
+                title_read(band_b, b, !flipped_first, started)
+            } else {
+                title_read(band_a, a, flipped_first, started)
+            }
+        }
+    }
+
+    fn letters(s: &str) -> usize {
+        s.chars().filter(|c| c.is_ascii_alphabetic()).count()
+    }
+
+    fn title_read(
+        band: RgbImage,
+        raw: String,
+        rotated: bool,
+        started: std::time::Instant,
+    ) -> TitleRead {
+        TitleRead {
+            band: Some(band),
+            normalized: normalize(&raw),
+            raw: raw.split_whitespace().collect::<Vec<_>>().join(" "),
+            rotated,
+            elapsed_ms: started.elapsed().as_secs_f32() * 1000.0,
         }
     }
 
@@ -348,20 +410,35 @@ mod engine {
         /// title there is no heuristic here — the caller checks each candidate against the
         /// corpus and an upside-down read simply produces none that resolve.
         pub fn read_collector(&self, upright: &RgbImage, flipped: &RgbImage) -> CollectorRead {
+            self.read_collector_first(upright, flipped, false)
+        }
+
+        /// The same, starting from the way up the hash chose rather than always from upright.
+        ///
+        /// A card held upside-down read the flipped band only after the upright one found
+        /// nothing, so it always paid for two reads. The hash already knows which way up won.
+        pub fn read_collector_first(
+            &self,
+            upright: &RgbImage,
+            flipped: &RgbImage,
+            flipped_first: bool,
+        ) -> CollectorRead {
             let started = std::time::Instant::now();
+            let (first, second) =
+                if flipped_first { (flipped, upright) } else { (upright, flipped) };
             // **The first crop settles which way up, and the fallbacks only ever try that
             // one.** Both orientations of every crop is six reads at ~130 ms each, and the
             // cost lands exactly the wrong way round: a card that reads resolves on the first
             // attempt, while a card that cannot be read pays for all six. Deciding the
             // orientation once takes the worst case from 785 ms to roughly half that.
-            let mut shown = band(upright, COLLECTOR_BAND, 4);
+            let mut shown = band(first, COLLECTOR_BAND, 4);
             let up = self.read_band(&shown).unwrap_or_default();
             let mut candidates = collector_candidates(&up);
             let mut raw = up;
-            let mut rotated = false;
+            let mut from_second = false;
 
             if candidates.is_empty() {
-                let flip = band(flipped, COLLECTOR_BAND, 4);
+                let flip = band(second, COLLECTOR_BAND, 4);
                 let down = self.read_band(&flip).unwrap_or_default();
                 let found = collector_candidates(&down);
                 // Digits decide it, not length: upside-down, this band holds the *title*,
@@ -369,12 +446,13 @@ mod engine {
                 // containing nothing that could ever resolve.
                 let digits = |t: &str| t.chars().filter(|c| c.is_ascii_digit()).count();
                 if !found.is_empty() || digits(&down) > digits(&raw) {
-                    rotated = true;
+                    from_second = true;
                     candidates = found;
                     raw = down;
                     shown = flip;
                 }
             }
+            let rotated = flipped_first != from_second;
 
             // Wider, then higher — only in the orientation already chosen.
             if candidates.is_empty() {

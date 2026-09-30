@@ -43,7 +43,7 @@ use card_scanner::filters::ScanFilters;
 use card_scanner::index::{format_uuid, parse_uuid, Bundle, ID_LEN};
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::{Label, Reference};
-use card_scanner::session::{FrameOptions, Outcome, ScanMode, Session};
+use card_scanner::session::{FrameOptions, Outcome, ResolveOn, ScanMode, Session};
 use card_scanner::synth::{burst, SynthOptions};
 use clap::{ArgGroup, Parser};
 use serde::de::{SeqAccess, Visitor};
@@ -455,7 +455,12 @@ impl Ingredients {
         let mut reference = Reference::new(bundle);
         attach(&mut reference, &self.labels);
         let reader = TitleReader::from_bytes(&self.detection, &self.recognition)?;
-        Ok(Session::new(Some(reference), Some(reader), TOP))
+        let mut session = Session::new(Some(reference), Some(reader), TOP);
+        // **Inline, not the app's background thread**, so "median frames" counts frames rather
+        // than how busy the machine was while a resolve ran — and so the mean ms column still
+        // holds each resolve's whole wall time.
+        session.set_resolve_on(ResolveOn::Inline);
+        Ok(session)
     }
 }
 
