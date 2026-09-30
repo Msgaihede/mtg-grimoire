@@ -161,6 +161,11 @@ impl CardWatch {
         self.anchor.is_some()
     }
 
+    /// The look of the frame that decided, while one is watched.
+    pub fn anchor(&self) -> Option<Look> {
+        self.anchor
+    }
+
     /// Bits between a frame's upright descriptor and the nearest look of the decided card,
     /// while one is watched.
     pub fn distance_to(&self, upright: &Descriptor) -> Option<u32> {

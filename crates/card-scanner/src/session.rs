@@ -504,6 +504,10 @@ pub struct Session {
     /// The observations of the far frame the watch is holding, so the frame a new card first
     /// lay at rest still votes for it once the next frame confirms it.
     stacked: Vec<Observation>,
+    /// The card the last change forgot — its look, and the oracle card its decision named —
+    /// until the next decision says whether it was that card back. See
+    /// [`Session::card_changed`].
+    laid_over: Option<(watch::Look, Option<String>)>,
 }
 
 impl Session {
@@ -530,6 +534,7 @@ impl Session {
             standing: (0, false),
             watch: CardWatch::default(),
             stacked: Vec::new(),
+            laid_over: None,
         }
     }
 
@@ -625,6 +630,7 @@ impl Session {
         self.rearm_pending = false;
         self.watch.clear();
         self.stacked.clear();
+        self.laid_over = None;
     }
 
     /// A different card has come to rest where the decided one lay, and the lock never let go
@@ -636,11 +642,20 @@ impl Session {
     /// the at-rest rule: its burst view stays in Exact's burst and its observations are counted
     /// again under the fresh tally, so a stacked card needs no more frames than a fresh one
     /// once the lock holds. The frame that confirmed it is counted by the caller, as usual.
-    fn card_changed(&mut self) {
+    ///
+    /// **The card it forgot is remembered until the next decision** (`laid_over`, with its
+    /// look — `forgotten`, the anchor the watch had). Two frames of a hand held still over the
+    /// decided card, or that card's own worst frames, are a card at rest too, and once the hand
+    /// lifts the same card is decided again. That decision's own look settles it: near the card
+    /// forgotten, it is that card back, and it replaces the row as a mode switch's second
+    /// opinion does. Measured on the synthetic stacking sequence before this existed, Exact
+    /// added a card twice in 5 piles of 160 after a hand lifted, and in 2 during a long hold.
+    fn card_changed(&mut self, forgotten: Option<watch::Look>) {
         let first = self.burst.pop_back();
         let first_votes = std::mem::take(&mut self.stacked);
+        let previous = self.previous_card.take();
         self.forget_card();
-        self.previous_card = None;
+        self.laid_over = forgotten.map(|look| (look, previous));
         // This frame, and the one before it when anything of it was kept — its view in Exact,
         // its votes in either mode. A burst guard still waits for a full burst in Exact.
         let kept = first.is_some() || !first_votes.is_empty();
@@ -684,6 +699,7 @@ impl Session {
             // The card may have changed hands: a decision after this is a new card, never a
             // second opinion on the last one.
             self.previous_card = None;
+            self.laid_over = None;
         } else if detected {
             self.steady += 1;
             if !settled {
@@ -1027,10 +1043,11 @@ impl Session {
         // ---- is the decided card still the one in frame? (#710) ---------------------------
         // Asked before anything counts this frame, so the frame that confirms a stacked card
         // is already the new card's.
+        let watched = self.watch.anchor();
         let seen =
             self.watch.see(watch::descriptor(rectified), || watch::descriptor(rectified_180));
         if seen == Seen::Changed {
-            self.card_changed();
+            self.card_changed(watched);
             settled = false;
         }
         let r = self.reference.as_ref()?;
@@ -1138,7 +1155,14 @@ impl Session {
         // that found nothing leaves `attempted` set and nothing to re-arm it while the lock
         // holds, so a card laid over that one is watched for too.
         if !self.watch.is_watching() && (t.committed || self.attempted) {
-            self.watch.watch(watch::look(rectified, rectified_180));
+            let now = watch::look(rectified, rectified_180);
+            // The card a change forgot, decided again: a second opinion, not a second copy.
+            if let Some((before, card)) = self.laid_over.take() {
+                if before.distance(&now) < watch::CHANGED_BITS {
+                    self.previous_card = card;
+                }
+            }
+            self.watch.watch(now);
         }
         v.tracked = Some(tracked_view(&t, Some(r)));
         v.r#match = Some(report);
@@ -2539,6 +2563,27 @@ mod tests {
                 2,
                 "decided again at rest, frame {f}"
             );
+        }
+    }
+
+    #[test]
+    fn a_hand_that_stops_on_the_decided_card_and_lifts_is_not_a_second_copy() {
+        // **Measured on the synthetic stacking sequence:** two frames of a hand held still over
+        // the decided card are a card at rest to the watch, so the card is forgotten — and once
+        // the hand lifts it is decided again. That decision's own look is the card the change
+        // forgot, so it is a second opinion on it, not a second copy: it replaces the row.
+        for mode in [ScanMode::Fast, ScanMode::Exact] {
+            let (r, card, _) = two_far_cards();
+            let hand = checker();
+            let mut s = Session::new(Some(r), None, 5);
+            s.mode = mode;
+            let first = until_decided(&mut s, &card).decision.expect("decision");
+            locked_frame(&mut s, &hand);
+            locked_frame(&mut s, &hand);
+            assert!(!s.tracker.last_committed(), "the premise ({mode:?}): the hand was a change");
+            let again = until_decided(&mut s, &card).decision.expect("decision");
+            assert_eq!(again.oracle_id, first.oracle_id, "the premise ({mode:?}): the same card");
+            assert!(again.replaces_previous, "a hand that lifted added the card twice ({mode:?})");
         }
     }
 

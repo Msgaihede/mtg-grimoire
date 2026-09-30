@@ -525,23 +525,49 @@ impl Ingredients {
     }
 }
 
-/// What one pile came to in one mode.
+/// What one pile came to in one mode. Every count is of decisions that **add** a tray row: one
+/// that `replaces_previous` is a second opinion on the row before it, not a second copy.
 #[derive(Default, Clone)]
 struct Pile {
-    /// Decisions while the first card was held or covered. One is right; two is a second row.
+    /// Rows added while the first card was held or covered. One is right; two is a second row.
     held: usize,
     held_right: bool,
     /// Frames from the card on top's first frame to its first decision.
     on_top_at: Option<usize>,
     on_top_right: bool,
-    /// Decisions after the card on top's first. More is a second row for it.
+    /// Rows added after the card on top's first. More is a second row for it.
     on_top_again: usize,
     /// The two share an oracle card — the same card reprinted — so "right" cannot tell them
     /// apart.
     same_card: bool,
-    /// Decisions in a second session with no card on top: the first card held, the hand over
+    /// Rows added in a second session with no card on top: the first card held, the hand over
     /// it, and the hand lifted again. More than one is a hand that read as a new card.
     hand_lifted: usize,
+    /// Decisions that replaced the row before them, across both sessions — what a change the
+    /// watch made in error costs when the card it forgot is decided again.
+    replaced: usize,
+}
+
+/// Feed `frames` to `session`; for each frame whose decision is new, `(frame index, the oracle
+/// card it names, whether it adds a row)`.
+fn decisions(
+    session: &mut Session,
+    frames: &[Vec<u8>],
+    opts: &FrameOptions,
+) -> Vec<(usize, String, bool)> {
+    let mut seq = 0;
+    let mut out = Vec::new();
+    for (i, jpeg) in frames.iter().enumerate() {
+        let v = session.frame(jpeg, opts);
+        if v.decision_seq == seq {
+            continue;
+        }
+        seq = v.decision_seq;
+        let d = v.decision.as_ref();
+        let adds = !d.is_some_and(|d| d.replaces_previous);
+        out.push((i, d.and_then(|d| d.oracle_id.clone()).unwrap_or_default(), adds));
+    }
+    out
 }
 
 fn pile(
@@ -569,21 +595,18 @@ fn pile(
     // The hand lifting off the card it covered: the first card again, where the jitter left it.
     let mut lifted = frames[..first_on_top].to_vec();
     lifted.extend(burst(&a.render, &opts(HOLD + AGAIN), seed).into_iter().skip(HOLD));
-    let mut session = ing.session();
-    out.hand_lifted =
-        lifted.iter().map(|jpeg| session.frame(jpeg, &frame_opts).decision_seq).max().unwrap_or(0)
-            as usize;
-
-    let mut session = ing.session();
-    let mut seq = 0;
-    for (i, jpeg) in frames.iter().enumerate() {
-        let v = session.frame(jpeg, &frame_opts);
-        if v.decision_seq == seq {
-            continue;
+    for (_, _, adds) in decisions(&mut ing.session(), &lifted, &frame_opts) {
+        if adds {
+            out.hand_lifted += 1;
+        } else {
+            out.replaced += 1;
         }
-        seq = v.decision_seq;
-        let named = v.decision.and_then(|d| d.oracle_id).unwrap_or_default();
-        if i < first_on_top {
+    }
+
+    for (i, named, adds) in decisions(&mut ing.session(), &frames, &frame_opts) {
+        if !adds {
+            out.replaced += 1;
+        } else if i < first_on_top {
             out.held += 1;
             out.held_right |= named == a_card;
         } else if out.on_top_at.is_none() {
@@ -628,10 +651,11 @@ fn sequence(cards: &[Card], missing: usize, bundle: &Path, corpus: &Path, models
         started.elapsed().as_secs_f32()
     );
     println!(
-        "\n| mode | piles | held card decided | decided twice | on top decided | on top card ✓ \
-         | frames to it p50 / p90 / max | on top decided again | decided twice, hand lifted |"
+        "\n| mode | piles | held card decided | added twice | on top decided | on top card ✓ \
+         | frames to it p50 / p90 / max | on top added again | added twice, hand lifted \
+         | replaced |"
     );
-    println!("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+    println!("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
     for (m, (name, _)) in modes.iter().enumerate() {
         let ps: Vec<&Pile> = piles.iter().filter_map(|p| p.get(m)).collect();
         let n = ps.len();
@@ -639,7 +663,7 @@ fn sequence(cards: &[Card], missing: usize, bundle: &Path, corpus: &Path, models
         let mut at: Vec<usize> = ps.iter().filter_map(|p| p.on_top_at).collect();
         at.sort_unstable();
         println!(
-            "| {name} | {n} | {} | {} | {} | {} | {} / {} / {} | {} | {} |",
+            "| {name} | {n} | {} | {} | {} | {} | {} / {} / {} | {} | {} | {} |",
             pct(ps.iter().filter(|p| p.held >= 1 && p.held_right).count()),
             ps.iter().filter(|p| p.held >= 2).count(),
             pct(at.len()),
@@ -649,6 +673,7 @@ fn sequence(cards: &[Card], missing: usize, bundle: &Path, corpus: &Path, models
             at.last().map_or("—".into(), |m| m.to_string()),
             ps.iter().map(|p| p.on_top_again).sum::<usize>(),
             ps.iter().filter(|p| p.hand_lifted >= 2).count(),
+            ps.iter().map(|p| p.replaced).sum::<usize>(),
         );
     }
     let same = piles.iter().filter(|p| p.first().is_some_and(|p| p.same_card)).count();
