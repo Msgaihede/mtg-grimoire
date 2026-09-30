@@ -236,8 +236,9 @@ export const Collapsed: Story = {
  * * **The emblem** — Oko's, untouched, sorted last, with **no subtitle at all**: the card itself
  *   already says whose emblem it is.
  *
- * **No tile draws a name line** (issue #615): each reads the card, the controls across its full
- * width, the subtitle under them and the source under that.
+ * **No tile draws a name line** (issue #615): each reads the card — its stepper and Remove
+ * printing a column over the picture's right edge, as the deck stack draws them (issue #711) — the
+ * subtitle under it and the source under that.
  *
  * Every token here is one the deck makes, so none wears `NOT MADE BY DECK`; the next story does.
  */

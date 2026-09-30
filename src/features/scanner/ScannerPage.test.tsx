@@ -303,6 +303,28 @@ describe("ScannerPage", () => {
     }
   });
 
+  /**
+   * The rectified preview is a JPEG encode a frame and only a developer panel draws it, so the
+   * frame asks for it exactly while the Developer switch is on (issue #701).
+   */
+  it.each([
+    [false, "off"],
+    [true, "on"],
+  ])("asks the crate for previews = %s while the Developer switch is %s", async (developer) => {
+    const restore = shimVideo();
+    opens();
+    storedPrefs({ developer });
+    frames(VERDICTS.noCard);
+    try {
+      mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      const [, options] = vi.mocked(ipc.scannerFrame).mock.calls[0] ?? [];
+      expect(options?.previews).toBe(developer);
+    } finally {
+      restore();
+    }
+  });
+
   it("puts the tray beside the camera, the video box taking what the row leaves", async () => {
     refused();
     const { container } = mount();
