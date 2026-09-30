@@ -445,7 +445,50 @@ window therefore works at the sweep's own scale, and its saving is the pixels ou
 pins the contract: the window's quad lands within 0.5 px of the sweep's, for both methods, at
 1280 px. It fails at 0.89 px with the snap removed.
 
-MEASURED_TRACK
+**Measured 2026-09-30, Windows, release, on a quiet machine** (load 0–6% either side of every
+run). `detect-bench --frames 24 --limit 60`: `eval`'s own bursts of the first 60 renders at
+1280 px, one card at a time, through a session with no reference and no reader, so what is
+left is decode, detection, the lock and the rectification. Three interleaved rounds each, which
+agreed within 2%. `main` is `46bfec93`; the branch is #702 merged into it; *window off* is the
+same binary with `Session::set_tracking(false)`, so the threads without the window:
+
+| a frame arriving … | `main` | window off | **window on** |
+| --- | ---: | ---: | ---: |
+| locked, wall ms less decode, p50 | 167–170 | 101 | **75** |
+| locked, CPU ms, every thread, decode included | 171–175 | 174 | **121** |
+| unlocked, wall ms less decode, p50 | 169–172 | 102 | 102 |
+| time to the first lock, p50 (decode included) | 357–366 | 222 | **222** |
+
+And where a locked frame's time goes, from the verdict's own timings (mean ms):
+
+| | resize | mask | contour | rectify | total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `main` | 13.5 | 51.6 | 8.0 | 47.6 | 122.2 |
+| window on | 5.7 | 11.9 | 3.8 | 47.5 | 70.5 |
+
+- **A locked frame costs 55% less wall and 30% less CPU.** The threads buy the latency and spend
+  no CPU doing it (window off: 174 against `main`'s 172). The window then removes most of the
+  mask stage.
+- **Finding a card got faster too**, 357–366 → 222 ms to the first lock, from the threads alone.
+  Frames to lock are unchanged, as they must be, since an unlocked frame gets the same sweep.
+- 1,097 of 1,266 locked frames were searched in the window. 169 were the ninth-frame sweep or a
+  miss. Locks lost mid-burst went 3 → 2.
+- **Rectification is now two thirds of a locked frame**: six 488×680 warps a frame, which no
+  search can shrink. That is #704's to take.
+- **On a loaded machine none of this reads cleanly.** With other sessions holding every core,
+  wall time per frame swung ±30% between two identical runs of one binary, and `main` measured
+  both faster and slower than the branch on different rounds. Hence the CPU column and the
+  quiet-machine rule: take these figures again with the machine idle, or read CPU only.
+
+**Accuracy is unchanged, and that was the bar.** `eval` at seed 7, 160 printings × 12 frames at
+1280 px, on the same two trees: all 36 rows of the session table — every pass, every stratum —
+match `main` in decided, card ✓, printing ✓, ambiguous, not found and median frames
+(Fast 96.2 / 96.2 / 84.4, Exact 96.2 / 96.2 / 82.5, Exact + own set 96.2 / 96.2 / 93.1).
+Detected % in the corner table matches too. Mean corner error moved 4.4 → 4.3 px in Fast and
+1.12 → 1.13% of the card's height in Exact, and the same six cards stayed undecided in every
+pass. Getting there took the three fixes above. The first build lost 4.4 points of Fast's
+decided % and put a wrong card into Exact, and the second, with only the area gates fixed, still
+turned one card from right to wrong.
 
 ### Rectify — the 7% expand, the trim, and the alternate framings
 
