@@ -28,7 +28,9 @@
 //! tray row for one card — and the frames from the card on top's first frame to its decision.
 //! A second session per pile lifts the hand again with nothing laid on top, for [`AGAIN`]
 //! frames, and counts the same: a hand at rest over the card is the watch's one blind spot.
-//! It uses nothing but [`Session`], so it builds against a tree from before the watch too.
+//! It uses nothing but [`Session`], so it builds against a tree from before the watch too —
+//! any since `Session::set_resolve_on`; the comparison in card-scanner.md §10 was built from
+//! `9a0ba706`, before it, when every resolve was inline.
 //!
 //! **Synthetic**, like the evaluation: a fence and a threshold, not a claim about a camera.
 
@@ -38,7 +40,7 @@ use card_scanner::index::{format_uuid, parse_uuid, Bundle, ID_LEN};
 use card_scanner::lock::QuadLock;
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::{Label, Reference};
-use card_scanner::session::{FrameOptions, ScanMode, Session};
+use card_scanner::session::{FrameOptions, ResolveOn, ScanMode, Session};
 use card_scanner::synth::{burst, SynthOptions};
 use image::{GrayImage, Rgb, RgbImage};
 use std::collections::HashMap;
@@ -521,7 +523,10 @@ impl Ingredients {
             reference.add_label(r.id, r.oracle, r.illustration, r.label.clone());
         }
         let reader = TitleReader::from_bytes(&self.detection, &self.recognition).expect("models");
-        Session::new(Some(reference), Some(reader), 5)
+        let mut session = Session::new(Some(reference), Some(reader), 5);
+        // Inline, as the evaluation resolves: a frame count must not depend on the clock.
+        session.set_resolve_on(ResolveOn::Inline);
+        session
     }
 }
 
