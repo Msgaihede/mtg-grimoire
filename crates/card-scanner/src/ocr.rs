@@ -733,17 +733,22 @@ pub fn collector_fit(raw: &str, set: &str, number: &str) -> Option<CollectorFit>
         .filter(|t| !t.is_empty())
         .map(str::to_ascii_uppercase)
         .collect();
+    // The token as read, and without a rarity letter stuck to its front (`U0014`).
+    let tails = |t: &str| {
+        let stuck = t.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
+        [Some(t.to_string()), stuck.then(|| t[1..].to_string())].into_iter().flatten()
+    };
     let number_read = !number.is_empty()
-        && tokens.iter().any(|t| {
-            let stuck = t.chars().next().is_some_and(|c| c.is_ascii_alphabetic());
-            let tails = [Some(t.as_str()), stuck.then(|| &t[1..])];
-            tails.into_iter().flatten().any(|n| read_number(n).is_some_and(|d| d == number))
-        });
+        && tokens.iter().any(|t| tails(t).any(|n| read_number(&n).is_some_and(|d| d == number)));
+    // Live on 2026-09-30, Exact read Faramir's line as `U0014 L8EH SOR/`: the number plain,
+    // the set past recognising, and no fit until the stuck `U` was allowed here too.
     let long_number_read = !number.is_empty()
         && tokens.iter().any(|t| {
-            t.len() >= 3
-                && t.chars().any(|c| c.is_ascii_digit())
-                && read_number(t).is_some_and(|d| d == number)
+            tails(t).any(|n| {
+                n.len() >= 3
+                    && n.chars().any(|c| c.is_ascii_digit())
+                    && read_number(&n).is_some_and(|d| d == number)
+            })
         });
     // A number read cleanly that is not this printing's says the line is some other printing's,
     // so the set alone is then no evidence for this one.
@@ -1174,6 +1179,7 @@ mod tests {
         let set = collector_fit("LTRCN SOG", "ltr", "14");
         assert!(both > number && number > set && set.is_some(), "{both:?} {number:?} {set:?}");
         assert_eq!(collector_fit("U0014 LTR", "ltr", "14"), both, "a rarity letter stuck on");
+        assert_eq!(collector_fit("U0014 L8EH SOR/", "ltr", "14"), number, "stuck, set unreadable");
         // Nothing that reads as its number or its set.
         assert_eq!(collector_fit("1XRE SOM", "ltr", "14"), None);
         assert_eq!(collector_fit("1", "ltr", "1"), None, "one character is noise");

@@ -276,6 +276,15 @@ impl QuadLock {
 
 /// `candidate`'s corners, rotated to line up with `previous`'s: the cyclic shift that puts each
 /// corner nearest its counterpart. The rectangle is unchanged; only which corner is called first.
+///
+/// **A half-turn at most, never a quarter.** The detector orders every quad portrait, a short
+/// edge first (`detect::order_corners`), so the only relabelling that can be right is the card
+/// read upside down — which the hash already tries both ways. A quarter-turn calls a long edge
+/// the top and rectifies the card sideways, where neither way up matches anything; and the
+/// shift is taken against the *held* quad, so once one got in, every later frame inherited it
+/// for as long as the lock held. Measured live 2026-09-30: an upright Dwarven Mauler held with
+/// its first corner at the bottom-left for 575 frames, the title band a sideways strip, and
+/// the whole-card tier finding no printing at all.
 fn aligned(previous: &Quad, candidate: &Quad) -> Quad {
     let cost = |shift: usize| -> f32 {
         (0..4)
@@ -285,7 +294,8 @@ fn aligned(previous: &Quad, candidate: &Quad) -> Quad {
             })
             .sum()
     };
-    let best = (0..4)
+    let best = [0, 2]
+        .into_iter()
         .min_by(|&x, &y| cost(x).partial_cmp(&cost(y)).unwrap_or(std::cmp::Ordering::Equal))
         .unwrap_or(0);
     Quad { corners: [0, 1, 2, 3].map(|i| candidate.corners[(i + best) % 4]) }
@@ -304,6 +314,24 @@ fn blend(a: &Quad, b: &Quad, t: f32) -> Quad {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_held_quarter_turn_is_never_passed_on() {
+        // The held quad calls the bottom-left corner first — a card labelled sideways.
+        let upright = quad(400.0, 300.0, 260.0);
+        let [tl, tr, br, bl] = upright.corners;
+        let sideways = Quad { corners: [bl, tl, tr, br] };
+        let next = aligned(&sideways, &upright);
+        let half_turn = Quad { corners: [br, bl, tl, tr] };
+        assert!(
+            next.corners == upright.corners || next.corners == half_turn.corners,
+            "a quarter-turned label survived: {:?}",
+            next.corners
+        );
+        // A card turned over is still relabelled to match, as it always was.
+        assert_eq!(aligned(&half_turn, &upright).corners, half_turn.corners);
+        assert_eq!(aligned(&upright, &upright).corners, upright.corners);
+    }
 
     /// A card-shaped quad of width `w` centred at `(x, y)`.
     fn quad(x: f32, y: f32, w: f32) -> Quad {

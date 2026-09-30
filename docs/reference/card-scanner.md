@@ -458,6 +458,16 @@ every frame, so there was never a better one for the lock to move to — the fau
 §3 *Detect*. Blending at 0.6 still reaches a corrected quad within a few frames once the detector
 offers one.
 
+**That rotation is a half-turn at most (2026-09-30).** `lock::aligned` chose among all four cyclic
+shifts, and the detector orders every quad portrait, a short edge first — so a quarter-turn is
+never a relabelling, it calls a long edge the top and rectifies the card sideways, where neither
+way up matches. And the shift is taken against the *held* quad, so one that got in was inherited
+by every later frame. Live: an upright Dwarven Mauler held with its first corner at the
+bottom-left for 575 frames, both detectors offering the correctly ordered quad on every one, the
+title band a sideways strip and the whole-card tier finding no printing. The detector is not
+involved — `scan` on the saved frame orders the corners top-left first with both methods. Only
+shifts 0 and 2 are tried now (`a_held_quarter_turn_is_never_passed_on`).
+
 ### Track — a locked card is searched where it is
 
 **Added 2026-09-30 (#702).** Until then every frame ran the whole detector from scratch: two
