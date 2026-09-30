@@ -137,7 +137,7 @@ pub fn resolve(
     // ---- 0 filters -----------------------------------------------------------------------
     let (admitted, detail) = match mask.len() {
         Some(n) => (n, format!("{n} printings")),
-        None => (r.bundle.cards.len(), "unrestricted".to_string()),
+        None => (r.bundle_printings(), "unrestricted".to_string()),
     };
     tiers.push(tier("filters", admitted, detail));
 

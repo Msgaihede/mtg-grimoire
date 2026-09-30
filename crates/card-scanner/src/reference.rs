@@ -85,9 +85,27 @@ pub struct MatchReport {
     pub search_ms: f32,
 }
 
+/// One card filed under a name in [`Reference`]'s name index.
+///
+/// **A whole name outranks a face name**, and a name's entries are kept in that order: the
+/// first card the mask admits is the answer, so the order is the tie-break. 2,153 cards in
+/// the corpus have a face named what some other card is named whole (counted 2026-09-30), and
+/// 2,065 of them are art-series cards — `Memory Lapse // Memory Lapse` against the Memory Lapse
+/// that is played, where a read of `memory lapse` means the second. Within each half, corpus
+/// order.
+#[derive(Debug, Clone, Copy)]
+struct NameEntry {
+    card: [u8; ID_LEN],
+    /// Filed under one face of an `a // b` name rather than under the whole of it.
+    face: bool,
+}
+
 /// The bundle and the corpus labels, ready to answer.
 pub struct Reference {
     pub bundle: Bundle,
+    /// Distinct printings in the bundle's card section — fewer than its entries, since a
+    /// double-faced printing is filed once per face.
+    bundle_printings: usize,
     labels: HashMap<[u8; ID_LEN], Label>,
     /// `illustration_id` → every printing that shares it. Populated only when a corpus is
     /// loaded; its size is the measured fact that half of all artworks are shared.
@@ -101,12 +119,23 @@ pub struct Reference {
     /// What lets a filtered name read ask the question that matters — does this card have
     /// *any* printing the filters permit — and what Exact's title tier widens a read name to.
     oracle_printings: HashMap<[u8; ID_LEN], Vec<[u8; ID_LEN]>>,
-    /// Normalized card name → the card's oracle id (the printing's own id when it has none).
+    /// Normalized card name → every card that bears it, as oracle ids (the printing's own id
+    /// when it has none). See [`NameEntry`] for the order.
     ///
     /// Names, not printings: OCR reads the name, and every printing of a card shares it. An
     /// oracle rather than a representative printing, so a masked lookup can check the card's
     /// printings against the filters instead of one arbitrary printing of it.
-    by_name: HashMap<String, [u8; ID_LEN]>,
+    ///
+    /// **Every card, not the first.** 244 normalized names in the corpus belong to more than
+    /// one oracle (counted 2026-09-30) — Ornithopter is a 9ED card and a DMU token — and keeping
+    /// one meant a masked read whose first oracle the filters excluded answered `None` for a card
+    /// the filters permit.
+    ///
+    /// **Face names too.** A split, adventure or double-faced card's name is `a // b`, and
+    /// what is printed in its title bar is `a` alone — so an exact read of it never matched
+    /// exactly, fell through to the fuzzy search, and read `virtue of knowledge` as Price of
+    /// Knowledge at four edits.
+    by_name: HashMap<String, Vec<NameEntry>>,
     /// `(set, collector number)` to printing — the index the collector line resolves against.
     ///
     /// Lower-cased and with leading zeros stripped on both sides, because the card prints
@@ -116,8 +145,11 @@ pub struct Reference {
 
 impl Reference {
     pub fn new(bundle: Bundle) -> Self {
+        let bundle_printings =
+            bundle.cards.ids.iter().collect::<std::collections::HashSet<_>>().len();
         Reference {
             bundle,
+            bundle_printings,
             labels: HashMap::new(),
             art_printings: HashMap::new(),
             oracle: HashMap::new(),
@@ -125,6 +157,12 @@ impl Reference {
             by_name: HashMap::new(),
             by_set_number: HashMap::new(),
         }
+    }
+
+    /// How many printings the bundle can recognise by appearance: its card section's distinct
+    /// ids, not its entries.
+    pub fn bundle_printings(&self) -> usize {
+        self.bundle_printings
     }
 
     pub fn label_count(&self) -> usize {
@@ -193,7 +231,12 @@ impl Reference {
             }
             self.oracle_printings.entry(card).or_default().push(id);
         }
-        self.by_name.entry(crate::ocr::normalize(&label.name)).or_insert(card);
+        self.index_name(&label.name, card, false);
+        if label.name.contains(" // ") {
+            for face in label.name.split(" // ") {
+                self.index_name(face, card, true);
+            }
+        }
         // English first: a non-English printing shares the set and number with its English
         // counterpart, and `or_insert` would otherwise hand back whichever language the corpus
         // happened to list first.
@@ -204,6 +247,27 @@ impl Reference {
             self.by_set_number.entry(key).or_insert(id);
         }
         self.labels.insert(id, label);
+    }
+
+    /// File `card` under one name, once, keeping whole names ahead of face names.
+    fn index_name(&mut self, name: &str, card: [u8; ID_LEN], face: bool) {
+        let entries = self.by_name.entry(crate::ocr::normalize(name)).or_default();
+        match entries.iter().position(|e| e.card == card) {
+            // A card already filed under this name as a face and now met under it whole —
+            // `Forest // Forest` before a plain Forest of the same oracle — moves up.
+            Some(i) if entries[i].face && !face => {
+                entries.remove(i);
+            }
+            Some(_) => return,
+            None => {}
+        }
+        let at = if face { entries.len() } else { entries.iter().take_while(|e| !e.face).count() };
+        entries.insert(at, NameEntry { card, face });
+    }
+
+    /// The first card filed under `name` with a printing the mask admits.
+    fn named_card(&self, entries: &[NameEntry], mask: &Mask) -> Option<[u8; ID_LEN]> {
+        entries.iter().map(|e| e.card).find(|card| self.card_permitted(card, mask))
     }
 
     /// The mask a set of filters admits: every labelled printing that passes them.
@@ -331,8 +395,8 @@ impl Reference {
         if read.len() < 4 {
             return None;
         }
-        if let Some(card) = self.by_name.get(read) {
-            return self.card_permitted(card, mask).then_some((*card, 0));
+        if let Some(entries) = self.by_name.get(read) {
+            return self.named_card(entries, mask).map(|card| (card, 0));
         }
 
         // One edit per four characters, so a long name tolerates more misreads than a short
@@ -340,7 +404,7 @@ impl Reference {
         // same slip in "Shock" is a different card.
         let budget = (read.len() / 4).clamp(1, 6) as u32;
         let mut best: Option<([u8; ID_LEN], u32)> = None;
-        for (name, card) in &self.by_name {
+        for (name, entries) in &self.by_name {
             if name.len().abs_diff(read.len()) > 3 {
                 continue;
             }
@@ -348,8 +412,11 @@ impl Reference {
             if let Some(d) = bounded_edit_distance(name, read, cap.min(budget)) {
                 // The mask is checked only for a name that would win, so a filtered read pays
                 // for it on a handful of names rather than on every one within reach.
-                if best.is_none_or(|(_, b)| d < b) && self.card_permitted(card, mask) {
-                    best = Some((*card, d));
+                if best.is_some_and(|(_, b)| d >= b) {
+                    continue;
+                }
+                if let Some(card) = self.named_card(entries, mask) {
+                    best = Some((card, d));
                     if d == 0 {
                         break;
                     }
@@ -1004,6 +1071,69 @@ mod tests {
         let r = three();
         assert_eq!(r.lookup_by_name("forest"), Some((id(1), 0)));
         assert_eq!(r.lookup_by_name("shock"), Some((id(3), 0)));
+    }
+
+    #[test]
+    fn an_exact_read_of_one_face_names_the_card() {
+        // §8 item 12, from the corpus: the title bar of an adventure prints the front face
+        // alone. Indexed only as `virtue of knowledge vantress visions`, the read below missed
+        // the exact lookup and fell to the fuzzy one, which answered Price of Knowledge at
+        // four edits.
+        let r = labelled(&[
+            (1, 10, "Price of Knowledge", "c13", "89", "2013-11-01"),
+            (2, 20, "Virtue of Knowledge // Vantress Visions", "woe", "76", "2023-09-08"),
+        ]);
+        assert_eq!(r.lookup_by_name("virtue of knowledge"), Some((id(2), 0)));
+        assert_eq!(r.lookup_by_name("vantress visions"), Some((id(2), 0)), "the back face");
+        assert_eq!(
+            r.lookup_by_name("virtue of knowledge vantress visions"),
+            Some((id(2), 0)),
+            "the whole name still resolves"
+        );
+        // And a misread of the face now lands on the face, not four edits away.
+        assert_eq!(r.lookup_by_name("virtue of knowiedge"), Some((id(2), 1)));
+    }
+
+    #[test]
+    fn a_whole_name_outranks_the_same_name_as_a_face() {
+        // An art-series card is named `Memory Lapse // Memory Lapse`, and its face is the
+        // played card's whole name. A read of `memory lapse` is the played card — whichever
+        // of the two the corpus happened to list first.
+        for rows in [
+            [
+                (1, 10, "Memory Lapse // Memory Lapse", "astx", "66", "2021-04-23"),
+                (2, 20, "Memory Lapse", "sld", "2142", "2025-12-01"),
+            ],
+            [
+                (2, 20, "Memory Lapse", "sld", "2142", "2025-12-01"),
+                (1, 10, "Memory Lapse // Memory Lapse", "astx", "66", "2021-04-23"),
+            ],
+        ] {
+            let r = labelled(&rows);
+            assert_eq!(r.lookup_by_name("memory lapse"), Some((id(2), 0)));
+            // Filtered to the art series, the face still answers.
+            let art = r.mask_for(&sets(&["astx"]));
+            assert_eq!(r.lookup_by_name_masked("memory lapse", &art), Some((id(10), 0)));
+        }
+    }
+
+    #[test]
+    fn a_name_two_cards_share_answers_for_whichever_the_filters_permit() {
+        // §8 item 12's parenthesis, from the corpus: Ornithopter is a 9ED card and a DMU
+        // token, two oracles under one name. Keeping one oracle per name made a read filtered
+        // to the other one's set answer `None`, for a card the filters permit.
+        let r = labelled(&[
+            (1, 10, "Ornithopter", "tdmu", "22", "2022-09-09"),
+            (2, 20, "Ornithopter", "9ed", "305", "2005-07-29"),
+        ]);
+        let ninth = r.mask_for(&sets(&["9ed"]));
+        assert_eq!(r.lookup_by_name_masked("ornithopter", &ninth), Some((id(20), 0)));
+        let token = r.mask_for(&sets(&["tdmu"]));
+        assert_eq!(r.lookup_by_name_masked("ornithopter", &token), Some((id(10), 0)));
+        // The fuzzy path reads the same list.
+        assert_eq!(r.lookup_by_name_masked("ornlthopter", &ninth), Some((id(20), 1)));
+        // Unfiltered, corpus order decides, as it always has.
+        assert_eq!(r.lookup_by_name("ornithopter"), Some((id(1), 0)));
     }
 
     #[test]
