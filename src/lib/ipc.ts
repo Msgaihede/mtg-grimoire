@@ -7396,6 +7396,11 @@ export interface ScannerOptions {
   min_cardness: number;
   /** The binary and contour images as well as the quad. Roughly doubles the response time. */
   stages: boolean;
+  /**
+   * The rectified card's preview and its display hash. Nothing but the developer panels draws
+   * either, so the page sets this only while the Developer switch is on.
+   */
+  previews: boolean;
   rule: ScannerRule;
   decide_at: number;
   lead_margin: number;
@@ -7725,8 +7730,9 @@ export interface ScannerVerdict {
    */
   search: "full" | "window";
   score: ScannerScore | null;
+  /** The primary view's 256-bit dHash, for display. `null` unless the frame asked for `previews`. */
   hash: string | null;
-  /** The rectified card as a data URL — the payload a reader actually wants to see. */
+  /** The rectified card as a data URL. `null` unless the frame asked for `previews`. */
   rectified: string | null;
   timings: ScannerTimings | null;
   candidates_examined: number | null;

@@ -216,7 +216,7 @@ pub struct DetectOptions {
     pub only_pass: Option<EdgePass>,
     /// Split Otsu's masks at this level rather than at the one this image's histogram gives.
     ///
-    /// **For [`detect_near`], and a measured failure is why.** Otsu's level is a property of the
+    /// **For [`locate_near`], and a measured failure is why.** Otsu's level is a property of the
     /// pixels it is handed, and a window is mostly card where the frame was mostly table: on a
     /// synthetic card the frame split at 92 and its window at 135, which cut the card itself in
     /// two and found no card in the window on any frame. A locked card keeps the level that
@@ -482,14 +482,87 @@ pub enum DetectError {
     NotACard { cardness: f32 },
 }
 
+/// Where the card is, without flattening it: [`locate`]'s answer.
+#[derive(Debug, Clone, Copy)]
+pub struct Located {
+    /// In **source** coordinates, ready for [`rectify_views`].
+    pub quad: Quad,
+    pub score: QuadScore,
+    pub cardness: crate::cardness::Cardness,
+    /// The mask that found it — what a locked card's next frame runs alone.
+    pub pass: EdgePass,
+    /// The level Otsu's masks split at — `None` for Canny. See [`DetectOptions::otsu_level`].
+    pub otsu_level: Option<u8>,
+}
+
+/// The frame as RGB, borrowed when it already is — which a decoded JPEG always is.
+///
+/// Every warp reads an [`RgbImage`], and `DynamicImage::to_rgb8` is a full-frame copy even when
+/// the pixels are already RGB. A caller that locates twice and rectifies once takes this once
+/// and hands it to all three (issue #701).
+pub fn rgb_of(source: &DynamicImage) -> std::borrow::Cow<'_, RgbImage> {
+    match source {
+        DynamicImage::ImageRgb8(rgb) => std::borrow::Cow::Borrowed(rgb),
+        other => std::borrow::Cow::Owned(other.to_rgb8()),
+    }
+}
+
 /// Find the card and flatten it, returning the debug trace either way.
 ///
 /// The trace is returned on failure too — a scan that found nothing is exactly when a reader
 /// wants to see the edge image.
+///
+/// [`locate`] then [`rectify_views`]. The session calls the two halves itself, because it runs
+/// more than one method and rectifies only the winner — see `Session::frame`.
 pub fn detect(
     source: &DynamicImage,
     opts: &DetectOptions,
 ) -> (Result<Detection, DetectError>, Option<DetectTrace>) {
+    let rgb = rgb_of(source);
+    let (located, trace) = locate(source, &rgb, opts);
+    let located = match located {
+        Ok(l) => l,
+        Err(e) => return (Err(e), trace),
+    };
+
+    // ── Stages 6-7: the homography, from the full-resolution source ───────────────
+    let t_rectify = std::time::Instant::now();
+    let views = rectify_views(&rgb, &located.quad, opts);
+    let rectify_ms = t_rectify.elapsed().as_secs_f32() * 1000.0;
+    let trace = trace.map(|mut t| {
+        t.timings.rectify_ms = rectify_ms;
+        t.timings.total_ms += rectify_ms;
+        t
+    });
+    let Some(Views { rectified, rectified_180, margin, alternates }) = views else {
+        return (Err(DetectError::Degenerate), trace);
+    };
+    (
+        Ok(Detection {
+            quad: located.quad,
+            score: located.score,
+            pass: located.pass,
+            otsu_level: located.otsu_level,
+            cardness: located.cardness,
+            rectified,
+            rectified_180,
+            margin,
+            alternates,
+        }),
+        trace,
+    )
+}
+
+/// Find the card and score it, **without** the full-size rectification: stages 0–5 and the
+/// card-likeness ranking. `rgb` is `source` as RGB — [`rgb_of`] — passed in so a caller running
+/// several methods over one frame converts it once.
+///
+/// The trace's `rectify_ms` is left at zero; whoever rectifies fills it in.
+pub fn locate(
+    source: &DynamicImage,
+    rgb: &RgbImage,
+    opts: &DetectOptions,
+) -> (Result<Located, DetectError>, Option<DetectTrace>) {
     let t_start = std::time::Instant::now();
     let mut timings = DetectTimings::default();
     let ms = |t: std::time::Instant| t.elapsed().as_secs_f32() * 1000.0;
@@ -589,7 +662,6 @@ pub fn detect(
     // every card has, and *that* picks the winner. Over the sample corpus, gating on it kept
     // all 24 good matches while rejecting 10 of the 15 bad ones — geometry alone was right 62%
     // of the time, card-likeness 83%.
-    let rgb = source.to_rgb8();
     let considered = opts.cardness_candidates.min(candidates.len());
     for c in candidates.iter_mut().take(considered) {
         // **Candidate quads are in work-image coordinates; the source is full resolution.**
@@ -599,9 +671,9 @@ pub fn detect(
         let warped =
             Quad { corners: c.quad.corners.map(|(x, y)| (x * scale, y * scale)) }
                 .scaled(opts.inset);
-        let small = rectify_to(&rgb, &warped, crate::cardness::W, crate::cardness::H);
+        let small = rectify_to(rgb, &warped, crate::cardness::W, crate::cardness::H);
         let flipped =
-            rectify_to(&rgb, &warped.flipped(), crate::cardness::W, crate::cardness::H);
+            rectify_to(rgb, &warped.flipped(), crate::cardness::W, crate::cardness::H);
         if let (Some(a), Some(b)) = (small, flipped) {
             c.cardness = Some(crate::cardness::cardness_oriented(&a, &b).0);
         }
@@ -611,12 +683,13 @@ pub fn detect(
         key(b).partial_cmp(&key(a)).unwrap_or(std::cmp::Ordering::Equal)
     });
 
+    let work_rgb = work.to_rgb8();
     let trace = DetectTrace {
         timings,
         gray: gray.clone(),
         binary: masks.swap_remove(0),
-        contours: draw_contours(&work.to_rgb8(), &all_contours),
-        quads: draw_quads(&work.to_rgb8(), &candidates),
+        contours: draw_contours(&work_rgb, &all_contours),
+        quads: draw_quads(&work_rgb, &candidates),
         candidates: candidates.clone(),
         method: opts.method,
         scale,
@@ -634,22 +707,15 @@ pub fn detect(
         );
     }
 
-    // ── Stages 6-7: back to source coordinates, then the homography ───────────────
+    // ── Back to source coordinates ────────────────────────────────────────────────
     let source_quad = Quad {
         corners: best.quad.corners.map(|(x, y)| (x * scale, y * scale)),
     };
-    let t_rectify = std::time::Instant::now();
-    let Some(views) = rectify_views(&rgb, &source_quad, opts) else {
-        return (Err(DetectError::Degenerate), Some(trace));
-    };
-    let Views { rectified, rectified_180, margin, alternates } = views;
-
     let mut trace = trace;
-    trace.timings.rectify_ms = ms(t_rectify);
     trace.timings.total_ms = ms(t_start);
 
     (
-        Ok(Detection {
+        Ok(Located {
             quad: source_quad,
             score: best.score,
             pass: best.pass,
@@ -660,16 +726,12 @@ pub fn detect(
                 full_width_rows: 0,
                 score: 0.0,
             }),
-            rectified,
-            rectified_180,
-            margin,
-            alternates,
         }),
         Some(trace),
     )
 }
 
-/// How many pixels a locked card's short edge spans in [`detect_near`]'s working image.
+/// How many pixels a locked card's short edge spans in [`locate_near`]'s working image.
 ///
 /// Near what a full sweep gives the typical card: at 1024 px a card whose height is half the
 /// frame's short edge is ~205 px across, and one filling the frame ~290. The ceiling in
@@ -724,7 +786,7 @@ impl Window {
     }
 }
 
-/// [`detect`], but only where a locked card can be — the search a trusted lock gets.
+/// [`locate`], but only where a locked card can be — the search a trusted lock gets.
 ///
 /// **A locked card's position is already known to within a few pixels**, and a full sweep
 /// spends almost all of its time re-finding it. So this searches [`Window::around`] the held
@@ -733,9 +795,8 @@ impl Window {
 /// nobody tuned the morphology for. Pair it with [`DetectOptions::only_pass`] and one mask runs
 /// over a fraction of the pixels.
 ///
-/// The detection comes back in **source** coordinates, like [`detect`]'s. The rectifications
-/// are the source's own pixels too — the window is a crop, not a resample, and it reaches
-/// further past the card than any framing does. **The trace does not**: its images and
+/// The quad comes back in **source** coordinates, like [`locate`]'s, ready for the one
+/// rectification the caller makes from the whole frame. **The trace does not**: its images and
 /// candidates are the window's, which is what a debug view of this search should show.
 ///
 /// Every gate still applies inside the window: a contour touching its edge is a card that
@@ -751,12 +812,12 @@ impl Window {
 /// `max_area_ratio` of the held quad, and never below the full sweep's floor: **the window
 /// answers only with what the lock would accept, and anything else is a miss** — which the
 /// caller sends to the full sweep.
-pub fn detect_near(
+pub fn locate_near(
     source: &DynamicImage,
     held: &Quad,
     lock: &crate::lock::LockOptions,
     opts: &DetectOptions,
-) -> (Result<Detection, DetectError>, Option<DetectTrace>) {
+) -> (Result<Located, DetectError>, Option<DetectTrace>) {
     let (sw, sh) = source.dimensions();
     let Some(window) = Window::around(held, lock.max_drift, sw, sh) else {
         return (Err(DetectError::NoCard { examined: 0 }), None);
@@ -769,9 +830,10 @@ pub fn detect_near(
     let min_area_frac =
         (held.area() / ratio).max(opts.min_area_frac * frame_area) / window_area;
     let max_area_frac = (held.area() * ratio / window_area).min(opts.max_area_frac);
+    // A crop of an RGB frame is RGB, so `rgb_of` borrows it: the window is copied once.
     let crop = source.crop_imm(window.x, window.y, window.w, window.h);
     let near = DetectOptions { work_long_edge, min_area_frac, max_area_frac, ..opts.clone() };
-    let (result, trace) = detect(&crop, &near);
+    let (result, trace) = locate(&crop, &rgb_of(&crop), &near);
     let (dx, dy) = (window.x as f32, window.y as f32);
     // The area fraction too: "frame area" in a readout means the frame's, and the window's
     // would read the same card as three times the size whenever the lock is trusted.
@@ -1206,12 +1268,21 @@ pub fn rectify_to(source: &RgbImage, quad: &Quad, w: u32, h: u32) -> Option<RgbI
     Some(out)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Full-size warps made on this thread by [`rectify`] — how a test counts what one frame
+    /// costs, which is the whole of issue #701's claim (18 on a locked frame, now 6).
+    pub(crate) static WARPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Flatten `quad` out of `source` into a canonical [`RECTIFIED_W`]×[`RECTIFIED_H`] card.
 ///
 /// The control points run source-then-destination because `imageproc`'s projection maps the
 /// input plane onto the output plane, and `warp_into` inverts it internally. Handing them
 /// over the other way round produces a plausible-looking, entirely wrong image.
 pub fn rectify(source: &RgbImage, quad: &Quad) -> Option<RgbImage> {
+    #[cfg(test)]
+    WARPS.with(|w| w.set(w.get() + 1));
     let dst = [
         (0.0, 0.0),
         (RECTIFIED_W as f32, 0.0),
@@ -1694,14 +1765,14 @@ mod tests {
             // The lock's quad is smoothed and a few pixels behind, never exactly this frame's.
             let held = Quad { corners: full.quad.corners.map(|(x, y)| (x + 12.0, y - 8.0)) };
             let alone = DetectOptions { only_pass: Some(full.pass), ..opts };
-            let near = detect_near(&frame, &held, &crate::lock::LockOptions::default(), &alone)
+            let near = locate_near(&frame, &held, &crate::lock::LockOptions::default(), &alone)
                 .0
                 .unwrap_or_else(|e| panic!("the window lost a {card_w} px card: {e}"));
             for (a, b) in near.quad.corners.iter().zip(full.quad.corners.iter()) {
                 let off = ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
                 assert!(off < 6.0, "{card_w} px: a corner is {off:.1} px from the full sweep's");
             }
-            assert_eq!(near.rectified.dimensions(), full.rectified.dimensions());
+            assert_eq!(near.pass, full.pass);
         }
     }
 
@@ -1711,7 +1782,7 @@ mod tests {
         // had been picked up and put down elsewhere. The window must miss, so the caller sweeps.
         let frame = synth(1280, 720, 220.0, 0.0);
         let held = Quad { corners: [(60.0, 40.0), (160.0, 40.0), (160.0, 180.0), (60.0, 180.0)] };
-        assert!(detect_near(&frame, &held, &crate::lock::LockOptions::default(), &DetectOptions::default()).0.is_err());
+        assert!(locate_near(&frame, &held, &crate::lock::LockOptions::default(), &DetectOptions::default()).0.is_err());
     }
 
     #[test]
@@ -1735,7 +1806,7 @@ mod tests {
         let lock = crate::lock::LockOptions::default();
         let opts = DetectOptions { method: EdgeMethod::Otsu, ..Default::default() };
         assert!(detect(&frame, &opts).0.is_ok(), "the small card is a card to the full sweep");
-        assert!(detect_near(&frame, &held, &lock, &opts).0.is_err());
+        assert!(locate_near(&frame, &held, &lock, &opts).0.is_err());
     }
 
     #[test]
