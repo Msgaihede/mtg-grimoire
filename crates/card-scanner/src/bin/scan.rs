@@ -199,7 +199,7 @@ fn main() -> std::process::ExitCode {
             .map_err(|e| eprintln!("bundle {}: {e}", path.display()))
             .ok()?;
         eprintln!(
-            "bundle: {} printings, {} artworks, {} at {} bits",
+            "bundle: {} card faces, {} artworks, {} at {} bits",
             bundle.cards.len(),
             bundle.arts.len(),
             bundle.kind.as_str(),

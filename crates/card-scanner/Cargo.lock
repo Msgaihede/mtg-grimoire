@@ -137,6 +137,7 @@ dependencies = [
  "ocrs",
  "rayon",
  "rten",
+ "rten-imageproc",
  "rusqlite",
  "serde",
  "serde_json",

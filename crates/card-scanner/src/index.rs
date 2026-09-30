@@ -265,6 +265,28 @@ impl Field {
     }
 }
 
+/// Make room for a new hit on `id` in a ranked list: `false` when the list already holds `id`
+/// at least as well (`as_good` says so), else drops any worse hit on it and answers `true`.
+///
+/// **A section can hold one id more than once.** A double-faced printing is hashed per face and
+/// both faces are filed under the printing's id, so without this a top-K could list one
+/// printing twice — and the margin between a card's two faces would read as a contested match.
+/// Only a row that would enter the list pays for the check, and the list is single digits long.
+fn displace_same_id(
+    best: &mut Vec<Match>,
+    id: &[u8; ID_LEN],
+    as_good: impl Fn(&Match) -> bool,
+) -> bool {
+    match best.iter().position(|e| e.id == *id) {
+        Some(j) if as_good(&best[j]) => false,
+        Some(j) => {
+            best.remove(j);
+            true
+        }
+        None => true,
+    }
+}
+
 /// A mask covering the low `n` bits of the four-word array.
 fn low_mask(n: u16) -> [u64; 4] {
     std::array::from_fn(|i| {
@@ -358,6 +380,9 @@ impl Bundle {
             if best.len() == k && score >= worst {
                 continue;
             }
+            if !displace_same_id(&mut best, id, |e| e.normalized <= score) {
+                continue;
+            }
             let m = Match { id: *id, distance: ld + cd, normalized: score };
             let at = best
                 .iter()
@@ -409,6 +434,9 @@ impl Bundle {
                 d += ((w ^ q) & m).count_ones();
             }
             if best.len() == k && d >= worst {
+                continue;
+            }
+            if !displace_same_id(&mut best, id, |e| e.distance <= d) {
                 continue;
             }
             let m = Match {
@@ -640,6 +668,34 @@ mod tests {
         assert_eq!(hits.len(), 5);
         for w in hits.windows(2) {
             assert!(w[0].distance <= w[1].distance, "results are not sorted: {hits:?}");
+        }
+    }
+
+    #[test]
+    fn a_printing_with_two_faces_ranks_once_on_its_better_face() {
+        // A double-faced printing is filed once per face under one id. Listed twice, a top-K
+        // would spend a slot on it and report the gap between its two faces as the margin.
+        for kind in [HashKind::DHash, HashKind::DHashChroma32] {
+            let mut b = BundleBuilder::new(kind, 256);
+            for i in 0..20u8 {
+                b.push(Section::Card, id(i), &desc(256, i as u64));
+            }
+            b.push(Section::Card, id(7), &desc(256, 50)); // the back face
+            let b = b.finish(0);
+
+            for (face, query) in [("front", desc(256, 7)), ("back", desc(256, 50))] {
+                // Every entry is within reach, so both faces would rank without the fold.
+                let runs = [
+                    b.search(&query, Section::Card, 25, &Mask::all()),
+                    b.search_weighted(&query, Section::Card, 25, &Mask::all(), 0.5),
+                ];
+                for hits in runs {
+                    assert_eq!(hits[0].id, id(7), "{kind:?} {face}");
+                    assert_eq!(hits[0].distance, 0, "{kind:?} {face}: the better face ranks");
+                    assert_eq!(hits.iter().filter(|h| h.id == id(7)).count(), 1, "{hits:?}");
+                    assert_eq!(hits.len(), 20, "twenty printings, twenty-one entries");
+                }
+            }
         }
     }
 

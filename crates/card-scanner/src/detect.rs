@@ -428,14 +428,92 @@ pub enum DetectError {
     NotACard { cardness: f32 },
 }
 
+/// Where the card is, without flattening it: [`locate`]'s answer.
+#[derive(Debug, Clone, Copy)]
+pub struct Located {
+    /// In **source** coordinates, ready for [`rectify_views`].
+    pub quad: Quad,
+    pub score: QuadScore,
+    pub cardness: crate::cardness::Cardness,
+    /// What the outer-edge search found on each side, when it ran. See [`crate::edges`].
+    pub edges: Option<[crate::edges::SideEdge; 4]>,
+}
+
+impl Located {
+    /// How good an answer this is, for choosing between two methods' answers for one frame —
+    /// card-likeness and edge evidence, weighted as [`locate`] weighs its own candidates.
+    pub fn rank(&self) -> f32 {
+        self.cardness.score + EDGE_EVIDENCE_WEIGHT * self.edges.map_or(0.5, side_evidence)
+    }
+}
+
+/// The frame as RGB, borrowed when it already is — which a decoded JPEG always is.
+///
+/// Every warp reads an [`RgbImage`], and `DynamicImage::to_rgb8` is a full-frame copy even when
+/// the pixels are already RGB. A caller that locates twice and rectifies once takes this once
+/// and hands it to all three (issue #701).
+pub fn rgb_of(source: &DynamicImage) -> std::borrow::Cow<'_, RgbImage> {
+    match source {
+        DynamicImage::ImageRgb8(rgb) => std::borrow::Cow::Borrowed(rgb),
+        other => std::borrow::Cow::Owned(other.to_rgb8()),
+    }
+}
+
 /// Find the card and flatten it, returning the debug trace either way.
 ///
 /// The trace is returned on failure too — a scan that found nothing is exactly when a reader
 /// wants to see the edge image.
+///
+/// [`locate`] then [`rectify_views`]. The session calls the two halves itself, because it runs
+/// more than one method and rectifies only the winner — see `Session::frame`.
 pub fn detect(
     source: &DynamicImage,
     opts: &DetectOptions,
 ) -> (Result<Detection, DetectError>, Option<DetectTrace>) {
+    let rgb = rgb_of(source);
+    let (located, trace) = locate(source, &rgb, opts);
+    let located = match located {
+        Ok(l) => l,
+        Err(e) => return (Err(e), trace),
+    };
+
+    // ── Stages 6-7: the homography, from the full-resolution source ───────────────
+    let t_rectify = std::time::Instant::now();
+    let views = rectify_views(&rgb, &located.quad, opts);
+    let rectify_ms = t_rectify.elapsed().as_secs_f32() * 1000.0;
+    let trace = trace.map(|mut t| {
+        t.timings.rectify_ms = rectify_ms;
+        t.timings.total_ms += rectify_ms;
+        t
+    });
+    let Some(Views { rectified, rectified_180, margin, alternates }) = views else {
+        return (Err(DetectError::Degenerate), trace);
+    };
+    (
+        Ok(Detection {
+            quad: located.quad,
+            score: located.score,
+            cardness: located.cardness,
+            rectified,
+            rectified_180,
+            margin,
+            alternates,
+            edges: located.edges,
+        }),
+        trace,
+    )
+}
+
+/// Find the card and score it, **without** the full-size rectification: stages 0–5 and the
+/// card-likeness ranking. `rgb` is `source` as RGB — [`rgb_of`] — passed in so a caller running
+/// several methods over one frame converts it once.
+///
+/// The trace's `rectify_ms` is left at zero; whoever rectifies fills it in.
+pub fn locate(
+    source: &DynamicImage,
+    rgb: &RgbImage,
+    opts: &DetectOptions,
+) -> (Result<Located, DetectError>, Option<DetectTrace>) {
     let t_start = std::time::Instant::now();
     let mut timings = DetectTimings::default();
     let ms = |t: std::time::Instant| t.elapsed().as_secs_f32() * 1000.0;
@@ -605,7 +683,6 @@ pub fn detect(
     // that, and a corner found at the working scale is up to two source pixels coarse before
     // anything else goes wrong. A candidate whose refined quad fails the shape gates keeps its
     // contour quad. The time is counted in `contour_ms`.
-    let rgb = source.to_rgb8();
     let mut blind = vec![false; candidates.len()];
     for (c, blind) in candidates.iter_mut().zip(blind.iter_mut()) {
         let Some(r) = crate::edges::refine(&rgb, &to_source(&c.quad, scale)) else { continue };
@@ -701,9 +778,9 @@ pub fn detect(
         // scores as featureless and rejects every real card — measured, it took the sample
         // corpus from 39 detections to 2 while looking like a threshold problem.
         let warped = to_source(q, scale).scaled(opts.inset);
-        let small = rectify_to(&rgb, &warped, crate::cardness::W, crate::cardness::H);
+        let small = rectify_to(rgb, &warped, crate::cardness::W, crate::cardness::H);
         let flipped =
-            rectify_to(&rgb, &warped.flipped(), crate::cardness::W, crate::cardness::H);
+            rectify_to(rgb, &warped.flipped(), crate::cardness::W, crate::cardness::H);
         match (small, flipped) {
             (Some(a), Some(b)) => Some(crate::cardness::cardness_oriented(&a, &b).0),
             _ => None,
@@ -761,12 +838,13 @@ pub fn detect(
         }
     }
 
+    let work_rgb = work.to_rgb8();
     let trace = DetectTrace {
         timings,
         gray: gray.clone(),
         binary: masks[0].clone(),
-        contours: draw_contours(&work.to_rgb8(), &all_contours),
-        quads: draw_quads(&work.to_rgb8(), &candidates),
+        contours: draw_contours(&work_rgb, &all_contours),
+        quads: draw_quads(&work_rgb, &candidates),
         candidates: candidates.clone(),
         method: opts.method,
         scale,
@@ -784,22 +862,15 @@ pub fn detect(
         );
     }
 
-    // ── Stages 6-7: back to source coordinates, then the homography ───────────────
+    // ── Back to source coordinates ────────────────────────────────────────────────
     let source_quad = Quad {
         corners: best.quad.corners.map(|(x, y)| (x * scale, y * scale)),
     };
-    let t_rectify = std::time::Instant::now();
-    let Some(views) = rectify_views(&rgb, &source_quad, opts) else {
-        return (Err(DetectError::Degenerate), Some(trace));
-    };
-    let Views { rectified, rectified_180, margin, alternates } = views;
-
     let mut trace = trace;
-    trace.timings.rectify_ms = ms(t_rectify);
     trace.timings.total_ms = ms(t_start);
 
     (
-        Ok(Detection {
+        Ok(Located {
             quad: source_quad,
             score: best.score,
             cardness: best.cardness.unwrap_or(crate::cardness::Cardness {
@@ -808,10 +879,6 @@ pub fn detect(
                 full_width_rows: 0,
                 score: 0.0,
             }),
-            rectified,
-            rectified_180,
-            margin,
-            alternates,
             edges: best.edges,
         }),
         Some(trace),
@@ -1211,12 +1278,21 @@ pub fn rectify_to(source: &RgbImage, quad: &Quad, w: u32, h: u32) -> Option<RgbI
     Some(out)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// Full-size warps made on this thread by [`rectify`] — how a test counts what one frame
+    /// costs, which is the whole of issue #701's claim (18 on a locked frame, now 6).
+    pub(crate) static WARPS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Flatten `quad` out of `source` into a canonical [`RECTIFIED_W`]×[`RECTIFIED_H`] card.
 ///
 /// The control points run source-then-destination because `imageproc`'s projection maps the
 /// input plane onto the output plane, and `warp_into` inverts it internally. Handing them
 /// over the other way round produces a plausible-looking, entirely wrong image.
 pub fn rectify(source: &RgbImage, quad: &Quad) -> Option<RgbImage> {
+    #[cfg(test)]
+    WARPS.with(|w| w.set(w.get() + 1));
     let dst = [
         (0.0, 0.0),
         (RECTIFIED_W as f32, 0.0),

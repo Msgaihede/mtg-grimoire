@@ -43,7 +43,7 @@ for (let f = 1; f <= Number(frames); f++) {
     .join(' ');
   console.log(
     `${String(f).padStart(2)} ${String(ms).padStart(5)} ms lock=${j.lock?.phase ?? '-'} ` +
-      `${t ? `rule=${t.rule} committed=${t.committed} frozen=${t.frozen} tally=${tally}/${t.decide_at} misses=${t.misses}` : 'no tracker'} ` +
+      `${t ? `rule=${t.rule} committed=${t.committed} frozen=${t.frozen} tally=${tally}/${t.decide_at}${t.early ? ' clear' : ''} misses=${t.misses}` : 'no tracker'} ` +
       `:: ${name} ${reads} ${j.error ? `err=${j.error}` : ''}`,
   );
 }

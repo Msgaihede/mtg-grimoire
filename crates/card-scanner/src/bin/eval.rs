@@ -67,7 +67,7 @@ use card_scanner::filters::ScanFilters;
 use card_scanner::index::{format_uuid, parse_uuid, Bundle, ID_LEN};
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::{Label, Reference};
-use card_scanner::session::{FrameOptions, Outcome, ScanMode, Session};
+use card_scanner::session::{FrameOptions, Outcome, ResolveOn, ScanMode, Session};
 use card_scanner::synth::{burst_scene, Scene, SynthFrame, SynthOptions};
 use clap::{ArgGroup, Parser};
 use image::{Rgb, RgbImage};
@@ -140,6 +140,16 @@ struct Args {
     /// Also write the table here, as markdown.
     #[arg(long)]
     summary: Option<PathBuf>,
+    /// Also write one JSON line per Fast frame here: the lock, the card-likeness, the frame's
+    /// best card and its distance, and how far behind it the nearest *other* card sat. What
+    /// Fast's early decision and its two-frame lock were tuned from. Tracing feeds the Fast pass
+    /// the whole burst rather than stopping at its decision; the frames after it are left out of
+    /// the table and its mean ms, though they still take a core from the other workers.
+    #[arg(long)]
+    trace: Option<PathBuf>,
+    /// Run the Fast pass alone — a third of the time, for tuning Fast.
+    #[arg(long)]
+    fast_only: bool,
     /// What surrounds each card: bare, in a sleeve, or on a small stack.
     #[arg(long, default_value_t = Scene::Plain)]
     scene: Scene,
@@ -498,6 +508,8 @@ struct Ingredients {
     labels: Vec<LabelRow>,
     detection: Vec<u8>,
     recognition: Vec<u8>,
+    /// Printing to card, for the trace's "nearest other card". Empty unless tracing.
+    oracles: HashMap<[u8; ID_LEN], [u8; ID_LEN]>,
 }
 
 impl Ingredients {
@@ -507,7 +519,12 @@ impl Ingredients {
         let mut reference = Reference::new(bundle);
         attach(&mut reference, &self.labels);
         let reader = TitleReader::from_bytes(&self.detection, &self.recognition)?;
-        Ok(Session::new(Some(reference), Some(reader), TOP))
+        let mut session = Session::new(Some(reference), Some(reader), TOP);
+        // **Inline, not the app's background thread**, so "median frames" counts frames rather
+        // than how busy the machine was while a resolve ran — and so the mean ms column still
+        // holds each resolve's whole wall time.
+        session.set_resolve_on(ResolveOn::Inline);
+        Ok(session)
     }
 }
 
@@ -523,6 +540,12 @@ struct CardResult {
     frames_to_decision: Option<usize>,
     frames_fed: usize,
     ms: f64,
+    /// Frames that reached the whole-card match — trusted, with a card detected.
+    matched_frames: usize,
+    /// Descriptors those frames computed, summed. See `MatchReport::hashes`.
+    hashes: usize,
+    /// Hashing plus searching over those frames, summed.
+    match_ms: f64,
     /// One per frame fed: how far the raw quad was from the truth, `None` where nothing was
     /// detected.
     corners: Vec<Option<Corner>>,
@@ -549,6 +572,7 @@ fn run_pass(
     frames: &[SynthFrame],
     id: &[u8; ID_LEN],
     truth: &Truth,
+    mut trace: Option<&mut Trace<'_>>,
 ) -> CardResult {
     let opts = FrameOptions { mode, ..Default::default() };
     let truth_id = format_uuid(id);
@@ -558,8 +582,20 @@ fn run_pass(
     for (i, frame) in frames.iter().enumerate() {
         let started = Instant::now();
         let v = session.frame(&frame.jpeg, &opts);
-        out.ms += started.elapsed().as_secs_f64() * 1000.0;
+        let ms = started.elapsed().as_secs_f64() * 1000.0;
+        if let Some(t) = trace.as_deref_mut() {
+            t.record(i + 1, &v, truth, out.decided);
+            if out.decided {
+                continue;
+            }
+        }
+        out.ms += ms;
         out.frames_fed += 1;
+        if let Some(m) = &v.r#match {
+            out.matched_frames += 1;
+            out.hashes += m.hashes;
+            out.match_ms += f64::from(m.hash_ms + m.search_ms);
+        }
         out.corners.push(v.quad_raw.map(|q| Corner::measure(&q, &frame.quad)));
         if v.resolution.as_ref().is_some_and(|r| r.outcome == Outcome::NotFound) {
             out.not_found = true;
@@ -577,10 +613,69 @@ fn run_pass(
                 _ => out.printing_ok,
             };
             out.ambiguous = d.outcome == Outcome::Ambiguous;
-            out.true_in_choices = out.ambiguous && d.choices.iter().any(|c| c.id == truth_id);        }
-        break;
+            out.true_in_choices = out.ambiguous && d.choices.iter().any(|c| c.id == truth_id);
+        }
+        if trace.is_none() {
+            break;
+        }
     }
     out
+}
+
+/// The `--trace` lines of one card's Fast pass.
+struct Trace<'a> {
+    oracles: &'a HashMap<[u8; ID_LEN], [u8; ID_LEN]>,
+    card: String,
+    stratum: &'a str,
+    seed: u64,
+    lines: Vec<String>,
+}
+
+impl Trace<'_> {
+    /// One frame. Distances are in bits of the 256-bit descriptor; `rival` is the nearest
+    /// candidate naming a different card, and when every candidate names this one it is the
+    /// last candidate's distance — a floor under the true gap rather than the gap itself, and
+    /// `rival_floor` says which.
+    fn record(
+        &mut self,
+        frame: usize,
+        v: &card_scanner::session::Verdict,
+        truth: &Truth,
+        after: bool,
+    ) {
+        let card_of = |id: &str| parse_uuid(id).map(|p| self.oracles.get(&p).copied().unwrap_or(p));
+        let lock = v.lock.as_ref();
+        let mut line = serde_json::json!({
+            "card": self.card,
+            "stratum": self.stratum,
+            "seed": self.seed,
+            "frame": frame,
+            "after_decision": after,
+            "detected": v.ok,
+            "agree": lock.map(|l| l.agree),
+            "trusted": lock.is_some_and(|l| l.is_trusted()),
+            "cardness": v.cardness.as_ref().map(|c| c.score),
+            "angle": v.score.as_ref().map(|s| s.max_angle_error),
+            "skew": v.score.as_ref().map(|s| s.skew),
+            "committed": v.tracked.as_ref().is_some_and(|t| t.committed),
+            "evidence": v.tracked.as_ref().and_then(|t| t.standings.first()).map(|s| s.evidence),
+        });
+        if let Some(best) = v.r#match.as_ref().and_then(|m| m.candidates.first()) {
+            let best_card = card_of(&best.id);
+            let rival = v
+                .r#match
+                .iter()
+                .flat_map(|m| &m.candidates)
+                .find(|c| card_of(&c.id) != best_card);
+            let last =
+                v.r#match.iter().flat_map(|m| &m.candidates).last().map_or(0, |c| c.distance);
+            line["best"] = best.distance.into();
+            line["best_true"] = (best_card.is_some() && best_card == truth.oracle).into();
+            line["rival"] = rival.map_or(last, |c| c.distance).into();
+            line["rival_floor"] = rival.is_none().into();
+        }
+        self.lines.push(line.to_string());
+    }
 }
 
 /// The burst's card index: the printing's id, not its line in the list.
@@ -639,18 +734,33 @@ fn card_burst(
 /// could not run is an `Err` inside.
 fn run_card(
     ingredients: &Ingredients,
+    synth: &SynthOptions,
     frames: &[SynthFrame],
     wanted: &Wanted,
     truth: &Truth,
+    passes: &[(&str, ScanMode, bool)],
+    trace: Option<&Mutex<Vec<String>>>,
 ) -> Vec<Result<CardResult, String>> {
-    PASSES
+    passes
         .iter()
         .map(|&(_, mode, own_set)| -> Result<CardResult, String> {
             let mut session = ingredients.session()?;
             if own_set {
                 session.set_filters(ScanFilters { sets: vec![truth.set.clone()], ..Default::default() })?;
             }
-            Ok(run_pass(&mut session, mode, frames, &wanted.id, truth))
+            // Only Fast is traced: the early decision and the quick lock are Fast's alone.
+            let mut t = trace.filter(|_| mode == ScanMode::Fast && !own_set).map(|_| Trace {
+                oracles: &ingredients.oracles,
+                card: format_uuid(&wanted.id),
+                stratum: &wanted.stratum,
+                seed: synth.seed,
+                lines: Vec::new(),
+            });
+            let result = run_pass(&mut session, mode, frames, &wanted.id, truth, t.as_mut());
+            if let (Some(sink), Some(t)) = (trace, t) {
+                sink.lock().expect("trace").extend(t.lines);
+            }
+            Ok(result)
         })
         .collect()
 }
@@ -903,8 +1013,18 @@ fn row(pass: &str, mode: ScanMode, stratum: &str, results: &[&CardResult]) -> St
     };
     let fed: usize = results.iter().map(|r| r.frames_fed).sum();
     let ms: f64 = results.iter().map(|r| r.ms).sum();
+    let matched: usize = results.iter().map(|r| r.matched_frames).sum();
+    let hashes: usize = results.iter().map(|r| r.hashes).sum();
+    let match_ms: f64 = results.iter().map(|r| r.match_ms).sum();
+    let per_match = |x: f64, decimals: usize| {
+        if matched == 0 {
+            "—".to_string()
+        } else {
+            format!("{:.*}", decimals, x / matched as f64)
+        }
+    };
     format!(
-        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
+        "| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |",
         pass,
         stratum,
         n,
@@ -919,6 +1039,8 @@ fn row(pass: &str, mode: ScanMode, stratum: &str, results: &[&CardResult]) -> St
         if exact { pct(count(|r| r.not_found), n) } else { "—".to_string() },
         median,
         if fed == 0 { "—".to_string() } else { format!("{:.0}", ms / fed as f64) },
+        per_match(hashes as f64, 2),
+        per_match(match_ms, 1),
     )
 }
 
@@ -996,7 +1118,12 @@ fn run(args: Args) -> Result<(), String> {
     let ingredients = match session_inputs {
         Some((bundle, bundle_printings, detection, recognition)) => {
             eprintln!("labels: {} printings", labels.len());
-            let ingredients = Ingredients { bundle, labels, detection, recognition };
+            let oracles = if args.trace.is_some() {
+                labels.iter().filter_map(|l| l.oracle.map(|o| (l.id, o))).collect()
+            } else {
+                HashMap::new()
+            };
+            let ingredients = Ingredients { bundle, labels, detection, recognition, oracles };
             // One session up front, so a bad model fails here and not once per card.
             let built = Instant::now();
             drop(ingredients.session()?);
@@ -1104,6 +1231,7 @@ fn run(args: Args) -> Result<(), String> {
         .file_name()
         .map_or_else(|| args.printings.display().to_string(), |f| f.to_string_lossy().into_owned());
     let evaluating = Instant::now();
+    let trace: Option<Mutex<Vec<String>>> = args.trace.as_ref().map(|_| Mutex::new(Vec::new()));
 
     let mut md = match &ingredients {
         None => {
@@ -1177,6 +1305,8 @@ fn run(args: Args) -> Result<(), String> {
             md
         }
         Some((ingredients, bundle_printings)) => {
+            let passes: &[(&str, ScanMode, bool)] =
+                if args.fast_only { &PASSES[..1] } else { &PASSES };
             type Outcome = Result<Vec<Result<CardResult, String>>, String>;
             let outcomes: Vec<Outcome> = parallel(chosen.len(), jobs, |k| {
                 let r = chosen[k];
@@ -1186,12 +1316,12 @@ fn run(args: Args) -> Result<(), String> {
                         let probes = frames.iter().map(probe).collect::<Result<Vec<_>, _>>()?;
                         dump(r, &frames, &probes)?;
                     }
-                    Ok(run_card(ingredients, &frames, w, truth))
+                    Ok(run_card(ingredients, &synth, &frames, w, truth, passes, trace.as_ref()))
                 });
                 let mut line = progress(&truth.shown);
                 match &outcome {
-                    Ok(passes) => {
-                        for ((name, ..), r) in PASSES.iter().zip(passes) {
+                    Ok(results) => {
+                        for ((name, ..), r) in passes.iter().zip(results) {
                             match r {
                                 Ok(r) => line.push_str(&format!("  {name}: {}", r.describe())),
                                 Err(e) => line.push_str(&format!("  {name}: skipped ({e})")),
@@ -1199,7 +1329,7 @@ fn run(args: Args) -> Result<(), String> {
                         }
                         // Detection does not depend on the pass, so the frames a pass fed are a
                         // prefix of one list of answers, and the longest pass holds all of them.
-                        let longest = passes
+                        let longest = results
                             .iter()
                             .flatten()
                             .max_by_key(|r| r.corners.len())
@@ -1212,14 +1342,14 @@ fn run(args: Args) -> Result<(), String> {
                 outcome
             });
             // results[pass][card]: `None` where that pass could not run that card.
-            let mut results: Vec<Vec<Option<CardResult>>> = vec![Vec::new(); PASSES.len()];
+            let mut results: Vec<Vec<Option<CardResult>>> = vec![Vec::new(); passes.len()];
             for (&r, outcome) in chosen.iter().zip(outcomes) {
                 let shown = &ready[r].1.shown;
                 match outcome {
-                    Ok(passes) => {
-                        for (p, result) in passes.into_iter().enumerate() {
+                    Ok(card) => {
+                        for (p, result) in card.into_iter().enumerate() {
                             if let Err(e) = &result {
-                                skipped.push(format!("{shown} — {}: {e}", PASSES[p].0));
+                                skipped.push(format!("{shown} — {}: {e}", passes[p].0));
                             }
                             results[p].push(result.ok());
                         }
@@ -1246,7 +1376,8 @@ fn run(args: Args) -> Result<(), String> {
                  Percentages are of n, and an ambiguous decision is judged on its first choice; \
                  the bracket is the share of the ambiguous whose choices held the true printing. \
                  Mean ms is wall time per frame fed with that many cards running at once — a \
-                 figure under load, not a latency.\n\n",
+                 figure under load, not a latency. Hashes and match ms are per frame that reached \
+                 the whole-card match; match ms is hashing plus searching, under the same load.\n\n",
                 chosen.len(),
                 synth.frames,
                 synth.long_edge,
@@ -1255,10 +1386,13 @@ fn run(args: Args) -> Result<(), String> {
             );
             md.push_str(
                 "| pass | stratum | n | decided % | card ✓ % | printing ✓ % | \
-                 ambiguous % (true in choices %) | not found % | median frames | mean ms |\n",
+                 ambiguous % (true in choices %) | not found % | median frames | mean ms | \
+                 hashes / match | match ms |\n",
             );
-            md.push_str("| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n");
-            for (p, &(name, mode, _)) in PASSES.iter().enumerate() {
+            md.push_str(
+                "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |\n",
+            );
+            for (p, &(name, mode, _)) in passes.iter().enumerate() {
                 for stratum in std::iter::once("all").chain(strata.iter().copied()) {
                     md.push_str(&row(name, mode, stratum, &in_stratum(p, stratum)));
                     md.push('\n');
@@ -1276,7 +1410,7 @@ fn run(args: Args) -> Result<(), String> {
             ));
             md.push_str(&format!("| pass | stratum | {CORNER_HEADER} |\n"));
             md.push_str(&format!("| --- | --- | {CORNER_RULE} |\n"));
-            for (p, &(name, ..)) in PASSES.iter().enumerate() {
+            for (p, &(name, ..)) in passes.iter().enumerate() {
                 for stratum in std::iter::once("all").chain(strata.iter().copied()) {
                     let cards = in_stratum(p, stratum);
                     let cells = corner_cells(cards.iter().flat_map(|c| c.corners.iter()));
@@ -1314,6 +1448,11 @@ fn run(args: Args) -> Result<(), String> {
     }
 
     println!("{md}");
+    if let (Some(path), Some(lines)) = (&args.trace, trace) {
+        let mut text = lines.into_inner().expect("trace").join("\n");
+        text.push('\n');
+        std::fs::write(path, text).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
+    }
     if let Some(path) = &args.summary {
         std::fs::write(path, &md).map_err(|e| format!("cannot write {}: {e}", path.display()))?;
     }

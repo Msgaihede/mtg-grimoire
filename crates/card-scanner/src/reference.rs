@@ -67,6 +67,11 @@ pub struct MatchReport {
     pub view: usize,
     /// How many framings were searched.
     pub views: usize,
+    /// Descriptors computed for this report — one per framing and orientation searched.
+    ///
+    /// The cost the view lock exists to cut: hashing is ~22 ms a view in release against ~3.5 ms
+    /// to search every printing, so this count, not `views`, is what the match costs.
+    pub hashes: usize,
     pub candidates: Vec<Candidate>,
     /// Computing the two descriptors, which is a Lanczos3 downsample of a 488x680 card to a
     /// 17x8 grid and back — separated from the search because they scale with completely
@@ -80,9 +85,27 @@ pub struct MatchReport {
     pub search_ms: f32,
 }
 
+/// One card filed under a name in [`Reference`]'s name index.
+///
+/// **A whole name outranks a face name**, and a name's entries are kept in that order: the
+/// first card the mask admits is the answer, so the order is the tie-break. 2,153 cards in
+/// the corpus have a face named what some other card is named whole (counted 2026-09-30), and
+/// 2,065 of them are art-series cards — `Memory Lapse // Memory Lapse` against the Memory Lapse
+/// that is played, where a read of `memory lapse` means the second. Within each half, corpus
+/// order.
+#[derive(Debug, Clone, Copy)]
+struct NameEntry {
+    card: [u8; ID_LEN],
+    /// Filed under one face of an `a // b` name rather than under the whole of it.
+    face: bool,
+}
+
 /// The bundle and the corpus labels, ready to answer.
 pub struct Reference {
     pub bundle: Bundle,
+    /// Distinct printings in the bundle's card section — fewer than its entries, since a
+    /// double-faced printing is filed once per face.
+    bundle_printings: usize,
     labels: HashMap<[u8; ID_LEN], Label>,
     /// `illustration_id` → every printing that shares it. Populated only when a corpus is
     /// loaded; its size is the measured fact that half of all artworks are shared.
@@ -96,12 +119,23 @@ pub struct Reference {
     /// What lets a filtered name read ask the question that matters — does this card have
     /// *any* printing the filters permit — and what Exact's title tier widens a read name to.
     oracle_printings: HashMap<[u8; ID_LEN], Vec<[u8; ID_LEN]>>,
-    /// Normalized card name → the card's oracle id (the printing's own id when it has none).
+    /// Normalized card name → every card that bears it, as oracle ids (the printing's own id
+    /// when it has none). See [`NameEntry`] for the order.
     ///
     /// Names, not printings: OCR reads the name, and every printing of a card shares it. An
     /// oracle rather than a representative printing, so a masked lookup can check the card's
     /// printings against the filters instead of one arbitrary printing of it.
-    by_name: HashMap<String, [u8; ID_LEN]>,
+    ///
+    /// **Every card, not the first.** 244 normalized names in the corpus belong to more than
+    /// one oracle (counted 2026-09-30) — Ornithopter is a 9ED card and a DMU token — and keeping
+    /// one meant a masked read whose first oracle the filters excluded answered `None` for a card
+    /// the filters permit.
+    ///
+    /// **Face names too.** A split, adventure or double-faced card's name is `a // b`, and
+    /// what is printed in its title bar is `a` alone — so an exact read of it never matched
+    /// exactly, fell through to the fuzzy search, and read `virtue of knowledge` as Price of
+    /// Knowledge at four edits.
+    by_name: HashMap<String, Vec<NameEntry>>,
     /// `(set, collector number)` to printing — the index the collector line resolves against.
     ///
     /// Lower-cased and with leading zeros stripped on both sides, because the card prints
@@ -111,8 +145,11 @@ pub struct Reference {
 
 impl Reference {
     pub fn new(bundle: Bundle) -> Self {
+        let bundle_printings =
+            bundle.cards.ids.iter().collect::<std::collections::HashSet<_>>().len();
         Reference {
             bundle,
+            bundle_printings,
             labels: HashMap::new(),
             art_printings: HashMap::new(),
             oracle: HashMap::new(),
@@ -120,6 +157,12 @@ impl Reference {
             by_name: HashMap::new(),
             by_set_number: HashMap::new(),
         }
+    }
+
+    /// How many printings the bundle can recognise by appearance: its card section's distinct
+    /// ids, not its entries.
+    pub fn bundle_printings(&self) -> usize {
+        self.bundle_printings
     }
 
     pub fn label_count(&self) -> usize {
@@ -188,7 +231,12 @@ impl Reference {
             }
             self.oracle_printings.entry(card).or_default().push(id);
         }
-        self.by_name.entry(crate::ocr::normalize(&label.name)).or_insert(card);
+        self.index_name(&label.name, card, false);
+        if label.name.contains(" // ") {
+            for face in label.name.split(" // ") {
+                self.index_name(face, card, true);
+            }
+        }
         // English first: a non-English printing shares the set and number with its English
         // counterpart, and `or_insert` would otherwise hand back whichever language the corpus
         // happened to list first.
@@ -199,6 +247,27 @@ impl Reference {
             self.by_set_number.entry(key).or_insert(id);
         }
         self.labels.insert(id, label);
+    }
+
+    /// File `card` under one name, once, keeping whole names ahead of face names.
+    fn index_name(&mut self, name: &str, card: [u8; ID_LEN], face: bool) {
+        let entries = self.by_name.entry(crate::ocr::normalize(name)).or_default();
+        match entries.iter().position(|e| e.card == card) {
+            // A card already filed under this name as a face and now met under it whole —
+            // `Forest // Forest` before a plain Forest of the same oracle — moves up.
+            Some(i) if entries[i].face && !face => {
+                entries.remove(i);
+            }
+            Some(_) => return,
+            None => {}
+        }
+        let at = if face { entries.len() } else { entries.iter().take_while(|e| !e.face).count() };
+        entries.insert(at, NameEntry { card, face });
+    }
+
+    /// The first card filed under `name` with a printing the mask admits.
+    fn named_card(&self, entries: &[NameEntry], mask: &Mask) -> Option<[u8; ID_LEN]> {
+        entries.iter().map(|e| e.card).find(|card| self.card_permitted(card, mask))
     }
 
     /// The mask a set of filters admits: every labelled printing that passes them.
@@ -326,8 +395,8 @@ impl Reference {
         if read.len() < 4 {
             return None;
         }
-        if let Some(card) = self.by_name.get(read) {
-            return self.card_permitted(card, mask).then_some((*card, 0));
+        if let Some(entries) = self.by_name.get(read) {
+            return self.named_card(entries, mask).map(|card| (card, 0));
         }
 
         // One edit per four characters, so a long name tolerates more misreads than a short
@@ -335,7 +404,7 @@ impl Reference {
         // same slip in "Shock" is a different card.
         let budget = (read.len() / 4).clamp(1, 6) as u32;
         let mut best: Option<([u8; ID_LEN], u32)> = None;
-        for (name, card) in &self.by_name {
+        for (name, entries) in &self.by_name {
             if name.len().abs_diff(read.len()) > 3 {
                 continue;
             }
@@ -343,8 +412,11 @@ impl Reference {
             if let Some(d) = bounded_edit_distance(name, read, cap.min(budget)) {
                 // The mask is checked only for a name that would win, so a filtered read pays
                 // for it on a handful of names rather than on every one within reach.
-                if best.is_none_or(|(_, b)| d < b) && self.card_permitted(card, mask) {
-                    best = Some((*card, d));
+                if best.is_some_and(|(_, b)| d >= b) {
+                    continue;
+                }
+                if let Some(card) = self.named_card(entries, mask) {
+                    best = Some((card, d));
                     if d == 0 {
                         break;
                     }
@@ -431,48 +503,129 @@ impl Reference {
         field: crate::index::Field,
         chroma_weight: Option<f32>,
     ) -> MatchReport {
-        let kind = self.bundle.kind;
-        let bits = self.bundle.bits;
-        // **`normalized`, not `distance`.** This chooses between orientations and between
-        // framings, and it has to use the same score the ranking used or it is answering a
-        // different question than the one just asked. A field search reports `distance` over
-        // the whole descriptor while ranking on one half of it, and a weighted search reports
-        // it over both halves while ranking on a blend — so comparing raw bits here picked a
-        // different framing than the ranking would have, and the two disagreed on a card.
-        let best_of = |v: &[Match]| v.first().map(|m| m.normalized).unwrap_or(f32::INFINITY);
+        let every = every_pick(views.len());
+        let found = self.search_picks(views, &every, k, mask, field, chroma_weight);
+        self.report(views.len(), found)
+    }
 
-        let mut hash_ms = 0.0;
-        let mut search_ms = 0.0;
-        let mut winner: Vec<Match> = Vec::new();
-        let mut use_rotated = false;
-        let mut view = 0usize;
-
-        for (i, (upright, rotated)) in views.iter().enumerate() {
-            let t_hash = std::time::Instant::now();
-            // `hash_rgb`, not `hash`: the bundle's kind decides whether colour is used, and a
-            // grayscale call would silently drop it — matching a colour bundle with a
-            // colourless query returns confident nonsense rather than an error.
-            let hash_a = crate::hash::hash_rgb(upright, kind, bits);
-            let hash_b = crate::hash::hash_rgb(rotated, kind, bits);
-            hash_ms += t_hash.elapsed().as_secs_f32() * 1000.0;
-
-            let started = std::time::Instant::now();
-            let run = |h: &crate::hash::Descriptor| match chroma_weight {
-                Some(w) => self.bundle.search_weighted(h, Section::Card, k, mask, w),
-                None => self.bundle.search_field(h, Section::Card, k, mask, field),
-            };
-            let (a, b) = (run(&hash_a), run(&hash_b));
-            search_ms += started.elapsed().as_secs_f32() * 1000.0;
-
-            let rotated_wins = best_of(&b) < best_of(&a);
-            let candidate = if rotated_wins { b } else { a };
-            if winner.is_empty() || best_of(&candidate) < best_of(&winner) {
-                winner = candidate;
-                use_rotated = rotated_wins;
-                view = i;
+    /// Match one frame of a held card, hashing only the way up the stretch has settled on.
+    ///
+    /// **Three descriptors rather than six, for as long as the held orientation keeps matching.**
+    /// A card held in front of the lens does not turn over, so once a frame has said which end
+    /// is the top, asking again every frame buys nothing. Hashing is the expensive half of a
+    /// match (~22 ms a view in release against ~3.5 ms to search every printing), so this is
+    /// where a frame's match time goes — and the three that remain are hashed in parallel.
+    ///
+    /// **Every framing is still searched.** Holding the framing too — one descriptor a frame —
+    /// was built and measured, and the synthetic evaluation refused it: card-correct held in every
+    /// stratum, but it changed which *printing* Fast named on nine cards and frames-to-decision on
+    /// twenty-one more, because reprints sit a few bits apart and which framing a frame is matched
+    /// in decides between them. This orientation-only hold gave per-frame matches identical to
+    /// the unheld search on the card traced frame by frame (`docs/reference/card-scanner.md` §3).
+    /// Which
+    /// framing is right depends on how sharp that frame's edge was, and until the corners are
+    /// exact (#703) that is still a per-frame question.
+    ///
+    /// `held` is the orientation to try — `true` for the 180° rectification, as in
+    /// [`MatchReport::rotated`] — and `gate` is the tracker's `max_normalized`. The held
+    /// orientation **stands** when its best framing's top candidate comes in under the gate.
+    /// Otherwise the frame **widens** to the other orientation as well, exactly as
+    /// [`Reference::match_views`] does — the held half's searches are reused rather than repeated
+    /// — so a hold that went wrong costs one frame of six hashes and never a card.
+    ///
+    /// Returns the report and the orientation to hold next frame: `held` again when it stood, the
+    /// widened winner's when that was **plain** — under the gate, with the other orientation's
+    /// best at least [`ORIENTATION_GAP`] worse — and `None` otherwise, so the next frame searches
+    /// both.
+    pub fn match_views_held(
+        &self,
+        views: &[(&image::RgbImage, &image::RgbImage)],
+        k: usize,
+        mask: &Mask,
+        held: Option<bool>,
+        gate: f32,
+    ) -> (MatchReport, Option<bool>) {
+        let field = crate::index::Field::All;
+        let mut found: Vec<(ViewPick, Searched)> = Vec::new();
+        if let Some(held) = held.filter(|_| !views.is_empty()) {
+            let half: Vec<ViewPick> =
+                every_pick(views.len()).into_iter().filter(|p| p.rotated == held).collect();
+            let searched = self.search_picks(views, &half, k, mask, field, None);
+            if winner_of(&searched).1 <= gate {
+                return (self.report(views.len(), searched), Some(held));
             }
+            found = searched;
         }
+        let rest: Vec<ViewPick> = every_pick(views.len())
+            .into_iter()
+            .filter(|p| !found.iter().any(|(q, _)| q == p))
+            .collect();
+        found.extend(self.search_picks(views, &rest, k, mask, field, None));
+        // Back into canonical order, so the winner is chosen exactly as an unheld match would.
+        found.sort_by_key(|(p, _)| (p.view, p.rotated));
 
+        let (pick, best) = winner_of(&found);
+        let other = found
+            .iter()
+            .filter(|(p, _)| p.rotated != pick.rotated)
+            .map(|(_, s)| best_of(&s.matches))
+            .fold(f32::INFINITY, f32::min);
+        let plain = best <= gate && other - best >= ORIENTATION_GAP;
+        (self.report(views.len(), found), plain.then_some(pick.rotated))
+    }
+
+    /// Hash and search each pick, in parallel when there is more than one.
+    ///
+    /// **Two phases, each timed as wall time**, so `hash_ms` and `search_ms` stay what a frame
+    /// waits for rather than a sum of work done side by side.
+    fn search_picks(
+        &self,
+        views: &[(&image::RgbImage, &image::RgbImage)],
+        picks: &[ViewPick],
+        k: usize,
+        mask: &Mask,
+        field: crate::index::Field,
+        chroma_weight: Option<f32>,
+    ) -> Vec<(ViewPick, Searched)> {
+        let (kind, bits) = (self.bundle.kind, self.bundle.bits);
+        let t_hash = std::time::Instant::now();
+        // `hash_rgb`, not `hash`: the bundle's kind decides whether colour is used, and a
+        // grayscale call would silently drop it — matching a colour bundle with a colourless
+        // query returns confident nonsense rather than an error.
+        let hashes = par_map(picks, |p| {
+            let (upright, rotated) = views[p.view];
+            crate::hash::hash_rgb(if p.rotated { rotated } else { upright }, kind, bits)
+        });
+        let hash_ms = t_hash.elapsed().as_secs_f32() * 1000.0;
+
+        let t_search = std::time::Instant::now();
+        let matches = par_map(&hashes, |h| match chroma_weight {
+            Some(w) => self.bundle.search_weighted(h, Section::Card, k, mask, w),
+            None => self.bundle.search_field(h, Section::Card, k, mask, field),
+        });
+        let search_ms = t_search.elapsed().as_secs_f32() * 1000.0;
+
+        // The phase times go on the first entry only, so summing them over any set of entries
+        // counts each phase once.
+        picks
+            .iter()
+            .zip(matches)
+            .enumerate()
+            .map(|(i, (p, matches))| {
+                let (hash_ms, search_ms) = if i == 0 { (hash_ms, search_ms) } else { (0.0, 0.0) };
+                (*p, Searched { matches, hash_ms, search_ms })
+            })
+            .collect()
+    }
+
+    /// The report for a set of searched picks, in canonical order.
+    fn report(&self, views: usize, found: Vec<(ViewPick, Searched)>) -> MatchReport {
+        let (pick, _) = winner_of(&found);
+        let hashes = found.len();
+        let hash_ms = found.iter().map(|(_, s)| s.hash_ms).sum();
+        let search_ms = found.iter().map(|(_, s)| s.search_ms).sum();
+        let winner =
+            found.into_iter().find(|(p, _)| *p == pick).map(|(_, s)| s.matches).unwrap_or_default();
         let margin = match winner.len() {
             0 | 1 => None,
             _ => Some(winner[1].distance.saturating_sub(winner[0].distance)),
@@ -480,9 +633,10 @@ impl Reference {
 
         MatchReport {
             section: Section::Card,
-            rotated: use_rotated,
-            view,
-            views: views.len(),
+            rotated: pick.rotated,
+            view: pick.view,
+            views,
+            hashes,
             candidates: winner.iter().map(|m| self.candidate(Section::Card, m)).collect(),
             margin,
             hash_ms,
@@ -491,6 +645,79 @@ impl Reference {
     }
 }
 
+/// One framing, one way up — an index into the views handed to a match, and which of the pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ViewPick {
+    view: usize,
+    rotated: bool,
+}
+
+/// How much worse, in normalized distance, the losing orientation's best must be before a match
+/// holds its orientation for the frames after it.
+///
+/// **An upside-down card matches nothing**, so the wrong way up scores what two unrelated
+/// printings do — ~0.39, 101 bits of 256 — while the right way up of a card that matched at all
+/// is inside the 0.30 gate. 0.05 is 13 bits: a card whose two orientations come that close is
+/// one where the hold would be a guess, and those frames keep searching both.
+pub const ORIENTATION_GAP: f32 = 0.05;
+
+/// One pick's search, with the phase times it carries (see [`Reference::search_picks`]).
+struct Searched {
+    matches: Vec<Match>,
+    hash_ms: f32,
+    search_ms: f32,
+}
+
+/// **`normalized`, not `distance`.** This chooses between orientations and between framings,
+/// and it has to use the same score the ranking used or it is answering a different question
+/// than the one just asked. A field search reports `distance` over the whole descriptor while
+/// ranking on one half of it, and a weighted search reports it over both halves while ranking on
+/// a blend — so comparing raw bits here picked a different framing than the ranking would have,
+/// and the two disagreed on a card.
+fn best_of(v: &[Match]) -> f32 {
+    v.first().map(|m| m.normalized).unwrap_or(f32::INFINITY)
+}
+
+/// Every framing both ways up, primary first and upright before rotated.
+fn every_pick(views: usize) -> Vec<ViewPick> {
+    (0..views).flat_map(|view| [false, true].map(|rotated| ViewPick { view, rotated })).collect()
+}
+
+/// The first pick with the lowest top score. **First, on a tie**: upright over rotated and the
+/// primary framing over the alternates, as the matcher has always chosen.
+fn winner_of(found: &[(ViewPick, Searched)]) -> (ViewPick, f32) {
+    let mut winner = (ViewPick { view: 0, rotated: false }, f32::INFINITY);
+    for (i, (p, s)) in found.iter().enumerate() {
+        let score = best_of(&s.matches);
+        if i == 0 || score < winner.1 {
+            winner = (*p, score);
+        }
+    }
+    winner
+}
+
+/// `items.iter().map(f)`, on scoped threads when there is more than one item.
+///
+/// The first item runs on the calling thread. A panic in any of them is re-raised here, so a
+/// session's panic guard still sees it.
+fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let Some((first, rest)) = items.split_first() else {
+        return Vec::new();
+    };
+    if rest.is_empty() {
+        return vec![f(first)];
+    }
+    let f = &f;
+    std::thread::scope(|s| {
+        let spawned: Vec<_> = rest.iter().map(|item| s.spawn(move || f(item))).collect();
+        let mut out = Vec::with_capacity(items.len());
+        out.push(f(first));
+        out.extend(
+            spawned.into_iter().map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))),
+        );
+        out
+    })
+}
 
 /// The key both sides of the collector lookup are normalized to.
 fn set_number_key(set: &str, number: &str) -> (String, String) {
@@ -615,6 +842,84 @@ mod tests {
         assert_eq!(a.candidates[0].distance, b.candidates[0].distance);
         assert_eq!(b.view, 0);
         assert_eq!(b.views, 1);
+    }
+
+    #[test]
+    fn a_held_orientation_that_still_matches_hashes_only_its_half() {
+        // The card is the rotated half of the second framing, and rotated is held: three framings
+        // searched one way up, and the framing is still chosen among them.
+        let r = reference();
+        let views = [(&img(98), &img(97)), (&img(96), &img(9)), (&img(94), &img(93))];
+        let (report, next) = r.match_views_held(&views, 3, &Mask::all(), Some(true), 0.0);
+        assert_eq!(report.hashes, 3, "a held orientation that matched still paid for the other");
+        assert_eq!((report.view, report.rotated, report.views), (1, true, 3));
+        assert_eq!(report.candidates[0].id, format_uuid(&id(9)));
+        assert_eq!(next, Some(true), "an orientation that matched let go of its hold");
+    }
+
+    #[test]
+    fn a_held_orientation_that_stops_matching_widens_and_the_hold_follows_the_card() {
+        // Held upright, and the card has turned over. The frame must find it anyway, and hold the
+        // way up it now is.
+        let r = reference();
+        let views = [(&img(98), &img(97)), (&img(96), &img(9))];
+        let (report, next) = r.match_views_held(&views, 3, &Mask::all(), Some(false), 0.0);
+        assert_eq!(report.hashes, 4, "the held half is searched once, never twice");
+        assert_eq!(report.candidates[0].id, format_uuid(&id(9)));
+        assert_eq!((report.view, report.rotated), (1, true));
+        assert_eq!(next, Some(true));
+    }
+
+    #[test]
+    fn nothing_is_held_until_one_orientation_plainly_wins() {
+        let r = reference();
+        // Nothing under the gate: every view searched, nothing held.
+        let (report, next) =
+            r.match_views_held(&[(&img(98), &img(97))], 3, &Mask::all(), None, 0.0);
+        assert_eq!((report.hashes, next), (2, None));
+        // Under the gate both ways up: a match, but no orientation to hold.
+        let (_, next) = r.match_views_held(&[(&img(5), &img(5))], 3, &Mask::all(), None, 0.3);
+        assert_eq!(next, None, "two equal orientations were held as though one had won");
+        // One way up matches and the other matches nothing: held.
+        let (_, next) = r.match_views_held(&[(&img(5), &img(99))], 3, &Mask::all(), None, 0.3);
+        assert_eq!(next, Some(false));
+        let (_, next) = r.match_views_held(&[(&img(99), &img(5))], 3, &Mask::all(), None, 0.3);
+        assert_eq!(next, Some(true));
+    }
+
+    #[test]
+    fn a_widened_match_chooses_exactly_as_an_unheld_one() {
+        // The held path's widening re-orders what it searched; the answer must not depend on it.
+        let r = reference();
+        let sets: [&[(&image::RgbImage, &image::RgbImage)]; 4] = [
+            &[(&img(98), &img(97)), (&img(96), &img(95)), (&img(5), &img(94))],
+            &[(&img(98), &img(97)), (&img(96), &img(9))],
+            &[(&img(5), &img(5)), (&img(5), &img(5))],
+            &[(&img(98), &img(97))],
+        ];
+        for views in sets {
+            let plain = r.match_views(views, 3, &Mask::all());
+            for held in [None, Some(true), Some(false)] {
+                let (widened, _) = r.match_views_held(views, 3, &Mask::all(), held, -1.0);
+                assert_eq!((widened.view, widened.rotated), (plain.view, plain.rotated));
+                assert_eq!(widened.hashes, plain.hashes);
+                let ids = |m: &MatchReport| {
+                    m.candidates.iter().map(|c| (c.id.clone(), c.distance)).collect::<Vec<_>>()
+                };
+                assert_eq!(ids(&widened), ids(&plain));
+            }
+        }
+    }
+
+    #[test]
+    fn par_map_keeps_order_and_reraises_a_panic() {
+        assert_eq!(par_map(&[1, 2, 3, 4, 5, 6], |x| x * 10), vec![10, 20, 30, 40, 50, 60]);
+        assert_eq!(par_map(&[7], |x| x + 1), vec![8]);
+        assert!(par_map(&[] as &[u8], |x| *x).is_empty());
+        let caught = std::panic::catch_unwind(|| {
+            par_map(&[1, 2, 3], |&x| if x == 3 { panic!("a spawned item panicked") } else { x })
+        });
+        assert!(caught.is_err(), "a panic on a scoped thread was swallowed");
     }
 
     #[test]
@@ -766,6 +1071,69 @@ mod tests {
         let r = three();
         assert_eq!(r.lookup_by_name("forest"), Some((id(1), 0)));
         assert_eq!(r.lookup_by_name("shock"), Some((id(3), 0)));
+    }
+
+    #[test]
+    fn an_exact_read_of_one_face_names_the_card() {
+        // §8 item 12, from the corpus: the title bar of an adventure prints the front face
+        // alone. Indexed only as `virtue of knowledge vantress visions`, the read below missed
+        // the exact lookup and fell to the fuzzy one, which answered Price of Knowledge at
+        // four edits.
+        let r = labelled(&[
+            (1, 10, "Price of Knowledge", "c13", "89", "2013-11-01"),
+            (2, 20, "Virtue of Knowledge // Vantress Visions", "woe", "76", "2023-09-08"),
+        ]);
+        assert_eq!(r.lookup_by_name("virtue of knowledge"), Some((id(2), 0)));
+        assert_eq!(r.lookup_by_name("vantress visions"), Some((id(2), 0)), "the back face");
+        assert_eq!(
+            r.lookup_by_name("virtue of knowledge vantress visions"),
+            Some((id(2), 0)),
+            "the whole name still resolves"
+        );
+        // And a misread of the face now lands on the face, not four edits away.
+        assert_eq!(r.lookup_by_name("virtue of knowiedge"), Some((id(2), 1)));
+    }
+
+    #[test]
+    fn a_whole_name_outranks_the_same_name_as_a_face() {
+        // An art-series card is named `Memory Lapse // Memory Lapse`, and its face is the
+        // played card's whole name. A read of `memory lapse` is the played card — whichever
+        // of the two the corpus happened to list first.
+        for rows in [
+            [
+                (1, 10, "Memory Lapse // Memory Lapse", "astx", "66", "2021-04-23"),
+                (2, 20, "Memory Lapse", "sld", "2142", "2025-12-01"),
+            ],
+            [
+                (2, 20, "Memory Lapse", "sld", "2142", "2025-12-01"),
+                (1, 10, "Memory Lapse // Memory Lapse", "astx", "66", "2021-04-23"),
+            ],
+        ] {
+            let r = labelled(&rows);
+            assert_eq!(r.lookup_by_name("memory lapse"), Some((id(2), 0)));
+            // Filtered to the art series, the face still answers.
+            let art = r.mask_for(&sets(&["astx"]));
+            assert_eq!(r.lookup_by_name_masked("memory lapse", &art), Some((id(10), 0)));
+        }
+    }
+
+    #[test]
+    fn a_name_two_cards_share_answers_for_whichever_the_filters_permit() {
+        // §8 item 12's parenthesis, from the corpus: Ornithopter is a 9ED card and a DMU
+        // token, two oracles under one name. Keeping one oracle per name made a read filtered
+        // to the other one's set answer `None`, for a card the filters permit.
+        let r = labelled(&[
+            (1, 10, "Ornithopter", "tdmu", "22", "2022-09-09"),
+            (2, 20, "Ornithopter", "9ed", "305", "2005-07-29"),
+        ]);
+        let ninth = r.mask_for(&sets(&["9ed"]));
+        assert_eq!(r.lookup_by_name_masked("ornithopter", &ninth), Some((id(20), 0)));
+        let token = r.mask_for(&sets(&["tdmu"]));
+        assert_eq!(r.lookup_by_name_masked("ornithopter", &token), Some((id(10), 0)));
+        // The fuzzy path reads the same list.
+        assert_eq!(r.lookup_by_name_masked("ornlthopter", &ninth), Some((id(20), 1)));
+        // Unfiltered, corpus order decides, as it always has.
+        assert_eq!(r.lookup_by_name("ornithopter"), Some((id(1), 0)));
     }
 
     #[test]
