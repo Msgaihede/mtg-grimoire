@@ -251,6 +251,91 @@ describe("parseNoteBody", () => {
     ]);
   });
 
+  /**
+   * ⚠️ **The editor stores `<`, `>` and `&` as `&lt;`, `&gt;` and `&amp;`**, in every block and
+   * inside every mark — `NoteEditor.test.tsx` pins the writing half. Undecoded, a note reading
+   * *a > b* is drawn as `a &gt; b` on every read-only surface.
+   */
+  it("decodes the three entities the editor writes, in every block", () => {
+    expect(parseNoteBody("a &lt; b &amp;&amp; c &gt; d")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "text", text: "a < b && c > d" }] },
+    ]);
+    expect(parseNoteBody("## R&amp;D")).toEqual([
+      { kind: "heading", level: 2, inlines: [{ kind: "text", text: "R&D" }] },
+    ]);
+    expect(parseNoteBody("- a &lt; b\n1. c &gt; d")).toEqual([
+      { kind: "list", ordered: false, items: [[{ kind: "text", text: "a < b" }]] },
+      { kind: "list", ordered: true, items: [[{ kind: "text", text: "c > d" }]] },
+    ]);
+    expect(parseNoteBody("> AT&amp;T")).toEqual([
+      { kind: "quote", inlines: [{ kind: "text", text: "AT&T" }] },
+    ]);
+  });
+
+  it("reads a line the reader began with > as a paragraph, because the editor wrote it as one", () => {
+    // `&gt; q` is how the editor stores a paragraph whose words start `> `; the entity is what
+    // kept it out of the quote rule, and decoding it after the block is read is what shows the `>`.
+    expect(parseNoteBody("&gt; not a quote")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "text", text: "> not a quote" }] },
+    ]);
+  });
+
+  it("decodes inside a mark and a link's words, and never inside a code span or an href", () => {
+    expect(parseNoteBody("**a &lt; b** *c &amp; d* ~~e &gt; f~~")).toEqual([
+      {
+        kind: "paragraph",
+        inlines: [
+          { kind: "strong", text: "a < b" },
+          { kind: "text", text: " " },
+          { kind: "em", text: "c & d" },
+          { kind: "text", text: " " },
+          { kind: "strike", text: "e > f" },
+        ],
+      },
+    ]);
+    // The editor writes a link's href verbatim, `&` and all, and a code span verbatim too — so a
+    // `&lt;` inside backticks is four characters the reader typed.
+    expect(parseNoteBody("[R&amp;D](https://x.test/?a=1&amp;b=2) `&lt;b&gt;`")).toEqual([
+      {
+        kind: "paragraph",
+        inlines: [
+          { kind: "link", text: "R&D", href: "https://x.test/?a=1&amp;b=2" },
+          { kind: "text", text: " " },
+          { kind: "code", text: "&lt;b&gt;" },
+        ],
+      },
+    ]);
+  });
+
+  it("draws a tag the reader typed as the characters they typed, never as markup", () => {
+    // Stored `&lt;b&gt;` — the answer is a text run, and a text run is drawn by React as text.
+    expect(parseNoteBody("&lt;b&gt;bold?&lt;/b&gt;")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "text", text: "<b>bold?</b>" }] },
+    ]);
+  });
+
+  it("decodes in one pass, so an entity the reader typed comes back as they typed it", () => {
+    // The editor stores a typed `&lt;` as `&amp;lt;`. Two passes would turn it into `<`.
+    expect(parseNoteBody("&amp;lt; and &amp;#39; and &amp;amp;")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "text", text: "&lt; and &#39; and &amp;" }] },
+    ]);
+    // CommonMark's escape: `\&` is a literal ampersand, so what follows it is not an entity.
+    expect(parseNoteBody("\\&lt;")).toEqual([
+      { kind: "paragraph", inlines: [{ kind: "text", text: "&lt;" }] },
+    ]);
+  });
+
+  it("leaves every entity the editor does not write as written", () => {
+    // Measured: `"` and `'` are stored as themselves, and no numeric entity is ever written. A
+    // bare `&` and one with no semicolon are not entities at all.
+    expect(parseNoteBody("&quot; &#39; &#60; &copy; &nbsp; AT&T &lt")).toEqual([
+      {
+        kind: "paragraph",
+        inlines: [{ kind: "text", text: "&quot; &#39; &#60; &copy; &nbsp; AT&T &lt" }],
+      },
+    ]);
+  });
+
   it("degrades a doubled mark to one and keeps every word", () => {
     // An `Inline` is flat, so `***both***` cannot be both. The italic is what is lost — never
     // the text, and never the delimiters left lying around as punctuation.
@@ -310,5 +395,10 @@ describe("noteToPlainText", () => {
 
   it("says nothing for a body with nothing in it", () => {
     expect(noteToPlainText("   ")).toBe("");
+  });
+
+  it("says the characters an entity stands for", () => {
+    // A note's fallback title line is this, so an entity here is one on the card menu's row.
+    expect(noteToPlainText("## Cut &lt;3 drops\n\nR&amp;D")).toBe("Cut <3 drops\nR&D");
   });
 });
