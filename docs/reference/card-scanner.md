@@ -362,7 +362,9 @@ every set that drops it scores 10/11 rather than 11/11 while looking identical o
 photographed upside-down rectifies perfectly and then matches nothing; an implementation that
 skips this fails on roughly half of hand-held scans for no visible reason. Which orientation won
 is reported, because a scan that consistently says `rotated` is a card being held upside-down
-and that is invisible in the overlay.
+and that is invisible in the overlay. **Both, but only until the stretch has said which** — see
+*The held orientation* below: once a frame matches plainly one way up, the frames after it hash
+that half alone.
 
 ### Hash — `dhash-chroma32`, 256 bits
 
@@ -412,7 +414,8 @@ and ask which parts are redder than the rest of the same card.
 straight from a 488×680 rectification to a 15×8 grid is the most expensive thing in the frame —
 its kernel support scales with the ratio, so a 30-to-80× reduction reads the whole source
 several times over. Measured on a 720 px frame: **32 ms of hashing against 3.5 ms of searching
-113,375 cards**, and the multi-framing search pays it six times a frame rather than twice.
+113,375 cards**, and the multi-framing search pays it six times a frame rather than twice — three,
+since 2026-09-30, once a stretch holds its orientation (below).
 
 | pre-scale | hashing, a 720 px frame | over the labelled corpus |
 | --- | --- | --- |
@@ -475,6 +478,63 @@ nothing changed, which is the useful kind of answer.
 The sweep exposed a real bug on the way: `match_views` chose between orientations and framings
 on raw `distance` while the ranking used `normalized`, so a field search picked a different
 framing than its own ranking would have. It compares the score the ranking actually used now.
+
+### The held orientation — three descriptors a frame, not six (#704)
+
+**A card held in front of the lens does not turn over, so the orientation is asked once per
+stretch rather than once per frame.** `Reference::match_views_held` takes the orientation the
+session holds and the tracker's `max_normalized` (0.30) as a gate. A held frame hashes its three
+framings in that orientation only; if the best of them comes in under the gate the frame is
+done, and if not it **widens** to the other three and chooses exactly as an unheld match does,
+reusing the three it already searched. A hold that went wrong costs one frame of six hashes and
+never a card. The session holds an orientation once a frame's winner is under the gate **and**
+the other orientation's best is at least `ORIENTATION_GAP` (0.05, 13 bits) worse. An upside-down
+card scores what two unrelated printings do, ~0.39, so a real card clears that by a wide margin,
+and a card whose two orientations come that close keeps searching both. The hold clears with the
+stretch (the lock no longer trusted) and with everything else `forget_card` forgets.
+
+**Whatever still has to be hashed is hashed in parallel** — `std::thread::scope`, because the app
+build carries no rayon — and `hash_ms` and `search_ms` are the two phases' wall time rather than
+a sum of work done side by side. `MatchReport::hashes` counts the descriptors a frame actually
+computed; `eval` reports it as *hashes / match*.
+
+**The framing is not held, and that was measured rather than assumed.** Holding framing and
+orientation both — one descriptor a frame — was built first. The per-frame A/B below had it at a
+third of the old cost, and the evaluation kept every card-correct figure. But it moved which
+*printing* Fast named on nine cards — two of them the noise §10 describes — and changed
+frames-to-decision on twenty-one more, because
+reprints sit a few bits apart and the framing a frame is matched in decides between them — §3's
+warning about the tightest framing, in a new place. With the orientation alone held, a replay of
+Soul Snuffers — one of the two cards whose printing changed between runs — produced **identical
+per-frame matches** held and unheld, and it and Greenwood Sentinel split between the same two
+printings in the same 4-to-2 proportion over six runs either way. The framing can be revisited once the corners are exact (#703).
+
+Measured 2026-09-30, Windows, release. The per-frame figures are an interleaved A/B, the four
+arms timed on the same 341 detected frames of 30 cards (the synthetic bursts of the first 30
+cached renders), at high priority on a machine other sessions held at 100% CPU. Two runs:
+
+| per matched frame | median | p90 |
+| --- | ---: | ---: |
+| six views, sequential — before | 51.6 / 48.6 ms | 54.0 / 51.2 |
+| six views, parallel | 39.7 / 42.6 ms | 59.0 / 62.1 |
+| **held orientation, three views, parallel — after** | **20.7 / 22.1 ms** | 29.7 / 32.2 |
+| held orientation, three views, sequential | 25.9 / 24.6 ms | 27.2 / 26.7 |
+
+The held orientation stood on 333 of 341 frames and named the same top-1 as the full search on
+all 333. **The hold is most of the win and the parallelism is the small, uncertain part**: on
+this machine it took about a tenth off the median and added to the tail, because its threads
+were competing with every other core's work. At normal priority on the same saturated machine
+the parallel arms were *slower* than sequential — 278 against 126 ms — so a figure for it taken
+anywhere but an idle machine is a figure about the load.
+
+Over the evaluation (160 printings, seed 7, 8 workers), hashes per matched frame went **6.00 →
+3.55 in Fast and 6.00 → 4.15 in Exact**: six on a stretch's first matched frame and three after,
+averaged over the few frames before a decision. Every accuracy column of both Exact passes is
+identical to the baseline in every stratum, and every Fast accuracy column but *printing ✓* is too — **basic lands
+included**, the stratum the chroma half exists for. Fast's printing figure read 75.6% before and
+74.4% after, two cards, and both are the evaluation's own noise: see the reproducibility note in
+§10. The resolve's own whole-card tier still hashes its burst both ways up, once per card; it
+reads its views from `StoredView`, not from the session's hold.
 
 **The art section is built but not matched against.** Its hashes are of Scryfall's isolated art
 crop and a rectified photograph is a whole card; using it needs an art-window extractor, which
@@ -2211,9 +2271,14 @@ And after round 4 by stratum (same run):
 
 **Fast's printing figure moved 73.8% → 75.6% between the two runs with no change to the Fast path**
 — Fast never calls `resolve` — while HEAD gained the evaluation's own commit and a merge of `main`.
-Three cards moved and nobody has found which change moved them, so **the evaluation's reproducibility
-is unverified**: until a same-HEAD double run agrees with itself, read a difference of a few cards
-between two runs as noise rather than as a regression or a fix.
+Three cards moved and nobody had found which change moved them. **Found 2026-09-30: nothing
+moved them — Fast's printing column is not reproducible across processes.** The tracker picks a
+standing's `best_member` with a `max_by` over a `HashMap`, so two reprints at exactly equal scores
+(they share art, and tie often) resolve in hash order, which Rust seeds per process. One binary
+replaying Soul Snuffers' burst six times named EVE 45 four times and PLST EVE-45 twice; Greenwood
+Sentinel split the same way between ANB 97 and M19 187. Until that tie-break is deterministic,
+**read a difference of a few cards in Fast's printing column as noise**; every other accuracy
+column agreed exactly across three runs on 2026-09-30.
 
 **#705 found why, and it is Fast's printing alone.** Two runs of #705's branch that differed only
 in a guard no card reached made every decision on the same frame with the same card, and eleven

@@ -67,6 +67,11 @@ pub struct MatchReport {
     pub view: usize,
     /// How many framings were searched.
     pub views: usize,
+    /// Descriptors computed for this report — one per framing and orientation searched.
+    ///
+    /// The cost the view lock exists to cut: hashing is ~22 ms a view in release against ~3.5 ms
+    /// to search every printing, so this count, not `views`, is what the match costs.
+    pub hashes: usize,
     pub candidates: Vec<Candidate>,
     /// Computing the two descriptors, which is a Lanczos3 downsample of a 488x680 card to a
     /// 17x8 grid and back — separated from the search because they scale with completely
@@ -431,48 +436,129 @@ impl Reference {
         field: crate::index::Field,
         chroma_weight: Option<f32>,
     ) -> MatchReport {
-        let kind = self.bundle.kind;
-        let bits = self.bundle.bits;
-        // **`normalized`, not `distance`.** This chooses between orientations and between
-        // framings, and it has to use the same score the ranking used or it is answering a
-        // different question than the one just asked. A field search reports `distance` over
-        // the whole descriptor while ranking on one half of it, and a weighted search reports
-        // it over both halves while ranking on a blend — so comparing raw bits here picked a
-        // different framing than the ranking would have, and the two disagreed on a card.
-        let best_of = |v: &[Match]| v.first().map(|m| m.normalized).unwrap_or(f32::INFINITY);
+        let every = every_pick(views.len());
+        let found = self.search_picks(views, &every, k, mask, field, chroma_weight);
+        self.report(views.len(), found)
+    }
 
-        let mut hash_ms = 0.0;
-        let mut search_ms = 0.0;
-        let mut winner: Vec<Match> = Vec::new();
-        let mut use_rotated = false;
-        let mut view = 0usize;
-
-        for (i, (upright, rotated)) in views.iter().enumerate() {
-            let t_hash = std::time::Instant::now();
-            // `hash_rgb`, not `hash`: the bundle's kind decides whether colour is used, and a
-            // grayscale call would silently drop it — matching a colour bundle with a
-            // colourless query returns confident nonsense rather than an error.
-            let hash_a = crate::hash::hash_rgb(upright, kind, bits);
-            let hash_b = crate::hash::hash_rgb(rotated, kind, bits);
-            hash_ms += t_hash.elapsed().as_secs_f32() * 1000.0;
-
-            let started = std::time::Instant::now();
-            let run = |h: &crate::hash::Descriptor| match chroma_weight {
-                Some(w) => self.bundle.search_weighted(h, Section::Card, k, mask, w),
-                None => self.bundle.search_field(h, Section::Card, k, mask, field),
-            };
-            let (a, b) = (run(&hash_a), run(&hash_b));
-            search_ms += started.elapsed().as_secs_f32() * 1000.0;
-
-            let rotated_wins = best_of(&b) < best_of(&a);
-            let candidate = if rotated_wins { b } else { a };
-            if winner.is_empty() || best_of(&candidate) < best_of(&winner) {
-                winner = candidate;
-                use_rotated = rotated_wins;
-                view = i;
+    /// Match one frame of a held card, hashing only the way up the stretch has settled on.
+    ///
+    /// **Three descriptors rather than six, for as long as the held orientation keeps matching.**
+    /// A card held in front of the lens does not turn over, so once a frame has said which end
+    /// is the top, asking again every frame buys nothing. Hashing is the expensive half of a
+    /// match (~22 ms a view in release against ~3.5 ms to search every printing), so this is
+    /// where a frame's match time goes — and the three that remain are hashed in parallel.
+    ///
+    /// **Every framing is still searched.** Holding the framing too — one descriptor a frame —
+    /// was built and measured, and the synthetic evaluation refused it: card-correct held in every
+    /// stratum, but it changed which *printing* Fast named on nine cards and frames-to-decision on
+    /// twenty-one more, because reprints sit a few bits apart and which framing a frame is matched
+    /// in decides between them. This orientation-only hold gave per-frame matches identical to
+    /// the unheld search on the card traced frame by frame (`docs/reference/card-scanner.md` §3).
+    /// Which
+    /// framing is right depends on how sharp that frame's edge was, and until the corners are
+    /// exact (#703) that is still a per-frame question.
+    ///
+    /// `held` is the orientation to try — `true` for the 180° rectification, as in
+    /// [`MatchReport::rotated`] — and `gate` is the tracker's `max_normalized`. The held
+    /// orientation **stands** when its best framing's top candidate comes in under the gate.
+    /// Otherwise the frame **widens** to the other orientation as well, exactly as
+    /// [`Reference::match_views`] does — the held half's searches are reused rather than repeated
+    /// — so a hold that went wrong costs one frame of six hashes and never a card.
+    ///
+    /// Returns the report and the orientation to hold next frame: `held` again when it stood, the
+    /// widened winner's when that was **plain** — under the gate, with the other orientation's
+    /// best at least [`ORIENTATION_GAP`] worse — and `None` otherwise, so the next frame searches
+    /// both.
+    pub fn match_views_held(
+        &self,
+        views: &[(&image::RgbImage, &image::RgbImage)],
+        k: usize,
+        mask: &Mask,
+        held: Option<bool>,
+        gate: f32,
+    ) -> (MatchReport, Option<bool>) {
+        let field = crate::index::Field::All;
+        let mut found: Vec<(ViewPick, Searched)> = Vec::new();
+        if let Some(held) = held.filter(|_| !views.is_empty()) {
+            let half: Vec<ViewPick> =
+                every_pick(views.len()).into_iter().filter(|p| p.rotated == held).collect();
+            let searched = self.search_picks(views, &half, k, mask, field, None);
+            if winner_of(&searched).1 <= gate {
+                return (self.report(views.len(), searched), Some(held));
             }
+            found = searched;
         }
+        let rest: Vec<ViewPick> = every_pick(views.len())
+            .into_iter()
+            .filter(|p| !found.iter().any(|(q, _)| q == p))
+            .collect();
+        found.extend(self.search_picks(views, &rest, k, mask, field, None));
+        // Back into canonical order, so the winner is chosen exactly as an unheld match would.
+        found.sort_by_key(|(p, _)| (p.view, p.rotated));
 
+        let (pick, best) = winner_of(&found);
+        let other = found
+            .iter()
+            .filter(|(p, _)| p.rotated != pick.rotated)
+            .map(|(_, s)| best_of(&s.matches))
+            .fold(f32::INFINITY, f32::min);
+        let plain = best <= gate && other - best >= ORIENTATION_GAP;
+        (self.report(views.len(), found), plain.then_some(pick.rotated))
+    }
+
+    /// Hash and search each pick, in parallel when there is more than one.
+    ///
+    /// **Two phases, each timed as wall time**, so `hash_ms` and `search_ms` stay what a frame
+    /// waits for rather than a sum of work done side by side.
+    fn search_picks(
+        &self,
+        views: &[(&image::RgbImage, &image::RgbImage)],
+        picks: &[ViewPick],
+        k: usize,
+        mask: &Mask,
+        field: crate::index::Field,
+        chroma_weight: Option<f32>,
+    ) -> Vec<(ViewPick, Searched)> {
+        let (kind, bits) = (self.bundle.kind, self.bundle.bits);
+        let t_hash = std::time::Instant::now();
+        // `hash_rgb`, not `hash`: the bundle's kind decides whether colour is used, and a
+        // grayscale call would silently drop it — matching a colour bundle with a colourless
+        // query returns confident nonsense rather than an error.
+        let hashes = par_map(picks, |p| {
+            let (upright, rotated) = views[p.view];
+            crate::hash::hash_rgb(if p.rotated { rotated } else { upright }, kind, bits)
+        });
+        let hash_ms = t_hash.elapsed().as_secs_f32() * 1000.0;
+
+        let t_search = std::time::Instant::now();
+        let matches = par_map(&hashes, |h| match chroma_weight {
+            Some(w) => self.bundle.search_weighted(h, Section::Card, k, mask, w),
+            None => self.bundle.search_field(h, Section::Card, k, mask, field),
+        });
+        let search_ms = t_search.elapsed().as_secs_f32() * 1000.0;
+
+        // The phase times go on the first entry only, so summing them over any set of entries
+        // counts each phase once.
+        picks
+            .iter()
+            .zip(matches)
+            .enumerate()
+            .map(|(i, (p, matches))| {
+                let (hash_ms, search_ms) = if i == 0 { (hash_ms, search_ms) } else { (0.0, 0.0) };
+                (*p, Searched { matches, hash_ms, search_ms })
+            })
+            .collect()
+    }
+
+    /// The report for a set of searched picks, in canonical order.
+    fn report(&self, views: usize, found: Vec<(ViewPick, Searched)>) -> MatchReport {
+        let (pick, _) = winner_of(&found);
+        let hashes = found.len();
+        let hash_ms = found.iter().map(|(_, s)| s.hash_ms).sum();
+        let search_ms = found.iter().map(|(_, s)| s.search_ms).sum();
+        let winner =
+            found.into_iter().find(|(p, _)| *p == pick).map(|(_, s)| s.matches).unwrap_or_default();
         let margin = match winner.len() {
             0 | 1 => None,
             _ => Some(winner[1].distance.saturating_sub(winner[0].distance)),
@@ -480,9 +566,10 @@ impl Reference {
 
         MatchReport {
             section: Section::Card,
-            rotated: use_rotated,
-            view,
-            views: views.len(),
+            rotated: pick.rotated,
+            view: pick.view,
+            views,
+            hashes,
             candidates: winner.iter().map(|m| self.candidate(Section::Card, m)).collect(),
             margin,
             hash_ms,
@@ -491,6 +578,79 @@ impl Reference {
     }
 }
 
+/// One framing, one way up — an index into the views handed to a match, and which of the pair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ViewPick {
+    view: usize,
+    rotated: bool,
+}
+
+/// How much worse, in normalized distance, the losing orientation's best must be before a match
+/// holds its orientation for the frames after it.
+///
+/// **An upside-down card matches nothing**, so the wrong way up scores what two unrelated
+/// printings do — ~0.39, 101 bits of 256 — while the right way up of a card that matched at all
+/// is inside the 0.30 gate. 0.05 is 13 bits: a card whose two orientations come that close is
+/// one where the hold would be a guess, and those frames keep searching both.
+pub const ORIENTATION_GAP: f32 = 0.05;
+
+/// One pick's search, with the phase times it carries (see [`Reference::search_picks`]).
+struct Searched {
+    matches: Vec<Match>,
+    hash_ms: f32,
+    search_ms: f32,
+}
+
+/// **`normalized`, not `distance`.** This chooses between orientations and between framings,
+/// and it has to use the same score the ranking used or it is answering a different question
+/// than the one just asked. A field search reports `distance` over the whole descriptor while
+/// ranking on one half of it, and a weighted search reports it over both halves while ranking on
+/// a blend — so comparing raw bits here picked a different framing than the ranking would have,
+/// and the two disagreed on a card.
+fn best_of(v: &[Match]) -> f32 {
+    v.first().map(|m| m.normalized).unwrap_or(f32::INFINITY)
+}
+
+/// Every framing both ways up, primary first and upright before rotated.
+fn every_pick(views: usize) -> Vec<ViewPick> {
+    (0..views).flat_map(|view| [false, true].map(|rotated| ViewPick { view, rotated })).collect()
+}
+
+/// The first pick with the lowest top score. **First, on a tie**: upright over rotated and the
+/// primary framing over the alternates, as the matcher has always chosen.
+fn winner_of(found: &[(ViewPick, Searched)]) -> (ViewPick, f32) {
+    let mut winner = (ViewPick { view: 0, rotated: false }, f32::INFINITY);
+    for (i, (p, s)) in found.iter().enumerate() {
+        let score = best_of(&s.matches);
+        if i == 0 || score < winner.1 {
+            winner = (*p, score);
+        }
+    }
+    winner
+}
+
+/// `items.iter().map(f)`, on scoped threads when there is more than one item.
+///
+/// The first item runs on the calling thread. A panic in any of them is re-raised here, so a
+/// session's panic guard still sees it.
+fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
+    let Some((first, rest)) = items.split_first() else {
+        return Vec::new();
+    };
+    if rest.is_empty() {
+        return vec![f(first)];
+    }
+    let f = &f;
+    std::thread::scope(|s| {
+        let spawned: Vec<_> = rest.iter().map(|item| s.spawn(move || f(item))).collect();
+        let mut out = Vec::with_capacity(items.len());
+        out.push(f(first));
+        out.extend(
+            spawned.into_iter().map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))),
+        );
+        out
+    })
+}
 
 /// The key both sides of the collector lookup are normalized to.
 fn set_number_key(set: &str, number: &str) -> (String, String) {
@@ -615,6 +775,84 @@ mod tests {
         assert_eq!(a.candidates[0].distance, b.candidates[0].distance);
         assert_eq!(b.view, 0);
         assert_eq!(b.views, 1);
+    }
+
+    #[test]
+    fn a_held_orientation_that_still_matches_hashes_only_its_half() {
+        // The card is the rotated half of the second framing, and rotated is held: three framings
+        // searched one way up, and the framing is still chosen among them.
+        let r = reference();
+        let views = [(&img(98), &img(97)), (&img(96), &img(9)), (&img(94), &img(93))];
+        let (report, next) = r.match_views_held(&views, 3, &Mask::all(), Some(true), 0.0);
+        assert_eq!(report.hashes, 3, "a held orientation that matched still paid for the other");
+        assert_eq!((report.view, report.rotated, report.views), (1, true, 3));
+        assert_eq!(report.candidates[0].id, format_uuid(&id(9)));
+        assert_eq!(next, Some(true), "an orientation that matched let go of its hold");
+    }
+
+    #[test]
+    fn a_held_orientation_that_stops_matching_widens_and_the_hold_follows_the_card() {
+        // Held upright, and the card has turned over. The frame must find it anyway, and hold the
+        // way up it now is.
+        let r = reference();
+        let views = [(&img(98), &img(97)), (&img(96), &img(9))];
+        let (report, next) = r.match_views_held(&views, 3, &Mask::all(), Some(false), 0.0);
+        assert_eq!(report.hashes, 4, "the held half is searched once, never twice");
+        assert_eq!(report.candidates[0].id, format_uuid(&id(9)));
+        assert_eq!((report.view, report.rotated), (1, true));
+        assert_eq!(next, Some(true));
+    }
+
+    #[test]
+    fn nothing_is_held_until_one_orientation_plainly_wins() {
+        let r = reference();
+        // Nothing under the gate: every view searched, nothing held.
+        let (report, next) =
+            r.match_views_held(&[(&img(98), &img(97))], 3, &Mask::all(), None, 0.0);
+        assert_eq!((report.hashes, next), (2, None));
+        // Under the gate both ways up: a match, but no orientation to hold.
+        let (_, next) = r.match_views_held(&[(&img(5), &img(5))], 3, &Mask::all(), None, 0.3);
+        assert_eq!(next, None, "two equal orientations were held as though one had won");
+        // One way up matches and the other matches nothing: held.
+        let (_, next) = r.match_views_held(&[(&img(5), &img(99))], 3, &Mask::all(), None, 0.3);
+        assert_eq!(next, Some(false));
+        let (_, next) = r.match_views_held(&[(&img(99), &img(5))], 3, &Mask::all(), None, 0.3);
+        assert_eq!(next, Some(true));
+    }
+
+    #[test]
+    fn a_widened_match_chooses_exactly_as_an_unheld_one() {
+        // The held path's widening re-orders what it searched; the answer must not depend on it.
+        let r = reference();
+        let sets: [&[(&image::RgbImage, &image::RgbImage)]; 4] = [
+            &[(&img(98), &img(97)), (&img(96), &img(95)), (&img(5), &img(94))],
+            &[(&img(98), &img(97)), (&img(96), &img(9))],
+            &[(&img(5), &img(5)), (&img(5), &img(5))],
+            &[(&img(98), &img(97))],
+        ];
+        for views in sets {
+            let plain = r.match_views(views, 3, &Mask::all());
+            for held in [None, Some(true), Some(false)] {
+                let (widened, _) = r.match_views_held(views, 3, &Mask::all(), held, -1.0);
+                assert_eq!((widened.view, widened.rotated), (plain.view, plain.rotated));
+                assert_eq!(widened.hashes, plain.hashes);
+                let ids = |m: &MatchReport| {
+                    m.candidates.iter().map(|c| (c.id.clone(), c.distance)).collect::<Vec<_>>()
+                };
+                assert_eq!(ids(&widened), ids(&plain));
+            }
+        }
+    }
+
+    #[test]
+    fn par_map_keeps_order_and_reraises_a_panic() {
+        assert_eq!(par_map(&[1, 2, 3, 4, 5, 6], |x| x * 10), vec![10, 20, 30, 40, 50, 60]);
+        assert_eq!(par_map(&[7], |x| x + 1), vec![8]);
+        assert!(par_map(&[] as &[u8], |x| *x).is_empty());
+        let caught = std::panic::catch_unwind(|| {
+            par_map(&[1, 2, 3], |&x| if x == 3 { panic!("a spawned item panicked") } else { x })
+        });
+        assert!(caught.is_err(), "a panic on a scoped thread was swallowed");
     }
 
     #[test]
