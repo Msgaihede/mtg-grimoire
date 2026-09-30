@@ -91,7 +91,7 @@
  * the stats band and the price strip beside it.
  *
  * **Everything on a tile scales with it, through `cardScaleVars`** — the app's rule for anything
- * drawn on a card, and here it reaches the stepper and the icon button beside it through
+ * drawn on a card, and here it reaches the stepper and the icon button under it through
  * `--control-scale` with no prop threaded anywhere. The type is `calc(… * var(--mark-scale, 1))`
  * for the same reason: a 420px picture over an 11px caption at 2×, or a 105px one over the same
  * caption at 0.5×, is the tile disagreeing with itself. The **gutters** take {@link atLeast}
@@ -115,8 +115,9 @@
  * (`"Missing2"`).
  *
  * **The tile draws no line of type for the name since issue #615** (2026-09-28). The picture is the
- * printed card and says it already, so the tile reads top to bottom as the card, the controls
- * across its full width, the subtitle under them, and where the token came from. The name is still
+ * printed card and says it already, so the tile reads top to bottom as the card (its controls a
+ * column over the picture's right edge since issue #711), the subtitle, and where the token came
+ * from. The name is still
  * the first term of every control's accessible name — the ear is not the eye, and a stepper named
  * `Quantity of <subtitle>` would be no name at all.
  *
@@ -136,6 +137,7 @@ import { ChevronRight, Plus, Trash2 } from "lucide-react";
 import { CardArt } from "@/components/CardArt";
 import { CardChin } from "@/components/CardChin";
 import {
+  BUTTON_OVER_ART,
   QUANTITY_STEPPER_CARD_BOX,
   QUANTITY_STEPPER_CARD_ICON,
   QuantityStepper,
@@ -201,19 +203,36 @@ export function tokenWallDrawn(tokens: DeckTokens, open: boolean): boolean {
 
 /**
  * A tile's icon button — Remove printing, since managed tokens took the eye and the reset away —
- * the same box the `card` stepper beside it draws, **at the same zoom**.
+ * the same box the `card` stepper above it draws, **at the same zoom**.
  *
- * **`QUANTITY_STEPPER_CARD_BOX` itself rather than a copy of it** (issue #687, which grew the row
- * from `xs` to `card` so it matches the deck stack's own quantity column): both halves scale on
- * `--control-scale`, so the three controls in the row are one height at every stop rather than
- * three that agree at 100%. The variable is published by the tile's root.
+ * **The token pile's `CardRemove`, class for class** (issue #711): the box, the backing over art,
+ * the destructive hover and the inset ring. The two surfaces draw one entry's one press, so the
+ * button is one object on both. `QUANTITY_STEPPER_CARD_BOX` rather than a copy of it (issue #687):
+ * both halves scale on `--control-scale`, so the column is one width at every stop rather than two
+ * that agree at 100%. The variable is published by the tile's root.
  */
 const TILE_BUTTON = cn(
-  "grid shrink-0 place-items-center border border-border text-dim",
+  "grid shrink-0 place-items-center border border-border",
   QUANTITY_STEPPER_CARD_BOX,
-  "hover:text-text",
+  BUTTON_OVER_ART,
+  "hover:text-destructive",
   PRESS,
-  FOCUS,
+  FOCUS_INSET,
+);
+
+/**
+ * Where the controls column stands on the picture — the deck stack's `top-9 right-1.5`
+ * (`TokenPile`, `CardStack`), **scaled by `--mark-scale`** where those two are fixed.
+ *
+ * `top-9` clears the stacked card's 27px title bar, and on a stacked card nothing else is in that
+ * corner: `DeckCardFace` draws `FoilOverlay mark={false}`. This tile's picture is `CardArt`, which
+ * does draw the finish chip top-right, and the chip scales with the card — at 2× it is ~56px tall
+ * against a fixed 36px offset, so a foil entry's `+` would sit on it. Scaled, the offset is 36px
+ * at 100%, the stack's own number, and clears the title bar and the chip at every stop.
+ */
+const TILE_CONTROLS = cn(
+  "absolute flex flex-col items-end gap-1",
+  "top-[calc(2.25rem*var(--mark-scale,1))] right-[calc(0.375rem*var(--mark-scale,1))]",
 );
 
 /** The glyph inside {@link TILE_BUTTON} — the stepper's own, at the same fraction of the box. */
@@ -228,8 +247,8 @@ const TILE_ICON = QUANTITY_STEPPER_CARD_ICON;
  * at its base going down. `cardZoom.ts` carries the whole argument, and `GridView`'s wall is the
  * other surface that reads it.
  *
- * The vertical one is the larger because a tile ends in a controls row and up to three lines of
- * type under the picture, where its neighbour's picture starts immediately: 10px between two
+ * The vertical one is the larger because a tile ends in up to three lines of type under the
+ * picture, where its neighbour's picture starts immediately: 10px between two
  * pictures reads as the same air as 16px between a caption and the next row's art.
  */
 const TILE_GAP_X = 10;
@@ -553,9 +572,10 @@ function TokenWall({
  * One entry of a token or emblem: its picture, the three things a reader can do to it — change its
  * printing, count it, remove it — and what it is and why it is here.
  *
- * **In that order, top to bottom** (issue #615): the card and its foot, the controls row across
- * the tile's whole width, the colour-and-stats subtitle, and the source line. The card prints the
- * token's name, so the tile draws no line of its own for it — see this file's header.
+ * **In that order, top to bottom** (issue #615): the card and its foot — its stepper and Remove
+ * printing a column over the picture's right edge, the deck stack's own (issue #711) — then the
+ * colour-and-stats subtitle, and the source line. The card prints the token's name, so the tile
+ * draws no line of its own for it — see this file's header.
  *
  * **A token nothing in the deck makes is drawn as a rule-break card is** (managed tokens spec
  * §3.5): the destructive outline round the picture and its foot, and `NOT MADE BY DECK` in the
@@ -600,7 +620,7 @@ function TokenTile({
 
   return (
     <div
-      // The stepper, the icon button beside it and every line of type below size themselves against
+      // The stepper, the icon button under it and every line of type below size themselves against
       // these two rather than taking a prop — `cardZoom.ts`'s rule, and the reason it is a
       // variable: `QuantityStepper` is drawn in three tables as well as on this tile, and a prop
       // would have to be threaded to every one of them and defaulted where nothing scales.
@@ -610,8 +630,9 @@ function TokenTile({
       {/* The picture and its foot are one child of the column, so the column's `gap` does not
           open between them: `CardChin` rides up onto the frame by `CHIN_RISE` to read as the
           card's own edge, which a gap would turn back into a bar floating under a picture. It is
-          also the box a hand-added token's outline goes round — see this component's doc. */}
-      <div className={cn("rounded-lg", handAdded && "ring-2 ring-destructive")}>
+          also the box a hand-added token's outline goes round — see this component's doc.
+          `relative` for the controls column laid over the picture's right edge. */}
+      <div className={cn("relative rounded-lg", handAdded && "ring-2 ring-destructive")}>
         <button
           type="button"
           onClick={onPick}
@@ -645,12 +666,15 @@ function TokenTile({
             // the reader has not counted, so it is on the band to be found and left off every
             // stack. Only the picture fades — the stepper that counts it up, the chin and the
             // lines under it stay at full strength, and so does `NOT MADE BY DECK`, which is a
-            // warning rather than a picture. 60% is the switched-off pile's own `opacity-60`
-            // (`StackView`), the deck's one word for "counts toward nothing".
+            // warning rather than a picture. **40%, deliberately fainter than the switched-off
+            // pile's `opacity-60`** (issue #712): 60% was that pile's number, and on this band it
+            // read as barely dimmer than the counted token beside it. A switched-off pile fades a
+            // whole column the eye already knows is parked; this fades one tile in a row of
+            // bright ones, and that tile has to read as not counted at a glance.
             className={cn(
               "transition-opacity duration-[var(--duration-fast)] ease-standard",
               "motion-reduce:transition-none",
-              view.quantity === 0 && "opacity-60",
+              view.quantity === 0 && "opacity-40",
             )}
           />
           {/* Where a rule-break card wears `RULE BREAK`, in its style — `DeckCardFace`'s own
@@ -681,27 +705,33 @@ function TokenTile({
           // grey one would run a neutral line down the foot of a red-ringed tile.
           tone={handAdded ? "destructive" : "default"}
         />
-      </div>
 
-      {/* **The controls come straight after the card, and they span the tile** (issue #615). The
-          line of type that used to sit here was the token's name, which the picture above already
-          prints on the card itself — so it said the same word twice, a line apart, and pushed the
-          one thing a reader presses on this tile down under two lines of reading. It is gone from
-          the eye and not from the ear: every control's accessible name still starts with it,
-          through `tokenEntryName`, and the frame that never loads still draws it (`CardArt`'s
-          `name`).
+        {/* **The controls are the deck stack's own column** (issue #711): a vertical `card`
+            stepper — increase on top, where up means more — and Remove printing under it, standing
+            in the picture's right margin over the art, as `TokenPile` draws them on a stacked
+            token and `DeckCardControls layout="card-column"` on a deck card. They were a row
+            across the tile under the chin (issue #615), which made the band the one wall of cards
+            in the editor whose controls were not where the rest keep them.
 
-          **Full width is `fill` on the stepper and `flex-1` around it**, so the number box takes
-          whatever the two square buttons and Remove printing leave — the card modal's controls
-          column's arrangement, and `QuantityStepper`'s own rule for it: the buttons keep their
-          square geometry and only the number grows. The wrapper is what shrinks, since the
-          stepper takes no `className`; `min-w-0` because a flex item's floor is its content. */}
-      <div className="flex items-center gap-[calc(0.25rem*var(--mark-scale,1))]">
-        <div className="min-w-0 flex-1">
+            **A sibling of the picture's button, never inside it** — a button in a button is not
+            markup, and the stepper's words must not join the picture's accessible name. Absolute,
+            so it takes no height and the tile is still the card, its chin and two lines of type.
+
+            **Always drawn, where the stack reveals it on the open card and the Grid tile on
+            hover.** Those two print the count on the card's own `QuantityTag` at rest; this tile's
+            picture is `CardArt`, which prints none, so the stepper is the only place the band says
+            how many — and a count a reader could see only under the pointer is the band hiding
+            the one number it exists to set. */}
+        <span className={TILE_CONTROLS}>
           <QuantityStepper
-            // **`card`, the deck stack's own quantity size** (issue #687): `xs` was a 20px box
-            // under a card the size of a stacked one, where the deck beside it draws 36px.
+            // **`card`, the deck stack's own quantity size** (issue #687), and **`art`/`inset`**,
+            // its own tone and ring over a picture (issue #711): the felt backing each button so
+            // an outline does not vanish over bright art, and a ring the card's corners cannot
+            // clip.
             size="card"
+            orientation="vertical"
+            tone="art"
+            focus="inset"
             value={view.quantity}
             // **This entry and no other** — `entryRef`'s four facts, so a step on the foil Treasure
             // cannot land on the plain one, and an implicit entry says so and is materialised by
@@ -712,34 +742,34 @@ function TokenTile({
             // any other entry stepped to 0 leaves the list — Rust's rule, not this stepper's.
             min={0}
             label={tokenEntryName("Quantity of", view)}
-            fill
           />
-        </div>
-        {/* **Remove printing** — this entry and no other (managed tokens spec §3.4), on every
-            tile but an implicit one, which is not stored and has nothing to delete. A derived
-            token's last entry falls back to the printing the deck's cards name, at 0; a hand-added
-            token's last entry in both lists takes it off the deck. Named for its entry, so a
-            token's plain and foil tiles are two presses; `Remove printing` is the pointer's word,
-            the same on every tile. At the row's far end, so an implicit entry's stepper simply
-            runs the whole width where a stored one stops short of it. */}
-        {!view.implicit && (
-          <button
-            type="button"
-            onClick={onRemove}
-            aria-label={tokenEntryName("Remove", view)}
-            {...tip("Remove printing", { describes: false })}
-            className={cn(TILE_BUTTON, "hover:text-destructive")}
-            {...TOKEN_REMOVE_MARK}
-          >
-            <Trash2 aria-hidden="true" className={TILE_ICON} />
-          </button>
-        )}
+          {/* **Remove printing** — this entry and no other (managed tokens spec §3.4), on every
+              tile but an implicit one, which is not stored and has nothing to delete. A derived
+              token's last entry falls back to the printing the deck's cards name, at 0; a
+              hand-added token's last entry in both lists takes it off the deck. Named for its
+              entry, so a token's plain and foil tiles are two presses; `Remove printing` is the
+              pointer's word, the same on every tile. At the foot of the column, where the pile
+              draws it. */}
+          {!view.implicit && (
+            <button
+              type="button"
+              onClick={onRemove}
+              aria-label={tokenEntryName("Remove", view)}
+              {...tip("Remove printing", { describes: false })}
+              className={TILE_BUTTON}
+              {...TOKEN_REMOVE_MARK}
+            >
+              <Trash2 aria-hidden="true" className={TILE_ICON} />
+            </button>
+          )}
+        </span>
       </div>
 
-      {/* **The colour and stats line, under the controls rather than over them** (issue #615, the
-          owner's comment on it: keep the row, move it). It is the one line on the tile the card
-          does not already say in a form a reader can find at a glance — and it is what separates
-          the two `Wurm`s — so it stays, below the thing that is pressed.
+      {/* **The colour and stats line, straight under the card** (issue #615, the owner's comment
+          on it: keep the row, move it — it sat under a controls row until issue #711 moved the
+          controls onto the picture). It is the one line on the tile the card does not already say
+          in a form a reader can find at a glance — and it is what separates the two `Wurm`s — so
+          it stays.
 
           **No tooltip, and that is a measurement rather than a preference.** `whenClipped` asks
           `scrollWidth > clientWidth`, which is a question about *width* — and `line-clamp` cuts

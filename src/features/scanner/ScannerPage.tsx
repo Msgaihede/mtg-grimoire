@@ -121,7 +121,12 @@ function LiveScanner() {
   // the prefs on the way out rather than from here.
   const [options, setOptions] = useState<ScannerOptions>(DEFAULT_SCANNER_OPTIONS);
   const [sendPx, setSendPx] = useState(DEFAULT_SEND_PX);
-  const frameOptions = useMemo(() => ({ ...options, mode: prefs.mode }), [options, prefs.mode]);
+  // `previews` is the Developer switch's too: the rectified preview and its hash cost a JPEG
+  // encode a frame, and nothing but the developer panels draws them.
+  const frameOptions = useMemo(
+    () => ({ ...options, mode: prefs.mode, previews: prefs.developer }),
+    [options, prefs.mode, prefs.developer],
+  );
   // `staleTime: Infinity` and no button to invalidate it: `scanner_status` loads the bundle and
   // the models on its first call and answers out of what it loaded thereafter, so asking again
   // in the same session cannot report a file that has since appeared. A `Reload assets` press

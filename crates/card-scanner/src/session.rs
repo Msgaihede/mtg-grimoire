@@ -28,7 +28,7 @@
 
 use crate::cardness::Cardness;
 use crate::detect::{
-    detect, rectify_views, DetectOptions, DetectTimings, DetectTrace, Detection, EdgeMethod,
+    locate, rectify_views, rgb_of, DetectOptions, DetectTimings, DetectTrace, EdgeMethod, Located,
     QuadScore,
 };
 use crate::filters::ScanFilters;
@@ -163,6 +163,10 @@ pub struct FrameOptions {
     /// Return the binary and contour images as well as the quad. Roughly doubles the response
     /// time, so a page asks for it only while its pipeline panel is open.
     pub stages: bool,
+    /// Return the rectified card's preview (`Verdict::rectified`) and its display hash
+    /// (`Verdict::hash`). **Off by default because only a developer panel draws either**: the
+    /// app's page sets it while the Developer switch is on, and `live.html` always does.
+    pub previews: bool,
     /// How the tracker decides — votes toward a bar, or the two-way confidence contest.
     ///
     /// **Chosen per frame by the caller, so the two rules can be A/B'd on one held card
@@ -187,6 +191,7 @@ impl Default for FrameOptions {
             aspect_tolerance: 0.18,
             min_cardness: crate::cardness::MIN_SCORE,
             stages: false,
+            previews: false,
             rule: CommitRule::Votes,
             decide_at: 8.0,
             lead_margin: 1.3,
@@ -358,9 +363,12 @@ pub struct Verdict {
     /// worth seeing rather than being rescued from silently.
     pub from_lock: bool,
     pub score: Option<QuadScore>,
+    /// The primary view's 256-bit luma dHash, for display. Only when [`FrameOptions::previews`]
+    /// asked: the match hashes its own views and never reads this.
     pub hash: Option<String>,
-    /// The rectified card, always returned when there was one: it is the payload a reader
-    /// actually wants to see, one small JPEG, and the proof the homography is right.
+    /// The rectified card as one small JPEG — the proof the homography is right. Only when
+    /// [`FrameOptions::previews`] asked (issue #701): it was built on every frame, and with the
+    /// Developer switch off nothing drew it.
     pub rectified: Option<String>,
     pub timings: Option<DetectTimings>,
     pub candidates_examined: Option<usize>,
@@ -878,12 +886,19 @@ impl Session {
         // same decision.
         let settled = self.tracker.last_committed();
 
-        // ---- detect: the sweep over the methods, card-likeness picks the winner ------------
-        let mut best: Option<(EdgeMethod, Detection, Option<DetectTrace>)> = None;
+        // ---- locate: the sweep over the methods, card-likeness picks the winner ------------
+        //
+        // **Locate only; nothing is flattened until the winner is known** (issue #701). Each
+        // method used to rectify its own winner — six full-size warps apiece — and a locked
+        // frame then rectified a third time from the held quad, so `Method::Both` made 18
+        // warps and three full-frame RGB copies to hash six. One RGB view of the frame now
+        // serves every method and the one rectification below.
+        let rgb = rgb_of(&source);
+        let mut best: Option<(EdgeMethod, Located, Option<DetectTrace>)> = None;
         let mut fallback_trace: Option<DetectTrace> = None;
         let mut error = None;
         for m in opts.method.edge_methods() {
-            let (result, trace) = detect(&source, &opts.detect_options(m, settled));
+            let (result, trace) = locate(&source, &rgb, &opts.detect_options(m, settled));
             match result {
                 Ok(d) => {
                     // **Card-likeness picks the method, not the geometric score.** Measured, it
@@ -892,7 +907,7 @@ impl Session {
                     // Otsu from frame to frame, handing back a different quad each time.
                     // Nothing can lock onto a target that changes every frame, and a card that
                     // appears for one frame and vanishes is what that looks like from outside.
-                    if best.as_ref().is_none_or(|(_, b, _): &(_, Detection, _)| {
+                    if best.as_ref().is_none_or(|(_, b, _): &(_, Located, _)| {
                         d.cardness.score > b.cardness.score
                     }) {
                         best = Some((m, d, trace));
@@ -909,7 +924,6 @@ impl Session {
 
         let mut v =
             Verdict::failed(String::new(), frame, decode_ms, matcher, self.mode, self.decision_seq);
-        v.ok = best.is_some();
         v.error = None;
 
         // ---- lock -------------------------------------------------------------------------
@@ -927,7 +941,7 @@ impl Session {
         // Whatever the tracker made of this frame, for the decision bookkeeping at the end.
         let mut tracked: Option<Tracked> = None;
 
-        // ---- rectify from the quad the lock holds, not the one this frame found ------------
+        // ---- rectify once: from the quad the lock holds, or else from this frame's own ------
         //
         // The two are usually within a few pixels, and the few pixels were already worth
         // removing: the descriptor is sensitive enough to framing that a jittering quad hands
@@ -939,28 +953,43 @@ impl Session {
         // the tracker with the full weight of a real observation.
         //
         // Only once locked: while acquiring, the quad has not proved it is anything yet, and
-        // rectifying from it would be believing it early.
-        let relocked = match (&held_quad, &best) {
-            (Some(q), Some((method, d, _))) if trusted && q.corners != d.quad.corners => {
-                rectify_views(&source.to_rgb8(), q, &opts.detect_options(*method, settled))
+        // rectifying from it would be believing it early. A held quad that admits no
+        // homography falls back to the frame's own, as it did when both were always built.
+        let rectify_started = std::time::Instant::now();
+        let views = best.as_ref().and_then(|(method, d, _)| {
+            let o = opts.detect_options(*method, settled);
+            let relocked = match &held_quad {
+                Some(q) if trusted && q.corners != d.quad.corners => rectify_views(&rgb, q, &o),
+                _ => None,
+            };
+            match relocked {
+                Some(views) => Some((views, true)),
+                None => rectify_views(&rgb, &d.quad, &o).map(|views| (views, false)),
             }
-            _ => None,
+        });
+        let rectify_ms = rectify_started.elapsed().as_secs_f32() * 1000.0;
+
+        // A winner whose own quad admits no homography is `DetectError::Degenerate`, as it was
+        // when each method rectified inside `detect`. Its card-likeness was scored by warping
+        // that same quad, so this is a guard rather than a path any frame is known to take.
+        let best = match (best, views) {
+            (Some((method, d, trace)), Some(views)) => Some((method, d, trace, views)),
+            (Some((_, _, trace)), None) => {
+                error = Some(crate::detect::DetectError::Degenerate.to_string());
+                fallback_trace = trace;
+                None
+            }
+            (None, _) => None,
         };
+        v.ok = best.is_some();
 
         match best {
-            Some((method, d, trace)) => {
-                // The locked rectification when there is one, otherwise this frame's own.
-                let view = relocked.as_ref();
-                let rectified = view.map_or(&d.rectified, |x| &x.rectified);
-                let rectified_180 = view.map_or(&d.rectified_180, |x| &x.rectified_180);
-                let alternates = view.map_or(&d.alternates, |x| &x.alternates);
-                let margin = view.map_or(d.margin, |x| x.margin);
+            Some((method, d, trace, (views, from_lock))) => {
+                let rectified = &views.rectified;
+                let rectified_180 = &views.rectified_180;
+                let alternates = &views.alternates;
+                let margin = views.margin;
 
-                let descriptor = hash(
-                    &image::DynamicImage::ImageRgb8(rectified.clone()).to_luma8(),
-                    HashKind::DHash,
-                    256,
-                );
                 v.method = Some(method.as_str().to_string());
                 // **Deliberately not overwriting `quad`.** The lock's smoothed quad was
                 // written above, and overwriting it here is what made the box wobble: raw
@@ -974,11 +1003,15 @@ impl Session {
                 }
                 v.cardness = Some(d.cardness);
                 v.trim = Some(margin);
-                v.from_lock = relocked.is_some();
+                v.from_lock = from_lock;
                 v.score = Some(d.score);
-                v.hash = Some(descriptor.to_hex());
                 if let Some(t) = &trace {
-                    v.timings = Some(t.timings);
+                    // `locate` leaves the rectification to its caller, so the one it did not
+                    // make is written in here.
+                    let mut timings = t.timings;
+                    timings.rectify_ms = rectify_ms;
+                    timings.total_ms += rectify_ms;
+                    v.timings = Some(timings);
                     v.candidates_examined = Some(t.candidates.len());
                     if opts.stages {
                         v.stages = Some(Stages {
@@ -988,7 +1021,19 @@ impl Session {
                         });
                     }
                 }
-                v.rectified = preview_uri(rectified, 320, 78);
+                // **Both only on request** (issue #701). The preview is a JPEG encode and a
+                // base64 a frame, and the hash a 256-bit dHash that the match below computes
+                // again for itself; only a developer panel draws either, so a reader's frame
+                // pays for neither.
+                if opts.previews {
+                    let descriptor = hash(
+                        &image::DynamicImage::ImageRgb8(rectified.clone()).to_luma8(),
+                        HashKind::DHash,
+                        256,
+                    );
+                    v.hash = Some(descriptor.to_hex());
+                    v.rectified = preview_uri(rectified, 320, 78);
+                }
 
                 // ---- match, readers, track -------------------------------------------------
                 if trusted && matcher {
@@ -1518,6 +1563,84 @@ mod tests {
         assert!(!v.ok, "a blank frame is not a card");
         assert_eq!(v.frame.w, 320);
         assert!(!v.matcher, "no reference was given");
+    }
+
+    /// A 960×540 JPEG with one card in it — a dark border round light title, art, type and text
+    /// bands, which is the horizontal structure card-likeness scores — on a flat grey table,
+    /// `dx` pixels right of centre. Moving it a pixel or two a frame is what keeps the lock's
+    /// smoothed quad apart from the raw one, which is the case that used to rectify twice.
+    fn card_frame_jpeg(dx: u32) -> Vec<u8> {
+        let (cw, ch) = (250u32, 349u32);
+        let (x0, y0) = (355 + dx, 95u32);
+        let img = image::RgbImage::from_fn(960, 540, |x, y| {
+            if x < x0 || y < y0 || x >= x0 + cw || y >= y0 + ch {
+                return image::Rgb([96, 100, 104]);
+            }
+            let (cx, cy) = (x - x0, y - y0);
+            let border = 11;
+            if cx < border || cy < border || cx >= cw - border || cy >= ch - border {
+                return image::Rgb([16, 16, 18]);
+            }
+            let v = match cy as f32 / ch as f32 {
+                t if t < 0.10 => 238,
+                t if t < 0.55 => 150,
+                t if t < 0.62 => 238,
+                t if t < 0.92 => 205,
+                _ => 140,
+            };
+            image::Rgb([v, v, v])
+        });
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
+            .encode_image(&img)
+            .expect("encode");
+        out
+    }
+
+    /// **One rectification a frame, whatever the method and whatever the lock** (issue #701).
+    /// `Method::Both` used to flatten each method's winner inside `detect` and then, once
+    /// locked, flatten the held quad a third time: 18 full-size warps to hash six views. Three
+    /// framings, both ways up, is six — and it has to be six on the frames that rectify from
+    /// the lock as well as on the ones that do not.
+    #[test]
+    fn a_locked_frame_makes_six_warps_not_eighteen() {
+        let mut s = Session::new(None, None, 5);
+        let opts = FrameOptions::default();
+        assert_eq!(opts.method, Method::Both, "the case the issue measured");
+        // Both methods find this card, so the old path paid for two rectifications before the
+        // lock's third — without that, six here would prove nothing.
+        let img = image::load_from_memory(&card_frame_jpeg(0)).expect("decode");
+        for m in opts.method.edge_methods() {
+            let found = locate(&img, &rgb_of(&img), &opts.detect_options(m, false)).0;
+            assert!(found.is_ok(), "{m:?} misses the test card: {:?}", found.err());
+        }
+        let (mut locked, mut relocked) = (0, 0);
+        for i in 0..16 {
+            crate::detect::WARPS.with(|w| w.set(0));
+            let v = s.frame(&card_frame_jpeg(i % 3), &opts);
+            let warps = crate::detect::WARPS.with(|w| w.get());
+            assert!(v.ok, "frame {i}: {:?}", v.error);
+            assert_eq!(warps, 6, "frame {i} made {warps} warps (from_lock {})", v.from_lock);
+            if v.lock.as_ref().is_some_and(LockState::is_trusted) {
+                locked += 1;
+                relocked += usize::from(v.from_lock);
+            }
+        }
+        assert!(locked > 0, "the card never locked, so nothing was measured");
+        assert!(relocked > 0, "no frame rectified from the held quad, so that went unmeasured");
+    }
+
+    /// The preview and the display hash are built only when asked for.
+    #[test]
+    fn previews_are_built_only_on_request() {
+        let mut s = Session::new(None, None, 5);
+        let v = s.frame(&card_frame_jpeg(0), &FrameOptions::default());
+        assert!(v.ok, "{:?}", v.error);
+        assert!(v.rectified.is_none() && v.hash.is_none());
+        let asked = FrameOptions { previews: true, ..Default::default() };
+        let v = s.frame(&card_frame_jpeg(0), &asked);
+        assert!(v.rectified.as_deref().is_some_and(|r| r.starts_with("data:image/jpeg;base64,")));
+        assert_eq!(v.hash.as_deref().map(str::len), Some(64), "256 bits of hex");
     }
 
     #[test]
