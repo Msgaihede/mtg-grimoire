@@ -2180,6 +2180,12 @@ per row and rose overall on two seeds of three: an early decision reports the be
 two or three frames rather than eight, which is Fast's promise — the card now, its printing
 provisional. **Read the printing column as noisy by a few cards** — *#705 found why*, above, is the reason.
 
+**Re-run after main's #701 (rectify a frame once) and #717 (Exact's resolve off the frame path)
+merged into the branch**, against the same merged tree with both of #705's switches turned off:
+every decided, card ✓ and median-frames figure in both tables above came out identical to the digit
+on all three seeds — the same sixteen cards newly decided, the same Flower // Flourish — and only
+the printing column moved, by the tie noise.
+
 Three things the tables cannot say. **Fast's decided rate is partly the burst length**: before #705
 its median was 10 frames of 12 — three to lock, eight votes — so the evaluation could not tell
 "needed a thirteenth frame" from "wrong". At a median of 4 that is true only of the cards that are
