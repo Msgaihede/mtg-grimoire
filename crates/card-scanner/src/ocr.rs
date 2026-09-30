@@ -368,12 +368,16 @@ pub struct ReadOptions {
     pub title_line: bool,
     /// Find the collector block inside [`COLLECTOR_REGION`] and read that first, before the
     /// fixed crops.
+    ///
+    /// **Off by default, on a measurement.** It finds the block — the dumped crops show both
+    /// lines — and still resolved fewer printings than the fixed band on `read_eval` (17.9%
+    /// against 20.7% of 2015-on reads, 2026-09-30). Kept for a real-camera set to decide.
     pub collector_layout: bool,
 }
 
 impl Default for ReadOptions {
     fn default() -> Self {
-        ReadOptions { title_line: true, collector_layout: true }
+        ReadOptions { title_line: true, collector_layout: false }
     }
 }
 
@@ -454,10 +458,15 @@ pub fn collector_candidates(raw: &str) -> Vec<(String, String)> {
     // number this read correctly over the corpus came back four digits — `0001`, `0232`,
     // `0193`. A one- or two-digit token is a fragment of something else: measured, a garbage
     // read of `... D 6 T K A ...` produced a confident `LTR 6` against a true `LTR 590`.
+    let digits = |t: &str| !t.is_empty() && t.chars().all(|c| c.is_ascii_digit());
+    // **A number straight after another number is the set's total** — the 2015–2022 frames
+    // print `226/259`, and the slash is a separator OCR drops. It is never a collector number:
+    // GRN 259 is a real card, so offering it would be a confident wrong printing.
+    let is_total = |i: usize| i > 0 && digits(&words[i - 1]);
     let numbers: Vec<(usize, String)> = words
         .iter()
         .enumerate()
-        .filter(|(_, t)| t.len() >= 3 && t.chars().all(|c| c.is_ascii_digit()))
+        .filter(|(i, t)| t.len() >= 3 && digits(t) && !is_total(*i))
         .map(|(i, t)| (i, t.to_ascii_lowercase()))
         .collect();
 
@@ -479,9 +488,26 @@ pub fn collector_candidates(raw: &str) -> Vec<(String, String)> {
         // resolved to nothing, so the search reached the *next* word — an artist's surname
         // whose first three letters are a real set — and answered INV 4 with full confidence.
         // Wrong and certain is worse than absent, so it now answers nothing there.
+        //
+        // **One exception, and it is a layout rather than a loosening.** The 2015–2022 frames
+        // print `226/259 U` over `GRN • EN`, so the set sits past the total and a one-letter
+        // rarity — measured on `read_eval`'s detail crops (2026-09-30), those lines came back
+        // legible and paired with nothing. The reach extends to that one slot and only when a
+        // total follows the number, so it can land on the set, the language or nothing, and
+        // never on the artist after them.
+        let past_total = words.get(ni + 1).filter(|t| digits(t)).map(|_| {
+            let rarity = words
+                .get(ni + 2)
+                .is_some_and(|t| t.len() == 1 && t.chars().all(|c| c.is_ascii_alphabetic()));
+            if rarity {
+                ni + 3
+            } else {
+                ni + 2
+            }
+        });
         let mut near: Vec<&String> = alpha
             .iter()
-            .filter(|(i, _)| i.abs_diff(*ni) <= 1)
+            .filter(|(i, _)| i.abs_diff(*ni) <= 1 || Some(*i) == past_total)
             .map(|(_, t)| *t)
             .collect();
         near.sort_by_key(|t| std::cmp::Reverse(t.len()));
@@ -723,6 +749,39 @@ mod tests {
         // true `LTR 590`.
         let c = collector_candidates("I LTR OEN TruERLC D 6 T K A SRA");
         assert!(c.is_empty(), "a one-digit fragment was taken as a collector number: {c:?}");
+    }
+
+    #[test]
+    fn a_numbered_frame_reaches_its_set_past_the_total_and_the_rarity() {
+        // The 2015–2022 frames print `226/259 U` over `GRN • EN`, so the set code is three
+        // tokens from the number. Real reads from `read_eval`'s detail crops (2026-09-30), every
+        // one legible and every one producing no pairing at all before this.
+        for (raw, set, number) in [
+            ("226/259 U GRNEN OMITRY", "grn", "226"),
+            ("084/249 C IMASEN SHS", "ima", "84"),
+            ("221/ 259 RNA EN S RAN", "rna", "221"),
+            ("272/280 L ZNREN SAM BU", "znr", "272"),
+            ("004/012 P FNM FNM*EN IASON", "fnm", "4"),
+        ] {
+            let c = collector_candidates(raw);
+            assert!(c.contains(&(set.into(), number.into())), "{raw}: got {c:?}");
+        }
+    }
+
+    #[test]
+    fn the_total_is_never_offered_as_a_collector_number() {
+        // `226/259`: GRN 259 is a real card, so offering the set's total as a number is a
+        // confident wrong printing — the failure the adjacency rule exists to prevent.
+        let c = collector_candidates("226/259 U GRNEN OMITRY");
+        assert!(!c.iter().any(|(_, n)| n == "259"), "the total was offered: {c:?}");
+    }
+
+    #[test]
+    fn past_the_total_the_search_still_stops_at_the_set() {
+        // With no set code where it belongs, the next words are the language and the artist,
+        // and an artist is exactly what `a_word_beyond_the_set_code_is_not_reachable` fences.
+        let c = collector_candidates("226/259 U EN INVEK");
+        assert!(!c.iter().any(|(s, _)| s.starts_with("inv")), "reached the artist: {c:?}");
     }
 
     #[test]

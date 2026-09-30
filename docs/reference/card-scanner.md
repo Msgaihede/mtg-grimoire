@@ -571,6 +571,104 @@ weak evidence about *which card* (2.0, where appearance is 1.0 and can outweigh 
 and decisive about *which printing of it* (20.0, because nothing else can tell two printings
 apart at all). The art decides the card; the number narrows it down within that card.
 
+### Where the bands come from (issue #708, 2026-09-30)
+
+**Until #708 a band was three resamples of a downscaled frame.** The page sends every frame at
+`send px` (960 by default); the card was warped out of that to 488×680, trimmed and stretched
+back, and the band cropped out of it was upscaled 2× or 4× with Lanczos3. None of the last three
+steps adds information, and on a card filling half of a 960 px frame the collector line is a few
+pixels tall before any of them.
+
+- **`ocr::CardPixels` warps each band straight out of the frame.** A band is still a rectangle of
+  the trimmed canonical card — the same fractions as before — and its four corners go through the
+  trim (`trim::effective`, so a margin the trim declined moves nothing) and the inset quad's
+  homography into frame coordinates; `detect::rectify_to` then warps just that band. **The output
+  is the size the recogniser got before**, so ocrs's text detection — which pads a small image to
+  its input rather than scaling it — sees text at the scale it always did. Readers take a
+  `BandSource`: the rectified card (a still, a test, a frame with no pixels kept) or the frame.
+- **A detail frame, only on a frame that will read.** The verdict's `wants_detail` says the next
+  frame's readers are expected to run — Fast one frame ahead of each rescue read, Exact until the
+  card's resolve has run, because the resolve reads whichever burst views are most card-like — and
+  the page then sends that frame at the camera's resolution behind the usual JPEG (§9's IPC seam).
+  Detection, the lock and the hash never see it, so the lock's coordinates never change scale; the
+  quad is scaled onto it by the width ratio, and it is decoded only when a read runs. `detail` on
+  the verdict names the frame a read used. **Warping from the 960 px frame alone changed nothing
+  measurable** (below): the resolution is what helps, and only the detail frame carries it.
+- **The title is cut to its line.** `ocr::text_rows` sums `|∂I/∂x|` along each row — letterforms
+  are vertical strokes, a frame's rule and border are horizontal and barely move it — takes the
+  strongest run above a threshold between the quiet floor and the peak, bridges small gaps, and
+  pads by half the run each side (at 0.3 the dumped crops cut the capitals' serifs). No clear run,
+  or a run filling the band, reads the whole band as before. **This was the largest single gain.**
+- **The collector layout crop was built and ships off.** The same projection with a wider bridge
+  finds the two-line collector block in the corner below the text box (86–100% down, the same
+  28.5% across), to be read before the fixed crops. It found the block — the dumped crops show
+  both lines — and still lost reads against the fixed band. `ReadOptions::collector_layout` keeps
+  it for a real-camera set to decide.
+- **The 2015–2022 collector format needed the parse, not the pixels.** Those frames print
+  `226/259 U` over `GRN • EN`, so the set code is three tokens from the number and the
+  touching-only rule above never reached it. Before the detail frames the line was never legible
+  enough for that to show; with them, reads like `226/259 U GRNEN`, `084/249 C IMASEN` and
+  `272/280 L ZNREN` came back clean and paired with nothing. `collector_candidates` now reaches
+  the one slot past a total and a one-letter rarity, and only when a total follows the number —
+  so it lands on the set, the language or nothing, never the artist — and never offers the total
+  itself (GRN 259 is a real card).
+
+**`read_eval` is the labelled set.** It renders each of `eval`'s 160 printings into a burst at
+**1920 px** (a 1080p camera), downscales to **960 px** through JPEG 0.72 for detection as the page
+does, and JPEGs the camera frame at 0.85 as a detail. Every read in every configuration is from the
+same detection and is scored against the corpus label: the title exact (normalized, either face of
+a `//` name), the title resolving to the right card, the collector resolving to the right printing
+over the printings from 2015 on (the only ones with the line), and a resolve to any other printing
+counted as wrong. `--dump` writes the shipped configuration's crops and a `labels.jsonl` of what
+each should read and did. Synthetic, like `eval`: a regression fence, never a camera claim.
+
+Windows, release, 2026-09-30, 160 printings × 2 frames, seed 7, 8 workers; the detector found a
+card on 286 of 320 frames and only those are read. **The machine was at 100% from other sessions'
+benchmarks throughout, so neither run's ms columns are usable and neither is printed.** The first
+run, at `a3701068`, before the parse change:
+
+| config | title exact % | title → card % | title wrong card | collector → printing % (179 reads, 2015+) | collector wrong |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| cropped from the rectified 960 px frame (before) | 25.2 | 41.3 | 4 | 0.0 | 2 |
+| warped from the 960 px frame | 23.4 | 41.3 | 2 | 0.0 | 1 |
+| warped from the detail frame | 33.6 | 45.5 | 3 | 12.3 | 11 |
+| detail + title line + collector layout | 51.4 | 63.3 | 4 | 10.1 | 8 |
+
+The second, with the parse change:
+
+| config | title exact % | title → card % | title wrong card | collector → printing % (179 reads, 2015+) | collector wrong |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| before | 25.2 | 42.0 | 2 | 0.0 | 2 |
+| **detail + title line (shipped)** | **51.4** | **63.3** | 4 | **20.7** | 13 |
+| detail + title line + collector layout | 51.4 | 63.3 | 4 | 17.9 | 9 |
+
+**What a read costs is not settled, and the figures are only good enough to say it did not jump.**
+Two one-worker passes over 22 printings, both still at 100% machine load, each reading every
+configuration from the same detections in turn: seed 7 read a title in 1,483 ms before and
+1,791 ms shipped, and a collector line in 2,749 against 2,638; seed 11, 744 against 785 and 1,358
+against 1,407. So the title read is somewhere between 5% and 21% dearer and the collector read
+within a few percent either way. The code #708 adds — one warp of about a hundred thousand pixels
+and a row sum over it — is milliseconds; what the rest would be, if it is not load, is ocrs
+recognising more text in a band it can now read. **A release timing on a quiet machine is still
+owed**, and #707 (skip text detection) is what should move these numbers.
+
+**The baseline row moved by two reads between two runs of identical code** — the title's
+right-card count and its wrong-card count — so read a difference of a couple of reads as noise,
+which is §10's caveat about `eval` holding here too. The collector's wrong count rising with its
+right count is the tier finally reading at all: precision is about 74% shipped and 78% with the
+layout crop, and in Exact every collector answer is checked against the survivors of the tiers
+before it (`conflict: … not among survivors`), which is what a wrong printing of the right card
+meets. **The by-stratum table is `read_eval --summary`'s**, and two rows are worth knowing, both
+read off the dumped crops rather than guessed. **Basic lands' title exact went _down_**
+(33.3 → 25.0): a basic's name is one short word, and `read_title` keeps whichever orientation
+read *more letters* — so the upside-down band's copyright and artist line, cut to a clean line
+now, outscores `Island`. The same card reads `Island` on its other frame. That is the orientation
+contest losing, which #704 (read the orientation the match chose) removes, not the crop.
+**Adventure and double-faced titles read exactly and still resolve to no card** —
+`Realm-Cloaked Giant`, `Fell Horseman` — because the band shows one face's name and the name
+index holds the whole `A // B`. That is a lookup gap and not a read gap, and it is §8 item 12 and
+issue #709's; true split cards, turned sideways, read junk either way.
+
 ## 5. The tracker
 
 Matching is stateless: every frame is decided from scratch, and at ~12 detections a second a
@@ -1017,7 +1115,10 @@ cycle with the card never leaving the lens**.
     printing named the wrong one and contributed nothing. Had a Forest been standing, round 4's
     margin rule is what would have had to catch it: the pin is only as safe as the survivors are
     unlike the misread. The fix is in the parse — a number followed by `/` is the number, the one
-    after it is not.
+    after it is not. **Fixed 2026-09-30 (issue #708)**: a number token straight after another is
+    taken as the total and never offered, and `the_total_is_never_offered_as_a_collector_number`
+    pins it — the slash itself is a separator OCR drops, so "straight after another number" is
+    the form the rule can see. §4's *Where the bands come from* has the rest of that change.
 17. **Filtering to a set the card is not in answers `ambiguous`, not `not_found`.** Live on
     2026-09-15, an LEA-only filter over that NEO card left 295 printings, 13 inside the whole-card
     gate, and a resolve of **six LEA cards at 0.246–0.266 normalized** — every one inside the 0.30

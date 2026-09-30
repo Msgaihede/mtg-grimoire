@@ -29,7 +29,7 @@
 //! **The renders come from `eval`'s cache and are never fetched here.** Run `eval` once with the
 //! same `--cache` to fill it; a printing whose render is missing is skipped and counted.
 //!
-//! `--dump` writes every band the last configuration read, one PNG each, with a `labels.jsonl`
+//! `--dump` writes every band the shipped configuration read, one PNG each, with a `labels.jsonl`
 //! naming the printing, the text it should read and the text it did — the labelled set the issue
 //! asks for, kept as files rather than rebuilt in memory each time.
 
@@ -88,7 +88,7 @@ struct Args {
     /// Printings read at once. Defaults to half the logical cores.
     #[arg(long)]
     jobs: Option<usize>,
-    /// Write the last configuration's bands here, with a `labels.jsonl`.
+    /// Write the shipped configuration's bands here, with a `labels.jsonl`.
     #[arg(long)]
     dump: Option<PathBuf>,
     /// Also write the tables here, as markdown.
@@ -101,25 +101,24 @@ struct Args {
 enum Source {
     /// Cropped from the 488×680 rectification of the sent frame — the path before #708.
     Rectified,
-    /// Warped straight out of the sent frame.
-    Frame,
     /// Warped out of the detail frame.
     Detail,
 }
 
-/// Every configuration, in the order the table prints them. The first is the baseline.
+/// Every configuration, in the order the table prints them. The first is the baseline and the
+/// second what ships ([`ReadOptions::default`]); each row after it adds one refinement to it.
 ///
-/// **Four rows measure all five effects**, because the two refinements touch disjoint reads:
-/// `title_line` changes only the title crop and `collector_layout` only the collector's. So the
-/// last row's title columns against the row above are the line crop's effect alone, and its
-/// collector columns the layout's alone — a row per refinement would read every band twice to
-/// print the same numbers.
-const CONFIGS: [(&str, Source, ReadOptions); 4] = [
+/// **One row per refinement is enough because the two touch disjoint reads**: `title_line`
+/// changes only the title crop and `collector_layout` only the collector's. A row's title
+/// columns against the row above are the line crop alone, its collector columns the layout alone.
+const CONFIGS: [(&str, Source, ReadOptions); 3] = [
     ("rectified (before)", Source::Rectified, ReadOptions { title_line: false, collector_layout: false }),
-    ("frame", Source::Frame, ReadOptions { title_line: false, collector_layout: false }),
-    ("detail", Source::Detail, ReadOptions { title_line: false, collector_layout: false }),
-    ("detail + line + layout", Source::Detail, ReadOptions { title_line: true, collector_layout: true }),
+    ("detail + title line (shipped)", Source::Detail, ReadOptions { title_line: true, collector_layout: false }),
+    ("detail + title line + collector layout", Source::Detail, ReadOptions { title_line: true, collector_layout: true }),
 ];
+
+/// The row `--dump` writes and the stratum table sets beside the baseline: what ships.
+const SHIPPED: usize = 1;
 
 /// What the corpus says one wanted printing is.
 #[derive(Debug, Clone)]
@@ -243,7 +242,6 @@ fn read_one(
     let warped = d.quad.scaled(inset);
     let pixels = match from {
         Source::Rectified => None,
-        Source::Frame => Some(CardPixels::new(sent.to_rgb8(), warped, d.margin)),
         Source::Detail => {
             let k = detail.width() as f32 / sent.width() as f32;
             let q = card_scanner::detect::Quad { corners: warped.corners.map(|(x, y)| (x * k, y * k)) };
@@ -400,7 +398,7 @@ fn run(args: Args) -> Result<(), String> {
                             reader.set_options(*ropts);
                             let (read, t, c, traw, craw) =
                                 read_one(reader, &reference, truth, &d, &sent, &detail, *from);
-                            if let (Some(dir), true) = (&args.dump, ci + 1 == CONFIGS.len()) {
+                            if let (Some(dir), true) = (&args.dump, ci == SHIPPED) {
                                 let stem = format!("{}-{f}", format_uuid(&truth.id));
                                 let _ = t.save(dir.join(format!("{stem}-title.png")));
                                 let _ = c.save(dir.join(format!("{stem}-collector.png")));
@@ -463,18 +461,18 @@ fn run(args: Args) -> Result<(), String> {
         out.push('\n');
     }
 
-    // By stratum, the baseline against the last configuration.
+    // By stratum, the baseline against what ships.
     let mut strata: Vec<&str> = Vec::new();
     for r in &results {
         if !strata.contains(&r.truth.stratum.as_str()) {
             strata.push(&r.truth.stratum);
         }
     }
-    out.push_str("\nBy stratum, the baseline and the last configuration:\n\n");
+    out.push_str("\nBy stratum, the baseline and what ships:\n\n");
     out.push_str(&HEADER.replacen("| config |", "| config · stratum |", 1));
     out.push('\n');
     for s in strata {
-        for ci in [0, CONFIGS.len() - 1] {
+        for ci in [0, SHIPPED] {
             let reads: Vec<&Read> = results
                 .iter()
                 .filter(|r| r.truth.stratum == s)
