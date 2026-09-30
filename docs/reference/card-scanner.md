@@ -1729,9 +1729,54 @@ card's first permitted printing rather than passing an oracle id off as one.
 **The same detect, lock and tracker loop, plus a resolve.** The tracker still decides *which card*
 is in front of the lens and still owns "has it left". While in Exact the session keeps the last
 `EXACT_BURST` (3) locked frames' rectified views, and on the first frame where the stretch has held
-`EXACT_STEADY_FRAMES` (3) with no attempt yet for this card, it runs `resolve::resolve` over them —
-synchronously, inside that frame's command. The status line says *Hold steady — reading the card…*
+`EXACT_STEADY_FRAMES` (3) with no attempt yet for this card, it hands them to `resolve::resolve`
+**on a thread of its own** and returns. The status line says *Hold steady — reading the card…*
 meanwhile.
+
+**The resolve ran inside that frame's command until 2026-09-30**
+([#706](https://github.com/Msgaihede/mtg-grimoire/issues/706)), and a resolve measured **1,316 ms**
+in the app (debug, 2026-09-15). For that whole time no frame was processed: the overlay froze, the
+lock saw nothing, and a card swapped mid-resolve was invisible to it. What replaced it, in
+`session.rs`:
+
+- **The burst is taken, not copied** (`Session::start_resolve`), and the reference and the reader
+  sit behind `Arc`s so the thread can hold them. `attempted` is set when the resolve *starts*, so a
+  second never starts beside it.
+- **Every frame polls for the answer right after the stretch is counted** (`Session::poll_resolve`)
+  and before the tracker sees the frame, so the frame a resolution lands on is already the decided
+  one — the same guarantee the inline resolve gave its own frame. That frame's verdict carries
+  `resolution`, `ocr` and `collector`; the frames before it carry none of them.
+- **A result is dropped, never decided, once the card may have gone**
+  (`Session::drop_pending_resolve`): on a stretch break, and on a mode switch, a filter change or a
+  Reset. Nothing was applied, so `last_resolution` is still `None` and the break's re-arm is taken
+  on the same frame — the next steady stretch resolves the card now in frame on its own burst. The
+  thread runs to its end regardless, because an OCR read cannot be interrupted part-way. **A card
+  swapped under a lock that stays trusted is not caught here**: that is
+  [#710](https://github.com/Msgaihede/mtg-grimoire/issues/710)'s appearance check, which should call
+  the same drop.
+- **A panic on the thread is caught there** — `Session::guarded` is not on that thread — and the
+  frame it lands on says *the Exact resolve failed on this card*. `attempted` clears, so the burst
+  refills and the card is tried again.
+- **`ResolveOn::Inline` keeps the old behaviour for the evaluation and the tests**, where frames to
+  a decision must not depend on a clock. The eval sets it, so its *median frames* column still
+  counts frames and its *mean ms* still holds each resolve's whole wall time.
+
+**Inside the resolve, the whole-card search and the two reads run at once** (`std::thread::scope`
+in `resolve::resolve`). None needs another's answer: the title and the collector line are different
+bands of the same views, and the search reads neither. The tiers still *apply* in the order below,
+so running them together changes the time and nothing else —
+`the_title_and_the_collector_line_are_read_at_the_same_time` has each reader wait for the other,
+which a sequential resolve cannot satisfy. `Readers` is `Sync` for it, and `SessionReaders` keeps
+its two views behind mutexes.
+
+**Both readers start from the way up the frame's hash match won** (`BurstView::rotated`, from
+`MatchReport::rotated`). The collector read did this already for an upright card and now does it
+for an upside-down one too, which used to pay for the upright read first. **The title still reads
+the other way when the first read is not an exact name** (`TitleReader::read_title_first`), which
+departs from the issue's "read one orientation" on purpose: the title reader exists for the foil
+under a lamp, where the hash's candidates are noise and its orientation close to a coin flip. When
+both are read, an exact name beats a corrected one beats none, and between equals the one with
+more letters wins, `read_title`'s old rule. Fast's rescue read still reads both ways.
 
 **The tiers, as they behave since round 4 (commit `64c5810e`).** Each takes the survivors of the one
 before and records a `detail` in words.

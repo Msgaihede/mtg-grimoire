@@ -120,6 +120,9 @@ fn options_from_query(url: &str) -> FrameOptions {
         aspect_tolerance: num("aspect", d.aspect_tolerance),
         min_cardness: num("cardness", d.min_cardness),
         stages: q.get("stages").map(String::as_str) == Some("1"),
+        // **Always, and not a query key.** `live.html` is a developer page end to end and
+        // draws the rectified card on every frame; the app is the caller that turns it off.
+        previews: true,
         // **Chosen per frame from the page, so the two rules can be A/B'd on one held card
         // without a rebuild.** `Tracker::set_options`, which the session calls with these,
         // keeps the tally — so flipping the segment or dragging a slider re-judges the
@@ -586,11 +589,16 @@ mod tests {
             "/frame?edge=800&method=otsu&decide=12&rule=confidence&stages=1&mode=exact",
         );
         let from_json: FrameOptions = serde_json::from_str(
-            r#"{"work_long_edge":800,"method":"otsu","decide_at":12,"rule":"confidence","stages":true,"mode":"exact"}"#,
+            r#"{"work_long_edge":800,"method":"otsu","decide_at":12,"rule":"confidence","stages":true,"previews":true,"mode":"exact"}"#,
         )
         .expect("json");
         assert_eq!(from_query, from_json);
-        assert_eq!(options_from_query("/frame"), FrameOptions::default());
+        // The page always draws the rectified card, so its bare query differs from the
+        // crate's default in exactly that.
+        assert_eq!(
+            options_from_query("/frame"),
+            FrameOptions { previews: true, ..FrameOptions::default() }
+        );
     }
 
     #[test]

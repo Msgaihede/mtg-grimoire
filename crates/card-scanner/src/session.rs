@@ -14,6 +14,13 @@
 //! [`Verdict::decision_seq`], and both search under the session's filters
 //! ([`Session::set_filters`]).
 //!
+//! **An Exact resolve runs on its own thread** ([`ResolveOn`]). It took **1,316 ms** in the app
+//! (debug, 2026-09-15), and while it ran inside a frame no frame was processed: the overlay
+//! froze and the lock saw nothing. Now the frame that starts it hands the burst over and returns,
+//! later frames go on detecting and tracking, and the first frame after it lands carries the
+//! resolution. A result that lands after the card has gone is dropped, never decided — see
+//! [`Session::drop_pending_resolve`].
+//!
 //! **The JSON keys are the debug page's.** `live.html` reads them by name and is not
 //! changing, so [`Verdict`] is snake case and
 //! `session::tests::every_key_the_debug_page_reads_is_in_the_verdict` scrapes the page for
@@ -21,7 +28,7 @@
 
 use crate::cardness::Cardness;
 use crate::detect::{
-    detect, rectify_views, DetectOptions, DetectTimings, DetectTrace, Detection, EdgeMethod,
+    locate, rectify_views, rgb_of, DetectOptions, DetectTimings, DetectTrace, EdgeMethod, Located,
     QuadScore,
 };
 use crate::filters::ScanFilters;
@@ -35,6 +42,8 @@ use crate::track::{CommitRule, Observation, Tracked, Tracker, TrackerOptions};
 use crate::trim::Margin;
 use image::RgbImage;
 use std::collections::VecDeque;
+use std::sync::mpsc::{Receiver, TryRecvError};
+use std::sync::Arc;
 
 /// **The readers run only while the hash tier is still unsure, and never more than every few
 /// frames.** Reading a title costs **~340 ms against a ~350 ms frame** (release, measured
@@ -55,6 +64,26 @@ pub const FAST_RESCUE_AFTER: u32 = 8;
 pub const EXACT_STEADY_FRAMES: u32 = 3;
 /// How many locked frames an Exact resolve reads over — the ring buffer's length.
 pub const EXACT_BURST: usize = 3;
+
+/// Where an Exact resolve runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ResolveOn {
+    /// On a thread of its own. The frame that starts it returns at once, and the first frame
+    /// after it finishes carries the resolution. What the app and the debug server run.
+    #[default]
+    Background,
+    /// Inside the frame that starts it, which then carries the resolution itself.
+    ///
+    /// **For the evaluation and the tests, where frames to a decision must not depend on a
+    /// clock.** In the background a resolve lands on whichever frame follows it, so the same
+    /// burst could decide on frame 5 on one run and frame 7 on a loaded machine. Both run the
+    /// same resolve on the same views; only which frame waits for it differs.
+    Inline,
+}
+
+/// What a resolve thread hands back: the resolution, and the title and collector views its
+/// reads produced. `Err` is a panic inside it, caught on that thread.
+type ResolveResult = std::thread::Result<(ResolutionView, Option<OcrView>, Option<CollectorView>)>;
 
 /// The two ways a session decides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -134,6 +163,10 @@ pub struct FrameOptions {
     /// Return the binary and contour images as well as the quad. Roughly doubles the response
     /// time, so a page asks for it only while its pipeline panel is open.
     pub stages: bool,
+    /// Return the rectified card's preview (`Verdict::rectified`) and its display hash
+    /// (`Verdict::hash`). **Off by default because only a developer panel draws either**: the
+    /// app's page sets it while the Developer switch is on, and `live.html` always does.
+    pub previews: bool,
     /// How the tracker decides — votes toward a bar, or the two-way confidence contest.
     ///
     /// **Chosen per frame by the caller, so the two rules can be A/B'd on one held card
@@ -158,6 +191,7 @@ impl Default for FrameOptions {
             aspect_tolerance: 0.18,
             min_cardness: crate::cardness::MIN_SCORE,
             stages: false,
+            previews: false,
             rule: CommitRule::Votes,
             decide_at: 8.0,
             lead_margin: 1.3,
@@ -329,9 +363,12 @@ pub struct Verdict {
     /// worth seeing rather than being rescued from silently.
     pub from_lock: bool,
     pub score: Option<QuadScore>,
+    /// The primary view's 256-bit luma dHash, for display. Only when [`FrameOptions::previews`]
+    /// asked: the match hashes its own views and never reads this.
     pub hash: Option<String>,
-    /// The rectified card, always returned when there was one: it is the payload a reader
-    /// actually wants to see, one small JPEG, and the proof the homography is right.
+    /// The rectified card as one small JPEG — the proof the homography is right. Only when
+    /// [`FrameOptions::previews`] asked (issue #701): it was built on every frame, and with the
+    /// Developer switch off nothing drew it.
     pub rectified: Option<String>,
     pub timings: Option<DetectTimings>,
     pub candidates_examined: Option<usize>,
@@ -432,6 +469,8 @@ struct StoredView {
     rectified_180: RgbImage,
     alternates: Vec<(RgbImage, RgbImage)>,
     cardness: f32,
+    /// Which way up this frame's hash match won — the orientation the readers try first.
+    rotated: bool,
 }
 
 impl StoredView {
@@ -441,6 +480,7 @@ impl StoredView {
             flipped: &self.rectified_180,
             alternates: &self.alternates,
             cardness: self.cardness,
+            rotated: self.rotated,
         }
     }
 }
@@ -456,8 +496,9 @@ const FILTERS_NEED_LABELS: &str =
 /// stateful part of the pipeline: a stable answer is a property of the *stream*, not of any
 /// one frame, and staying still is a property of the sequence.
 pub struct Session {
-    reference: Option<Reference>,
-    reader: Option<Reader>,
+    /// Behind an `Arc` so a resolve thread can hold it while frames go on using it.
+    reference: Option<Arc<Reference>>,
+    reader: Option<Arc<Reader>>,
     tracker: Tracker,
     lock: QuadLock,
     /// Frames since the session started, for the reader's cadence.
@@ -478,9 +519,14 @@ pub struct Session {
     leaderless_locked: u32,
     /// Trusted frames with a detection in this stretch. See [`Session::count_stretch`].
     steady: u32,
-    /// An Exact resolve already ran for the card in frame. Cleared only by a re-arm being taken
-    /// (see `rearm_pending`) or a reset.
+    /// An Exact resolve already ran for the card in frame, or is running. Cleared only by a
+    /// re-arm being taken (see `rearm_pending`), a reset, or a resolve that panicked.
     attempted: bool,
+    /// Where the next resolve runs. See [`ResolveOn`].
+    resolve_on: ResolveOn,
+    /// The resolve still running, if one is. Dropping it is how a result is thrown away: the
+    /// thread's send then fails, and nothing it found reaches the session.
+    pending: Option<Receiver<ResolveResult>>,
     /// The last [`EXACT_BURST`] locked frames, in Exact.
     burst: VecDeque<StoredView>,
     /// The resolve the current Exact decision was made on. Only ever `Some` while `attempted`
@@ -506,8 +552,8 @@ pub struct Session {
 impl Session {
     pub fn new(reference: Option<Reference>, reader: Option<Reader>, top: usize) -> Session {
         Session {
-            reference,
-            reader,
+            reference: reference.map(Arc::new),
+            reader: reader.map(Arc::new),
             tracker: Tracker::default(),
             lock: QuadLock::default(),
             seq: 0,
@@ -520,6 +566,8 @@ impl Session {
             leaderless_locked: 0,
             steady: 0,
             attempted: false,
+            resolve_on: ResolveOn::default(),
+            pending: None,
             burst: VecDeque::with_capacity(EXACT_BURST + 1),
             last_resolution: None,
             rearm_pending: false,
@@ -564,6 +612,16 @@ impl Session {
         self.filters = f;
         self.forget_card();
         Ok(())
+    }
+
+    /// Where Exact resolves run from now on. [`ResolveOn::Background`] until this is called.
+    pub fn set_resolve_on(&mut self, on: ResolveOn) {
+        self.resolve_on = on;
+    }
+
+    /// Whether an Exact resolve is running and has not landed yet.
+    pub fn resolving(&self) -> bool {
+        self.pending.is_some()
     }
 
     /// Change mode. A switch forgets the card ([`Session::forget_card`]); the same mode again is
@@ -620,6 +678,23 @@ impl Session {
         self.last_resolution = None;
         self.rearm_pending = false;
         self.held_rotated = None;
+        self.drop_pending_resolve();
+    }
+
+    /// Throw away the resolve still running, so it decides nothing when it lands.
+    ///
+    /// **Called on everything that says the card in frame may no longer be the one the burst
+    /// saw**: a stretch break (the lock stopped trusting its quad), and a mode switch, a filter
+    /// change or a Reset through [`Session::forget_card`]. A result that lands after any of them
+    /// answers a question nobody is asking any more, and deciding it would add the card that
+    /// left. #710's "a different card stacked on this one" belongs here too.
+    ///
+    /// It does not clear `attempted` itself. Nothing was applied, so `last_resolution` is still
+    /// `None`, and the re-arm a break arms is taken on the same frame
+    /// ([`Session::record_decision`]) — so the next steady stretch resolves again. The thread
+    /// runs to its end regardless: an OCR read cannot be interrupted part-way.
+    pub fn drop_pending_resolve(&mut self) {
+        self.pending = None;
     }
 
     /// Should the readers run on this frame? In Fast mode, once [`FAST_RESCUE_AFTER`] locked
@@ -652,10 +727,12 @@ impl Session {
             self.rearm_pending = true;
             self.burst.clear();
             // The card may have changed hands: a decision after this is a new card, never a
-            // second opinion on the last one.
+            // second opinion on the last one — and a resolve still reading the old burst is
+            // about a card that may not be here.
             self.previous_card = None;
             // And may come back the other way up.
             self.held_rotated = None;
+            self.drop_pending_resolve();
         } else if detected {
             self.steady += 1;
             if !settled {
@@ -696,7 +773,7 @@ impl Session {
         if !t.committed {
             return None;
         }
-        let r = self.reference.as_ref();
+        let r = self.reference.as_deref();
         match self.mode {
             ScanMode::Fast => {
                 let mut printing = t.leader()?.best_member;
@@ -817,12 +894,19 @@ impl Session {
         // same decision.
         let settled = self.tracker.last_committed();
 
-        // ---- detect: the sweep over the methods, card-likeness picks the winner ------------
-        let mut best: Option<(EdgeMethod, Detection, Option<DetectTrace>)> = None;
+        // ---- locate: the sweep over the methods, card-likeness picks the winner ------------
+        //
+        // **Locate only; nothing is flattened until the winner is known** (issue #701). Each
+        // method used to rectify its own winner — six full-size warps apiece — and a locked
+        // frame then rectified a third time from the held quad, so `Method::Both` made 18
+        // warps and three full-frame RGB copies to hash six. One RGB view of the frame now
+        // serves every method and the one rectification below.
+        let rgb = rgb_of(&source);
+        let mut best: Option<(EdgeMethod, Located, Option<DetectTrace>)> = None;
         let mut fallback_trace: Option<DetectTrace> = None;
         let mut error = None;
         for m in opts.method.edge_methods() {
-            let (result, trace) = detect(&source, &opts.detect_options(m, settled));
+            let (result, trace) = locate(&source, &rgb, &opts.detect_options(m, settled));
             match result {
                 Ok(d) => {
                     // **Card-likeness picks the method, not the geometric score.** Measured, it
@@ -831,7 +915,7 @@ impl Session {
                     // Otsu from frame to frame, handing back a different quad each time.
                     // Nothing can lock onto a target that changes every frame, and a card that
                     // appears for one frame and vanishes is what that looks like from outside.
-                    if best.as_ref().is_none_or(|(_, b, _): &(_, Detection, _)| {
+                    if best.as_ref().is_none_or(|(_, b, _): &(_, Located, _)| {
                         d.cardness.score > b.cardness.score
                     }) {
                         best = Some((m, d, trace));
@@ -848,7 +932,6 @@ impl Session {
 
         let mut v =
             Verdict::failed(String::new(), frame, decode_ms, matcher, self.mode, self.decision_seq);
-        v.ok = best.is_some();
         v.error = None;
 
         // ---- lock -------------------------------------------------------------------------
@@ -860,10 +943,13 @@ impl Session {
         let held_quad = lock_state.quad;
         v.lock = Some(lock_state);
         self.count_stretch(trusted, best.is_some(), settled);
+        // After the stretch, which drops a resolve whose card has gone, and before the tracker
+        // sees this frame — so the frame a resolution lands on is already the decided one.
+        self.poll_resolve(&mut v);
         // Whatever the tracker made of this frame, for the decision bookkeeping at the end.
         let mut tracked: Option<Tracked> = None;
 
-        // ---- rectify from the quad the lock holds, not the one this frame found ------------
+        // ---- rectify once: from the quad the lock holds, or else from this frame's own ------
         //
         // The two are usually within a few pixels, and the few pixels were already worth
         // removing: the descriptor is sensitive enough to framing that a jittering quad hands
@@ -875,28 +961,43 @@ impl Session {
         // the tracker with the full weight of a real observation.
         //
         // Only once locked: while acquiring, the quad has not proved it is anything yet, and
-        // rectifying from it would be believing it early.
-        let relocked = match (&held_quad, &best) {
-            (Some(q), Some((method, d, _))) if trusted && q.corners != d.quad.corners => {
-                rectify_views(&source.to_rgb8(), q, &opts.detect_options(*method, settled))
+        // rectifying from it would be believing it early. A held quad that admits no
+        // homography falls back to the frame's own, as it did when both were always built.
+        let rectify_started = std::time::Instant::now();
+        let views = best.as_ref().and_then(|(method, d, _)| {
+            let o = opts.detect_options(*method, settled);
+            let relocked = match &held_quad {
+                Some(q) if trusted && q.corners != d.quad.corners => rectify_views(&rgb, q, &o),
+                _ => None,
+            };
+            match relocked {
+                Some(views) => Some((views, true)),
+                None => rectify_views(&rgb, &d.quad, &o).map(|views| (views, false)),
             }
-            _ => None,
+        });
+        let rectify_ms = rectify_started.elapsed().as_secs_f32() * 1000.0;
+
+        // A winner whose own quad admits no homography is `DetectError::Degenerate`, as it was
+        // when each method rectified inside `detect`. Its card-likeness was scored by warping
+        // that same quad, so this is a guard rather than a path any frame is known to take.
+        let best = match (best, views) {
+            (Some((method, d, trace)), Some(views)) => Some((method, d, trace, views)),
+            (Some((_, _, trace)), None) => {
+                error = Some(crate::detect::DetectError::Degenerate.to_string());
+                fallback_trace = trace;
+                None
+            }
+            (None, _) => None,
         };
+        v.ok = best.is_some();
 
         match best {
-            Some((method, d, trace)) => {
-                // The locked rectification when there is one, otherwise this frame's own.
-                let view = relocked.as_ref();
-                let rectified = view.map_or(&d.rectified, |x| &x.rectified);
-                let rectified_180 = view.map_or(&d.rectified_180, |x| &x.rectified_180);
-                let alternates = view.map_or(&d.alternates, |x| &x.alternates);
-                let margin = view.map_or(d.margin, |x| x.margin);
+            Some((method, d, trace, (views, from_lock))) => {
+                let rectified = &views.rectified;
+                let rectified_180 = &views.rectified_180;
+                let alternates = &views.alternates;
+                let margin = views.margin;
 
-                let descriptor = hash(
-                    &image::DynamicImage::ImageRgb8(rectified.clone()).to_luma8(),
-                    HashKind::DHash,
-                    256,
-                );
                 v.method = Some(method.as_str().to_string());
                 // **Deliberately not overwriting `quad`.** The lock's smoothed quad was
                 // written above, and overwriting it here is what made the box wobble: raw
@@ -910,11 +1011,15 @@ impl Session {
                 }
                 v.cardness = Some(d.cardness);
                 v.trim = Some(margin);
-                v.from_lock = relocked.is_some();
+                v.from_lock = from_lock;
                 v.score = Some(d.score);
-                v.hash = Some(descriptor.to_hex());
                 if let Some(t) = &trace {
-                    v.timings = Some(t.timings);
+                    // `locate` leaves the rectification to its caller, so the one it did not
+                    // make is written in here.
+                    let mut timings = t.timings;
+                    timings.rectify_ms = rectify_ms;
+                    timings.total_ms += rectify_ms;
+                    v.timings = Some(timings);
                     v.candidates_examined = Some(t.candidates.len());
                     if opts.stages {
                         v.stages = Some(Stages {
@@ -924,7 +1029,19 @@ impl Session {
                         });
                     }
                 }
-                v.rectified = preview_uri(rectified, 320, 78);
+                // **Both only on request** (issue #701). The preview is a JPEG encode and a
+                // base64 a frame, and the hash a 256-bit dHash that the match below computes
+                // again for itself; only a developer panel draws either, so a reader's frame
+                // pays for neither.
+                if opts.previews {
+                    let descriptor = hash(
+                        &image::DynamicImage::ImageRgb8(rectified.clone()).to_luma8(),
+                        HashKind::DHash,
+                        256,
+                    );
+                    v.hash = Some(descriptor.to_hex());
+                    v.rectified = preview_uri(rectified, 320, 78);
+                }
 
                 // ---- match, readers, track -------------------------------------------------
                 if trusted && matcher {
@@ -940,7 +1057,7 @@ impl Session {
                     // Detected but not yet trusted: tell the tracker nothing was seen, so a
                     // box that never locks can never accumulate a name.
                     let t = self.tracker.observe(&[]);
-                    v.tracked = Some(tracked_view(&t, self.reference.as_ref()));
+                    v.tracked = Some(tracked_view(&t, self.reference.as_deref()));
                     tracked = Some(t);
                 }
             }
@@ -950,7 +1067,7 @@ impl Session {
                 // standing.
                 if matcher {
                     let t = self.tracker.observe(&[]);
-                    v.tracked = Some(tracked_view(&t, self.reference.as_ref()));
+                    v.tracked = Some(tracked_view(&t, self.reference.as_deref()));
                     tracked = Some(t);
                 }
                 v.error = Some(error.unwrap_or_else(|| "no card".into()));
@@ -989,7 +1106,10 @@ impl Session {
         cardness: f32,
         settled: bool,
     ) -> Option<Tracked> {
-        let r = self.reference.as_ref()?;
+        // A clone of the handle rather than a borrow of the field, so starting a resolve below
+        // can take `&mut self` while this frame is still matched against it.
+        let r = Arc::clone(self.reference.as_ref()?);
+        let r = &*r;
         // Every framing both ways up is offered, because a card is 180°-symmetric, the quad
         // cannot say which end is the top, and the right framing depends on the frame — see
         // `DetectOptions::query_insets`. **Only a stretch's first frames hash both ways up.**
@@ -1031,7 +1151,7 @@ impl Session {
                 let eligible =
                     fast_reader_due(self.mode, self.leaderless_locked, &mut self.seq, settled);
                 #[cfg(feature = "ocr")]
-                if let Some(reader) = self.reader.as_ref().filter(|_| eligible) {
+                if let Some(reader) = self.reader.as_deref().filter(|_| eligible) {
                     let (ocr, obs) = read_title(reader, r, &self.mask, rectified, rectified_180);
                     if let Some(o) = obs {
                         observations.insert(0, o);
@@ -1053,6 +1173,7 @@ impl Session {
                     rectified_180: rectified_180.clone(),
                     alternates: alternates.to_vec(),
                     cardness,
+                    rotated: report.rotated,
                 });
                 while self.burst.len() > EXACT_BURST {
                     self.burst.pop_front();
@@ -1060,32 +1181,16 @@ impl Session {
                 // No term for the tracker. `last_resolution` is only ever `Some` while `attempted`
                 // is set, so `!attempted` already says this card has no resolve: a vote commit
                 // that got there first cannot block it, and a card decided by a resolve is held
-                // off by `attempted` alone until a re-arm is taken.
+                // off by `attempted` alone until a re-arm is taken. A resolve still running has
+                // set `attempted` too, so a second one never starts beside it.
                 if self.steady >= EXACT_STEADY_FRAMES
                     && !self.attempted
                     && self.burst.len() == EXACT_BURST
                 {
-                    let views: Vec<BurstView<'_>> =
-                        self.burst.iter().map(StoredView::view).collect();
-                    let gate = self.tracker.options().max_normalized;
-                    let (resolution, ocr, collector) =
-                        run_resolve(r, &self.mask, &views, self.reader.as_ref(), gate);
-                    self.attempted = true;
-                    v.ocr = ocr;
-                    v.collector = collector;
-                    // Committed before this frame's observation, so the frame that resolved is
-                    // already the decided one. An ambiguous outcome commits on its best
-                    // printing's card: the freeze only has to know that *a* card is being held.
-                    if resolution.outcome != Outcome::NotFound {
-                        if let Some(best) =
-                            resolution.choices.first().and_then(|c| parse_uuid(&c.id))
-                        {
-                            self.tracker.commit_to(r.oracle_for(&best), best);
-                        }
-                        self.decision_seq += 1;
-                        self.last_resolution = Some(resolution.clone());
-                    }
-                    v.resolution = Some(resolution);
+                    self.start_resolve();
+                    // Inline, the answer is already there. In the background it lands on a
+                    // later frame — or on this one, if it was quick enough.
+                    self.poll_resolve(v);
                 }
             }
         }
@@ -1094,6 +1199,75 @@ impl Session {
         v.tracked = Some(tracked_view(&t, Some(r)));
         v.r#match = Some(report);
         Some(t)
+    }
+
+    /// Hand the burst to a resolve, on its own thread or on this one ([`ResolveOn`]).
+    ///
+    /// **The burst is taken, not copied.** Nothing reads it again until the next resolve, and
+    /// that one needs [`EXACT_BURST`] fresh frames either way: it is armed only by a stretch
+    /// break, which clears the burst, or by forgetting the card, which does too.
+    fn start_resolve(&mut self) {
+        let Some(r) = self.reference.clone() else { return };
+        let reader = self.reader.clone();
+        let mask = self.mask.clone();
+        let gate = self.tracker.options().max_normalized;
+        let burst: Vec<StoredView> = self.burst.drain(..).collect();
+        let (tx, rx) = std::sync::mpsc::channel();
+        // Caught here, on the thread that panics, because nothing else would see it: a panic on
+        // a spawned thread unwinds only that thread, and `Session::guarded` is not on it.
+        let job = move || {
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                let views: Vec<BurstView<'_>> = burst.iter().map(StoredView::view).collect();
+                run_resolve(&r, &mask, &views, reader.as_deref(), gate)
+            }));
+            // Refused when the result was dropped while this ran, which is the point of
+            // dropping it.
+            let _ = tx.send(result);
+        };
+        self.attempted = true;
+        self.pending = Some(rx);
+        match self.resolve_on {
+            ResolveOn::Inline => job(),
+            // A thread the OS will not give us drops `job`, and `tx` with it, so the next poll
+            // finds the channel closed and reports a failed resolve rather than waiting for ever.
+            ResolveOn::Background => {
+                let _ = std::thread::Builder::new().name("exact-resolve".into()).spawn(job);
+            }
+        }
+    }
+
+    /// Apply a resolve that has landed, if one has. A no-op while it is still running.
+    fn poll_resolve(&mut self, v: &mut Verdict) {
+        let Some(rx) = &self.pending else { return };
+        // `None` is a resolve that panicked, or a thread that never started.
+        let result = match rx.try_recv() {
+            Ok(result) => result.ok(),
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => None,
+        };
+        self.pending = None;
+        let Some((resolution, ocr, collector)) = result else {
+            // The old inline resolve failed the whole frame here, through the guard, and the
+            // next frame tried again. This keeps the frame and lets the burst refill and retry.
+            self.attempted = false;
+            v.error = Some("the Exact resolve failed on this card — see the log".into());
+            return;
+        };
+        v.ocr = ocr;
+        v.collector = collector;
+        // Committed before this frame's observation, so the frame that resolved is already the
+        // decided one. An ambiguous outcome commits on its best printing's card: the freeze only
+        // has to know that *a* card is being held.
+        if resolution.outcome != Outcome::NotFound {
+            if let Some(r) = self.reference.clone() {
+                if let Some(best) = resolution.choices.first().and_then(|c| parse_uuid(&c.id)) {
+                    self.tracker.commit_to(r.oracle_for(&best), best);
+                }
+            }
+            self.decision_seq += 1;
+            self.last_resolution = Some(resolution.clone());
+        }
+        v.resolution = Some(resolution);
     }
 
     /// What every frame ends with: the decision bookkeeping on whatever the tracker made of it,
@@ -1125,11 +1299,16 @@ fn run_resolve(
             reader,
             r,
             mask,
-            ocr: std::cell::RefCell::new(None),
-            collector: std::cell::RefCell::new(None),
+            ocr: std::sync::Mutex::new(None),
+            collector: std::sync::Mutex::new(None),
         };
         let resolution = crate::resolve::resolve(r, mask, burst, &readers, gate);
-        return (resolution, readers.ocr.into_inner(), readers.collector.into_inner());
+        let (ocr, collector) = (readers.ocr.into_inner(), readers.collector.into_inner());
+        return (
+            resolution,
+            ocr.unwrap_or_else(std::sync::PoisonError::into_inner),
+            collector.unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
     }
     #[cfg(not(feature = "ocr"))]
     let _ = reader;
@@ -1139,27 +1318,35 @@ fn run_resolve(
 /// The production [`crate::resolve::Readers`]: the OCR models, under the session's mask.
 ///
 /// Keeps the last title and collector views it produced, so the frame a resolve ran on fills
-/// the verdict's `ocr` and `collector` keys exactly as a Fast read does.
+/// the verdict's `ocr` and `collector` keys exactly as a Fast read does. Behind mutexes, because
+/// the two are read on two threads at once.
+///
+/// **Both readers start from the way up the frame's hash match won** ([`BurstView::rotated`]).
+/// The title reads the other way too unless the first read is an exact name; see
+/// [`crate::ocr::TitleReader::read_title_first`].
 #[cfg(feature = "ocr")]
 struct SessionReaders<'a> {
     reader: &'a Reader,
     r: &'a Reference,
     mask: &'a Mask,
-    ocr: std::cell::RefCell<Option<OcrView>>,
-    collector: std::cell::RefCell<Option<CollectorView>>,
+    ocr: std::sync::Mutex<Option<OcrView>>,
+    collector: std::sync::Mutex<Option<CollectorView>>,
 }
 
 #[cfg(feature = "ocr")]
 impl crate::resolve::Readers for SessionReaders<'_> {
     fn title(&self, view: &BurstView<'_>) -> Option<String> {
-        let read = self.reader.read_title(view.upright, view.flipped);
-        self.ocr.replace(Some(title_view(&read, self.r, self.mask).0));
+        let edits = |text: &str| self.r.lookup_by_name_masked(text, self.mask).map(|(_, e)| e);
+        let read = self.reader.read_title_first(view.upright, view.flipped, view.rotated, &edits);
+        *self.ocr.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(title_view(&read, self.r, self.mask).0);
         read.is_usable().then_some(read.normalized)
     }
 
     fn collector(&self, view: &BurstView<'_>) -> Vec<(String, String)> {
-        let col = self.reader.read_collector(view.upright, view.flipped);
-        self.collector.replace(Some(collector_view(&col, self.r, self.mask)));
+        let col = self.reader.read_collector_first(view.upright, view.flipped, view.rotated);
+        *self.collector.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
+            Some(collector_view(&col, self.r, self.mask));
         col.candidates
     }
 }
@@ -1391,6 +1578,84 @@ mod tests {
         assert!(!v.matcher, "no reference was given");
     }
 
+    /// A 960×540 JPEG with one card in it — a dark border round light title, art, type and text
+    /// bands, which is the horizontal structure card-likeness scores — on a flat grey table,
+    /// `dx` pixels right of centre. Moving it a pixel or two a frame is what keeps the lock's
+    /// smoothed quad apart from the raw one, which is the case that used to rectify twice.
+    fn card_frame_jpeg(dx: u32) -> Vec<u8> {
+        let (cw, ch) = (250u32, 349u32);
+        let (x0, y0) = (355 + dx, 95u32);
+        let img = image::RgbImage::from_fn(960, 540, |x, y| {
+            if x < x0 || y < y0 || x >= x0 + cw || y >= y0 + ch {
+                return image::Rgb([96, 100, 104]);
+            }
+            let (cx, cy) = (x - x0, y - y0);
+            let border = 11;
+            if cx < border || cy < border || cx >= cw - border || cy >= ch - border {
+                return image::Rgb([16, 16, 18]);
+            }
+            let v = match cy as f32 / ch as f32 {
+                t if t < 0.10 => 238,
+                t if t < 0.55 => 150,
+                t if t < 0.62 => 238,
+                t if t < 0.92 => 205,
+                _ => 140,
+            };
+            image::Rgb([v, v, v])
+        });
+        let mut out = Vec::new();
+        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 90)
+            .encode_image(&img)
+            .expect("encode");
+        out
+    }
+
+    /// **One rectification a frame, whatever the method and whatever the lock** (issue #701).
+    /// `Method::Both` used to flatten each method's winner inside `detect` and then, once
+    /// locked, flatten the held quad a third time: 18 full-size warps to hash six views. Three
+    /// framings, both ways up, is six — and it has to be six on the frames that rectify from
+    /// the lock as well as on the ones that do not.
+    #[test]
+    fn a_locked_frame_makes_six_warps_not_eighteen() {
+        let mut s = Session::new(None, None, 5);
+        let opts = FrameOptions::default();
+        assert_eq!(opts.method, Method::Both, "the case the issue measured");
+        // Both methods find this card, so the old path paid for two rectifications before the
+        // lock's third — without that, six here would prove nothing.
+        let img = image::load_from_memory(&card_frame_jpeg(0)).expect("decode");
+        for m in opts.method.edge_methods() {
+            let found = locate(&img, &rgb_of(&img), &opts.detect_options(m, false)).0;
+            assert!(found.is_ok(), "{m:?} misses the test card: {:?}", found.err());
+        }
+        let (mut locked, mut relocked) = (0, 0);
+        for i in 0..16 {
+            crate::detect::WARPS.with(|w| w.set(0));
+            let v = s.frame(&card_frame_jpeg(i % 3), &opts);
+            let warps = crate::detect::WARPS.with(|w| w.get());
+            assert!(v.ok, "frame {i}: {:?}", v.error);
+            assert_eq!(warps, 6, "frame {i} made {warps} warps (from_lock {})", v.from_lock);
+            if v.lock.as_ref().is_some_and(LockState::is_trusted) {
+                locked += 1;
+                relocked += usize::from(v.from_lock);
+            }
+        }
+        assert!(locked > 0, "the card never locked, so nothing was measured");
+        assert!(relocked > 0, "no frame rectified from the held quad, so that went unmeasured");
+    }
+
+    /// The preview and the display hash are built only when asked for.
+    #[test]
+    fn previews_are_built_only_on_request() {
+        let mut s = Session::new(None, None, 5);
+        let v = s.frame(&card_frame_jpeg(0), &FrameOptions::default());
+        assert!(v.ok, "{:?}", v.error);
+        assert!(v.rectified.is_none() && v.hash.is_none());
+        let asked = FrameOptions { previews: true, ..Default::default() };
+        let v = s.frame(&card_frame_jpeg(0), &asked);
+        assert!(v.rectified.as_deref().is_some_and(|r| r.starts_with("data:image/jpeg;base64,")));
+        assert_eq!(v.hash.as_deref().map(str::len), Some(64), "256 bits of hex");
+    }
+
     #[test]
     fn a_frame_the_detector_panics_on_answers_a_sentence() {
         // **The guard is not theoretical.** `imageproc`'s canny asserts low <= high, and
@@ -1520,6 +1785,14 @@ mod tests {
         r
     }
 
+    /// A session over `r` whose resolves run inside the frame that starts them, so a test can
+    /// say which frame decides. See [`ResolveOn::Inline`].
+    fn inline(r: Reference) -> Session {
+        let mut s = Session::new(Some(r), None, 5);
+        s.set_resolve_on(ResolveOn::Inline);
+        s
+    }
+
     fn sets(codes: &[&str]) -> ScanFilters {
         ScanFilters { sets: codes.iter().map(|s| s.to_string()).collect(), ..Default::default() }
     }
@@ -1610,6 +1883,7 @@ mod tests {
             rectified_180: blank,
             alternates: Vec::new(),
             cardness: 0.5,
+            rotated: false,
         });
         s.attempted = true;
         s.last_resolution = Some(ResolutionView {
@@ -1646,6 +1920,7 @@ mod tests {
             rectified_180: image::RgbImage::new(4, 4),
             alternates: Vec::new(),
             cardness: 0.5,
+            rotated: false,
         });
         s.count_stretch(true, false, false);
         assert_eq!((s.steady, s.leaderless_locked), (3, 3), "a missed detection counted or reset");
@@ -1653,7 +1928,7 @@ mod tests {
 
         // And through the frame path: two locked frames, a trusted miss, one more — the resolve
         // runs on that fourth frame, the third to hold a card.
-        let mut s = Session::new(Some(labelled()), None, 5);
+        let mut s = inline(labelled());
         s.mode = ScanMode::Exact;
         let card = card_image(3);
         locked_frame(&mut s, &card);
@@ -1716,7 +1991,7 @@ mod tests {
         assert_eq!(s.set_filters(sets(&["hob"])), Err(sentence.to_string()));
 
         let bare = Reference::new(crate::index::BundleBuilder::new(crate::hash::HashKind::DHash, 256).finish(0));
-        let mut s = Session::new(Some(bare), None, 5);
+        let mut s = inline(bare);
         assert_eq!(s.set_filters(sets(&["hob"])), Err(sentence.to_string()));
         assert!(s.filters().is_empty());
 
@@ -1726,7 +2001,7 @@ mod tests {
 
     #[test]
     fn filters_that_match_nothing_are_a_sentence_and_keep_the_old_mask() {
-        let mut s = Session::new(Some(labelled()), None, 5);
+        let mut s = inline(labelled());
         assert_eq!(s.set_filters(sets(&["hob"])), Ok(()));
         assert_eq!(s.mask.len(), Some(2));
         assert_eq!(s.filters(), &sets(&["hob"]));
@@ -1744,7 +2019,7 @@ mod tests {
 
     #[test]
     fn setting_filters_resets_the_tracker() {
-        let mut s = Session::new(Some(labelled()), None, 5);
+        let mut s = inline(labelled());
         for _ in 0..8 {
             observe(&mut s, &[(id(1), 0.16)]);
         }
@@ -1773,7 +2048,7 @@ mod tests {
 
     #[test]
     fn a_fast_decision_names_the_leaders_printing() {
-        let mut s = Session::new(Some(labelled()), None, 5);
+        let mut s = inline(labelled());
         let mut t = None;
         for _ in 0..8 {
             t = Some(s.tracker.observe(&[Observation::appearance(id(10), id(2), 0.16)]));
@@ -1789,7 +2064,7 @@ mod tests {
 
         // A card decided on a read name alone has no printing in its tally, only the card; the
         // decision still names a printing, never the oracle id standing in for one.
-        let mut s = Session::new(Some(labelled()), None, 5);
+        let mut s = inline(labelled());
         s.tracker.observe(&[Observation::from_ocr(id(10), id(1), 0)]);
         s.tracker.observe(&[Observation::from_ocr(id(10), id(1), 0)]);
         let t = s.tracker.observe(&[]);
@@ -1800,7 +2075,7 @@ mod tests {
 
     #[test]
     fn an_exact_decision_is_the_resolution_it_committed_on() {
-        let mut s = Session::new(Some(labelled()), None, 5);
+        let mut s = inline(labelled());
         s.mode = ScanMode::Exact;
         let choice = |n: u8| ChoiceView {
             id: format_uuid(&id(n)),
@@ -1833,6 +2108,7 @@ mod tests {
         s.count_stretch(true, true, settled);
         let mut v =
             Verdict::failed(String::new(), FrameSize { w: 0, h: 0 }, 0.0, true, s.mode, s.decision_seq);
+        s.poll_resolve(&mut v);
         let t = s.match_locked(&mut v, card, card, &[], 0.5, settled);
         s.conclude(&mut v, t.as_ref());
         v
@@ -1845,6 +2121,7 @@ mod tests {
         s.count_stretch(trusted, false, settled);
         let mut v =
             Verdict::failed(String::new(), FrameSize { w: 0, h: 0 }, 0.0, true, s.mode, s.decision_seq);
+        s.poll_resolve(&mut v);
         let t = s.tracker.observe(&[]);
         s.conclude(&mut v, Some(&t));
         v
@@ -1860,7 +2137,7 @@ mod tests {
 
     /// An Exact session that has just resolved `card_image(3)` — decision 1.
     fn resolved_on_card_three() -> Session {
-        let mut s = Session::new(Some(labelled()), None, 5);
+        let mut s = inline(labelled());
         s.mode = ScanMode::Exact;
         for _ in 0..EXACT_STEADY_FRAMES {
             locked_frame(&mut s, &card_image(3));
@@ -1871,7 +2148,7 @@ mod tests {
 
     #[test]
     fn an_exact_stretch_resolves_once_and_decides_once() {
-        let mut s = Session::new(Some(labelled()), None, 5);
+        let mut s = inline(labelled());
         s.mode = ScanMode::Exact;
         let card = card_image(3);
         for f in 1..EXACT_STEADY_FRAMES {
@@ -1959,7 +2236,7 @@ mod tests {
             released: "2025-01-01".into(),
         };
         r.add_label(id(3), Some(id(20)), None, label);
-        let mut s = Session::new(Some(r), None, 5);
+        let mut s = inline(r);
         s.mode = ScanMode::Exact;
 
         // The burst sees the card's negative: every gradient comparison flipped, nothing inside
@@ -2040,7 +2317,7 @@ mod tests {
             released: "2025-01-01".into(),
         };
         r.add_label(id(3), Some(id(20)), None, label);
-        let mut s = Session::new(Some(r), None, 5);
+        let mut s = inline(r);
         s.mode = ScanMode::Exact;
         for _ in 0..4 {
             locked_frame(&mut s, &card);
@@ -2072,7 +2349,7 @@ mod tests {
         let q = hash_rgb(&card, HashKind::DHash, 256);
         let mut b = BundleBuilder::new(HashKind::DHash, 256);
         b.push(Section::Card, id(9), &Descriptor { words: q.words.map(|w| !w), bits: 256 });
-        let mut s = Session::new(Some(Reference::new(b.finish(0))), None, 5);
+        let mut s = inline(Reference::new(b.finish(0)));
         s.mode = ScanMode::Exact;
 
         let mut v = locked_frame(&mut s, &card);
@@ -2093,6 +2370,161 @@ mod tests {
             v = locked_frame(&mut s, &card);
         }
         assert!(v.resolution.is_some(), "a new stretch did not try again");
+    }
+
+    // ---- The resolve off the frame path ------------------------------------------------------
+
+    /// Stand in for a resolve thread that has not answered yet: the session is waiting on the
+    /// returned sender, exactly as it waits on a real one.
+    fn pending_on(s: &mut Session) -> std::sync::mpsc::Sender<ResolveResult> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        s.pending = Some(rx);
+        s.attempted = true;
+        tx
+    }
+
+    /// A resolve that found printing `n` of oracle card `oracle`.
+    fn resolved_as(n: u8, oracle: u8) -> ResolveResult {
+        Ok((
+            ResolutionView {
+                outcome: Outcome::Resolved,
+                choices: vec![ChoiceView {
+                    id: format_uuid(&id(n)),
+                    oracle_id: Some(format_uuid(&id(oracle))),
+                    label: None,
+                    distance: Some(0.0),
+                }],
+                tiers: Vec::new(),
+                elapsed_ms: 0.0,
+            },
+            None,
+            None,
+        ))
+    }
+
+    #[test]
+    fn a_background_resolve_decides_on_a_later_frame_and_only_once() {
+        // The real thread. Which frame it lands on is the clock's business, so this asserts only
+        // what holds whenever it lands: frames go on answering meanwhile, the frame it lands on
+        // is already the decided one, and it decides once.
+        let mut s = Session::new(Some(labelled()), None, 5);
+        assert_eq!(s.resolve_on, ResolveOn::Background, "the app's default");
+        s.mode = ScanMode::Exact;
+        let card = card_image(3);
+        let mut landed = None;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let mut frames = 0;
+        while landed.is_none() && std::time::Instant::now() < deadline {
+            let v = locked_frame(&mut s, &card);
+            frames += 1;
+            if v.resolution.is_some() {
+                landed = Some(v);
+            } else {
+                assert_eq!(v.decision_seq, 0, "decided without a resolution on frame {frames}");
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+        }
+        let v = landed.expect("the background resolve never landed");
+        assert!(frames >= EXACT_STEADY_FRAMES as usize);
+        assert!(!s.resolving());
+        assert_eq!(v.decision_seq, 1);
+        assert!(v.tracked.as_ref().is_some_and(|t| t.committed && t.frozen));
+        assert_eq!(v.decision.as_ref().map(|d| d.printing.clone()), Some(format_uuid(&id(3))));
+        for _ in 0..20 {
+            let v = locked_frame(&mut s, &card);
+            assert!(v.resolution.is_none(), "a held card resolved again");
+            assert_eq!(v.decision_seq, 1);
+        }
+    }
+
+    #[test]
+    fn frames_go_on_while_a_resolve_runs_and_the_one_it_lands_on_decides() {
+        let mut s = inline(labelled());
+        s.mode = ScanMode::Exact;
+        let card = card_image(3);
+        let tx = pending_on(&mut s);
+        for f in 0..6 {
+            let v = locked_frame(&mut s, &card);
+            assert!(v.resolution.is_none() && v.decision.is_none(), "frame {f} decided early");
+            assert_eq!(v.decision_seq, 0);
+            assert!(s.resolving(), "a second resolve started beside the first on frame {f}");
+        }
+        // A trusted frame with no detection is still the card under the lock.
+        held_frame(&mut s);
+        tx.send(resolved_as(3, 20)).expect("the session is still waiting");
+        let v = locked_frame(&mut s, &card);
+        assert!(v.resolution.is_some(), "the landed resolve was not applied");
+        assert_eq!(v.decision_seq, 1);
+        assert!(v.tracked.as_ref().is_some_and(|t| t.committed && t.frozen));
+        assert_eq!(v.decision.map(|d| d.printing), Some(format_uuid(&id(3))));
+    }
+
+    #[test]
+    fn a_resolve_whose_card_left_is_dropped_and_the_next_stretch_resolves_again() {
+        let mut s = inline(labelled());
+        s.mode = ScanMode::Exact;
+        let tx = pending_on(&mut s);
+        let v = lost_frame(&mut s);
+        assert!(!s.resolving(), "a lost lock kept waiting on the old burst");
+        assert!(v.resolution.is_none());
+        assert!(tx.send(resolved_as(3, 20)).is_err(), "the result still had somewhere to land");
+        assert!(!s.attempted, "the break did not re-arm");
+
+        // Nothing it found was decided, and the card now in frame is resolved on its own burst.
+        let other = card_image(1);
+        let mut v = locked_frame(&mut s, &other);
+        for _ in 1..EXACT_STEADY_FRAMES {
+            assert_eq!(v.decision_seq, 0);
+            v = locked_frame(&mut s, &other);
+        }
+        let res = v.resolution.as_ref().expect("the next stretch resolved");
+        assert_eq!(v.decision_seq, 1);
+        assert_ne!(res.choices.first().map(|c| c.id.clone()), Some(format_uuid(&id(3))));
+    }
+
+    #[test]
+    fn a_mode_switch_a_filter_change_and_a_reset_each_drop_a_running_resolve() {
+        let mut s = inline(labelled());
+        s.mode = ScanMode::Exact;
+        let tx = pending_on(&mut s);
+        s.set_mode(ScanMode::Fast);
+        assert!(!s.resolving() && tx.send(resolved_as(3, 20)).is_err(), "a mode switch");
+
+        s.set_mode(ScanMode::Exact);
+        let tx = pending_on(&mut s);
+        s.set_filters(sets(&["hob"])).expect("hob has printings");
+        assert!(!s.resolving() && tx.send(resolved_as(3, 20)).is_err(), "a filter change");
+
+        let tx = pending_on(&mut s);
+        s.reset();
+        assert!(!s.resolving() && tx.send(resolved_as(3, 20)).is_err(), "a reset");
+        assert_eq!(s.decision_seq, 0);
+    }
+
+    #[test]
+    fn a_resolve_that_panicked_says_so_and_tries_again() {
+        let mut s = inline(labelled());
+        s.mode = ScanMode::Exact;
+        let card = card_image(3);
+        let tx = pending_on(&mut s);
+        tx.send(Err(Box::new("an assertion deep in the OCR crates"))).expect("waiting");
+        let v = locked_frame(&mut s, &card);
+        assert!(v.error.as_deref().is_some_and(|e| e.contains("resolve failed")), "{:?}", v.error);
+        assert_eq!(v.decision_seq, 0);
+        assert!(!s.resolving());
+        // The burst refills and the card is resolved after all.
+        let v = until_decided(&mut s, &card);
+        assert!(v.resolution.is_some());
+    }
+
+    #[test]
+    fn a_resolve_thread_that_never_answered_is_a_failure_and_not_a_wait() {
+        let mut s = inline(labelled());
+        s.mode = ScanMode::Exact;
+        drop(pending_on(&mut s));
+        let v = locked_frame(&mut s, &card_image(3));
+        assert!(v.error.is_some());
+        assert!(!s.resolving() && !s.attempted);
     }
 
     // ---- Returning to the scanner, and a second opinion on the card in frame ----------------
@@ -2180,7 +2612,7 @@ mod tests {
         // "Fast said Forest, switch to Exact to pin the printing." One physical card, so the
         // tray must end with one row — the second decision says it is a second opinion.
         let (r, card, _) = two_far_cards();
-        let mut s = Session::new(Some(r), None, 5);
+        let mut s = inline(r);
         let fast = until_decided(&mut s, &card);
         let d = fast.decision.expect("a decision on the deciding frame");
         assert_eq!(d.oracle_id, Some(format_uuid(&id(20))));
@@ -2219,7 +2651,7 @@ mod tests {
     #[test]
     fn the_same_card_after_a_stretch_break_is_a_new_copy() {
         let (r, card, _) = two_far_cards();
-        let mut s = Session::new(Some(r), None, 5);
+        let mut s = inline(r);
         until_decided(&mut s, &card);
         s.set_mode(ScanMode::Exact);
         assert!(until_decided(&mut s, &card).decision.expect("decision").replaces_previous);
@@ -2235,7 +2667,7 @@ mod tests {
 
         // One lost frame is enough, even under a freeze that outlasts it: the lock stopped
         // trusting the quad, so nothing says the card in frame afterwards is the same one.
-        let mut s = Session::new(Some(two_far_cards().0), None, 5);
+        let mut s = inline(two_far_cards().0);
         until_decided(&mut s, &card);
         lost_frame(&mut s);
         s.set_mode(ScanMode::Exact);
@@ -2245,7 +2677,7 @@ mod tests {
     #[test]
     fn a_different_card_after_a_mode_switch_replaces_nothing() {
         let (r, card, negative) = two_far_cards();
-        let mut s = Session::new(Some(r), None, 5);
+        let mut s = inline(r);
         until_decided(&mut s, &card);
         s.set_mode(ScanMode::Exact);
         let v = until_decided(&mut s, &negative);
