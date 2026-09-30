@@ -96,6 +96,13 @@ name = "ocr-bench"
 path = "src/bin/ocr_bench.rs"
 required-features = ["builder"]
 
+# The readers scored per read against labels — see the module doc. Beside `eval` rather than
+# a mode of it: it asks a narrower question, and `eval` is the file every scanner branch edits.
+[[bin]]
+name = "read_eval"
+path = "src/bin/read_eval.rs"
+required-features = ["builder"]
+
 # The measurements behind the appearance watch (#710), beside `eval` so CI's `--bins` builds it.
 [[bin]]
 name = "stacking"

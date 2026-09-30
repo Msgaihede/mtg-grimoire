@@ -21,7 +21,9 @@
 //! **[`scanner_frame`] and [`scanner_capture`] take a raw body.** The JPEG is the request body
 //! and its JSON rides in a header — [`OPTIONS_HEADER`] for a frame, [`CAPTURE_HEADER`] for a
 //! capture. [`frame_payload`] and [`capture_payload`] read the two, and refuse a JSON body in
-//! words.
+//! words. A frame may carry a second JPEG behind the first — the same video frame at the
+//! camera's own resolution, for the title and collector reads — and [`DETAIL_HEADER`] is what
+//! says where the first one ends.
 //!
 //! **The seventh connection.** Labels are loaded on a read-only connection opened for the
 //! load and dropped after — never `AppState.db_read`, the rule the mirror thread and
@@ -68,6 +70,10 @@ pub const RECOGNITION_MODEL: &str = "models/text-recognition.rten";
 pub const OPTIONS_HEADER: &str = "x-scanner-options";
 /// The header a capture carries its `Sidecar` in, as JSON.
 pub const CAPTURE_HEADER: &str = "x-scanner-capture";
+/// The header that says a frame's body is **two** JPEGs back to back, and where the first ends:
+/// the decimal byte length of the frame, with the detail image as everything after it. Absent,
+/// the body is the frame alone. See [`frame_payload`].
+pub const DETAIL_HEADER: &str = "x-scanner-detail";
 /// Candidates per frame — the debug server's `--top` default.
 const TOP: usize = 5;
 
@@ -651,11 +657,27 @@ pub fn tray_commit(
     })
 }
 
-/// The frame from the request body and its options from [`OPTIONS_HEADER`]. See the module doc.
-pub fn frame_payload(
-    body: &InvokeBody,
-    headers: &HeaderMap,
-) -> Result<(Vec<u8>, FrameOptions), String> {
+/// What [`frame_payload`] reads out of one request: the frame, the detail image if one came, and
+/// the options.
+pub type FramePayload = (Vec<u8>, Option<Vec<u8>>, FrameOptions);
+
+/// The frame from the request body, the detail image behind it if [`DETAIL_HEADER`] says there
+/// is one, and the options from [`OPTIONS_HEADER`]. See the module doc.
+///
+/// **Why one body carrying two JPEGs rather than a second command or a second header.** The
+/// detail image has to be the *same video frame* as the one the crate detects on — the quad it
+/// found in the small image is scaled onto the large one, so a large image one frame later is a
+/// card that has moved by however far the reader's hand did. One request is what makes the pair
+/// arrive together or not at all; a raw body is the only way bytes cross this boundary without a
+/// base64 step; and a header is the only place left to say where one ends.
+///
+/// **A detail header that is present and wrong is a refusal, where an unreadable options header
+/// is a shrug** — [`capture_payload`]'s asymmetry, for a sharper reason. A defaulted slider costs
+/// one frame; a mis-split body hands the decoder the first half of a JPEG as the frame and a
+/// tail of it as the detail, and the verdict that comes back describes neither. So a length that
+/// is not a number, is zero, runs past the body, or leaves nothing behind it for the detail says
+/// so in words, and the page's loop shows the sentence and sends the next frame.
+pub fn frame_payload(body: &InvokeBody, headers: &HeaderMap) -> Result<FramePayload, String> {
     match body {
         InvokeBody::Raw(bytes) => {
             let opts = headers
@@ -663,10 +685,40 @@ pub fn frame_payload(
                 .and_then(|v| v.to_str().ok())
                 .and_then(|s| serde_json::from_str(s).ok())
                 .unwrap_or_default();
-            Ok((bytes.clone(), opts))
+            let (jpeg, detail) = split_detail(bytes, headers.get(DETAIL_HEADER))?;
+            Ok((jpeg, detail, opts))
         }
         InvokeBody::Json(_) => Err("the frame has to arrive as a raw request body".to_string()),
     }
+}
+
+/// The body split at [`DETAIL_HEADER`]'s length — `(frame, None)` when there is no header, and
+/// the whole body is the frame exactly as it was before the detail image existed.
+fn split_detail(
+    bytes: &[u8],
+    header: Option<&tauri::http::HeaderValue>,
+) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
+    let Some(value) = header else {
+        return Ok((bytes.to_vec(), None));
+    };
+    let text = value
+        .to_str()
+        .map_err(|e| format!("the frame's detail length did not parse: {e}"))?;
+    let n: usize = text
+        .parse()
+        .map_err(|_| format!("the frame's detail length is not a number: {text:?}"))?;
+    if n == 0 {
+        return Err("the frame's detail length is zero, so there is no frame before it".into());
+    }
+    if n >= bytes.len() {
+        return Err(format!(
+            "the frame's detail length is {n} bytes but the body is {} — there is no detail image \
+             behind the frame",
+            bytes.len()
+        ));
+    }
+    let (jpeg, detail) = bytes.split_at(n);
+    Ok((jpeg.to_vec(), Some(detail.to_vec())))
 }
 
 /// The capture from the request body and its sidecar from [`CAPTURE_HEADER`].
@@ -751,11 +803,17 @@ pub async fn scanner_frame(
     // with its camera already open would otherwise pay one per frame to be told no. The guard is
     // held through the decode, so a slow frame cannot let the lease lapse under itself.
     let _lease = state.admit(webview.label())?;
-    let (jpeg, opts) = frame_payload(request.body(), request.headers())?;
+    let (jpeg, detail, opts) = frame_payload(request.body(), request.headers())?;
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut guard = state.ensure()?;
-        Ok(guard.as_mut().expect("ensured").session.frame(&jpeg, &opts))
+        // The detail image is decoded only on a frame whose reads run, so carrying one the
+        // session did not ask for costs the copy and nothing else.
+        Ok(guard.as_mut().expect("ensured").session.frame_with_detail(
+            &jpeg,
+            detail.as_deref(),
+            &opts,
+        ))
     })
     .await
     .map_err(|e| format!("the scanner thread failed: {e}"))?
@@ -1407,8 +1465,10 @@ mod tests {
     #[test]
     fn a_raw_body_with_no_header_uses_the_default_options() {
         let body = InvokeBody::Raw(vec![1, 2, 3]);
-        let (jpeg, opts) = frame_payload(&body, &HeaderMap::new()).expect("payload");
+        let (jpeg, detail, opts) = frame_payload(&body, &HeaderMap::new()).expect("payload");
         assert_eq!(jpeg, vec![1, 2, 3]);
+        // No detail header is the body exactly as it was before the detail image existed.
+        assert_eq!(detail, None);
         assert_eq!(opts, FrameOptions::default());
     }
 
@@ -1420,9 +1480,54 @@ mod tests {
             OPTIONS_HEADER,
             r#"{"decide_at":12,"method":"otsu"}"#.parse().expect("value"),
         );
-        let (_, opts) = frame_payload(&body, &headers).expect("payload");
+        let (_, _, opts) = frame_payload(&body, &headers).expect("payload");
         assert_eq!(opts.decide_at, 12.0);
         assert_eq!(opts.method, card_scanner::session::Method::Otsu);
+    }
+
+    /// The page's own shape: the frame, then the detail image, one body, with the frame's length
+    /// in the header. The options header still reads beside it.
+    #[test]
+    fn a_detail_header_splits_the_body_into_the_frame_and_the_detail() {
+        let body = InvokeBody::Raw(vec![1, 2, 3, 7, 8, 9, 10]);
+        let mut headers = HeaderMap::new();
+        headers.insert(DETAIL_HEADER, "3".parse().expect("value"));
+        headers.insert(
+            OPTIONS_HEADER,
+            r#"{"decide_at":12}"#.parse().expect("value"),
+        );
+        let (jpeg, detail, opts) = frame_payload(&body, &headers).expect("payload");
+        assert_eq!(jpeg, vec![1, 2, 3]);
+        assert_eq!(detail, Some(vec![7, 8, 9, 10]));
+        assert_eq!(opts.decide_at, 12.0);
+    }
+
+    /// Every wrong length is a sentence rather than a split somewhere else: a mis-split body is a
+    /// frame decoded from half a JPEG, and the verdict for it would describe neither image.
+    #[test]
+    fn a_detail_length_that_cannot_split_the_body_is_a_sentence() {
+        let body = InvokeBody::Raw(vec![1, 2, 3, 4]);
+        let refused = |value: &str| {
+            let mut headers = HeaderMap::new();
+            headers.insert(DETAIL_HEADER, value.parse().expect("value"));
+            frame_payload(&body, &headers).expect_err(value)
+        };
+        let err = refused("three");
+        assert!(err.contains("not a number"), "{err}");
+        let err = refused("-1");
+        assert!(err.contains("not a number"), "{err}");
+        let err = refused("0");
+        assert!(err.contains("zero"), "{err}");
+        // Past the end, and exactly at it — the second leaves an empty detail image.
+        let err = refused("9");
+        assert!(err.contains("no detail image"), "{err}");
+        let err = refused("4");
+        assert!(err.contains("no detail image"), "{err}");
+        // One byte short of the end is still a split, however small the detail.
+        let mut headers = HeaderMap::new();
+        headers.insert(DETAIL_HEADER, "3".parse().expect("value"));
+        let (jpeg, detail, _) = frame_payload(&body, &headers).expect("payload");
+        assert_eq!((jpeg, detail), (vec![1, 2, 3], Some(vec![4])));
     }
 
     #[test]
