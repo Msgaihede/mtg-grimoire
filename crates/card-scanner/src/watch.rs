@@ -128,9 +128,34 @@ pub enum Seen {
     /// that disagrees with the frame before it.
     Moved,
     /// A second far frame that agrees with the one before it: a different card has come to
-    /// rest. The watch has stopped; the caller forgets the card and watches the next one when
-    /// it is decided.
+    /// rest. The watch has stopped and holds what it watched for [`CardWatch::forgotten`]; the
+    /// caller forgets the card and watches the next one when it is decided.
     Changed,
+}
+
+/// What a watch held of the card it stopped watching — enough to ask, later, whether a frame
+/// is that card after all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Remembered {
+    anchor: Look,
+    recent: Vec<Descriptor>,
+}
+
+impl Remembered {
+    /// Bits from a frame's upright descriptor to the nearest of the card's looks — the same
+    /// question the watch asked while it watched.
+    pub fn distance_to(&self, upright: &Descriptor) -> u32 {
+        nearest(&self.anchor, self.recent.iter(), upright)
+    }
+}
+
+/// Bits from `upright` to the nearest of an anchor (either way up) and its recent frames.
+fn nearest<'a>(
+    anchor: &Look,
+    recent: impl Iterator<Item = &'a Descriptor>,
+    upright: &Descriptor,
+) -> u32 {
+    recent.map(|r| bits_between(r, upright)).fold(anchor.distance_to(upright), u32::min)
 }
 
 /// The decided card's looks, and the far frame waiting for a second to agree with it.
@@ -141,6 +166,8 @@ pub struct CardWatch {
     /// comes out the same way up frame to frame, and the anchor covers it when it does not.
     recent: VecDeque<Descriptor>,
     pending: Option<Look>,
+    /// What the last change stopped watching, until [`CardWatch::forgotten`] takes it.
+    forgot: Option<Remembered>,
 }
 
 impl CardWatch {
@@ -155,6 +182,7 @@ impl CardWatch {
         self.anchor = None;
         self.recent.clear();
         self.pending = None;
+        self.forgot = None;
     }
 
     pub fn is_watching(&self) -> bool {
@@ -169,8 +197,12 @@ impl CardWatch {
     /// Bits between a frame's upright descriptor and the nearest look of the decided card,
     /// while one is watched.
     pub fn distance_to(&self, upright: &Descriptor) -> Option<u32> {
-        let anchor = self.anchor?.distance_to(upright);
-        Some(self.recent.iter().map(|r| bits_between(r, upright)).fold(anchor, u32::min))
+        Some(nearest(&self.anchor?, self.recent.iter(), upright))
+    }
+
+    /// The card the last [`Seen::Changed`] stopped watching — taken, so it is handed over once.
+    pub fn forgotten(&mut self) -> Option<Remembered> {
+        self.forgot.take()
     }
 
     /// Judge one trusted frame by its upright descriptor. `turned` is asked for only when the
@@ -192,7 +224,9 @@ impl CardWatch {
         let frame = Look { upright, turned: turned() };
         match self.pending.replace(frame) {
             Some(before) if before.distance(&frame) <= AGREE_BITS => {
+                let recent = self.recent.drain(..).collect();
                 self.clear();
+                self.forgot = Some(Remembered { anchor, recent });
                 Seen::Changed
             }
             _ => Seen::Moved,
@@ -332,6 +366,26 @@ mod tests {
         }
         // `up(20)` has been pushed out, so a frame near only it is judged by the rest.
         assert_eq!(w.distance_to(&bits(20 + CHANGED_BITS - 1)), Some(20 + CHANGED_BITS - 1 - 3));
+    }
+
+    #[test]
+    fn a_change_hands_over_the_card_it_stopped_watching() {
+        // The ring as well as the anchor: the card's own frame a moment later is judged against
+        // the nearest of them, as it would have been while watched.
+        let mut w = watching(up(0));
+        assert_eq!(see(&mut w, up(20)), Seen::Same);
+        assert_eq!(see(&mut w, up(62)), Seen::Moved);
+        assert_eq!(see(&mut w, up(62)), Seen::Changed);
+        let forgot = w.forgotten().expect("a change hands over what it watched");
+        // 44 from the anchor, 24 from the recent 20: the ring went with it.
+        assert_eq!(forgot.distance_to(&bits(44)), 24, "judged by the anchor alone");
+        assert!(w.forgotten().is_none(), "handed over twice");
+        // Not taken, then cleared: a reset drops it with everything else.
+        w.watch(up(0));
+        assert_eq!(see(&mut w, up(62)), Seen::Moved);
+        assert_eq!(see(&mut w, up(62)), Seen::Changed);
+        w.clear();
+        assert!(w.forgotten().is_none(), "a clear kept a forgotten card");
     }
 
     #[test]
