@@ -29,7 +29,7 @@ default = []
 corpus = ["dep:rusqlite"]
 # OCR. Pure Rust: `ocrs` on `rten`, whose whole dependency closure was walked for `cc`,
 # `cmake`, `bindgen` and `*-sys` and has none.
-ocr = ["dep:ocrs", "dep:rten"]
+ocr = ["dep:ocrs", "dep:rten", "dep:rten-imageproc"]
 # The two developer tools — the debug server (`bin/serve.rs`), and the bundle builder with the
 # synthetic evaluation (`bin/build_hashes.rs`, `bin/eval.rs`). Each turns the app's two on for
 # its own use; neither is ever compiled into the app. `builder` takes `ocr` for the evaluation,
@@ -66,6 +66,10 @@ rayon = { version = "1", optional = true }
 
 ocrs = { version = "0.13", optional = true }
 rten = { version = "0.26", optional = true }
+# For `RotatedRect`, which `ocrs::OcrEngine::recognize_text` takes and `ocrs` does not
+# re-export. Held to `ocrs`'s own `0.26` so the type is the one it expects — a second
+# version would be a second, incompatible `RotatedRect`.
+rten-imageproc = { version = "0.26", optional = true }
 
 [[bin]]
 name = "scan"
@@ -90,6 +94,11 @@ required-features = ["builder"]
 [[bin]]
 name = "detect-bench"
 path = "src/bin/detect_bench.rs"
+required-features = ["builder"]
+
+[[bin]]
+name = "ocr-bench"
+path = "src/bin/ocr_bench.rs"
 required-features = ["builder"]
 
 [profile.release]

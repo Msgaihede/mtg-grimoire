@@ -201,7 +201,15 @@ export function MatchPanel({
         />
         <Row
           label="lock"
-          value={verdict?.lock == null ? "—" : `${verdict.lock.phase} ${verdict.lock.agree}/3`}
+          // "/3" is the three-frame count still to reach; a locked quad has reached it, or
+          // Fast's two-frame quick path has made it unnecessary, so "locked 2/3" never shows.
+          value={
+            verdict?.lock == null
+              ? "—"
+              : verdict.lock.phase === "locked"
+                ? `locked ${verdict.lock.agree}`
+                : `${verdict.lock.phase} ${verdict.lock.agree}/3`
+          }
         />
       </dl>
 

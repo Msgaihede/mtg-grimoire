@@ -33,6 +33,15 @@ pub struct LockOptions {
     /// At the measured ~12 detections a second this is a quarter of a second — short enough
     /// that holding a card up feels immediate, long enough that nothing transient survives.
     pub min_agree: u32,
+    /// Consecutive agreeing frames that are each *clean* before a quad is trusted early — see
+    /// [`QuadLock::observe_clean`]. 0 turns it off.
+    ///
+    /// A flicker is what `min_agree` is there to outlast, and a flicker is rarely a clean
+    /// card: a quad conjured from a glare or a table seam does not rectify into something with
+    /// a title band and a type line, with every corner square. So a quad that is both card-like
+    /// and square on consecutive frames has already shown most of what the third frame would
+    /// have, and it is trusted one frame sooner. The caller decides what clean means.
+    pub quick_agree: u32,
     /// How far a quad's centre may move between frames and still be "the same quad", as a
     /// fraction of its own short edge. Generous: a hand is never still.
     pub max_drift: f32,
@@ -53,6 +62,7 @@ impl Default for LockOptions {
     fn default() -> Self {
         LockOptions {
             min_agree: 3,
+            quick_agree: 2,
             max_drift: 0.35,
             max_area_ratio: 1.6,
             reset_after_misses: 5,
@@ -99,6 +109,11 @@ pub struct QuadLock {
     quad: Option<Quad>,
     agree: u32,
     misses: u32,
+    /// Consecutive agreeing frames the caller called clean.
+    clean: u32,
+    /// Trusted through the quick path. Latched until the quad is lost or replaced, so one
+    /// frame that is less clean than the last does not un-trust a quad that earned it.
+    quick: bool,
 }
 
 impl Default for QuadLock {
@@ -132,13 +147,19 @@ fn short_edge(q: &Quad) -> f32 {
 
 impl QuadLock {
     pub fn new(opts: LockOptions) -> Self {
-        QuadLock { opts, quad: None, agree: 0, misses: 0 }
+        QuadLock { opts, quad: None, agree: 0, misses: 0, clean: 0, quick: false }
     }
 
     pub fn reset(&mut self) {
         self.quad = None;
         self.agree = 0;
         self.misses = 0;
+        self.clean = 0;
+        self.quick = false;
+    }
+
+    fn locked(&self) -> bool {
+        self.agree >= self.opts.min_agree || self.quick
     }
 
     /// The held quad, while the lock is trusted — the same test [`LockState::is_trusted`] makes
@@ -167,6 +188,12 @@ impl QuadLock {
 
     /// Feed the frame's best quad, or `None` if nothing was detected.
     pub fn observe(&mut self, candidate: Option<Quad>) -> LockState {
+        self.observe_clean(candidate, false)
+    }
+
+    /// The same, with the caller's word on whether this frame's quad is *clean* — card-like
+    /// and square enough that [`LockOptions::quick_agree`] frames of it can be trusted.
+    pub fn observe_clean(&mut self, candidate: Option<Quad>, clean: bool) -> LockState {
         match candidate {
             None => {
                 self.misses += 1;
@@ -176,7 +203,7 @@ impl QuadLock {
                 // A locked quad survives a brief dropout rather than flickering off: a hand
                 // crossing the card, or one blurred frame, should not restart the count.
                 LockState {
-                    phase: if self.quad.is_some() && self.agree >= self.opts.min_agree {
+                    phase: if self.quad.is_some() && self.locked() {
                         Phase::Locked
                     } else if self.quad.is_some() {
                         Phase::Acquiring
@@ -193,9 +220,20 @@ impl QuadLock {
                 match self.quad {
                     Some(prev) if self.agrees(&prev, &c) => {
                         self.agree += 1;
+                        self.clean = if clean { self.clean + 1 } else { 0 };
+                        let quick_agree = self.opts.quick_agree;
+                        self.quick |= quick_agree > 0 && self.clean >= quick_agree;
                         // Smooth only once locked. While acquiring, the raw quad is what has
                         // to prove itself — blending it towards a quad that may be spurious
                         // would help the spurious one agree with itself.
+                        //
+                        // **At `min_agree`, not at the quick lock.** The quick path changes
+                        // when a quad is trusted and nothing about how it is drawn, so from the
+                        // third frame on the held quad is exactly the one the three-frame lock
+                        // would hold. Smoothing from the second frame shifted every later quad
+                        // by a pixel or two, and on a card whose hash flips between a good and
+                        // a bad frame that was enough to trade a 36-bit match for a 56-bit
+                        // wrong one — two cards measured undecided that had decided before.
                         self.quad = Some(if self.agree >= self.opts.min_agree {
                             blend(&prev, &c, self.opts.smoothing)
                         } else {
@@ -204,11 +242,13 @@ impl QuadLock {
                     }
                     _ => {
                         self.agree = 1;
+                        self.clean = u32::from(clean);
+                        self.quick = false;
                         self.quad = Some(c);
                     }
                 }
                 LockState {
-                    phase: if self.agree >= self.opts.min_agree {
+                    phase: if self.locked() {
                         Phase::Locked
                     } else {
                         Phase::Acquiring
@@ -362,5 +402,80 @@ mod tests {
         let raw = l.observe(Some(quad(510.0, 400.0, 200.0))).quad.expect("a quad");
         let (cx, _) = centre(&raw);
         assert!((cx - 510.0).abs() < 0.01, "acquiring quad was smoothed: {cx}");
+    }
+
+    #[test]
+    fn two_clean_frames_lock_a_frame_sooner() {
+        let mut l = QuadLock::default();
+        let q = quad(500.0, 400.0, 200.0);
+        assert_eq!(l.observe_clean(Some(q), true).phase, Phase::Acquiring);
+        let s = l.observe_clean(Some(q), true);
+        assert_eq!(s.phase, Phase::Locked, "two clean agreeing frames did not lock");
+        assert_eq!(s.agree, 2);
+    }
+
+    #[test]
+    fn one_unclean_frame_keeps_the_three_frame_count() {
+        // Both frames have to be clean: a clean second frame after a doubtful first has shown
+        // only one clean frame, and the quick path is two of them.
+        let mut l = QuadLock::default();
+        let q = quad(500.0, 400.0, 200.0);
+        l.observe_clean(Some(q), false);
+        assert_eq!(l.observe_clean(Some(q), true).phase, Phase::Acquiring);
+        let third = l.observe_clean(Some(q), true);
+        assert_eq!(third.phase, Phase::Locked, "the third frame locks anyway");
+
+        let mut l = QuadLock::default();
+        l.observe_clean(Some(q), true);
+        assert_eq!(l.observe_clean(Some(q), false).phase, Phase::Acquiring);
+    }
+
+    #[test]
+    fn a_quick_lock_survives_a_less_clean_frame_and_a_dropout() {
+        // Latched: a quad trusted on the quick path is not un-trusted by the next frame being
+        // a little less square, nor by one frame the detector missed. At the defaults the third
+        // agreeing frame locks anyway, so the latch only shows with a longer slow path.
+        let mut l = QuadLock::new(LockOptions { min_agree: 4, ..Default::default() });
+        let q = quad(500.0, 400.0, 200.0);
+        l.observe_clean(Some(q), true);
+        l.observe_clean(Some(q), true);
+        assert_eq!(l.observe(None).phase, Phase::Locked, "a dropout un-trusted a quick lock");
+        assert_eq!(l.observe_clean(Some(q), false).phase, Phase::Locked);
+    }
+
+    #[test]
+    fn a_quick_lock_ends_with_the_quad() {
+        // A different card somewhere else starts from nothing: the latch belonged to the old one.
+        let mut l = QuadLock::default();
+        let q = quad(500.0, 400.0, 200.0);
+        l.observe_clean(Some(q), true);
+        l.observe_clean(Some(q), true);
+        let far = quad(1400.0, 900.0, 200.0);
+        assert_eq!(l.observe_clean(Some(far), false).phase, Phase::Acquiring);
+        assert_eq!(l.observe_clean(Some(far), false).phase, Phase::Acquiring);
+    }
+
+    #[test]
+    fn the_quick_path_draws_the_same_quads_as_the_three_frame_lock() {
+        // It trusts the second frame and changes nothing else: the quads it holds are the ones
+        // the three-frame lock holds, frame for frame, so the only difference downstream is one
+        // more frame matched.
+        let frames: Vec<Quad> =
+            (0..6).map(|i| quad(500.0 + i as f32 * 7.0, 400.0, 200.0)).collect();
+        let mut quick = QuadLock::default();
+        let mut slow = QuadLock::default();
+        for (i, q) in frames.iter().enumerate() {
+            let a = quick.observe_clean(Some(*q), true);
+            let b = slow.observe_clean(Some(*q), false);
+            assert_eq!(a.quad.map(|q| q.corners), b.quad.map(|q| q.corners), "frame {}", i + 1);
+        }
+    }
+
+    #[test]
+    fn the_quick_path_can_be_turned_off() {
+        let mut l = QuadLock::new(LockOptions { quick_agree: 0, ..Default::default() });
+        let q = quad(500.0, 400.0, 200.0);
+        l.observe_clean(Some(q), true);
+        assert_eq!(l.observe_clean(Some(q), true).phase, Phase::Acquiring);
     }
 }

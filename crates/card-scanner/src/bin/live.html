@@ -781,14 +781,17 @@ function renderMatch(j, detected, hasBundle) {
   }
 
   $('ev').className = 'ev' + (tr?.committed ? ' on' : '') + (votes ? ' votes' : '');
-  const fill = votes ? (tr.decide_at > 0 ? tally / tr.decide_at * 100 : 0) : confidence * 100;
+  // A card Fast decided on clear frames before the bar reads as a full bar: decided is decided.
+  const fill = votes
+    ? (tr.early ? 100 : tr.decide_at > 0 ? tally / tr.decide_at * 100 : 0)
+    : confidence * 100;
   $('ev-fill').style.width = `${Math.min(100, fill).toFixed(0)}%`;
 
   const set = (id, v, warn) => { const el = $(id); el.textContent = v; el.classList.toggle('warn', !!warn); };
   set('mt-share-k', votes ? 'votes' : 'confidence');
   set('mt-lead', !tr || !votes || !lead ? '—' : tr.lead == null ? 'unopposed' : `×${tr.lead.toFixed(1)}`);
   set('mt-share', !tr ? '—'
-    : votes ? `${tally.toFixed(1)}/${tr.decide_at} · ${tr.frames}f`
+    : votes ? `${tally.toFixed(1)}/${tr.decide_at}${tr.early ? ' · clear' : ''} · ${tr.frames}f`
     : `${(confidence * 100).toFixed(0)}% over ${tr.frames}f`);
 
   const best = m?.candidates?.[0];
@@ -804,7 +807,9 @@ function renderMatch(j, detected, hasBundle) {
   // in the overlay because both orientations rectify perfectly.
   set('mt-rot', m ? (m.rotated ? 'rotated 180°' : 'upright') : '—');
   const lk = j.lock;
-  set('mt-lock', lk ? `${lk.phase} ${lk.agree}/3` : '—', lk && lk.phase !== 'locked');
+  // No "/3" once locked: Fast's quick path locks a clean quad at two.
+  set('mt-lock', lk ? (lk.phase === 'locked' ? `locked ${lk.agree}` : `${lk.phase} ${lk.agree}/3`) : '—',
+      lk && lk.phase !== 'locked');
   const ck = j.cardness ?? j.rejected_cardness;
   set('mt-cardness', ck ? `${ck.score.toFixed(2)} (t${ck.title.toFixed(2)}/y${ck.type_line.toFixed(2)})` : '—',
       ck && ck.score < 0.45);
