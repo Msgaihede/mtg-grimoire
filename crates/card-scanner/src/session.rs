@@ -510,10 +510,13 @@ pub struct Session {
     reader: Option<Reader>,
     tracker: Tracker,
     lock: QuadLock,
-    /// The mask whose detection last reached the lock — what a locked frame's window runs.
-    focus: Option<EdgePass>,
+    /// The mask whose detection last reached the lock, and the Otsu level it split at — what a
+    /// locked frame's window runs.
+    focus: Option<(EdgePass, Option<u8>)>,
     /// Locked frames searched in the window since the last full sweep.
     windowed: u32,
+    /// Whether a trusted lock's frame searches its window at all. See [`Session::set_tracking`].
+    tracking: bool,
     /// Frames since the session started, for the reader's cadence.
     seq: u64,
     top: usize,
@@ -562,6 +565,7 @@ impl Session {
             lock: QuadLock::default(),
             focus: None,
             windowed: 0,
+            tracking: true,
             seq: 0,
             top: top.clamp(1, 25),
             mask: Mask::all(),
@@ -627,6 +631,14 @@ impl Session {
     }
 
     /// The filters in force.
+    /// Search a trusted lock's window (the default), or sweep the whole frame every time.
+    ///
+    /// The switch the evaluation and `detect-bench` measure the window against, within one
+    /// binary — a before and after that differ in that one thing and nothing else.
+    pub fn set_tracking(&mut self, on: bool) {
+        self.tracking = on;
+    }
+
     pub fn filters(&self) -> &ScanFilters {
         &self.filters
     }
@@ -879,14 +891,17 @@ impl Session {
         let mut error = None;
         let methods = opts.method.edge_methods();
         let mut search = Search::Full;
-        if let (Some(held), Some(pass)) = (self.lock.trusted_quad(), self.focus) {
+        if let (true, Some(held), Some((pass, otsu_level))) =
+            (self.tracking, self.lock.trusted_quad(), self.focus)
+        {
             if self.windowed < FULL_SWEEP_EVERY && methods.contains(&pass.method()) {
                 let detect_opts = DetectOptions {
                     only_pass: Some(pass),
+                    otsu_level,
                     ..opts.detect_options(pass.method(), settled)
                 };
                 let (result, trace) =
-                    detect_near(&source, &held, self.lock.options().max_drift, &detect_opts);
+                    detect_near(&source, &held, self.lock.options(), &detect_opts);
                 if let Ok(d) = result {
                     best = Some((pass.method(), d, trace));
                     search = Search::Window;
@@ -925,7 +940,7 @@ impl Session {
         }
 
         if let Some((_, d, _)) = &best {
-            self.focus = Some(d.pass);
+            self.focus = Some((d.pass, d.otsu_level));
         }
 
         let mut v =

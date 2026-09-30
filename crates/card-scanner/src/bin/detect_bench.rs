@@ -51,6 +51,16 @@ struct Args {
     /// `canny`, `otsu` or `both` — the session's `method`.
     #[arg(long, default_value = "both")]
     method: String,
+    /// Sweep the whole frame on every frame, as before the window existed
+    /// (`Session::set_tracking(false)`) — the same binary with one thing different.
+    #[arg(long)]
+    no_track: bool,
+    /// Only renders whose file name starts with this — a printing id or a prefix of one.
+    #[arg(long)]
+    only: Option<String>,
+    /// Print every frame: the lock going in and coming out, the search, the quad.
+    #[arg(long)]
+    trace: bool,
 }
 
 /// The same derivation as `eval`'s, so a card here is posed exactly as it is there.
@@ -108,6 +118,11 @@ fn run(args: Args) -> Result<(), String> {
         })
         .collect();
     renders.sort();
+    if let Some(prefix) = &args.only {
+        renders.retain(|(p, _)| {
+            p.file_name().and_then(|f| f.to_str()).is_some_and(|f| f.starts_with(prefix.as_str()))
+        });
+    }
     if let Some(n) = args.limit {
         renders.truncate(n);
     }
@@ -145,6 +160,10 @@ fn run(args: Args) -> Result<(), String> {
             .to_rgb8();
         let frames = burst(&image, &synth, card_index(id));
         let mut session = Session::new(None, None, 5);
+        session.set_tracking(!args.no_track);
+        if args.trace {
+            println!("{}", path.display());
+        }
         let mut was_locked = false;
         let mut elapsed = 0.0f64;
         let mut first_lock: Option<(usize, f64)> = None;
@@ -164,6 +183,25 @@ fn run(args: Args) -> Result<(), String> {
                 acquiring.push(work);
             }
             let now_locked = json.pointer("/lock/phase").and_then(|p| p.as_str()) == Some("locked");
+            if args.trace {
+                let q = v.quad_raw.map(|q| {
+                    let (cx, cy) = q.iter().fold((0.0, 0.0), |a, c| (a.0 + c.0 / 4.0, a.1 + c.1 / 4.0));
+                    format!("raw centre ({cx:.1}, {cy:.1})")
+                });
+                println!(
+                    "  {:>2} in {:<6} out {:<9} agree {:>2} {:<6} {:<5} {:>6.1} ms  cardness {:<5} {} {}",
+                    i + 1,
+                    if was_locked { "locked" } else { "-" },
+                    json.pointer("/lock/phase").and_then(|p| p.as_str()).unwrap_or("-"),
+                    json.pointer("/lock/agree").and_then(|p| p.as_u64()).unwrap_or(0),
+                    json.get("search").and_then(|s| s.as_str()).unwrap_or("-"),
+                    v.method.as_deref().unwrap_or("-"),
+                    work,
+                    v.cardness.map_or("-".to_string(), |c| format!("{:.2}", c.score)),
+                    q.unwrap_or_default(),
+                    v.error.as_deref().unwrap_or(""),
+                );
+            }
             if now_locked && first_lock.is_none() {
                 first_lock = Some((i + 1, elapsed));
             }
