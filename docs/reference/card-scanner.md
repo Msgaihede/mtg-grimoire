@@ -266,40 +266,71 @@ The card being hashed was a strip of black border, going into the tracker with t
 of a real observation. `from_lock` is reported per frame, because a stream that says true
 constantly is a detector failing behind a lock that is covering for it.
 
-### Track — a locked card is searched where it is, with the mask that found it
+### Track — a locked card is searched where it is
 
 **Added 2026-09-30 (#702).** Until then every frame ran the whole detector from scratch: two
 Canny rungs and two Otsu polarities over the whole working image, their contours, and the
-card-likeness warps. That happened even when the card had lain locked in one place for seconds
-and its position was known to within a few pixels. Three changes, all gated on a lock that is
-**already trusted when the frame arrives** (`QuadLock::trusted_quad`), so nothing about
-*finding* a card changed:
+card-likeness warps. It did this even when the card had lain locked in one place for seconds,
+with its position known to within a few pixels. Now a frame that **arrives to a trusted lock**
+(`QuadLock::trusted_quad`) is searched only in the window the card can have reached. Nothing
+about *finding* a card changed: a card that is not locked yet gets the full sweep exactly as
+before.
 
-- **The window.** `detect::detect_near` crops the source to `Window::around` the held quad. That
-  is its bounding box grown on every side by the lock's own `max_drift` (0.35) × its short edge,
-  so the window cannot hide a card the lock would still have agreed with. It detects in that
-  crop at a scale where the card's short edge spans `WINDOW_CARD_PX` (240). **The scale is never
-  finer than the full sweep's own**, so a small card is never searched at a resolution the
-  morphology was not tuned at. The quad and `area_frac` are mapped back to the frame, and the
-  rectification is the source's own pixels because the crop is a crop, not a resample. The
-  trace is not mapped back: a debug view of a window frame shows the window.
-- **The mask that is working.** `EdgePass` names the four masks (`canny_strict`, `canny_loose`,
-  `otsu_light`, `otsu_dark`), and every `ScoredQuad` and `Detection` carries the one it came
-  from. A locked frame runs only the pass that last reached the lock
-  (`DetectOptions::only_pass`), because which mask wins depends on the table and the lamp, and
-  neither changes between two frames of a card lying still.
-- **Back to the full sweep** on a window miss, on a card that is not locked, and on every
+- **The window.** `detect::locate_near` crops the frame to `Window::around` the held quad. That
+  is its bounding box grown on every side by the lock's own `max_drift` (0.35) × its short
+  edge, so the window cannot hide a card the lock would still have agreed with. It runs every
+  method and every mask there, and card-likeness picks the winner, exactly as in the sweep.
+- **Back to the full sweep** on a window miss (nothing the lock would accept) and on every
   `FULL_SWEEP_EVERY` (8)th locked frame. The window can only ever find the card it is centred
   on, so that ninth frame is what lets anything else — a second card, a better quad — reach
-  the lock. `Verdict::search` says which search ran (`full` / `window`). It is shown as the
-  *search* row in the app's Rectified panel and on the debug page.
+  the lock. `Verdict::search` says which ran (`full` / `window`); it is the *search* row in the
+  app's Rectified panel and on the debug page.
+- **More than one core.** The masks inside one `locate` and the methods inside one frame are
+  independent, so they run under `std::thread::scope` (no new dependency). Candidates merge in
+  pass order and the ranking is a stable sort, so the answer is the serial one. A panic on a
+  worker thread is resumed on the caller's, where `Session::frame`'s guard catches it as before.
+  Because the masks overlap, `DetectTimings::mask_ms` is now the **slowest** mask's time, not
+  the sum.
 
-**And more than one core.** The masks inside one `detect` call and the methods inside one frame
-are independent, so they run under `std::thread::scope` (no new dependency). Candidates merge in
-pass order and the ranking is a stable sort, so the answer is the one the serial loop gave. A
-panic on a worker thread is resumed on the caller's, where `Session::frame`'s guard catches it as
-before. Because the masks overlap, `DetectTimings::mask_ms` is now the **slowest** mask's time
-rather than the sum, and `contour_ms` is the rest of the threaded stage's wall clock.
+**The window is built to give the sweep's answer, not a cheaper one**, and that is the finding
+that shaped it. The lock's smoothed quad is what gets rectified and hashed, so any systematic
+difference in where the window puts the corners moves every descriptor. The first build moved
+enough to lose cards. Three causes were found, each by tracing frames with the window on and off
+(`detect-bench --trace --only <id> [--no-track]`):
+
+1. **Area gates are fractions of the image searched.** In a window a seventh of the frame, the
+   2% floor admitted fragments of 0.6% and 1.3% of the frame, with card-likeness 0.00. The lock
+   refused them as a different card and dropped, and two cards went undecided in every mode.
+   The window now gates on the held quad's area within the lock's `max_area_ratio` and never
+   below the sweep's floor, and every area — gates and the score's area term — is stated in the
+   frame's terms (`DetectOptions::window_share`).
+2. **Otsu's level comes from the pixels it is handed.** One card's frame split at 92 and its
+   window at 135, which cut the card in two. The window splits at the **whole frame's** level,
+   which costs one resize of the frame and no masks (`DetectOptions::otsu_level`).
+3. **An unsnapped crop resamples at another phase.** The evaluation's 1280 px frames work at
+   1.25, and a crop resized from its own origin is not the sweep's pixels. `Window::snapped`
+   grows the crop onto the grid where a source and a working pixel boundary coincide.
+
+Measured over 406 locked frames of 40 evaluation cards, as the mean distance of the window's
+corners from the sweep's quad on the same frame, as a fraction of the card's short edge:
+
+| window | mean | frames > 1% |
+| --- | ---: | ---: |
+| one pass kept from last frame, card searched at 240 px (the first build) | 3.62% | 188 |
+| the same at the sweep's own scale | 3.59% | 190 |
+| every method, picked by card-likeness | 3.39% | 182 |
+| **every method, snapped to the sweep's grid — what ships** | **0.14%** | **4** |
+| the same, Otsu at last frame's level rather than this frame's | 0.28% | 11 |
+| *no window:* the whole frame, only last frame's pass | 2.06% | 68 |
+
+**The issue proposed keeping the method, rung and polarity that produced the lock, and that
+was built and removed.** The pass that won last frame is not the one the sweep picks about
+three frames in ten, and running it alone drifts the quad 1.5–2% even over the whole frame.
+That drift turned Sangromancer C17 from right to wrong in Exact. **Scale was never the
+problem**: the 240 px search looked guilty and measured the same as the sweep's scale. The
+window therefore works at the sweep's own scale, and its saving is the pixels outside it. A test
+pins the contract: the window's quad lands within 0.5 px of the sweep's, for both methods, at
+1280 px. It fails at 0.89 px with the snap removed.
 
 MEASURED_TRACK
 
