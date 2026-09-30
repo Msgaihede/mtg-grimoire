@@ -318,9 +318,10 @@ fn handle_frame(
         // bar, so that is what the line shows; the confidence contest keeps its percentage.
         let verdict = if out["tracked"]["rule"].as_str() == Some("votes") {
             format!(
-                "votes={:5.1}/{}",
+                "votes={:5.1}/{}{}",
                 out["tracked"]["standings"][0]["evidence"].as_f64().unwrap_or(0.0),
-                out["tracked"]["decide_at"].as_f64().unwrap_or(0.0)
+                out["tracked"]["decide_at"].as_f64().unwrap_or(0.0),
+                if out["tracked"]["early"].as_bool() == Some(true) { " clear" } else { "" }
             )
         } else {
             format!(

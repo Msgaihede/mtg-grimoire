@@ -23,6 +23,15 @@
 //! The band is deliberately generous at the top and cut short on the right: the title starts
 //! higher on a pre-8th-edition frame than on an M15 one, and the right end of every modern
 //! title bar is the mana cost, which is not text and reads as garbage.
+//!
+//! ## No text detection
+//!
+//! Since #707 a read runs no `ocrs` detection model. A band is cropped *because* we know where
+//! its text is, so [`text_lines`] finds the lines with a projection and each goes straight to
+//! the recogniser. Detection was most of a read's cost — its model takes a fixed-size input and
+//! every band was padded out to it. Measured on the same synthetic bands, a title read is
+//! **5.9×** faster and a collector read **6.8×**; 24 more titles resolve, and 2 more resolve
+//! to the wrong card, both short truncated reads (`docs/reference/card-scanner.md` §4).
 
 use image::RgbImage;
 
@@ -55,9 +64,10 @@ const COLLECTOR_BAND: (f32, f32, f32, f32) = (0.018, 0.918, 0.285, 0.990);
 /// then a lower one recovers reads that the first band clips.
 ///
 /// Ordered, and taken in order, with an early exit as soon as a crop yields any candidate at
-/// all: a read costs roughly **340 ms against a ~350 ms frame** (release, measured 2026-09-08),
-/// so the common case has to stay at one. Only a card the
-/// first band cannot see pays for the second.
+/// all, so the common case stays at one read and only a card the first band cannot see pays
+/// for the second. The order was set when a read cost **~340 ms against a ~350 ms frame**
+/// (release, 2026-09-08); since #707 dropped text detection it costs about a sixth of that, which
+/// makes the fallbacks cheap enough to revisit but has not changed them.
 const COLLECTOR_FALLBACKS: [(f32, f32, f32, f32); 2] = [
     // Wider and taller — for a frame that sits the line lower or runs it longer.
     (0.010, 0.900, 0.340, 1.000),
@@ -155,16 +165,6 @@ fn band_extent(at: (f32, f32, f32, f32), w: u32, h: u32) -> (u32, u32) {
     (cw, ch)
 }
 
-/// The whole collector corner, from just below the text box to the card's foot, at the
-/// collector band's width.
-///
-/// **Read for where the line is, never read whole.** [`text_rows`] finds the block of text in
-/// it and the read is cropped to that block, so where [`COLLECTOR_FALLBACKS`] guesses at the
-/// line's height in a fixed order, this measures it. Kept to [`COLLECTOR_BAND`]'s 28.5% across
-/// for that band's reason: the artist credit past it is what read as `INVEN` and resolved to
-/// Invasion.
-const COLLECTOR_REGION: (f32, f32, f32, f32) = (0.018, 0.860, 0.285, 1.000);
-
 /// A card as the frame holds it: the pixels, and where the canonical card sits in them.
 ///
 /// **Why the bands are warped from here and not cropped from the rectified card.** The
@@ -253,155 +253,222 @@ impl BandSource<'_> {
     }
 }
 
-/// The rows of `band` that hold its text — a line, or with `block` a block of lines.
+/// One line of text inside a band, in the band's own pixels, bottom and right exclusive.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextLine {
+    pub top: u32,
+    pub left: u32,
+    pub bottom: u32,
+    pub right: u32,
+    /// How far this line's rows stand above the band's quiet floor, summed. The title keeps
+    /// the strongest lines, not the first ones.
+    pub strength: f32,
+}
+
+/// Where the text in a band is, top to bottom — found by a projection, not a model.
+///
+/// **This is what replaced `ocrs`'s text detection** (#707). `get_text` ran a detection model
+/// over every band to find the words, and the band was only ever cropped because we already
+/// knew where the words were. The model takes a fixed-size input, so every band was padded
+/// out to it and the model paid for the padding. It was most of the cost of a read.
 ///
 /// **A row projection of the horizontal gradient.** Letterforms are mostly vertical strokes,
-/// so a row through text crosses dark-light-dark many times and its sum of `|∂I/∂x|` is high;
-/// the frame's own edges — the title bar's rule, the border, the top of the art window — are
-/// *horizontal*, so they change `∂I/∂y` and barely move this at all. That asymmetry is what
-/// lets a generous band be cut down to the line without being fooled by the frame edge a crop
-/// of it always contains.
+/// so a row through text crosses dark-light-dark many times and its sum of `|∂I/∂x|` is high.
+/// The frame's own edges — the title bar's rule, the border, the top of the art window — are
+/// *horizontal*, so they barely move it. That asymmetry is what lets a generous band be cut to
+/// its lines without being fooled by the frame edge a crop of it always contains. Rows above a
+/// cut set between the band's quiet floor and its peak are text; runs a small gap apart are one
+/// line, because a line's ascender rows are weaker than its x-height rows.
 ///
-/// The strongest run of rows above a threshold set between the quiet floor and the peak wins;
-/// runs a small gap apart are one line (a line's ascender rows are weaker than its x-height
-/// rows), and with `block` a gap up to most of a line's height is bridged too, because the
-/// collector corner is two lines — `U 0232` over `LTR • EN` — and both belong to the read.
+/// **Every line, not the one line**, because the collector corner is two — `U 0232` over
+/// `LTR • EN` — and a recogniser handed both as one line reads neither. Each line is then cut
+/// to the columns that hold its text, with room either side.
 ///
-/// `None` when nothing stands out from the floor, or when the text already fills the band:
-/// the caller then reads the whole band, exactly as it did before this existed.
-pub fn text_rows(band: &RgbImage, block: bool) -> Option<(u32, u32)> {
+/// Empty when nothing stands out from the floor: a blank band has no text to read, and saying
+/// so costs nothing, where reading it cost a detection pass.
+pub fn text_lines(band: &RgbImage) -> Vec<TextLine> {
     let (w, h) = (band.width() as usize, band.height() as usize);
-    if w < 8 || h < 12 {
-        return None;
+    if w < 16 || h < 8 {
+        return Vec::new();
     }
     let gray = image::imageops::grayscale(band);
-    let raw = gray.as_raw();
-    let energy: Vec<f32> = (0..h)
-        .map(|y| {
-            let row = &raw[y * w..(y + 1) * w];
-            let sum: u32 = row.windows(2).map(|p| u32::from(p[0].abs_diff(p[1]))).sum();
-            sum as f32 / w as f32
-        })
-        .collect();
-    // A little smoothing, so one noisy row cannot split a line or make one.
-    let r = (h / 40).max(1);
-    let smooth: Vec<f32> = (0..h)
-        .map(|y| {
-            let (a, b) = (y.saturating_sub(r), (y + r + 1).min(h));
-            energy[a..b].iter().sum::<f32>() / (b - a) as f32
-        })
-        .collect();
-
-    let mut sorted = smooth.clone();
-    sorted.sort_by(f32::total_cmp);
-    let floor = sorted[h / 5];
-    let peak = sorted[h - 1];
-    // Nothing stands out — a blank band, or one that is texture from edge to edge.
-    if peak < floor * 1.6 + 2.0 {
-        return None;
+    let px = gray.as_raw();
+    // A difference across a few pixels rather than one: a band is an upscale of a warp, so
+    // its edges are soft, and a one-pixel difference across a soft edge is small everywhere.
+    let step = (h / 40).max(1);
+    if w <= step * 4 {
+        return Vec::new();
     }
-    let cut = floor + 0.35 * (peak - floor);
+    let grad = |y: usize, x: usize| u32::from(px[y * w + x].abs_diff(px[y * w + x + step]));
 
-    // Runs of rows above the cut, as (start, end-exclusive).
-    let mut runs: Vec<(usize, usize)> = Vec::new();
+    let rows: Vec<f32> = (0..h)
+        .map(|y| (0..w - step).map(|x| grad(y, x)).sum::<u32>() as f32 / w as f32)
+        .collect();
+    // A little smoothing, so one noisy row can neither split a line nor make one.
+    let rows = smoothed(&rows, (h / 60).max(1));
+    let (floor, peak) = (quantile(&rows, 0.2), quantile(&rows, 1.0));
+    // Nothing stands out — a blank band, or one that is texture from edge to edge. Relative,
+    // because a short name is a fifth of a title band's width and its rows' average is a fifth
+    // of what the same letters would give across the whole band: a soft `Plains` peaked at 2.7
+    // over a floor of 0.9.
+    if peak < floor * 1.6 + 0.5 {
+        return Vec::new();
+    }
+    // One line's own gaps — the rows between an ascender and the x-height — are bridged; the
+    // gap between two lines is wider than a quarter of either, and is not.
+    let lines = runs(&rows, floor + LINE_CUT * (peak - floor), |tall| {
+        (tall / 4).max(1)
+    });
+
+    let min_height = (h / 12).max(3);
+    lines
+        .into_iter()
+        .filter(|(a, b)| b - a >= min_height)
+        .filter_map(|(a, b)| {
+            let tall = b - a;
+            let strength = rows[a..b].iter().map(|v| v - floor).sum::<f32>();
+            // Room for what the projection underweights: the tops of capitals and the tails
+            // below the line carry few vertical strokes, and a line cut through them misreads.
+            let above = ((tall as f32 * LINE_PAD_ABOVE).round() as usize).max(2);
+            let below = ((tall as f32 * LINE_PAD_BELOW).round() as usize).max(2);
+            let (top, bottom) = (a.saturating_sub(above), (b + below).min(h));
+            let (left, right) = text_columns(&grad, w - step, top..bottom, tall)?;
+            // Room either side: a recogniser handed a line that starts on its first letter drops
+            // it — `R 0318` read as `0318`.
+            let side = ((tall as f32 * LINE_PAD_SIDE).round() as usize).max(2);
+            Some(TextLine {
+                top: top as u32,
+                bottom: bottom as u32,
+                left: left.saturating_sub(side) as u32,
+                right: (right + step + side).min(w) as u32,
+                strength,
+            })
+        })
+        .collect()
+}
+
+/// The columns of one line that hold its text, as `(left, right)`.
+///
+/// **Clusters of busy columns, grown outward from the strongest.** A band always holds a
+/// piece of the frame, and the frame's *vertical* edges — the border beside the title bar, the
+/// side of the collector corner — are exactly what a horizontal gradient finds. Measured on a
+/// 4ED Sorceress Queen, a line box that reached the band's left edge read `|Ser`; the same box
+/// from 30 px in read `Sorceres Qucen`. So a cluster at either side of the band, narrower than
+/// a letter pair and a word space clear of everything else, is an edge, not text, and is
+/// dropped.
+///
+/// Then the line is the strongest cluster and every neighbour within four line-heights of it,
+/// transitively. That keeps a name's words and a collector line's fields together, and leaves
+/// out what sits well apart on the same rows — the mana cost at the right end of a title bar,
+/// which read as a trailing `0`.
+fn text_columns(
+    grad: &impl Fn(usize, usize) -> u32,
+    w: usize,
+    rows: std::ops::Range<usize>,
+    tall: usize,
+) -> Option<(usize, usize)> {
+    let cols: Vec<f32> = (0..w)
+        .map(|x| rows.clone().map(|y| grad(y, x)).sum::<u32>() as f32)
+        .collect();
+    let cols = smoothed(&cols, (tall / 8).max(1));
+    let (floor, peak) = (quantile(&cols, 0.2), quantile(&cols, 0.95));
+    let word_gap = (tall * 3 / 5).max(2);
+    let clusters = runs(&cols, floor + COLUMN_CUT * (peak - floor), |_| 0);
+    let thin = (tall * 3 / 5).max(2);
+    // Only at the band's own sides, which is where the frame is: a thin cluster in the middle of
+    // the line is a letter — the collector line's rarity `R` stands a word space from its number.
+    let edge = |i: usize| {
+        let (a, b) = clusters[i];
+        let (first, last) = (i == 0, i + 1 == clusters.len());
+        let before = if first {
+            usize::MAX
+        } else {
+            a - clusters[i - 1].1
+        };
+        let after = if last {
+            usize::MAX
+        } else {
+            clusters[i + 1].0 - b
+        };
+        let at_side = (first && a <= tall) || (last && b + tall >= w);
+        at_side && b - a < thin && before > word_gap && after > word_gap
+    };
+    let kept: Vec<(usize, usize)> = (0..clusters.len())
+        .filter(|&i| clusters.len() == 1 || !edge(i))
+        .map(|i| clusters[i])
+        .collect();
+    let mass = |(a, b): (usize, usize)| cols[a..b].iter().map(|v| v - floor).sum::<f32>();
+    let strongest = (0..kept.len()).max_by(|&i, &j| mass(kept[i]).total_cmp(&mass(kept[j])))?;
+    let apart = tall * 4;
+    let (mut first, mut last) = (strongest, strongest);
+    while first > 0 && kept[first].0 - kept[first - 1].1 <= apart {
+        first -= 1;
+    }
+    while last + 1 < kept.len() && kept[last + 1].0 - kept[last].1 <= apart {
+        last += 1;
+    }
+    Some((kept[first].0, kept[last].1))
+}
+
+/// Runs of `values` above `cut`, as `(start, end)` with the end exclusive, where two runs
+/// closer than `bridge(taller of the two)` are one.
+fn runs(values: &[f32], cut: f32, bridge: impl Fn(usize) -> usize) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
     let mut start = None;
-    for (y, v) in smooth.iter().enumerate() {
+    for (i, v) in values
+        .iter()
+        .chain(std::iter::once(&f32::NEG_INFINITY))
+        .enumerate()
+    {
         match (start, *v > cut) {
-            (None, true) => start = Some(y),
+            (None, true) => start = Some(i),
             (Some(s), false) => {
-                runs.push((s, y));
                 start = None;
+                if let Some(last) = out.last_mut() {
+                    if s - last.1 <= bridge((last.1 - last.0).max(i - s)) {
+                        last.1 = i;
+                        continue;
+                    }
+                }
+                out.push((s, i));
             }
             _ => {}
         }
     }
-    if let Some(s) = start {
-        runs.push((s, h));
-    }
-
-    // Bridge the gaps that are part of one line — or, for a block, of one block.
-    let mut merged: Vec<(usize, usize)> = Vec::new();
-    for run in runs {
-        if let Some(last) = merged.last_mut() {
-            let gap = run.0 - last.1;
-            let tall = (last.1 - last.0).max(run.1 - run.0);
-            let bridge = if block { tall * 4 / 5 } else { (tall / 4).max(2) };
-            if gap <= bridge {
-                last.1 = run.1;
-                continue;
-            }
-        }
-        merged.push(run);
-    }
-    let mass = |(a, b): (usize, usize)| smooth[a..b].iter().map(|v| v - floor).sum::<f32>();
-    let (a, b) = merged.into_iter().max_by(|x, y| mass(*x).total_cmp(&mass(*y)))?;
-
-    // Too thin to be text at the size a band is drawn at.
-    if b - a < 6 {
-        return None;
-    }
-    // Room for what the projection underweights: the tops of capitals and the tails below the
-    // line carry few vertical strokes, and a recogniser handed a line cut through them misreads.
-    // Half the run each side: at 0.3 the dumped title crops cut the capitals' serifs off.
-    let pad = ((b - a) as f32 * 0.5).round().max(3.0) as usize;
-    let (a, b) = (a.saturating_sub(pad), (b + pad).min(h));
-    if (b - a) as f32 >= h as f32 * 0.92 {
-        return None;
-    }
-    Some((a as u32, b as u32))
+    out
 }
 
-/// `band` cut to the rows `text_rows` found, full width.
-fn crop_rows(band: &RgbImage, (a, b): (u32, u32)) -> RgbImage {
-    image::imageops::crop_imm(band, 0, a, band.width(), b - a).to_image()
+/// A box filter of radius `r`.
+fn smoothed(values: &[f32], r: usize) -> Vec<f32> {
+    (0..values.len())
+        .map(|i| {
+            let (a, b) = (i.saturating_sub(r), (i + r + 1).min(values.len()));
+            values[a..b].iter().sum::<f32>() / (b - a) as f32
+        })
+        .collect()
 }
 
-/// Which of the band refinements a reader applies.
-///
-/// **Switches rather than constants because each one is kept or dropped on a measurement**,
-/// and `read_eval` has to be able to run the old path and the new one on the same crops in one
-/// process. The defaults are what that measurement chose — see the table in
-/// `docs/reference/card-scanner.md` §4.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ReadOptions {
-    /// Cut the title band down to its text line before reading. See [`text_rows`].
-    pub title_line: bool,
-    /// Find the collector block inside [`COLLECTOR_REGION`] and read that first, before the
-    /// fixed crops.
-    ///
-    /// **Off by default, on a measurement.** It finds the block — the dumped crops show both
-    /// lines — and still resolved fewer printings than the fixed band on `read_eval` (17.9%
-    /// against 20.7% of 2015-on reads, 2026-09-30). Kept for a real-camera set to decide.
-    pub collector_layout: bool,
+/// The value at fraction `q` of the way up `values` sorted. `values` is never empty here.
+fn quantile(values: &[f32], q: f32) -> f32 {
+    let mut sorted = values.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    sorted[((sorted.len() - 1) as f32 * q).round() as usize]
 }
 
-impl Default for ReadOptions {
-    fn default() -> Self {
-        ReadOptions { title_line: true, collector_layout: false }
-    }
-}
-
-/// The title band as a reader with `opts` reads it.
-pub fn title_crop(src: &BandSource<'_>, rotated: bool, opts: ReadOptions) -> RgbImage {
-    let band = src.band(TITLE_BAND, 2, rotated);
-    match opts.title_line.then(|| text_rows(&band, false)).flatten() {
-        Some(rows) => crop_rows(&band, rows),
-        None => band,
-    }
-}
-
-/// The first collector crop a reader with `opts` reads: the block found in the collector corner,
-/// or the fixed band when there is none to find.
-pub fn collector_crop(src: &BandSource<'_>, rotated: bool, opts: ReadOptions) -> RgbImage {
-    if opts.collector_layout {
-        let region = src.band(COLLECTOR_REGION, 4, rotated);
-        if let Some(rows) = text_rows(&region, true) {
-            return crop_rows(&region, rows);
-        }
-    }
-    src.band(COLLECTOR_BAND, 4, rotated)
-}
-
+/// Where between a line's quiet floor and its peak a column counts as text. Low, because the
+/// peak is often the frame edge rather than a letter: at a quarter, the lighter second half of
+/// `Oread of Mountain's Blaze` fell under it and the line stopped at `Mour`.
+const COLUMN_CUT: f32 = 0.12;
+/// Where between the band's quiet floor and its peak a row counts as text.
+const LINE_CUT: f32 = 0.35;
+/// Rows added above a line, as a fraction of its height. More than below, because the rows the
+/// projection finds are the x-height's, and capitals rise further above them than descenders
+/// fall below: at a quarter, `Honor Guard` lost the tops of both capitals and read `onor uar`.
+const LINE_PAD_ABOVE: f32 = 0.5;
+/// Rows added below a line.
+const LINE_PAD_BELOW: f32 = 0.3;
+/// Columns added either side of a line.
+const LINE_PAD_SIDE: f32 = 0.6;
 
 /// What a collector line read produced.
 #[derive(Debug, Clone, Default)]
@@ -488,7 +555,6 @@ pub fn collector_candidates(raw: &str) -> Vec<(String, String)> {
         // resolved to nothing, so the search reached the *next* word — an artist's surname
         // whose first three letters are a real set — and answered INV 4 with full confidence.
         // Wrong and certain is worse than absent, so it now answers nothing there.
-        //
         // **One exception, and it is a layout rather than a loosening.** The 2015–2022 frames
         // print `226/259 U` over `GRN • EN`, so the set sits past the total and a one-letter
         // rarity — measured on `read_eval`'s detail crops (2026-09-30), those lines came back
@@ -542,12 +608,43 @@ pub fn collector_candidates(raw: &str) -> Vec<(String, String)> {
 mod engine {
     use super::*;
     use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
+    use rten_imageproc::{RectF, RotatedRect};
     use std::path::Path;
 
-    /// A loaded OCR engine. Construction reads ~12 MB of model, so build one and keep it.
+    /// What the collector line prints, as far as the recogniser's alphabet can say it.
+    ///
+    /// **Narrowed because the line holds nothing else**: a rarity letter, a number, a set code,
+    /// a language, and the separators between them. Letting the recogniser answer lowercase and
+    /// punctuation only gave it more ways to be wrong — a lowercase `o` where the card prints
+    /// `0` becomes, here, whichever of `O` and `0` the model finds likelier. `O/0` and `I/1`
+    /// stay the parse's problem. The bullet and the star the card prints are not in the model's
+    /// alphabet at all, so they cannot be allowed; `*` is what the star has always read as.
+    const COLLECTOR_CHARS: &str = " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ/*";
+
+    /// How many of a title band's lines are read. The name is the strongest line almost
+    /// always; the second is for the band that also caught the top of the art or a subtitle,
+    /// and the line with more letters in it wins.
+    const TITLE_LINES: usize = 2;
+    /// How many of a collector band's lines are read — both printed lines, and one more for a
+    /// crop that caught the bottom of the text box.
+    const COLLECTOR_LINES: usize = 3;
+
+    /// A loaded OCR engine. Construction reads ~22 MB of model, so build one and keep it.
     pub struct TitleReader {
-        engine: OcrEngine,
-        options: ReadOptions,
+        /// The title's recogniser, and the detection model the old path ran.
+        title: OcrEngine,
+        /// The same recognition model, restricted to [`COLLECTOR_CHARS`]. A second copy
+        /// because `ocrs` takes the restriction per engine, not per call.
+        collector: OcrEngine,
+        /// Find the text with `ocrs`'s detection model, as every read did before #707.
+        detect: bool,
+    }
+
+    /// Which band a read is of — they are read by different engines and kept differently.
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Band {
+        Title,
+        Collector,
     }
 
     impl TitleReader {
@@ -559,48 +656,106 @@ mod engine {
             let read = |what: &str, path: &Path| {
                 std::fs::read(path).map_err(|e| format!("{what} model {}: {e}", path.display()))
             };
-            let (d, r) = (read("detection", detection)?, read("recognition", recognition)?);
+            let (d, r) = (
+                read("detection", detection)?,
+                read("recognition", recognition)?,
+            );
             TitleReader::from_bytes(&d, &r).map_err(|e| {
-                format!("{e} ({} and {})", detection.display(), recognition.display())
+                format!(
+                    "{e} ({} and {})",
+                    detection.display(),
+                    recognition.display()
+                )
             })
         }
 
         /// The same, from the two model files' bytes — an embedded copy, say.
         ///
-        /// `rten::Model::load` takes an owned buffer, so this copies each model once (~12 MB
-        /// together, once per session). `load_static_slice` would avoid it and would tie the
-        /// signature to `'static`, which a caller holding a file it just read cannot give.
+        /// `rten::Model::load` takes an owned buffer, so this copies each model once — the
+        /// recognition model twice, for the collector's narrowed engine: ~22 MB together, once
+        /// per session. `load_static_slice` would avoid it and would tie the signature to
+        /// `'static`, which a caller holding a file it just read cannot give.
         pub fn from_bytes(
             detection: &[u8],
             recognition: &[u8],
         ) -> anyhow_lite::Result<TitleReader> {
             let detection_model = rten::Model::load(detection.to_vec())
                 .map_err(|e| format!("detection model: {e}"))?;
-            let recognition_model = rten::Model::load(recognition.to_vec())
-                .map_err(|e| format!("recognition model: {e}"))?;
-            let engine = OcrEngine::new(OcrEngineParams {
+            let recognition_model = || {
+                rten::Model::load(recognition.to_vec())
+                    .map_err(|e| format!("recognition model: {e}"))
+            };
+            let title = OcrEngine::new(OcrEngineParams {
                 detection_model: Some(detection_model),
-                recognition_model: Some(recognition_model),
+                recognition_model: Some(recognition_model()?),
                 ..Default::default()
             })
             .map_err(|e| format!("ocr engine: {e}"))?;
-            Ok(TitleReader { engine, options: ReadOptions::default() })
+            let collector = OcrEngine::new(OcrEngineParams {
+                recognition_model: Some(recognition_model()?),
+                allowed_chars: Some(COLLECTOR_CHARS.to_string()),
+                ..Default::default()
+            })
+            .map_err(|e| format!("ocr engine: {e}"))?;
+            Ok(TitleReader {
+                title,
+                collector,
+                detect: false,
+            })
         }
 
-        /// Which band refinements the reads apply. See [`ReadOptions`].
-        pub fn set_options(&mut self, options: ReadOptions) {
-            self.options = options;
+        /// Find the text with `ocrs`'s detection model instead of [`text_lines`], with the
+        /// full alphabet on both bands — the read exactly as it was before #707.
+        ///
+        /// **Kept so the two can be measured on the same bands in one process**, which is the
+        /// only fair comparison while other work shares the machine; `ocr-bench` is what turns
+        /// it on. Nothing else should.
+        pub fn set_text_detection(&mut self, on: bool) {
+            self.detect = on;
         }
 
-        pub fn options(&self) -> ReadOptions {
-            self.options
-        }
+        fn read_band(&self, band: &RgbImage, what: Band) -> Option<String> {
+            let src = ImageSource::from_bytes(band.as_raw(), (band.width(), band.height())).ok()?;
+            if self.detect {
+                let input = self.title.prepare_input(src).ok()?;
+                return self.title.get_text(&input).ok();
+            }
 
-        fn read_band(&self, band: &RgbImage) -> Option<String> {
-            let src =
-                ImageSource::from_bytes(band.as_raw(), (band.width(), band.height())).ok()?;
-            let input = self.engine.prepare_input(src).ok()?;
-            self.engine.get_text(&input).ok()
+            let (engine, keep) = match what {
+                Band::Title => (&self.title, TITLE_LINES),
+                Band::Collector => (&self.collector, COLLECTOR_LINES),
+            };
+            let mut lines = text_lines(band);
+            if lines.is_empty() {
+                return Some(String::new());
+            }
+            // The strongest lines, then back into reading order: the collector parse pairs
+            // tokens by adjacency, so `U 0232` has to come before `LTR EN`.
+            lines.sort_by(|a, b| b.strength.total_cmp(&a.strength));
+            lines.truncate(keep);
+            lines.sort_by_key(|l| l.top);
+
+            // One box per line, straight to the recogniser — the band was cropped because we
+            // know where the text is, so nothing has to go looking for it.
+            let boxes: Vec<Vec<RotatedRect>> = lines
+                .iter()
+                .map(|l| {
+                    let (t, le, b, r) =
+                        (l.top as f32, l.left as f32, l.bottom as f32, l.right as f32);
+                    vec![RotatedRect::from_rect(RectF::from_tlbr(t, le, b, r))]
+                })
+                .collect();
+            let input = engine.prepare_input(src).ok()?;
+            let read = engine.recognize_text(&input, &boxes).ok()?;
+            let texts = read
+                .into_iter()
+                .map(|l| l.map(|l| l.to_string()).unwrap_or_default());
+            match what {
+                // The line most like a name. Upside-down, the band's strongest line is the
+                // collector line, and the orientation choice compares letters for that reason.
+                Band::Title => texts.max_by_key(|t| letters(t)),
+                Band::Collector => Some(texts.collect::<Vec<_>>().join("\n")),
+            }
         }
 
         /// Read the title from both orientations and keep the more plausible one.
@@ -612,9 +767,9 @@ mod engine {
         /// because a name is longer than a set code and a collector number.
         pub fn read_title(&self, src: &BandSource<'_>) -> TitleRead {
             let started = std::time::Instant::now();
-            let (ba, bb) = (title_crop(src, false, self.options), title_crop(src, true, self.options));
-            let a = self.read_band(&ba).unwrap_or_default();
-            let b = self.read_band(&bb).unwrap_or_default();
+            let (ba, bb) = (src.band(TITLE_BAND, 2, false), src.band(TITLE_BAND, 2, true));
+            let a = self.read_band(&ba, Band::Title).unwrap_or_default();
+            let b = self.read_band(&bb, Band::Title).unwrap_or_default();
 
             let rotated = letters(&b) > letters(&a);
             if rotated {
@@ -643,14 +798,14 @@ mod engine {
             edits: &dyn Fn(&str) -> Option<u32>,
         ) -> TitleRead {
             let started = std::time::Instant::now();
-            let band_a = title_crop(src, flipped_first, self.options);
-            let a = self.read_band(&band_a).unwrap_or_default();
+            let band_a = src.band(TITLE_BAND, 2, flipped_first);
+            let a = self.read_band(&band_a, Band::Title).unwrap_or_default();
             let a_edits = edits(&normalize(&a));
             if a_edits == Some(0) {
                 return title_read(band_a, a, flipped_first, started);
             }
-            let band_b = title_crop(src, !flipped_first, self.options);
-            let b = self.read_band(&band_b).unwrap_or_default();
+            let band_b = src.band(TITLE_BAND, 2, !flipped_first);
+            let b = self.read_band(&band_b, Band::Title).unwrap_or_default();
             let b_edits = edits(&normalize(&b));
             let rank = |e: Option<u32>| match e {
                 Some(0) => 2,
@@ -703,22 +858,26 @@ mod engine {
         ///
         /// A card held upside-down read the flipped band only after the upright one found
         /// nothing, so it always paid for two reads. The hash already knows which way up won.
-        pub fn read_collector_first(&self, src: &BandSource<'_>, flipped_first: bool) -> CollectorRead {
+        pub fn read_collector_first(
+            &self,
+            src: &BandSource<'_>,
+            flipped_first: bool,
+        ) -> CollectorRead {
             let started = std::time::Instant::now();
             // **The first crop settles which way up, and the fallbacks only ever try that
             // one.** Both orientations of every crop is six reads at ~130 ms each, and the
             // cost lands exactly the wrong way round: a card that reads resolves on the first
             // attempt, while a card that cannot be read pays for all six. Deciding the
             // orientation once takes the worst case from 785 ms to roughly half that.
-            let mut shown = collector_crop(src, flipped_first, self.options);
-            let up = self.read_band(&shown).unwrap_or_default();
+            let mut shown = src.band(COLLECTOR_BAND, 4, flipped_first);
+            let up = self.read_band(&shown, Band::Collector).unwrap_or_default();
             let mut candidates = collector_candidates(&up);
             let mut raw = up;
             let mut from_second = false;
 
             if candidates.is_empty() {
-                let flip = collector_crop(src, !flipped_first, self.options);
-                let down = self.read_band(&flip).unwrap_or_default();
+                let flip = src.band(COLLECTOR_BAND, 4, !flipped_first);
+                let down = self.read_band(&flip, Band::Collector).unwrap_or_default();
                 let found = collector_candidates(&down);
                 // Digits decide it, not length: upside-down, this band holds the *title*,
                 // which reads long and cleanly and would win any "more text" comparison while
@@ -737,7 +896,7 @@ mod engine {
             if candidates.is_empty() {
                 for at in COLLECTOR_FALLBACKS {
                     let crop = src.band(at, 4, rotated);
-                    let text = self.read_band(&crop).unwrap_or_default();
+                    let text = self.read_band(&crop, Band::Collector).unwrap_or_default();
                     let found = collector_candidates(&text);
                     if !found.is_empty() {
                         candidates = found;
@@ -816,7 +975,10 @@ mod tests {
         // digits. A bare `6` inside a garbage line produced a confident `LTR 6` against a
         // true `LTR 590`.
         let c = collector_candidates("I LTR OEN TruERLC D 6 T K A SRA");
-        assert!(c.is_empty(), "a one-digit fragment was taken as a collector number: {c:?}");
+        assert!(
+            c.is_empty(),
+            "a one-digit fragment was taken as a collector number: {c:?}"
+        );
     }
 
     #[test]
@@ -868,14 +1030,20 @@ mod tests {
         let c = collector_candidates("0232 LTR");
         let whole = c.iter().position(|(s, _)| s == "ltr");
         let prefix = c.iter().position(|(s, _)| s == "lt");
-        assert!(whole < prefix, "a prefix was offered before the whole token: {c:?}");
+        assert!(
+            whole < prefix,
+            "a prefix was offered before the whole token: {c:?}"
+        );
     }
 
     #[test]
     fn normalize_strips_what_ocr_gets_wrong() {
         // Apostrophes, commas and hyphens are exactly the characters OCR renders
         // inconsistently, so both sides of the comparison lose them.
-        assert_eq!(normalize("Strider, Ranger of the North"), "strider ranger of the north");
+        assert_eq!(
+            normalize("Strider, Ranger of the North"),
+            "strider ranger of the north"
+        );
         assert_eq!(normalize("Kroxa's Return"), "kroxa s return");
         assert_eq!(normalize("  Fire // Ice  "), "fire ice");
         assert_eq!(normalize("Ætherize"), "therize"); // non-ASCII drops; both sides do
@@ -893,7 +1061,10 @@ mod tests {
         };
         assert!(!mk("").is_usable());
         assert!(!mk("l|").is_usable());
-        assert!(!mk("12 34").is_usable(), "digits alone are a collector line, not a name");
+        assert!(
+            !mk("12 34").is_usable(),
+            "digits alone are a collector line, not a name"
+        );
         assert!(mk("Oliphaunt").is_usable());
     }
 
@@ -905,13 +1076,124 @@ mod tests {
         // Upscaled 2x, so compare against twice the crop.
         assert_eq!(band.width(), ((0.780 - 0.045) * 488.0) as u32 * 2);
         assert_eq!(band.height(), ((0.130 - 0.025) * 680.0) as u32 * 2);
-        assert!(band.height() < card.height(), "the band is a band, not the card");
+        assert!(
+            band.height() < card.height(),
+            "the band is a band, not the card"
+        );
     }
 
     #[test]
     fn a_tiny_image_does_not_panic() {
         let band = title_band(&RgbImage::new(4, 4));
         assert!(band.width() >= 1 && band.height() >= 1);
+        assert!(text_lines(&RgbImage::new(4, 4)).is_empty());
+        // Taller than it is wide: the gradient's step is a fortieth of the height.
+        assert!(text_lines(&RgbImage::new(16, 2000)).is_empty());
+    }
+
+    /// A light band, 716×142 — a title band's size at its 2× scale.
+    fn light_band(w: u32, h: u32) -> RgbImage {
+        RgbImage::from_pixel(w, h, image::Rgb([220, 215, 200]))
+    }
+
+    /// Dark vertical strokes 3 px wide every 8 px across `x0..x1`, rows `y0..y1` — the part of a
+    /// line of type the projection responds to.
+    fn strokes(band: &mut RgbImage, (x0, x1): (u32, u32), (y0, y1): (u32, u32)) {
+        for x in (x0..x1).filter(|x| (x - x0) % 8 < 3) {
+            for y in y0..y1 {
+                band.put_pixel(x, y, image::Rgb([30, 30, 30]));
+            }
+        }
+    }
+
+    #[test]
+    fn a_blank_band_has_no_lines() {
+        // Reading it cost a detection pass; saying so costs nothing.
+        assert!(text_lines(&light_band(716, 142)).is_empty());
+    }
+
+    #[test]
+    fn a_line_is_found_and_boxed_around_its_strokes() {
+        let mut band = light_band(716, 142);
+        strokes(&mut band, (60, 300), (40, 80));
+        let lines = text_lines(&band);
+        assert_eq!(lines.len(), 1, "got {lines:?}");
+        let l = lines[0];
+        assert!(
+            l.top <= 40 && l.bottom >= 80,
+            "the box must hold the strokes: {l:?}"
+        );
+        assert!(
+            l.left <= 60 && l.right >= 300,
+            "the box must hold the strokes: {l:?}"
+        );
+        assert!(
+            l.top > 10 && l.bottom < 110,
+            "the box should be the line, not the band: {l:?}"
+        );
+        assert!(l.right < 400, "the box should stop near the text: {l:?}");
+    }
+
+    #[test]
+    fn both_collector_lines_are_found_in_reading_order() {
+        // `U 0232` over `LTR • EN`: handed to the recogniser as one line, it reads neither.
+        let mut band = light_band(560, 196);
+        strokes(&mut band, (20, 200), (30, 70));
+        strokes(&mut band, (20, 320), (110, 150));
+        let lines = text_lines(&band);
+        assert_eq!(lines.len(), 2, "got {lines:?}");
+        assert!(
+            lines[0].bottom <= lines[1].top,
+            "two separate lines, top first: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn a_vertical_frame_edge_is_not_part_of_the_line() {
+        // Measured: a box that reached the band's left edge read `|Ser` for Sorceress Queen,
+        // and the same box from 30 px in read the name.
+        let mut band = light_band(716, 142);
+        for x in 0..6 {
+            for y in 0..142 {
+                band.put_pixel(x, y, image::Rgb([20, 30, 25]));
+            }
+        }
+        strokes(&mut band, (60, 300), (40, 80));
+        let lines = text_lines(&band);
+        assert_eq!(lines.len(), 1, "got {lines:?}");
+        assert!(
+            lines[0].left > 20,
+            "the frame edge was kept in the line: {:?}",
+            lines[0]
+        );
+    }
+
+    #[test]
+    fn a_horizontal_rule_is_not_a_line() {
+        // The title bar's rule and the top of the art window are horizontal edges; the
+        // projection is of the horizontal gradient precisely so they do not count.
+        let mut band = light_band(716, 142);
+        for x in 0..716 {
+            for y in 100..104 {
+                band.put_pixel(x, y, image::Rgb([20, 20, 20]));
+            }
+        }
+        assert!(text_lines(&band).is_empty());
+    }
+
+    #[test]
+    fn a_mark_well_apart_on_the_same_rows_is_left_out() {
+        // The mana cost at the right end of a title bar read as a trailing `0`.
+        let mut band = light_band(716, 142);
+        strokes(&mut band, (40, 260), (40, 80));
+        strokes(&mut band, (660, 700), (40, 80));
+        let lines = text_lines(&band);
+        assert_eq!(lines.len(), 1, "got {lines:?}");
+        assert!(
+            lines[0].right < 600,
+            "the far mark was taken into the line: {:?}",
+            lines[0]
+        );
     }
 
     /// A 488×680 card with structure everywhere — smooth enough that two resamplers agree, varied
@@ -986,66 +1268,5 @@ mod tests {
             );
             assert!(d < 8.0, "rotated {rotated}: mean diff {d:.2}");
         }
-    }
-
-    /// A band with a hard horizontal rule near the top — a frame edge — and a row of vertical
-    /// strokes lower down, which is what a line of type is to a gradient.
-    fn band_with_a_line(w: u32, h: u32, rule: u32, text: (u32, u32)) -> RgbImage {
-        RgbImage::from_fn(w, h, |x, y| {
-            let v = if y < rule {
-                30 // the frame above the rule
-            } else if (text.0..text.1).contains(&y) && (x / 3) % 2 == 0 {
-                20 // a stroke
-            } else {
-                220
-            };
-            image::Rgb([v, v, v])
-        })
-    }
-
-    #[test]
-    fn the_text_line_is_found_and_the_frame_edge_is_not() {
-        let band = band_with_a_line(400, 120, 18, (60, 84));
-        let (a, b) = text_rows(&band, false).expect("a line");
-        assert!(a <= 60 && b >= 84, "the line was cut: {a}..{b}");
-        assert!(a > 18, "the frame's rule was taken for text: {a}..{b}");
-        assert!(b - a < 60, "the crop kept most of the band: {a}..{b}");
-    }
-
-    #[test]
-    fn a_block_keeps_both_collector_lines_where_a_line_keeps_one() {
-        // `U 0232` over `LTR • EN`: two lines with a gap under a line's height between them.
-        let band = RgbImage::from_fn(400, 160, |x, y| {
-            let text = (40..60).contains(&y) || (70..90).contains(&y);
-            let v = if text && (x / 3) % 2 == 0 { 230 } else { 15 };
-            image::Rgb([v, v, v])
-        });
-        let (a, b) = text_rows(&band, true).expect("a block");
-        assert!(a <= 40 && b >= 90, "the block lost a line: {a}..{b}");
-        let (a, b) = text_rows(&band, false).expect("a line");
-        assert!(b <= 75 || a >= 55, "a single line spanned both: {a}..{b}");
-    }
-
-    #[test]
-    fn a_blank_band_or_a_band_of_texture_is_read_whole() {
-        assert_eq!(text_rows(&RgbImage::from_pixel(300, 80, image::Rgb([200, 200, 200])), false), None);
-        let noise = RgbImage::from_fn(300, 80, |x, y| {
-            let v = ((x * 7919 + y * 104_729) % 251) as u8;
-            image::Rgb([v, v, v])
-        });
-        assert_eq!(text_rows(&noise, false), None, "texture from edge to edge is not a line");
-        assert_eq!(text_rows(&RgbImage::new(4, 4), false), None);
-    }
-
-    #[test]
-    fn with_the_refinements_off_the_crops_are_the_old_bands() {
-        // `ReadOptions` off must be exactly the path before it existed, or `read_eval`'s baseline
-        // row measures something no build ever shipped.
-        let card = patterned_card();
-        let flipped = image::imageops::rotate180(&card);
-        let src = BandSource::Rectified { upright: &card, flipped: &flipped };
-        let off = ReadOptions { title_line: false, collector_layout: false };
-        assert_eq!(title_crop(&src, false, off), title_band(&card));
-        assert_eq!(collector_crop(&src, true, off), collector_band(&flipped));
     }
 }

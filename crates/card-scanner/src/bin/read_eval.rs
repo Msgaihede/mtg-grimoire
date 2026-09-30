@@ -36,7 +36,7 @@
 use card_scanner::detect::{detect, DetectOptions, Detection};
 use card_scanner::index::{format_uuid, parse_uuid, Bundle, Mask, ID_LEN};
 use card_scanner::ocr::{
-    collector_crop, normalize, title_crop, BandSource, CardPixels, ReadOptions, TitleReader,
+    normalize, BandSource, CardPixels, TitleReader,
 };
 use card_scanner::reference::Reference;
 use card_scanner::synth::{burst, SynthOptions};
@@ -105,16 +105,13 @@ enum Source {
     Detail,
 }
 
-/// Every configuration, in the order the table prints them. The first is the baseline and the
-/// second what ships ([`ReadOptions::default`]); each row after it adds one refinement to it.
-///
-/// **One row per refinement is enough because the two touch disjoint reads**: `title_line`
-/// changes only the title crop and `collector_layout` only the collector's. A row's title
-/// columns against the row above are the line crop alone, its collector columns the layout alone.
-const CONFIGS: [(&str, Source, ReadOptions); 3] = [
-    ("rectified (before)", Source::Rectified, ReadOptions { title_line: false, collector_layout: false }),
-    ("detail + title line (shipped)", Source::Detail, ReadOptions { title_line: true, collector_layout: false }),
-    ("detail + title line + collector layout", Source::Detail, ReadOptions { title_line: true, collector_layout: true }),
+/// Every configuration, in the order the table prints them: where the bands come from, before
+/// #708 and after. Both read with the same `TitleReader` — since #707 each band is cut to its
+/// lines by `ocr::text_lines` and recognised with no detection model — so a difference between
+/// the two rows is the pixels and nothing else.
+const CONFIGS: [(&str, Source); 2] = [
+    ("rectified at send px (before)", Source::Rectified),
+    ("detail frame (shipped)", Source::Detail),
 ];
 
 /// The row `--dump` writes and the stratum table sets beside the baseline: what ships.
@@ -269,9 +266,8 @@ fn read_one(
         collector_ms: col.elapsed_ms,
     };
     // The crops the reads came from, for the dump: the winning orientation's.
-    let opts = reader.options();
-    let t = title.band.unwrap_or_else(|| title_crop(&src, title.rotated, opts));
-    let c = col.band.unwrap_or_else(|| collector_crop(&src, col.rotated, opts));
+    let t = title.band.unwrap_or_else(|| RgbImage::new(1, 1));
+    let c = col.band.unwrap_or_else(|| RgbImage::new(1, 1));
     (read, t, c, title.raw, col.raw)
 }
 
@@ -394,8 +390,7 @@ fn run(args: Args) -> Result<(), String> {
                         let Ok(d) = detect(&sent, &det_opts).0 else { continue };
                         res.detected += 1;
                         let mut per = Vec::new();
-                        for (ci, (name, from, ropts)) in CONFIGS.iter().enumerate() {
-                            reader.set_options(*ropts);
+                        for (ci, (name, from)) in CONFIGS.iter().enumerate() {
                             let (read, t, c, traw, craw) =
                                 read_one(reader, &reference, truth, &d, &sent, &detail, *from);
                             if let (Some(dir), true) = (&args.dump, ci == SHIPPED) {
@@ -455,7 +450,7 @@ fn run(args: Args) -> Result<(), String> {
     ));
     out.push_str(HEADER);
     out.push('\n');
-    for (ci, (name, _, _)) in CONFIGS.iter().enumerate() {
+    for (ci, (name, _)) in CONFIGS.iter().enumerate() {
         let reads: Vec<&Read> = results.iter().flat_map(|r| r.reads.iter().map(move |p| &p[ci])).collect();
         out.push_str(&row(name, &reads));
         out.push('\n');

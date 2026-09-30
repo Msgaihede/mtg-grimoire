@@ -52,6 +52,7 @@ Tesseract.
 | `serve` | `cli` | The live camera page, with the whole pipeline visible per frame and every threshold on a slider. |
 | `build-hashes` | `builder` | Build the reference bundle from `corpus.db` — or, since 2026-09-15, from Scryfall's bulk file (`--bulk`) — and Scryfall's images. Incremental. |
 | `eval` | `builder` | The synthetic evaluation of both scan modes (§10), added 2026-09-15. |
+| `ocr-bench` | `builder` | Both OCR readers timed and scored on `eval`'s synthetic bands — the old detection path and the current one back to back on every band (§4), added 2026-09-30. |
 
 `cli` = `clap` + `tiny_http` + `corpus` + `ocr`; `builder` = `clap` + `ureq` + `rayon` +
 `corpus` + `ocr` — **`ocr` joined `builder` on 2026-09-15 for `eval`**, whose Exact passes are
@@ -253,6 +254,22 @@ spurious box does not is **stay put**: a hand moves a card slowly and continuous
 conjured out of a glare appears for a frame or two somewhere else and is gone. `QuadLock`
 therefore rejects nothing on appearance and asks only that a quad still be there next frame —
 three agreeing frames to lock, five missing frames to drop, corners blended at 0.6 once locked.
+
+**In Fast, a clean quad locks in two** (`LockOptions::quick_agree`, #705, 2026-09-30). The
+caller says whether each frame's quad is clean — in Fast, card-likeness at least `GOOD_SCORE`
+(0.45) and every corner within 5° of square — and two agreeing clean frames in a row are trusted
+a frame early. A flicker is what the third frame outlasts, and a flicker is rarely a quad that
+rectifies into a title band and a type line with square corners. The quick lock is latched, so a
+less clean third frame does not un-trust it, and it dies with the quad. **It changes when a quad is
+trusted and nothing about how it is drawn**: smoothing still starts at the third agreeing frame, so
+from there the held quad is the one the three-frame lock would hold and the only difference is one
+more frame matched. The first version smoothed from the quick lock, and the evaluation caught it —
+every later quad moved a pixel or two, and on Oko, Thief of Crowns (OTP) and Graf Rats (INR), whose
+hashes flip between a good frame and a bad one, a 36-bit match became a 56-bit wrong one and both
+ran out of burst short of the bar: two cards undecided that had decided before. **Exact keeps three**: its
+resolve counts steady frames from the lock, and its timing is #706's. Synthetic frames have no
+spurious quads, so the evaluation cannot measure what this lets through — the 0.45 is the level
+the real corpus measured to lose no good match, and the tracker's own rule still stands behind it.
 
 Two things came out of it. **Both `scan` and `serve` had to pick between Canny and Otsu by
 card-likeness rather than geometric score**: the geometric winner alternated between methods
@@ -471,9 +488,9 @@ Each answers a different question, and the weights encode which question each is
 | Tier | What it reads | Card weight | Printing weight | Cost |
 | --- | --- | --- | --- | --- |
 | **Appearance** | a nearest neighbour in the bundle | 1.0 | 1.0 | ~22 ms hashing, ~3.5 ms searching |
-| **Name**, clean read | the title band | **6.0** | **0** | ~340 ms, release, 2026-09-08 |
+| **Name**, clean read | the title band | **6.0** | **0** | ~340 ms, release, 2026-09-08; **5.9× less** since #707 (below) |
 | **Name**, needed correcting | the same, at edit distance ≥ 1 | 3.0 | 0 | — |
-| **Collector** | the set code and number, bottom left | **2.0** | **20.0** | ~650 ms, release, 2026-09-08 |
+| **Collector** | the set code and number, bottom left | **2.0** | **20.0** | ~650 ms, release, 2026-09-08; **6.8× less** since #707 |
 
 **Not every signal is equal evidence, and treating them as equal was a real bug.** Measured live
 on a foil: the hash offered a different near-random neighbour every frame at 55–66 bits
@@ -571,6 +588,82 @@ weak evidence about *which card* (2.0, where appearance is 1.0 and can outweigh 
 and decisive about *which printing of it* (20.0, because nothing else can tell two printings
 apart at all). The art decides the card; the number narrows it down within that card.
 
+### Reading without text detection (#707)
+
+**A read runs no detection model any more.** `ocrs`'s `get_text` is three stages — `detect_words`,
+`find_text_lines`, `recognize_text` — and the first runs a detection model over the whole band to
+find where the text is, which is the one thing a band cropped to where the text is already knows.
+It was most of the cost: the model takes a **fixed-size input**, so every band was padded out to it
+and the model paid for the padding. `ocrs` exposes all three stages, so no fork: `ocr::text_lines`
+finds the lines and each goes to `recognize_text` as one box. `RotatedRect` is not re-exported by
+`ocrs`, so the crate takes `rten-imageproc` at `ocrs`'s own `0.26` — a second version would be a
+second, incompatible type.
+
+**`text_lines` is a row projection of the horizontal gradient.** Letterforms are vertical strokes;
+the frame's rules are horizontal and barely register. Rows above a cut between the band's quiet
+floor and its peak are a line, and each line is cut to its columns. It returns **every** line, in
+reading order, because the collector corner is two — `U 0232` over `LTR • EN` — and a recogniser
+handed both as one line reads neither. The title keeps its two strongest lines and the one with
+more letters wins. Each rule in it came from a band that read wrong without it:
+
+| Rule | The band it came from |
+| --- | --- |
+| A thin cluster at the band's side, a word space clear of the rest, is the frame, not text | 4ED Sorceress Queen: a box that reached the band's left edge read `\|Ser`; from 30 px in, `Sorceres Qucen` |
+| Only at the *side* — a thin cluster mid-line is a letter | BLB Manifold Mouse's rarity `R`, a word space from `0318` |
+| Half a line's height of room above, 0.3 below | STH Honor Guard read `onor uar` with the capitals' tops cut off |
+| 0.6 of a line's height of room either side | `R 0318` read `0318` when the box started on the `R` |
+| The column cut is 12% of floor-to-peak, not 25% | THB Oread of Mountain's Blaze stopped at `Mour`: the frame edge set the peak and the lighter half of the name fell under it |
+| The line grows from its strongest cluster across gaps up to four line-heights, and no further | the mana cost at the end of a title bar read as a trailing `0` |
+| "Nothing here" is relative to the floor, not an absolute margin | a soft LTR `Plains` peaked at 2.7 over a floor of 0.9 and was called blank |
+
+**The collector's recogniser answers only ` 0-9A-Z/*`** (`allowed_chars`) — a second engine over a
+second copy of the recognition model, because `ocrs` takes the restriction per engine, so **+9.7 MB
+resident**. `O/0` and `I/1` stay the parse's problem, and the card's `•` and `★` are not in the
+model's alphabet at all. The detection model is still loaded, for `TitleReader::set_text_detection`,
+which `ocr-bench` uses to run the old path beside the new one; nothing else should call it.
+
+**Measured by `ocr-bench`**: `eval`'s 160 printings, seed 7, frames 0 and 6 of each burst — 305
+bands, after 15 frames the detector did not find — each band read **by both paths back to back, in
+alternating order**, because the machine was at 100% CPU from other scanner work the whole day and
+only a paired comparison is fair under that. **The absolute milliseconds below are inflated by that
+load and are not a latency**; the ratios are the finding. Windows, release, 2026-09-30, base
+`9a0ba706`. Scored against the corpus as #700 defines a reader's rates.
+
+| | detection (before) | projection (after) |
+| --- | ---: | ---: |
+| title ms, median / p90, under load | 1,542 / 3,004 | 257 / 669 |
+| collector ms, median / p90, under load | 2,811 / 6,100 | 386 / 1,095 |
+| paired speed-up, median (p10) | — | title **5.9×** (2.7×), collector **6.8×** (3.7×) |
+| titles exact / corrected / wrong / junk | 73 / 53 / 1 / 178 | **75 / 75 / 3 / 152** |
+| collector resolved / conflicting / none | 3 / 3 / 299 | **3 / 0** / 302 |
+
+**The honest line in that table is the wrong titles, 1 → 3.** Per band, 35 titles became usable
+and 11 stopped being. All three wrong reads are short, truncated reads the fuzzy name lookup then
+placed on a neighbour: `aims` → Alms at one edit; `Swam` → Swat, *tied* at one edit with Swamp;
+`mrock Knight` → Black Knight at three, because Rimrock Knight is indexed under its whole adventure
+name. The reader's share is the lost first letter; a tie resolved rather than refused, and an
+adventure's face missing from the index, are the name index's (#709).
+
+**The collector numbers are too small to rank anything by** — a synthetic render at 25–70% of a
+720 px frame leaves the collector line a few pixels tall, which is #708's subject. Every conflict the
+detection path produced was a misread digit; the projection path produced none on this run.
+
+What was measured and not kept:
+
+- **Beam search on the title** (`DecodeMethod::BeamSearch`). Width 5: 152 usable and 3 wrong against
+  greedy's 149 and 4, at the same cost; width 10: one more usable read at twice the cost. An
+  eight-point grid over `text_lines`'s own constants moved the same counts by 2–4 bands of 305, so a
+  3-band difference is inside the noise, and **greedy stays**.
+- **The full alphabet on the collector**: 3 resolved and **1 conflicting** (a PBRO `163/207` misread)
+  against the narrowed alphabet's 3 and 0. Kept narrowed.
+
+**Still to do.** Exact's resolve now starts from the way up the hash chose (§10), but Fast's
+rescue read still reads the title **both ways**, and so does `ocr-bench` — its ratios are for a
+`read_title`, not a `read_title_first`. A read is now cheap enough that the ratio `session::OCR_EVERY`
+was derived from (~340 ms a read against a ~350 ms frame) no longer holds, and #705 kept the cadence
+as it was; nobody has re-derived it. **Nobody has timed a read on a quiet machine** since this
+change: take one before quoting a latency.
+
 ### Where the bands come from (issue #708, 2026-09-30)
 
 **Until #708 a band was three resamples of a downscaled frame.** The page sends every frame at
@@ -582,10 +675,10 @@ pixels tall before any of them.
 - **`ocr::CardPixels` warps each band straight out of the frame.** A band is still a rectangle of
   the trimmed canonical card — the same fractions as before — and its four corners go through the
   trim (`trim::effective`, so a margin the trim declined moves nothing) and the inset quad's
-  homography into frame coordinates; `detect::rectify_to` then warps just that band. **The output
-  is the size the recogniser got before**, so ocrs's text detection — which pads a small image to
-  its input rather than scaling it — sees text at the scale it always did. Readers take a
-  `BandSource`: the rectified card (a still, a test, a frame with no pixels kept) or the frame.
+  homography into frame coordinates; `detect::rectify_to` then warps just that band, at the size
+  the recogniser got before. Readers take a `BandSource`: the rectified card (a still, a test,
+  `ocr-bench`, a frame with no pixels kept) or the frame, and the orientation #717's readers try
+  first is its `rotated` flag.
 - **A detail frame, only on a frame that will read.** The verdict's `wants_detail` says the next
   frame's readers are expected to run — Fast one frame ahead of each rescue read, Exact until the
   card's resolve has run, because the resolve reads whichever burst views are most card-like — and
@@ -593,17 +686,8 @@ pixels tall before any of them.
   Detection, the lock and the hash never see it, so the lock's coordinates never change scale; the
   quad is scaled onto it by the width ratio, and it is decoded only when a read runs. `detail` on
   the verdict names the frame a read used. **Warping from the 960 px frame alone changed nothing
-  measurable** (below): the resolution is what helps, and only the detail frame carries it.
-- **The title is cut to its line.** `ocr::text_rows` sums `|∂I/∂x|` along each row — letterforms
-  are vertical strokes, a frame's rule and border are horizontal and barely move it — takes the
-  strongest run above a threshold between the quiet floor and the peak, bridges small gaps, and
-  pads by half the run each side (at 0.3 the dumped crops cut the capitals' serifs). No clear run,
-  or a run filling the band, reads the whole band as before. **This was the largest single gain.**
-- **The collector layout crop was built and ships off.** The same projection with a wider bridge
-  finds the two-line collector block in the corner below the text box (86–100% down, the same
-  28.5% across), to be read before the fixed crops. It found the block — the dumped crops show
-  both lines — and still lost reads against the fixed band. `ReadOptions::collector_layout` keeps
-  it for a real-camera set to decide.
+  measurable** (the first table below): the resolution is what helps, and only the detail frame
+  carries it.
 - **The 2015–2022 collector format needed the parse, not the pixels.** Those frames print
   `226/259 U` over `GRN • EN`, so the set code is three tokens from the number and the
   touching-only rule above never reached it. Before the detail frames the line was never legible
@@ -611,7 +695,13 @@ pixels tall before any of them.
   `272/280 L ZNREN` came back clean and paired with nothing. `collector_candidates` now reaches
   the one slot past a total and a one-letter rarity, and only when a total follows the number —
   so it lands on the set, the language or nothing, never the artist — and never offers the total
-  itself (GRN 259 is a real card).
+  itself (GRN 259 is a real card; §8 item 16).
+- **#708 also built a line crop, and #707 made it redundant the same day.** Before #707 landed,
+  the read was `get_text` with its detection model, and cutting the title band to its line first
+  (a row projection of `|∂I/∂x|`) was the largest single gain in the first two tables below; a
+  collector *layout* crop found the two-line block and still resolved fewer printings, so it was
+  never switched on. `text_lines` does the same job inside every read, per line and per column,
+  so at the merge both were removed — one line finder, not two.
 
 **`read_eval` is the labelled set.** It renders each of `eval`'s 160 printings into a burst at
 **1920 px** (a 1080p camera), downscales to **960 px** through JPEG 0.72 for detection as the page
@@ -622,10 +712,35 @@ over the printings from 2015 on (the only ones with the line), and a resolve to 
 counted as wrong. `--dump` writes the shipped configuration's crops and a `labels.jsonl` of what
 each should read and did. Synthetic, like `eval`: a regression fence, never a camera claim.
 
-Windows, release, 2026-09-30, 160 printings × 2 frames, seed 7, 8 workers; the detector found a
-card on 286 of 320 frames and only those are read. **The machine was at 100% from other sessions'
-benchmarks throughout, so neither run's ms columns are usable and neither is printed.** The first
-run, at `a3701068`, before the parse change:
+**On the merged tree — #707's reader in both rows, so the difference is the pixels.** Windows,
+release, 2026-09-30, 160 printings × 2 frames, seed 7, 8 workers; the detector found a card on 286
+of 320 frames and only those are read:
+
+| bands from | title exact % | title → card % | title wrong card | collector → printing % (179 reads, 2015+) | collector wrong | ms / title, under load | ms / collector, under load |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| the rectified 960 px frame (before) | 21.7 | 45.1 | 5 | 0.6 | 2 | 883 | 1,221 |
+| **the detail frame (shipped)** | **45.1** | **72.4** | 4 | **12.3** | 9 | 1,034 | 1,216 |
+
+**The machine was at 100% from other sessions' benchmarks for every run here**, so the ms columns
+are means under load, not latencies. Within one run both rows read the same detections in turn, so
+the comparison holds: a title read about 17% dearer, a collector read the same. The code #708 adds
+— one warp of about a hundred thousand pixels — is milliseconds, so what the rest would be, if it
+is not load, is the recogniser reading more text out of a band it can now see. **A release timing
+on a quiet machine is still owed.**
+
+The collector's wrong count rising with its right count is the tier reading at all. In Exact every
+collector answer is checked against the survivors of the tiers before it (`conflict: … not among
+survivors`), which is what a wrong printing of the right card meets. Two strata are worth knowing,
+both read off the dumped crops rather than guessed. **Basic lands** read worst of the frames with a
+title: a basic's name is one short word, and a read that keeps whichever orientation read *more
+letters* can lose to the upside-down band's copyright line — the orientation contest, which reading
+the way up the hash chose (#704, #717) is for. **Adventure and double-faced titles read exactly and
+still resolve to no card** — `Realm-Cloaked Giant`, `Fell Horseman` — because the band shows one
+face's name and the name index holds the whole `A // B`; that is a lookup gap, §8 item 12 and
+issue #709's.
+
+Before the merge, on `get_text` with detection (the same run shape): the first run, at `a3701068`,
+and the second with the parse change.
 
 | config | title exact % | title → card % | title wrong card | collector → printing % (179 reads, 2015+) | collector wrong |
 | --- | ---: | ---: | ---: | ---: | ---: |
@@ -633,41 +748,12 @@ run, at `a3701068`, before the parse change:
 | warped from the 960 px frame | 23.4 | 41.3 | 2 | 0.0 | 1 |
 | warped from the detail frame | 33.6 | 45.5 | 3 | 12.3 | 11 |
 | detail + title line + collector layout | 51.4 | 63.3 | 4 | 10.1 | 8 |
+| *second run:* before | 25.2 | 42.0 | 2 | 0.0 | 2 |
+| *second run:* detail + title line + the parse change | 51.4 | 63.3 | 4 | 20.7 | 13 |
+| *second run:* the same + collector layout | 51.4 | 63.3 | 4 | 17.9 | 9 |
 
-The second, with the parse change:
-
-| config | title exact % | title → card % | title wrong card | collector → printing % (179 reads, 2015+) | collector wrong |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| before | 25.2 | 42.0 | 2 | 0.0 | 2 |
-| **detail + title line (shipped)** | **51.4** | **63.3** | 4 | **20.7** | 13 |
-| detail + title line + collector layout | 51.4 | 63.3 | 4 | 17.9 | 9 |
-
-**What a read costs is not settled, and the figures are only good enough to say it did not jump.**
-Two one-worker passes over 22 printings, both still at 100% machine load, each reading every
-configuration from the same detections in turn: seed 7 read a title in 1,483 ms before and
-1,791 ms shipped, and a collector line in 2,749 against 2,638; seed 11, 744 against 785 and 1,358
-against 1,407. So the title read is somewhere between 5% and 21% dearer and the collector read
-within a few percent either way. The code #708 adds — one warp of about a hundred thousand pixels
-and a row sum over it — is milliseconds; what the rest would be, if it is not load, is ocrs
-recognising more text in a band it can now read. **A release timing on a quiet machine is still
-owed**, and #707 (skip text detection) is what should move these numbers.
-
-**The baseline row moved by two reads between two runs of identical code** — the title's
-right-card count and its wrong-card count — so read a difference of a couple of reads as noise,
-which is §10's caveat about `eval` holding here too. The collector's wrong count rising with its
-right count is the tier finally reading at all: precision is about 74% shipped and 78% with the
-layout crop, and in Exact every collector answer is checked against the survivors of the tiers
-before it (`conflict: … not among survivors`), which is what a wrong printing of the right card
-meets. **The by-stratum table is `read_eval --summary`'s**, and two rows are worth knowing, both
-read off the dumped crops rather than guessed. **Basic lands' title exact went _down_**
-(33.3 → 25.0): a basic's name is one short word, and `read_title` keeps whichever orientation
-read *more letters* — so the upside-down band's copyright and artist line, cut to a clean line
-now, outscores `Island`. The same card reads `Island` on its other frame. That is the orientation
-contest losing, which #704 (read the orientation the match chose) removes, not the crop.
-**Adventure and double-faced titles read exactly and still resolve to no card** —
-`Realm-Cloaked Giant`, `Fell Horseman` — because the band shows one face's name and the name
-index holds the whole `A // B`. That is a lookup gap and not a read gap, and it is §8 item 12 and
-issue #709's; true split cards, turned sideways, read junk either way.
+**The baseline moved by two reads between two runs of identical code**, so read a difference of a
+couple of reads as noise — §10's caveat about `eval` holding here too.
 
 ## 5. The tracker
 
@@ -765,11 +851,59 @@ made a vote worth 0.47 at 41 bits and 0.13 at 66, so the bar read in no unit any
 picture and a far-but-consistent card climbed to it several times slower than a close one. A
 vote is worth the same anywhere inside the gate, and the gate is what rejects noise.
 
+### The early decision (Fast only)
+
+**Eight votes is the same wait for a card nobody could mistake as for one at the gate's edge.**
+Fast's median was 10 frames — 3 to lock, 8 to vote — and most of those votes confirmed what the
+first two frames already said. So the vote rule has a second way to decide
+(`TrackerOptions::early_frames`, #705, 2026-09-30): **two trusted frames in a row, each *clear*
+about the held leader**, where a clear frame's best appearance candidate is within **0.20** (51
+bits) and leads the nearest candidate naming a **different card** by **15 bits**. Anything short of
+that on any one frame — a marginal distance, a close rival, an empty frame, a lost lock — breaks the
+run and the card goes back to the bar. The tally is then short of `decide_at` on purpose; `early`
+on the tracked view says so, and both the app's panel and `live.html` draw a full bar with
+`· clear` beside the tally.
+
+- **Another card, not another candidate.** Reprints pool on the oracle id, so two printings of one
+  card a bit apart are one answer. When every candidate in a frame names the same card, the rival is
+  somewhere past the last of them and that distance is used — a floor under the gap, never an
+  overstatement. A basic land with a hundred near-identical printings still decides early whenever
+  its nearest five include another card, which is most frames: its median gap in the trace is 30
+  bits.
+- **The margin still applies.** The early path waives the bar, not `lead_margin`: the held leader
+  can keep the lead while a rival's marginal frames have it fractionally behind, and two clear
+  frames do not decide a card the tally has not yet put ahead by 1.3.
+- **Appearance only.** A read name enters at distance zero with no rival of its kind, so it would be
+  clear on every frame it appeared in, and one read deciding alone is what the bar prevents.
+- **Fast only.** An early vote commit in Exact would drop the extra framings from the frames its
+  resolve's burst is still collecting — changing what Exact reads, not just when.
+
+**The thresholds are the evaluation's, not a guess.** `eval --trace` on the unchanged pipeline
+(Windows, release, 2026-09-30, seeds 7, 1 and 2, 160 printings × 12 frames each), trusted frames
+with a match:
+
+| frames | n | best, bits: min / p5 / p50 / p95 | gap to the nearest other card, bits: p5 / p50 / p95 / **max** |
+| --- | ---: | --- | --- |
+| true card on top | 4,234 | 3 / 15 / 32 / 57 | 6 / 25 / 49 / 70 |
+| wrong card on top | 231 | 41 / 48 / 66 / 84 | 0 / 2 / 6 / **10** |
+| true card on top, basic lands | 545 | 8 / 17 / 33 / 62 | 8 / 30 / 54 / 65 |
+| wrong card on top, basic lands | 32 | 48 / 52 / 73 / 81 | 0 / 2 / 6 / **10** |
+
+**The margin is what keeps wrong frames out**: none led by more than 10 bits — a basic land and a
+split card reached it, every other stratum stopped at 9 or under — and 15 is half again that. The
+basic lands were the worry, since a HOB Plains and a HOB Forest are 44 bits apart (§3) and a gap only
+colour explains is the one this must not fire on; their wrong frames sit exactly where every other
+stratum's do. The distance keeps the rule to matches well inside the gate, and would not have been
+enough alone — one seed put a wrong card at 41 bits. Simulated over the three traces, the rule fires
+before the bar on 371 of 480 bursts, on a wrong card never, and moves the median decision from frame
+10 to 4; three frames rather than two only reaches 5 and guards against nothing the traces show.
+
 ### What ends a freeze
 
 Four things: **ten frames without the decided card**, a **reset**, a **bar raised above the
 tally**, or switching to the confidence rule. Lowering the bar under a frozen tally changes
-nothing — it was decided, and it still is.
+nothing — it was decided, and it still is. **An early decision (below) is not thawed by a raised
+bar**, because it was short of the bar on purpose; the other three end it as they end any freeze.
 
 **A miss under a freeze is not the same as a miss while gathering**, and that shape came from a
 measured self-reset found on 2026-09-08. Once decided, the server drops the extra framings it no
@@ -967,7 +1101,7 @@ of the table: **the ~100 ms figures elsewhere in this crate are release figures.
 | Frame | Release | Debug |
 | --- | --- | --- |
 | One locked frame, no reader running | **~350 ms** wall | ~580 ms on the cheapest path (frozen decision, no extra framings, no OCR) |
-| A frame that runs both readers | **~1.3 s** wall — OCR title ~340 ms, collector ~650 ms | — |
+| A frame that runs both readers | **~1.3 s** wall — OCR title ~340 ms, collector ~650 ms. **Superseded by #707**: §4 measured both reads 5.9× and 6.8× cheaper, paired, on 2026-09-30 | — |
 | Detect-only, 960 px in, no quad found | **145–180 ms** | — |
 | JPEG decode of a 960 px frame | 3–4 ms | **230 ms** |
 | JPEG decode of a 5 MB full-resolution photo | — | **4.1–4.5 s** |
@@ -1043,8 +1177,9 @@ cycle with the card never leaving the lens**.
    nothing inside `max_normalized` is a miss.
 4. **`IMG20260823055008.jpg` never detects a quad** — one corpus frame that produces no candidate
    at either Canny rung, on either detector (2026-09-08).
-5. **OCR reads on one frame in four**, and only while the tracker is uncommitted. That is the
-   right trade at ~340 ms a title read against a ~350 ms frame, but it means the tier that saves
+5. **OCR reads on one frame in four**, and only while the tracker is uncommitted. That was the
+   right trade at ~340 ms a title read against a ~350 ms frame — a read #707 made roughly six times
+   cheaper (§4) without anyone re-deriving the cadence — but it means the tier that saves
    foils contributes at a quarter of the rate the tier it is rescuing does — which is the
    arithmetic that produced the `Suplex` commit before the weights were split.
 6. **The collector fallback crops are a guess about frame layouts, not a model of them.** Two
@@ -1778,6 +1913,11 @@ the stretch breaks (below). The decision's printing is the tracker's best member
 title reads alone has none, because a name abstains on the printing (§4), so the decision takes the
 card's first permitted printing rather than passing an oracle id off as one.
 
+**A clear card decides in two frames rather than eight** (§5, *The early decision*), and a clean
+quad locks in two rather than three (§3, *Lock*) — both Fast's alone, both #705. `FAST_RESCUE_AFTER`
+did not move: a card still undecided after eight locked frames is one that never had two clear
+frames in a row about its leader.
+
 ### Exact
 
 **The same detect, lock and tracker loop, plus a resolve.** The tracker still decides *which card*
@@ -2110,6 +2250,14 @@ frame whose `decision_seq` moved.
   have been: **it reports and does not gate**, so an unreachable image host or a panic cannot skip
   the weekly publish of a bundle that built fine. CI fetches the 160 renders on every run; nothing
   caches `eval-cache` there.
+- **`--trace <file>` writes one JSON line per Fast frame** (#705): the lock's agreement and trust,
+  card-likeness and worst corner, and for a matched frame the best candidate's distance in bits,
+  whether it is the true card, and the distance of the nearest candidate naming a *different* card
+  (`rival_floor` when every candidate named the same one, so the figure is a floor). Tracing feeds
+  Fast the whole burst rather than stopping at its decision; the frames after it are left out of
+  the table and its mean ms, though they still take a core from the other workers. **`--fast-only`**
+  runs Fast alone, a third of the time. §5's early-decision thresholds were
+  read off these traces.
 
 **Before round 4** — Windows, release, 2026-09-15, HEAD `68917fa1`, 160 printings, 12 frames each at
 1280 px, seed 7, against the 113,494-printing bundle, 12 workers, renders cached, 383 s wall.
@@ -2174,9 +2322,59 @@ Three cards moved and nobody has found which change moved them, so **the evaluat
 is unverified**: until a same-HEAD double run agrees with itself, read a difference of a few cards
 between two runs as noise rather than as a regression or a fix.
 
-Three things the tables cannot say. **Fast's decided rate is partly the burst length**: its median is
-10 frames of 12 — three to lock, eight votes — so the evaluation cannot tell "needed a thirteenth
-frame" from "wrong". **Eight cards were undecided in every pass** of the pre-round-4 run (Tobias
+**#705 found why, and it is Fast's printing alone.** Two runs of #705's branch that differed only
+in a guard no card reached made every decision on the same frame with the same card, and eleven
+cards over two seeds still reported a different printing (seed 7's printing 80.0 → 79.4, seed 2's
+77.5 → 76.2). `Tracker::snapshot` picks a card's printing with `max_by` over a `HashMap` of
+per-printing evidence; reprints that share art tie *exactly*, `max_by` keeps the last of equals in
+iteration order, and a `HashMap`'s iteration order is seeded per process. So which of two tied
+printings a Fast decision names changes from run to run — in the app as much as in the evaluation.
+Decided, card ✓ and median frames were identical to the digit across both runs; they do not read
+the member map.
+
+**After #705** — Fast's early decision and quick lock (§5, §3). Windows, release, 2026-09-30, 160
+printings, 12 frames at 1280 px, 12 workers, against the same 113,494-printing bundle; before and after
+are the same machine and the same day, with the baseline built from `9a0ba706` plus the `--trace` flag
+alone. Mean ms is omitted: other agents' evaluations shared the machine, and it read 1,100–11,000.
+
+| seed 7 | decided % | card ✓ % | wrong card | printing ✓ % | median frames |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fast, before | 90.6 | 90.6 | 0 | 73.8 | 10 |
+| **Fast, after** | **94.4** | **94.4** | **0** | 79.4 | **4** |
+| Exact, before and after | 95.0 | 95.0 | 0 | 81.2 | 5 |
+| Exact + own set, before and after | 95.0 | 95.0 | 0 | 91.2 | 5 |
+
+**Exact's rows are identical in every stratum**, which is the Fast-only gate doing its job. Seeds 1
+and 2, Fast only, against their own baselines:
+
+| Fast | decided % | card ✓ % | wrong card | printing ✓ % | median frames |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| seed 1, before | 93.1 | 92.5 | 1 | 81.2 | 10 |
+| **seed 1, after** | **95.6** | **95.0** | **1** | 80.6 | **4** |
+| seed 2, before | 86.9 | 86.9 | 0 | 71.9 | 10 |
+| **seed 2, after** | **90.6** | **90.6** | **0** | 76.2 | **4** |
+
+**Card-correct fell in none of the 33 stratum rows across the three seeds, and no card that decided
+before is undecided after**: every outcome that moved is an undecided card now deciding — 16 of
+them, in bursts that used to end before the eighth vote. Every stratum's median is 3–5 frames except
+seed 2's frame-2015 at 7; basic lands went 10 → 4 on every seed with card-correct up on all three.
+**The one wrong card is Flower // Flourish (GRN) on seed 1, and it is wrong in the baseline too** —
+decided by the vote bar at a 2-bit gap in both, a frame sooner now only because the quick lock
+matched one more frame; the early rule never fired on it. Printing moved both ways by a card or two
+per row and rose overall on two seeds of three: an early decision reports the best printing after
+two or three frames rather than eight, which is Fast's promise — the card now, its printing
+provisional. **Read the printing column as noisy by a few cards** — *#705 found why*, above, is the reason.
+
+**Re-run after main's #701 (rectify a frame once) and #717 (Exact's resolve off the frame path)
+merged into the branch**, against the same merged tree with both of #705's switches turned off:
+every decided, card ✓ and median-frames figure in both tables above came out identical to the digit
+on all three seeds — the same sixteen cards newly decided, the same Flower // Flourish — and only
+the printing column moved, by the tie noise.
+
+Three things the tables cannot say. **Fast's decided rate is partly the burst length**: before #705
+its median was 10 frames of 12 — three to lock, eight votes — so the evaluation could not tell
+"needed a thirteenth frame" from "wrong". At a median of 4 that is true only of the cards that are
+never clear, which are exactly the ones still undecided. **Eight cards were undecided in every pass** of the pre-round-4 run (Tobias
 Andrion, Skyknight Legionnaire, Control of the Court, Swamp HOB, Counterbalance SLD, Elektra, Pest
 Infestation, Tyrranax Rex — the last `not found` in Exact), most likely the detector or the lock on
 hard synthetic poses; nobody has looked. And **the first `--bulk` evaluation is the workflow's first
