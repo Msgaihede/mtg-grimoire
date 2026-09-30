@@ -11,6 +11,7 @@ describe("the scanner options", () => {
       aspect_tolerance: 0.18,
       min_cardness: 0,
       stages: false,
+      previews: false,
       rule: "votes",
       decide_at: 8,
       lead_margin: 1.3,
