@@ -972,10 +972,17 @@ before the bar on 371 of 480 bursts, on a wrong card never, and moves the median
 
 ### What ends a freeze
 
-Four things: **ten frames without the decided card**, a **reset**, a **bar raised above the
-tally**, or switching to the confidence rule. Lowering the bar under a frozen tally changes
-nothing — it was decided, and it still is. **An early decision (below) is not thawed by a raised
-bar**, because it was short of the bar on purpose; the other three end it as they end any freeze.
+Five things: **ten frames without the decided card**, **a different card come to rest where it
+lay**, a **reset**, a **bar raised above the tally**, or switching to the confidence rule.
+Lowering the bar under a frozen tally changes nothing — it was decided, and it still is. **An early
+decision (below) is not thawed by a raised bar**, because it was short of the bar on purpose; the
+other four end it as they end any freeze.
+
+The second is not the tracker's at all. A card stacked on the decided one is the same quad to the
+lock, and to the hash it may be the same other card each frame (ten frames), nothing inside the
+gate (never), or another printing of the decided card (never). So the session watches what the
+decided card *looks like* and forgets it when a different card has come to rest over it — §10
+*A card laid on the last*, and `watch.rs`.
 
 **A miss under a freeze is not the same as a miss while gathering**, and that shape came from a
 measured self-reset found on 2026-09-08. Once decided, the server drops the extra framings it no
@@ -998,6 +1005,7 @@ every foil after its read stands down, and that is not a card being swapped in.
 | Printing decays and is sticky | `Gandalf, Spark Starter` latched to HOB 97 after one lucky frame, correct answer HOB 203 |
 | Per-kind ranking, and tier weights | a foil committing to **`Suplex`** while OCR read the title right on all 400 runs |
 | Freeze counts presence, not the gate | the Plains 74 → 84-bit self-reset oscillation, 2026-09-08 |
+| A different card at rest ends a freeze the lock never let go of | a card stacked on a decided one held the old decision nine frames and decided seven after (§7); one the hash could not place, or a second printing of the same card, never ended it (#710) |
 
 ## 6. The debug page and the server
 
@@ -1355,6 +1363,12 @@ cycle with the card never leaving the lens**.
     typing `neo` or `kamigawa` finds it, and *Show 50 more* walks to every set. The live pass read
     the first page and nothing else. Kept here, struck through by this sentence, so the next reader
     who counts a short list does not file it again.
+20. **Exact adds a card twice in 2 more stacking piles of 160 than `main` does** (§10 *A card
+    laid on the last*, measured 2026-09-30): one while the card was held, one after a hand lifted
+    off it. Each is a change the watch made in error whose next decision neither looked like the
+    forgotten card nor named its printing. Three rules have already cut it from 7; the next step is
+    printing which piles they are, which `stacking sequence` does not do yet. `main` itself adds 4
+    in the same sessions, untraced.
 
 Struck 2026-09-08: the two doc comments that quoted a title read at ~250 ms against a ~80 ms
 frame — `session::OCR_EVERY` and `ocr.rs`'s `COLLECTOR_FALLBACKS` — where §4 and §7 measured
@@ -2115,6 +2129,7 @@ rule below is a failure the code before it shipped.** A *stretch* is the run of 
 | A break **arms** `rearm_pending` rather than clearing the attempt, and a resolve's own freeze holds the re-arm back | after round 1 made a break re-arm directly, a two-frame lock blip — one degenerate quad — re-resolved a decided card and put a duplicate row in the tray |
 | The re-arm is taken when `rearm_pending && (!committed \|\| last_resolution.is_none())` | round 2's `!committed` alone held it back behind a freeze the **votes** made after a `not_found`, so that card was never decided until it left |
 | One place takes the re-arm (`record_decision`) | round 2 kept a second copy just before the resolve condition, untested; keeping the two in step is how the regression round 3 fixed came about, so the copy was deleted |
+| A different card **at rest** forgets the card inside the stretch (`card_changed`, by its look — never by the freeze lifting), and that clears `attempted` | a card stacked on a resolved one was never resolved: only a lock break re-arms, and a stacked card never breaks the lock (#710, *A card laid on the last* below) |
 
 **A row this table used to carry is gone: "the resolve clears `rearm_pending`".** It was round 2's
 fix for a flaky lock leaving the flag set before the first resolve, and round 3's placement made it
@@ -2148,6 +2163,165 @@ stored filters every time the Scanner mounts, and the loop waits for that; a res
 decided card still on the mat before the first frame, the card decided again, and — past
 `useScanLoop`'s baseline guard, which the moved `decision_seq` defeated — was added a second time.
 Mocked IPC never resets, which is why no page test saw it.
+
+### A card laid on the last
+
+**A pile is scanned by laying each card on the one before, in the same place, and until
+2026-09-30 the second card was not seen** (#710). The quad lock judges geometry alone — centre
+drift within 35% of the short edge, area within 1.6× — so a card stacked where the decided one
+lay is the same quad and the lock never lets go. Everything that ended a decision keyed off the
+lock letting go or the hash naming someone else. Four failing tests at `9a0ba706`, all through
+the session's frame path with the lock trusted on every frame:
+
+| Stacked on a decided card | What happened |
+| --- | --- |
+| a different card, Fast | decided on its **17th** frame: nine frames held, the freeze lifted on the tenth, seven more votes — §7's headless swap exactly |
+| a card the hash cannot place | the old decision **never** ended: under a freeze a frame with candidates but none inside the gate is not a miss (§5), so a foil left the old card as the answer |
+| a different card, Exact | **never** resolved: only a lock that stops being trusted arms a second resolve |
+| a second printing of the decided card | **never** decided: the hash names the same oracle card, so under the freeze it is not even a miss — a Forest laid on a Forest from another set was never added |
+
+**So the session watches what the decided card looks like** (`watch.rs`). The frame that
+decided — a Fast commit, or an Exact resolve of any outcome, `not_found` included — is the
+**anchor**, and every trusted frame while that decision stands is compared with the anchor and
+with the last three frames that were the same card; the nearest decides. A frame at least
+`CHANGED_BITS` from all of them is not the decided card, and a run of such frames, each within
+`AGREE_BITS` of the one before, is a card **at rest** — a new card: **two frames in Fast
+(`FAST_AT_REST`), three in Exact (`EXACT_AT_REST`)**, below. One far frame is a hand passing
+over; far frames that disagree with each other are a hand moving. The recent frames are
+admitted only while they are within `CHANGED_BITS` of the anchor itself, so the set cannot walk
+away from the decided card a frame at a time. Every distance is the nearer of the two relative
+turns, because `order_corners` breaks the 180° tie by the corner nearest the frame's origin and a
+stacked card may lie the other way round.
+
+**A new card at rest is forgotten into, not waited out** — `Session::card_changed`, which is
+`forget_card` (the tracker, the burst, the counters, the resolve — **the lock kept**, since the
+geometry is still right) plus the previous decision, so the card on top is *added*, never a
+`replaces_previous` of the one under it. **The frames at rest before the one that confirmed it
+are kept as the new card's first**: their observations are counted again under the fresh tally
+and their views stay in Exact's burst. A stacked card therefore decides exactly when a fresh card
+would with the lock already held — Fast on its **8th** frame by votes (9 without the keep),
+Exact resolving on its **3rd**, the confirming frame itself, its burst the three frames at rest —
+which the tests assert to the frame. **With Fast's early decision** (two clear frames in a row,
+above), the kept frame is the first of the two, so a card the hash is sure of decides on its
+**2nd** frame at rest, where it would otherwise need a 3rd.
+
+**A change the watch makes in error is a second opinion, not a second copy.** Two frames of a
+hand held still over the decided card, or the card's own worst frames, are a card at rest too;
+the card is forgotten, and once the hand lifts it is decided again. So `card_changed` remembers
+what it forgot (`laid_over`: what the watch held of the card — the anchor and the recent frames —
+and what its decision named), and the next decision **replaces** the row instead of adding one
+when either its look is near that card's or it names the same **printing**. The printing settles
+it whatever the look, because two copies of one printing look alike and never make a change at
+all; a second printing of the same card differs on both and adds. The memory lasts **until the
+next decision**, and a `not_found` is not one: three still frames of a hand make an Exact burst of
+nothing but hand, which resolves `not_found` and is watched in turn, and the card coming back was
+then a second change that overwrote the card with the hand.
+
+**Exact wants a third frame at rest because a false change costs it a whole re-resolve**, and
+the third costs a stacked card nothing: a burst cannot resolve before it holds three frames, and
+the two kept frames plus the confirming one are that burst. The measured case for each of these
+rules is the stacking sequence below — each was added because the run before it showed the
+double add it prevents.
+
+**The watch ends with the decision it guards** (`record_decision`: nothing committed and nothing
+attempted clears it). Without that, a card decided while still moving — carried in, the hash
+naming it on alternate frames, never at rest — was decided a second time when it came to rest,
+read as a card laid over the one before it.
+
+#### The threshold, measured
+
+`stacking gap` (`src/bin/stacking.rs`) — release, Windows, 2026-09-30, `claude/scanner-stacking-detection`.
+The eval's 160 cached renders through `synth::burst` (seed 7, 12 frames each), the session's own
+detector sweep and quad lock; the card on top is the next printing of the same stratum posed on
+the first card's seed — same pose, glare and background. 157 cards reached two trusted frames.
+Every figure is the nearest of the decided card's last four frames (`K = 4`), in **bits of 128**:
+
+| distribution | n | p1 | p5 | p50 | p95 | p99 | max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| the same card, a later frame | 1336 | 1 | 2 | 8 | 19 | **28** | 65 |
+| a different card on top | 1751 | 5 | 14 | **41** | 60 | 70 | 78 |
+| … a basic land on another basic | 227 | 23 | 30 | 48 | 70 | 76 | 78 |
+| the same basic from another set | 162 | 36 | 37 | 49 | 63 | 68 | 71 |
+| the card on top, frame to frame | 1597 | 1 | 3 | 11 | **28** | 41 | 64 |
+| a hand over 5% of the decided card | 1488 | 4 | 7 | 18 | 42 | 63 | 68 |
+| … 10% | 1160 | 8 | 10 | 19 | 52 | 64 | 68 |
+| … 20% | 942 | 10 | 12 | 20 | 54 | 64 | 69 |
+| … 35% | 892 | 14 | 16 | 26 | 45 | 60 | 68 |
+
+`CHANGED_BITS` is **32**, over the held card's p99; `AGREE_BITS` is **28**, the card on top's own
+frame-to-frame p95. The synthetic jitter — up to 1.5% of the short edge and a degree of turn per
+frame — is a hand holding the card, harsher than a card lying on a table.
+
+**The descriptor was chosen on the same run, and the obvious one lost.** On a 0–256 scale
+(bits × 2 for 128), `K = 4`:
+
+| descriptor | held card p95 / p99 | different card p5 / p50 | basic on basic p5 | same basic, another set, min |
+| --- | ---: | ---: | ---: | ---: |
+| dHash 256, the bundle's width | 58 / 83 | 40 / 92 | 78 | 89 |
+| **dHash 128** | **38 / 56** | **28 / 82** | **60** | **70** |
+| correlation, gray 16×22 | 22 / 46 | 7 / 42 | 19 | 31 |
+| correlation, gray 8×11 | 11 / 29 | 3 / 36 | 17 | 31 |
+| correlation, RGB 12×17 | 14 / 33 | 6 / 45 | 20 | 39 |
+
+The coarser hash has the widest gap between a held card's worst frames and a different card's
+typical one, and it alone keeps basics apart. The correlations are the tightest on one card and
+the worst at two: every card shares its frame, so two different cards correlate well. Against a
+single anchor rather than the nearest of four, 256-bit dHash put a held card's p99 at 106 against
+a different card's median of 98 — any threshold would have added a held card twice now and then,
+which is the one mistake the tray cannot absorb quietly. The colour dHash the bundle uses was
+within a few bits of the grayscale one on every row.
+
+**The closest "different" cards are mostly one card**: of the twelve nearest stacked pairs, ten
+were two printings of the same card — Runaway Steam-Kin GRN on its promo nearest, at a median of
+12 bits of 256 — which is the second-copy limit below under another name. The other two were
+Blight Rot on Faunsbane Troll and Assault // Battery on Illusion // Reality.
+
+#### The stacking sequence, measured
+
+`stacking sequence` — release, Windows, 2026-09-30. Whole sessions against the 113,494-printing
+bundle, the corpus labels and both readers, resolving inline as the evaluation does: for each of
+the 160 printings, that card held for 30 frames, a hand over it for 3 (10%, 35%, 20% of the card
+in turn), then the next printing of its stratum laid on top, at the same pose, for 30. A second
+session per pile lifts the hand again with nothing on top, for 10 frames. **Before** is `main` at
+`9d473c7f` with only the tool added; **after** is this branch at `0cff4cb2`, the same `main` with
+the watch — so the difference is the watch and nothing else. A row *added* is a decision that
+does not `replaces_previous`.
+
+| | Fast before | Fast after | Exact before | Exact after |
+| --- | ---: | ---: | ---: | ---: |
+| the card on top decided within 30 frames | 78.8% | **86.2%** | 23.1% | **79.4%** |
+| frames to it from its first, p50 / p90 | 11 / 18 | **3 / 11** | 13 / 17 | **3 / 6** |
+| the held card added twice | 0 | 0 | 1 | 2 |
+| the card on top added again | 0 | 0 | 0 | 0 |
+| the held card added twice after a hand lifted | 1 | 1 | 3 | 4 |
+| a false change caught as a second opinion | — | 1 | — | 2 |
+
+`main` adds rows twice on its own in these sessions, before any watch existed — nobody has
+traced those — and Fast adds none beyond them. **Exact adds 2 more in 160 piles than `main`,
+and that residue is open (§8 item 20).** It took three rules to get there, each added because the run
+before it showed the double add: comparing only with the forgotten anchor left 7 more than
+`main`; comparing with its ring or its printing, 4; a third frame at rest in Exact, 2. Twelve of
+the piles lay a reprint of the same card on top, which "decided" counts and a card check cannot
+judge. The synthetic hand is a flat blob inside the card's outline and the per-frame jitter a card
+held in a hand, not one lying on a table — a fence, not a claim about a camera.
+
+#### What it cannot see
+
+- **A second copy of the same printing.** Nothing about it looks different. Lifting the first
+  away and laying the second down breaks the lock, and the stretch break counts it; the tray's
+  quantity stepper is the other answer. (Options (b), a hand then settling as a new copy, and
+  (c), the stepper alone, were weighed in #710; (a) and (c) is what shipped.)
+- **A hand that stops on the card, as such.** The at-rest rule rejects a moving hand; a hand held
+  still over enough of the card for the run is a card at rest, and the card is forgotten. What
+  keeps that from costing a row is the second-opinion rule above, not the watch. The table's
+  hand rows are a still hand inside the card's outline.
+
+**A resolve still running when a card comes to rest over its card is dropped** (#706's
+`drop_pending_resolve`, reached through `forget_card`; the test is
+`a_card_come_to_rest_over_one_still_resolving_drops_that_resolve`). Deciding it would freeze the
+session on the card underneath while the one on top is in frame. The cost is the card underneath:
+**a card covered before its Exact resolve lands is never added**, so a pile scanned in Exact is
+scanned one decision at a time — wait for the row, then lay the next card.
 
 ### `decision_seq` and `decision`
 
