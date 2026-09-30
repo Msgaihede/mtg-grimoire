@@ -497,6 +497,10 @@ pub struct Session {
     /// `(decision_seq, replaces_previous)` for the decision now standing, so every frame of one
     /// decision reports the answer its first frame was given.
     standing: (u64, bool),
+    /// Which way up this stretch's card matched, once a frame made it plain — `true` for the
+    /// 180° rectification — so later frames hash three views rather than six. See
+    /// [`Reference::match_views_held`]. Cleared with the stretch and by [`Session::forget_card`].
+    held_rotated: Option<bool>,
 }
 
 impl Session {
@@ -521,6 +525,7 @@ impl Session {
             rearm_pending: false,
             previous_card: None,
             standing: (0, false),
+            held_rotated: None,
         }
     }
 
@@ -596,8 +601,8 @@ impl Session {
         self.previous_card = None;
     }
 
-    /// What a settings change forgets: the tracker's evidence, the burst, the stretch counters
-    /// and any resolution — everything [`Session::reset`] does **except the quad lock and the
+    /// What a settings change forgets: the tracker's evidence, the burst, the stretch counters,
+    /// the held orientation and any resolution — everything [`Session::reset`] does **except the quad lock and the
     /// previous decision**.
     ///
     /// **The lock is geometry, and a mode or a filter says nothing about where the card is.**
@@ -614,6 +619,7 @@ impl Session {
         self.was_committed = false;
         self.last_resolution = None;
         self.rearm_pending = false;
+        self.held_rotated = None;
     }
 
     /// Should the readers run on this frame? In Fast mode, once [`FAST_RESCUE_AFTER`] locked
@@ -648,6 +654,8 @@ impl Session {
             // The card may have changed hands: a decision after this is a new card, never a
             // second opinion on the last one.
             self.previous_card = None;
+            // And may come back the other way up.
+            self.held_rotated = None;
         } else if detected {
             self.steady += 1;
             if !settled {
@@ -982,13 +990,18 @@ impl Session {
         settled: bool,
     ) -> Option<Tracked> {
         let r = self.reference.as_ref()?;
-        // Both orientations are hashed inside the match, because a card is 180°-symmetric and
-        // the quad cannot say which end is the top. The primary framing first, then the
-        // alternates — see `DetectOptions::query_insets`. Order matters only for the reported
-        // view.
+        // Every framing both ways up is offered, because a card is 180°-symmetric, the quad
+        // cannot say which end is the top, and the right framing depends on the frame — see
+        // `DetectOptions::query_insets`. **Only a stretch's first frames hash both ways up.**
+        // Once one has matched plainly, its orientation is held and later frames hash that half
+        // alone, widening back to all six on any frame it stops matching. The primary framing
+        // first, then the alternates; order matters only for the reported view.
         let mut views: Vec<(&RgbImage, &RgbImage)> = vec![(rectified, rectified_180)];
         views.extend(alternates.iter().map(|(a, b)| (a, b)));
-        let report = r.match_views(&views, self.top, &self.mask);
+        let gate = self.tracker.options().max_normalized;
+        let (report, hold) =
+            r.match_views_held(&views, self.top, &self.mask, self.held_rotated, gate);
+        self.held_rotated = hold;
 
         // Accumulate across frames. A per-frame top-1 flickers between near-ties several times a
         // second; the stable answer is the one that keeps recurring. Grouped by oracle id: a
@@ -2271,6 +2284,50 @@ mod tests {
         assert!(s.previous_card.is_none(), "a Reset press kept the card a decision could replace");
         let v = s.frame(&blank_jpeg(), &exact);
         assert!(!v.lock.as_ref().is_some_and(LockState::is_trusted), "reset kept the lock");
+    }
+
+    #[test]
+    fn a_stretch_hashes_both_ways_up_once_and_then_holds_one() {
+        let mut s = Session::new(Some(labelled()), None, 5);
+        let card = card_image(3);
+        let flipped = image::imageops::rotate180(&card);
+        // One locked frame of the card, given as `(upright, rotated)`; the descriptors it cost.
+        let hashes = |s: &mut Session, upright: &RgbImage, rotated: &RgbImage| {
+            let settled = s.tracker.last_committed();
+            s.count_stretch(true, true, settled);
+            let mut v = Verdict::failed(
+                String::new(),
+                FrameSize { w: 0, h: 0 },
+                0.0,
+                true,
+                s.mode,
+                s.decision_seq,
+            );
+            let t = s.match_locked(&mut v, upright, rotated, &[], 0.5, settled);
+            s.conclude(&mut v, t.as_ref());
+            v.r#match.expect("a locked frame with a reference matches").hashes
+        };
+
+        assert_eq!(hashes(&mut s, &card, &flipped), 2, "the first frame searched both ways up");
+        assert_eq!(s.held_rotated, Some(false));
+        for _ in 0..3 {
+            assert_eq!(hashes(&mut s, &card, &flipped), 1, "a held card was hashed both ways up");
+        }
+
+        // Turned over mid-stretch: the held way up stops matching, the frame widens, and the
+        // hold follows the card.
+        assert_eq!(hashes(&mut s, &flipped, &card), 2);
+        assert_eq!(s.held_rotated, Some(true));
+        assert_eq!(hashes(&mut s, &flipped, &card), 1);
+
+        // A broken stretch forgets the hold — the next card may come the other way up.
+        s.count_stretch(false, false, false);
+        assert_eq!(s.held_rotated, None, "a lost lock kept its held orientation");
+        hashes(&mut s, &card, &flipped);
+        assert!(s.held_rotated.is_some());
+        // And so does a settings change, with everything else the card had gathered.
+        s.set_mode(ScanMode::Exact);
+        assert_eq!(s.held_rotated, None, "a mode switch kept its held orientation");
     }
 
     #[test]
