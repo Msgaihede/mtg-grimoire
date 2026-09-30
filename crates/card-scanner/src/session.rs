@@ -47,10 +47,11 @@ use std::sync::mpsc::{Receiver, TryRecvError};
 use std::sync::Arc;
 
 /// **The readers run only while the hash tier is still unsure, and never more than every few
-/// frames.** Reading a title costs **~340 ms against a ~350 ms frame** (release, measured
-/// 2026-09-08 — `docs/reference/card-scanner.md` §4 and §7), so running them on every frame
-/// would roughly halve the rate to answer a question that is usually
-/// already answered. They are a tie-breaker: they earn their cost exactly when appearance has
+/// frames.** The cadence was set when reading a title cost **~340 ms against a ~350 ms frame**
+/// (release, measured 2026-09-08 — `docs/reference/card-scanner.md` §4 and §7), when running
+/// them on every frame would roughly halve the rate to answer a question that is usually
+/// already answered. Since #707 a title read costs about a sixth of that (§4), so the argument is
+/// weaker than it was and the cadence has not been re-derived — #705 kept it as it was. They are a tie-breaker: they earn their cost exactly when appearance has
 /// failed — a foil under a lamp, where the hash's top five do not contain the card at all and
 /// the title is still perfectly legible.
 pub const OCR_EVERY: u64 = 4;
