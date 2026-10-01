@@ -223,8 +223,9 @@ describe("CardArt", () => {
 
   /**
    * **`remoteSrc` is the share viewer's door and nothing else's.** That page has no `mtgimg`
-   * protocol to ask, so it hands the frame the snapshot's own Scryfall URL; every app surface
-   * passes nothing and draws the local cache. Getting it backwards is silent in both directions
+   * protocol to ask, so its `ShareTile` supplies the snapshot's own Scryfall URL — through
+   * `components/CardTile`, the one caller that passes the prop on to this frame; every app surface
+   * supplies nothing and draws the local cache. Getting it backwards is silent in both directions
    * — an app wall drawing Scryfall's URL would refetch a screenful of art the cache already holds,
    * over the network, on every scroll, and still draw cards.
    */

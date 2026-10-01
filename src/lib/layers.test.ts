@@ -2,11 +2,11 @@ import { describe, expect, it } from "vitest";
 import { LAYER } from "./layers";
 
 /**
- * Every source file in the app, as text. The stylesheet is in the sweep for the reason
- * `tokens.test.ts` gives: Tailwind's scanner reads prose as eagerly as code, so a class
- * named in a comment is a class the build emits a rule for.
+ * Every source file in the app, and in the light app's `mobile/`, as text. The stylesheet is in
+ * the sweep for the reason `tokens.test.ts` gives: Tailwind's scanner reads prose as eagerly as
+ * code, so a class named in a comment is a class the build emits a rule for.
  */
-const SOURCES = import.meta.glob<string>("/src/**/*.{ts,tsx,css}", {
+const SOURCES = import.meta.glob<string>(["/src/**/*.{ts,tsx,css}", "/mobile/**/*.{ts,tsx,css}"], {
   query: "?raw",
   import: "default",
   eager: true,
@@ -78,7 +78,7 @@ describe("the layer scale", () => {
    * review rule because the failure it prevents — an inline `z-20` losing to a header by
    * document order — is invisible in every test that does not paint.
    */
-  it("is the only place in src/ that names a z-index", () => {
+  it("is the only place in src/ or mobile/ that names a z-index", () => {
     // A glob that stops matching returns `{}`, and a sweep over nothing finds nothing.
     expect(Object.keys(SOURCES).length).toBeGreaterThan(20);
 

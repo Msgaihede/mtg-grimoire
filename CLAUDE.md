@@ -174,6 +174,9 @@ no combo" and "we have never downloaded the list" have to be two different sente
   covered by definition, and reads ~14 points high. See
   [test-coverage.md](docs/reference/test-coverage.md) before quoting either figure.
 - `npm run storybook` / `build-storybook` — the component workbench
+- `npm run mobile:dev` / `mobile:tauri` — the light app, over the Storybook fake in a browser
+  (port 5175, no lock) or over the real core in a phone-sized window (**takes the `app` lock**).
+  See [`mobile/CLAUDE.md`](mobile/CLAUDE.md).
 
 ## Architecture
 
@@ -209,6 +212,7 @@ on — do not work from this page alone.
 | [`src/features/transfer/CLAUDE.md`](src/features/transfer/CLAUDE.md) | Decklist import and export — parsing, planning, the two dialogs |
 | [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md) | Stories, the fake, seeds and faults |
 | [`.github/CLAUDE.md`](.github/CLAUDE.md) | Workflows, the `changes` router, release-please |
+| [`mobile/CLAUDE.md`](mobile/CLAUDE.md) | The light app — the Android and web face: the two faces and the width that picks one, the URL as navigation, what the phone face may import, and the rule that nothing there asks where it is running |
 
 **Two rules load by file *extension* rather than by directory, and sit in `.claude/rules/`.**
 They cover the language servers, which are active for every `.rs` and `.ts`/`.tsx` file with no
@@ -277,6 +281,7 @@ number to compare against.
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
 | [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
 | [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what the 2026-10-01 deploy has not proved** |
+| [light-app.md](docs/reference/light-app.md) | The Android and web face — one entry and two faces, what a browser over the fake was driven to show at 360 and 1280 and across the crossing between them, the phone-sized Tauri window over the real core and the desktop app launched after it, the build's chunks, the two ways the dev server died, and what is open by the phase that owns it. **Phase 1 only: no Android host, no WASM host, no sync** |
 | [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the eighteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 

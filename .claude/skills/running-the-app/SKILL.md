@@ -99,6 +99,18 @@ thing that makes `$app.Id` the wrong pid.
 After `release`, check `Get-Process mtg-grimoire` is empty and close the `tauri dev`
 window if it survived its child.
 
+## `npm run mobile:tauri` is the same app, and takes the same lock
+
+The light app's dev window is **this binary with a config overlay**
+(`src-tauri/tauri.light.conf.json`): the same `com.mtggrimoire.app` identifier, the same
+single-instance guard, the same `target/debug/data`. So it is launched exactly as above with
+`"run","mobile:tauri"` in place of `"run","tauri","dev"`, under the **`app`** lock, and the
+process to adopt is still `mtg-grimoire`. Its Vite is on **5175** rather than 1420 — which
+`npm run mobile:dev`, the browser-only server over the Storybook fake, also uses, so stop that one
+first; `mobile:dev` itself needs no lock. Switching between the two launches rebuilds the binary
+each way, because the overlay arrives through the build's environment. Driven both ways on
+2026-10-01 (debug build): [light-app.md](../../../docs/reference/light-app.md).
+
 ## The other three recipes — read the file, do not improvise
 
 | You are about to | Read |

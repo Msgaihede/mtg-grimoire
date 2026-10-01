@@ -1,7 +1,6 @@
-import { CardArt } from "@/components/CardArt";
-import { CardChin } from "@/components/CardChin";
+import { CardTile } from "@/components/CardTile";
 import { CountTag } from "@/components/CountTag";
-import { cardScaleVars, DEFAULT_ZOOM } from "@/lib/cardZoom";
+import { DEFAULT_ZOOM } from "@/lib/cardZoom";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { isFinish, type Finish } from "@/lib/finish";
 import type { Currency } from "@/lib/marketplace";
@@ -25,10 +24,11 @@ export function wireFinish(f: string): Finish | null {
 /**
  * One published copy, drawn as the card it is.
  *
- * **`CardArt` and `CardChin` rather than a frame of its own**, which is most of why a page with
- * no core imports from `src/` at all: several surfaces in the app draw a card and those two are
- * the one definition of what that looks like. A fresh drawing, on the one page a stranger sees,
- * is exactly the drift `src/CLAUDE.md` was written about.
+ * **`CardTile` rather than a frame of its own**, which is most of why a page with no core imports
+ * from `src/` at all: several surfaces in the app draw a card, and `CardTile` composes `CardArt`
+ * and `CardChin`, which are the one definition of what a card and its chin look like. A fresh
+ * drawing, on the one page a stranger sees, is exactly the drift `src/CLAUDE.md` was written
+ * about.
  *
  * Three things this tile is **not**, and each is a fact about the surface rather than a
  * simplification:
@@ -38,12 +38,13 @@ export function wireFinish(f: string): Finish | null {
  *   nothing would be a control the page cannot honour.
  * * **`cardId={null}`, always — but that is not what carries the picture.** `remoteSrc` is:
  *   this page has no Tauri behind it and so no `mtgimg://` protocol to ask, and `CardArt`'s
- *   `remoteSrc` is the one door for a picture from anywhere else — this tile is its only
- *   caller. ⚠️ **`card.img ?? null`, never bare `card.img`**: an absent `remoteSrc` means *the
- *   cache*, and a present `null` means *no picture*. A card the publisher's corpus had
- *   forgotten carries no `img`, which `CardArt` draws as a named frame rather than a broken
- *   image. The null id is kept as defence in depth: it means this bundle can never *ask* for
- *   the `mtgimg://` protocol a browser has never heard of.
+ *   `remoteSrc` is the one door for a picture from anywhere else — `CardTile` is what passes
+ *   it to `CardArt`, and this tile is the only surface that supplies one. ⚠️ **Always
+ *   `card.img ?? null`, never bare `card.img`**: an absent `remoteSrc` means *the cache*, and a
+ *   present `null` means *no picture*. A card the publisher's corpus had forgotten carries no
+ *   `img`, which `CardArt` draws as a named frame rather than a broken image. The null id is
+ *   kept as defence in depth: it means this bundle can never *ask* for the `mtgimg://` protocol
+ *   a browser has never heard of.
  * * **`rarity={null}` on the chin.** Rarity is not on the wire (spec §3's absences), so the gem
  *   says *unknown* rather than being derived from a corpus this page does not have.
  */
@@ -81,30 +82,30 @@ export function ShareTile({
   const condition = card.c == null ? NOTHING : (CONDITION_LABEL[card.c as Condition] ?? card.c);
 
   return (
-    <li className="group flex flex-col" style={cardScaleVars(DEFAULT_ZOOM)}>
-      <div className="relative">
-        <CardArt cardId={null} name={card.n} remoteSrc={card.img ?? null} finish={marked} />
-        {card.q > 1 && (
-          // Bottom-left. The art's top-right corner is the finish chip's on every wall in this
-          // app, and a bare number laid *on* a card is `CountTag` — no `×`. The tag is
-          // `aria-hidden`, so the words are owed elsewhere: the tile's own sr-only line below
-          // carries them.
-          <span className="absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5">
-            <CountTag count={card.q} title={`${card.q} copies`} />
-          </span>
-        )}
-      </div>
-      <CardChin
-        zoom={DEFAULT_ZOOM}
-        rarity={null}
-        setCode={card.s}
-        collectorNumber={card.cn}
+    <li className="flex flex-col">
+      <CardTile
+        cardId={null}
+        name={card.n}
+        remoteSrc={card.img ?? null}
         finish={marked}
+        rarity={null}
+        chin={{ setCode: card.s, collectorNumber: card.cn }}
+        zoom={DEFAULT_ZOOM}
         // `undefined` rather than `null`: the chin draws no money slot for the first and an em
         // dash for the second, which is precisely the difference between "nobody asked" and
         // "nobody quoted". Both are live states on this page.
         money={showValue ? formatPrice(card.p ?? null, currency) : undefined}
-        seam="art"
+        overlay={
+          card.q > 1 ? (
+            // Bottom-left. The art's top-right corner is the finish chip's on every wall in this
+            // app, and a bare number laid *on* a card is `CountTag` — no `×`. The tag is
+            // `aria-hidden`, so the words are owed elsewhere: the tile's own sr-only line below
+            // carries them.
+            <span className="absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5">
+              <CountTag count={card.q} title={`${card.q} copies`} />
+            </span>
+          ) : undefined
+        }
       />
       {(showCondition || showLang) && (
         // **Two spans and a gap, not one string joined by a middle dot.** Each column has to be

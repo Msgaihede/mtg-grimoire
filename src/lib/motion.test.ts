@@ -172,7 +172,7 @@ describe("the press recipes", () => {
  * Every `.tsx` in the app, as text. The same `?raw` glob `tokens.test.ts` sweeps with, and for
  * the same reason: this project has no `@types/node` on purpose, so a test cannot read the tree.
  */
-const SOURCES = import.meta.glob<string>("/src/**/*.tsx", {
+const SOURCES = import.meta.glob<string>(["/src/**/*.tsx", "/mobile/**/*.tsx"], {
   query: "?raw",
   import: "default",
   eager: true,

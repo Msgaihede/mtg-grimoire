@@ -108,10 +108,14 @@ Every one of these has its measurement and its story in
   [image-cache.md](../docs/reference/image-cache.md).
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
   no-art fallback and the foil marking, in one place. **Its picture is the `mtgimg://` protocol's,
-  built by `cardImageUrl` from the card id, unless the caller passes `remoteSrc` — and only the
-  share viewer's `share/ShareTile.tsx` does**, because that page has no protocol to ask.
+  built by `cardImageUrl` from the card id, unless the caller passes `remoteSrc` —
+  `components/CardTile` is the one caller that passes it on, and only the share viewer's
+  `share/ShareTile.tsx` supplies one**, because that page has no protocol to ask.
+  **`CardTile` is the one composition of this frame and `CardChin` under it**: the phone wall
+  (`mobile/phone/CardWall.tsx`) and `ShareTile` draw it, and `features/search/CardGrid` still
+  spells the pair out itself until somebody is next in that file.
   **Every wall of card faces draws it**: the search's, the collection's, the wishlist's and the
-  three docked search columns — all of them `features/search/CardGrid`, which is the one wall.
+  three docked search columns — all of them `features/search/CardGrid`, the desktop's one wall.
   Grep `from "@/components/CardArt"` for the census rather than trusting a list here. **This
   sentence named two callers that are not that wall — the deck's own `DeckTokensPanel` and
   `TokenArtPicker`, which draw tokens rather than deck rows — and that was never the whole
@@ -454,9 +458,12 @@ Every one of these has its measurement and its story in
   host spells neither** (2026-09-08). `Dialog`'s scrim is `p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]`:
   24px across, 5vh down, so a dialog whose body outgrows the window leaves glass above and below
   and reads as a panel over the app rather than as a page. The below-`sm` rung is under the
-  desktop floor and no shipped window draws it; it stays on purpose (the owner's call, 2026-09-27,
-  when the phone layout went) because it is correct at any width — never read it as a phone
-  target. It is stated as an **inset** rather than as
+  desktop floor, so no *desktop* window draws it; it stays on purpose (the owner's call,
+  2026-09-27, when the phone layout went) because it is correct at any width. **Since 2026-10-01
+  it has one reader: the light app's phone face draws its card sheet through this shell
+  (`mobile/phone/CardSheet.tsx`), and that rung is what makes the sheet span the window there** —
+  so it is not dead code to tidy away, and it is still not a design for a phone: phase 3 of the
+  light app decides what the sheet is. It is stated as an **inset** rather than as
   a `max-h` on the panel for two reasons that are both load-bearing. The scrim is where this shell
   states insets, so `max-h-full` stays the one height rule and only the box it is a percentage of
   moves; and a `sm:max-h-…` would sit on the same property as `CardDetailModal`'s
@@ -1127,9 +1134,14 @@ Every one of these has its measurement and its story in
   reference to something the palette decides later.
 - Card images arrive over `mtgimg://`; `mtgimg:` is an `img-src` and nothing else — **read images
   with `<img>`, never with `fetch`** (a `fetch()` at it fails CORS by design).
-- **There is no viewport branch in the app.** The desktop window's floor is `DESKTOP_FLOOR_PX`
-  (1024, quoted from `tauri.conf.json`) and every fold answers its own box; the one branch there
-  was, `useNarrowWindow`, went with the phone layout on 2026-09-27.
+- **There is no viewport branch in the app, and the light app's is not in `src/`.** The desktop
+  window's floor is `DESKTOP_FLOOR_PX` (1024, quoted from `tauri.conf.json`) and every fold answers
+  its own box; the one branch there was, `useNarrowWindow`, went with the phone layout on
+  2026-09-27. The light app picks between this UI and a phone face by viewport width — in
+  `mobile/useFace.ts`, which is the only place that question is asked. What `src/` reads instead is
+  an **`Edition`** (`lib/edition.ts`), handed to the shell at the root: which rail rows to draw,
+  whether to draw the caption, and which view chords act. **A page never reads it** — `AppShell` is
+  its one reader today — and a provider passes a module constant, never an object built in render.
 - **`Core.call` takes `(command, args?: CallArgs, options?: CallOptions)`**, where `CallArgs` is
   `Record<string, unknown> | Uint8Array`. It widened for one *shape* of call, which two wrappers
   make — `ipc.scannerFrame` and `ipc.scannerCapture`, the only two that pass raw bytes and
@@ -1313,10 +1325,11 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
 
 | Path | What lives there |
 | --- | --- |
-| `components/` | Shared UI — `CardImage`, `CardArt`, `table/VirtualTable`, `menu/` (the one context menu) |
+| `components/` | Shared UI — `CardImage`, `CardArt`, `CardTile`, `table/VirtualTable`, `menu/` (the one context menu) |
 | `features/` | One directory per surface — **`ls src/features` is the census.** This row named six while the tree held eight; a prose-only edit routes to neither CI job |
 | `lib/` | `ipc.ts` (the Rust mirror), `layers.ts`, `activity.ts`, `sort.ts`, `tokens.test.ts` |
 | `features/decks/` | Has its own `CLAUDE.md` — the deck domain rules live there |
 | `features/tags/` | Browse by what a card **is of**. Storied under `Tags/*`; the wall is `features/search`'s, reused with collapse off |
 | `features/share/` | Somebody else's binder, read-only — the guarantee is structural and `readOnly.test.ts` is the fence. [collection-sharing.md](../docs/reference/collection-sharing.md) |
 | `share/` (repo root) | **Not part of this program's bundle** — the *public* web viewer, a second Vite entry over the same `src/` components, with no `ipc` and no core. In `tsconfig.json`'s `include`, built by `npm run share:build`, which **neither `verify` nor CI runs** |
+| `mobile/` (repo root) | **The light app** — a third Vite entry. At ≥ 1024px it draws this program's own pages under the light `Edition` (`lib/edition.ts`); below that, a phone face of its own, fenced off this program's store and shell. [`mobile/CLAUDE.md`](../mobile/CLAUDE.md) |

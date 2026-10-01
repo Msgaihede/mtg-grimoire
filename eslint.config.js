@@ -40,6 +40,8 @@ export default tseslint.config(
       // any machine that has run `npm run share:build` — which `share-worker`'s deploy requires,
       // because `wrangler.jsonc` declares an `assets` binding over it.
       "dist-share/",
+      // The light app's bundle (`npm run mobile:build`). Generated output like the two above.
+      "dist-mobile/",
       "storybook-static/",
       "src-tauri/",
       "node_modules/",
