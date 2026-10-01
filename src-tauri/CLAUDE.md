@@ -2958,7 +2958,10 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   that shows it**, so it runs before anything in `setup` that can fail — an early `?` above it
   would leave a running app with no window, which is exactly what the single-instance guard
   looks like.
-  **Every window climbs the same ladder, not only `main`** (2026-09-20). `open_sized_to_monitor`
+  **Every window climbs the same ladder, not only `main`** (2026-09-20) — **with one exception
+  since 2026-10-01: a window whose config sized it below `MIN`** keeps that size, first and later
+  alike (`window::configured_small`). That is the light app's phone-sized dev window under
+  `tauri.light.conf.json`, and nothing the desktop config opens. `open_sized_to_monitor`
   takes a `&WebviewWindow` rather than looking up `"main"`, and `window::open_new` — behind both a
   relaunch and Ctrl+Shift+N — shares `opening_size` through its own `place`, which differs only in
   *where* it puts the window: `OFFSET` (32 logical px) down and right of the window it came from,

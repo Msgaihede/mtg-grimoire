@@ -15,6 +15,10 @@
 //! **And every window after the first is opened here too** — [`open_new`], behind both a
 //! relaunch and Ctrl+Shift+N. It takes the same rungs on the monitor of the window it came from
 //! and opens [`OFFSET`] down and right of it, by [`cascade`].
+//!
+//! **One kind of window climbs no rung: one whose config sized it below [`MIN`]** — the light
+//! app's phone-sized dev window, under `tauri.light.conf.json`. [`configured_small`] is the test,
+//! and such a window keeps the size it was asked for, first and later alike.
 
 use tauri::Manager;
 
@@ -131,7 +135,9 @@ pub fn focused(app: &tauri::AppHandle) -> Option<tauri::WebviewWindow> {
 }
 
 /// Open another window onto the same app: the config's window under a new label, sized by
-/// [`opening_size`], placed by [`cascade`] beside `from`, with the camera grant, shown and focused.
+/// [`opening_size`] — or kept at the config's own size when that is below [`MIN`], see
+/// [`configured_small`] — placed by [`cascade`] beside `from`, with the camera grant, shown and
+/// focused.
 ///
 /// ⚠️ **Never call this synchronously from a command or an event handler.** Tauri documents that
 /// building a window on Windows "deadlocks when used in a synchronous command or event handlers"
@@ -160,7 +166,8 @@ pub fn open_new(
 }
 
 /// Size `window` for the monitor `from` is on and put it beside `from`, or centre it when there is
-/// no `from`. Best-effort, for [`open_sized_to_monitor`]'s reason.
+/// no `from`. Best-effort, for [`open_sized_to_monitor`]'s reason. A window the config sized below
+/// [`MIN`] keeps that size and is only placed.
 ///
 /// **The position is set in physical pixels, converted back with the same `scale` it was derived
 /// with.** A `LogicalPosition` would be converted by the *new* window's scale factor, and a window
@@ -209,10 +216,10 @@ fn place(window: &tauri::WebviewWindow, from: Option<&tauri::WebviewWindow>) {
     }
 }
 
-/// Size a window to the monitor it opened on, centre it, and show it. Every window the app opens
-/// is sized by the same rungs — `main` here, from `setup`, and every later one through
-/// [`open_new`]'s `place`, which shares [`opening_size`] and differs only in where it puts the
-/// window.
+/// Size a window to the monitor it opened on, centre it, and show it. Every window the desktop
+/// config opens is sized by the same rungs — `main` here, from `setup`, and every later one
+/// through [`open_new`]'s `place`, which shares [`opening_size`] and differs only in where it
+/// puts the window. The one exception is in the last paragraph.
 ///
 /// Best-effort throughout, and deliberately: every call here is a window operation whose
 /// failure is not worth a launch. What is *not* optional is `show()` — the config opens the
@@ -395,6 +402,10 @@ mod tests {
             window["height"].as_f64().unwrap(),
         );
         assert!(configured_small(size.0, size.1).is_some());
+        // Tauri enforces the minimum itself: a floor copied over from the main config would open
+        // this window at 1024 while `configured_small` still skipped the ladder for it.
+        assert!(window["minWidth"].as_f64().unwrap() <= size.0);
+        assert!(window["minHeight"].as_f64().unwrap() <= size.1);
         assert_eq!(window["visible"], false);
         assert_eq!(window["dragDropEnabled"], false);
         assert_eq!(window["decorations"], true);
