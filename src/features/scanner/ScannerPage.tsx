@@ -22,6 +22,7 @@ import { useScanLoop } from "./useScanLoop";
 import { SCANNER_ELSEWHERE_KEY, SCANNER_ELSEWHERE_POLL_MS, useScannerElsewhere } from "./useScannerElsewhere";
 import { useScannerPrefs } from "./useScannerPrefs";
 import { useTray } from "./useTray";
+import { useWindowParked } from "./useWindowParked";
 import { bundleSentence, modelsSentence, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 
 /**
@@ -116,10 +117,15 @@ function LiveScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const queryClient = useQueryClient();
   const { prefs, update, filterError, loaded } = useScannerPrefs();
+  // **A minimized window stands down** (issue #556): the pump pauses at once, and the camera and
+  // the heartbeat go after a grace, so the light goes out and the lease lapses for another window.
+  // WebView2 reports a minimized page as visible, so the page could not see this on its own.
+  const parked = useWindowParked();
   // **`undefined` until the prefs are in, which holds the camera shut.** The stored choice is one
   // of them, and opening the default on mount only to reopen the stored camera a moment later is
-  // two `getUserMedia` calls, a flicker, and on some platforms a second permission prompt.
-  const camera = useCamera(videoRef, loaded ? prefs.cameraId : undefined);
+  // two `getUserMedia` calls, a flicker, and on some platforms a second permission prompt. A
+  // released window is `undefined` too — its tracks are stopped, and a restore asks again.
+  const camera = useCamera(videoRef, loaded && !parked.released ? prefs.cameraId : undefined);
   // Keyed on the camera that opened, because a browser names no camera until one has been
   // granted: the list read before that is `Camera 1`, `Camera 2`, and the one read after it has
   // the real names.
@@ -162,8 +168,14 @@ function LiveScanner() {
    * the frame loop's re-ask below fires once per run of refused frames, and a run that began while
    * the gate still said "free" could leave a mounted view sending refused frames at full rate. Any
    * other failure says nothing about the lease and is left to the frame loop's own line.
+   *
+   * **Stopped while the window is released** (minimized past the grace): a window sitting on the
+   * taskbar held the scanner for good before, and nothing else could take it. The restore starts it
+   * again with an immediate beat, whose refusal is the first thing to say another window has it.
    */
+  const released = parked.released;
   useEffect(() => {
+    if (released) return;
     const hold = () => {
       ipc.scannerHold().catch((e: unknown) => {
         if (ipcError(e) === SCANNER_OPEN_ELSEWHERE) {
@@ -174,7 +186,7 @@ function LiveScanner() {
     hold();
     const beat = setInterval(hold, SCANNER_ELSEWHERE_POLL_MS);
     return () => clearInterval(beat);
-  }, [queryClient]);
+  }, [queryClient, released]);
 
   /**
    * Every tray write goes through here, and every writer builds on `tray.latest()` rather than
@@ -245,8 +257,8 @@ function LiveScanner() {
     videoRef,
     // **Held until the prefs and the tray are in.** The first frame must go out in the stored
     // mode and under the stored filters, and a decision must land on the stored tray rather than
-    // on an empty one the load then overwrites.
-    live: camera.kind === "live" && loaded && tray.loaded,
+    // on an empty one the load then overwrites. And paused the moment the window is minimized.
+    live: camera.kind === "live" && loaded && tray.loaded && !parked.paused,
     options: frameOptions,
     sendPx,
     onDecision,
