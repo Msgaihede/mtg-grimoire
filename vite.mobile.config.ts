@@ -1,3 +1,4 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig, mergeConfig, type Plugin } from "vite";
 import base from "./vite.config.ts";
 
@@ -66,17 +67,36 @@ function lightEntry(): Plugin {
  * in a plain browser exercises the mirror too. `mergeConfig` puts these ahead of the base
  * config's `@` alias, and `@/lib/images` has to be tried before that prefix.
  */
+const fake = (name: string) =>
+  fileURLToPath(new URL(`./.storybook/fake/${name}`, import.meta.url));
+
 const FAKE_ALIASES = [
-  { find: /^@tauri-apps\/api\/core$/, replacement: "/.storybook/fake/core.ts" },
-  { find: /^@tauri-apps\/api\/event$/, replacement: "/.storybook/fake/event.ts" },
-  { find: /^@tauri-apps\/api\/window$/, replacement: "/.storybook/fake/window.ts" },
-  { find: /^@\/lib\/images$/, replacement: "/.storybook/fake/images.ts" },
+  { find: /^@tauri-apps\/api\/core$/, replacement: fake("core.ts") },
+  { find: /^@tauri-apps\/api\/event$/, replacement: fake("event.ts") },
+  { find: /^@tauri-apps\/api\/window$/, replacement: fake("window.ts") },
+  { find: /^@\/lib\/images$/, replacement: fake("images.ts") },
 ];
+
+/**
+ * The two Tauri plugins the app imports, kept **out of the dependency optimizer** in fake mode.
+ *
+ * Each of them imports `@tauri-apps/api/core` from inside `node_modules`, and the optimizer
+ * applies the alias above while it pre-bundles them. Spelled root-relative, that replacement is
+ * not a path the optimizer can load — it reads `/.storybook/…` off the drive's root — and the
+ * dev server **exits** during "bundling dependencies", a few seconds after it printed its URL
+ * (driven 2026-10-01: a blank page and `ERR_CONNECTION_REFUSED` on every dependency). Spelled
+ * absolute it loads, and the plugin's bundle then carries **its own copy of the fake**, with its
+ * own scope pointer and no world installed in it, so a Copy or an Open-on would be answered by
+ * nobody. Served unbundled, the plugin's import takes the same alias the app's does and there is
+ * one fake. Both packages are plain ESM, which is all leaving the optimizer asks of them.
+ */
+const FAKE_UNBUNDLED = ["@tauri-apps/plugin-clipboard-manager", "@tauri-apps/plugin-opener"];
 
 export default defineConfig(({ mode }) =>
   mergeConfig(base, {
     plugins: [lightEntry()],
     resolve: mode === "fake" ? { alias: FAKE_ALIASES } : {},
+    optimizeDeps: mode === "fake" ? { exclude: FAKE_UNBUNDLED } : {},
     build: {
       outDir: "dist-mobile",
       emptyOutDir: true,
