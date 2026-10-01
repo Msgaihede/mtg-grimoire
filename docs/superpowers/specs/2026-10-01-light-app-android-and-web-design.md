@@ -310,25 +310,30 @@ providing one.
 ```ts
 interface Edition {
   id: "full" | "light";
-  /** The rail's rows, in order. `NAV` filtered by this. */
-  views: readonly ViewId[];
+  /** The rail's rows: `NAV` filtered by this. `null` is every destination, so the full edition
+   *  cannot fall behind a view added to the rail. */
+  views: readonly ViewId[] | null;
   /** Whether this window draws its own caption. False wherever a browser or an OS owns the frame. */
   caption: boolean;
-  /** The view a fresh install opens on. The full edition's is `home`. */
+  /** The view a URL that names nothing opens on. */
   startView: ViewId;
-  /** Which Settings entries exist. */
-  settings: readonly SettingsEntryId[];
 }
 ```
 
 The light edition's `views` are **Search, Decks, Collection, Wishlist, Scanner, Settings**.
+Which Settings entries exist joins the type in phase 3, with its first reader.
 
 **This is a seam, not a platform check, and the difference is the whole lesson of round one.**
 `isWebTarget()` reached into components and asked where they were running; three readers of
 `isAndroid()` were already flagged as too many. An edition is *handed to* the shell and answers what
-to draw. Its readers are few and named: `AppShell` (the rail and the caption), `useStartView`,
-`SettingsPage` (its entry list), and the chord table (`Ctrl+1…9` binds against the edition's
-views). A page never asks.
+to draw. Its readers are few and named: `AppShell` — the rail, the caption and the chords — and,
+from phase 3, `SettingsPage`'s entry list. A page never asks.
+
+**The digits do not move between editions.** `Ctrl+2` is Search in both; a chord for a view the
+edition does not draw is inert rather than rebound to the next row. That is the shell's own rule
+about the conditional Shared row — one press must not mean two things to two readers — and it was
+found by reading `AppShell.tsx` while the skeleton was planned, where the first draft of this
+section had the chords renumber.
 
 **What a page calls that only a desktop can answer** — the Rust-opened file dialogs, a new window —
 is answered below the `Core` seam (§4.6), not by a branch in the page.
@@ -622,9 +627,10 @@ built.**
 **The edition seam** (§3.1)
 
 - `src/lib/edition.ts` — the type, the two editions, a provider whose default is `full`.
-- `AppShell` filters `NAV` by the edition and draws `TitleBar` only when `caption` is true;
-  `useStartView` falls back to the edition's `startView`; the chord table binds against the
-  edition's views.
+- `AppShell` filters `NAV` by the edition, draws `TitleBar` only when `caption` is true, and
+  leaves a chord for a view outside the edition inert. The stored start view is not consulted in
+  the light app at all: the URL is seeded into the store as a press, and the shell's launch
+  hydration already yields to a press.
 - **The desktop app is unchanged**, and the tests that say so are the existing ones: nothing in
   `AppShell.test.tsx`, `nav.test.ts` or `App.test.tsx` may need editing for the full edition.
   Settings' light entry list is phase 3; the skeleton's light Settings draws what it draws today.
@@ -646,7 +652,10 @@ built.**
 - The light entry draws the phone face below 1024px and the desktop face, light edition, at or
   above it — each a lazy chunk — with the URL adapter of §3.4 for the view.
 
-**The fence** (§3.3) and stories for the shell under `Mobile/*`.
+**The fence** (§3.3), and a story for `CardTile`, which lives in `src/`. **Stories for phone UI
+are phase 3's**: Storybook's story glob, its stylesheet source and `src/stories.test.tsx`'s module
+glob all stop at `src/`, and widening three globs is work for when the pages that need a
+catalogue exist. Until then the phone face's workbench is `npm run mobile:dev`.
 
 **`mobile/CLAUDE.md`**, carrying the rules of §3 for whoever works there next, and a row for it in
 the root file's table.
