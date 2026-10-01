@@ -43,7 +43,13 @@
  *
  * The residual gap is a *narrower* invalidation — `["collection", "summary"]` — landing while
  * nothing under that exact key is cached. It is worth naming and not worth more machinery: the
- * feed is also refetched on mount and on focus like every other query in this app.
+ * feed is also refetched on focus like every other query in this app, and **on every mount**.
+ *
+ * **`refetchOnMount: "always"`, because the bridge only exists while this widget does** (issue
+ * #556). A write made on another view — Home unmounted, so no subscription heard it — left the
+ * feed cached and still inside the app's 30 s `staleTime`, and coming back to Home inside that
+ * window drew the old feed with nothing to correct it. The read is one indexed query against
+ * the user database; paying it per visit is cheaper than a feed that is quietly behind.
  *
  * **No `@container` here or on the page that draws this**, and no z-index that is not from
  * `LAYER` — `fit.ts`'s module doc has the first argument in full.
@@ -193,6 +199,8 @@ export function ActivityWidget({ widget, fit, still }: WidgetBodyProps): ReactEl
   const query = useQuery({
     queryKey: activityKey(limit),
     queryFn: () => ipc.activityRecent(limit),
+    // A write made while Home was not mounted reached no bridge; see the module doc.
+    refetchOnMount: "always",
   });
 
   const entries = query.data ?? NONE;

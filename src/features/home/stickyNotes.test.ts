@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 
-import { noteColor, notePreview, orderedNotes, stickyTitle, UNTITLED_STICKY } from "./stickyNotes";
+import {
+  noteColor,
+  notePreview,
+  orderedNotes,
+  stickyTitle,
+  storedOrder,
+  UNTITLED_STICKY,
+} from "./stickyNotes";
 
 const note = (over: Partial<Parameters<typeof orderedNotes>[0][number]> = {}) => ({
   id: 1,
@@ -95,5 +102,57 @@ describe("orderedNotes", () => {
     const input = [c, b, a];
     orderedNotes(input, true);
     expect(input.map((n) => n.id)).toEqual([3, 2, 1]);
+  });
+});
+
+describe("storedOrder", () => {
+  // Stored: 1, 2 (pinned), 3, 4 (pinned), 5 — drawn with pinning on as 2, 4, 1, 3, 5.
+  const stored = [
+    note({ id: 1, sortOrder: 0 }),
+    note({ id: 2, sortOrder: 1, pinned: true }),
+    note({ id: 3, sortOrder: 2 }),
+    note({ id: 4, sortOrder: 3, pinned: true }),
+    note({ id: 5, sortOrder: 4 }),
+  ];
+  const drawnAfter = (ids: number[]) =>
+    orderedNotes(
+      storedOrder(stored, ids, true).map((id, at) => ({ ...stored.find((n) => n.id === id)!, sortOrder: at })),
+      true,
+    ).map((n) => n.id);
+
+  it("is the drawn order itself when pinning is off", () => {
+    expect(storedOrder(stored, [3, 1, 2, 4, 5], false)).toEqual([3, 1, 2, 4, 5]);
+  });
+
+  /** The whole bug: writing the drawn list promoted the pinned notes in the stored order. */
+  it("keeps the pinned notes in the slots they already held", () => {
+    // 5 moved to the front of the unpinned group: 2, 4, 5, 1, 3.
+    expect(storedOrder(stored, [2, 4, 5, 1, 3], true)).toEqual([5, 2, 1, 4, 3]);
+  });
+
+  it("reorders the pinned group within its own slots", () => {
+    expect(storedOrder(stored, [4, 2, 1, 3, 5], true)).toEqual([1, 4, 3, 2, 5]);
+  });
+
+  it("draws back exactly the arrangement the gesture made", () => {
+    expect(drawnAfter([2, 4, 5, 1, 3])).toEqual([2, 4, 5, 1, 3]);
+    expect(drawnAfter([4, 2, 3, 1, 5])).toEqual([4, 2, 3, 1, 5]);
+  });
+
+  /** A drop across the line lands at the nearest place on the note's own side of it. */
+  it("clamps an unpinned note dropped above a pinned one to the head of its group", () => {
+    expect(drawnAfter([5, 2, 4, 1, 3])).toEqual([2, 4, 5, 1, 3]);
+  });
+
+  it("clamps a pinned note dropped among the unpinned to the tail of its group", () => {
+    expect(drawnAfter([4, 1, 3, 2, 5])).toEqual([4, 2, 1, 3, 5]);
+  });
+
+  it("changes nothing for a drop that clamps back to where the note was", () => {
+    expect(storedOrder(stored, [1, 2, 4, 3, 5], true)).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("leaves a list that disagrees with the notes unmapped", () => {
+    expect(storedOrder(stored, [2, 4, 1, 3], true)).toEqual([2, 4, 1, 3]);
   });
 });

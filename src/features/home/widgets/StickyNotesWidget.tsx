@@ -71,11 +71,13 @@
  * rest as a pager, a rail or an index, so there is no arrangement on screen to rearrange — and a
  * press on a rail chip already means *show me this one*, which a drag from it would contradict.
  *
- * ⚠️ **Both gestures act on the whole drawn order, and `Pinned note first` outranks them.**
- * `orderedNotes` lifts a pinned note to the front *after* `sortOrder`, so a note dropped above a
- * pinned one is written first and then drawn second. That is the toggle doing what it says rather
- * than the drop being refused, and it is why the board writes the order it is *drawing* — the
- * list that comes back re-reads the same way.
+ * ⚠️ **Both gestures act on the drawn order, and the widget translates it before it is stored.**
+ * With `Pinned note first` on, `orderedNotes` draws every pinned note ahead of every unpinned one,
+ * so the drawn order is not the stored one — and writing it as it stood (which this did until
+ * issue #556) promoted the pinned notes in the stored order for good, and drew a note dropped
+ * above a pin back below it. `storedOrder` keeps a gesture inside the note's own group and writes
+ * each group into the slots it already holds, so a drop lands where the reader saw it land and
+ * switching the toggle off finds the order they arranged underneath.
  */
 import {
   useCallback,
@@ -104,6 +106,7 @@ import {
   notePreview,
   orderedNotes,
   stickyTitle,
+  storedOrder,
   type NoteColor,
 } from "../stickyNotes";
 import { useStickyNotes } from "../useStickyNotes";
@@ -445,6 +448,19 @@ export function StickyNotesWidget({
   const [openId, setOpenId] = useState<number | null>(null);
 
   const ordered = useMemo(() => orderedNotes(api.notes, pinnedFirst), [api.notes, pinnedFirst]);
+  /** Every note in **stored** order — what a gesture on the drawn order is written back into. */
+  const stored = useMemo(() => orderedNotes(api.notes, false), [api.notes]);
+
+  /** A board gesture, as the stored order it means; nothing written where it changes nothing —
+   *  a pinned note stepped past its own group is clamped straight back to where it was. */
+  const onReorder = useCallback(
+    (drawn: number[]) => {
+      const next = storedOrder(stored, drawn, pinnedFirst);
+      if (next.length === stored.length && next.every((id, at) => id === stored[at].id)) return;
+      reorder(next);
+    },
+    [stored, pinnedFirst, reorder],
+  );
   const open = ordered.find((note) => note.id === openId);
 
   // The dialog latches `onSave` in a ref and names it in a debounce's dependency array, so these
@@ -512,7 +528,7 @@ export function StickyNotesWidget({
 
   return (
     <>
-      {layout === "pad" ? <Pad {...shared} /> : <Board {...shared} onReorder={reorder} />}
+      {layout === "pad" ? <Pad {...shared} /> : <Board {...shared} onReorder={onReorder} />}
       {open !== undefined && (
         <StickyNoteDialog
           note={open}
