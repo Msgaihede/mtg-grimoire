@@ -21,7 +21,8 @@ import type { Env } from "./index";
  * and walk back into the group that evicted it. So the fake tokenises the clause and evaluates
  * it, and the mutation is caught by the comparison actually being run.
  *
- * The dialect it covers is exactly the one the relay writes and no more: five statement shapes,
+ * The dialect it covers is exactly the one the relay writes and no more: five statement shapes
+ * (a `DELETE` or an `UPDATE` may end in `RETURNING`),
  * `AND`/`OR` and parenthesised groups, `IS [NOT] NULL`, arithmetic, `coalesce`, quoted strings, an
  * `IN` list of values, a `max()` or `count(*)` subquery, and on a `SELECT` an `ORDER BY` of one
  * or more keys (NULL sorting first, as SQLite sorts it) and a `LIMIT` that may be bound. Anything
@@ -576,9 +577,13 @@ function execute(
     return { results, changes: doomed.size };
   }
 
-  const update = /^UPDATE (\w+) SET (.+?) WHERE (.+)$/i.exec(text);
+  // `RETURNING` on an `UPDATE` too, for the share Worker's `handleRevoke`: the flip to `revoked`
+  // and the read of the object it orphans have to be one statement, or an upload that commits
+  // between them leaves a plaintext snapshot in R2 that nothing points at. SQLite answers the
+  // row as it stands *after* the assignments, and so does this.
+  const update = /^UPDATE (\w+) SET (.+?) WHERE (.+?)(?: RETURNING (.+))?$/i.exec(text);
   if (update) {
-    const [, table, setList, where] = update;
+    const [, table, setList, where, returning] = update;
     const assignments = setList.split(",").map((a) => a.trim());
     // ⚠️ **The offset is the number of `?` in the SET list, not the number of assignments.**
     // A literal consumes no parameter, so `SET status = 'dead', grace_until = NULL, checked_at = ?`
@@ -596,7 +601,8 @@ function execute(
       assertUnique(table, all, candidate, row);
       Object.assign(row, candidate);
     }
-    return { results: [], changes: matched.length };
+    const results = returning === undefined ? [] : matched.map((row) => project(row, returning));
+    return { results, changes: matched.length };
   }
 
   const select = /^SELECT (.+?) FROM (\w+)(.*)$/i.exec(text);

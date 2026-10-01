@@ -6,6 +6,7 @@ import {
   LayoutGrid,
   List as ListIcon,
   LoaderCircle,
+  Trash2,
   X,
   type LucideIcon,
 } from "lucide-react";
@@ -72,6 +73,14 @@ export interface TrayPanelProps {
   layout: ScannerTrayLayout;
   /** The header's toggle was pressed onto the *other* layout. */
   onLayout: (layout: ScannerTrayLayout) => void;
+  /**
+   * *Clear all…* was pressed — **a request, never the clear itself.** The page asks first, and it is
+   * the page that has to: the tray is drawn inside the view's `@container/scan` box, which is the
+   * containing block for anything `fixed`, so a confirmation mounted here would be a scrim the size
+   * of this column (`src/CLAUDE.md`, the `@container` rule). `opener` is the button, for the caret
+   * to come back to.
+   */
+  onClearAll: (opener: HTMLElement) => void;
 }
 
 /** The collection's own word for its top level — `AddToCollection`'s `rootLabel`, one tree over. */
@@ -215,6 +224,7 @@ export function TrayPanel({
   flashKey,
   layout,
   onLayout,
+  onClearAll,
 }: TrayPanelProps) {
   const titleId = useId();
   const tip = useTooltip();
@@ -232,6 +242,9 @@ export function TrayPanel({
           ? NO_FINISHED_ROWS
           : null;
   const refused = refusal !== null || committing;
+  // Nothing to clear, or a commit about to file these very rows — the Add button's two states that
+  // are not about printings or finishes, since a card waiting on either can still be thrown away.
+  const clearRefused = rows.length === 0 || committing;
   const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows);
   const money: Money = { currency, marketplaceLabel };
 
@@ -272,6 +285,29 @@ export function TrayPanel({
         </h3>
         <div className="ml-auto flex items-center gap-3">
           {waiting > 0 && <span className="text-xs text-accent">{plural(waiting, "card")} to pick</span>}
+          {/* **Drawn greyed rather than hidden on an empty tray**: a confirmed clear empties the
+              tray, and the caret the dialog hands back has to land on a control that is still
+              there — a hidden button would be a detached node and a silent `focus()`. */}
+          <button
+            type="button"
+            aria-disabled={clearRefused || undefined}
+            onClick={(e) => {
+              if (clearRefused) return;
+              onClearAll(e.currentTarget);
+            }}
+            {...tip(committing ? null : rows.length === 0 ? EMPTY_REASON : null)}
+            className={cn(
+              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs text-dim",
+              "hover:text-destructive",
+              PRESS,
+              "aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:hover:text-dim",
+              "aria-disabled:active:scale-100",
+              FOCUS,
+            )}
+          >
+            <Trash2 className="size-3.5" aria-hidden="true" />
+            Clear all…
+          </button>
           <LayoutToggle layout={layout} onLayout={onLayout} />
         </div>
       </header>

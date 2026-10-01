@@ -84,11 +84,13 @@ interface StatusRow {
  * that should not have gone dark lights again on the next pass; a group that should have gone
  * dark and did not, never does.
  *
- * `now` is a parameter with the clock as its default, for `index.ts`'s reason about one clock
- * read per request: every row this pass moves carries the same `updated_at`, and a test can say
- * what that stamp is without stubbing time.
+ * ⚠️ **It never writes `updated_at`, in either direction.** That stamp is what the shell's
+ * OpenGraph card dates the snapshot by — *"updated today"* — and nothing about the snapshot changes
+ * when a membership lapses or revives. Until 2026-10-01 both statements restamped it, so a share
+ * relit after a month of lapse told every Discord preview that a month-old binder was fresh. The
+ * row's state is what moved; the column that says when the *owner* last published stays theirs.
  */
-export async function sweepLapsed(env: Env, now = Date.now()): Promise<void> {
+export async function sweepLapsed(env: Env): Promise<void> {
   const published = await env.DB.prepare(`SELECT group_id FROM shares`).all<GroupRow>();
   const groups = new Set(published.results.map((row) => row.group_id));
   // **No statements means no `batch`**, which is a refusal on D1 rather than a wasted round trip.
@@ -107,7 +109,7 @@ export async function sweepLapsed(env: Env, now = Date.now()): Promise<void> {
   );
 
   // One prepared statement for both directions: D1's `bind` answers a new statement rather than
-  // mutating this one, so the four values are what say which way a group is going.
+  // mutating this one, so the three values are what say which way a group is going.
   //
   // ⚠️ **`AND state = ?` is the load-bearing clause of the whole file.** `revoked` is the reader's
   // own press and is terminal; `lapsed` is this pass's and is reversible, and that asymmetry is
@@ -115,20 +117,17 @@ export async function sweepLapsed(env: Env, now = Date.now()): Promise<void> {
   // re-lighting statement would republish every binder a reader had ever withdrawn, to an
   // audience that already has the link.
   //
-  // It is also what keeps `updated_at` honest in the other direction: a statement that matched
-  // rows it had nothing to say about would restamp every share on the account nightly, and the
-  // shell page renders that stamp.
+  // **No `updated_at = ?`** — see the doc comment above. The shell renders that stamp as the
+  // snapshot's date, and a flip of `state` is not a publish.
   //
   // The states are **bound and never written as SQL literals**, as `shares.ts` binds `REVOKED`:
   // one shape for both directions, and one spelling of each string in the codebase.
-  const move = env.DB.prepare(
-    `UPDATE shares SET state = ?, updated_at = ? WHERE group_id = ? AND state = ?`,
-  );
+  const move = env.DB.prepare(`UPDATE shares SET state = ? WHERE group_id = ? AND state = ?`);
   await env.DB.batch(
     [...groups].map((group) =>
       serving.has(group)
-        ? move.bind(LIVE, now, group, LAPSED)
-        : move.bind(LAPSED, now, group, LIVE),
+        ? move.bind(LIVE, group, LAPSED)
+        : move.bind(LAPSED, group, LIVE),
     ),
   );
 }

@@ -398,12 +398,15 @@ async function grantFor(
   env: Env,
   subject: string,
   group: string,
+  device: string,
   status: Status,
   createdAtMs: number,
 ): Promise<GroupGrant> {
   const exp = Date.now() + TOKEN_TTL_MS;
   const access = await mint(
-    { sub: subject, grp: group, exp },
+    // `dev` is read by the share Worker alone — see `Claims`. Every door has already checked it
+    // with `deviceIn` and admitted it to the roll, so it is the device the grant is really for.
+    { sub: subject, grp: group, exp, dev: device },
     required(env.RELAY_HMAC_KEY, "RELAY_HMAC_KEY"),
   );
   return {
@@ -833,7 +836,7 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   // serde failure in `sync_engine::entitlement` that no test on either side can see.
   const grant: Grant = {
     refresh,
-    ...(await grantFor(env, row.subject, group, status, row.created_at)),
+    ...(await grantFor(env, row.subject, group, device, status, row.created_at)),
   };
   return json(grant);
 }
@@ -942,7 +945,7 @@ async function refreshDoor(env: Env, refresh: string, device: string): Promise<R
   // break a device that is refreshing concurrently.
   const grant: Grant = {
     refresh,
-    ...(await grantFor(env, row.subject, row.group_id, status, row.created_at)),
+    ...(await grantFor(env, row.subject, row.group_id, device, status, row.created_at)),
   };
   return json(grant);
 }
@@ -998,7 +1001,14 @@ async function groupDoor(
     return json({ error: GROUP_FULL, code: DEVICE_LIMIT }, 403);
   }
 
-  const grant: GroupGrant = await grantFor(env, row.subject, group, status, row.created_at);
+  const grant: GroupGrant = await grantFor(
+    env,
+    row.subject,
+    group,
+    device,
+    status,
+    row.created_at,
+  );
   return json(grant);
 }
 
