@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionFolder, ScannerPrefs, ScannerVerdict } from "@/lib/ipc";
 import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
-import { DEFAULT_SCANNER_PREFS, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
+import { DEFAULT_SCANNER_PREFS, MARKS, NEEDS_A_FINISH_ROW, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
 
 vi.mock("@/lib/ipc", async (orig) => {
   const real = await orig<typeof import("@/lib/ipc")>();
@@ -516,6 +516,63 @@ describe("ScannerPage", () => {
   });
 
   /**
+   * **Detect is the default, and a card it cannot read lands as Unknown rather than as a guess.**
+   * Storm of Saruman exists in two finishes, so with no separator measured there is nothing to
+   * choose between them by — and the row says so instead of filing the first finish on the list.
+   */
+  it("stamps a new row Unknown under Detect when the separator did not read", async () => {
+    const restore = shimVideo();
+    opens();
+    expect(DEFAULT_SCANNER_PREFS.finish).toBe("detect");
+    const unread: ScannerVerdict = {
+      ...VERDICTS.decided,
+      decision: { ...VERDICTS.decided.decision!, finish_mark: MARKS.unmeasured },
+    };
+    frames(VERDICTS.voting, unread);
+    try {
+      mount();
+      await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
+      expect(
+        within(tray()).getByRole("button", { name: "Add 0 to collection · 1 needs a finish" }),
+      ).toHaveAttribute("aria-disabled", "true");
+      await waitFor(() => expect(ipc.setScannerTray).toHaveBeenCalled(), { timeout: 2000 });
+      const [written] = vi.mocked(ipc.setScannerTray).mock.lastCall ?? [];
+      expect(written?.[0]?.finish).toBe("unknown");
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **Add files the rows with a finish and leaves the one without**, in the same one call: the
+   * known rows are the import and the Unknown row is the whole of `remaining` — so it is still in
+   * the stored tray when the commit lands, not merely still on screen.
+   */
+  it("commits the known-finish rows and keeps the one that needs a finish", async () => {
+    refused();
+    const known = TRAY_ROWS.slice(1); // 3 + 1 + 1 copies
+    vi.mocked(ipc.scannerTray).mockResolvedValue([NEEDS_A_FINISH_ROW, ...known]);
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("region", { name: "Scanned cards" });
+
+    await user.click(
+      await within(tray()).findByRole("button", { name: "Add 5 to collection · 1 needs a finish" }),
+    );
+    await waitFor(() => expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(1));
+    expect(ipc.scannerTrayCommit).toHaveBeenCalledWith(importItems(known, "NONE"), null, [
+      NEEDS_A_FINISH_ROW,
+    ]);
+    await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
+    expect(within(tray()).getByText("Lightning Bolt")).toBeInTheDocument();
+    const add = within(tray()).getByRole("button", { name: "Add 0 to collection · 1 needs a finish" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    // Refused on the press as well as drawn refused — the handler asks the same question.
+    await user.click(add);
+    expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(1);
+  });
+
+  /**
    * **One call carries the collection's rows and the tray that is left, so neither can land
    * without the other.** The emptied tray is stored by the commit itself: a debounced write behind
    * it was what an app closed in the next 400 ms never made, and the committed rows came back.
@@ -620,6 +677,9 @@ describe("ScannerPage", () => {
         outcome: "resolved",
         choices: [],
         replaces_previous: false,
+        // A dot on a two-finish printing: Detect files it nonfoil, the saga row's own finish.
+        finishes: ["nonfoil", "foil"],
+        finish_mark: MARKS.dot,
       },
     };
     let land!: (v: ScannerVerdict) => void;

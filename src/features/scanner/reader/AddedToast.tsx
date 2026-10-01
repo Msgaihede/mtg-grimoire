@@ -12,11 +12,11 @@ import { AnimatePresence, motion, useReducedMotion, type Transition } from "moti
 import { CircleHelp, RefreshCw } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
 import { plural, verb } from "@/lib/counts";
-import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
-import type { ScannerTrayChoice, ScannerTrayRow } from "@/lib/ipc";
+import type { ScannerTrayChoice, ScannerTrayFinish, ScannerTrayRow } from "@/lib/ipc";
 import { DURATION, EASE, TRANSITION, landed, seconds } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import { TRAY_FINISH_LABEL } from "./trayFinish";
 
 /** What kind of landing it was — which is what the card's label line says. */
 export type LandedKind = "added" | "again" | "updated" | "pick";
@@ -29,7 +29,8 @@ export interface LandedCard {
   name: string;
   setCode: string;
   collectorNumber: string;
-  finish: Finish;
+  /** `unknown` when the scanner could not read it — the strip then says `Unknown finish`. */
+  finish: ScannerTrayFinish;
   /** The row's quantity after the landing — the `×N` an `again` landing shows. */
   quantity: number;
   /** The candidates a `pick` landing is waiting on, best first. */
@@ -186,7 +187,7 @@ export function AddedToast({ card, onDone }: AddedToastProps) {
 
 /** `LTR · 426 · Nonfoil` — whichever of the set and the number the row has, then the finish. */
 function printingLine(card: LandedCard): string {
-  return [card.setCode.toUpperCase(), card.collectorNumber, FINISH_LABEL[card.finish]]
+  return [card.setCode.toUpperCase(), card.collectorNumber, card.finish === "unknown" ? "Unknown finish" : TRAY_FINISH_LABEL[card.finish]]
     .filter((part) => part !== "")
     .join(" · ");
 }

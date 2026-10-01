@@ -357,6 +357,9 @@ pub struct CollectorView {
     /// What `band` was warped from, and how many of that image's pixels it spanned.
     pub origin: Option<crate::ocr::BandOrigin>,
     pub matched: Option<String>,
+    /// The separator measured against the decided printing's set code — a foil's ★ or a
+    /// non-foil's •. `None` until a decision names the printing. See [`crate::ocr::finish_mark`].
+    pub mark: Option<crate::ocr::FinishMark>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -398,6 +401,12 @@ pub struct DecisionView {
     /// away, or the lock lost — forgets the previous decision, so the same card presented again
     /// is `false` and adds. The same on every frame of one decision.
     pub replaces_previous: bool,
+    /// The finishes the printing exists in, from the corpus — `nonfoil`, `foil`, `etched` — and
+    /// empty when it did not say. See [`Reference::finishes_of`].
+    pub finishes: Vec<String>,
+    /// The collector line's separator, measured for this printing: what the page's Detect
+    /// finish reads when the printing exists in more than one. `None` when no line was read.
+    pub finish_mark: Option<crate::ocr::FinishMark>,
 }
 
 /// Where a frame's detector looked.
@@ -852,6 +861,11 @@ pub struct Session {
     /// This stretch's last collector read as text, matched against the decided card's printings
     /// when its blind parse paired nothing ([`Reference::collector_among`]). Cleared likewise.
     collector_raw: Option<String>,
+    /// The band that read came from, for measuring its separator once the printing is known.
+    collector_band: Option<RgbImage>,
+    /// The standing decision's separator reading. Set where a decision names its printing — a
+    /// Fast settle, an Exact resolve — and cleared with it.
+    decided_mark: Option<crate::ocr::FinishMark>,
     /// `(leader, printing)`: the printing the standing Fast decision names, and the tracker's
     /// leader when it was settled. See [`Session::settle_fast_decision`].
     fast_decided: Option<(Id, Id)>,
@@ -904,6 +918,8 @@ impl Session {
             title_pick: None,
             collector_pin: None,
             collector_raw: None,
+            collector_band: None,
+            decided_mark: None,
             fast_decided: None,
             decision_read_due: false,
         }
@@ -1018,6 +1034,7 @@ impl Session {
         self.attempted = false;
         self.was_committed = false;
         self.last_resolution = None;
+        self.decided_mark = None;
         self.rearm_pending = false;
         self.watch.clear();
         self.stacked.clear();
@@ -1025,6 +1042,7 @@ impl Session {
         self.held_rotated = None;
         self.forget_reads();
         self.fast_decided = None;
+        self.decided_mark = None;
         self.decision_read_due = false;
         self.drop_pending_resolve();
     }
@@ -1036,6 +1054,7 @@ impl Session {
         self.title_pick = None;
         self.collector_pin = None;
         self.collector_raw = None;
+        self.collector_band = None;
     }
 
     /// A different card has come to rest where the decided one lay, and the lock never let go
@@ -1170,11 +1189,13 @@ impl Session {
             // An untrusted frame never reaches `settle_fast_decision`, and the decided card can
             // leave on one: what was settled for it goes with the commit.
             self.fast_decided = None;
+            self.decided_mark = None;
             self.decision_read_due = false;
         }
         if self.rearm_pending && (!committed || self.last_resolution.is_none()) {
             self.attempted = false;
             self.last_resolution = None;
+            self.decided_mark = None;
             self.rearm_pending = false;
         }
         // Nothing holds a card any more — it left, or its freeze was lifted — so there is no
@@ -1209,11 +1230,17 @@ impl Session {
                     outcome: Outcome::Resolved,
                     choices: Vec::new(),
                     replaces_previous: false,
+                    finishes: r.map(|r| r.finishes_of(&printing).to_vec()).unwrap_or_default(),
+                    finish_mark: self.decided_mark,
                 })
             }
             ScanMode::Exact => {
                 let res = self.last_resolution.as_ref()?;
                 let first = res.choices.first()?;
+                let finishes = parse_uuid(&first.id)
+                    .zip(r)
+                    .map(|(p, r)| r.finishes_of(&p).to_vec())
+                    .unwrap_or_default();
                 Some(DecisionView {
                     printing: first.id.clone(),
                     oracle_id: first.oracle_id.clone(),
@@ -1221,6 +1248,8 @@ impl Session {
                     outcome: res.outcome,
                     choices: res.choices.clone(),
                     replaces_previous: false,
+                    finishes,
+                    finish_mark: self.decided_mark,
                 })
             }
         }
@@ -1245,6 +1274,7 @@ impl Session {
     fn settle_fast_decision(&mut self, t: &Tracked, r: &Reference, read: bool) -> Option<Id> {
         let Some(leader) = t.leader().filter(|_| t.committed) else {
             self.fast_decided = None;
+            self.decided_mark = None;
             self.decision_read_due = false;
             return None;
         };
@@ -1264,6 +1294,13 @@ impl Session {
         };
         let (printing, by_collector) = fast_printing(r, &self.mask, leader, &reads);
         self.fast_decided = Some((leader.id, printing));
+        // The separator is measured once the printing is known, because where it sits on the
+        // line depends on how long that printing's set code is.
+        self.decided_mark = self
+            .collector_band
+            .as_ref()
+            .zip(r.label_for(&printing))
+            .map(|(band, l)| crate::ocr::finish_mark(band, l.set.chars().count()));
         by_collector.then_some(printing)
     }
 
@@ -1779,6 +1816,7 @@ impl Session {
                     }
                     if !reads.collector_raw.is_empty() {
                         self.collector_raw = Some(reads.collector_raw);
+                        self.collector_band = reads.collector_band;
                     }
                     v.ocr = Some(reads.ocr);
                     v.collector = Some(reads.collector);
@@ -1855,6 +1893,9 @@ impl Session {
                 if let Some(c) = v.collector.as_mut() {
                     c.matched = r.label_for(&p).map(|l| l.display());
                 }
+            }
+            if let Some(c) = v.collector.as_mut() {
+                c.mark = self.decided_mark;
             }
         }
         // The frame that decided is the anchor: what the decided card looks like. A resolve
@@ -1945,6 +1986,7 @@ impl Session {
             }
             self.decision_seq += 1;
             self.last_resolution = Some(resolution.clone());
+            self.decided_mark = v.collector.as_ref().and_then(|c| c.mark);
         }
         v.resolution = Some(resolution);
     }
@@ -1988,14 +2030,26 @@ fn run_resolve(
             mask,
             ocr: std::sync::Mutex::new(None),
             collector: std::sync::Mutex::new(None),
+            bands: std::sync::Mutex::new(Vec::new()),
         };
         let resolution = crate::resolve::resolve(r, mask, burst, &readers, gate);
-        let (ocr, collector) = (readers.ocr.into_inner(), readers.collector.into_inner());
-        return (
-            resolution,
-            ocr.unwrap_or_else(std::sync::PoisonError::into_inner),
-            collector.unwrap_or_else(std::sync::PoisonError::into_inner),
-        );
+        let ocr = readers.ocr.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut collector =
+            readers.collector.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let bands = readers.bands.into_inner().unwrap_or_else(std::sync::PoisonError::into_inner);
+        // The band the collector tier took — the first read that paired anything, else the
+        // first — measured against the resolved printing's set code.
+        let band = bands.iter().find(|(paired, _)| *paired).or(bands.first()).and_then(|b| b.1.as_ref());
+        let set_len = resolution
+            .choices
+            .first()
+            .and_then(|c| parse_uuid(&c.id))
+            .and_then(|p| r.label_for(&p))
+            .map(|l| l.set.chars().count());
+        if let (Some(c), Some(band), Some(set_len)) = (collector.as_mut(), band, set_len) {
+            c.mark = Some(crate::ocr::finish_mark(band, set_len));
+        }
+        return (resolution, ocr, collector);
     }
     #[cfg(not(feature = "ocr"))]
     let _ = reader;
@@ -2018,6 +2072,9 @@ struct SessionReaders<'a> {
     mask: &'a Mask,
     ocr: std::sync::Mutex<Option<OcrView>>,
     collector: std::sync::Mutex<Option<CollectorView>>,
+    /// Every collector read's band, in the order the resolve asked, and whether its parse paired
+    /// anything — so the band measured afterwards is the one the collector tier used.
+    bands: std::sync::Mutex<Vec<(bool, Option<RgbImage>)>>,
 }
 
 #[cfg(feature = "ocr")]
@@ -2038,6 +2095,10 @@ impl crate::resolve::Readers for SessionReaders<'_> {
         let col = self.reader.read_collector_first(&bands_of(view), view.rotated);
         *self.collector.lock().unwrap_or_else(std::sync::PoisonError::into_inner) =
             Some(collector_view(&col, self.r, self.mask));
+        self.bands
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push((!col.candidates.is_empty(), col.band));
         (col.raw, col.candidates)
     }
 }
@@ -2087,6 +2148,7 @@ fn collector_view(col: &crate::ocr::CollectorRead, r: &Reference, mask: &Mask) -
         band: col.band.as_ref().and_then(|b| preview_uri(b, b.width().max(b.height()), 90)),
         origin: col.origin,
         matched: printing.and_then(|id| r.label_for(&id)).map(|l| l.display()),
+        mark: None,
     }
 }
 
@@ -2102,6 +2164,8 @@ struct FastReads {
     collector: CollectorView,
     /// The collector line as read, for [`Reference::collector_among`] once the card is known.
     collector_raw: String,
+    /// The band that line was read from, for [`crate::ocr::finish_mark`] once the printing is.
+    collector_band: Option<RgbImage>,
     /// The printing the collector line's blind parse resolved to under the mask.
     pin: Option<Id>,
 }
@@ -2145,6 +2209,7 @@ fn fast_reads(
         pin: r.lookup_collector_masked(&col.candidates, mask),
         collector: collector_view(&col, r, mask),
         collector_raw: col.raw,
+        collector_band: col.band,
     }
 }
 
@@ -2946,6 +3011,35 @@ mod tests {
     }
 
     #[test]
+    fn a_fast_decision_carries_its_printings_finishes_and_the_separator_read() {
+        use crate::ocr::test_bands::{collector_band, Separator};
+        use crate::ocr::MarkReading;
+        let decide = |separator: Option<Separator>| {
+            let mut r = labelled();
+            r.set_finishes(id(2), vec!["nonfoil".into(), "foil".into()]);
+            let mut s = inline(r);
+            s.collector_band = separator.map(collector_band);
+            let obs = [Observation::appearance(id(10), id(2), 0.16)];
+            let mut t = None;
+            for _ in 0..8 {
+                t = Some(s.tracker.observe(&obs));
+            }
+            let t = t.expect("frames");
+            let r = Arc::clone(s.reference.as_ref().expect("reference"));
+            s.settle_fast_decision(&t, &r, false);
+            s.decision_view(&t).expect("decision")
+        };
+        // Printing 2 is LTR — a three-letter set code, which is where the separator is found.
+        let d = decide(Some(Separator::Star));
+        assert_eq!(d.finishes, ["nonfoil", "foil"]);
+        assert_eq!(d.finish_mark.map(|m| m.reading), Some(MarkReading::Foil));
+        let d = decide(Some(Separator::Dot));
+        assert_eq!(d.finish_mark.map(|m| m.reading), Some(MarkReading::Nonfoil));
+        // No collector line read: no mark, and the page decides from the finishes alone.
+        assert_eq!(decide(None).finish_mark, None);
+    }
+
+    #[test]
     fn a_title_naming_several_cards_takes_the_dhash_pick_among_them() {
         // The read named cards 10 and 20; the hash, limited to their printings, liked 3 best.
         let (d, _) = fast_settled_with(&[10, 20], Some(3), None);
@@ -3000,6 +3094,7 @@ mod tests {
             oracle_id: Some(format_uuid(&id(10))),
             label: None,
             distance: Some(0.0),
+            finishes: Vec::new(),
         };
         s.last_resolution = Some(ResolutionView {
             outcome: Outcome::Ambiguous,
@@ -3357,6 +3452,7 @@ mod tests {
                     oracle_id: Some(format_uuid(&id(oracle))),
                     label: None,
                     distance: Some(0.0),
+                    finishes: Vec::new(),
                 }],
                 tiers: Vec::new(),
                 elapsed_ms: 0.0,

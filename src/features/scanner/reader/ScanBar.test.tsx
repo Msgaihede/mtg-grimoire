@@ -36,7 +36,7 @@ function props(over: Partial<ScanBarProps> = {}): ScanBarProps {
     onFilters: vi.fn(),
     filterError: null,
     filtersDisabled: null,
-    finish: "nonfoil",
+    finish: "detect",
     onFinish: vi.fn(),
     condition: "NONE",
     onCondition: vi.fn(),
@@ -63,6 +63,39 @@ function wrap(ui: ReactElement) {
 }
 
 describe("ScanBar", () => {
+  /**
+   * **Detect leads the finish menu and is the one it opens on by default** — the reader decided it
+   * should be the default, and the order is the information (`FINISH_OPTIONS`' comment). A fixed
+   * finish is still one press away, and picking one is handed up as the finish itself.
+   */
+  it("offers Detect first in the Defaults finish menu, then the three finishes", async () => {
+    const user = userEvent.setup();
+    const onFinish = vi.fn();
+    wrap(<ScanBar {...props({ onFinish })} />);
+    await user.click(screen.getByRole("button", { name: "Defaults: Detect finish · Condition not set" }));
+    expect(
+      screen.getByText("The scanner reads each card's finish. A card it can't tell waits in the tray for you to pick."),
+    ).toBeInTheDocument();
+    const finish = screen.getByRole("button", { name: "Finish" });
+    expect(finish).toHaveTextContent("Detect");
+    await user.click(finish);
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Detect",
+      "Nonfoil",
+      "Foil",
+      "Etched",
+    ]);
+    await user.click(screen.getByRole("option", { name: "Foil" }));
+    expect(onFinish).toHaveBeenCalledWith("foil");
+  });
+
+  it("names a fixed finish on the bar and says a new card starts in it", async () => {
+    const user = userEvent.setup();
+    wrap(<ScanBar {...props({ finish: "foil" })} />);
+    await user.click(screen.getByRole("button", { name: "Defaults: Foil · Condition not set" }));
+    expect(screen.getByText("Each new card starts in this finish.")).toBeInTheDocument();
+  });
+
   it("switches to Exact", async () => {
     const user = userEvent.setup();
     const onMode = vi.fn();

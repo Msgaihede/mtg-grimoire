@@ -28,6 +28,28 @@ function originText(origin: ScannerCollector["origin"]): string {
   return `${origin.width}×${origin.height} ${from} · band ${origin.span_width}×${origin.span_height} px`;
 }
 
+/**
+ * The separator between the set code and the language, as `ocr::finish_mark` measured it: the
+ * reading, then each figure it was read from — `foil · height 0.84 · area 0.44 · solidity 0.95`.
+ *
+ * **The figures are the point of the row**, not the word: the reading is two thresholds over them,
+ * set from a first calibration of twelve crops, and a developer tuning those thresholds needs the
+ * number a new card landed on rather than which side of the cut it fell. A figure the crate did not
+ * measure is left out rather than drawn as `null`, so `unknown` alone is "no separator found".
+ */
+function markText(mark: ScannerCollector["mark"]): string {
+  if (mark === null) return "—";
+  const figures: [string, number | null][] = [
+    ["height", mark.height],
+    ["area", mark.area],
+    ["solidity", mark.solidity],
+  ];
+  return [
+    mark.reading,
+    ...figures.flatMap(([name, value]) => (value === null ? [] : [`${name} ${value.toFixed(2)}`])),
+  ].join(" · ");
+}
+
 /** A band the recogniser read from, or the space one would have taken. */
 function Band({ src, alt }: { src: string | null; alt: string }) {
   return src === null ? (
@@ -118,6 +140,7 @@ export function ReadoutsPanel({
           label="matched"
           value={collector === null ? "—" : (collector.matched ?? "no printing")}
         />
+        <Row label="finish mark" value={collector === null ? "—" : markText(collector.mark)} />
       </dl>
 
       {collector !== null && collector.tried.length > 0 && (

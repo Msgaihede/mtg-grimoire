@@ -11,7 +11,8 @@ import { AddedToast, landedFrom, type LandedCard } from "./reader/AddedToast";
 import { MatchStrip } from "./reader/MatchStrip";
 import type { LastAdded } from "./reader/readerText";
 import { ScanBar } from "./reader/ScanBar";
-import { addDecision, importItems, setPrinting, trayLayoutOf } from "./reader/tray";
+import { addDecision, commitPlan, setPrinting, trayLayoutOf } from "./reader/tray";
+import { trayFinish } from "./reader/trayFinish";
 import { TrayPanel } from "./reader/TrayPanel";
 import { ScannerPanels } from "./ScannerPanels";
 import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
@@ -210,13 +211,15 @@ function LiveScanner() {
    * Fast named); this files the answer, marks the row for the flash, and remembers what to say
    * about it. The finish is the
    * Defaults popover's at the moment the card landed, which is why a change there moves only the
-   * next card.
+   * next card — and under **Detect**, the popover's default, it is `trayFinish`'s reading of this
+   * decision's own facts: the printing's finishes and the separator the collector line showed, or
+   * `unknown` for the reader to settle.
    */
   const onDecision = (decision: ScannerDecision) => {
     const { rows, bumped, replaced } = addDecision(
       tray.latest(),
       decision,
-      { finish: prefs.finish },
+      { finish: trayFinish(prefs.finish, decision) },
       Date.now(),
       crypto.randomUUID(),
     );
@@ -322,10 +325,15 @@ function LiveScanner() {
   const [commitError, setCommitError] = useState<string | null>(null);
 
   /**
-   * The whole tray into the collection, in one `scanner_tray_commit` — the collection import and
-   * the tray that is left after it, in one transaction, so all or nothing: a refusal keeps every
-   * row and puts the sentence above them, and the backend's own words are the sentence, because
-   * they already name what is wrong.
+   * The tray into the collection, in one `scanner_tray_commit` — the collection import and the
+   * tray that is left after it, in one transaction, so all or nothing: a refusal keeps every row
+   * and puts the sentence above them, and the backend's own words are the sentence, because they
+   * already name what is wrong.
+   *
+   * **Every row with a known finish, and none without one.** `commitPlan` splits the tray: the
+   * rows it takes are the import's lines *and* the snapshot {@link withoutCommitted} subtracts, so
+   * a row of unknown finish is never "taken", and it is still in `remaining` when the commit goes
+   * out and still in the tray when it answers — marked, where the reader left it.
    *
    * **The stored tray moves with the collection, not behind it.** This used to commit and then let
    * the tray's debounced write catch up; an app closed in that window — or that write refused, or
@@ -338,10 +346,10 @@ function LiveScanner() {
    */
   const onCommit = () => {
     if (committing) return;
-    const snapshot = tray.latest();
     let items: CollectionImportItem[];
+    let snapshot: ScannerTrayRow[];
     try {
-      items = importItems(snapshot, prefs.condition);
+      ({ items, taken: snapshot } = commitPlan(tray.latest(), prefs.condition));
     } catch (e) {
       setCommitError(ipcError(e));
       return;

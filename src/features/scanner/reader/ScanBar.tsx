@@ -7,15 +7,16 @@ import { FILTER_CONTROL, filterChipState } from "@/components/FilterChips";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { SetCombobox } from "@/features/search/SetCombobox";
 import { CONDITION_LABEL, CONDITION_NOT_SET, CONDITIONS, type Condition } from "@/lib/conditions";
-import { FINISH_LABEL, FINISHES, type Finish } from "@/lib/finish";
+import { FINISHES } from "@/lib/finish";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
-import type { ScanFilters, ScanMode } from "@/lib/ipc";
+import type { ScanFilters, ScanMode, ScannerFinishPref } from "@/lib/ipc";
 import { PRESS, PRESS_STILL } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
 import { radioKeys } from "@/lib/radioGroup";
 import { cn } from "@/lib/utils";
 import type { CameraDevice } from "../useCamera";
 import { filterSummary } from "./readerText";
+import { DETECT, FINISH_PREF_LABEL } from "./trayFinish";
 
 export interface ScanBarProps {
   mode: ScanMode;
@@ -26,8 +27,8 @@ export interface ScanBarProps {
   filterError: string | null;
   /** A reason, or null when filters can be used. */
   filtersDisabled: string | null;
-  finish: Finish;
-  onFinish: (f: Finish) => void;
+  finish: ScannerFinishPref;
+  onFinish: (f: ScannerFinishPref) => void;
   condition: Condition;
   onCondition: (c: Condition) => void;
   /** Every camera the machine has — `useCameraDevices`' list, in whatever order it came. */
@@ -63,11 +64,15 @@ const MODES: readonly { id: ScanMode; label: string; hint: string }[] = [
 ];
 
 /**
- * **Deliberately not through `sortOptions` — the order is the information.** A printing's finishes
- * read plain before the premium treatments everywhere in this app, and `FINISHES` is written in
- * that order.
+ * **Deliberately not through `sortOptions` — the order is the information.** `Detect` first,
+ * because it is the default and the one choice that is not a finish; then a printing's finishes,
+ * plain before the premium treatments as everywhere in this app, which is the order `FINISHES` is
+ * written in.
  */
-const FINISH_OPTIONS: readonly DropdownOption[] = FINISHES.map((f) => ({ value: f, label: FINISH_LABEL[f] }));
+const FINISH_OPTIONS: readonly DropdownOption[] = [DETECT, ...FINISHES].map((f) => ({
+  value: f,
+  label: FINISH_PREF_LABEL[f],
+}));
 
 /**
  * **Deliberately not through `sortOptions` — the order is the information.** `CONDITIONS` is a
@@ -112,6 +117,9 @@ export function ScanBar({
     filters.sets.length > 0 || Boolean(filters.released_from) || Boolean(filters.released_to);
   const conditionWords =
     condition === CONDITION_NOT_SET ? "Condition not set" : CONDITION_LABEL[condition];
+  // `Detect` alone on the bar reads as a verb with no object; the menu row sits under a `Finish`
+  // label and needs none.
+  const finishWords = finish === DETECT ? "Detect finish" : FINISH_PREF_LABEL[finish];
   // `Default` for a live camera the list has not caught up with yet, and for no camera at all —
   // the trigger still has to read as something, and what opens with nothing chosen is the default.
   const cameraName = cameras.find((c) => c.deviceId === cameraId)?.label ?? "Default";
@@ -133,7 +141,7 @@ export function ScanBar({
 
       <BarPopover
         caption="Defaults"
-        value={`${FINISH_LABEL[finish]} · ${conditionWords}`}
+        value={`${finishWords} · ${conditionWords}`}
         active={false}
         refusal={null}
         panelLabel="Defaults"
@@ -402,6 +410,9 @@ function FiltersBody({
  * is stamped on a row as it lands, so changing it moves the *next* card and leaves the rows already
  * there alone — a row the reader set to foil must not flip back. A condition is not a row field at
  * all: the whole tray commits in one condition, so this one is read at the press of Add.
+ *
+ * **`Detect` is a policy, and its caption says what it does when it cannot tell** — the one thing a
+ * reader has to know about it before a row reading `Unknown` turns up in the tray.
  */
 function DefaultsBody({
   finish,
@@ -409,8 +420,8 @@ function DefaultsBody({
   condition,
   onCondition,
 }: {
-  finish: Finish;
-  onFinish: (f: Finish) => void;
+  finish: ScannerFinishPref;
+  onFinish: (f: ScannerFinishPref) => void;
   condition: Condition;
   onCondition: (c: Condition) => void;
 }) {
@@ -425,11 +436,15 @@ function DefaultsBody({
           id={`${id}-finish`}
           labelledBy={`${id}-finish-label`}
           value={finish}
-          onChange={(v) => onFinish(v as Finish)}
+          onChange={(v) => onFinish(v as ScannerFinishPref)}
           options={FINISH_OPTIONS}
           fill
         />
-        <p className="text-[0.7rem] leading-snug text-dim">Each new card starts in this finish.</p>
+        <p className="text-[0.7rem] leading-snug text-dim">
+          {finish === DETECT
+            ? "The scanner reads each card's finish. A card it can't tell waits in the tray for you to pick."
+            : "Each new card starts in this finish."}
+        </p>
       </div>
       <div className="flex flex-col gap-1">
         <label id={`${id}-condition-label`} htmlFor={`${id}-condition`} className="text-xs text-dim">

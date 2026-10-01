@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore, type ScannerPanelId } from "@/lib/store";
 import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import { ScannerPanels, type ScannerPanelsProps } from "./ScannerPanels";
-import { READS, STATUS, VERDICTS } from "./fixtures";
+import { MARKS, READS, STATUS, VERDICTS } from "./fixtures";
 import type { ScannerVerdict } from "./types";
 
 function props(over: Partial<ScannerPanelsProps> = {}): ScannerPanelsProps {
@@ -224,6 +224,29 @@ describe("the folded panels", () => {
     expect(within(readouts).getByText("960×540 frame · band 62×23 px")).toBeInTheDocument();
     expect(within(readouts).getByText("LTR 72 → —")).toBeInTheDocument();
     expect(within(readouts).getByText("+3 more pairings not shown")).toBeInTheDocument();
+  });
+
+  /**
+   * **The separator's row carries the figures, not just the word** — the reading is two cuts over
+   * them, set from twelve crops, and tuning those cuts needs the number a new card landed on. A
+   * mark the crate found nothing to measure reads `unknown` alone; no mark at all is an em dash.
+   */
+  it("draws the finish mark's reading and the figures it was read from", () => {
+    useAppStore.setState({ scannerFolds: { ...ALL_FOLDED, readouts: true } });
+    const markRow = (mark: typeof MARKS.dot | null) => {
+      const { unmount } = render(
+        <ScannerPanels {...props({ ...withReads, lastCollector: { ...READS.collector, mark } })} />,
+      );
+      const readouts = screen.getByRole("region", { name: "Readouts" });
+      const label = within(readouts).getByText("finish mark");
+      const value = label.nextElementSibling?.textContent;
+      unmount();
+      return value;
+    };
+    expect(markRow(MARKS.star)).toBe("foil · height 0.84 · area 0.44 · solidity 0.95");
+    expect(markRow(MARKS.dot)).toBe("nonfoil · height 0.52 · area 0.14 · solidity 1.08");
+    expect(markRow(MARKS.unmeasured)).toBe("unknown");
+    expect(markRow(null)).toBe("—");
   });
 
   /**

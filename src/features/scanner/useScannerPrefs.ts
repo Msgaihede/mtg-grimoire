@@ -63,7 +63,8 @@ const NO_FILTERS: ScanFilters = { sets: [], released_from: null, released_to: nu
 export const SCANNER_PREFS_BEFORE_LOAD: ScannerPrefs = {
   mode: "fast",
   filters: NO_FILTERS,
-  finish: "nonfoil",
+  // `scanner::DETECT_FINISH`: a policy, not a finish — the scanner reads each card's.
+  finish: "detect",
   condition: "NONE",
   folderId: null,
   developer: false,

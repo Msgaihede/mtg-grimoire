@@ -100,7 +100,7 @@ describe("matchStrip", () => {
   it("names no card when the printings to pick from are not one card", () => {
     const tie: ScannerChoice[] = [
       boltChoices[0],
-      { id: "chain", oracle_id: null, label: { name: "Chain Lightning", set: "lgn", number: "94", lang: "en", released: "1998-02-23" }, distance: 0.15 },
+      { id: "chain", oracle_id: null, label: { name: "Chain Lightning", set: "lgn", number: "94", lang: "en", released: "1998-02-23" }, distance: 0.15, finishes: ["nonfoil"] },
     ];
     expect(matchStrip(settled, "exact", forest, true, resolution("ambiguous", tie))).toMatchObject({
       word: "2 printings",

@@ -21,21 +21,30 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { plural } from "@/lib/counts";
-import { FINISH_LABEL, FINISHES, type Finish } from "@/lib/finish";
+import { FINISHES } from "@/lib/finish";
 import { buildFolderTree } from "@/lib/folderTree";
 import { FOCUS } from "@/lib/focus";
 import { CARD_ASPECT, cardImageUrl, type ImageVariant } from "@/lib/images";
-import type { ScannerTrayChoice, ScannerTrayLayout, ScannerTrayRow } from "@/lib/ipc";
+import type {
+  ScannerTrayChoice,
+  ScannerTrayFinish,
+  ScannerTrayLayout,
+  ScannerTrayRow,
+} from "@/lib/ipc";
 import { DURATION, PRESS, TRANSITION, seconds } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import {
+  NO_FINISHED_ROWS,
+  needsFinishCount,
   pickChoice,
+  readyRows,
   removeRow,
   setFinish,
   setQuantity,
   totalCopies,
   unresolvedCount,
 } from "./tray";
+import { isKnownFinish, TRAY_FINISH_LABEL, UNKNOWN_FINISH } from "./trayFinish";
 
 export interface TrayPanelProps {
   rows: readonly ScannerTrayRow[];
@@ -71,9 +80,26 @@ const UNPICKED_REASON = "Pick a printing for every card first";
 
 /**
  * **Deliberately not through `sortOptions` — the order is the information.** A printing's finishes
- * read plain before the premium treatments everywhere in this app.
+ * read plain before the premium treatments everywhere in this app, and `Unknown` comes last because
+ * it is not a finish: it is the answer "not yet", which a reader can also give on purpose to hold a
+ * card out of the next Add without removing it.
  */
-const FINISH_OPTIONS: readonly DropdownOption[] = FINISHES.map((f) => ({ value: f, label: FINISH_LABEL[f] }));
+const FINISH_OPTIONS: readonly DropdownOption[] = [...FINISHES, UNKNOWN_FINISH].map((f) => ({
+  value: f,
+  label: TRAY_FINISH_LABEL[f],
+}));
+
+/**
+ * The Add button's words: the copies it files, and — while there are any — the copies it leaves
+ * behind for want of a finish. **One string, never a second element**: the name is computed from
+ * the button's content and a span beside the count would fuse into `collection· 2` (`src/CLAUDE.md`,
+ * the `Missing2` rule).
+ */
+export function addLabel(ready: number, needsFinish: number): string {
+  const add = `Add ${ready} to collection`;
+  if (needsFinish === 0) return add;
+  return `${add} · ${needsFinish} ${needsFinish === 1 ? "needs" : "need"} a finish`;
+}
 
 /** The two layouts in the order the toggle draws them, and the word each is called by. */
 const TRAY_LAYOUTS = [
@@ -168,6 +194,11 @@ function choiceLabel(choice: ScannerTrayChoice): string {
  * press in either goes through the same reducer call with the same control names, so a reader who
  * switches mid-pile loses nothing, and the empty sentence, the commit error and the footer are
  * drawn once for both.
+ *
+ * **Add files the rows with a known finish and leaves the rest** (`tray.ts`'s `commitPlan`), and
+ * its label says both halves — `Add 8 to collection · 2 need a finish` — so the rows it leaves are
+ * never a surprise. With nothing it could file it is refused, with the reason, like every other
+ * state it cannot act in.
  */
 export function TrayPanel({
   rows,
@@ -186,14 +217,24 @@ export function TrayPanel({
   const tip = useTooltip();
   const copies = totalCopies(rows);
   const waiting = unresolvedCount(rows);
-  const refusal = rows.length === 0 ? EMPTY_REASON : waiting > 0 ? UNPICKED_REASON : null;
+  const ready = totalCopies(readyRows(rows));
+  const needsFinish = needsFinishCount(rows);
+  // The order `commitPlan` refuses in, so the drawing and the press agree.
+  const refusal =
+    rows.length === 0
+      ? EMPTY_REASON
+      : waiting > 0
+        ? UNPICKED_REASON
+        : ready === 0
+          ? NO_FINISHED_ROWS
+          : null;
   const refused = refusal !== null || committing;
 
   // What a press on a card does — four writes, each a reducer call waiting for the latest rows, and
   // the printings dialog — built once here so the row and the tile cannot come to disagree.
   const handlers = (row: ScannerTrayRow) => ({
     onQuantity: (q: number) => onRows((latest) => setQuantity(latest, row.key, q)),
-    onFinish: (f: Finish) => onRows((latest) => setFinish(latest, row.key, f)),
+    onFinish: (f: ScannerTrayFinish) => onRows((latest) => setFinish(latest, row.key, f)),
     onPick: (cardId: string) => onRows((latest) => pickChoice(latest, row.key, cardId)),
     onRemove: () => onRows((latest) => removeRow(latest, row.key)),
     onMorePrintings: () => onMorePrintings(row),
@@ -319,7 +360,7 @@ export function TrayPanel({
           )}
           {/* One label in both states: the name a reader pressed is the name the pending control
               keeps, and `aria-busy` is what says the write is under way. */}
-          Add {copies} to collection
+          {addLabel(ready, needsFinish)}
         </button>
       </footer>
     </section>
@@ -421,7 +462,7 @@ function TrayRow({
   row: ScannerTrayRow;
   flash: boolean;
   onQuantity: (q: number) => void;
-  onFinish: (f: Finish) => void;
+  onFinish: (f: ScannerTrayFinish) => void;
   onPick: (cardId: string) => void;
   onRemove: () => void;
   onMorePrintings: () => void;
@@ -472,12 +513,18 @@ function TrayRow({
             <Choices row={row} onPick={onPick} />
           ) : (
             <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+              {/* **An unknown finish wears the accent**, the colour this tray already asks its other
+                  question in (`Pick a printing`, `1 card to pick`) — a question for the reader,
+                  never the destructive red, which would say something had gone wrong. The trigger
+                  reads `Unknown` and the Add button counts it out; the border is what finds it in a
+                  long list. */}
               <Dropdown
                 size="sm"
                 label={`Finish of ${label}`}
                 value={row.finish}
-                onChange={(v) => onFinish(v as Finish)}
+                onChange={(v) => onFinish(v as ScannerTrayFinish)}
                 options={FINISH_OPTIONS}
+                active={!isKnownFinish(row.finish)}
               />
               <QuantityStepper
                 size="sm"
@@ -618,7 +665,7 @@ function TrayTile({
   row: ScannerTrayRow;
   flash: boolean;
   onQuantity: (q: number) => void;
-  onFinish: (f: Finish) => void;
+  onFinish: (f: ScannerTrayFinish) => void;
   onRemove: () => void;
   onMorePrintings: () => void;
 }) {
@@ -630,7 +677,13 @@ function TrayTile({
   // is how the deck's card face cuts the same banner.
   const face = (
     <>
-      <CardArt cardId={row.cardId} name={row.name} variant={TILE_VARIANT} finish={row.finish} loading="lazy" />
+      <CardArt
+        cardId={row.cardId}
+        name={row.name}
+        variant={TILE_VARIANT}
+        finish={isKnownFinish(row.finish) ? row.finish : null}
+        loading="lazy"
+      />
       {row.quantity > 1 && (
         <CountTag
           count={row.quantity}
@@ -683,8 +736,10 @@ function TrayTile({
           size="sm"
           label={`Finish of ${label}`}
           value={row.finish}
-          onChange={(v) => onFinish(v as Finish)}
+          onChange={(v) => onFinish(v as ScannerTrayFinish)}
           options={FINISH_OPTIONS}
+          // The row's rule: an unknown finish wears the accent, so it is found in a wall of tiles too.
+          active={!isKnownFinish(row.finish)}
         />
         <QuantityStepper
           size="sm"

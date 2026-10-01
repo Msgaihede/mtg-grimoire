@@ -24,8 +24,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { VERDICTS } from "../fixtures";
-import { rowFromDecision } from "./tray";
-import { TrayPanel, type TrayPanelProps } from "./TrayPanel";
+import { NO_FINISHED_ROWS, rowFromDecision } from "./tray";
+import { addLabel, TrayPanel, type TrayPanelProps } from "./TrayPanel";
 
 const resolved = VERDICTS.exactResolved.decision!;
 const ambiguous = VERDICTS.exactAmbiguous.decision!;
@@ -160,6 +160,96 @@ describe("TrayPanel", () => {
     expect(add).not.toBeDisabled();
     await user.click(add);
     expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The label says what Add leaves behind** — copies, like the heading's count, and the second
+   * half only while there is one.
+   */
+  it("words the add with the copies it files and the ones that need a finish", () => {
+    expect(addLabel(8, 0)).toBe("Add 8 to collection");
+    expect(addLabel(8, 2)).toBe("Add 8 to collection · 2 need a finish");
+    expect(addLabel(3, 1)).toBe("Add 3 to collection · 1 needs a finish");
+    expect(addLabel(0, 4)).toBe("Add 0 to collection · 4 need a finish");
+  });
+
+  it("adds the known-finish rows and counts the Unknown one out, on one button", async () => {
+    const user = userEvent.setup();
+    const onCommit = vi.fn();
+    const unknown: ScannerTrayRow = { ...older, finish: "unknown", quantity: 2 };
+    wrap(<TrayPanel {...props({ rows: [{ ...newer, quantity: 3 }, unknown], onCommit })} />);
+    // The heading still counts the whole tray; the button counts it out.
+    expect(screen.getByRole("heading", { name: "Scanned cards, 5 copies" })).toBeInTheDocument();
+    const add = screen.getByRole("button", { name: "Add 3 to collection · 2 need a finish" });
+    expect(add).not.toHaveAttribute("aria-disabled");
+    await user.click(add);
+    expect(onCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses the add when every row needs a finish, and says why", async () => {
+    const user = userEvent.setup();
+    const onCommit = vi.fn();
+    wrap(<TrayPanel {...props({ rows: [{ ...newer, finish: "unknown" }], onCommit })} />);
+    const add = screen.getByRole("button", { name: "Add 0 to collection · 1 needs a finish" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(add).not.toBeDisabled();
+    await user.hover(add);
+    expect(await screen.findByRole("tooltip", undefined, { timeout: 2000 })).toHaveTextContent(
+      NO_FINISHED_ROWS,
+    );
+    await user.click(add);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Unknown is a finish control's value like the other three**, drawn in the accent the tray asks
+   * its questions in, and a pick hands the reducer a finish; the list also offers Unknown, last, so
+   * a reader can hold a card back on purpose.
+   */
+  it("draws an Unknown finish as a question and lets the reader answer it", async () => {
+    const user = userEvent.setup();
+    const onRows = vi.fn();
+    const unknown: ScannerTrayRow = { ...newer, finish: "unknown" };
+    wrap(<TrayPanel {...props({ rows: [unknown, older], onRows })} />);
+    const finish = screen.getByRole("button", { name: "Finish of Storm of Saruman — LTR 72" });
+    expect(finish).toHaveTextContent("Unknown");
+    expect(finish.classList.contains("border-accent")).toBe(true);
+    const known = screen.getByRole("button", { name: "Finish of Honored Hierarch — ORI 17" });
+    expect(known).toHaveTextContent("Nonfoil");
+    expect(known.classList.contains("border-accent")).toBe(false);
+
+    await user.click(finish);
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Nonfoil",
+      "Foil",
+      "Etched",
+      "Unknown",
+    ]);
+    await user.click(screen.getByRole("option", { name: "Foil" }));
+    expect(edit(onRows, [unknown, older]).map((r) => [r.key, r.finish])).toEqual([
+      ["newer", "foil"],
+      ["older", "nonfoil"],
+    ]);
+  });
+
+  it("draws an Unknown finish as a question in the grid too — the page's default layout", async () => {
+    // The grid's tile arrived on main beside the Unknown state and was merged without it: the
+    // menu offered Unknown through the shared options, and nothing marked a tile that held it.
+    const user = userEvent.setup();
+    const onRows = vi.fn();
+    const unknown: ScannerTrayRow = { ...newer, finish: "unknown" };
+    wrap(<TrayPanel {...grid({ rows: [unknown, older], onRows })} />);
+    const finish = screen.getByRole("button", { name: "Finish of Storm of Saruman — LTR 72" });
+    expect(finish).toHaveTextContent("Unknown");
+    expect(finish.classList.contains("border-accent")).toBe(true);
+    const known = screen.getByRole("button", { name: "Finish of Honored Hierarch — ORI 17" });
+    expect(known.classList.contains("border-accent")).toBe(false);
+    await user.click(finish);
+    await user.click(screen.getByRole("option", { name: "Foil" }));
+    expect(edit(onRows, [unknown, older]).map((r) => [r.key, r.finish])).toEqual([
+      ["newer", "foil"],
+      ["older", "nonfoil"],
+    ]);
   });
 
   it("refuses the add on an empty tray, which says where cards will appear", async () => {

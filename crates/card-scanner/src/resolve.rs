@@ -75,6 +75,9 @@ pub struct ChoiceView {
     /// The best normalized distance this printing reached across the burst. `None` for a
     /// printing no search ever matched — a collector read can name a printing the bundle lacks.
     pub distance: Option<f32>,
+    /// The finishes the printing exists in, from the corpus; empty when it did not say. What
+    /// settles an Unknown tray row's finish once the reader picks this printing.
+    pub finishes: Vec<String>,
 }
 
 /// What one tier did.
@@ -443,6 +446,7 @@ pub fn resolve(
             oracle_id: r.oracle_id_of(p).map(|o| format_uuid(&o)),
             label: named(p),
             distance: best.get(p).copied(),
+            finishes: r.finishes_of(p).to_vec(),
         })
         .collect();
     ResolutionView {

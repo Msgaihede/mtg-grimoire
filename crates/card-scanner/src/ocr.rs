@@ -526,6 +526,16 @@ fn quantile(values: &[f32], q: f32) -> f32 {
 const COLUMN_CUT: f32 = 0.12;
 /// Where between the band's quiet floor and its peak a row counts as text.
 const LINE_CUT: f32 = 0.35;
+/// The share of a collector band's width, from the left, whose strokes decide where its
+/// lines are ([`text_lines_at`]).
+///
+/// **The whole width drowned the line that carries the number.** `U 0026` fills the left
+/// third of the band and `LTR • EN` runs on into the artist credit to the far edge, so
+/// averaged across the band the first line was under a third of the second's strength and
+/// under the cut: measured on eighteen crops from a live 1080p pass (2026-09-30), the
+/// number's line was found on 1 of the 5 that showed it, and those reads came back as
+/// `TREN SI` and `ERNIS`. Over the left 60% both lines are found on all five at the same cut.
+const COLLECTOR_MEASURED: f32 = 0.6;
 /// Rows added above a line, as a fraction of its height. More than below, because the rows the
 /// projection finds are the x-height's, and capitals rise further above them than descenders
 /// fall below: at a quarter, `Honor Guard` lost the tops of both capitals and read `onor uar`.
@@ -702,6 +712,195 @@ fn end_word(words: &mut Vec<String>, totals: &mut Vec<usize>, cur: &mut String, 
     *slash = false;
 }
 
+/// What the collector line's separator says about the finish. See [`finish_mark`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarkReading {
+    Foil,
+    Nonfoil,
+    /// No separator was found, or it measured between a dot and a star. The page files the row
+    /// as Unknown for the reader to decide rather than guess.
+    Unknown,
+}
+
+/// The separator between the set code and the language, measured. See [`finish_mark`].
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
+pub struct FinishMark {
+    pub reading: MarkReading,
+    /// The mark's height over the line's letter height. `None` when no mark was found.
+    pub height: Option<f32>,
+    /// The mark's area over the letter height squared.
+    pub area: Option<f32>,
+    /// The mark's area over its convex hull's — near 1 for a dot, lower for a star's points.
+    pub solidity: Option<f32>,
+}
+
+/// A separator this tall, over the letter height, and at least this large, is a star.
+///
+/// **A first calibration, from twelve crops, and not a measurement of the population.** A live
+/// pass on 2026-10-01 (OnePlus 12 as a 1280×720 virtual camera, LTR and HOB cards) measured seven
+/// non-foil dots at height 0.41–0.62 and area 0.12–0.17 of the letter height, and five foil stars
+/// at 0.80–0.84 and 0.33–0.44 — no overlap on either axis. The cuts sit in the gaps, and a mark
+/// between them is [`MarkReading::Unknown`].
+const STAR_HEIGHT: f32 = 0.72;
+const STAR_AREA: f32 = 0.26;
+/// And no star is this large: a mark over it is a smear, not a separator. Measured on a Lenovo 500
+/// crop whose band was cut off at the bottom (2026-09-30), the "separator" was 1.34 letter heights
+/// squared and would otherwise have read as a star; the stars above top out at 0.44.
+const STAR_AREA_MAX: f32 = 0.6;
+/// A separator no taller and no larger than these is a dot.
+const DOT_HEIGHT: f32 = 0.68;
+const DOT_AREA: f32 = 0.22;
+/// And at least this large: a smaller speck is a mark that mostly did not survive the binarization,
+/// which a star under glare can leave as well as a dot. The dots above measured 0.10 and up; a
+/// Lenovo 500 crop of a non-foil left 0.01.
+const DOT_AREA_MIN: f32 = 0.06;
+/// A star's area over its hull is at most this. **Shape is the weaker vote at webcam
+/// resolution**: the star is six or seven camera pixels across and its points smear, so on the
+/// same twelve crops it measured 0.91–0.99 against the dot's 1.04–1.12 — separated, but partly by
+/// how a small blob's pixel count compares to its hull. It confirms a star; it never makes one.
+const STAR_SOLIDITY: f32 = 1.02;
+
+/// Does the separator on a collector band's second line read as a foil's ★ or a non-foil's •?
+///
+/// **Measured, not read.** The recogniser was asked first: on five foils it returned the star as
+/// `*` once, as `M` and `Y` once each and dropped it twice, and on a non-foil it once turned the
+/// dot into `C`. The mark itself is unambiguous — a star is a bold blob nearly a letter tall, a
+/// dot a speck — so this cuts it out and measures it.
+///
+/// `set_len` is the decided printing's set code length: the line is `LTR • EN …`, so the
+/// separator is the first mark after that many letters. The second line is the lower of the
+/// band's two strongest ([`text_lines_at`], measured on its left like the reader); the marks are
+/// the connected components of the line binarized at its Otsu level, light on dark or dark on
+/// light, whichever is the minority; and only marks centred on the line's own rows count, since
+/// the padded line box catches slivers of the line above.
+pub fn finish_mark(band: &RgbImage, set_len: usize) -> FinishMark {
+    let unknown = FinishMark { reading: MarkReading::Unknown, height: None, area: None, solidity: None };
+    let mut lines = text_lines_at(band, LINE_CUT, COLLECTOR_MEASURED);
+    if lines.len() < 2 || set_len == 0 {
+        return unknown;
+    }
+    lines.sort_by(|a, b| b.strength.total_cmp(&a.strength));
+    lines.truncate(2);
+    let line = *lines.iter().max_by_key(|l| l.top).expect("two lines");
+    let (w, h) = (line.right - line.left, line.bottom - line.top);
+    if w < 8 || h < 8 {
+        return unknown;
+    }
+    let gray = image::imageops::grayscale(band);
+    let crop = image::imageops::crop_imm(&gray, line.left, line.top, w, h).to_image();
+    let level = imageproc::contrast::otsu_level(&crop);
+    let lit = crop.pixels().filter(|p| p[0] > level).count();
+    let light_text = lit * 2 < (w * h) as usize;
+    let bin = image::GrayImage::from_fn(w, h, |x, y| {
+        let on = (crop.get_pixel(x, y)[0] > level) == light_text;
+        image::Luma([if on { 255 } else { 0 }])
+    });
+    let labels = imageproc::region_labelling::connected_components(
+        &bin,
+        imageproc::region_labelling::Connectivity::Eight,
+        image::Luma([0u8]),
+    );
+
+    // The line box is padded half a line above and three tenths below (`LINE_PAD_*`), so the
+    // line's own rows are its middle 1/1.8.
+    let tall = h as f32 / (1.0 + LINE_PAD_ABOVE + LINE_PAD_BELOW);
+    let (core_top, core_bottom) = (LINE_PAD_ABOVE * tall, (1.0 + LINE_PAD_ABOVE) * tall);
+    let mut marks: std::collections::HashMap<u32, Mark> = std::collections::HashMap::new();
+    for (x, y, v) in labels.enumerate_pixels() {
+        if v[0] != 0 {
+            marks.entry(v[0]).or_insert_with(|| Mark::at(x, y)).add(x, y);
+        }
+    }
+    let mut marks: Vec<Mark> = marks
+        .into_values()
+        .filter(|m| m.pixels.len() >= 6)
+        .filter(|m| {
+            let cy = (m.top + m.bottom) as f32 / 2.0;
+            (core_top..=core_bottom).contains(&cy)
+        })
+        .collect();
+    marks.sort_by_key(|m| m.left);
+
+    // The letter height: the upper quartile of the substantial marks, which letters dominate.
+    let mut heights: Vec<u32> = marks.iter().filter(|m| m.pixels.len() >= 40).map(Mark::height).collect();
+    heights.sort_unstable();
+    let Some(&cap) = heights.get(heights.len() * 3 / 4) else { return unknown };
+    let cap = cap as f32;
+
+    // Past the set code's letters; the next mark is the separator — unless it is letter-height,
+    // which is the `E` of a line whose separator did not survive the binarization.
+    let mut letters = 0;
+    let mut after = None;
+    for (i, m) in marks.iter().enumerate() {
+        if m.height() as f32 >= 0.7 * cap {
+            letters += 1;
+            if letters == set_len {
+                after = Some(i + 1);
+                break;
+            }
+        }
+    }
+    let Some(sep) = after.and_then(|i| marks.get(i)) else { return unknown };
+    let height = sep.height() as f32 / cap;
+    if height >= 0.9 {
+        return unknown;
+    }
+    let area = sep.pixels.len() as f32 / (cap * cap);
+    let solidity = sep.solidity();
+    let reading = if height >= STAR_HEIGHT
+        && (STAR_AREA..=STAR_AREA_MAX).contains(&area)
+        && solidity <= STAR_SOLIDITY
+    {
+        MarkReading::Foil
+    } else if height <= DOT_HEIGHT && (DOT_AREA_MIN..=DOT_AREA).contains(&area) {
+        MarkReading::Nonfoil
+    } else {
+        MarkReading::Unknown
+    };
+    FinishMark { reading, height: Some(height), area: Some(area), solidity: Some(solidity) }
+}
+
+/// One connected mark on a line: its box and its pixels.
+struct Mark {
+    left: u32,
+    top: u32,
+    right: u32,
+    bottom: u32,
+    pixels: Vec<imageproc::point::Point<i32>>,
+}
+
+impl Mark {
+    fn at(x: u32, y: u32) -> Mark {
+        Mark { left: x, top: y, right: x, bottom: y, pixels: Vec::new() }
+    }
+
+    fn add(&mut self, x: u32, y: u32) {
+        self.left = self.left.min(x);
+        self.top = self.top.min(y);
+        self.right = self.right.max(x);
+        self.bottom = self.bottom.max(y);
+        self.pixels.push(imageproc::point::Point::new(x as i32, y as i32));
+    }
+
+    fn height(&self) -> u32 {
+        self.bottom - self.top + 1
+    }
+
+    /// Pixel count over the convex hull's area. A small blob's count can exceed its hull, whose
+    /// corners run through pixel centres, so a dot reads a little over 1.
+    fn solidity(&self) -> f32 {
+        let hull = imageproc::geometry::convex_hull(self.pixels.clone());
+        let twice: i64 = (0..hull.len())
+            .map(|i| {
+                let (p, q) = (hull[i], hull[(i + 1) % hull.len()]);
+                i64::from(p.x) * i64::from(q.y) - i64::from(q.x) * i64::from(p.y)
+            })
+            .sum();
+        self.pixels.len() as f32 / (twice.abs() as f32 / 2.0).max(1.0)
+    }
+}
+
 /// How well a collector-line read fits one printing, best highest. See [`collector_fit`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CollectorFit(u8);
@@ -839,16 +1038,6 @@ mod engine {
     /// How many of a collector band's lines are read — both printed lines, and one more for a
     /// crop that caught the bottom of the text box.
     const COLLECTOR_LINES: usize = 3;
-    /// The share of a collector band's width, from the left, whose strokes decide where its
-    /// lines are ([`super::text_lines_at`]).
-    ///
-    /// **The whole width drowned the line that carries the number.** `U 0026` fills the left
-    /// third of the band and `LTR • EN` runs on into the artist credit to the far edge, so
-    /// averaged across the band the first line was under a third of the second's strength and
-    /// under the cut: measured on eighteen crops from a live 1080p pass (2026-09-30), the
-    /// number's line was found on 1 of the 5 that showed it, and those reads came back as
-    /// `TREN SI` and `ERNIS`. Over the left 60% both lines are found on all five at the same cut.
-    const COLLECTOR_MEASURED: f32 = 0.6;
 
     /// A loaded OCR engine. Construction reads ~22 MB of model, so build one and keep it.
     pub struct TitleReader {
@@ -1157,6 +1346,66 @@ mod engine {
 #[cfg(feature = "ocr")]
 pub use engine::{anyhow_lite, TitleReader};
 
+/// Synthetic collector bands for the finish mark's tests — here rather than in `tests` so the
+/// session's tests can build one too.
+#[cfg(test)]
+pub(crate) mod test_bands {
+    use image::RgbImage;
+    use imageproc::drawing::{draw_filled_circle_mut, draw_filled_rect_mut, draw_polygon_mut};
+    use imageproc::point::Point;
+    use imageproc::rect::Rect;
+
+    /// What sits between the set code and `EN`.
+    #[derive(Clone, Copy)]
+    pub(crate) enum Separator {
+        Star,
+        Dot,
+        /// A mark far larger than any star: a smear.
+        Blob,
+        None,
+    }
+
+    const PAPER: image::Rgb<u8> = image::Rgb([24, 22, 20]);
+    const INK: image::Rgb<u8> = image::Rgb([225, 222, 214]);
+
+    /// A collector band as a 4× upscale sees one: light marks on the black frame, `U 0014` over
+    /// `LTR <separator> EN` and an artist, the letters 24×34 — the size the live crops measured.
+    pub(crate) fn collector_band(separator: Separator) -> RgbImage {
+        let mut band = RgbImage::from_pixel(520, 192, PAPER);
+        // A letter with a counter, so it has vertical strokes for the line finder.
+        let letter = |band: &mut RgbImage, x: i32, y: i32| {
+            draw_filled_rect_mut(band, Rect::at(x, y).of_size(24, 34), INK);
+            draw_filled_rect_mut(band, Rect::at(x + 7, y + 7).of_size(10, 20), PAPER);
+        };
+        for x in [30, 70, 100, 130, 160] {
+            letter(&mut band, x, 36); // U 0014
+        }
+        for x in [30, 57, 86] {
+            letter(&mut band, x, 100); // LTR
+        }
+        let (x, y) = (150, 117);
+        match separator {
+            Separator::Star => {
+                let points: Vec<Point<i32>> = (0..10)
+                    .map(|i| {
+                        let r = if i % 2 == 0 { 15.0 } else { 8.0 };
+                        let a = std::f32::consts::PI * (i as f32 / 5.0 - 0.5);
+                        Point::new(x + (r * a.cos()) as i32, y + (r * a.sin()) as i32)
+                    })
+                    .collect();
+                draw_polygon_mut(&mut band, &points, INK);
+            }
+            Separator::Dot => draw_filled_circle_mut(&mut band, (x, y), 6, INK),
+            Separator::Blob => draw_filled_circle_mut(&mut band, (x, y), 22, INK),
+            Separator::None => {}
+        }
+        for x in [181, 213, 272, 304, 336, 368, 400, 432, 464] {
+            letter(&mut band, x, 100); // EN, the artist
+        }
+        band
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1168,6 +1417,23 @@ mod tests {
     fn a_clean_collector_line_resolves_to_its_set_and_number() {
         let c = collector_candidates("U 0232 LTR EN");
         assert!(c.contains(&("ltr".into(), "232".into())), "got {c:?}");
+    }
+
+    #[test]
+    fn the_separator_is_measured_as_a_star_a_dot_or_nothing_known() {
+        use test_bands::{collector_band, Separator};
+        let read = |sep| finish_mark(&collector_band(sep), 3);
+        let m = read(Separator::Star);
+        assert_eq!(m.reading, MarkReading::Foil, "a star: {m:?}");
+        let m = read(Separator::Dot);
+        assert_eq!(m.reading, MarkReading::Nonfoil, "a dot: {m:?}");
+        // No separator at all: the next mark is the `E`, letter-height, so nothing is known.
+        assert_eq!(read(Separator::None).reading, MarkReading::Unknown);
+        // A blob larger than any star is a smear, not a separator.
+        assert_eq!(read(Separator::Blob).reading, MarkReading::Unknown);
+        // And a band with no two lines says nothing either.
+        let blank = RgbImage::from_pixel(520, 192, image::Rgb([24, 22, 20]));
+        assert_eq!(finish_mark(&blank, 3).reading, MarkReading::Unknown);
     }
 
     /// The reads are verbatim from the 2026-09-30 live pass on a 1080p webcam, where the whole
