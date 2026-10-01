@@ -132,6 +132,7 @@ type Attempt = { marketplace: MarketplaceId; failed: boolean; error: string | nu
 function invalidatePricedQueries(queryClient: QueryClient): void {
   void queryClient.invalidateQueries({ queryKey: MARKETPLACE_FEEDS_KEY });
   void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+  void queryClient.invalidateQueries({ queryKey: ["cards", "prices"] });
   void queryClient.invalidateQueries({ queryKey: ["collection"] });
   void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
   void queryClient.invalidateQueries({ queryKey: ["decks"] });
