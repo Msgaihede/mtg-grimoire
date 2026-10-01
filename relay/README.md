@@ -33,19 +33,21 @@ live Worker (2026-09-28), and **401** once `"device":"deadbeef"` is added. ⚠�
 it was not deployed until that day**, on a `{"group":…,"auth":…}` probe the group door refuses as
 `malformed token request` — its `auth` was not 64 hex — before it reads `device` at all. **The
 pairing rendezvous is live too**: `GET /p/{32 hex}/offer` answers a JSON `nothing there`, not the
-router's plain-text `not found`. **The last deploy was 2026-09-28, from `main` at `1512ea68`**, and
-carried the refresh-secret change. Deploying this tree is `npx wrangler deploy` from here, and it
+router's plain-text `not found`. **The last deploy was 2026-10-01, from `main` at `2b845048`**, and
+carried issue #548's `dev` claim — `token.ts` and `claim.ts`, no migration, and nothing a probe
+without a credential can see. Deploying this tree is `npx wrangler deploy` from here, and it
 is the last of the steps under **Deploying** below rather than the whole of them.
 
-**What is not deployed is issue #546's half, and it adds no public route either** — the push admission,
+**Issue #546's half is deployed, and it adds no public route either** — the push admission,
 `/keys?epoch=` and `removalStep`, `/rotate`'s two-epoch step, the internal `/roster`, the hourly
 reconciliation and the group door's `membership_ended`. Its tell is a query parameter:
 `/g/{group}/keys?device=…&epoch=x` carrying any well-formed bearer answers **400 `that is not an
 epoch`** from this tree, which checks the epoch's shape before the credential's value, and **401**
-from a Worker that ignores the parameter. That is read off `handleKeys`, not probed — the host
-could not be reached from the sandbox this was written in, 2026-09-28. A device meets the same fact
-from inside: its own `/keys` 200 carries `removalStep: 2` from this tree and nothing from the live
-one.
+from a Worker that ignores the parameter. **Probed 2026-10-01: 400.** ⚠️ **This paragraph said
+"what is not deployed" until that day.** The deploy went out on 2026-09-28 at 19:57 UTC — nine
+minutes after the half merged — and nobody recorded it; the probe had been read off `handleKeys`
+and never run. A device meets the same fact from inside: its own `/keys` 200 carries
+`removalStep: 2`.
 
 ## What it cannot do
 

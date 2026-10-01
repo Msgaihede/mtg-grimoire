@@ -50,15 +50,17 @@ ordinary case.
 The only way to exercise any of this today is the `sync_state` key **`share_url`**, a dev override
 with no UI that mirrors `relay_url` exactly.
 
-**What is missing is more than the address.** As of 2026-09-08:
+**What is missing is more than the address.** As of 2026-10-01, asked of the account rather than
+of this page:
 
 | | State |
 | --- | --- |
-| The Worker | never deployed; it has no address to probe |
-| `shares` in D1 | `share-worker/schema.sql` is written and has never been applied to the remote database |
-| The R2 bucket | **R2 may not be enabled on the account at all** — a dashboard action only Markus can take (spec §14 item 2) |
-| `RELAY_HMAC_KEY` on this Worker | not set; it must be the *same value* the relay holds or every publish is a 401 and nothing says why |
-| `dist-share/` | built by no automated command — see [what nothing runs](#what-no-build-runs-and-what-that-costs) |
+| The Worker | never deployed — the account lists one script, the relay. Its address will be `mtg-grimoire-share.denmark-east.workers.dev`, which answers Cloudflare's own 404 today |
+| `shares` in D1 | **applied 2026-10-01**, one statement per request and never `--file`: the table and both indexes, read back from `sqlite_master` with the `CHECK` and `shares_folder`'s `WHERE state <> 'revoked'` intact. Inert until a Worker reads it |
+| The R2 bucket | **R2 is not enabled on the account** — the API answers `10042: Please enable R2 through the Cloudflare Dashboard`. A dashboard action only Markus can take (spec §14 item 2), and the deploy fails on the binding until the bucket exists |
+| `RELAY_HMAC_KEY` on this Worker | not set; it must be the *same value* the relay holds or every publish is a 401 and nothing says why. **Cloudflare never shows a secret back and the relay's value was not kept**, so the two are set together with one fresh value — the relay runbook's break-glass, which costs every outstanding access token and nothing else |
+| The relay's `dev` claim | **deployed 2026-10-01** — the gate's precondition, see [the Worker](#the-worker) |
+| `dist-share/` | built by no automated command — see [what nothing runs](#what-no-build-runs-and-what-that-costs). ⚠️ **In a worktree with no `node_modules` of its own, `npm run share:build` exits 0 and writes the wrong thing**: Node resolves the main checkout's Vite, a Vite 7 ignores `rolldownOptions`, and `dist-share/assets/` holds the *app's* `index-*.js` and no `share.js` — which `wrangler deploy` would upload happily and the shell would then link to nothing. Measured 2026-10-01; check that `dist-share/assets/share.js` exists before any deploy |
 
 ⚠️ **Do not conclude any of that from this page on the day you read it.**
 [hosted-relay-deploy.md](hosted-relay-deploy.md) opens with the rule and this feature inherits it:

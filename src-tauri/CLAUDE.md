@@ -1968,8 +1968,9 @@ record, with every measurement, is
   a device id`**, and **401** once a `device` is added. ⚠️ **This line said it was not deployed
   until then**, on a `{group, auth}` probe whose 8-character `auth` the group door refuses as
   `malformed` before it reads `device` — a probe that could not tell. The pairing rendezvous is live
-  as well, and the last deploy was 2026-09-28 from `main` at `1512ea68`, carrying the
-  refresh-secret change. `wrangler.jsonc` carries a real `database_id`, so the D1 holds live entitlement
+  as well, **and so is issue #546's half** — deployed 2026-09-28 at 19:57 UTC and unrecorded until
+  step 0's sixth probe answered `400 that is not an epoch` on 2026-10-01. The last deploy was that
+  day, from `main` at `2b845048`, carrying issue #548's `dev` claim. `wrangler.jsonc` carries a real `database_id`, so the D1 holds live entitlement
   rows. That makes the next deploy an **update to a running service**, not a first landing, and the
   `ALTER TABLE`s in `schema.sql` run against real data.
   [hosted-relay-deploy.md](../docs/reference/hosted-relay-deploy.md)'s step 0 is those `curl`s

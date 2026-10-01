@@ -2641,18 +2641,18 @@ can meet, `claim.ts` and `patreon.ts` the OAuth hop, the webhook and the reconci
 and `log.ts` the object and who its floor waits for, and `wrangler.jsonc` a D1 binding and an
 hourly cron — `0 * * * *` since issue #546, `0 3 * * *` before it.
 **The device cap, `/claim`'s rebind and the `group_devices` table are deployed too**, and so are
-the pairing rendezvous and the refresh-secret change — the last deploy was 2026-09-28, from `main`
-at `1512ea68`. Settled by the same kind of probe rather than by reading this file:
+the pairing rendezvous and the refresh-secret change — the last deploy was 2026-10-01, from `main`
+at `2b845048`, carrying issue #548's `dev` claim. Settled by the same kind of probe rather than by reading this file:
 `POST /token {"refresh":"x"}` **with no `device` field** answers **400 `that is not a device id`**,
 and **401** once a `device` is added. ⚠️ **This paragraph called that half undeployed until
 2026-09-28**, on a `{group, auth}` probe whose short `auth` is refused as `malformed` before
 `device` is read — a probe that answers the same on either build.
-**What is not deployed is issue #546's half** — the push admission, `/keys?epoch=` and
+**Issue #546's half is deployed too** — the push admission, `/keys?epoch=` and
 `removalStep`, the two-epoch removal, `/roster`, the hourly reconciliation and `membership_ended`.
 Its tell is a query: `/g/{group}/keys?device=…&epoch=x` with any well-formed bearer answers **400
-`that is not an epoch`** from this tree and **401** from a Worker that ignores the parameter — read
-off `handleKeys`, not probed, because the sandbox it was written in could not reach the host on
-2026-09-28.
+`that is not an epoch`** from this tree and **401** from a Worker that ignores the parameter.
+**Probed 2026-10-01: 400.** ⚠️ **This paragraph said "what is not deployed" until then** — the
+deploy was 2026-09-28 at 19:57 UTC and went unrecorded, and the probe had never been run.
 **The rest of this section describes the hosted design in the present tense**, which is how this
 repository writes a design that is agreed and not yet a deployment; where a sentence is about what
 has actually run, it says so. [hosted-relay-deploy.md](hosted-relay-deploy.md) is the runbook and
@@ -2996,8 +2996,8 @@ key distribution** are all live — an earlier reading of this line, taken befor
 `/rotate` and `/keys` were the two routes still missing, and that is history. `wrangler.jsonc`
 carries a real `database_id`, so the D1 exists too and may hold live rows. **The device roll and
 the pairing rendezvous are live too** — probed 2026-09-28, after this line had called the device
-roll missing for four weeks on a probe that could not tell — and the last deploy was that day,
-from `main` at `1512ea68`. The next deploy is an update to a running service, and
+roll missing for four weeks on a probe that could not tell — and the last deploy was 2026-10-01,
+from `main` at `2b845048`. The next deploy is an update to a running service, and
 [hosted-relay-deploy.md](hosted-relay-deploy.md)'s step 0 is how to check rather than assume —
 this paragraph is why it exists. **`PATREON_CLIENT_ID` is no longer the exception it was**: it was a placeholder until
 `a0eb0c6` (2026-08-30) and holds the real id now, verified live — `GET /oauth2/authorize` with it
@@ -3508,7 +3508,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   refreshes `["sync"]` alone. It gated on `pulled > 0` for one review round and missed a pull that
   only mooted: the moot arm deletes rows and counts them in `moot`, never in `applied`.
 - ~~**A removed device's ack pins the relay's compaction floor.**~~ **Fixed with issue #546, and
-  not deployed.** `compact` took its floor as the lowest ack of every device the object had heard
+  deployed 2026-09-28.** `compact` took its floor as the lowest ack of every device the object had heard
   from, and nothing but a membership's end ever deleted an ack — so a removed device, a departed
   one and a wiped reinstall each stayed the slowest reader the group had, and nothing above its
   last ack was compacted again. Now an accepted rotation posts its roster to the object's internal

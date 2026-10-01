@@ -181,8 +181,10 @@ Those are the repo owner's. `wrangler dev --local` is the only wrangler command 
 
 **Step 0 is to ask the host rather than a document**, for the reason `relay/README.md` opens with:
 that file has been wrong twice about what was deployed, in the same week, and the only sentence
-that cannot rot is a `curl`. As of 2026-09-08 **nothing is deployed at this Worker's address,
-because it has no address yet.**
+that cannot rot is a `curl`. As of 2026-10-01 **nothing is deployed at this Worker's address** —
+the account lists one script, the relay. **Step 2 is done** (the table and both indexes, verified
+in `sqlite_master`), the relay carries the `dev` claim the gate needs, and **step 1 is the
+blocker**: the API answers `10042: Please enable R2 through the Cloudflare Dashboard`.
 
 1. **Enable R2 on the account** — a dashboard action, and spec §14's open item 2. Then
    `npx wrangler r2 bucket create mtg-grimoire-shares`.
