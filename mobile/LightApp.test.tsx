@@ -1,8 +1,16 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+/** Set by the one test that needs the phone face to fail as a face's render can. */
+const phone = vi.hoisted(() => ({ throws: false }));
+
 vi.mock("./DesktopFace", () => ({ default: () => <div>the desktop face</div> }));
-vi.mock("./phone/PhoneApp", () => ({ default: () => <div>the phone face</div> }));
+vi.mock("./phone/PhoneApp", () => ({
+  default: () => {
+    if (phone.throws) throw new Error("the phone face broke");
+    return <div>the phone face</div>;
+  },
+}));
 
 const startupStatus = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", () => ({
@@ -32,7 +40,10 @@ function stubViewport(wide: boolean) {
   };
 }
 
-beforeEach(() => startupStatus.mockReset());
+beforeEach(() => {
+  startupStatus.mockReset();
+  phone.throws = false;
+});
 afterEach(() => vi.restoreAllMocks());
 
 describe("LightApp", () => {
@@ -56,6 +67,23 @@ describe("LightApp", () => {
     act(() => resize(true));
     expect(await screen.findByText("the desktop face")).toBeInTheDocument();
     expect(screen.queryByText("the phone face")).toBeNull();
+  });
+
+  it("says so when a face breaks, and does not carry the failure across the floor", async () => {
+    // React logs the caught error and the boundary records it; neither belongs in the run's output.
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    phone.throws = true;
+    const resize = stubViewport(false);
+    render(<LightApp gate={false} />);
+
+    // Without the boundary the throw unwinds the whole tree and the page is blank.
+    expect(await screen.findByRole("alert")).toHaveTextContent("This page could not be drawn.");
+
+    // The boundary is keyed by the face: unkeyed, it would stay failed and draw its sentence over
+    // a desktop face that has nothing wrong with it.
+    act(() => resize(true));
+    expect(await screen.findByText("the desktop face")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 
   it("draws neither face until the data folder is open", async () => {

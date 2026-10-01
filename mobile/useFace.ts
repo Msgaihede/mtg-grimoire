@@ -6,9 +6,9 @@ export type Face = "phone" | "desktop";
 /**
  * The floor the desktop UI is designed and measured down to, and no further.
  *
- * At or above it the light app draws the desktop's own pages; below it, the phone face. The
- * desktop app itself has no viewport branch and must not grow one — this is the light entry's,
- * and it is the only one.
+ * At or above it the light app draws the desktop's own pages; below it, the phone face. Nothing
+ * in the desktop app picks a face and nothing there may start — the question is the light
+ * entry's, and this is the only place it is asked.
  */
 const QUERY = `(min-width: ${DESKTOP_FLOOR_PX}px)`;
 
