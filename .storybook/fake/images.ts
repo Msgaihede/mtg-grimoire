@@ -26,6 +26,11 @@
  *   tree-shaken out of the build, so `build-storybook` alone proves nothing about it.
  * * `live` — the real JPG off `cards.scryfall.io`, read from the fixture's own columns. No
  *   image bytes are in this repository; only URLs are.
+ * * `bundled` — the same JPGs, served from beside a design-system build instead of from
+ *   Scryfall. claude.ai's pages allow no remote image source, so `live` draws nothing there, and
+ *   a design built from the bundle drew every card as `synthetic` until this mode existed.
+ *   `.design-sync/card-art.mjs` downloads the fixture's images at sync time into a gitignored
+ *   folder and copies them next to the bundle; still no image bytes in this repository.
  */
 export * from "../../src/lib/images";
 
@@ -52,7 +57,7 @@ const SIZE: Record<ImageVariant, readonly [number, number]> = {
 };
 
 /** Where the art comes from. The values are also the toolbar item values in `preview.tsx`. */
-export type ArtMode = "synthetic" | "live";
+export type ArtMode = "synthetic" | "live" | "bundled";
 
 /**
  * Module state, and the one piece of it {@link import("./world").installWorld} deliberately
@@ -69,6 +74,66 @@ let mode: ArtMode = "synthetic";
 
 export function setArtMode(next: ArtMode): void {
   mode = next;
+}
+
+/**
+ * The folder `bundled` serves from — an absolute URL ending in `/`, or `null` for none.
+ *
+ * `bundled` with no root falls back to `synthetic` rather than handing out a relative path
+ * that would resolve against whatever page happened to mount the component. Kept apart from
+ * the mode so the two callers can each answer the question they own: the design-system
+ * provider knows where its bundle was loaded from, and `preview.tsx` knows where Storybook's
+ * static folder is.
+ */
+let bundledRoot: string | null = null;
+
+/** The art folder's name at a design system's root. `card-art.mjs` writes it; nothing else does. */
+export const CARD_ART_DIR = "card-art";
+
+export function setBundledArtRoot(root: string | null): void {
+  bundledRoot = root;
+}
+
+/**
+ * Where one fixture image is shipped inside the art folder, or `null` for a URL that is not one.
+ *
+ * Keyed by the **Scryfall path**, never by the fixture's card id, and the difference is the
+ * `large` seed: its 5 200 minted printings copy `normalUrl`/`artCropUrl` from real rows under
+ * ids of their own, so a folder keyed by id would miss every one of them while `live` drew them.
+ * `https://cards.scryfall.io/normal/front/d/5/<id>.jpg?1783948684` ships as `normal/<id>.jpg`
+ * — the kind, then the file, with the cache-busting query dropped. `card-art.mjs` writes to
+ * exactly these paths, so this function is half of one contract and that script the other.
+ */
+export function bundledArtPath(url: string): string | null {
+  const match = /^https:\/\/cards\.scryfall\.io\/(normal|art_crop)\/(?:[^/?#]+\/)*([^/?#]+\.jpg)(?:\?[^#]*)?$/.exec(
+    url,
+  );
+  return match ? `${match[1]}/${match[2]}` : null;
+}
+
+/**
+ * The art folder beside a design-system bundle, from the URL the bundle script was loaded from.
+ *
+ * Two layouts ship the same bundle and both are answered: the claude.ai/design project keeps it
+ * at the root as `_ds_bundle.js`, and the Design System artifact — and every canvas that
+ * installs it under `ds/<folder>/` — keeps it as `components/bundle.js`. The art folder sits at
+ * the design system's root in both, so a script under a `components/` directory looks one
+ * level up. `null` for no URL (an ES module has no `currentScript`, which is Storybook's case)
+ * or one that does not parse.
+ */
+export function bundledArtRootFor(scriptSrc: string | null | undefined): string | null {
+  if (!scriptSrc) return null;
+  let script: URL;
+  try {
+    script = new URL(scriptSrc);
+  } catch {
+    return null;
+  }
+  script.search = "";
+  script.hash = "";
+  const dir = new URL(".", script);
+  const root = dir.pathname.endsWith("/components/") ? new URL("..", dir) : dir;
+  return new URL(`${CARD_ART_DIR}/`, root).href;
 }
 
 /**
@@ -140,7 +205,7 @@ function cardById(cardId: string): FakeCard | undefined {
  */
 export function cardImageUrl(cardId: string, face: number, variant: ImageVariant): string {
   const card = cardById(cardId);
-  if (mode === "live" && card && face === 0) {
+  if ((mode === "live" || mode === "bundled") && card && face === 0) {
     // The fixture carries two of Scryfall's six `image_uris` keys — `art_crop` and `normal`
     // (`gen-storybook-cards.mjs:230-231`) — so `thumb` and `display` are served the 488x680
     // `normal` too: upscaled a little at `display`, downscaled at `thumb`, and honest about
@@ -150,7 +215,11 @@ export function cardImageUrl(cardId: string, face: number, variant: ImageVariant
     // 1 of the 43 rows is null in both columns: `Prismatic Ending // Prismatic Ending`
     // (`amh2 5s`, `imageStatus: "missing"`), which is the no-image branch's only fixture.
     // Live art must not turn that row into a broken `<img>`.
-    if (url) return url;
+    if (url && mode === "live") return url;
+    // Bundled serves exactly the rows live would, from beside the bundle. No root, or a URL
+    // the art folder has no path for, is synthetic — never a relative `<img>` that 404s.
+    const path = url && bundledRoot ? bundledArtPath(url) : null;
+    if (path) return bundledRoot + path;
   }
   return synthetic(card, cardId, face, variant);
 }

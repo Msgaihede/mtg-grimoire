@@ -66,6 +66,27 @@ and snow symbols), the sync bar with `ManaLine`, rarity with `RarityGem`, and th
 family with `ToggleChip` / `ManaChip` / `ManaValueChips` / `LayoutToggle` / `ResetAll`. Do not
 hand-draw a mana pip.
 
+### Cards are real card images — keep `card-art/` beside the bundle
+
+Every card a component draws (`CardImage`, `CardArt`, the deck editor's stacks) shows the real
+printed card, served from the `card-art/` folder at this design system's root. The provider finds
+it from the bundle script's own address, so **when you install this system on a canvas, copy
+`card-art/` along with `components/bundle.js`** — without it every card falls back to the app's
+own no-image frame. The images cover the seeded fixture's printings (`CARDS` on
+`window.MtgGrimoire`); a card id outside it draws a labelled placeholder, never a broken image.
+
+### The deck editor is components, not a drawing
+
+Draw the deck editor by mounting its parts rather than recreating them: `StackView` (the Stacks
+desk — piles in columns, the rail on the right), `CardStack` (one pile), `DeckCardFace` (a stacked
+card's face), `CardChin` (the rarity · set · number · finish · price foot), `GroupHeader` (a pile's
+heading), `QuantityTag` and `TheoryMatchMark` (the card's corner marks) and `CountPill`.
+`StackView`, `CardStack`, `CardChin` and `QuantityTag` have cards of their own — read their
+`.prompt.md` and `.d.ts` before passing a prop; the rest ship on `window.MtgGrimoire` as the
+pieces those four are built from. The seeded fixtures the stories use ship too —
+`printing`, `deckCard`, `deckCategory` and `deckGroups` — so a deck built from them draws real
+cards.
+
 ### Selects and hints — use the app's own
 
 - **A select is `Dropdown` (one value) or `MultiDropdown` (several), never a native `<select>`.**

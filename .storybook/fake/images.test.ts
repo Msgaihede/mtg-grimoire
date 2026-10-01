@@ -13,7 +13,13 @@
  * that read the constant it is checking would agree with any typo in it.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { cardImageUrl, setArtMode } from "./images";
+import {
+  bundledArtPath,
+  bundledArtRootFor,
+  cardImageUrl,
+  setArtMode,
+  setBundledArtRoot,
+} from "./images";
 import * as fake from "./images";
 import * as real from "../../src/lib/images";
 import { IMAGE_VARIANTS, type ImageVariant } from "../../src/lib/images";
@@ -70,7 +76,10 @@ const TWO_FACED = "Delver of Secrets // Insectile Aberration";
 /** An apostrophe in a card name, which is `&apos;` by the time it is markup. */
 const APOSTROPHE = "Smuggler's Copter";
 
-beforeEach(() => setArtMode("synthetic"));
+beforeEach(() => {
+  setArtMode("synthetic");
+  setBundledArtRoot(null);
+});
 
 describe("the re-export", () => {
   it("replaces cardImageUrl and nothing else", () => {
@@ -183,6 +192,79 @@ describe("live art", () => {
     expect(cardImageUrl(bolt.id, 0, "grid")).toBe(bolt.normalUrl);
     setArtMode("synthetic");
     expect(svgOf(cardImageUrl(bolt.id, 0, "grid"))).toContain("Black Lotus");
+  });
+});
+
+/**
+ * The design system's art: live's rows, served from beside the bundle.
+ *
+ * Every assertion is paired with live's answer for the same card, because the promise is "the
+ * same picture from a different host" — a bundled URL that pointed at a different file would be
+ * a correct-looking card of the wrong printing, which is exactly the lie synthetic art exists to
+ * avoid telling.
+ */
+describe("bundled art", () => {
+  const ROOT = "https://example.test/project/ds/mtggrimoire/card-art/";
+
+  beforeEach(() => {
+    setArtMode("bundled");
+    setBundledArtRoot(ROOT);
+  });
+
+  it("serves the file live would have fetched, keyed by Scryfall's path", () => {
+    const lotus = card("Black Lotus");
+    const file = (url: string | null) => url?.split("?")[0].split("/").pop();
+    expect(cardImageUrl(lotus.id, 0, "grid")).toBe(`${ROOT}normal/${file(lotus.normalUrl)}`);
+    expect(cardImageUrl(lotus.id, 0, "display")).toBe(`${ROOT}normal/${file(lotus.normalUrl)}`);
+    expect(cardImageUrl(lotus.id, 0, "art")).toBe(`${ROOT}art_crop/${file(lotus.artCropUrl)}`);
+  });
+
+  it("falls back to synthetic with no root, rather than a relative <img> that 404s", () => {
+    setBundledArtRoot(null);
+    expect(svgOf(cardImageUrl(card("Black Lotus").id, 0, "grid"))).toContain("Black Lotus");
+  });
+
+  it("falls back to synthetic wherever live does", () => {
+    expect(svgOf(cardImageUrl(card(NO_ART).id, 0, "art"))).toContain("Prismatic Ending");
+    expect(svgOf(cardImageUrl(card(TWO_FACED).id, 1, "grid"))).toContain("· back");
+    expect(svgOf(cardImageUrl("nope", 0, "grid"))).toContain("Unknown card");
+  });
+
+  it("maps every image URL in the fixture to a path, so the download script can write them all", () => {
+    for (const row of CARDS) {
+      for (const url of [row.normalUrl, row.artCropUrl]) {
+        if (url) expect(bundledArtPath(url), url).toMatch(/^(normal|art_crop)\/[^/]+\.jpg$/);
+      }
+    }
+  });
+
+  it("refuses a URL that is not a Scryfall card image", () => {
+    expect(bundledArtPath("https://example.test/normal/front/a/b/x.jpg")).toBeNull();
+    expect(bundledArtPath("https://cards.scryfall.io/png/front/a/b/x.png")).toBeNull();
+  });
+});
+
+describe("the art folder beside a bundle", () => {
+  it("is at the root for the claude.ai/design layout, where the bundle is _ds_bundle.js", () => {
+    expect(bundledArtRootFor("https://h.test/p/abc/_ds_bundle.js?v=3")).toBe(
+      "https://h.test/p/abc/card-art/",
+    );
+  });
+
+  it("is one level up for the artifact and canvas layout, where it is components/bundle.js", () => {
+    expect(bundledArtRootFor("https://h.test/a/project/components/bundle.js")).toBe(
+      "https://h.test/a/project/card-art/",
+    );
+    expect(bundledArtRootFor("https://h.test/c/project/ds/mtggrimoire/components/bundle.js")).toBe(
+      "https://h.test/c/project/ds/mtggrimoire/card-art/",
+    );
+  });
+
+  it("is nothing without a script URL, which is an ES module's case", () => {
+    expect(bundledArtRootFor(null)).toBeNull();
+    expect(bundledArtRootFor(undefined)).toBeNull();
+    expect(bundledArtRootFor("")).toBeNull();
+    expect(bundledArtRootFor("not a url")).toBeNull();
   });
 });
 
