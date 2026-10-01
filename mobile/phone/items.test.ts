@@ -2,6 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { CardSummary, CollectionRow, DeckCard, WishRow } from "@/lib/ipc";
 import { collectionItem, deckCardItem, searchItem, wishItem } from "./items";
 
+/** A printing sold both ways — which is most of them, and the one a wall leaves unmarked. */
+const BOTH = '["nonfoil","foil"]';
+/** A printing that exists only in foil: the mark states what the object is. */
+const FOIL_ONLY = '["foil"]';
+
 const summary = (over: Partial<CardSummary> = {}): CardSummary =>
   ({
     id: "card-1",
@@ -11,6 +16,7 @@ const summary = (over: Partial<CardSummary> = {}): CardSummary =>
     collectorNumber: "161",
     rarity: "common",
     price: 1.5,
+    finishes: BOTH,
     ownedQuantity: 0,
     printings: 1,
     ...over,
@@ -35,6 +41,18 @@ describe("searchItem", () => {
 
   it("counts what the reader owns", () => {
     expect(searchItem(summary({ ownedQuantity: 3 }), "usd").count).toBe(3);
+  });
+
+  it("marks a printing that exists only in foil, and says so in the tile's name", () => {
+    const item = searchItem(summary({ finishes: FOIL_ONLY }), "usd");
+    expect(item.finish).toBe("foil");
+    expect(item.pressLabel).toBe("Lightning Bolt, LEA 161, Foil");
+  });
+
+  it("leaves a printing sold both ways unmarked", () => {
+    expect(searchItem(summary(), "usd").finish).toBeNull();
+    // An orphan's `finishes` is null: nothing is known, so nothing is claimed.
+    expect(searchItem(summary({ finishes: null }), "usd").finish).toBeNull();
   });
 });
 
@@ -61,6 +79,17 @@ describe("collectionItem", () => {
   it("marks a foil copy and leaves a plain one unmarked", () => {
     expect(collectionItem(entry(), "usd").finish).toBe("foil");
     expect(collectionItem(entry({ finish: "nonfoil" }), "usd").finish).toBeNull();
+  });
+
+  it("names a foil copy and a plain one of one printing differently", () => {
+    expect(collectionItem(entry(), "usd").pressLabel).toBe("Lightning Bolt, LEA 161, Foil");
+    expect(collectionItem(entry({ finish: "nonfoil" }), "usd").pressLabel).toBe(
+      "Lightning Bolt, LEA 161",
+    );
+  });
+
+  it("leaves the count out of the name, because the wall writes it", () => {
+    expect(collectionItem(entry({ quantity: 4 }), "usd").pressLabel).not.toMatch(/cop/);
   });
 
   it("names a card the corpus has forgotten rather than drawing nothing", () => {
@@ -107,6 +136,18 @@ describe("wishItem", () => {
       printingTitle: null,
     });
   });
+
+  it("says the finish a wish asks for, pinned or not", () => {
+    expect(wishItem(wish({ preferredFinish: "foil" }), "usd").pressLabel).toBe(
+      "Sol Ring, any printing, Foil",
+    );
+    expect(
+      wishItem(
+        wish({ cardId: "card-9", setCode: "c21", collectorNumber: "263", preferredFinish: "etched" }),
+        "usd",
+      ).pressLabel,
+    ).toBe("Sol Ring, C21 263, Etched");
+  });
 });
 
 const deckCard = (over: Partial<DeckCard> = {}): DeckCard =>
@@ -119,6 +160,7 @@ const deckCard = (over: Partial<DeckCard> = {}): DeckCard =>
     collectorNumber: "117",
     rarity: "uncommon",
     finish: null,
+    finishes: BOTH,
     quantity: 4,
     unitPrice: 2.25,
     ...over,
@@ -135,8 +177,21 @@ describe("deckCardItem", () => {
     expect(item.pressLabel).toBe("Lightning Bolt, 2X2 117");
   });
 
-  it("leaves the regular copy unmarked, which a deck row spells as null", () => {
+  it("leaves a row that has said nothing unmarked when its printing is sold both ways", () => {
     expect(deckCardItem(deckCard(), "usd").finish).toBeNull();
-    expect(deckCardItem(deckCard({ finish: "etched" }), "usd").finish).toBe("etched");
+  });
+
+  it("marks a row that has said nothing when its printing exists only in foil", () => {
+    // `null` on a deck row is "the deck has not said", not "regular": a foil-only printing is
+    // foil whatever the row says.
+    const item = deckCardItem(deckCard({ finishes: FOIL_ONLY }), "usd");
+    expect(item.finish).toBe("foil");
+    expect(item.pressLabel).toBe("Lightning Bolt, 2X2 117, Foil");
+  });
+
+  it("lets the deck's own statement win over the printing's", () => {
+    expect(deckCardItem(deckCard({ finish: "etched", finishes: FOIL_ONLY }), "usd").finish).toBe(
+      "etched",
+    );
   });
 });

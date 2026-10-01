@@ -20,9 +20,17 @@ import { Shell } from "./Shell";
 /** The word for a destination — the desktop rail's, so the two apps cannot name one differently. */
 const titleOf = (view: LightView): string => NAV.find((n) => n.id === view)?.label ?? "";
 
-/** Open a card over wherever the reader is. A push, so Back closes it. */
+/**
+ * Open a card over wherever the reader is. A push, so Back closes it.
+ *
+ * **A tile with no card id opens nothing.** The one row that makes such a tile is a wish whose
+ * card the corpus no longer has a printing of: it has neither a printing of its own nor one to be
+ * drawn as, so there is no id for a sheet to ask about. (A wish for *any* printing is not that
+ * row — it carries the printing it is drawn as, and opens it.) The tile is still a button,
+ * because the wall makes every tile one; what this guard buys is a press that does nothing
+ * rather than a sheet that can only say the card could not be read.
+ */
 const openCard = (place: Place) => (item: WallItem) => {
-  // A wish for any printing has no card of its own to open; its picture's is the honest one.
   if (item.cardId !== null) navigate({ ...place, cardId: item.cardId });
 };
 
@@ -39,14 +47,13 @@ function Pages({ place }: { place: Place }) {
       return <SearchPage onOpen={onOpen} />;
     case "decks":
       return place.deckId === null ? (
-        <DecksPage onOpen={(deckId) => navigate({ view: "decks", deckId, cardId: null })} />
+        <DecksPage />
       ) : (
         <DeckPage
           // Keyed by the deck: a second one is a fresh page, not the first one's scroll position.
           key={place.deckId}
           deckId={place.deckId}
           onOpen={onOpen}
-          onBack={() => navigate({ view: "decks", deckId: null, cardId: null })}
         />
       );
     case "collection":
@@ -73,7 +80,7 @@ export function PhoneFace() {
       {/* A sibling of the shell, not a child of a page: `Dialog`'s scrim is `fixed inset-0`, and
           nothing that covers the window may mount inside a box that could become its containing
           block. `App.tsx` mounts the desktop's card modal the same way. */}
-      <CardSheet cardId={place.cardId} onClose={() => navigate({ ...place, cardId: null })} />
+      <CardSheet cardId={place.cardId} />
     </>
   );
 }

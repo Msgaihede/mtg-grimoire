@@ -7,6 +7,8 @@ import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { CardWall, type WallItem } from "../CardWall";
 import { deckCardItem } from "../items";
+import { linkTo } from "../router";
+import { DimNote, ReadError } from "./parts";
 
 /**
  * One deck, read-only: its actual list as a wall.
@@ -17,11 +19,9 @@ import { deckCardItem } from "../items";
 export function DeckPage({
   deckId,
   onOpen,
-  onBack,
 }: {
   deckId: number;
   onOpen: (item: WallItem) => void;
-  onBack: () => void;
 }) {
   const { marketplace, currency } = useMarketplace();
   const deck = useQuery({
@@ -32,25 +32,30 @@ export function DeckPage({
     () => (deck.data?.cards ?? []).map((card) => deckCardItem(card, currency)),
     [deck.data, currency],
   );
-  const gone = deck.isError || (deck.isSuccess && deck.data === null);
+  const name = deck.data?.deck.name;
 
   return (
     <>
       <div className="flex shrink-0 items-center gap-2 border-b border-border bg-surface px-2 py-1">
-        <button
-          type="button"
+        {/* A link, like the tabs: it changes the URL. */}
+        <a
+          {...linkTo({ view: "decks", deckId: null, cardId: null })}
           aria-label="Back to decks"
-          onClick={onBack}
           className={cn("flex size-11 items-center justify-center rounded-md text-dim", FOCUS)}
         >
           <ChevronLeft aria-hidden className="size-5" />
-        </button>
-        <h2 className="min-w-0 flex-1 truncate text-base">{deck.data?.deck.name ?? ""}</h2>
+        </a>
+        {/* Only once there is a name: an empty heading is a stop with nothing to hear at it. */}
+        {name ? <h2 className="min-w-0 flex-1 truncate text-base">{name}</h2> : null}
       </div>
-      {gone ? (
-        <p className="p-4 text-sm text-dim">That deck is gone.</p>
+      {deck.isLoadingError ? (
+        // The read failed, which says nothing about the deck. "Gone" is the sentence below, for a
+        // read that succeeded and answered no deck.
+        <ReadError>That deck could not be read.</ReadError>
+      ) : deck.data === null ? (
+        <DimNote>That deck is gone.</DimNote>
       ) : !deck.isPending && items.length === 0 ? (
-        <p className="p-4 text-sm text-dim">No cards in this deck yet.</p>
+        <DimNote>No cards in this deck yet.</DimNote>
       ) : (
         <CardWall
           label="Cards in this deck"

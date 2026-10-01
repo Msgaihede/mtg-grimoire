@@ -1,7 +1,8 @@
-import { useCallback, useMemo } from "react";
+import { useMemo } from "react";
 import { useCardSearch } from "@/features/search/useCardSearch";
 import { CardWall, type WallItem } from "../CardWall";
 import { searchItem } from "../items";
+import { DimNote, ReadError, useMore } from "./parts";
 
 /**
  * Card search: one line, and the wall.
@@ -18,13 +19,7 @@ export function SearchPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
     () => search.rows.map((row) => searchItem(row, marketplace.currency)),
     [search.rows, marketplace.currency],
   );
-  // Read off the result rather than depended on whole: `useInfiniteQuery` hands back a fresh proxy
-  // every render, so a callback keyed on `query` is a new one each time and the wall's near-end
-  // effect would run on every render. `fetchNextPage` is bound once per observer.
-  const { hasNextPage, isFetchingNextPage, fetchNextPage } = query;
-  const more = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+  const more = useMore(query, query.hasNextPage);
 
   return (
     <>
@@ -39,12 +34,10 @@ export function SearchPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
           className="h-11 w-full rounded-md border border-border bg-bg px-3 text-base text-text select-text"
         />
       </div>
-      {query.isError ? (
-        <p role="alert" className="p-4 text-sm text-destructive">
-          The search could not be read.
-        </p>
+      {query.isLoadingError ? (
+        <ReadError>The search could not be read.</ReadError>
       ) : !query.isPending && items.length === 0 ? (
-        <p className="p-4 text-sm text-dim">No cards match.</p>
+        <DimNote>No cards match.</DimNote>
       ) : (
         <CardWall
           label="Search results"
