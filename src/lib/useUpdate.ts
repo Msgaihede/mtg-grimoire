@@ -107,8 +107,11 @@ export function useUpdate(): Update {
         // Not worth a banner: the next poll is a minute away, and a status that cannot be
         // read says nothing about whether an update exists.
       }
-      // Chained timeouts rather than an interval, so two reads can never overlap.
-      timer = setTimeout(poll, POLL_MS);
+      // Chained timeouts rather than an interval, so two reads can never overlap. **Only while
+      // the effect is still live** (issue #556): a cleanup that lands while a read is in flight
+      // clears a timer that does not exist yet, and an unguarded reschedule here then started a
+      // loop nothing could stop — one per StrictMode remount and per failed install's re-run.
+      if (!cancelled) timer = setTimeout(poll, POLL_MS);
     };
     void poll();
     return () => {
