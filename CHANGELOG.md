@@ -30,6 +30,14 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.38.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.37.1...v0.38.0) (2026-10-01)
+
+
+### Features
+
+* **scanner:** match strip, camera picker, card-added overlay and a wider tray ([af3e182](https://github.com/Msgaihede/mtg-grimoire/commit/af3e18210ffdafe81157dd8f91ad3e3e1ccef9d2))
+* **scanner:** match strip, camera picker, card-added overlay and a wider tray ([066bd81](https://github.com/Msgaihede/mtg-grimoire/commit/066bd8119220ff200aa4bace8f815f661b12986c))
+
 ## [0.37.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.37.0...v0.37.1) (2026-09-30)
 
 
