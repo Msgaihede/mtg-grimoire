@@ -1,0 +1,21 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run mobile:serve",
+    "devUrl": "http://localhost:5175"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "MTG Grimoire — light",
+        "width": 412,
+        "height": 915,
+        "minWidth": 320,
+        "minHeight": 480,
+        "visible": false,
+        "dragDropEnabled": false,
+        "decorations": true,
+        "shadow": true
+      }
+    ]
+  }
+}

@@ -67,6 +67,25 @@ pub fn opening_size(work_area: (f64, f64)) -> (f64, f64) {
     (room.0.max(MIN.0), room.1.max(MIN.1))
 }
 
+/// The size a window keeps instead of climbing [`LADDER`]: the config's own, when the config
+/// sized it **below the desktop floor**.
+///
+/// The ladder exists because the desktop UI has two layouts and a monitor decides which fits.
+/// A window configured narrower than [`MIN`] is not asking that question — it is the light app's
+/// phone-sized dev window (`tauri.light.conf.json`), and resizing it to 1280 would put the phone
+/// face in a desktop frame. `None` at the floor and above, where the ladder decides as before.
+pub fn configured_small(width: f64, height: f64) -> Option<(f64, f64)> {
+    (width < MIN.0).then_some((width, height))
+}
+
+/// [`configured_small`] for the config this app was built with. Every window is cloned from the
+/// config's first entry ([`open_new`]), so the first entry answers for all of them.
+fn config_small(window: &tauri::WebviewWindow) -> Option<(f64, f64)> {
+    let app = window.app_handle();
+    let first = app.config().app.windows.first()?;
+    configured_small(first.width, first.height)
+}
+
 /// Every window after the first is `window-2`, `window-3`, … — the prefix
 /// `capabilities/desktop.json` grants as `window-*`, which a test pins against this constant.
 pub const LABEL_PREFIX: &str = "window-";
@@ -169,7 +188,7 @@ fn place(window: &tauri::WebviewWindow, from: Option<&tauri::WebviewWindow>) {
         f64::from(area.size.width) / scale,
         f64::from(area.size.height) / scale,
     );
-    let size = opening_size(room);
+    let size = config_small(window).unwrap_or_else(|| opening_size(room));
     let _ = window.set_size(tauri::LogicalSize::new(size.0, size.1));
     match from.and_then(|f| f.outer_position().ok()) {
         Some(at) => {
@@ -203,7 +222,18 @@ fn place(window: &tauri::WebviewWindow, from: Option<&tauri::WebviewWindow>) {
 ///
 /// When no monitor answers, the window keeps the config's own 1920×1080 and is still shown: a
 /// size that may be too big beats no window at all.
+///
+/// **The one window that climbs no rung is one the config sized below [`MIN`]** —
+/// [`configured_small`], the light app's phone-sized dev window. It is already the size it was
+/// asked to be, so there is nothing to choose: it is centred and shown, and `place` keeps the
+/// same size for every window opened after it.
 pub fn open_sized_to_monitor(window: &tauri::WebviewWindow) {
+    // A window the config sized below the desktop floor keeps that size: centre it and show it.
+    if config_small(window).is_some() {
+        let _ = window.center();
+        let _ = window.show();
+        return;
+    }
     let monitor = window
         .current_monitor()
         .ok()
@@ -338,5 +368,36 @@ mod tests {
             serde_json::Value::Bool(false),
             "the window opens hidden so the reader never sees it resize"
         );
+    }
+
+    /// The light dev window is 412 wide — a phone — and the ladder would resize it to 1280.
+    /// A window the config sized below the desktop floor keeps the size it was given.
+    #[test]
+    fn a_window_configured_below_the_desktop_floor_keeps_its_own_size() {
+        assert_eq!(configured_small(412.0, 915.0), Some((412.0, 915.0)));
+        assert_eq!(configured_small(1023.0, 700.0), Some((1023.0, 700.0)));
+        // At the floor and above, the ladder decides, as it always has.
+        assert_eq!(configured_small(1024.0, 700.0), None);
+        assert_eq!(configured_small(1920.0, 1080.0), None);
+    }
+
+    /// The overlay `npm run mobile:tauri` passes to `tauri dev`. `--config` is a merge patch and
+    /// replaces `app.windows` whole, so every field the main config relies on has to be restated
+    /// there — `visible: false` above all, because `open_sized_to_monitor` is the only thing
+    /// that shows a window.
+    #[test]
+    fn the_light_overlay_sizes_a_phone_and_names_the_light_dev_server() {
+        let overlay: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.light.conf.json")).unwrap();
+        let window = &overlay["app"]["windows"][0];
+        let size = (
+            window["width"].as_f64().unwrap(),
+            window["height"].as_f64().unwrap(),
+        );
+        assert!(configured_small(size.0, size.1).is_some());
+        assert_eq!(window["visible"], false);
+        assert_eq!(window["dragDropEnabled"], false);
+        assert_eq!(window["decorations"], true);
+        assert_eq!(overlay["build"]["devUrl"], "http://localhost:5175");
     }
 }
