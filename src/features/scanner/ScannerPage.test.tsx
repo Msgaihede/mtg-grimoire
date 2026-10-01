@@ -188,7 +188,7 @@ function strip(container: HTMLElement): HTMLElement {
   return found;
 }
 
-/** The reader's one line under the camera. */
+/** The reader's one line — the Match strip's row, above the camera. */
 function statusLine(): HTMLElement {
   return screen.getByRole("status", { name: "Scanner status" });
 }
@@ -283,7 +283,7 @@ describe("ScannerPage", () => {
     expect(strip(container)).toHaveTextContent("");
   });
 
-  it("names what the scanner is doing in one line under the camera", async () => {
+  it("names what the scanner is doing in the strip above the camera", async () => {
     refused();
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
     mount();
@@ -381,15 +381,15 @@ describe("ScannerPage", () => {
     const restore = shimVideo();
     opens();
     storedPrefs({ developer: true });
-    // A bundle that loaded, so the panel names the card rather than standing the placement
-    // sentence where the name would be.
+    // A bundle that loaded, so the Match panel's figures describe a named card.
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
     frames(VERDICTS.decided);
     try {
       mount();
-      // The Match panel's head row, which is the tell that the verdict has landed.
+      // The Match panel's this-frame line naming the card is the tell that the verdict has
+      // landed — its head row went to the strip above the camera, which every reader sees.
       const match = await screen.findByRole("region", { name: "Match" });
-      expect(await within(match).findByText("Storm of Saruman — LTR 72")).toBeInTheDocument();
+      await waitFor(() => expect(match).toHaveTextContent("this frame: Storm of Saruman"));
       await userEvent.type(
         screen.getByRole("textbox", { name: "What it actually is" }),
         "Storm of Saruman",
@@ -429,7 +429,8 @@ describe("ScannerPage", () => {
       expect(rows).toHaveLength(1);
       expect(within(rows[0]).getByText("Storm of Saruman")).toBeInTheDocument();
       expect(within(tray()).getByRole("button", { name: "Add 1 to collection" })).toBeInTheDocument();
-      expect(statusLine()).toHaveTextContent("Added Storm of Saruman — LTR 72");
+      // The strip names the card that was filed and says it was added.
+      expect(statusLine()).toHaveTextContent("Matched Storm of Saruman LTR 72 Added · swap in the next card");
       // …and the store gets the tray once the quiet window has passed.
       await waitFor(() => expect(ipc.setScannerTray).toHaveBeenCalled(), { timeout: 2000 });
       const [written] = vi.mocked(ipc.setScannerTray).mock.lastCall ?? [];
@@ -438,6 +439,63 @@ describe("ScannerPage", () => {
     } finally {
       restore();
     }
+  });
+
+  /** The card that just landed is laid over the camera, named as the tray filed it. */
+  it("lays the card that just landed over the camera", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    frames(VERDICTS.voting, VERDICTS.decided);
+    try {
+      const { container } = mount();
+      await waitFor(() => expect(videoBox(container)).toHaveTextContent("Added to scanned cards"));
+      expect(videoBox(container)).toHaveTextContent("Storm of Saruman");
+      expect(videoBox(container)).toHaveTextContent("LTR · 72 · Nonfoil");
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **The stored camera, by its id, and one request for it.** The camera is held shut until the
+   * prefs are in; opened on mount instead it would ask for the default and then again for the
+   * stored one.
+   */
+  it("opens the stored camera by its id, and asks for no other first", async () => {
+    const getUserMedia = vi.fn(() =>
+      Promise.resolve({
+        getTracks: () => [{ stop: () => {} }],
+        getVideoTracks: () => [{ getSettings: () => ({ deviceId: "brio" }) }],
+      } as unknown as MediaStream),
+    );
+    mediaDevices(getUserMedia);
+    storedPrefs({ cameraId: "brio" });
+    // The camera goes live under the shim, so the pump starts; every frame it sends is parked.
+    frames();
+    const restore = shimVideo();
+    try {
+      mount();
+      await waitFor(() => expect(getUserMedia).toHaveBeenCalled());
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+      expect(getUserMedia.mock.calls[0]).toMatchObject([{ video: { deviceId: { exact: "brio" } } }]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("stores the tray layout the reader picks", async () => {
+    refused();
+    const user = userEvent.setup();
+    mount();
+    const layouts = await within(await screen.findByRole("region", { name: "Scanned cards" })).findByRole(
+      "group",
+      { name: "Tray layout" },
+    );
+    await user.click(within(layouts).getByRole("button", { name: "List" }));
+    await waitFor(() =>
+      expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith({ ...DEFAULT_SCANNER_PREFS, trayLayout: "list" }),
+    );
   });
 
   /** A new row is born in the Defaults popover's finish — the prefs', not a literal. */

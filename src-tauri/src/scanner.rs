@@ -536,6 +536,15 @@ pub struct ScannerPrefs {
     /// The folder a commit files into; `None` is the collection's root.
     pub folder_id: Option<i64>,
     pub developer: bool,
+    /// The camera the reader picked, as the webview's `deviceId` for it; `None` is whichever
+    /// camera the platform offers first. A fact about this computer: `app_meta` is on no sync
+    /// spec, and a `deviceId` names nothing on another machine. A stored id whose camera has
+    /// gone is not an error — the page opens the default and leaves the choice standing.
+    pub camera_id: Option<String>,
+    /// How the review tray lays out its cards: `grid` or `list`. Stored verbatim and not
+    /// validated, for `finish`'s reason: which layouts exist is the page's vocabulary, and it
+    /// reads a word it does not know as the grid.
+    pub tray_layout: String,
 }
 
 impl Default for ScannerPrefs {
@@ -550,6 +559,8 @@ impl Default for ScannerPrefs {
             condition: crate::collection::DEFAULT_CONDITION.to_owned(),
             folder_id: None,
             developer: false,
+            camera_id: None,
+            tray_layout: "grid".to_owned(),
         }
     }
 }
@@ -1197,6 +1208,28 @@ mod tests {
         assert_eq!(p.mode, ScanMode::Fast);
         assert_eq!(p.folder_id, None);
         assert!(!p.developer);
+        assert_eq!(p.camera_id, None);
+        assert_eq!(p.tray_layout, "grid");
+    }
+
+    /// A row an older build wrote has no camera and no tray layout, and `#[serde(default)]` is
+    /// what reads it: the reader's mode and folder survive, and the two new fields take the
+    /// defaults rather than the whole row falling back to them.
+    #[test]
+    fn a_row_from_before_the_camera_and_the_layout_keeps_what_it_had() {
+        let conn = meta();
+        set_app_meta(
+            &conn,
+            K_SCANNER_PREFS,
+            r#"{"mode":"exact","folderId":4,"developer":true}"#,
+        )
+        .unwrap();
+        let p = stored_prefs(&conn);
+        assert_eq!(p.mode, ScanMode::Exact);
+        assert_eq!(p.folder_id, Some(4));
+        assert!(p.developer);
+        assert_eq!(p.camera_id, None);
+        assert_eq!(p.tray_layout, "grid");
     }
 
     /// **Detect is a policy, so it must never be a word the collection would file.**
@@ -1226,11 +1259,14 @@ mod tests {
     fn prefs_and_tray_rows_travel_under_the_names_the_page_reads() {
         let p = serde_json::to_value(ScannerPrefs {
             folder_id: Some(4),
+            camera_id: Some("cam-1".to_owned()),
             ..Default::default()
         })
         .unwrap();
         assert_eq!(p["folderId"], 4);
         assert_eq!(p["mode"], "fast");
+        assert_eq!(p["cameraId"], "cam-1");
+        assert_eq!(p["trayLayout"], "grid");
         // The filters keep the crate's snake case inside the camel-case document.
         assert!(p["filters"].get("released_from").is_some(), "{p}");
 

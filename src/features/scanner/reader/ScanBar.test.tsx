@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
@@ -15,7 +15,18 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { listSets: vi.fn().mockResolvedValue([]) },
 }));
 
+import type { CameraDevice } from "../useCamera";
 import { ScanBar, type ScanBarProps } from "./ScanBar";
+
+/**
+ * Three cameras in the order a driver might list them — deliberately not alphabetical, so a list
+ * drawn in this order is a list that skipped `sortOptions`.
+ */
+const CAMERAS: readonly CameraDevice[] = [
+  { deviceId: "cam-obs", label: "OBS Virtual Camera" },
+  { deviceId: "cam-brio", label: "Logitech BRIO" },
+  { deviceId: "cam-integrated", label: "Integrated Camera" },
+];
 
 function props(over: Partial<ScanBarProps> = {}): ScanBarProps {
   return {
@@ -29,6 +40,9 @@ function props(over: Partial<ScanBarProps> = {}): ScanBarProps {
     onFinish: vi.fn(),
     condition: "NONE",
     onCondition: vi.fn(),
+    cameras: CAMERAS,
+    cameraId: "cam-brio",
+    onCamera: vi.fn(),
     developer: false,
     onDeveloper: vi.fn(),
     ...over,
@@ -171,6 +185,79 @@ describe("ScanBar", () => {
     await user.keyboard("{Escape}");
     expect(filters).toHaveAttribute("aria-expanded", "false");
     expect(filters).toHaveFocus();
+  });
+
+  it("names the live camera on the Camera button", () => {
+    wrap(<ScanBar {...props()} />);
+    expect(screen.getByRole("button", { name: /^Camera:/ })).toHaveAccessibleName("Camera: Logitech BRIO");
+  });
+
+  it("reads Default when the open camera is not one the list knows", () => {
+    wrap(<ScanBar {...props({ cameraId: null })} />);
+    expect(screen.getByRole("button", { name: /^Camera:/ })).toHaveAccessibleName("Camera: Default");
+  });
+
+  it("lists the cameras alphabetically as radios, with the live one checked", async () => {
+    const user = userEvent.setup();
+    wrap(<ScanBar {...props()} />);
+    await user.click(screen.getByRole("button", { name: "Camera: Logitech BRIO" }));
+    await screen.findByRole("dialog", { name: "Camera" });
+    const group = screen.getByRole("radiogroup", { name: "Camera" });
+    const radios = within(group).getAllByRole("radio");
+    expect(radios.map((r) => r.getAttribute("aria-label"))).toEqual([
+      "Integrated Camera",
+      "Logitech BRIO",
+      "OBS Virtual Camera",
+    ]);
+    const live = within(group).getByRole("radio", { checked: true });
+    // The whole name, so a `Live` mark fused onto the label (`Logitech BRIOLive`) goes red here.
+    expect(live).toHaveAccessibleName("Logitech BRIO");
+    // One Tab stop, and it is the checked radio's.
+    expect(radios.map((r) => r.tabIndex)).toEqual([-1, 0, -1]);
+  });
+
+  it("switches camera on a press, and closes the popover", async () => {
+    const user = userEvent.setup();
+    const onCamera = vi.fn();
+    wrap(<ScanBar {...props({ onCamera })} />);
+    const trigger = screen.getByRole("button", { name: "Camera: Logitech BRIO" });
+    await user.click(trigger);
+    await user.click(await screen.findByRole("radio", { name: "Integrated Camera" }));
+    expect(onCamera).toHaveBeenCalledExactlyOnceWith("cam-integrated");
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Camera" })).not.toBeInTheDocument());
+    expect(trigger).toHaveFocus();
+  });
+
+  it("switches camera on an arrow and keeps the list open to walk on", async () => {
+    const user = userEvent.setup();
+    const onCamera = vi.fn();
+    wrap(<ScanBar {...props({ onCamera })} />);
+    await user.click(screen.getByRole("button", { name: "Camera: Logitech BRIO" }));
+    await screen.findByRole("dialog", { name: "Camera" });
+    // Reached the way a reader reaches it — the caret is on the panel, and one Tab lands on the
+    // group's single stop, which is the live camera.
+    await user.tab();
+    expect(screen.getByRole("radio", { name: "Logitech BRIO" })).toHaveFocus();
+    await user.keyboard("{ArrowDown}");
+    expect(onCamera).toHaveBeenCalledExactlyOnceWith("cam-obs");
+    expect(screen.getByRole("radio", { name: "OBS Virtual Camera" })).toHaveFocus();
+    expect(screen.getByRole("dialog", { name: "Camera" })).toBeInTheDocument();
+  });
+
+  it("refuses the Camera popover when there is no camera, and says why", async () => {
+    const user = userEvent.setup();
+    wrap(<ScanBar {...props({ cameras: [], cameraId: null })} />);
+    const camera = screen.getByRole("button", { name: "Camera: Default" });
+    expect(camera).toHaveAttribute("aria-disabled", "true");
+    expect(camera).not.toBeDisabled();
+    // The hover delay is the tooltip's own, so the wait is `AnchoredPopup.test.tsx`'s.
+    await user.hover(camera);
+    expect(await screen.findByRole("tooltip", undefined, { timeout: 2000 })).toHaveTextContent(
+      "No camera found",
+    );
+    await user.click(camera);
+    expect(screen.queryByRole("dialog", { name: "Camera" })).not.toBeInTheDocument();
+    expect(camera).toHaveAttribute("aria-expanded", "false");
   });
 
   it("sends a release date as it is set, and a cleared one as no bound", async () => {

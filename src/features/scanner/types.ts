@@ -46,5 +46,6 @@ export type {
   ScannerFinishPref,
   ScannerTrayFinish,
   ScannerTrayChoice,
+  ScannerTrayLayout,
   ScannerTrayRow,
 } from "@/lib/ipc";

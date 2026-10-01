@@ -1,15 +1,25 @@
 /**
- * The two sentences the reader's half of the Scanner is made of: what the scanner is doing right
- * now, and what the filters are narrowing it to.
+ * What the reader's half of the Scanner says: the Match strip above the camera — where the
+ * scanner has got to with the card in front of it — and what the filters are narrowing it to.
  *
  * `verdictText.ts` is the developer panels' vocabulary — votes, leads, distances — and **none of
  * those words may reach here**. The reader's view never shows a vote, a lead or a distance; it
- * says what to do next, in the order a person holding a card would need to hear it.
+ * says what to do next, in the order a person holding a card would need to hear it. A bar and a
+ * card's name are not that vocabulary: the bar is `barFill`'s number and nothing of how it was
+ * reached, which is the one thing this file takes from that one.
  */
-import type { ScanFilters, ScanMode, ScannerResolution, ScannerVerdict } from "@/lib/ipc";
+import type {
+  ScanFilters,
+  ScanMode,
+  ScannerChoice,
+  ScannerLabel,
+  ScannerResolution,
+  ScannerVerdict,
+} from "@/lib/ipc";
+import { barFill } from "../verdictText";
 
 /**
- * The card the tray just took, as the status line words it — `null` until one has landed.
+ * The card the tray just took, as the strip names it — `null` until one has landed.
  *
  * `bumpedTo` is the row's new quantity when the add folded into the newest row, and `null` for a
  * row of its own: a second copy reads as a count, a new card as its printing. `replaced` is a
@@ -24,8 +34,69 @@ export type LastAdded = {
   replaced: boolean;
 } | null;
 
+/** How the strip's pill is coloured, and so what kind of news the row it leads is. */
+export type StripTone = "idle" | "progress" | "done" | "attention" | "error";
+
 /**
- * One line under the camera.
+ * Everything the Match strip draws, as one value — so every state it can be in is a return of
+ * {@link matchStrip} and `MatchStrip` decides nothing but how each field looks.
+ */
+export interface StripState {
+  /** The pill: a word, or a count of printings, saying where the scanner has got to. */
+  word: string;
+  tone: StripTone;
+  /** The card, in display type; `null` where there is none to name, and the sentence takes its place. */
+  name: string | null;
+  /** The printing beside it, `SET NUMBER` as the tray spells it; `null` where none is named. */
+  printing: string | null;
+  /** What to do next — the reader's one line. */
+  sentence: string;
+  /** 0..1, the bar. */
+  fill: number;
+  /** The bar in the accent rather than dim: the scanner has settled on a card. */
+  committed: boolean;
+  /** Where the bar's hairline sits: the right-hand end, or a fraction of the way along. */
+  threshold: "end" | number;
+}
+
+/**
+ * **`0.7` is `TrackerOptions::commit_confidence` (`crates/card-scanner/src/track.rs`, `0.70`)
+ * written a second time, with nothing keeping the two in step.** The crate does not send the
+ * threshold on the verdict — `TrackedView` carries `decide_at` for the vote rule and no equivalent
+ * for this one — so the only alternatives were a field on the wire or a literal with its coupling
+ * named. If that constant moves, move this: a hairline in the wrong place is a bar that commits
+ * visibly early or late, and nothing in either suite can see it. The vote rule needs no literal —
+ * its bar *is* `decide_at`, so the line is the right-hand end.
+ */
+const COMMIT_CONFIDENCE = 0.7;
+
+/**
+ * A printing as the tray spells it: the set upper-cased, then the number. `null` for a card with
+ * no label, which has no printing to name — an empty mono span beside the name would be a gap
+ * pointing at nothing.
+ */
+function printingOf(set: string, number: string): string | null {
+  const printing = [set.toUpperCase(), number].filter((part) => part !== "").join(" ");
+  return printing === "" ? null : printing;
+}
+
+function labelPrinting(label: ScannerLabel | null): string | null {
+  return label === null ? null : printingOf(label.set, label.number);
+}
+
+/**
+ * The one card an ambiguous resolve's printings all belong to, or `null` when they are not one
+ * card. A resolve can tie two names — a fuzzy read, a title several oracle cards share — and the
+ * strip naming the first of them would tell the reader the card was settled when only its tray row
+ * knows it was not.
+ */
+function sharedName(choices: readonly ScannerChoice[]): string | null {
+  const names = new Set(choices.flatMap((c) => (c.label === null ? [] : [c.label.name])));
+  return names.size === 1 ? [...names][0] : null;
+}
+
+/**
+ * The strip above the camera.
  *
  * **The order is the whole rule, and every rung above a later one is a reason that one cannot be
  * true.** No hashes means nothing can be named, so it outranks everything, a card in frame
@@ -38,42 +109,113 @@ export type LastAdded = {
  * that frame for as long as the same card is still in front of the camera, and not a moment
  * longer. The two outcome rungs therefore sit *below* the no-card rung by construction.
  *
- * The ambiguous rung and the added rung ask `tracked.committed` as well, so neither sentence
- * reaches a card the tracker has not settled on: a stale latch from the last card is exactly
- * what the new card's first frames would otherwise read.
+ * The ambiguous rung asks `tracked.committed` as well, so it never reaches a card the tracker has
+ * not settled on: a stale latch from the last card is exactly what the new card's first frames
+ * would otherwise read. **The added rung asks for this frame's decision too, and for the same
+ * reason one step further on**: `lastAdded` is never cleared, so on a committed frame that has not
+ * decided yet — Fast's one frame waiting on the read that confirms it, or Exact's tracker settling
+ * before its resolve has answered — it is still the *previous* card, and the strip would call that
+ * one matched over the card in the camera.
+ *
+ * **Exact is settled by its resolve, not by the tracker**, so an Exact commit with no decision
+ * still reads as reading; Fast's decision *is* the commit, and its one unconfirmed frame reads as
+ * matched on the tracker's leader.
+ *
+ * **A filed card is named from the tray's row, never from the hash's leader** — in Exact the
+ * resolve can pin another printing than the one the tracker leads with, and the strip has to name
+ * what was filed. The leader names the card only until then.
  */
-export function statusLine(
+export function matchStrip(
   verdict: ScannerVerdict | null,
   mode: ScanMode,
   lastAdded: LastAdded,
   hasBundle: boolean,
   lastResolution: ScannerResolution | null,
-): string {
+): StripState {
+  const tracked = verdict?.tracked ?? null;
+  const threshold: StripState["threshold"] =
+    tracked?.rule === "confidence" ? COMMIT_CONFIDENCE : "end";
+  const empty = { name: null, printing: null, fill: 0, committed: false, threshold };
   if (!hasBundle) {
-    return "Card hashes aren't loaded, so cards can be detected but not identified.";
+    return {
+      ...empty,
+      word: "Can't identify",
+      tone: "error",
+      sentence: "Card hashes aren't loaded, so cards can be detected but not identified.",
+    };
   }
-  if (verdict === null || verdict.quad === null) return "Point the camera at a card";
+  if (verdict === null || verdict.quad === null) {
+    return { ...empty, word: "Looking", tone: "idle", sentence: "Point the camera at a card" };
+  }
   if (lastResolution?.outcome === "not_found") {
-    return "No match. Try better lighting or clear the filters.";
+    return {
+      ...empty,
+      word: "No match",
+      tone: "error",
+      sentence: "Try better lighting or clear the filters.",
+    };
   }
-  const committed = verdict.tracked?.committed === true;
-  if (lastResolution?.outcome === "ambiguous" && committed) return "Pick a printing below";
-  if (lastAdded !== null && committed) {
-    if (lastAdded.bumpedTo) return `Added ${lastAdded.name} again — ×${lastAdded.bumpedTo}`;
-    const printing = [lastAdded.setCode.toUpperCase(), lastAdded.collectorNumber]
-      .filter((part) => part !== "")
-      .join(" ");
-    // "Updated" rather than "Added": the tray did not grow, and a reader told a card was added
-    // after switching to Exact would go looking for the duplicate.
-    const verb = lastAdded.replaced ? "Updated" : "Added";
-    // A card with no label has no printing to name, and "Added Unknown card — " with a dash
-    // pointing at nothing reads as a sentence that lost its ending.
-    return printing === "" ? `${verb} ${lastAdded.name}` : `${verb} ${lastAdded.name} — ${printing}`;
+
+  const committed = tracked?.committed === true;
+  const decided = committed && verdict.decision !== null;
+  const lead = tracked?.standings[0]?.label ?? null;
+  const full = { fill: 1, committed: true, threshold };
+
+  if (lastResolution?.outcome === "ambiguous" && committed) {
+    const count = lastResolution.choices.length;
+    return {
+      ...full,
+      word: count > 1 ? `${count} printings` : "Pick a printing",
+      tone: "attention",
+      name: sharedName(lastResolution.choices),
+      // A card, not a printing: which printing is the question the tray is asking.
+      printing: null,
+      sentence: "Pick a printing in the tray",
+    };
   }
-  if (mode === "exact" && verdict.lock?.phase === "locked" && !committed) {
-    return "Hold steady — reading…";
+  if (lastAdded !== null && decided) {
+    // "Updated" rather than "Added" for a replaced row: the tray did not grow, and a reader told a
+    // card was added after switching to Exact would go looking for the duplicate.
+    const sentence = lastAdded.bumpedTo
+      ? `Added again — ×${lastAdded.bumpedTo}`
+      : lastAdded.replaced
+        ? "Printing updated"
+        : "Added · swap in the next card";
+    return {
+      ...full,
+      word: "Matched",
+      tone: "done",
+      name: lastAdded.name,
+      printing: printingOf(lastAdded.setCode, lastAdded.collectorNumber),
+      sentence,
+    };
   }
-  return "Hold steady";
+  if (decided || (committed && mode === "fast")) {
+    // The decision's name before the leader's: a Fast title read that names a card overrides the
+    // hash, so the two can differ, and the decision is what the tray is about to file.
+    const label = verdict.decision?.label ?? lead;
+    return {
+      ...full,
+      word: "Matched",
+      tone: "done",
+      name: label?.name ?? null,
+      printing: labelPrinting(label),
+      sentence: "Hold steady",
+    };
+  }
+
+  const leaning = {
+    tone: "progress" as const,
+    name: lead?.name ?? null,
+    printing: labelPrinting(lead),
+    fill: barFill(tracked),
+    committed: false,
+    threshold,
+  };
+  if (mode === "exact" && verdict.lock?.phase === "locked") {
+    return { ...leaning, word: "Reading", sentence: "Hold steady — reading…" };
+  }
+  return { ...leaning, word: "Matching", sentence: "Hold steady" };
 }
 
 /** A set list as a trigger can say it: up to two codes by name, a count past that. */

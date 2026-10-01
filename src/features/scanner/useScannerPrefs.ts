@@ -68,6 +68,8 @@ export const SCANNER_PREFS_BEFORE_LOAD: ScannerPrefs = {
   condition: "NONE",
   folderId: null,
   developer: false,
+  cameraId: null,
+  trayLayout: "grid",
 };
 
 /**

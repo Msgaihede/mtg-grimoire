@@ -2084,13 +2084,15 @@ the next generated write is one editor away.
 
 | File | Owns |
 | --- | --- |
-| `ScannerPage.tsx` | The view: the camera and the panel column |
-| `useCamera.ts` | The stream: `getUserMedia` with the debug page's constraints, one `stopAll` every exit path goes through, a tolerated `play()` rejection, and the wait for `loadedmetadata` before reporting a size. Its error state is **keyed on `verdictText.ts`'s `cameraSentence`**, which is where the wording lives |
+| `ScannerPage.tsx` | The view: the Match strip over the camera, the tray beside it, and the developer column |
+| `useCamera.ts` | The stream: `getUserMedia` with the debug page's constraints — or the reader's camera by `deviceId: { exact }`, falling back to the default when that camera has gone — one `stopAll` every exit path goes through, a tolerated `play()` rejection, and the wait for `loadedmetadata` before reporting a size. It opens nothing while its `deviceId` is `undefined`, which is how the page holds the camera shut until the stored choice has loaded. Its error state is **keyed on `verdictText.ts`'s `cameraSentence`**, which is where the wording lives. `useCameraDevices` lists the `videoinput`s for the picker, re-read on `devicechange` and once a camera is live, because a browser names no camera before one is granted |
+| `reader/MatchStrip.tsx` | The strip above the camera — `readerText.ts`'s `matchStrip` drawn: a pill, the card, one sentence, the bar |
+| `reader/AddedToast.tsx` | The card laid over the camera for 2.2 s each time the tray takes one |
 | `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture (**with a `catch` of its own** — a throwing `drawImage`/`toBlob` outside one rejects `pump()` and freezes the loop with `error` still `null`), and the two **kept reads** below |
 | `Overlay.tsx` | The canvas over the video — the smoothed quad, the raw one behind it |
 | `ScannerPanels.tsx` | Pure. The whole column from `{ status, verdict, options, … }` |
 | `panels/Panel.tsx` | The section chrome, the fold, and the shared `Row` / `FIGURES` / `BUTTON` |
-| `panels/MatchPanel.tsx` | The verdict, the bar, the standings, reset and capture |
+| `panels/MatchPanel.tsx` | The figures, the standings, reset and capture — its head row and evidence bar moved into the Match strip on 2026-10-01, where every reader sees them |
 | `panels/ControlsPanel.tsx` | The rule and method segments, the stages toggle, the sliders |
 | `panels/PipelinePanel.tsx` | The three stage images, only when stages are on |
 | `panels/BudgetPanel.tsx` | The per-stage milliseconds as a stacked bar |
@@ -2125,18 +2127,22 @@ the video's own pixels and the quad arrives in the *sent* frame's coordinates, s
 factor and a stroke derived from the canvas width are needed — a fixed `lineWidth` is a hairline
 on a 1080p stream and a slab on a 480 px one.
 
-**And it carries `object-contain`, because the `<video>` under it does.** A `<canvas>` is a
+**And it carries `object-cover`, because the `<video>` under it does.** A `<canvas>` is a
 replaced element whose intrinsic size is its `width`/`height` attributes — the video's own
-pixels — so `object-fit` letterboxes it identically. Without it the bitmap is stretched to the
-element's box while the picture inside that box is not, and the quad sits off the card: a
-1920×1080 frame in the app's panel column drew it **25% too tall**, worse the narrower the
+pixels — so `object-fit` crops it identically, about the same centre. Without it the bitmap is
+stretched to the element's box while the picture inside that box is not, and the quad sits off the
+card: a 1920×1080 frame in the app's panel column drew it **25% too tall**, worse the narrower the
 column got. It is the one class the two elements have to agree on.
-Proven 2026-09-08 over the built stylesheet rather than in the window — the main checkout's
-debug app was running outside any lock, and under the single-instance guard a worktree launch
-exits with no window — with a harness carrying both elements' exact class strings over a
-1920×1080 stand-in, at the video box beside the panel column in a 1280- and a 900-wide window
-(444×560 and 254×560): with the class the canvas's frame sits on the picture's edge in both, and with
-`object-fit: fill` forced beside it the same frame is stretched to the whole box.
+Proven 2026-09-08 for `object-contain` over the built stylesheet rather than in the window — the
+main checkout's debug app was running outside any lock, and under the single-instance guard a
+worktree launch exits with no window — with a harness carrying both elements' exact class strings
+over a 1920×1080 stand-in, at the video box beside the panel column in a 1280- and a 900-wide
+window (444×560 and 254×560): with the class the canvas's frame sits on the picture's edge in both,
+and with `object-fit: fill` forced beside it the same frame is stretched to the whole box.
+**Both moved to `object-cover` on 2026-10-01**, because at two thirds of a wide view the camera box
+is nearer square than 16:9 and a letterboxed feed there was a strip with black above and below. A
+card at the very edge of the frame can now be detected outside what the box shows; the crate sees
+the whole frame either way.
 
 **Two things the panel column draws are the *last* read rather than this frame's**, and they are
 props of their own for that reason: `session::OCR_EVERY` runs the readers on one eligible frame
@@ -2146,9 +2152,16 @@ starts or stops, and by the `clearReads()` the Reset press calls beside `scanner
 is `live.html`'s own `lastOcr`. Read straight off the verdict, the Readouts panel says
 `(nothing read)` three frames in four about a tier that read the card correctly.
 
-**The row is the height, and the video box takes what the `w-80 shrink-0` panel column and the
-status line leave.** The camera stands beside the verdict at every width the desktop window can
-be. **Until 2026-09-27 the layout had a second, narrow arm** — the phone's, read off
+**The row is the height, and the video box takes what the Match strip above it leaves.** The split
+answers the view's own width through `@container/scan`, never the window's (2026-10-01). **Below
+88rem** the tray is a `w-[25rem] shrink-0` column and the developer panels stack under it in one
+scroller, the tray capped at 70vh — the old `w-80` column, a little wider. **From 88rem** the side
+is a row grown from a basis of the developer column plus its gap (22.25rem, or `0%` with the panels
+off) against the camera's `flex-[2_1_0%]`, so the camera gets two thirds of what the panels leave,
+the tray the third, and the panels scroll in a 340px column of their own. A container is the
+containing block for anything `fixed`, and nothing fixed mounts inside this one: the dropdowns
+measure the block they land in, and the all-printings dialog is drawn at the app root. **jsdom
+applies no container query**, so the suite sees the narrow arrangement only. **Until 2026-09-27 the layout had a second, narrow arm** — the phone's, read off
 `useNarrowWindow` — which stacked the camera above the verdict in a *scrolling column* and so had
 to size the video box the opposite way: a zero-basis `flex-1` under a scrolling parent yields all
 its free space to a `shrink-0` sibling, so one opened developer panel would have collapsed the
@@ -2436,8 +2449,9 @@ frames in a row about its leader.
 is in front of the lens and still owns "has it left". While in Exact the session keeps the last
 `EXACT_BURST` (3) locked frames' rectified views, and on the first frame where the stretch has held
 `EXACT_STEADY_FRAMES` (3) with no attempt yet for this card, it hands them to `resolve::resolve`
-**on a thread of its own** and returns. The status line says *Hold steady — reading the card…*
-meanwhile.
+**on a thread of its own** and returns. The Match strip reads *Reading* and *Hold steady —
+reading…* meanwhile, and an Exact commit with no decision yet stays *Reading* rather than
+*Matched*, because Exact is decided by its resolve.
 
 **The resolve ran inside that frame's command until 2026-09-30**
 ([#706](https://github.com/Msgaihede/mtg-grimoire/issues/706)), and a resolve measured **1,316 ms**
@@ -2770,7 +2784,11 @@ mirrored file. Both writes go through `sync::with_write`, so **both answer `BUSY
 the write connection**; `set_scanner_tray` also refuses more than 5,000 rows and any row under one
 copy, before writing. A stored value that does not parse reads as the defaults or an empty tray.
 `ScannerPrefs` is the mode, the filters, the finish and condition a new row starts with, the folder,
-and the Developer switch; **a tray row records no language**.
+the Developer switch, and since 2026-10-01 the camera (`cameraId`, the webview's `deviceId` — a fact
+about this computer, which is what `app_meta` never syncing makes true) and the tray's layout
+(`trayLayout`, `grid` or `list`, stored verbatim and read by `trayLayoutOf`, which takes any other
+word as the grid). Both arrived through `#[serde(default)]`, so a row an older build wrote reads with
+its mode and folder intact. **A tray row records no language**.
 
 **The TanStack cache is the tray, and a refused write keeps it on screen.** `useTray` holds the rows
 in `["scanner", "tray"]` with `staleTime` and `gcTime` both `Infinity` — nothing else writes the row,
@@ -2824,7 +2842,7 @@ reader's own answers, and the flash's identity) and takes everything that says w
 id, the names, the set and number, and the choices — from the decision, so a waiting row the
 switch to Exact pinned closes its question. The session's flag alone is not enough: a newest row of
 another card is one the reader removed the card from or scanned past, and it gets an ordinary add.
-The status line says *Updated Forest — LTR 270*, never *Added*.
+The Match strip says *Printing updated*, never *Added*, and so does the card laid over the camera.
 
 **The commit is one `scanner_tray_commit(items, folderId, remaining)`** (final review): the
 collection import in `add` mode **and** the tray that is left stored as `scanner_tray`, in one
@@ -2847,21 +2865,51 @@ once the folder list answers — the import accepts a deck's group, because the 
 files there on purpose, so a stale id naming one would put scanned cards in a deck's box. §8 item
 13 is the case the list never answers.
 
-**Every tray thumbnail is the whole card, the `thumb` variant in a 5:7 slot with `object-contain`,
-never the `art` crop.** A crop has no printed frame and so no artist credit, a tray row carries no
+**The tray has two layouts, a grid of card tiles and the list of rows** (2026-10-01), switched in
+its header and stored as the prefs' `trayLayout`. A grid tile is `CardArt` at the `grid` variant —
+a tile is 144–221px wide, and `thumb` is 146px — inside a button that opens *More printings…*, with
+the count as a `CountTag`, the finish and quantity controls under it, and a row waiting on a pick
+spanning two columns with its candidates as whole cards. The column template guarantees two columns
+(`minmax(min(9rem, calc(50% - 0.375rem)), 1fr)`), so a two-column waiting tile can never hang out of
+a one-column grid. **Every tray picture is the whole card, never the `art` crop** — the list row's
+is the `thumb` variant in a 5:7 slot with `object-contain`. A crop has no printed frame and so no artist credit, a tray row carries no
 artist to name beside one, and the Scanner shows no other full card a reader could read the credit
 off — [`src/CLAUDE.md`](../../src/CLAUDE.md)'s art-credit rule, met by its second arm. The candidate
 cards on an ambiguous row are whole cards for a second reason: reprints share art, and what tells two
 printings apart is the frame — the set symbol, the border, the treatment.
 
-**The status line under the camera is the reader's whole view of the session**, and none of the
-developer vocabulary — votes, leads, distances — reaches it. In rank order, each rung a reason the
-later ones cannot be true: *The scanner has no card hashes loaded, so it can find a card but not
-name it.* · *Point the camera at a card* · *No match — try better light, or clear the filters* ·
-*Pick a printing below* · *Added Forest — HOB 193*, *Added Forest again — ×2* or *Updated Forest —
-LTR 270* · *Hold steady —
-reading the card…* (Exact, locked) · *Hold steady*. The asset sentences sit under it, so a missing
-bundle is still said with the Developer panels off.
+**The Match strip above the camera is the reader's whole view of the session** (2026-10-01; it was
+one status line *under* the camera until then, and the bar and the decided card lived only in the
+Developer panels). `readerText.ts`'s `matchStrip` turns the verdict into a pill, the card's name and
+printing, one sentence, and a bar; `reader/MatchStrip.tsx` draws it. None of the developer
+vocabulary — votes, leads, distances — reaches it. In rank order, each rung a reason the later ones
+cannot be true: *Can't identify* (no card hashes) · *Looking — Point the camera at a card* · *No
+match — Try better lighting or clear the filters.* · *N printings — Pick a printing in the tray* ·
+*Matched*, with *Added · swap in the next card*, *Added again — ×2* or *Printing updated* · *Reading
+— Hold steady — reading…* (Exact, locked) · *Matching — Hold steady*. Four rules carry it:
+- **The Matched name is the tray's row, not the tracker's leader**, because in Exact the resolved
+  printing can differ from the hash's — and that rung also asks for `verdict.decision`, since
+  `lastAdded` is never cleared and a committed frame with no decision would otherwise call the last
+  card matched over the one in the camera.
+- **The row is the live region** (`role="status"`, named *Scanner status*), and while the tone is
+  *progress* the name and printing are `aria-hidden`: the leader can change frame to frame, and a
+  region re-announcing every flip is noise.
+- **The bar fills to the end on every committed rung**, the confidence rule included, and its
+  hairline — the end under votes, `COMMIT_CONFIDENCE` (0.7, `track.rs`'s constant written a second
+  time) under confidence — is drawn only while the scanner is still gathering.
+- **An ambiguous resolve names the card only when every choice shares one name**: a tie between two
+  names is not a settled card.
+The asset sentences sit under the camera, so a missing bundle is still said with the Developer
+panels off.
+
+**A card that lands is laid over the bottom of the camera for 2.2 s** (`reader/AddedToast.tsx`,
+`LANDED_HOLD_MS`): the Scryfall image of what was filed, a tick drawn on a green badge, the name,
+and the set, number and finish — *Added again ×N* on a bump, *Printing updated* on a re-read, and the
+first two candidates fanned for a card waiting on a pick. It is drawn from the tray's head row
+(`landedFrom`), keyed on `row.key:row.addedAt` so a bump replays it, and the camera's edge flashes
+once in the same colour as it lands. **It is `aria-hidden`**: the strip above says the same thing,
+and two live regions announcing one landing is noise. Its motion is `motion.ts`'s `landed` preset;
+the tick's draw has its own `useReducedMotion` opt-out, because `pathLength` is not a positional key.
 
 ### The Developer switch and the Tiers panel
 

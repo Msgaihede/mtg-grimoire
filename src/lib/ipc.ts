@@ -7843,6 +7843,17 @@ export interface ScannerPrefs {
   folderId: number | null;
   /** Whether the developer panels are showing. */
   developer: boolean;
+  /**
+   * The camera the reader picked, as the webview's `deviceId`; `null` is whichever camera the
+   * platform offers first. Per computer — `app_meta` does not sync — and a stored id whose camera
+   * has gone opens the default without clearing the choice.
+   */
+  cameraId: string | null;
+  /**
+   * How the review tray lays out its cards. `string` on the wire, because Rust stores it verbatim;
+   * read it through `trayLayoutOf`, which takes a word it does not know as the grid.
+   */
+  trayLayout: string;
 }
 
 /**
@@ -7861,6 +7872,9 @@ export type ScannerFinishPref = Finish | "detect";
  * commits; the collection never sees the word.
  */
 export type ScannerTrayFinish = Finish | "unknown";
+
+/** The review tray's two layouts — a wall of cards, or a line per card. */
+export type ScannerTrayLayout = "grid" | "list";
 
 /** One printing a tray row could be — `ScannerTrayChoice` in `scanner.rs`. */
 export interface ScannerTrayChoice {
