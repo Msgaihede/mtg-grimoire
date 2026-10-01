@@ -14,8 +14,8 @@ provably set**, probed 2026-08-30 — `/g/{group}/pull` with a *malformed* beare
 and not 500, and `required(env.RELAY_HMAC_KEY, …)` is called before `verify` can refuse it; the
 same shape holds for `POST /webhook/patreon` with no signature, where `required(env.
 PATREON_WEBHOOK_SECRET, …)` runs unconditionally ahead of `verifyWebhook`. `PATREON_CLIENT_SECRET`
-is only reachable through a real code exchange, so it cannot be probed. **Steps 7 and 8 are
-open.**
+is only reachable through a real code exchange, so it cannot be probed. **Step 7 is open; step 8
+was built on 2026-10-01** and that step says what it is and is not.
 
 **A second half landed on 2026-08-30** — `/token`'s group door, `POST /g/{group}/rotate`,
 `GET /g/{group}/keys`, the `group_keys` table and two columns on `entitlements`. **It is deployed
@@ -407,9 +407,55 @@ Until both are out, that device goes on saying *Supporting since …*, as it alw
 7. **Add the free-tier ceiling alarm** — a Cloudflare notification at ~70% of the 100 000/day
    request cap. Decided 2026-08-29: stay free, watch the ceiling. The ceiling is a **cliff, not a
    slope** — past it *every* reader errors at once, so without the alarm the first signal is
-   complaints.
-8. **Add rate-limiting rules on `/claim`, `/token`, `/g/{group}/rotate`, `/g/{group}/keys` and
-   `/p/{rv}/{offer,join}`.** The bill argument in `index.ts` — "junk is refused for the price of a
+   complaints. ⚠️ **Still open, and "a Cloudflare notification" turned out not to exist** (asked
+   of the account and the docs, 2026-10-01): the account's notification types hold nothing for
+   Workers requests, and the usage-based billing alert is for pay-as-you-go accounts. The alarm
+   has to be something that reads the day's request count from the analytics API on a schedule and
+   posts when it crosses — a small Worker of its own, a scheduled GitHub workflow, or a line in
+   this Worker's cron. Markus put it aside that day in favour of step 8.
+8. **Rate limits on `/claim`, `/token`, `/g/{group}/rotate`, `/g/{group}/keys` and
+   `/p/{rv}/{offer,join}` — built 2026-10-01, in the Worker rather than as rules in front of it.**
+   ⚠️ **This step said "add rate-limiting rules", and a rule is the one thing this host cannot
+   have**: a WAF rate-limit rule belongs to a zone, and `workers.dev` is not one the account
+   controls. What stands there instead is Cloudflare's rate-limit *binding* — three `ratelimits`
+   entries in `wrangler.jsonc`, asked by `relay/src/ratelimit.ts` after the method check and ahead
+   of each handler:
+
+   | Binding | Routes | Per client address, per 60 s | Heaviest honest use |
+   | --- | --- | --- | --- |
+   | `RL_CLAIM` | `/claim` | 10 | one per Connect press |
+   | `RL_MINT` | `/token`, `/rotate` | 30 | a device mints about once in eighteen hours |
+   | `RL_READ` | `/keys`, `/p/{rv}/{slot}` | 240 | one `/keys` per sync trip; a pairing dialog polls every 1.5 s — 40 a minute, 80 for a pair behind one address |
+
+   A caller past its limit gets **`429 {"error":"too many requests","code":"rate_limited"}`** with
+   `retry-after: 60`, before any D1 read. **Never a 401**: the app reads a 401 on these routes as a
+   statement about a membership, and it reads a 429 as an ordinary failure it retries — `the relay
+   answered 429 to /token`, no grant revoked (`entitlement.rs`'s `post`, `client.rs`'s key check).
+   **It fails open twice** — a binding that is absent and a binding that throws both let the
+   request through — so a limiter can never be what stops sync.
+
+   ⚠️ **What it does not do is keep junk off the 100 000-a-day budget.** The Worker has been
+   invoked by the time it asks, so a refused request still counts; only the D1 read is spared.
+   Step 7's alarm is still the only thing that would see the cliff coming, and the only fix that
+   refuses a request before it is counted is a custom domain with a zone rule in front of it —
+   which moves `RELAY_BASE` and the Patreon redirect URI, and is not planned.
+
+   ⚠️ **Cloudflare counts per location and eventually**, and says so: the binding is "permissive,
+   eventually consistent" and not an accounting system. A limit of 10 is a caller refused somewhere
+   after their tenth request in a minute at one data centre. So the deploy check is a burst and not
+   a count — fire fifteen `POST /claim` with an empty body from one machine and confirm **some** of
+   the later ones answer 429 where the earlier ones answered 400:
+   ```
+   H=https://mtg-grimoire-relay.denmark-east.workers.dev
+   for i in $(seq 1 15); do curl -s -o /dev/null -w "%{http_code} " "$H/claim" -d '{}'; done; echo
+   ```
+   **All 400 means no limiter is bound** — the fail-open arm, which is also what a binding name
+   that drifted from `ratelimit.ts` looks like; `ratelimit.test.ts` reads `wrangler.jsonc` to hold
+   the names and numbers together, and `wrangler deploy` prints the three bindings it attached.
+   Do not burst `/keys` to check: it spends 240 requests and locks your own devices out of sync
+   for a minute.
+
+   The bill argument in `index.ts` — "junk is refused for the price of a
    Worker invocation alone" — holds for the three routes behind the bearer gate and **not** for
    these five, which each cost a D1 read before anything can refuse them. ⚠️ **This step named two
    until 2026-08-30, and four until 2026-08-31**: `/rotate` and `/keys` are `/g/…` routes that

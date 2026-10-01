@@ -68,6 +68,27 @@
   // `patreon.ts` still turns a binding removed from here into a 500 that names it. The three that
   // are never committed, set with `wrangler secret put`, are `PATREON_CLIENT_SECRET`,
   // `PATREON_WEBHOOK_SECRET` and `RELAY_HMAC_KEY`.
+  // The limits on the five routes a caller reaches with no token — runbook step 8, and
+  // `src/ratelimit.ts` is the reasoning. Each of those routes reads D1 before it can refuse
+  // anything, and a limit refuses the caller ahead of that read. **It does not keep the request
+  // off the account's 100,000-a-day budget**: the Worker has already been invoked to ask, and a
+  // rule in front of the Worker needs a zone, which `workers.dev` has none of.
+  //
+  // One binding per limit, because a binding carries exactly one: `/claim`; `/token` and
+  // `/rotate`; `/keys` and the pairing rendezvous. Per client address, per 60 seconds — `period`
+  // takes 10 or 60 and nothing else. `namespace_id` is an integer of our own choosing, unique to
+  // this account, and the bucket a count is kept in: reusing one across two bindings would have
+  // them spend each other's budget.
+  //
+  // ⚠️ **`src/ratelimit.ts`'s `LIMITS` repeats these three names and numbers**, and
+  // `ratelimit.test.ts` reads this file to hold them together. A name that drifts is a binding
+  // the Worker reads as `undefined`, which it treats as "no limit" on purpose — so the deploy
+  // would succeed, every probe would answer, and nothing would be limited.
+  "ratelimits": [
+    { "name": "RL_CLAIM", "namespace_id": "1001", "simple": { "limit": 10, "period": 60 } },
+    { "name": "RL_MINT", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } },
+    { "name": "RL_READ", "namespace_id": "1003", "simple": { "limit": 240, "period": 60 } },
+  ],
   "vars": {
     "RELAY_BASE": "https://mtg-grimoire-relay.denmark-east.workers.dev",
     "PATREON_CLIENT_ID": "UFkUESN45GFyy36WQBaOpedWwFvtcOfujPZz_s8Yhu54z4I7-eA8Zg9lv-FEXqV4",
