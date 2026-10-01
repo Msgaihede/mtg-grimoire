@@ -32,6 +32,12 @@
 //! any since `Session::set_resolve_on`; the comparison in card-scanner.md §10 was built from
 //! `9a0ba706`, before it, when every resolve was inline.
 //!
+//! **`carried`** is `sequence` with the card on top arriving in motion (#735): its first
+//! [`CARRIED`] frames are the card still short of where it comes to rest, smeared along the way,
+//! and only then at rest. It counts the rows the card on top is given — more than one is a card
+//! decided on its way in and again once it lay still — and the rows naming another card. Same
+//! arguments as `sequence`.
+//!
 //! **Synthetic**, like the evaluation: a fence and a threshold, not a claim about a camera.
 
 use card_scanner::detect::{detect, rectify_views, DetectOptions, EdgeMethod, Quad};
@@ -41,7 +47,7 @@ use card_scanner::lock::QuadLock;
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::{Label, Reference};
 use card_scanner::session::{FrameOptions, ResolveOn, ScanMode, Session};
-use card_scanner::synth::{burst, SynthOptions};
+use card_scanner::synth::{burst, burst_scene, Scene, SynthOptions};
 use image::{GrayImage, Rgb, RgbImage};
 use std::collections::HashMap;
 use std::path::Path;
@@ -685,6 +691,167 @@ fn sequence(cards: &[Card], missing: usize, bundle: &Path, corpus: &Path, models
     println!("\n{same} piles lay a reprint of the same card on top; \"card ✓\" leaves them out.");
 }
 
+// ---- carried: the card on top is decided while it is still on its way in (#735) -------------
+
+/// How far short of its resting place the card on top still is on each frame of its way in, in
+/// card widths: slid into place, slowing as it lands. The first frame is well past what the quad
+/// lock calls the same quad (35% of the short edge), so the lock lets go of the pile and takes
+/// hold again on the later frames, 17% and 6% apart, while the card is still moving.
+const CARRIED: [f32; 4] = [0.60, 0.25, 0.08, 0.02];
+
+/// The pile's frames — the first card held, a hand over it, the next carried in and then at
+/// rest — with the index of the first carried frame and of the first at rest.
+fn carried_frames(a: &Card, b: &Card) -> (Vec<Vec<u8>>, usize, usize) {
+    let seed = card_index(&a.id);
+    let opts = |frames| SynthOptions { frames, ..SynthOptions::default() };
+    let mut frames = burst(&a.render, &opts(HOLD), seed);
+    for (n, &f) in HAND.iter().enumerate() {
+        frames.push(burst(&with_hand(&a.render, f), &opts(n + 1), seed)[n].clone());
+    }
+    let first_carried = frames.len();
+    // The way in, from a heading the pile's seed picks, measured in the card's own width.
+    let heading = (seed % 360) as f32 * std::f32::consts::PI / 180.0;
+    let (ux, uy) = (heading.cos(), heading.sin());
+    let on_top = burst_scene(&b.render, &opts(CARRIED.len() + ON_TOP), seed, Scene::Plain, &[]);
+    for (k, frame) in on_top.iter().enumerate() {
+        match CARRIED.get(k) {
+            Some(&left) => {
+                let [tl, tr, br, bl] = frame.quad;
+                let side = |p: (f32, f32), q: (f32, f32)| (p.0 - q.0).hypot(p.1 - q.1);
+                let width = side(tl, tr).min(side(tr, br)).min(side(br, bl)).min(side(bl, tl));
+                // Half the step to the next frame: the shutter is open for part of the move.
+                let step = left - CARRIED.get(k + 1).copied().unwrap_or(0.0);
+                let (d, s) = (left * width, 0.5 * step * width);
+                frames.push(on_the_way(&frame.jpeg, (d * ux, d * uy), (s * ux, s * uy)));
+            }
+            None => frames.push(frame.jpeg.clone()),
+        }
+    }
+    (frames, first_carried, first_carried + CARRIED.len())
+}
+
+/// `jpeg` as the camera saw it `offset` pixels short of where the card comes to rest, smeared
+/// by `smear` pixels along the way — what a shutter open across the move leaves. The whole
+/// scene moves with the card: a pan, which is the card's own motion and nothing else changing.
+fn on_the_way(jpeg: &[u8], offset: (f32, f32), smear: (f32, f32)) -> Vec<u8> {
+    let src = image::load_from_memory(jpeg).expect("a synthetic frame decodes").to_rgb8();
+    let (w, h) = (src.width(), src.height());
+    let taps = (smear.0.hypot(smear.1).ceil() as usize).clamp(1, 24);
+    let out = RgbImage::from_fn(w, h, |x, y| {
+        let mut sum = [0.0f32; 3];
+        for t in 0..taps {
+            let along = if taps == 1 { 0.0 } else { t as f32 / (taps - 1) as f32 - 0.5 };
+            let sx = (x as f32 - offset.0 - along * smear.0).round().clamp(0.0, (w - 1) as f32);
+            let sy = (y as f32 - offset.1 - along * smear.1).round().clamp(0.0, (h - 1) as f32);
+            let p = src.get_pixel(sx as u32, sy as u32).0;
+            for c in 0..3 {
+                sum[c] += f32::from(p[c]);
+            }
+        }
+        Rgb(sum.map(|s| (s / taps as f32).round() as u8))
+    });
+    let mut bytes = Vec::new();
+    image::codecs::jpeg::JpegEncoder::new_with_quality(&mut bytes, 80)
+        .encode_image(&out)
+        .expect("encoding an in-memory RGB image cannot fail");
+    bytes
+}
+
+/// What one carried pile came to in one mode. Rows are decisions that add one, counted from
+/// the card on top's first frame on its way in.
+#[derive(Default, Clone)]
+struct Carried {
+    rows: usize,
+    /// Rows naming another card than the one on top.
+    wrong: usize,
+    /// The first row was added before the card had come to rest.
+    on_the_way: bool,
+    replaced: usize,
+    /// Frames from the card's first frame at rest to its last decision.
+    settled_at: Option<usize>,
+    same_card: bool,
+}
+
+fn carried_pile(
+    ing: &Ingredients,
+    oracle: &HashMap<[u8; ID_LEN], String>,
+    a: &Card,
+    b: &Card,
+    mode: ScanMode,
+) -> Carried {
+    let (frames, first_carried, at_rest) = carried_frames(a, b);
+
+    let truth = |c: &Card| oracle.get(&c.id).cloned().unwrap_or_else(|| format_uuid(&c.id));
+    let (a_card, b_card) = (truth(a), truth(b));
+    let mut out = Carried { same_card: a_card == b_card, ..Carried::default() };
+    let frame_opts = FrameOptions { mode, ..FrameOptions::default() };
+    for (i, named, adds) in decisions(&mut ing.session(), &frames, &frame_opts) {
+        if i < first_carried {
+            continue;
+        }
+        if !adds {
+            out.replaced += 1;
+        } else {
+            out.on_the_way |= out.rows == 0 && i < at_rest;
+            out.rows += 1;
+            out.wrong += usize::from(named != b_card);
+        }
+        out.settled_at = Some((i + 1).saturating_sub(at_rest));
+    }
+    out
+}
+
+fn carried(cards: &[Card], missing: usize, bundle: &Path, corpus: &Path, models: &Path) {
+    let started = std::time::Instant::now();
+    let ing = Ingredients::load(bundle, corpus, models);
+    let oracle: HashMap<[u8; ID_LEN], String> =
+        ing.rows.iter().filter_map(|r| Some((r.id, format_uuid(&r.oracle?)))).collect();
+    let next = |i: usize| {
+        (i + 1..cards.len()).chain(0..i).find(|&j| j != i && cards[j].stratum == cards[i].stratum)
+    };
+    let modes = [("Fast", ScanMode::Fast), ("Exact", ScanMode::Exact)];
+    let piles: Vec<Vec<Carried>> = over_cards(cards.len(), |i| match next(i) {
+        Some(j) => modes
+            .iter()
+            .map(|&(_, m)| carried_pile(&ing, &oracle, &cards[i], &cards[j], m))
+            .collect(),
+        None => Vec::new(),
+    });
+    println!(
+        "{} piles of two ({} renders missing), the first card held {HOLD} frames, a hand over it \
+         for {}, the next carried in over {} frames and at rest for {ON_TOP}; {} workers, {:.0} s",
+        piles.iter().filter(|p| !p.is_empty()).count(),
+        missing,
+        HAND.len(),
+        CARRIED.len(),
+        workers(),
+        started.elapsed().as_secs_f32()
+    );
+    println!(
+        "\n| mode | piles | on top decided | first row on its way in | two rows or more \
+         | rows naming another card | replaced | last decision, frames at rest p50 / p90 / max |"
+    );
+    println!("| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |");
+    for (m, (name, _)) in modes.iter().enumerate() {
+        let ps: Vec<&Carried> = piles.iter().filter_map(|p| p.get(m)).collect();
+        let n = ps.len();
+        let pct = |k: usize| format!("{:.1}%", 100.0 * k as f64 / n.max(1) as f64);
+        let mut at: Vec<usize> = ps.iter().filter_map(|p| p.settled_at).collect();
+        at.sort_unstable();
+        println!(
+            "| {name} | {n} | {} | {} | {} | {} | {} | {} / {} / {} |",
+            pct(ps.iter().filter(|p| p.rows >= 1).count()),
+            ps.iter().filter(|p| p.on_the_way).count(),
+            ps.iter().filter(|p| p.rows >= 2).count(),
+            ps.iter().filter(|p| !p.same_card).map(|p| p.wrong).sum::<usize>(),
+            ps.iter().map(|p| p.replaced).sum::<usize>(),
+            percentile(&at, 0.5),
+            percentile(&at, 0.9),
+            at.last().map_or("—".into(), |m| m.to_string()),
+        );
+    }
+}
+
 fn main() {
     let args: Vec<String> =
         std::env::args_os().skip(1).map(|a| a.to_string_lossy().into_owned()).collect();
@@ -698,10 +865,15 @@ fn main() {
             let (cards, missing) = load(Path::new(printings), Path::new(cache));
             sequence(&cards, missing, Path::new(bundle), Path::new(corpus), Path::new(models));
         }
+        ["carried", printings, cache, bundle, corpus, models] => {
+            let (cards, missing) = load(Path::new(printings), Path::new(cache));
+            carried(&cards, missing, Path::new(bundle), Path::new(corpus), Path::new(models));
+        }
         _ => {
             eprintln!(
                 "usage: stacking gap <printings.txt> <render cache>\n       stacking sequence \
-                 <printings.txt> <render cache> <bundle> <corpus.db> <models dir>"
+                 <printings.txt> <render cache> <bundle> <corpus.db> <models dir>\n       \
+                 stacking carried <printings.txt> <render cache> <bundle> <corpus.db> <models dir>"
             );
             std::process::exit(2);
         }
