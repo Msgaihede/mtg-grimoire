@@ -667,6 +667,103 @@ fn a_folder_cycle_is_broken_and_the_later_move_goes_to_the_root() {
     );
 }
 
+/// What `managed_wishlist::settle_deck` leaves for a deck's **Tokens** subfolder: a folder
+/// under a folder, both written behind [`capture::suppressed`], so the insert trigger's mint
+/// never ran and neither row has a `sync_uid`.
+fn managed_tokens_folder(conn: &Connection) {
+    capture::suppressed(conn, || {
+        conn.execute_batch(
+            "INSERT INTO wishlist_folders (name, sort_order, created_at, updated_at)
+             VALUES ('Deck', 0, 0, 0);
+             INSERT INTO wishlist_folders (parent_id, name, sort_order, created_at, updated_at)
+             VALUES ((SELECT id FROM wishlist_folders WHERE name = 'Deck'), 'Tokens', 0, 0, 0);",
+        )
+    })
+    .unwrap();
+    let nameless: i64 = conn
+        .query_row(
+            "SELECT count(*) FROM wishlist_folders WHERE sync_uid IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(nameless, 2, "the fixture is not what a managed folder is");
+}
+
+/// **A folder with no `sync_uid` does not stop a pull.**
+///
+/// The cycle check reads every folder that has a parent, after every apply, and it read the
+/// uid as a `String` — so one nameless child failed the whole batch with `Invalid column type
+/// Null at index: 2, name: sync_uid`, on every pull, for as long as the row stood. A theory
+/// deck's managed wishlist makes exactly that row (user schema v55's Tokens subfolder), and it
+/// is nameless on purpose: the folder is derived per device and must never be announced.
+#[test]
+fn a_folder_with_no_uid_does_not_stop_a_pull() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    managed_tokens_folder(&b);
+
+    add_copy(&a);
+    let report = apply(&b, &outbox(&a)).unwrap();
+
+    assert_eq!(unwritten(report), (0, 0));
+    assert_eq!(qty(&b), (1, 1), "the peer's copy never landed");
+}
+
+/// **A loop that runs through a nameless folder is still found.**
+///
+/// Reading the uid as optional is the fix; leaving nameless folders out of the walk would stop
+/// the error too, and would stop the walk at the first one — so a loop through it stood. The
+/// nameless folder has no move on record, so the cut still falls on the later of the two moves
+/// the devices made.
+#[test]
+fn a_loop_through_a_folder_with_no_uid_is_still_broken() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    a.execute(
+        "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+         VALUES ('Outer', 0, unixepoch(), unixepoch()),
+                ('Inner', 1, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    capture::suppressed(&b, || {
+        b.execute(
+            "INSERT INTO deck_folders (parent_id, name, sort_order, created_at, updated_at)
+             VALUES ((SELECT id FROM deck_folders WHERE name = 'Outer'), 'Mid', 0, 0, 0)",
+            [],
+        )
+    })
+    .unwrap();
+
+    // Outer → Inner on `a`; Inner → Mid on `b`, a minute later; and Mid is already under Outer.
+    a.execute(
+        "UPDATE deck_folders SET parent_id = (SELECT id FROM deck_folders WHERE name = 'Inner')
+          WHERE name = 'Outer'",
+        [],
+    )
+    .unwrap();
+    b.execute("UPDATE sync_clock SET ms = ms + 60000", [])
+        .unwrap();
+    b.execute(
+        "UPDATE deck_folders SET parent_id = (SELECT id FROM deck_folders WHERE name = 'Mid')
+          WHERE name = 'Inner'",
+        [],
+    )
+    .unwrap();
+
+    let report = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(report.cycles_broken, 1);
+    let rooted: String = b
+        .query_row(
+            "SELECT name FROM deck_folders WHERE parent_id IS NULL",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(rooted, "Inner", "the later move is the one undone");
+}
+
 /// **A device's clock is pulled past everything it just applied.** Without that, an edit made
 /// *after* seeing a peer's op can carry a stamp that sorts *before* it, and last-writer-wins
 /// decides by which machine happened to have the faster clock.
