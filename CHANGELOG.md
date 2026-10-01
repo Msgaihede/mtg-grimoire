@@ -30,6 +30,18 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.39.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.38.0...v0.39.0) (2026-10-01)
+
+
+### Features
+
+* **scanner:** detect foil from the collector line's separator, with an Unknown tray finish ([1616bf0](https://github.com/Msgaihede/mtg-grimoire/commit/1616bf090290ac2f002b7bf871a0918e99fab923))
+
+
+### Bug Fixes
+
+* **scanner:** picking a single-finish printing settles an Unknown row's finish ([4d2f7ea](https://github.com/Msgaihede/mtg-grimoire/commit/4d2f7ea4a40b936adafe5bfd652ec20ea991ecda))
+
 ## [0.38.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.37.1...v0.38.0) (2026-10-01)
 
 
