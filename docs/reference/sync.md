@@ -1670,6 +1670,20 @@ standing — the arrangement more devices have already seen and drawn. Convergen
 requirement and both directions satisfy it; what convergence needs is that both devices consult
 the same set of stamps.
 
+⚠️ **A folder can have no `sync_uid`, and the cycle check reads it as optional** (2026-10-01).
+The check walks every folder that has a parent, after **every** apply — an empty page included —
+and until then it read the uid as a `String`. One nameless child therefore failed the whole
+batch with `Invalid column type Null at index: 2, name: sync_uid`, on every pull, for as long as
+the row stood: the device went on pushing and never read again. The row is not an accident. A
+theory deck's managed wishlist writes its folders behind `capture::suppressed`, where the insert
+trigger's mint does not run, and they are nameless **on purpose** — the baseline's
+`WHERE sync_uid IS NOT NULL` is what keeps a folder every device derives for itself from being
+announced. User schema v55's **Tokens** subfolder was the first of them to have a parent, so
+this reached every paired device whose managed wishlist held a token. A nameless folder stays in
+the walk, because a loop can run through one, and it has no move on record, so the cut never
+prefers it. **A read over a whole synced table may not assume a uid; a statement addressed by
+uid cannot reach a nameless row at all, which is why nothing else in `apply` met one.**
+
 ### A resurrection is an event, not a state
 
 `combined.resurrected` stays true for as long as the tombstone sits in this device's own op log
@@ -3064,6 +3078,45 @@ frame is a hint and is never itself the cursor advancing.
 3. **"Nothing polls, so nothing is being spent."** Correct at the time, and it was a reason to
    wait rather than a reason never to build it — see the cost below for what spending looks like
    now that something does.
+
+⚠️ **No socket came up from the day this was built until 2026-10-01, and nothing went red.**
+`connect_once` handed `connect_async` a hand-built `http::Request` carrying the bearer and
+nothing else. tungstenite passes such a request through untouched and its handshake refuses one
+without `Sec-WebSocket-Key` before a byte leaves — `WebSocket protocol error: Missing, duplicated
+or incorrect header sec-websocket-key`, folded into one `error_log` row with a rising count. The
+five handshake headers are only generated when the request is built **from the URL**, so
+`live::upgrade_request` does that and then adds the bearer. Sync still worked throughout, because
+the round trip ahead of the socket is plain HTTPS — one trip per backoff cycle instead of a
+doorbell — which is exactly why it went unnoticed. The route was live the whole time (probed
+2026-10-01: `/g/{group}/ws` **401** from the bearer gate, `/g/{group}/bogus` **404**).
+`the_upgrade_request_passes_the_handshakes_own_check` runs tungstenite's own check over the
+request, with no relay. **The cost table below has therefore never been measured against real
+traffic.**
+
+**The first pass with a socket up** (2026-10-01, debug build, Windows; the relay was this tree's
+`relay/` under `wrangler dev` 4.143 on `127.0.0.1`, reached through the `relay_url` override with
+a membership seeded into the local D1 — the deployed relay and Patreon were not involved, and
+the peer was a script pushing envelopes the app could not open, so this times the doorbell and
+not an apply):
+
+| | Measured |
+| --- | --- |
+| Claim → `connecting` → `live` | 1.7 s, 1.9 s; the relay logged `GET …/ws 101` |
+| A peer's push → this device's cursor at the relay's head | 1.2–1.3 s, 6 of 6 (`FRAME_DEBOUNCE_MS` plus the trip) |
+| The relay's frame itself, push to socket | 22 ms |
+| This device's write → its envelope on the relay | 3.1–3.3 s after the commit, 5 of 5 (`WRITE_DEBOUNCE_MS` plus the trip) |
+| Relay stopped 20 s, then restarted | `offline` within a second of the stop; `live` again 11 s after the restart was issued, on the ladder's next rung |
+
+So a change crosses in about four and a half seconds where the backoff ladder's one trip per
+cycle took a minute or two ([issue #751](https://github.com/Msgaihede/mtg-grimoire/issues/751)).
+A device's own push is not echoed to it, and a protocol ping is answered with a pong. **One
+write waited 27 s**, and it is the design rather than a fault: it was made while the first-run
+card ingest was inside its swap, `outbox_has_work` gave up on the write connection after its one
+second, and the swap's own commit rang the bell again — the trip could not have had the
+connection any sooner. The same pass held a managed wishlist's nameless **Tokens** folder
+(`parent_id` set, `sync_uid` NULL, made by the real `settle_deck`) through three pulls with no
+error, which is the cycle check's fix above seen in the window. **Not driven: two real devices
+through the deployed relay.**
 
 **The cost, re-derived** (spec §11; Cloudflare limits verified 2026-08-31):
 

@@ -245,6 +245,31 @@ fn ws_origin(base: &str) -> String {
     }
 }
 
+/// The upgrade request for one socket, carrying the bearer.
+///
+/// `tokio-tungstenite` sends an arbitrary upgrade request, so the bearer gate the relay already
+/// has at `index.ts:169-181` works unchanged. **The webview could not do this** — its
+/// `WebSocket` constructor cannot set a header — which is one of the reasons the socket lives in
+/// Rust rather than in the page.
+///
+/// **Built from the URL and then given the bearer, never assembled by hand.** tungstenite passes
+/// a ready-made `http::Request` through as it stands, and its handshake refuses one without
+/// `Host`, `Connection`, `Upgrade`, `Sec-WebSocket-Version` and `Sec-WebSocket-Key` before a
+/// byte leaves; only the URL's own conversion writes those five. A request built with the
+/// bearer alone is what this was until 2026-10-01, and no socket ever came up.
+fn upgrade_request(
+    url: &str,
+    token: &str,
+) -> Result<tokio_tungstenite::tungstenite::handshake::client::Request, String> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::http::header::{HeaderValue, AUTHORIZATION};
+
+    let mut request = url.into_client_request().map_err(|e| e.to_string())?;
+    let bearer = HeaderValue::from_str(&format!("Bearer {token}")).map_err(|e| e.to_string())?;
+    request.headers_mut().insert(AUTHORIZATION, bearer);
+    Ok(request)
+}
+
 /// Hold one socket until it dies, reporting what happened to it.
 async fn connect_once(
     app: &tauri::AppHandle,
@@ -258,17 +283,9 @@ async fn connect_once(
         Err(e) => return Ended::failed(e),
     };
     let url = format!("{}/g/{group}/ws?device={device}", ws_origin(&base));
-    // `tokio-tungstenite` builds an arbitrary upgrade request, so the bearer gate the relay
-    // already has at `index.ts:169-181` works unchanged. **The webview could not do this** — its
-    // `WebSocket` constructor cannot set a header — which is one of the reasons the socket lives
-    // in Rust rather than in the page.
-    let request = tokio_tungstenite::tungstenite::http::Request::builder()
-        .uri(&url)
-        .header("authorization", format!("Bearer {token}"))
-        .body(());
-    let request = match request {
+    let request = match upgrade_request(&url, &token) {
         Ok(request) => request,
-        Err(e) => return Ended::failed(e.to_string()),
+        Err(e) => return Ended::failed(e),
     };
 
     let socket = match tokio_tungstenite::connect_async(request).await {
@@ -897,5 +914,23 @@ mod tests {
         // terms rather than guessed at.
         assert_eq!(ws_origin("wss://relay.example"), "wss://relay.example");
         assert_eq!(ws_origin("relay.example"), "relay.example");
+    }
+
+    /// **The upgrade request is one tungstenite will actually send.**
+    ///
+    /// A hand-built `http::Request` is passed through as it stands, and the handshake refuses one
+    /// without `Sec-WebSocket-Key` before a byte leaves — `WebSocket protocol error: Missing,
+    /// duplicated or incorrect header sec-websocket-key`. The request this module built carried
+    /// the bearer and nothing else, so no socket ever came up. `generate_request` is that same
+    /// check, which is what lets this run with no relay.
+    #[test]
+    fn the_upgrade_request_passes_the_handshakes_own_check() {
+        let request = upgrade_request("wss://relay.example/g/abc/ws?device=d1", "tok").unwrap();
+        let (bytes, _key) =
+            tokio_tungstenite::tungstenite::handshake::client::generate_request(request).unwrap();
+        let sent = String::from_utf8(bytes).unwrap().to_ascii_lowercase();
+        assert!(sent.starts_with("get /g/abc/ws?device=d1 http/1.1\r\n"));
+        assert!(sent.contains("\r\nhost: relay.example\r\n"));
+        assert!(sent.contains("\r\nauthorization: bearer tok\r\n"));
     }
 }

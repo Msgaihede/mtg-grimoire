@@ -80,3 +80,40 @@ export function orderedNotes(notes: StickyNote[], pinnedFirst: boolean): StickyN
   if (!pinnedFirst) return by;
   return [...by.filter((n) => n.pinned), ...by.filter((n) => !n.pinned)];
 }
+
+/**
+ * The order to **store** after a gesture rearranged the order a board is **drawing**.
+ *
+ * With `Pinned note first` off the two are one list and `drawn` goes straight back. With it on,
+ * the board draws every pinned note ahead of every unpinned one, and writing that list as it stood
+ * did two wrong things at once (issue #556): pinned notes were promoted in the *stored* order for
+ * good, so switching the toggle off kept them at the front; and a note dropped above a pinned one
+ * was written there and then drawn below it, so a drop did not land where its target showed.
+ *
+ * So a gesture never moves a note out of its own group — the drawn list is partitioned again,
+ * stably, which clamps a note dropped across the line to the nearest place on its own side — and
+ * each group's new order is written into **the slots that group already holds** in the stored
+ * order. The interleaving of pinned and unpinned notes underneath is left exactly as it was, and
+ * the board re-reads the stored order into the very arrangement the reader just made.
+ *
+ * `stored` is every note in stored order ({@link orderedNotes} with the toggle off); `drawn` is the
+ * ids after the gesture. A note in one list and not the other — deleted in another window between
+ * the render and the press — leaves `drawn` unmapped, because guessing a slot for it would be a
+ * write about a list neither side holds.
+ */
+export function storedOrder(
+  stored: readonly StickyNote[],
+  drawn: readonly number[],
+  pinnedFirst: boolean,
+): number[] {
+  if (!pinnedFirst) return [...drawn];
+  const pinned = new Set(stored.filter((note) => note.pinned).map((note) => note.id));
+  if (drawn.length !== stored.length || stored.some((note) => !drawn.includes(note.id))) {
+    return [...drawn];
+  }
+  const pinnedNext = drawn.filter((id) => pinned.has(id));
+  const restNext = drawn.filter((id) => !pinned.has(id));
+  let p = 0;
+  let r = 0;
+  return stored.map((note) => (note.pinned ? pinnedNext[p++] : restNext[r++]));
+}

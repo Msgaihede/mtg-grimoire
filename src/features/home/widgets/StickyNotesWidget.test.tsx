@@ -455,10 +455,12 @@ describe("StickyNotesWidget", () => {
    */
   describe("reordering the board", () => {
     /** Six by three: four columns of two rows, so every one of the eight notes is drawn and a
-     *  row is worth four places. */
+     *  row is worth four places. **`Pinned note first` off**, so the drawn order is the stored one
+     *  and these cases are about the gesture's arithmetic alone — the pinned group has cases of
+     *  its own below. */
     function board() {
       stickyNotes.mockResolvedValue(NOTES);
-      draw({ w: 6, h: 3 });
+      draw({ config: { pinned: false }, w: 6, h: 3 });
       return within(screen.getByRole("list", { name: "Your notes" })).getAllByRole("button");
     }
 
@@ -585,6 +587,62 @@ describe("StickyNotesWidget", () => {
 
       await userEvent.keyboard("{Control>}{ArrowRight}{/Control}");
       expect(stickyNoteReorder).toHaveBeenCalledWith([1, 3, 2]);
+    });
+
+    /**
+     * **With `Pinned note first` on, a gesture moves a note within its own group and the pinned
+     * notes keep the slots they hold in the stored order** (issue #556). Writing the drawn list as
+     * it stood promoted every pinned note to the front of the stored order for good, and a note
+     * dropped above a pinned one was written there and drawn below it. `Gamma` is pinned and
+     * stored third, so it is drawn first and stored where it was.
+     */
+    describe("with the pinned note drawn first", () => {
+      const notes = [
+        note({ id: 1, title: "Alpha" }),
+        note({ id: 2, title: "Beta" }),
+        note({ id: 3, title: "Gamma", pinned: true }),
+        note({ id: 4, title: "Delta" }),
+      ];
+      function pinnedBoard() {
+        stickyNotes.mockResolvedValue(notes);
+        draw({ w: 6, h: 3, notes });
+        return within(screen.getByRole("list", { name: "Your notes" })).getAllByRole("button");
+      }
+
+      it("writes the unpinned notes' new order around the pin's own slot", async () => {
+        const tiles = pinnedBoard();
+        expect(tiles.map((tile) => tile.getAttribute("aria-label"))).toEqual([
+          "Gamma, pinned",
+          "Alpha",
+          "Beta",
+          "Delta",
+        ]);
+        tiles.forEach((tile, at) => boxed(tile, at * 100));
+
+        // Delta onto Alpha: drawn Gamma, Delta, Alpha, Beta — stored with Gamma still third.
+        await pointerDrag(tiles[3], tiles[1]);
+
+        await waitFor(() => expect(stickyNoteReorder).toHaveBeenCalledWith([4, 1, 3, 2]));
+      });
+
+      it("keeps a note dropped above the pin on its own side of it", async () => {
+        const tiles = pinnedBoard();
+        tiles.forEach((tile, at) => boxed(tile, at * 100));
+
+        // Delta onto Gamma: the head of the unpinned group, which is where it is then drawn.
+        await pointerDrag(tiles[3], tiles[0]);
+
+        await waitFor(() => expect(stickyNoteReorder).toHaveBeenCalledWith([4, 1, 3, 2]));
+      });
+
+      it("writes nothing for a pinned note stepped past its group", async () => {
+        pinnedBoard();
+        await userEvent.tab();
+        expect(document.activeElement).toHaveAccessibleName("Gamma, pinned");
+
+        await userEvent.keyboard("{Control>}{ArrowRight}{/Control}");
+        expect(stickyNoteReorder).not.toHaveBeenCalled();
+      });
     });
 
     /** The Pad draws one note at a time, so there is no arrangement on screen to rearrange. */

@@ -359,6 +359,10 @@ export function CombosDialog(): JSX.Element {
         open={open}
         card={card.data ?? null}
         loading={card.isPending}
+        // **Its own arm, ahead of `card === null`** (issue #556): a refused read is not pending,
+        // and its `data` is `undefined` — so without this it fell through to the sentence that
+        // blames the card database for a printing it may hold perfectly well.
+        cardError={card.isError ? ipcError(card.error) : null}
         oracleId={card.data?.oracleId ?? null}
       />
     </Dialog>
@@ -377,11 +381,14 @@ function Body({
   open,
   card,
   loading,
+  cardError,
   oracleId,
 }: {
   open: boolean;
   card: CardDetail | null;
   loading: boolean;
+  /** The card read's refusal, in the backend's words — `null` unless it failed. */
+  cardError: string | null;
   oracleId: string | null;
 }) {
   /**
@@ -522,6 +529,10 @@ function Body({
     loading ? (
       <Filler>
         <Note>Loading card…</Note>
+      </Filler>
+    ) : cardError !== null ? (
+      <Filler>
+        <p className="text-sm text-destructive">Couldn't read this card — {cardError}.</p>
       </Filler>
     ) : // `card_detail` answers `null` for an id `cards` has no row for, which is a real state
     // rather than a failure: a collection or a deck can hold a printing the corpus has dropped.
