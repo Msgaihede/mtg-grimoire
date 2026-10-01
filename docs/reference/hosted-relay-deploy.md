@@ -14,8 +14,9 @@ provably set**, probed 2026-08-30 — `/g/{group}/pull` with a *malformed* beare
 and not 500, and `required(env.RELAY_HMAC_KEY, …)` is called before `verify` can refuse it; the
 same shape holds for `POST /webhook/patreon` with no signature, where `required(env.
 PATREON_WEBHOOK_SECRET, …)` runs unconditionally ahead of `verifyWebhook`. `PATREON_CLIENT_SECRET`
-is only reachable through a real code exchange, so it cannot be probed. **Steps 7 and 8 are
-open.**
+is only reachable through a real code exchange, so it cannot be probed. **Step 7 is open; step 8
+was built and deployed on 2026-10-01** — that step says what it is, what it is not, and how
+loosely it counts.
 
 **A second half landed on 2026-08-30** — `/token`'s group door, `POST /g/{group}/rotate`,
 `GET /g/{group}/keys`, the `group_keys` table and two columns on `entitlements`. **It is deployed
@@ -92,14 +93,17 @@ run — it runs workerd locally, contacts nothing and needs no login. Everything
 | The **refresh-secret change** | **deployed 2026-09-28**, from `main` at `1512ea68`, after `refresh_device` was added. No probe without a credential can see it; step 6 has the read that can. |
 | Issue #546's **half** | **deployed 2026-09-28 at 19:57 UTC, and no public route path gives it away.** The tell is a query parameter: `/g/{group}/keys?device=…&epoch=x` with any well-formed bearer answers **400 `that is not an epoch`** from this tree — `handleKeys` checks the epoch's shape before the credential's value — and **401** from a Worker that ignores `epoch`. **Probed 2026-10-01: 400.** ⚠️ **This row said "not deployed" until then**, with a probe read off the code and never run. From inside a group the same fact is a `/keys` 200 that carries `removalStep: 2`. |
 | Issue #548's **`dev` claim** | **deployed 2026-10-01**, from `main` at `2b845048`. No probe without a credential can see it. |
+| The **rate limits** | **deployed 2026-10-01 at 22:09 UTC.** `settings` on the script lists `RL_CLAIM`, `RL_MINT` and `RL_READ` as `ratelimit` bindings, and a 400-request flood at `/claim` drew 347 `429`s. No small probe can see them — sixteen requests against a limit of ten drew none. Step 8 has the measurement. |
 | The D1 database | **exists.** `wrangler.jsonc`'s `database_id` is a real uuid, and has been since before this branch. It holds live entitlement rows, so step 2's `ALTER TABLE`s run against real data. `sqlite_master` listed `entitlements`, `claim_codes`, `group_keys`, `group_devices` and `pairing_rendezvous` on 2026-09-28, beside D1's own `_cf_KV`. **On 2026-10-01** `entitlements` carried fourteen columns, `refresh_device` and `reconciled_at` among them, with both CHECKs of item 5 in its stored SQL and the `entitlements_reconcile` index beside it — and the share Worker's `shares` table was added that day. |
 | The Patreon OAuth app | **the client exists.** `PATREON_CLIENT_ID` is real in `entitlement.rs` since `a0eb0c6` (2026-08-30) and was verified live: `GET /oauth2/authorize` with it and `/oauth/patreon/callback` answered 302 to Patreon's login, preserving both parameters, which an unregistered id or an unregistered redirect does not do. **`wrangler.jsonc`'s `vars` carry the relay's own copy of it and `PATREON_CAMPAIGN_ID`**, both real, the client id byte for byte equal to the Rust constant. |
 
 A device pointed at that host today reaches a relay that speaks the whole membership flow, the
 whole log, the key distribution, the device cap and the pairing rendezvous. **As of 2026-10-01,
-19:17 UTC, nothing in `relay/` on `main` at `2b845048` is undeployed.** That is the sentence on
+22:09 UTC, nothing in `relay/` is undeployed: the host runs `claude/relay-rate-limits` at
+`7f6d6f50`, which is `main` plus step 8's rate limits.** That is the sentence on
 this page most certain to rot, because the next branch that touches `relay/` makes it false
-without editing it — and the last two that did each left it wrong, once in each direction. Step 0
+without editing it — the last two that did each left it wrong, once in each direction, and the
+third edited it in the commit that made it false. Step 0
 is the authority, not it; so is `deployments` on the script, which dates every deploy whether or
 not anybody wrote one down.
 
@@ -382,8 +386,9 @@ Until both are out, that device goes on saying *Supporting since …*, as it alw
    ```
 5. **Register the webhook** for `members:pledge:create`, `members:pledge:update`,
    `members:pledge:delete` and `members:update`, pointing at `/webhook/patreon`.
-6. **`npx wrangler deploy`.** **Last run 2026-10-01, from `main` at `2b845048`** — and twice on
-   2026-09-28 before it, at `1512ea68` and then with issue #546's half. Both bullets below are
+6. **`npx wrangler deploy`.** **Last run 2026-10-01 at 22:09 UTC, from `claude/relay-rate-limits`
+   at `7f6d6f50`** with step 8's rate limits — after 19:17 UTC the same day from `main` at
+   `2b845048`, and twice on 2026-09-28, at `1512ea68` and then with issue #546's half. Both bullets below are
    still open. Then, for the refresh-secret change:
    - **Press Connect Patreon once on the paying device.** Not required, but it records which
      device holds the secret, so the group's next rotation keeps it rather than retiring it as
@@ -407,9 +412,82 @@ Until both are out, that device goes on saying *Supporting since …*, as it alw
 7. **Add the free-tier ceiling alarm** — a Cloudflare notification at ~70% of the 100 000/day
    request cap. Decided 2026-08-29: stay free, watch the ceiling. The ceiling is a **cliff, not a
    slope** — past it *every* reader errors at once, so without the alarm the first signal is
-   complaints.
-8. **Add rate-limiting rules on `/claim`, `/token`, `/g/{group}/rotate`, `/g/{group}/keys` and
-   `/p/{rv}/{offer,join}`.** The bill argument in `index.ts` — "junk is refused for the price of a
+   complaints. ⚠️ **Still open, and "a Cloudflare notification" turned out not to exist** (asked
+   of the account and the docs, 2026-10-01): the account's notification types hold nothing for
+   Workers requests, and the usage-based billing alert is for pay-as-you-go accounts. The alarm
+   has to be something that reads the day's request count from the analytics API on a schedule and
+   posts when it crosses — a small Worker of its own, a scheduled GitHub workflow, or a line in
+   this Worker's cron. Markus put it aside that day in favour of step 8.
+8. **Rate limits on `/claim`, `/token`, `/g/{group}/rotate`, `/g/{group}/keys` and
+   `/p/{rv}/{offer,join}` — built and deployed 2026-10-01, in the Worker rather than as rules in
+   front of it.** Deployed at 22:09 UTC, version `27776e8b`, from the branch
+   `claude/relay-rate-limits` at `7f6d6f50` — ahead of its merge, so until
+   [#758](https://github.com/Msgaihede/mtg-grimoire/pull/758) lands the host is one change ahead
+   of `main`. It was step 6's `wrangler deploy` and nothing else: no migration, no secret, and the
+   three bindings were created by the deploy that names them. The burst below is how to ask the
+   host whether a later deploy still has them. ⚠️ **This step said "add rate-limiting rules", and a rule is the one thing this host cannot
+   have**: a WAF rate-limit rule belongs to a zone, and `workers.dev` is not one the account
+   controls. What stands there instead is Cloudflare's rate-limit *binding* — three `ratelimits`
+   entries in `wrangler.jsonc`, asked by `relay/src/ratelimit.ts` after the method check and ahead
+   of each handler:
+
+   | Binding | Routes | Per client address, per 60 s | Heaviest honest use |
+   | --- | --- | --- | --- |
+   | `RL_CLAIM` | `/claim` | 10 | one per Connect press |
+   | `RL_MINT` | `/token`, `/rotate` | 30 | a device mints about once in eighteen hours |
+   | `RL_READ` | `/keys`, `/p/{rv}/{slot}` | 240 | one `/keys` per sync trip; a pairing dialog polls every 1.5 s — 40 a minute, 80 for a pair behind one address |
+
+   A caller past its limit gets **`429 {"error":"too many requests","code":"rate_limited"}`** with
+   `retry-after: 60`, before any D1 read. **Never a 401**: the app reads a 401 on these routes as a
+   statement about a membership, and it reads a 429 as an ordinary failure it retries — `the relay
+   answered 429 to /token`, no grant revoked (`entitlement.rs`'s `post`, `client.rs`'s key check).
+   **It fails open twice** — a binding that is absent and a binding that throws both let the
+   request through — so a limiter can never be what stops sync.
+
+   ⚠️ **What it does not do is keep junk off the 100 000-a-day budget.** The Worker has been
+   invoked by the time it asks, so a refused request still counts; only the D1 read is spared.
+   Step 7's alarm is still the only thing that would see the cliff coming, and the only fix that
+   refuses a request before it is counted is a custom domain with a zone rule in front of it —
+   which moves `RELAY_BASE` and the Patreon redirect URI, and is not planned.
+
+   ⚠️ **Cloudflare counts per location and eventually, and that is far looser than the number
+   reads.** The binding is, in its own documentation's words, "permissive, eventually consistent"
+   and not an accounting system. **Measured against the live Worker straight after the deploy, one
+   machine, `POST /claim` with an empty body, limit 10 a minute:**
+
+   | Sent | Refused |
+   | --- | --- |
+   | 16, one after another over a few seconds | **0** |
+   | 70 more inside the same minute, 60 of them twelve at a time | **2** |
+   | 400, forty at a time, in 8 s | **347** |
+   | 20 one after another straight after that | **20** |
+
+   So it **bounds a flood and does not meter a trickle**: a caller at a request or two a second
+   went eight times past the limit and met two refusals, and a caller at fifty a second was refused
+   seven times in eight and then every time. That is the right shape for what this step is for —
+   the D1 reads a trickle costs are noise, and a flood's are the bill — and it means an honest
+   reader has far more headroom than the table above says. It also means **a limit here is never a
+   promise about the eleventh request**, and nothing may be built on it being one.
+
+   ⚠️ **The deploy check this step first carried could not pass**: it sent fifteen requests and
+   said that all-400 means no limiter is bound. Fifteen is the first row of that table — a working
+   limiter answers all-400 to it. The check that can tell is the flood, and the `/token` beside it
+   is the control showing another bucket was not spent:
+   ```
+   H=https://mtg-grimoire-relay.denmark-east.workers.dev
+   seq 1 400 | xargs -P 40 -I{} curl -s -o /dev/null -w "%{http_code}\n" "$H/claim" -d '{}' | sort | uniq -c
+   curl -s -o /dev/null -w "%{http_code}\n" "$H/token" -d '{}'
+   ```
+   **A few dozen `400`, a few hundred `429`, then `400` from `/token`.** All `400` from a burst
+   that size means no limiter is bound — a Worker deployed before this step, or the fail-open arm,
+   which is also what a binding name that drifted from `ratelimit.ts` looks like;
+   `ratelimit.test.ts` reads `wrangler.jsonc` to hold the names and numbers together, `wrangler
+   deploy` prints the three bindings it attached, and `settings` on the script lists them as
+   `ratelimit`. **It spends 400 of the day's 100 000 requests and refuses `/claim` from that
+   address for about a minute**, so it is a check for a deploy that touched the limiter, not one
+   to run for reassurance. Never aim it at `/keys`: that locks your own devices out of sync.
+
+   The bill argument in `index.ts` — "junk is refused for the price of a
    Worker invocation alone" — holds for the three routes behind the bearer gate and **not** for
    these five, which each cost a D1 read before anything can refuse them. ⚠️ **This step named two
    until 2026-08-30, and four until 2026-08-31**: `/rotate` and `/keys` are `/g/…` routes that
