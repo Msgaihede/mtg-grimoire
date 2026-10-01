@@ -564,6 +564,9 @@ pub struct ScannerTrayChoice {
     pub name: String,
     pub set_code: String,
     pub collector_number: String,
+    /// The finishes the printing exists in — what settles an Unknown row's finish when the
+    /// reader picks this printing. Empty when unknown, and in a tray written before it existed.
+    pub finishes: Vec<String>,
 }
 
 /// One card waiting in the review tray.
@@ -1056,6 +1059,7 @@ mod tests {
                 name: "Lightning Bolt".into(),
                 set_code: "sta".into(),
                 collector_number: "105".into(),
+                finishes: Vec::new(),
             }],
             added_at: 1_757_900_000_000,
         }

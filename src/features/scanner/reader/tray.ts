@@ -20,7 +20,8 @@ import type {
   ScannerTrayFinish,
   ScannerTrayRow,
 } from "@/lib/ipc";
-import { isKnownFinish } from "./trayFinish";
+import { isFinish } from "@/lib/finish";
+import { isKnownFinish, UNKNOWN_FINISH } from "./trayFinish";
 
 /**
  * What a new row starts as that the decision itself cannot say.
@@ -48,6 +49,7 @@ function choiceOf(choice: ScannerDecision["choices"][number]): ScannerTrayChoice
     name: choice.label?.name ?? UNKNOWN_NAME,
     setCode: choice.label?.set ?? "",
     collectorNumber: choice.label?.number ?? "",
+    finishes: choice.finishes,
   };
 }
 
@@ -197,11 +199,22 @@ export function setFinish(
   return update(rows, key, (row) => ({ ...row, finish }));
 }
 
-/** A printing adopted whole — every identifying field at once, so a row cannot end up half one
- *  printing and half another — and the question it was waiting on closed. */
+/**
+ * A printing adopted whole — every identifying field at once, so a row cannot end up half one
+ * printing and half another — and the question it was waiting on closed.
+ *
+ * **An Unknown finish is settled by a printing that exists in one finish.** An ambiguous decision
+ * files its row Unknown when its candidates disagree about finishes — measured live on
+ * 2026-10-01, Ruthless Invasion's two candidates were PLST NPH-93 (non-foil only) and NPH 93 —
+ * and once the reader names the printing that question has an answer. A finish the reader chose is
+ * never overwritten, and neither is Unknown by a printing that exists in several.
+ */
 function adopt(row: ScannerTrayRow, p: ScannerTrayChoice): ScannerTrayRow {
+  const only = p.finishes?.length === 1 ? p.finishes[0] : undefined;
+  const settled = row.finish === UNKNOWN_FINISH && only !== undefined && isFinish(only) ? only : null;
   return {
     ...row,
+    finish: settled ?? row.finish,
     cardId: p.cardId,
     oracleId: p.oracleId,
     name: p.name,

@@ -156,6 +156,26 @@ describe("tray", () => {
     expect(row.choices.map((c) => c.cardId)).toEqual(ambiguous.choices.map((c) => c.id));
   });
 
+  it("settles an Unknown finish when the picked printing exists in only one", () => {
+    // Live on 2026-10-01: Ruthless Invasion was PLST NPH-93 (non-foil only) or NPH 93, and the
+    // row waited as Unknown. Naming the printing answers the finish too.
+    const only = {
+      ...ambiguous,
+      choices: ambiguous.choices.map((c, i) => ({
+        ...c,
+        finishes: i === 2 ? ["nonfoil"] : ["nonfoil", "foil"],
+      })),
+    };
+    const rows = addDecision([], only, { finish: "unknown" }, 1, "a").rows;
+    expect(rows[0].finish).toBe("unknown");
+    expect(pickChoice(rows, "a", only.choices[2].id)[0].finish).toBe("nonfoil");
+    // A printing in several finishes leaves the question open.
+    expect(pickChoice(rows, "a", only.choices[0].id)[0].finish).toBe("unknown");
+    // And a finish the reader chose is never overwritten by the printing's.
+    const chosen = setFinish(rows, "a", "foil");
+    expect(pickChoice(chosen, "a", only.choices[2].id)[0].finish).toBe("foil");
+  });
+
   it("leaves a row alone when a pick names no candidate it offers", () => {
     const rows = addDecision([], ambiguous, { finish: "nonfoil" }, 1, "a").rows;
     expect(pickChoice(rows, "a", "not-a-candidate")[0]).toEqual(rows[0]);

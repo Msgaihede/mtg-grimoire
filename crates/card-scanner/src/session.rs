@@ -3094,6 +3094,7 @@ mod tests {
             oracle_id: Some(format_uuid(&id(10))),
             label: None,
             distance: Some(0.0),
+            finishes: Vec::new(),
         };
         s.last_resolution = Some(ResolutionView {
             outcome: Outcome::Ambiguous,
@@ -3451,6 +3452,7 @@ mod tests {
                     oracle_id: Some(format_uuid(&id(oracle))),
                     label: None,
                     distance: Some(0.0),
+                    finishes: Vec::new(),
                 }],
                 tiers: Vec::new(),
                 elapsed_ms: 0.0,

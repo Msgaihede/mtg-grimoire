@@ -7698,6 +7698,8 @@ export interface ScannerChoice {
   label: ScannerLabel | null;
   /** The best normalized distance the burst reached; `null` for a printing only a name read found. */
   distance: number | null;
+  /** The finishes the printing exists in, from the corpus; empty when it did not say. */
+  finishes: string[];
 }
 
 /**
@@ -7867,6 +7869,12 @@ export interface ScannerTrayChoice {
   name: string;
   setCode: string;
   collectorNumber: string;
+  /**
+   * The finishes the printing exists in — what settles an Unknown row's finish when the reader
+   * picks this printing. Absent from a printing picked through *More printings…*, whose dialog
+   * does not carry them, and from a tray written before the field existed.
+   */
+  finishes?: string[];
 }
 
 /**

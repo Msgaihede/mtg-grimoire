@@ -349,13 +349,14 @@ const lotusChoice: ScannerChoice = {
   oracle_id: LOTUS_ORACLE,
   label: lotusLea,
   distance: 0.121,
+  finishes: ["nonfoil"],
 };
 
 /** Three printings of **one** card, best first and inside the margin of each other. */
 const boltChoices: ScannerChoice[] = [
-  { id: "f29ba16f-c8fb-42fe-aabf-87089cb214a7", oracle_id: BOLT_ORACLE, label: bolt2x2, distance: 0.141 },
-  { id: "b14fae63-2e82-49c1-8e62-d84a65f27479", oracle_id: BOLT_ORACLE, label: boltSta, distance: 0.152 },
-  { id: "4f43c378-9e6a-4ece-9c24-5dc08c977746", oracle_id: BOLT_ORACLE, label: boltSld, distance: 0.163 },
+  { id: "f29ba16f-c8fb-42fe-aabf-87089cb214a7", oracle_id: BOLT_ORACLE, label: bolt2x2, distance: 0.141, finishes: ["nonfoil", "foil"] },
+  { id: "b14fae63-2e82-49c1-8e62-d84a65f27479", oracle_id: BOLT_ORACLE, label: boltSta, distance: 0.152, finishes: ["nonfoil", "foil"] },
+  { id: "4f43c378-9e6a-4ece-9c24-5dc08c977746", oracle_id: BOLT_ORACLE, label: boltSld, distance: 0.163, finishes: ["nonfoil", "foil"] },
 ];
 
 /** Tier 0 over the whole 113 375-printing bundle — no filter set. */
