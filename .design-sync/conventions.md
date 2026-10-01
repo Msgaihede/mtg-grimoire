@@ -69,10 +69,17 @@ hand-draw a mana pip.
 ### Cards are real card images — keep `card-art/` beside the bundle
 
 Every card a component draws (`CardImage`, `CardArt`, the deck editor's stacks) shows the real
-printed card, served from the `card-art/` folder at this design system's root. The provider finds
-it from the bundle script's own address, so **when you install this system on a canvas, copy
-`card-art/` along with `components/bundle.js`** — without it every card falls back to the app's
-own no-image frame. The images cover the seeded fixture's printings (`CARDS` on
+printed card, served from the `card-art/` folder at this design system's root. **When you install
+this system on a canvas, copy `card-art/` along with `components/bundle.js`, and tell the provider
+where it landed**:
+
+```jsx
+<GrimoirePreviewProvider cardArt="ds/<folder>/card-art/">{/* your UI */}</GrimoirePreviewProvider>
+```
+
+`cardArt` is relative to the page. Without it the provider looks beside the bundle script's own
+address, which works only where the bundle was loaded by URL rather than inlined; with neither,
+cards draw labelled placeholders. The images cover the seeded fixture's printings (`CARDS` on
 `window.MtgGrimoire`); a card id outside it draws a labelled placeholder, never a broken image.
 
 ### The deck editor is components, not a drawing

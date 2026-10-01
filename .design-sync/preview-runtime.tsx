@@ -218,11 +218,39 @@ const BUNDLED_ART_ROOT = bundledArtRootFor(
  *
  * The reference storybook the sync compares against is built by `build-reference.mjs` with
  * `STORYBOOK_ART=bundled`, so both sides of every compare draw the same files.
+ *
+ * **`cardArt` names the folder outright, and it is there for the consumer that inlines the
+ * bundle.** The Design System artifact's format says consumers may paste `bundle.js` into an
+ * inline `<script>`, and an inline script has no URL — so {@link BUNDLED_ART_ROOT} is `null`
+ * there and every card would fall back to synthetic art with the folder sitting right beside
+ * it. A relative `cardArt` resolves against the page (`document.baseURI`), which is what a
+ * preview card or a canvas artboard can state about itself: `../../card-art/` from
+ * `components/<Name>/preview.html`, `ds/<folder>/card-art/` from an artboard. It wins over the
+ * script's own URL when both exist, because the caller said where the folder is and the script
+ * only implied it.
  */
-export function GrimoirePreviewProvider({ children }: { children: ReactNode }) {
-  setBundledArtRoot(BUNDLED_ART_ROOT);
-  setArtMode(BUNDLED_ART_ROOT ? "bundled" : "synthetic");
+export function GrimoirePreviewProvider({
+  children,
+  cardArt,
+}: {
+  children: ReactNode;
+  /** The `card-art/` folder's address, absolute or relative to the page. Optional. */
+  cardArt?: string;
+}) {
+  const root = cardArt ? explicitArtRoot(cardArt) : BUNDLED_ART_ROOT;
+  setBundledArtRoot(root);
+  setArtMode(root ? "bundled" : "synthetic");
   useAppSurface();
   useKeyboardModality();
   return <GrimoireWorld>{children}</GrimoireWorld>;
+}
+
+/** `cardArt` as an absolute folder URL, or `null` for one that does not parse. A trailing slash
+ *  is added when missing: `bundledArtPath` answers `normal/<file>` to append to it. */
+function explicitArtRoot(cardArt: string): string | null {
+  try {
+    return new URL(cardArt.endsWith("/") ? cardArt : `${cardArt}/`, document.baseURI).href;
+  } catch {
+    return null;
+  }
 }

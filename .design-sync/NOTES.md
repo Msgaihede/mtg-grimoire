@@ -151,15 +151,60 @@ shows them, so the fake grew a third mode (`.storybook/fake/images.ts`):
    its art draws no-image frames on every card in every design. Chunk the writes: 11 MB of
    JPEGs, and the server bounds bytes per call as well as files.
 
-**Which project the upload reaches is an open question — ask the host.** The design system this
-account's canvases read is the **Design System artifact**
-`https://claude.ai/code/artifact/78e3174c-a1be-4ceb-96de-5ae052092d1c`, migrated from the
-claude.ai/design project on **2026-09-20**. Its README (read 2026-10-01) lists 21 components and
-**not** `Dropdown`, `TooltipProvider` or `WorkInProgress`, which joined in the 2026-09-27 sync —
-so that sync's upload went to `config.json`'s `projectId` and never reached the artifact. The
-artifact keeps the bundle at `project/components/bundle.js` (renamed from `_ds_bundle.js`) and
-its tokens in `project/tokens.json`, so a sync meant for canvases has to land there — with the art
-at `project/card-art/`.
+**The provider takes a `cardArt` prop, because a consumer may inline the bundle.** The Design
+System artifact's format lets a consumer paste `bundle.js` into an inline `<script>`, which has
+no URL, so `document.currentScript.src` is empty and the script-address route finds nothing.
+`<GrimoirePreviewProvider cardArt="…">` names the folder outright, relative to the page, and wins
+over the script's own address. The artifact's page cards pass `../../card-art/`; a canvas passes
+`ds/<folder>/card-art/`.
+
+## Publishing to the Design System artifact (2026-10-01)
+
+**`/design-sync` no longer reaches the design system the canvases read.** That system is the
+**Design System artifact** `https://claude.ai/artifact/FvocuEAEkPVn6tcRfUvYVq` (also addressed as
+`claude.ai/code/artifact/78e3174c-a1be-4ceb-96de-5ae052092d1c`), migrated from the claude.ai/design
+project on **2026-09-20**. Read on 2026-10-01 it listed 21 components and none of the three the
+2026-09-27 sync added, so that sync's upload went to `config.json`'s `projectId` and stopped
+there. Until the two are tied together again, a change meant for canvases is published into the
+artifact with the Artifact tool, which needs no `/design-login`. What was done, in order:
+
+1. **Build and grade locally**: `buildCmd`, then `package-build.mjs`, then
+   `node .design-sync/card-art.mjs --copy ds-bundle`, `package-validate.mjs` and a scoped
+   `compare.mjs --components …`. No upload channel is involved.
+2. **`node .design-sync/artifact/bundle-css.mjs`** rebuilds `components/bundle.css`. The migration
+   made it by joining `styles.css`, `fonts/fonts.css` and `_ds_bundle.css` under section comments
+   and taking one declaration out for each of **103 token names** that `tokens.css` supplies.
+   The script first proves the rule against the artifact's own old files — it must reproduce the
+   old `bundle.css` byte for byte, and did — and then strips **only those same names** from the
+   new build. Not "every name in `tokens.css`": that generated file is stale (it still lists the
+   deleted `--color-pie-*` and lacks the creature colours), and `--ms-split-top` is a class-level
+   declaration the migration left alone.
+3. **`node .design-sync/artifact/page-cards.mjs`** writes the page's own cards,
+   `components/<Name>/preview.html`. These are hand-written scripts over `window.MtgGrimoire`, not
+   the converter's grids, and the page shows a component's preview only from that path.
+4. **`node .design-sync/artifact/assemble.mjs`** lays the build out in the artifact's layout —
+   `_ds_bundle.js` → `components/bundle.js`, `_preview/<Name>.js` → `assets/_preview/`, each
+   `<Name>.jsx` → `docs/components/…` — and writes the `files` lists for the publish calls.
+   `.d.ts` and the converter's `.html` go up as `text/plain`, as the migration stored them.
+5. **`node .design-sync/artifact/render-check.mjs`** mounts every page card on **React 18.3.1**
+   from the artifact's own `components/lib/`, with the bundle **inlined**, and photographs it.
+   Measured 2026-10-01: all six cards mounted with no script error and every image loaded from
+   `card-art/normal/`.
+6. **Publish in three calls** — the content files, then `card-art/**`, then
+   `project/design-system.json` alone and last, re-read right before, with only `lastChange`
+   moved. **Read the artifact itself (no `path`) first and publish to the `claude.ai/artifact/…`
+   address that read names.** Two publishes through the `/code/artifact/…` form were refused as
+   "not the latest version" after reading only files by path; the next, after both changes, went
+   through. Which of the two cleared it was not separated.
+
+**The artifact runs React 18.3.1 and the app is React 19**, and the converter vendors 19. Two
+components take `ref` as a plain prop, which only React 19 passes — `PopupListbox` (the dropdown's
+listbox) and a row in `metaRows.tsx` — so their refs are `null` in the artifact and on every
+canvas. The deck parts are unaffected: they hand ref *objects* to hooks. Not fixed here.
+
+**Three components are in the bundle with no page card yet**: `Dropdown`, `TooltipProvider` and
+`WorkInProgress`. Their `.prompt.md` and `.d.ts` are published; a `components/<Name>/preview.html`
+for each is the missing piece.
 
 ## Config decisions worth knowing
 

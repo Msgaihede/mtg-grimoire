@@ -104,6 +104,10 @@ export * from "../src/lib/rarity";
 export * from "../src/lib/sort";
 export * from "../src/lib/layers";
 export * from "../src/lib/utils";
+// `StackView` takes a required `marketplace` — one currency for the whole desk — and its stories
+// pass `MARKETPLACES.tcgplayer`. Pure data, exported so a design mounting the Stacks desk has the
+// same object to hand rather than a hand-written look-alike of its fields.
+export * from "../src/lib/marketplace";
 
 // ── react-query, as a singleton ──────────────────────────────────────────────
 // **Identity, not convenience** — the same reason `store` is called out above.
