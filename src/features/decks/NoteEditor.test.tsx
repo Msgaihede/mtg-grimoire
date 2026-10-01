@@ -1510,14 +1510,28 @@ function blockOf($pos: Editor["state"]["selection"]["$from"]): string {
   return $pos.depth === 1 ? $pos.parent.type.name : "other";
 }
 
-/** Where a row of the table puts the caret before its keys. */
-type Caret = { after: string } | { before: string } | { empty: number };
+/**
+ * Where a row of the table puts the caret before its keys or its paste — `select` is a selection
+ * from the end of one text run to the end of another.
+ */
+type Caret =
+  | { after: string }
+  | { before: string }
+  | { empty: number }
+  | { select: [from: string, to: string] };
 
 function placeCaret(editor: Editor, caret: Caret): void {
   if ("after" in caret) return caretAfter(editor, caret.after);
   if ("before" in caret) {
     caretAfter(editor, caret.before);
     editor.commands.setTextSelection(editor.state.selection.from - caret.before.length);
+    return;
+  }
+  if ("select" in caret) {
+    caretAfter(editor, caret.select[0]);
+    const from = editor.state.selection.from;
+    caretAfter(editor, caret.select[1]);
+    editor.commands.setTextSelection({ from, to: editor.state.selection.from });
     return;
   }
   const empties: number[] = [];
@@ -1947,6 +1961,226 @@ describe("the checklist's keys", () => {
     const editor = checklistEditor("- [ ] a");
     expect(editor.schema.nodes.taskItem.spec.content).toBe("paragraph taskList?");
     editor.destroy();
+  });
+});
+
+/* -------------------------------------------------------------- a plain-text paste ---- */
+
+/**
+ * A paste through ProseMirror's own `paste` handler — the path a real one takes, past every
+ * plugin's `handlePaste` — with `text` as the clipboard's plain text and `html` as its HTML, none
+ * by default. Not `view.pasteText`, which builds a `ClipboardEvent` and jsdom has no such class.
+ */
+function paste(target: HTMLElement, text: string, html = ""): void {
+  fireEvent.paste(target, {
+    clipboardData: {
+      getData: (type: string) => (type === "text/plain" ? text : type === "text/html" ? html : ""),
+    },
+  });
+}
+
+interface PasteRow {
+  name: string;
+  body: string;
+  caret: Caret;
+  /** The clipboard's plain text, with no HTML beside it. */
+  text: string;
+  /** The body after the paste. */
+  after: string;
+  /** Where the caret ends up: the words of its line and its offset in them. */
+  lands?: { line: string; offset: number };
+}
+
+/**
+ * Every answer `pastedTodos` gives, one row each. **The second row is the report's own
+ * reproduction**: before the parser, it gave `- [ ] ax\n  - [ ] y\n- [ ] \n  - [ ] s\n- [ ] b` —
+ * the second line a sub-to-do and an empty to-do nobody wrote holding `s` — and passed
+ * `doc.check()` while it did, which is why every row asserts the body and not only the schema.
+ */
+const PASTE_ROWS: PasteRow[] = [
+  {
+    // ⚠️ Two lines, not three: ProseMirror's own parse happens to make siblings of `"x\ny\nz"`
+    // here and nests `"x\ny"` (measured), so a third line would pass with no parser at all.
+    name: "into a plain to-do, each line is a to-do beside it",
+    body: "- [ ] a\n- [ ] b",
+    caret: { after: "a" },
+    text: "x\ny",
+    after: "- [ ] ax\n- [ ] y\n- [ ] b",
+    lands: { line: "y", offset: 1 },
+  },
+  {
+    name: "into a to-do with sub-to-dos, no empty to-do: the last line takes them, as Enter's split does",
+    body: "- [ ] a\n  - [ ] s\n- [ ] b",
+    caret: { after: "a" },
+    text: "x\ny",
+    after: "- [ ] ax\n- [ ] y\n  - [ ] s\n- [ ] b",
+    lands: { line: "y", offset: 1 },
+  },
+  {
+    name: "at a nested level, each line is a sub-to-do beside the one pasted into",
+    body: "- [ ] a\n  - [ ] b\n    - [ ] s\n- [ ] c",
+    caret: { after: "b" },
+    text: "x\ny",
+    after: "- [ ] a\n  - [ ] bx\n  - [ ] y\n    - [ ] s\n- [ ] c",
+    lands: { line: "y", offset: 1 },
+  },
+  {
+    name: "with blank lines, a blank line is no to-do — CRLF, a line of spaces and the trailing newline alike",
+    body: "- [ ] a\n- [ ] b",
+    caret: { after: "a" },
+    text: "x\r\n\r\n   \n\ty\n",
+    after: "- [ ] ax\n- [ ] y\n- [ ] b",
+    lands: { line: "y", offset: 1 },
+  },
+  {
+    name: "with only blank lines, nothing",
+    body: "- [ ] a\n  - [ ] s",
+    caret: { after: "a" },
+    text: "\n\n",
+    after: "- [ ] a\n  - [ ] s",
+  },
+  {
+    name: "in the middle of a line, the words after the caret go with the last line",
+    body: "- [ ] ab",
+    caret: { after: "a" },
+    text: "x\ny",
+    after: "- [ ] ax\n- [ ] yb",
+    lands: { line: "yb", offset: 1 },
+  },
+  {
+    name: "a newline at either end is a break against the reader's words",
+    body: "- [ ] ab",
+    caret: { after: "a" },
+    text: "\nx\ny\n",
+    after: "- [ ] a\n- [ ] x\n- [ ] y\n- [ ] b",
+    // Where the typed newline would have put it: at the start of the words it broke off.
+    lands: { line: "b", offset: 0 },
+  },
+  {
+    name: "into an empty to-do, a newline at either end makes no empty to-do",
+    body: "- [ ] ",
+    caret: { empty: 0 },
+    text: "\nx\ny\n",
+    after: "- [ ] x\n- [ ] y",
+    lands: { line: "y", offset: 1 },
+  },
+  {
+    name: "whitespace at a to-do's edge is trimmed, and kept where it meets the reader's words",
+    body: "- [ ] a",
+    caret: { after: "a" },
+    text: " x\n   y  \nz ",
+    after: "- [ ] a x\n- [ ] y\n- [ ] z",
+  },
+  {
+    name: "the to-do pasted into keeps its tick, and every new one is open",
+    body: "- [x] a",
+    caret: { after: "a" },
+    text: "x\ny",
+    after: "- [x] ax\n- [ ] y",
+  },
+  {
+    // An empty to-do with nothing under it is a range the replace takes whole: without the first
+    // to-do carrying its attributes, this came back `- [ ] x` (measured).
+    name: "an empty ticked to-do keeps its tick too",
+    body: "- [ ] a\n- [x] \n- [ ] b",
+    caret: { empty: 0 },
+    text: "x\ny",
+    after: "- [ ] a\n- [x] x\n- [ ] y\n- [ ] b",
+    lands: { line: "y", offset: 1 },
+  },
+  {
+    // The end of the selection is what has words after it, not its start: measured at the start,
+    // the trailing newline would leave an empty to-do where `def` was.
+    name: "over a selection, the lines replace it and its end decides the trailing newline",
+    body: "- [ ] abc\n- [ ] def",
+    caret: { select: ["a", "def"] },
+    text: "x\ny\n",
+    after: "- [ ] ax\n- [ ] y",
+    lands: { line: "y", offset: 1 },
+  },
+  {
+    name: "on a line of text, every line is text, as ProseMirror's own paste makes it",
+    body: "Some words",
+    caret: { after: "Some" },
+    text: "x\ny",
+    after: "Somex\n\ny words",
+  },
+];
+
+describe("a plain-text paste in the checklist", () => {
+  it.each(PASTE_ROWS)("$name", ({ body, caret, text, after, lands }) => {
+    const editor = checklistEditor(body);
+    placeCaret(editor, caret);
+
+    paste(editor.view.dom, text);
+
+    expect(editor.getMarkdown()).toBe(after);
+    expect(() => editor.state.doc.check()).not.toThrow();
+    const kinds: string[] = [];
+    editor.state.doc.forEach((node) => kinds.push(node.type.name));
+    expect(kinds.join(" ")).not.toContain("taskList taskList");
+    const { $from } = editor.state.selection;
+    if (lands) {
+      expect({ line: $from.parent.textContent, offset: $from.parentOffset }).toEqual(lands);
+    }
+    // One paste, one undo step: Ctrl+Z takes the whole of it back.
+    editor.commands.undo();
+    expect(editor.getMarkdown()).toBe(body);
+    editor.destroy();
+  });
+
+  it("hands the caller the pasted to-dos", () => {
+    const { surface, editor, onChange } = renderChecklist("- [ ] a\n  - [ ] s\n- [ ] b");
+    caretAfter(editor, "a");
+
+    paste(surface, "x\ny");
+
+    expect(onChange).toHaveBeenLastCalledWith("- [ ] ax\n- [ ] y\n  - [ ] s\n- [ ] b");
+  });
+
+  /**
+   * ProseMirror asks a text parser only when the clipboard has no HTML, so to-dos copied inside the
+   * editor paste as they did before the parser — measured here against the kit with it taken out,
+   * on the shape the parser changes most: a to-do with sub-to-dos.
+   *
+   * Equality, and deliberately not the body: that paste still leaves an empty to-do holding `s`
+   * after the copied ones (the copied slice is closed at its end, so the tail of the to-do pasted
+   * into becomes a to-do of its own), and pinning that string would make it the expected answer.
+   */
+  it("leaves an HTML paste of to-dos copied in the editor as it was", () => {
+    const copiedFrom = checklistEditor("- [ ] p\n  - [ ] q\n- [ ] r");
+    // From the start of the first to-do's words to the end of the list.
+    const { dom, text } = copiedFrom.view.serializeForClipboard(
+      copiedFrom.state.doc.slice(3, copiedFrom.state.doc.content.size - 1),
+    );
+    copiedFrom.destroy();
+    expect(dom.innerHTML).toContain("data-pm-slice");
+
+    const without = CHECKLIST_EXTENSIONS.filter((extension) => extension.name !== "checklistPaste");
+    expect(without).toHaveLength(CHECKLIST_EXTENSIONS.length - 1);
+    const [withParser, withoutParser] = [CHECKLIST_EXTENSIONS, without].map((extensions) => {
+      const editor = new Editor({
+        element: document.createElement("div"),
+        extensions,
+        content: "- [ ] a\n  - [ ] s\n- [ ] b",
+        contentType: "markdown",
+      });
+      caretAfter(editor, "a");
+      paste(editor.view.dom, text, dom.innerHTML);
+      const body = editor.getMarkdown();
+      expect(() => editor.state.doc.check()).not.toThrow();
+      editor.destroy();
+      return body;
+    });
+
+    expect(withParser).toBe(withoutParser);
+    // The HTML's own structure: `q` is still `p`'s sub-to-do, which the plain text cannot say.
+    expect(withParser).toMatch(/^- \[ \] ap\n {2}- \[ \] q\n- \[ \] r\n/);
+  });
+
+  it("is the checklist's alone: the note's kit has no paste parser", () => {
+    expect(NOTE_EXTENSIONS.map((extension) => extension.name)).not.toContain("checklistPaste");
+    expect(CHECKLIST_EXTENSIONS.map((extension) => extension.name)).toContain("checklistPaste");
   });
 });
 

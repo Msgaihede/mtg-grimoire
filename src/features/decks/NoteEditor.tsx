@@ -75,8 +75,9 @@ import Heading, { type Level } from "@tiptap/extension-heading";
 import { TaskItem, TaskList } from "@tiptap/extension-list";
 import { Placeholder } from "@tiptap/extensions";
 import { Markdown } from "@tiptap/markdown";
-import { Fragment, type Node as ProseMirrorNode, type ResolvedPos } from "@tiptap/pm/model";
+import { Fragment, Slice, type Node as ProseMirrorNode, type ResolvedPos } from "@tiptap/pm/model";
 import { Plugin, Selection, TextSelection, type Transaction } from "@tiptap/pm/state";
+import type { EditorView } from "@tiptap/pm/view";
 import {
   EditorContent,
   Extension,
@@ -909,6 +910,109 @@ const ChecklistKeys = Extension.create({
 });
 
 /**
+ * A plain-text paste on a to-do's line, as the to-dos it reads as: **every line with words in it
+ * a to-do at the caret's level** — or `null` anywhere else, which is ProseMirror's own parse.
+ *
+ * ⚠️ **Without it a paste nests, and the document stays valid while it does** (measured
+ * 2026-10-01, `prosemirror-view` 1.42.3). That parse makes each line a paragraph, and a to-do
+ * holds exactly one ({@link ChecklistItem}), so where lines 2..n go is the fitter's guess, made
+ * from the document's shape: `"x\ny"` after `a` in `- [ ] a\n  - [ ] s\n- [ ] b` gave
+ * `- [ ] ax\n  - [ ] y\n- [ ] \n  - [ ] s\n- [ ] b` — the second line a sub-to-do, and an empty
+ * to-do that nobody wrote holding `s` — while `"x\ny\nz"` in a list with no sub-to-dos happened to
+ * land as siblings. `doc.check()` passes on all of it, so no layer below sees it.
+ *
+ * **The answer is the lines as typed with Enter between them**, less the blank ones:
+ *
+ * * **The first line goes onto the caret's line**, after the words before the caret, and the
+ *   caret's to-do keeps its own tick.
+ * * **Every other line with words in it is a new, open to-do** at the caret's level — a sub-to-do
+ *   when the caret is in one.
+ * * **The last line takes the words after the caret and the to-do's sub-to-dos**, which is
+ *   Enter's split ({@link enterTodo}): what was under the caret's to-do stays under the line that
+ *   took its tail.
+ * * **A blank line is never a to-do.** One between two lines is dropped. One at either end is the
+ *   break it stands for only where the reader has words on its far side — so a paste starting
+ *   with a newline after words starts a new to-do, and one ending with a newline before words
+ *   leaves those words a to-do of their own — and is otherwise dropped too, so a paste never
+ *   leaves an empty to-do behind, the trailing newline a copied line usually carries included.
+ * * **Whitespace at a to-do's edge is trimmed**, except where a line meets the reader's own words:
+ *   the reader trims a to-do's line as it loads (`- [ ]    lead` reads back as `lead`, measured),
+ *   so a pasted indent would be drawn now and gone at the next load.
+ *
+ * **One line with no line break is declined**: an inline insert is already right. So is a paste
+ * anywhere but a to-do's line, where a paragraph per line is the right answer and the note's
+ * whole behaviour. The text carries the caret's marks, as that parse's does.
+ *
+ * The slice is a run of to-dos **open two deep at both ends** — into the first line's paragraph
+ * and out of the last's — so the replace joins its first line to the words before the caret and
+ * its last to the words after, and every to-do between stands in the caret's own list.
+ *
+ * **The first to-do carries the attributes of the to-do pasted into, and one case needs it**: an
+ * empty to-do with nothing under it is a range ProseMirror's replace takes whole, and a first
+ * to-do that differs from it goes in its place — so an empty ticked to-do came back open
+ * (measured). Everywhere else the first to-do is opened into and its attributes are never read.
+ *
+ * **Plain text only, by construction**: ProseMirror asks this only when the clipboard has no
+ * HTML (or the paste is Ctrl+Shift+V), so to-dos copied inside the editor arrive as HTML, with
+ * their own structure, and never reach it.
+ */
+function pastedTodos(text: string, $context: ResolvedPos, view: EditorView): Slice | null {
+  const at = todoAt($context);
+  const lines = text.split(/\r\n?|\n/);
+  if (!at || lines.length < 2) return null;
+
+  // A paste replaces the selection, so the words after it are past its end; a dropped text lands
+  // at a point that is not the selection, and its context is both ends at once.
+  const { selection } = view.state;
+  const $end = selection.from === $context.pos ? selection.$to : $context;
+  const wordsBefore = $context.parentOffset > 0;
+  const wordsAfter = $end.parentOffset < $end.parent.content.size;
+
+  const last = lines.length - 1;
+  const kept = lines.filter(
+    (line, index) =>
+      line.trim() !== "" || (index === 0 && wordsBefore) || (index === last && wordsAfter),
+  );
+  if (kept.length === 0) return Slice.empty;
+
+  const { schema } = $context.doc.type;
+  const { taskItem, paragraph } = schema.nodes;
+  const marks = $context.marks();
+  const todos = kept.map((line, index) => {
+    let words = line;
+    if (index > 0 || !wordsBefore) words = words.trimStart();
+    if (index < kept.length - 1 || !wordsAfter) words = words.trimEnd();
+    return taskItem.create(
+      index === 0 ? at.item.attrs : { checked: false },
+      paragraph.create(null, words ? schema.text(words, marks) : null),
+    );
+  });
+  return new Slice(Fragment.from(todos), 2, 2);
+}
+
+/**
+ * {@link pastedTodos} as the editor's plain-text parser — **an extension in
+ * {@link CHECKLIST_EXTENSIONS}, never `editorProps`**, so the note's kit cannot carry it and every
+ * editor built from the checklist's kit does, the bare ones the tests drive included.
+ */
+const ChecklistPaste = Extension.create({
+  name: "checklistPaste",
+
+  addProseMirrorPlugins() {
+    return [
+      new Plugin({
+        props: {
+          // ⚠️ Typed as always answering a `Slice`, and read as `if (parsed)`: `null` is how a
+          // parser says "not mine", and ProseMirror's own parse then runs.
+          clipboardTextParser: (text, $context, _plain, view) =>
+            pastedTodos(text, $context, view) as Slice,
+        },
+      }),
+    ];
+  },
+});
+
+/**
  * `TaskItem`, narrowed to one line and at most one sub-list, with a delete button on every row.
  *
  * **`content: "paragraph taskList?"`** where `TaskItem` has `paragraph block*`. A to-do is one
@@ -1159,6 +1263,11 @@ const ChecklistMarkdown = Markdown.extend({
  * drawn. **What a line _is_ is decided by the block buttons and by nothing else** — Heading 1–3,
  * Paragraph and To-do — so a mark, a link or a keystroke never turns text into a to-do or back.
  *
+ * **A plain-text paste is a fifth way in, and it needs a layer for a different reason**:
+ * {@link ChecklistPaste}. ProseMirror's fitter already keeps a pasted document valid; what it does
+ * not keep is the reader's lines as to-dos of their own, because a to-do holds one paragraph and
+ * the fitter nests lines 2..n under the one pasted into. Valid, and not what was pasted.
+ *
  * Three behaviours stay, each as in `NOTE_EXTENSIONS`: `undoRedo` is Ctrl+Z, which is the only
  * undo a deleted to-do has; `listKeymap`, whose default list types include `taskItem` and which
  * skips the `listItem` type this schema does not have rather than failing on it — kept for what it
@@ -1219,6 +1328,7 @@ export const CHECKLIST_EXTENSIONS = [
     },
   }),
   ChecklistKeys,
+  ChecklistPaste,
   JoinTodoLists,
   Placeholder.configure({ placeholder: TODO_PLACEHOLDER, includeChildren: true }),
   ChecklistMarkdown,
