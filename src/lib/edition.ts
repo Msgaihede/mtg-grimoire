@@ -61,6 +61,14 @@ export function editionHas(edition: Edition, view: ViewId): boolean {
   return edition.views === null || edition.views.includes(view);
 }
 
+/**
+ * The edition, handed down once from the root; no provider at all is {@link FULL_EDITION}.
+ *
+ * **A provider must pass a module constant** — {@link FULL_EDITION} or {@link LIGHT_EDITION} —
+ * **and never an object built during render**: the shell's key listener lists the edition as a
+ * dependency, so an inline object would be a new one every render and rebind that listener
+ * every render.
+ */
 export const EditionContext = createContext<Edition>(FULL_EDITION);
 
 export function useEdition(): Edition {

@@ -250,15 +250,21 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    * in a search field. The argument lives at each call site because it is a fact about the
    * binding rather than about matching a chord.
    *
-   * **The listener binds once for the life of the shell.** Both dependencies are zustand setters,
-   * which are created with the store and never replaced, and the current flag is read through
-   * `getState()` at press time rather than closed over — `useCardZoomGesture`'s idiom. Reading
-   * `keyMapOpen` as a dependency would tear the listener down and put a new one up on every
-   * press of the key that toggles it.
+   * **The listener binds once for the life of the shell.** Two of its three dependencies are
+   * zustand setters, which are created with the store and never replaced; the third is the
+   * edition, a module constant handed down by context that does not change for the life of the
+   * window (`EditionContext`'s doc is where a provider is told so). The current flag is read
+   * through `getState()` at press time rather than closed over — `useCardZoomGesture`'s idiom.
+   * Reading `keyMapOpen` as a dependency would tear the listener down and put a new one up on
+   * every press of the key that toggles it.
    */
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (matchesShortcut(KEY_MAP, e)) {
+      // **`edition.caption` first, because the map's only mount is the caption row** — `KeyMap`
+      // is drawn inside `TitleBar` and nowhere else. An edition without that row would be taking
+      // the press and showing nothing for it, so there the key is left to the browser: the
+      // digits' own rule below, one chord up.
+      if (edition.caption && matchesShortcut(KEY_MAP, e)) {
         // The press is ours whether or not it does anything, so the browser never sees a held
         // `F1` either.
         e.preventDefault();

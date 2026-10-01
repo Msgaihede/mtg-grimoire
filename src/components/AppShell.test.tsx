@@ -1987,9 +1987,42 @@ describe("the light edition", () => {
     // it does not become Search, because a chord's whole value is that it does not move.
     await user.keyboard("{Control>}1{/Control}");
     expect(useAppStore.getState().activeView).toBe("decks");
+    // **And the press is left alone, not merely ignored.** `fireEvent` answers what
+    // `dispatchEvent` answers — `false` once a listener has called `preventDefault()` — so
+    // `true` is a keydown the browser still gets. A guard moved below the handler's
+    // `preventDefault()` keeps the view just as still and turns this line red.
+    expect(fireEvent.keyDown(document.body, { key: "1", ctrlKey: true })).toBe(true);
+    expect(useAppStore.getState().activeView).toBe("decks");
 
     // Ctrl+2 is Search in every edition, and light has it.
     await user.keyboard("{Control>}2{/Control}");
     expect(useAppStore.getState().activeView).toBe("search");
+    // The control for the `true` above: a chord this edition does draw is taken.
+    expect(fireEvent.keyDown(document.body, { key: "2", ctrlKey: true })).toBe(false);
+  });
+
+  /**
+   * The keyboard map's only mount is inside `TitleBar`, and this edition draws no `TitleBar` — so
+   * a shell that went on claiming `F1` would take the browser's own key and show nothing for it.
+   *
+   * **Fired by hand** for the reason the auto-repeat cases above give in another form: what is
+   * asserted is the event's own `defaultPrevented`, and `user.keyboard` does not hand it back.
+   */
+  it("leaves F1 to the browser, because nothing here would draw the map", () => {
+    const { unmount } = renderLight();
+    expect(fireEvent.keyDown(document.body, { key: "F1" })).toBe(true);
+    expect(useAppStore.getState().keyMapOpen).toBe(false);
+    unmount();
+
+    // The control: the same press under the edition that draws a caption is taken and opens the
+    // map — so the two lines above are about the edition, and not about a keydown the handler
+    // never matched in the first place.
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+    expect(fireEvent.keyDown(document.body, { key: "F1" })).toBe(false);
+    expect(useAppStore.getState().keyMapOpen).toBe(true);
   });
 });
