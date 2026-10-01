@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/mtg-grimoire-mark.svg" />
+    <link rel="manifest" href="/light.webmanifest" />
+    <!-- `viewport-fit=cover` so the phone face can pad its tab bar by the safe-area inset. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- A hex of `--color-bg` (`oklch(0.16 0.01 270)`): a manifest and this tag are read before
+         any stylesheet, and not every browser parses `oklch` there. -->
+    <meta name="theme-color" content="#0e0f13" />
+    <title>MTG Grimoire</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/mobile/main.tsx"></script>
+  </body>
+</html>
