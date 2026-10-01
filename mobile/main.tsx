@@ -27,8 +27,11 @@ async function start(): Promise<void> {
   installNativeDragGuard(window);
 
   // Before React, and a dynamic import so a production build carries none of the fake: Vite
-  // replaces `MODE` at build time and the branch is dropped.
-  if (FAKE) (await import("./fakeBoot")).bootFake();
+  // replaces `MODE` at build time and the branch is dropped. **The comparison is written out
+  // here rather than read from `FAKE`**, so that dropping it rests on a literal the bundler
+  // sees at the `if`, not on it folding a `const` — a production bundle has no alias for the
+  // fake, and a branch that survived would ship `fakeBoot` and the fake's whole card table as a chunk.
+  if (import.meta.env.MODE === "fake") (await import("./fakeBoot")).bootFake();
 
   ReactDOM.createRoot(root).render(
     <React.StrictMode>

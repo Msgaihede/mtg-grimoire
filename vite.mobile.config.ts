@@ -5,7 +5,7 @@ import base from "./vite.config.ts";
 const ENTRY = "mobile/index.html";
 
 /**
- * Serves the light entry at every path, and puts it at the root of the build.
+ * Serves the light entry to every page navigation, and puts it at the root of the build.
  *
  * **The root stays the repository root**, for `vite.share.config.ts`'s reason: the base config's
  * `"@": "/src"` alias is root-relative, so `root: "mobile"` would quietly resolve every `@/…`
@@ -33,8 +33,10 @@ function lightEntry(): Plugin {
         const navigation =
           req.method === "GET" &&
           String(req.headers.accept ?? "").includes("text/html") &&
-          // A file has an extension and a Vite internal starts `/@`; neither is a page.
-          !path.includes(".") &&
+          // A file has an extension and a Vite internal starts `/@`; neither is a page. The
+          // extension is asked of the **last segment**: a dot further up the path is part of a
+          // route, and reading it as a file would hand that route the desktop's document.
+          !path.slice(path.lastIndexOf("/") + 1).includes(".") &&
           !path.startsWith("/@");
         if (navigation) req.url = `/${ENTRY}`;
         next();
@@ -45,8 +47,15 @@ function lightEntry(): Plugin {
       // write to an item's `fileName` is carried back, while a new key assigned onto the bundle
       // is warned about and ignored — so the Rollup idiom of deleting the old key and assigning
       // the new one deletes the document and emits nothing, exiting 0.
+      //
+      // **A missing document is an error, not a skip.** Neither `verify` nor CI runs this build,
+      // and a guard that quietly did nothing would leave the page at `dist-mobile/mobile/` and
+      // exit 0 — the same silent outcome, reached from the other side.
       const html = bundle[ENTRY];
-      if (html) html.fileName = "index.html";
+      if (!html) {
+        return this.error(`light:entry: ${ENTRY} was not emitted, so there is nothing to serve`);
+      }
+      html.fileName = "index.html";
     },
   };
 }
