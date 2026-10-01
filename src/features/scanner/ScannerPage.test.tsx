@@ -765,6 +765,91 @@ describe("ScannerPage", () => {
    * accepts a deck's group — the import's deck arm files there on purpose — so a stored id that
    * now names one would put scanned cards into a deck's box behind the reader's back.
    */
+  /**
+   * *Clear all…* (issue #738) asks before it throws a pile of scans away. Cancel keeps every row and
+   * hands the caret back to the button; the dialog is drawn outside the view's `@container/scan`
+   * box, because a container is the containing block for a `fixed` scrim.
+   */
+  it("asks before clearing the tray, and a cancel keeps every row", async () => {
+    refused();
+    const rows = TRAY_ROWS.slice(1); // 3 + 1 + 1 copies
+    vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
+    const user = userEvent.setup();
+    const { container } = mount();
+    await screen.findByRole("region", { name: "Scanned cards" });
+
+    const clear = await within(tray()).findByRole("button", { name: "Clear all…" });
+    await user.click(clear);
+    const dialog = await screen.findByRole("dialog", { name: "Clear the tray" });
+    expect(dialog).toHaveTextContent("5 scanned copies will leave the tray without being added to your collection.");
+    const scope = container.querySelector(".\\@container\\/scan");
+    expect(scope).not.toBeNull();
+    expect(scope?.contains(dialog)).toBe(false);
+
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length);
+    expect(clear).toHaveFocus();
+    await new Promise((resolve) => setTimeout(resolve, 600));
+    expect(ipc.setScannerTray).not.toHaveBeenCalled();
+  });
+
+  it("empties the tray on a confirmed clear and stores it, filing nothing", async () => {
+    refused();
+    vi.mocked(ipc.scannerTray).mockResolvedValue(TRAY_ROWS);
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("region", { name: "Scanned cards" });
+
+    const clear = await within(tray()).findByRole("button", { name: "Clear all…" });
+    await user.click(clear);
+    const dialog = await screen.findByRole("dialog", { name: "Clear the tray" });
+    await user.click(within(dialog).getByRole("button", { name: "Clear tray" }));
+
+    expect(await within(tray()).findByText("Cards you scan appear here.")).toBeInTheDocument();
+    // The caret is back on the button it left, which is still drawn — refused, on an empty tray.
+    expect(clear).toHaveFocus();
+    expect(clear).toHaveAttribute("aria-disabled", "true");
+    await waitFor(() => expect(vi.mocked(ipc.setScannerTray).mock.lastCall?.[0]).toEqual([]), {
+      timeout: 2000,
+    });
+    expect(ipc.scannerTrayCommit).not.toHaveBeenCalled();
+    expect(ipc.collectionImportCommit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The camera keeps running behind the question**, so a card that lands while it is open is one
+   * the sentence never counted — the clear takes the rows it asked about and leaves that one.
+   */
+  it("keeps a card scanned while the clear was being confirmed", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    const rows = TRAY_ROWS.slice(1);
+    vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
+    let land!: (v: ScannerVerdict) => void;
+    vi.mocked(ipc.scannerFrame)
+      .mockResolvedValueOnce(VERDICTS.voting)
+      .mockImplementationOnce(() => new Promise((resolve) => (land = resolve)))
+      .mockImplementation(() => new Promise(() => {}));
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalledTimes(2));
+      await user.click(await within(tray()).findByRole("button", { name: "Clear all…" }));
+      const dialog = await screen.findByRole("dialog", { name: "Clear the tray" });
+
+      land(VERDICTS.decided);
+      await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length + 1));
+      await user.click(within(dialog).getByRole("button", { name: "Clear tray" }));
+
+      await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
+      expect(within(tray()).getByText("Storm of Saruman")).toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
   it("files into the root, and stores the root, when the stored folder is not a user folder", async () => {
     refused();
     const rows = TRAY_ROWS.slice(1);

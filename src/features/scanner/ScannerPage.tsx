@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
+import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
+import { plural } from "@/lib/counts";
 import type { CollectionFolder, CollectionImportItem } from "@/lib/ipc";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
@@ -11,7 +13,7 @@ import { AddedToast, landedFrom, type LandedCard } from "./reader/AddedToast";
 import { MatchStrip } from "./reader/MatchStrip";
 import type { LastAdded } from "./reader/readerText";
 import { ScanBar } from "./reader/ScanBar";
-import { addDecision, commitPlan, setPrinting, trayLayoutOf } from "./reader/tray";
+import { addDecision, commitPlan, setPrinting, totalCopies, trayLayoutOf } from "./reader/tray";
 import { trayFinish } from "./reader/trayFinish";
 import { TrayPanel } from "./reader/TrayPanel";
 import { ScannerPanels } from "./ScannerPanels";
@@ -45,8 +47,8 @@ function isUserFolder(folders: readonly CollectionFolder[], id: number | null): 
 }
 
 /**
- * The tray after a commit that took `committed`, with whatever changed while it was in flight left
- * standing.
+ * The tray after a commit — or a confirmed *Clear all…* — that took `committed`, with whatever
+ * changed while it was in flight left standing.
  *
  * **Not `[]`, because the camera keeps running while the write does.** The commit waits for the
  * write connection — seconds, while a sync holds it — and a card landing in that window is a row
@@ -376,6 +378,25 @@ function LiveScanner() {
   };
 
   /**
+   * *Clear all…*: the rows the reader was asked about, while the question is up, and the button
+   * that asked, for the caret.
+   *
+   * **The snapshot, not "whatever is in the tray when Confirm is pressed".** The camera keeps
+   * running behind the dialog, and a card that lands while it is open is one the sentence never
+   * counted — so the clear is {@link withoutCommitted} against what was asked about, the commit's
+   * own subtraction: a new row stays, a bumped one keeps the copies added since, and the rest go.
+   * Nothing is written to the collection, so there is no command here — the emptied tray is stored
+   * by the same debounced write as every other edit.
+   */
+  const [clearing, setClearing] = useState<ScannerTrayRow[] | null>(null);
+  const clearOpener = useRef<HTMLElement | null>(null);
+  const onClearAll = (opener: HTMLElement) => {
+    clearOpener.current = opener;
+    setClearing(tray.latest());
+  };
+  const clearCopies = clearing === null ? 0 : totalCopies(clearing);
+
+  /**
    * *More printings…*: the app's all-printings wall, asked to hand the pressed printing back.
    *
    * The hand-back reads `tray.latest()` rather than the rows this press saw, because the camera
@@ -418,140 +439,166 @@ function LiveScanner() {
     // what the developer column leaves, the tray the other third, and the panels get a column of
     // their own. A container is the containing block for anything `fixed` inside it, so nothing
     // that must cover the window may mount in here — and nothing does: the dropdowns measure the
-    // block they land in, and the all-printings dialog is drawn at the app root.
-    <section className="@container/scan flex h-full flex-col gap-3">
-      {/* Not shown: the ribbon already says `Scanner`, and every pixel of this view's height is
-          the camera's. It is here to name the view for assistive tech, as the other views' do. */}
-      <h2 className="sr-only">Scanner</h2>
+    // block they land in, the all-printings dialog is drawn at the app root, and the tray's
+    // *Clear all…* question is this fragment's second child, a sibling of the box and not inside it.
+    <>
+      <section className="@container/scan flex h-full flex-col gap-3">
+        {/* Not shown: the ribbon already says `Scanner`, and every pixel of this view's height is
+            the camera's. It is here to name the view for assistive tech, as the other views' do. */}
+        <h2 className="sr-only">Scanner</h2>
 
-      <ScanBar
-        mode={prefs.mode}
-        onMode={(mode) => update({ mode })}
-        filters={prefs.filters}
-        onFilters={(filters) => update({ filters })}
-        filterError={filterError}
-        filtersDisabled={filtersDisabled}
-        finish={prefs.finish}
-        onFinish={(finish) => update({ finish })}
-        condition={prefs.condition}
-        onCondition={(condition) => update({ condition })}
-        developer={prefs.developer}
-        onDeveloper={(developer) => update({ developer })}
-        cameras={cameras}
-        // The camera that opened; while a switch is starting, the one asked for — so the trigger
-        // does not read `Default` for the moment between two cameras.
-        cameraId={camera.kind === "live" ? camera.deviceId : prefs.cameraId}
-        // A press on the camera already chosen changes nothing, and must not restart the stream.
-        onCamera={(cameraId) => {
-          if (cameraId !== prefs.cameraId) update({ cameraId });
-        }}
-      />
+        <ScanBar
+          mode={prefs.mode}
+          onMode={(mode) => update({ mode })}
+          filters={prefs.filters}
+          onFilters={(filters) => update({ filters })}
+          filterError={filterError}
+          filtersDisabled={filtersDisabled}
+          finish={prefs.finish}
+          onFinish={(finish) => update({ finish })}
+          condition={prefs.condition}
+          onCondition={(condition) => update({ condition })}
+          developer={prefs.developer}
+          onDeveloper={(developer) => update({ developer })}
+          cameras={cameras}
+          // The camera that opened; while a switch is starting, the one asked for — so the trigger
+          // does not read `Default` for the moment between two cameras.
+          cameraId={camera.kind === "live" ? camera.deviceId : prefs.cameraId}
+          // A press on the camera already chosen changes nothing, and must not restart the stream.
+          onCamera={(cameraId) => {
+            if (cameraId !== prefs.cameraId) update({ cameraId });
+          }}
+        />
 
-      <div className="flex min-h-0 flex-1 gap-4">
-        {/* The camera's column: how close the scanner is to a card, then the picture. */}
-        <div className="flex min-w-0 flex-1 flex-col gap-3 @min-[88rem]/scan:flex-[2_1_0%]">
-          {/* **The reader's one line, above the picture rather than under it**, with the card the
-              scanner is leaning towards and how close it is: a reader holding a card watches the
-              bar fill, and a line under a tall camera is a line below where they are looking. */}
-          <MatchStrip
-            verdict={loop.verdict}
-            mode={prefs.mode}
-            lastAdded={lastAdded}
-            hasBundle={hasBundle}
-            lastResolution={loop.lastResolution}
-            onReset={onReset}
-          />
-          {/* The column is the height, and the video box takes what the strip above it and the
-              asset notes under it leave. **Cropped rather than letterboxed** (`object-cover`, and
-              `Overlay`'s canvas with it): at two thirds of a wide view the box is nearer square
-              than 16:9, and a letterboxed feed there is a strip with black above and below. */}
-          <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
-            <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
-            <Overlay videoRef={videoRef} verdict={loop.verdict} />
-            <AddedToast card={landed} onDone={() => setLanded(null)} />
-            {camera.kind === "error" && (
-              <p
-                role="alert"
-                className="absolute inset-0 flex items-center justify-center p-6 text-center text-dim"
-              >
-                {camera.message}
+        <div className="flex min-h-0 flex-1 gap-4">
+          {/* The camera's column: how close the scanner is to a card, then the picture. */}
+          <div className="flex min-w-0 flex-1 flex-col gap-3 @min-[88rem]/scan:flex-[2_1_0%]">
+            {/* **The reader's one line, above the picture rather than under it**, with the card the
+                scanner is leaning towards and how close it is: a reader holding a card watches the
+                bar fill, and a line under a tall camera is a line below where they are looking. */}
+            <MatchStrip
+              verdict={loop.verdict}
+              mode={prefs.mode}
+              lastAdded={lastAdded}
+              hasBundle={hasBundle}
+              lastResolution={loop.lastResolution}
+              onReset={onReset}
+            />
+            {/* The column is the height, and the video box takes what the strip above it and the
+                asset notes under it leave. **Cropped rather than letterboxed** (`object-cover`, and
+                `Overlay`'s canvas with it): at two thirds of a wide view the box is nearer square
+                than 16:9, and a letterboxed feed there is a strip with black above and below. */}
+            <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
+              <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
+              <Overlay videoRef={videoRef} verdict={loop.verdict} />
+              <AddedToast card={landed} onDone={() => setLanded(null)} />
+              {camera.kind === "error" && (
+                <p
+                  role="alert"
+                  className="absolute inset-0 flex items-center justify-center p-6 text-center text-dim"
+                >
+                  {camera.message}
+                </p>
+              )}
+              {/* The detector's own sentence, in a strip that is *emptied* rather than removed: a
+                  frame that fails is the ordinary case at nine answers a second, and a box that
+                  grew and shrank with each one would be the loudest thing on the screen. Two lines
+                  of room, held whether or not there is anything to put in it. At the top of the
+                  picture, because the bottom is where a landed card is laid. */}
+              <p className="absolute left-3 top-2 min-h-[2.5em] text-xs text-dim" aria-live="polite">
+                {detectorSentence}
               </p>
-            )}
-            {/* The detector's own sentence, in a strip that is *emptied* rather than removed: a
-                frame that fails is the ordinary case at nine answers a second, and a box that
-                grew and shrank with each one would be the loudest thing on the screen. Two lines
-                of room, held whether or not there is anything to put in it. At the top of the
-                picture, because the bottom is where a landed card is laid. */}
-            <p className="absolute left-3 top-2 min-h-[2.5em] text-xs text-dim" aria-live="polite">
-              {detectorSentence}
-            </p>
-          </div>
-          {assetNotes.length > 0 && (
-            <div className="space-y-1 text-xs text-dim">
-              {assetNotes.map((note) => (
-                <p key={note}>{note}</p>
-              ))}
             </div>
-          )}
-        </div>
+            {assetNotes.length > 0 && (
+              <div className="space-y-1 text-xs text-dim">
+                {assetNotes.map((note) => (
+                  <p key={note}>{note}</p>
+                ))}
+              </div>
+            )}
+          </div>
 
-        {/* **The tray's side, and below 88rem it is one fixed column.** With the developer panels
-            off it is the tray alone, and the tray is the column's height — its cards scroll and
-            its Add button stays put. With them on the column scrolls by itself, so opening a panel
-            never moves the video, and the tray is capped rather than shrunk: a `min-h-0` item in a
-            scroller hands its height to the panels beside it.
-            **From 88rem it is a row instead**, grown from a basis of the developer column plus the
-            gap (22.25rem, or nothing with the panels off) against the camera's 2 — so the camera
-            gets two thirds of what the panels leave and the tray the third, and the panels scroll
-            in a column of their own beside it. */}
-        <div
-          className={
-            prefs.developer
-              ? "relative flex w-[25rem] shrink-0 flex-col gap-4 overflow-auto @min-[88rem]/scan:w-auto @min-[88rem]/scan:flex-[1_1_22.25rem] @min-[88rem]/scan:flex-row @min-[88rem]/scan:overflow-visible"
-              : "flex w-[25rem] shrink-0 flex-col @min-[88rem]/scan:w-auto @min-[88rem]/scan:flex-[1_1_0%]"
-          }
-        >
+          {/* **The tray's side, and below 88rem it is one fixed column.** With the developer panels
+              off it is the tray alone, and the tray is the column's height — its cards scroll and
+              its Add button stays put. With them on the column scrolls by itself, so opening a panel
+              never moves the video, and the tray is capped rather than shrunk: a `min-h-0` item in a
+              scroller hands its height to the panels beside it.
+              **From 88rem it is a row instead**, grown from a basis of the developer column plus the
+              gap (22.25rem, or nothing with the panels off) against the camera's 2 — so the camera
+              gets two thirds of what the panels leave and the tray the third, and the panels scroll
+              in a column of their own beside it. */}
           <div
             className={
               prefs.developer
-                ? "flex max-h-[70vh] shrink-0 flex-col @min-[88rem]/scan:max-h-none @min-[88rem]/scan:min-h-0 @min-[88rem]/scan:min-w-0 @min-[88rem]/scan:flex-1"
-                : "flex min-h-0 flex-1 flex-col"
+                ? "relative flex w-[25rem] shrink-0 flex-col gap-4 overflow-auto @min-[88rem]/scan:w-auto @min-[88rem]/scan:flex-[1_1_22.25rem] @min-[88rem]/scan:flex-row @min-[88rem]/scan:overflow-visible"
+                : "flex w-[25rem] shrink-0 flex-col @min-[88rem]/scan:w-auto @min-[88rem]/scan:flex-[1_1_0%]"
             }
           >
-            <TrayPanel
-              rows={tray.rows}
-              onRows={(update) => writeRows(update(tray.latest()))}
-              folderId={folderId}
-              onFolder={(id) => update({ folderId: id })}
-              onCommit={onCommit}
-              committing={committing}
-              commitError={commitError}
-              onMorePrintings={onMorePrintings}
-              flashKey={flashKey}
-              layout={trayLayoutOf(prefs.trayLayout)}
-              onLayout={(trayLayout) => update({ trayLayout })}
-            />
-          </div>
-          {prefs.developer && (
-            <div className="flex flex-col gap-4 @min-[88rem]/scan:min-h-0 @min-[88rem]/scan:w-[21.25rem] @min-[88rem]/scan:shrink-0 @min-[88rem]/scan:overflow-y-auto">
-              <ScannerPanels
-                status={statusData}
-                verdict={loop.verdict}
-                lastOcr={loop.lastOcr}
-                lastCollector={loop.lastCollector}
-                roundTripMs={loop.roundTripMs}
-                rate={loop.rate}
-                options={options}
-                sendPx={sendPx}
-                onOptions={setOptions}
-                onSendPx={setSendPx}
-                onCapture={onCapture}
+            <div
+              className={
+                prefs.developer
+                  ? "flex max-h-[70vh] shrink-0 flex-col @min-[88rem]/scan:max-h-none @min-[88rem]/scan:min-h-0 @min-[88rem]/scan:min-w-0 @min-[88rem]/scan:flex-1"
+                  : "flex min-h-0 flex-1 flex-col"
+              }
+            >
+              <TrayPanel
+                rows={tray.rows}
+                onRows={(update) => writeRows(update(tray.latest()))}
+                folderId={folderId}
+                onFolder={(id) => update({ folderId: id })}
+                onCommit={onCommit}
+                committing={committing}
+                commitError={commitError}
+                onMorePrintings={onMorePrintings}
+                flashKey={flashKey}
+                layout={trayLayoutOf(prefs.trayLayout)}
+                onLayout={(trayLayout) => update({ trayLayout })}
+                onClearAll={onClearAll}
               />
-              <TiersPanel resolution={loop.lastResolution} />
             </div>
-          )}
+            {prefs.developer && (
+              <div className="flex flex-col gap-4 @min-[88rem]/scan:min-h-0 @min-[88rem]/scan:w-[21.25rem] @min-[88rem]/scan:shrink-0 @min-[88rem]/scan:overflow-y-auto">
+                <ScannerPanels
+                  status={statusData}
+                  verdict={loop.verdict}
+                  lastOcr={loop.lastOcr}
+                  lastCollector={loop.lastCollector}
+                  roundTripMs={loop.roundTripMs}
+                  rate={loop.rate}
+                  options={options}
+                  sendPx={sendPx}
+                  onOptions={setOptions}
+                  onSendPx={setSendPx}
+                  onCapture={onCapture}
+                />
+                <TiersPanel resolution={loop.lastResolution} />
+              </div>
+            )}
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+
+      <ConfirmDialog
+        open={clearing !== null}
+        title="Clear the tray"
+        confirmLabel="Clear tray"
+        // Nothing typed: these are scans waiting for review, not copies the collection holds, and a
+        // typed word on a question this size teaches readers to type it without reading.
+        typeToConfirm={false}
+        pending={false}
+        onConfirm={() => {
+          if (clearing === null) return;
+          writeRows(withoutCommitted(tray.latest(), clearing));
+        }}
+        onDismiss={() => {
+          setClearing(null);
+          clearOpener.current?.focus();
+        }}
+        onClose={() => setClearing(null)}
+      >
+        {plural(clearCopies, "scanned copy", "scanned copies")} will leave the tray without being added
+        to your collection. Cards you scan while this is open stay.
+      </ConfirmDialog>
+    </>
   );
 }
