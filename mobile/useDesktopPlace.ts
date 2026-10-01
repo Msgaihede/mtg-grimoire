@@ -43,6 +43,26 @@ function apply(place: Place): void {
 }
 
 /**
+ * Write the URL — as a new entry, or over the one the reader is on — and survive a refusal.
+ *
+ * **A history write can throw, and this one is called from inside the store's own `set`.**
+ * Browsers ration the History API: past some rate a call is dropped or throws a `SecurityError`,
+ * and the card modal steps through cards on a held arrow key with one write per step. A throw
+ * here comes out of the store's bare loop over its listeners, so every subscriber registered
+ * after this adapter would miss that change — a stale address bar turned into a stale app. So a
+ * refused write is swallowed: the URL is one step behind, and the next write the browser accepts
+ * puts it right.
+ */
+function write(how: "push" | "replace", href: string): void {
+  try {
+    if (how === "push") window.history.pushState(null, "", href);
+    else window.history.replaceState(null, "", href);
+  } catch {
+    // Refused. Nothing to report and nothing to retry — see above.
+  }
+}
+
+/**
  * Keeps the desktop face's store and the URL saying the same thing.
  *
  * The desktop UI has no router: where the reader is, is three fields of its store —
@@ -89,6 +109,12 @@ export function useDesktopPlace(): void {
     // and any later one in the same task rewrites that entry; a task is one press, and the flag is
     // dropped in a microtask, which runs before the next one can begin. Every write stays
     // synchronous: the URL is right by the time the press returns.
+    //
+    // **A task here is a run of synchronous code, whoever started it.** Two writes back to back
+    // are one task whether they came from one press or from a script, so a test body — or a CDP
+    // script evaluated in one go — that makes two "presses" in a row is one task, and the second
+    // is replaced rather than pushed. A real second press always arrives after a microtask
+    // checkpoint, and gets its own entry.
     let pushed = false;
 
     const unsubscribe = useAppStore.subscribe((state, previous) => {
@@ -109,11 +135,11 @@ export function useDesktopPlace(): void {
         queueMicrotask(() => {
           pushed = false;
         });
-        window.history.pushState(null, "", href);
+        write("push", href);
       } else {
         // A later write of the same press — or the card alone, which is never an entry: opening
         // and closing one must not grow history, or Back would reopen a card the reader closed.
-        window.history.replaceState(null, "", href);
+        write("replace", href);
       }
     });
 

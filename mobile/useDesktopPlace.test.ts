@@ -1,5 +1,5 @@
 import { act, renderHook } from "@testing-library/react";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAppStore } from "@/lib/store";
 import { placeHref } from "./routes";
 import { useDesktopPlace } from "./useDesktopPlace";
@@ -80,7 +80,7 @@ describe("useDesktopPlace", () => {
     expect(useAppStore.getState().activeView).toBe("search");
   });
 
-  it("follows Back onto the gallery without pushing, even with a deck parked", () => {
+  it("follows Back onto the gallery without writing history, even with a deck parked", async () => {
     // Entering Decks hands back the deck that was open when the reader left — the store's own
     // rule — so following the URL onto the gallery takes two writes, and the first one is a
     // place the URL never named. Written back, it would bury the entry just gone back to.
@@ -88,18 +88,59 @@ describe("useDesktopPlace", () => {
     renderHook(() => useDesktopPlace());
     act(() => useAppStore.getState().setActiveView("wishlist"));
     expect(useAppStore.getState().parkedDeckId).toBe(7);
+    // A `popstate` is a task of its own in a browser, so the press that got here is over — and
+    // with it the adapter's memory of having pushed. Left out, an unguarded follow would only
+    // *replace*, and a test watching for pushes alone would pass over it.
+    await endOfTask();
 
+    // A jump of more than one entry — the browser's Back menu — onto the gallery's own. The
+    // browser moves the URL before it says so; spied on after, so this is not counted.
+    window.history.replaceState(null, "", "/decks");
     const pushState = vi.spyOn(window.history, "pushState");
+    const replaceState = vi.spyOn(window.history, "replaceState");
     act(() => {
-      // A jump of more than one entry — the browser's Back menu — onto the gallery's own.
-      window.history.replaceState(null, "", "/decks");
       window.dispatchEvent(new PopStateEvent("popstate"));
     });
 
     expect(useAppStore.getState().activeView).toBe("decks");
     expect(useAppStore.getState().openDeckId).toBeNull();
     expect(pushState).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
     expect(window.location.pathname).toBe("/decks");
+  });
+
+  /**
+   * The follow with the most writes in it: a view, then a deck that is not the parked one, then
+   * a card — three, and two places between them the URL never named. **Both ways round**, because
+   * what an unguarded follow does with those places depends on whether the adapter still
+   * remembers pushing: forgotten, the first is pushed; remembered, all three are replaced. Either
+   * is a history write on a Back, and neither may happen.
+   */
+  it.each([
+    { when: "in a task of its own", yielded: true },
+    { when: "in the task of the press before it", yielded: false },
+  ])("follows Back onto a deck and a card without writing history, $when", async ({ yielded }) => {
+    window.history.replaceState(null, "", "/decks/7");
+    renderHook(() => useDesktopPlace());
+    act(() => useAppStore.getState().setActiveView("search"));
+    expect(useAppStore.getState().parkedDeckId).toBe(7);
+    expect(url()).toBe(SEARCH);
+    if (yielded) await endOfTask();
+
+    const there = placeHref({ view: "decks", deckId: 3, cardId: "y" });
+    window.history.replaceState(null, "", there);
+    const pushState = vi.spyOn(window.history, "pushState");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+    act(() => {
+      window.dispatchEvent(new PopStateEvent("popstate"));
+    });
+
+    expect(useAppStore.getState().activeView).toBe("decks");
+    expect(useAppStore.getState().openDeckId).toBe(3);
+    expect(useAppStore.getState().selectedCardId).toBe("y");
+    expect(pushState).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
+    expect(url()).toBe(there);
   });
 
   it("stops listening when the face goes", () => {
@@ -194,6 +235,32 @@ describe("useDesktopPlace", () => {
       expect(replaceState).toHaveBeenCalledWith(null, "", SEARCH);
       expect(pushState).not.toHaveBeenCalled();
       expect(url()).toBe(SEARCH);
+    });
+
+    it("lets the store finish telling everyone when the browser refuses a write", () => {
+      // Browsers ration the History API, and stepping through cards with a held arrow key is a
+      // write per step. A refusal thrown out of this adapter would come out of the store's own
+      // `set` — and cut off every subscriber registered after it.
+      window.history.replaceState(null, "", SEARCH);
+      renderHook(() => useDesktopPlace());
+      const heard = vi.fn();
+      onTestFinished(useAppStore.subscribe(heard));
+      const replaceState = vi.spyOn(window.history, "replaceState").mockImplementation(() => {
+        throw new DOMException("Too many calls to the History API", "SecurityError");
+      });
+
+      expect(() => act(() => useAppStore.getState().setSelectedCardId("x"))).not.toThrow();
+
+      expect(replaceState).toHaveBeenCalledTimes(1);
+      expect(heard).toHaveBeenCalledTimes(1);
+      expect(useAppStore.getState().selectedCardId).toBe("x");
+      // One step stale, which is the whole cost...
+      expect(url()).toBe(SEARCH);
+
+      // ...and the next write the browser accepts puts it right.
+      replaceState.mockRestore();
+      act(() => useAppStore.getState().setSelectedCardId("z"));
+      expect(url()).toBe(searchWith("z"));
     });
 
     it("follows Back onto an entry with a card open, writing nothing", () => {
