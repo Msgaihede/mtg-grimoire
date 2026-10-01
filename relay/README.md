@@ -412,12 +412,14 @@ refused. `/keys` never reaches it at all. `/rotate` reaches it **exactly once, a
 accepted the rotation**, to post the roster below — and a caller that gets that far holds the
 group's current auth, which mints a bearer token at `/token`'s group door and opens the gated
 routes anyway, so it can spend nothing here it could not already spend there. **Both are rate
-limited since 2026-10-01**, with `/claim`, `/token` and the pairing rendezvous: what standing
+limited in this tree since 2026-10-01 — written, and not deployed when this sentence was** — with
+`/claim`, `/token` and the pairing rendezvous: what standing
 outside the gate costs is a D1 read per request from anyone, and `src/ratelimit.ts` refuses a
 caller past its limit ahead of that read — per client address, through three `ratelimits`
 bindings in `wrangler.jsonc`, as a **429 with `code: "rate_limited"`** and never a 401. It fails
 open, and it spares the read rather than the request: the runbook's step 8 has the limits, the
-deploy check, and what a limit inside the Worker cannot do.
+burst that says whether the deployed Worker has them, and what a limit inside the Worker cannot
+do.
 
 **The epoch must be one or two past the group's newest, and nothing else.** A join plans its own
 epoch plus one and a removal or a departure plus two (`REMOVAL_STEP`), and the auth a device

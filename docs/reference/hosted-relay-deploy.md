@@ -15,7 +15,7 @@ and not 500, and `required(env.RELAY_HMAC_KEY, …)` is called before `verify` c
 same shape holds for `POST /webhook/patreon` with no signature, where `required(env.
 PATREON_WEBHOOK_SECRET, …)` runs unconditionally ahead of `verifyWebhook`. `PATREON_CLIENT_SECRET`
 is only reachable through a real code exchange, so it cannot be probed. **Step 7 is open; step 8
-was built on 2026-10-01** and that step says what it is and is not.
+was built on 2026-10-01 and is waiting on a deploy** — that step says what it is and is not.
 
 **A second half landed on 2026-08-30** — `/token`'s group door, `POST /g/{group}/rotate`,
 `GET /g/{group}/keys`, the `group_keys` table and two columns on `entitlements`. **It is deployed
@@ -97,9 +97,11 @@ run — it runs workerd locally, contacts nothing and needs no login. Everything
 
 A device pointed at that host today reaches a relay that speaks the whole membership flow, the
 whole log, the key distribution, the device cap and the pairing rendezvous. **As of 2026-10-01,
-19:17 UTC, nothing in `relay/` on `main` at `2b845048` is undeployed.** That is the sentence on
+19:17 UTC, nothing in `relay/` on `main` at `2b845048` was undeployed — and step 8's rate limits,
+written later the same day, are the one thing since that is.** That is the sentence on
 this page most certain to rot, because the next branch that touches `relay/` makes it false
-without editing it — and the last two that did each left it wrong, once in each direction. Step 0
+without editing it — the last two that did each left it wrong, once in each direction, and the
+third edited it in the commit that made it false. Step 0
 is the authority, not it; so is `deployments` on the script, which dates every deploy whether or
 not anybody wrote one down.
 
@@ -414,8 +416,10 @@ Until both are out, that device goes on saying *Supporting since …*, as it alw
    posts when it crosses — a small Worker of its own, a scheduled GitHub workflow, or a line in
    this Worker's cron. Markus put it aside that day in favour of step 8.
 8. **Rate limits on `/claim`, `/token`, `/g/{group}/rotate`, `/g/{group}/keys` and
-   `/p/{rv}/{offer,join}` — built 2026-10-01, in the Worker rather than as rules in front of it.**
-   ⚠️ **This step said "add rate-limiting rules", and a rule is the one thing this host cannot
+   `/p/{rv}/{offer,join}` — built 2026-10-01, in the Worker rather than as rules in front of it,
+   and not deployed when this was written.** It is step 6's `wrangler deploy` and nothing else: no
+   migration, no secret, and the three bindings are created by the deploy that names them. The
+   burst below is how to ask the host whether it has happened. ⚠️ **This step said "add rate-limiting rules", and a rule is the one thing this host cannot
    have**: a WAF rate-limit rule belongs to a zone, and `workers.dev` is not one the account
    controls. What stands there instead is Cloudflare's rate-limit *binding* — three `ratelimits`
    entries in `wrangler.jsonc`, asked by `relay/src/ratelimit.ts` after the method check and ahead
@@ -449,8 +453,8 @@ Until both are out, that device goes on saying *Supporting since …*, as it alw
    H=https://mtg-grimoire-relay.denmark-east.workers.dev
    for i in $(seq 1 15); do curl -s -o /dev/null -w "%{http_code} " "$H/claim" -d '{}'; done; echo
    ```
-   **All 400 means no limiter is bound** — the fail-open arm, which is also what a binding name
-   that drifted from `ratelimit.ts` looks like; `ratelimit.test.ts` reads `wrangler.jsonc` to hold
+   **All 400 means no limiter is bound** — a Worker deployed before this step, or the fail-open
+   arm, which is also what a binding name that drifted from `ratelimit.ts` looks like; `ratelimit.test.ts` reads `wrangler.jsonc` to hold
    the names and numbers together, and `wrangler deploy` prints the three bindings it attached.
    Do not burst `/keys` to check: it spends 240 requests and locks your own devices out of sync
    for a minute.
