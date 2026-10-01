@@ -25,7 +25,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { VERDICTS } from "../fixtures";
 import { NO_FINISHED_ROWS, rowFromDecision } from "./tray";
-import { addLabel, TrayPanel, type TrayPanelProps } from "./TrayPanel";
+import { addLabel, NEXT_DECISION_LABEL, TrayPanel, type TrayPanelProps } from "./TrayPanel";
 
 const resolved = VERDICTS.exactResolved.decision!;
 const ambiguous = VERDICTS.exactAmbiguous.decision!;
@@ -160,6 +160,62 @@ describe("TrayPanel", () => {
     expect(add).not.toBeDisabled();
     await user.click(add);
     expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("offers the walk to the next decision only while a card is waiting on one", () => {
+    const { unmount } = wrap(<TrayPanel {...props()} />);
+    expect(screen.queryByRole("button", { name: NEXT_DECISION_LABEL })).not.toBeInTheDocument();
+    unmount();
+    wrap(<TrayPanel {...props({ rows: [newer, { ...older, finish: "unknown" }] })} />);
+    expect(screen.getByRole("button", { name: NEXT_DECISION_LABEL })).toBeInTheDocument();
+  });
+
+  /**
+   * **Each press lands on the next question — a printing to pick, then a finish — and wraps**, with
+   * the caret on the control that answers it. Settled rows are walked past.
+   */
+  it("walks the caret through each card needing a decision, in the tray's order, and wraps", async () => {
+    const user = userEvent.setup();
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    const unknown: ScannerTrayRow = { ...older, finish: "unknown" };
+    wrap(<TrayPanel {...props({ rows: [waiting, newer, unknown] })} />);
+    const next = screen.getByRole("button", { name: NEXT_DECISION_LABEL });
+    const first = waiting.choices[0];
+
+    await user.click(next);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", {
+        name: `${first.name} — ${first.setCode.toUpperCase()} ${first.collectorNumber}`,
+      }),
+    );
+    await user.click(next);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Finish of Honored Hierarch — ORI 17" }),
+    );
+    // Past the last question, round to the first again.
+    await user.click(next);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", {
+        name: `${first.name} — ${first.setCode.toUpperCase()} ${first.collectorNumber}`,
+      }),
+    );
+  });
+
+  /** Only the tray's own scroller moves — never the page around it — and the row is centred. */
+  it("scrolls the tray's own list to the row it lands on", async () => {
+    const user = userEvent.setup();
+    const scrollTo = vi.fn();
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTo");
+    Element.prototype.scrollTo = scrollTo as unknown as typeof Element.prototype.scrollTo;
+    try {
+      wrap(<TrayPanel {...props({ rows: [newer, { ...older, finish: "unknown" }] })} />);
+      await user.click(screen.getByRole("button", { name: NEXT_DECISION_LABEL }));
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(scrollTo.mock.contexts[0]).toBe(screen.getAllByRole("list")[0]);
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "scrollTo", original);
+      else delete (Element.prototype as { scrollTo?: unknown }).scrollTo;
+    }
   });
 
   /**
@@ -504,6 +560,22 @@ describe("TrayPanel's grid", () => {
     expect(next[0].cardId).toBe(choice.cardId);
     expect(next[0].choices).toEqual([]);
     expect(next[1]).toBe(newer);
+  });
+
+  it("walks the caret through the grid's questions too — a waiting tile's candidates, then a finish", async () => {
+    const user = userEvent.setup();
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    const unknown: ScannerTrayRow = { ...older, finish: "unknown" };
+    wrap(<TrayPanel {...grid({ rows: [newer, waiting, unknown] })} />);
+    const next = screen.getByRole("button", { name: NEXT_DECISION_LABEL });
+    await user.click(next);
+    expect(document.activeElement).toBe(
+      within(screen.getByRole("group", { name: `Printings of ${waiting.name}` })).getAllByRole("button")[0],
+    );
+    await user.click(next);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Finish of Honored Hierarch — ORI 17" }),
+    );
   });
 
   it("removes a waiting tile by the card's name", async () => {
