@@ -187,18 +187,30 @@ describe("the lapse sweep", () => {
       entitlements: [ent("s1", "g1", "active")],
       shares: [share("a", "g1", "live", 1_000), share("b", "g1", "revoked", 2_000)],
     };
-    await sweepLapsed(lapseEnv(tables), 9_999);
+    await sweepLapsed(lapseEnv(tables));
     expect(rowOf(tables, "a").updated_at).toBe(1_000);
     expect(rowOf(tables, "b").updated_at).toBe(2_000);
   });
 
-  it("stamps the share it does move", async () => {
+  /**
+   * **Nor the share it does move, in either direction.** `updated_at` is the date the shell's
+   * OpenGraph card puts on the snapshot, and a lapse or a revival changes the row's state and not
+   * one byte of what the owner published. Until 2026-10-01 both directions restamped it, so a
+   * share relit after a month of lapse previewed in Discord as *updated today*.
+   */
+  it("keeps the publish date through a lapse and a revival", async () => {
     const tables: Tables = {
       entitlements: [ent("s1", "g1", "dead")],
       shares: [share("a", "g1", "live", 1_000)],
     };
-    await sweepLapsed(lapseEnv(tables), 9_999);
-    expect(rowOf(tables, "a").updated_at).toBe(9_999);
+    await sweepLapsed(lapseEnv(tables));
+    expect(stateOf(tables, "a")).toBe("lapsed");
+    expect(rowOf(tables, "a").updated_at).toBe(1_000);
+
+    tables.entitlements[0].status = "active";
+    await sweepLapsed(lapseEnv(tables));
+    expect(stateOf(tables, "a")).toBe("live");
+    expect(rowOf(tables, "a").updated_at).toBe(1_000);
   });
 
   /** Idempotent: the second pass of a day finds nothing left to say. */
@@ -207,10 +219,10 @@ describe("the lapse sweep", () => {
       entitlements: [ent("s1", "g1", "dead")],
       shares: [share("a", "g1", "live", 1_000)],
     };
-    await sweepLapsed(lapseEnv(tables), 9_999);
-    await sweepLapsed(lapseEnv(tables), 20_000);
+    await sweepLapsed(lapseEnv(tables));
+    await sweepLapsed(lapseEnv(tables));
     expect(stateOf(tables, "a")).toBe("lapsed");
-    expect(rowOf(tables, "a").updated_at).toBe(9_999);
+    expect(rowOf(tables, "a").updated_at).toBe(1_000);
   });
 
   /**

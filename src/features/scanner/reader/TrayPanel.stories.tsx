@@ -75,6 +75,7 @@ const meta = {
     // stories below say `grid`, which is what the page opens on.
     layout: "list",
     onLayout: fn(),
+    onClearAll: fn(),
   },
   parameters: { trayWidth: COLUMN_WIDTH },
   decorators: [

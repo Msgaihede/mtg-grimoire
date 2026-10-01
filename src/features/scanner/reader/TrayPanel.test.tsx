@@ -66,6 +66,7 @@ function props(over: Partial<TrayPanelProps> = {}): TrayPanelProps {
     flashKey: null,
     layout: "list",
     onLayout: vi.fn(),
+    onClearAll: vi.fn(),
     ...over,
   };
 }
@@ -362,6 +363,51 @@ describe("TrayPanel", () => {
     wrap(<TrayPanel {...props({ onRows })} />);
     await user.click(screen.getByRole("button", { name: "Remove Honored Hierarch — ORI 17" }));
     expect(edit(onRows, [newer, older]).map((r) => r.key)).toEqual(["newer"]);
+  });
+
+  /**
+   * *Clear all…* is a request the page answers with a question (issue #738) — the panel writes no
+   * rows for it, and hands up the button so the caret can come back to it.
+   */
+  it("asks the page to clear the tray, and clears nothing itself", async () => {
+    const user = userEvent.setup();
+    const onRows = vi.fn();
+    const onClearAll = vi.fn();
+    wrap(<TrayPanel {...props({ onRows, onClearAll })} />);
+    const clear = screen.getByRole("button", { name: "Clear all…" });
+    expect(clear).not.toHaveAttribute("aria-disabled");
+    await user.click(clear);
+    expect(onClearAll).toHaveBeenCalledExactlyOnceWith(clear);
+    expect(onRows).not.toHaveBeenCalled();
+  });
+
+  it("offers Clear all… in the grid too, and on a tray still waiting on a pick", async () => {
+    const user = userEvent.setup();
+    const onClearAll = vi.fn();
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    wrap(<TrayPanel {...grid({ rows: [waiting, newer], onClearAll })} />);
+    await user.click(screen.getByRole("button", { name: "Clear all…" }));
+    expect(onClearAll).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses Clear all… on an empty tray, drawn rather than hidden", async () => {
+    const user = userEvent.setup();
+    const onClearAll = vi.fn();
+    wrap(<TrayPanel {...props({ rows: [], onClearAll })} />);
+    const clear = screen.getByRole("button", { name: "Clear all…" });
+    expect(clear).toHaveAttribute("aria-disabled", "true");
+    await user.click(clear);
+    expect(onClearAll).not.toHaveBeenCalled();
+  });
+
+  it("refuses Clear all… while a commit is filing these rows", async () => {
+    const user = userEvent.setup();
+    const onClearAll = vi.fn();
+    wrap(<TrayPanel {...props({ committing: true, onClearAll })} />);
+    const clear = screen.getByRole("button", { name: "Clear all…" });
+    expect(clear).toHaveAttribute("aria-disabled", "true");
+    await user.click(clear);
+    expect(onClearAll).not.toHaveBeenCalled();
   });
 
   /**

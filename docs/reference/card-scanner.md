@@ -2043,6 +2043,18 @@ gaps of 991–1010 ms throughout, well past the ~5 minutes at which Chromium's i
 would bite. WebView2 reports a minimized window's page as `visibilityState: "visible"`, so the
 renderer never sees a hidden page at all.
 
+**So a minimized window is asked about through Tauri instead** (issue #556, 2026-10-01).
+`useWindowParked` re-reads `isMinimized()` on the window's resize and focus events — a minimize on
+Windows is a resize to 0×0 and a lost focus — and once on mount, ORed with `document.hidden` for an
+engine that does report it. **The pump pauses on the minimize itself; the camera and the heartbeat
+go `PARK_GRACE_MS` (five seconds) later**, so a quick restore finds the stream still open, and a
+window left on the taskbar puts the camera light out and lets the lease lapse two seconds after
+that. A restore reopens the camera and beats at once, and a refused beat is what sends it to the
+sentence if another window took the scanner meanwhile. **Focus alone pauses nothing**: a reader
+holding a card up to the lens may well have clicked another window. **A fully covered window is
+still not seen** — no event reports it — and keeps the scanner as it did. Not yet driven in the
+shipped window; the suite drives the hook against the workbench's fake window.
+
 ### The IPC seam
 
 `Core.call` widened to `call(command, args?: CallArgs, options?: CallOptions)`, where
@@ -2086,13 +2098,13 @@ the next generated write is one editor away.
 | --- | --- |
 | `ScannerPage.tsx` | The view: the Match strip over the camera, the tray beside it, and the developer column |
 | `useCamera.ts` | The stream: `getUserMedia` with the debug page's constraints — or the reader's camera by `deviceId: { exact }`, falling back to the default when that camera has gone — one `stopAll` every exit path goes through, a tolerated `play()` rejection, and the wait for `loadedmetadata` before reporting a size. It opens nothing while its `deviceId` is `undefined`, which is how the page holds the camera shut until the stored choice has loaded. Its error state is **keyed on `verdictText.ts`'s `cameraSentence`**, which is where the wording lives. `useCameraDevices` lists the `videoinput`s for the picker, re-read on `devicechange` and once a camera is live, because a browser names no camera before one is granted |
-| `reader/MatchStrip.tsx` | The strip above the camera — `readerText.ts`'s `matchStrip` drawn: a pill, the card, one sentence, the bar |
+| `reader/MatchStrip.tsx` | The strip above the camera — `readerText.ts`'s `matchStrip` drawn: a pill, the card, one sentence, the bar, and *Reset evidence* beside it |
 | `reader/AddedToast.tsx` | The card laid over the camera for 2.2 s each time the tray takes one |
 | `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture (**with a `catch` of its own** — a throwing `drawImage`/`toBlob` outside one rejects `pump()` and freezes the loop with `error` still `null`), and the two **kept reads** below |
 | `Overlay.tsx` | The canvas over the video — the smoothed quad, the raw one behind it |
 | `ScannerPanels.tsx` | Pure. The whole column from `{ status, verdict, options, … }` |
 | `panels/Panel.tsx` | The section chrome, the fold, and the shared `Row` / `FIGURES` / `BUTTON` |
-| `panels/MatchPanel.tsx` | The figures, the standings, reset and capture — its head row and evidence bar moved into the Match strip on 2026-10-01, where every reader sees them |
+| `panels/MatchPanel.tsx` | The figures, the standings and capture — its head row, evidence bar and Reset press moved into the Match strip on 2026-10-01, where every reader sees them |
 | `panels/ControlsPanel.tsx` | The rule and method segments, the stages toggle, the sliders |
 | `panels/PipelinePanel.tsx` | The three stage images, only when stages are on |
 | `panels/BudgetPanel.tsx` | The per-stage milliseconds as a stacked bar |
@@ -2865,6 +2877,18 @@ once the folder list answers — the import accepts a deck's group, because the 
 files there on purpose, so a stale id naming one would put scanned cards in a deck's box. §8 item
 13 is the case the list never answers.
 
+**`Clear all…` empties the tray, and only after a question** (issue #738, 2026-10-01). It sits in
+the tray's header beside the layout toggle and is refused — drawn greyed, never hidden — on an
+empty tray and while a commit is in flight. A press is a *request* (`TrayPanel`'s `onClearAll`):
+the question is `ScannerPage`'s, a `ConfirmDialog` with no typed word, mounted as a sibling of the
+view's `@container/scan` box rather than inside it, because a container is the containing block for
+a `fixed` scrim ([`src/CLAUDE.md`](../../src/CLAUDE.md)'s `@container` rule). **It clears the rows
+it asked about, not the tray at the moment of Confirm**: the camera keeps running behind the
+dialog, so the confirmed clear is the commit's own `withoutCommitted` against a snapshot taken
+when the dialog opened — a card that landed meanwhile stays, a bump keeps the copies added since.
+Nothing is filed, so there is no command; the emptied tray is stored by the ordinary debounced
+tray write. The caret returns to the button, which is why it stays drawn on the tray it emptied.
+
 **The tray has two layouts, a grid of card tiles and the list of rows** (2026-10-01), switched in
 its header and stored as the prefs' `trayLayout`. A grid tile is `CardArt` at the `grid` variant —
 a tile is 144–221px wide, and `thumb` is 146px — inside a button that opens *More printings…*, with
@@ -2899,6 +2923,14 @@ match — Try better lighting or clear the filters.* · *N printings — Pick a 
   time) under confidence — is drawn only while the scanner is still gathering.
 - **An ambiguous resolve names the card only when every choice shares one name**: a tie between two
   names is not a settled card.
+
+**_Reset evidence_ sits at the bar's end, for every reader** (issue #740). It was a press in the
+Developer column's Match panel only, so a reader whose scanner had settled on the wrong card had no
+way to make it start over short of taking the card out of frame. It is the same press — the page's
+`onReset`, `clearReads()` then `scanner_reset`, a refusal said in the strip under the video — and
+the panel's copy went with the move, so a Developer reader never meets two buttons by one name. It
+is outside the live region: a press is not news, and a button inside *Scanner status* would be read
+out with every change of the line.
 The asset sentences sit under the camera, so a missing bundle is still said with the Developer
 panels off.
 
