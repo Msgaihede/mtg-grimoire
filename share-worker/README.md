@@ -53,6 +53,26 @@ shared `RELAY_HMAC_KEY`, and compare **`claims.grp` against the path segment**. 
 not redundant with the signature: a validly signed token for one's *own* group is exactly what an
 attacker has.
 
+**Then they ask whether the device is still in the group** (2026-10-01, issue #548). A token
+outlives its device's removal by up to a day, and a share is plaintext, so a removed laptop could
+otherwise overwrite or withdraw the group's binders for that long. The gate reads the group's
+newest `group_keys` row — the manifest a rotation published, whose key set is the roster — and
+refuses a token minted **before** that rotation by a device (`dev`, stamped by the relay since the
+same date) that the manifest omits. A token minted at or after it passes: only the group's
+*current* auth mints one, and a removed device no longer derives it, while a device that has just
+paired may not be on the manifest yet. A token with no `dev` (an older relay's) predating the
+rotation is refused. A group with no rows has never rotated and is not asked. One D1 read per gated
+request — traffic from at most five devices, never from a viewer.
+
+⚠️ **This needs the relay deployed first** so that tokens carry `dev`; until then every token
+minted before a group's newest rotation is refused, and a device sees one day of
+*"would not accept this device's membership"* at most.
+
+⚠️ **What it does not close**: `/claim` still mints a grant for a group whose presented auth is
+behind (a "behind" re-claim is a legitimate press), so a removed device whose owner is still
+signed in to Patreon can press Connect and get a token minted *after* the rotation. That is a relay
+question about `/claim`, not about token lifetime, and is left for its own change.
+
 **The two public routes are the whole of the entitlement asymmetry.** Publishing needs a token,
 which needs a membership; viewing needs the link and nothing else, which is what issue #360 asked
 for. The link *is* the capability — there is no viewer account and no per-viewer access control.

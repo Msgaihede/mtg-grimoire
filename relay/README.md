@@ -79,7 +79,9 @@ verifies it **before the Durable Object hop**. The position is the point, not th
   every group on the relay.
 
 `access` is `base64url(payload) "." base64url(HMAC-SHA256(payload, RELAY_HMAC_KEY))` over
-`{sub, grp, exp}`, with a **24-hour** TTL (`TOKEN_TTL_MS`). The app trades its long-lived
+`{sub, grp, exp, dev}`, with a **24-hour** TTL (`TOKEN_TTL_MS`). `dev` is the device the door
+admitted, added 2026-10-01 for the share Worker's removed-device check; nothing in the relay
+reads it, and a token without one (an older relay's) still verifies. The app trades its long-lived
 `refresh` secret for a new one when fewer than six hours remain. That split is what makes lapse
 work: deleting `refresh_secret` is instantaneous, and an already-issued `access` dies of old age
 within a day.
@@ -218,7 +220,7 @@ The mint is `DELETE … RETURNING` in **one** statement, and that is not tidines
 interactive transaction, so a read followed by a delete is two round trips with a window between
 them, and two requests racing that window would both see the code and both claim.
 
-**`/claim` carries the group id and that is not optional.** The token payload is `{sub, grp, exp}`
+**`/claim` carries the group id and that is not optional.** The token payload is `{sub, grp, exp, dev}`
 and the gate compares `grp` against the path segment, but `/claim` carries no `Authorization`
 header — the device has no token yet, which is the point of the call — so the body is the only
 channel there is. A claim without it mints a token whose `grp` matches nothing, and the reader

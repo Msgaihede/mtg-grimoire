@@ -476,6 +476,9 @@ describe("/token — the group door", () => {
     // sync that 401s for ever. `sub-1` is `g2`'s row, not `g1`'s.
     expect(claims?.grp).toBe("g2");
     expect(claims?.sub).toBe("sub-1");
+    // `dev` is what the share Worker checks against the group's newest manifest, so a removed
+    // device's leftover token cannot publish or revoke (issue #548).
+    expect(claims?.dev).toBe(DEVICE);
     // The milliseconds-to-seconds boundary, asserted where it actually crosses.
     expect(body.expires).toBe(unixSeconds(Number(claims?.exp)));
   });
