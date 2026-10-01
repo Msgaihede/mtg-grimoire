@@ -1,5 +1,6 @@
 import type { StorybookConfig } from "@storybook/react-vite";
 import { fileURLToPath } from "node:url";
+import { WATCH_IGNORED } from "../vite.watch.ts";
 
 const fake = (name: string) => fileURLToPath(new URL(`./fake/${name}`, import.meta.url));
 
@@ -86,6 +87,18 @@ const config: StorybookConfig = {
       { find: /^@\/lib\/images$/, replacement: fake("images.ts") },
       { find: /^@\//, replacement: fileURLToPath(new URL("../src/", import.meta.url)) },
     ];
+    // **The dev server does not inherit `vite.config.ts`'s `server` block — the builder replaces
+    // it.** `@storybook/builder-vite` loads that file and then spreads a `server` of its own over
+    // the result (`createViteServer`, read at 10.6.0), so `server.watch.ignored` never arrived:
+    // this server watched every build output under the root, all of `src-tauri/target` included,
+    // which the app's own server has never done. Driven 2026-10-01, it exited on `EBUSY` under
+    // `crates/card-scanner/target` during a cargo build exactly as the plain Vite servers did.
+    // `vite.watch.ts` is the list and the why. `storybook build` keeps the base config's `server`
+    // and has no watcher, so there this assigns the list it already had.
+    config.server = {
+      ...config.server,
+      watch: { ...config.server?.watch, ignored: WATCH_IGNORED },
+    };
     return config;
   },
 };
