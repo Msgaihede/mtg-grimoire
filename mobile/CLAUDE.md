@@ -1,0 +1,213 @@
+# mobile — the light app
+
+A second app over the same `src/` components and the same Rust core: card search, decks,
+collection, wishlist and scanner, for Android and for browsers. The design is
+[the light-app spec](../docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md);
+read its §3 before changing anything here.
+
+**Light is the menu and the face, never the data.** A light install runs the same commands
+against the same two databases. What it leaves out is destinations.
+
+**What is here is phase 1, the skeleton, and nothing on this page has been checked in a browser
+or in the `mobile:tauri` window yet** (2026-10-01). Every rule below is held by a jsdom test or by
+construction; the first live pass owes this file its measurements.
+
+## One entry, two faces
+
+`LightApp` picks a face by the viewport's width and by nothing else.
+
+| Viewport | Face | Lives in |
+| --- | --- | --- |
+| ≥ 1024px (`DESKTOP_FLOOR_PX`) | **The desktop UI itself**, in the light edition | `src/`, hosted by `DesktopFace.tsx` |
+| < 1024px | **The phone face** | `mobile/phone/` |
+
+- **The question is asked once, in `useFace.ts`**, as a `matchMedia` on `DESKTOP_FLOOR_PX` —
+  quoted from `src/lib/viewports.ts`, never typed again. The desktop app has no viewport branch
+  and must not grow one; this is the light entry's, and it is the only one.
+- **Each face is its own lazy chunk**, so a phone never downloads the desktop's deck editor and a
+  laptop never downloads the phone's sheets. Neither is imported statically by `LightApp`, and an
+  import that made one static would cost that without anything going red.
+- **A narrowed browser window _is_ the phone app**, not a responsive rendering of the desktop one:
+  dragging across 1024 swaps the face live and keeps the destination, because the URL is what
+  both read. **The rule runs both ways** — an Android tablet wide enough to cross 1024 gets the
+  desktop face, for the reason a wide browser does.
+- **Every component is drawn only at the widths it was designed for.** That is the whole lesson of
+  the phone layout removed on 2026-09-27: desktop components bent down to 360px. Do not add a
+  narrow branch to a desktop page, and do not stretch a phone page past 1024.
+- **Both faces are whole apps with their own providers, and they share one `queryClient`**
+  (`@/lib/query`), so what one face read is still in the cache when a resize draws the other.
+  Filter state does not survive the crossing; the destination and the open card do.
+
+## Nothing here asks where it is running
+
+The spec's §3, word for word: **"The Android app and the web app are the same program, and the
+phone face is one face — not two that resemble each other."** It is the owner's rule, 2026-10-01 —
+*"the web/PWA collapses down into the mobile view, and that view is 1:1 with the mobile app"* —
+and what follows from it first: **"Nothing under `mobile/` asks where it is running. No user-agent
+test, no `isTauri`, no `isAndroid`, no `display-mode` query deciding what a page draws."**
+
+- **`phone/fence.test.ts`'s second arm is the fence**, because a resemblance kept by hand is N
+  decisions that happen to agree today. It sweeps every `.ts`, `.tsx`, `.css` and `.html` under
+  `mobile/` — tests included, itself excluded — for `navigator.userAgent`, `userAgentData`,
+  `navigator.platform`, `isTauri`, `__TAURI`, `isAndroid`, `isWebTarget` and `display-mode`.
+  **It reads comments too**, so a source file may not name one even in prose; this file may,
+  because the sweep does not read Markdown.
+- **`import.meta.env.MODE === "fake"` is not a probe.** It is which *build* this is, replaced at
+  compile time, and it is how `main.tsx` keeps the Storybook fake out of a production bundle.
+- **What differs between two installs lives below `@/lib/core`** (spec §3.5): how a command is
+  called, how a file is picked, where a card image is served from. The one user-agent read the
+  phone face's graph reaches today is that seam's own — `src/lib/images.ts`'s `imageOrigin`,
+  which picks a URL's origin and decides nothing a page draws.
+- **What only one host has arrives from the host, in a form both understand**: Android's back
+  gesture as History navigation, a cutout as the `env()` safe-area insets — the phone shell pads
+  by all four. Never a banner one install draws and the other does not.
+
+## The edition
+
+`src/lib/edition.ts`. The desktop shell reads an `Edition` from context — which rail rows to draw,
+whether to draw the caption, which view chords act — and the full edition is the default, so the
+desktop app provides nothing and `DesktopFace` provides `LIGHT_EDITION`. **A page never reads the
+edition, and nothing under `src/` asks where it is running**; `AppShell` is its one reader. A
+chord for a view outside the edition is **inert** — the digits do not move between editions.
+
+## What the phone face may import
+
+Anything in `src/` whose import graph does not reach `@/lib/store`, `@/App`,
+`@/components/{AppShell,TitleBar,Ribbon}`, `@/boot/*`, `@/lib/window`, or a `@tauri-apps/*` module
+other than through `@/lib/core`. **`phone/fence.test.ts`'s first arm walks the graph from every
+file under `mobile/phone/` and enforces it.**
+
+- **A refusal prints the whole trail**, from the phone file to the thing it reached, because the
+  offending edge is usually between two files in `src/` and the last hop alone does not say
+  which phone file has to change. **Do not weaken the fence to make it pass.**
+- **When the phone face wants a component that reaches the store, change the component to take
+  props, in `src/`** — so both faces gain. Do not copy it. **`components/CardTile` is the first
+  such piece**: the one composition of a card and its chin, drawn by the phone wall
+  (`phone/CardWall.tsx`) and by `share/ShareTile`.
+- **In practice** that is the presentational components, `ipc.ts` and its types, the TypeScript
+  domain logic, **and the desktop's own data hooks** — `useCardSearch`, `useDecks`,
+  `useCollection` and `useWishlist` are all clean, and the phone pages call them rather than
+  writing a second query for the same list.
+- **A type-only import is not an edge.** `lib/edition.ts` and `components/nav.ts` import `ViewId`
+  from the store as a type, which costs nothing at runtime. An inline `import { type X }` *is*
+  one: with nothing else in the braces it still compiles to a side-effect import.
+- **Tests and `phone/testing.tsx` are exempt, by name.** The harness installs a fake world and
+  reaches the Storybook fake on purpose — which also makes it a dead end to the walk, so a real
+  file that imports it is reported as an import the fence could not follow.
+- **Files in `mobile/` outside `phone/` are not under this arm** — `LightApp` reads `@/boot`'s
+  gate, `DesktopFace` mounts `@/App`, `useDesktopPlace` writes the store; hosting the desktop face
+  is their job. They are under the other arm like everything else here.
+
+## Navigation is the URL
+
+`routes.ts` is the one grammar and the one place the two faces agree on a spelling: a view, a
+deck under Decks, and `?card=<id>` over any of them. `parsePlace` is total — a path that names
+nothing opens on the start view — and `placeHref` is the only thing that spells a place out.
+
+- **The phone face has its own router**, `phone/router.ts`, hand-written over the History API with
+  no dependency: `usePlace`, `navigate`, `back`, `linkTo`.
+- **The desktop face keeps its store, and `useDesktopPlace.ts` is the one adapter** between that
+  store's three fields and the URL — which is why no router enters `src/`.
+
+**On the desktop face** — `useDesktopPlace.test.ts` holds each of these, and the adapter says the
+failure behind each at its own site:
+
+- **One press writes one history entry.** The first place change in a task pushes; any later one
+  in the same task rewrites that entry. The wishlist's open-a-deck press makes two store writes —
+  the view, then the deck — and between them the store stands on the gallery or on whichever deck
+  was parked, a place the reader never chose and Back would have stopped on. **A task is a run of
+  synchronous code, whoever started it**: two "presses" back to back in one test body, or in one
+  CDP script, are one press, and the second is replaced rather than pushed.
+- **A card is written with `replaceState`, never pushed.** There it is a modal over a page, so it
+  is written onto the entry it was opened over; opening and closing one must not grow history, or
+  Back would reopen a card the reader closed.
+- **The open card crosses the 1024px floor in both directions.** It is in the grammar, both faces
+  read it, and the phone's sheet asks under the desktop modal's own query key — so the face a
+  resize draws paints the card from the cache.
+- **A `popstate` is followed without writing history.** Moving the store *to* the URL takes up to
+  three writes, and the places between them are ones the URL never named; written back, they
+  bury the entry the reader just went back to.
+- **A refused history write is swallowed.** Browsers ration the History API and the write is made
+  from inside the store's own `set`: a throw there cuts off every subscriber registered after
+  the adapter. The URL is one step stale and the next write the browser accepts puts it right.
+- **The URL wins over the stored start view.** `mobile:tauri` shares the desktop's database,
+  whose stored view may be one the light rail has no row for, so the URL is seeded as a press.
+
+**On the phone face:**
+
+- **A control that changes the URL is a real link, not a button** — `<a {...linkTo(place)}>`, with
+  a real `href`, so a middle click, "open in new tab" and "copy link" work and a screen reader
+  hears *link*. The router takes **only an unmodified primary click that nothing else has
+  handled**; every other press is the browser's. The five tabs and the Settings control are links
+  today. **`DecksPage`'s rows and `DeckPage`'s Back to decks are still buttons that call
+  `navigate`** — skeleton pages, owed the same change when they are built for real.
+- **A card is a place here, and opening one is a push** — which is what lets Android's back
+  gesture close the sheet. The two faces differ on this on purpose: a sheet over a phone page is
+  something a reader leaves with Back, a modal over a desktop page is not.
+- **Closing the sheet leaves no Back step that reopens it.** The ✕, Escape and the scrim go
+  through `back(fallback)`: a real Back when the entry beneath is one this router pushed (it marks
+  its own entries in history state), and a replace when it is not — a reader who arrived on the
+  card's own link has nothing of the app's beneath them, and a Back there would leave it. Closing
+  by pushing again left the card one Back beneath the page it was closed over.
+- **`navigate` does nothing for the place the reader is already on, asked of the place and not of
+  the string**: `/` is the start view without spelling it, and a press on the lit tab must not
+  push `/search` over it.
+
+## Running it
+
+| Command | Backend | Use it for |
+| --- | --- | --- |
+| `npm run mobile:dev` | The Storybook fake, by the four aliases Storybook uses | UI work in any browser. No Rust, **no lock**. `?art=live` draws real pictures |
+| `npm run mobile:tauri` | The real Rust core and the dev database | The same UI against a real corpus, in a 412 × 915 window |
+| `npm run mobile:build` | — | `tsc`, then the bundle into `dist-mobile/` |
+
+- **`mobile:tauri` is the desktop binary with a config overlay** (`src-tauri/tauri.light.conf.json`):
+  it **takes the `app` lock** and reads `src-tauri/target/debug/data`. Read the `running-the-app`
+  skill first. Widen the window past 1024 and the face changes.
+- **Both dev servers use port 5175**, so they cannot run at once — `mobile:tauri` starts its own
+  with `mobile:serve`, which is `mobile:dev` without the fake.
+- **Fake mode has no startup gate**: the fake answers no `startup_status`, and the gate reads a
+  rejected ask as *still loading*, so gating there would wait for ever. It also installs one
+  world, `starter`, once, before React.
+- **Neither `verify` nor CI runs `mobile:build`**, like `share:build`. `mobile/` is in
+  `tsconfig.json`'s `include`, so `npm run build` type-checks it; nothing bundles it.
+
+## Tests
+
+`mobile/**/*.test.{ts,tsx}` runs in the one Vitest suite.
+
+- **jsdom has no layout engine, so any test that _mounts_ a card wall calls `installLayout()`
+  first** (`phone/testing.tsx`) — not only one that goes on to expect tiles. Every element
+  measures 0 there, a virtualised wall draws no row at all, and a test asserting something is
+  *absent* from the wall then passes over a wall that is simply empty. A wall in a test stays
+  unmeasured and draws two columns.
+- **`renderPhone` runs the Storybook fake under the real `ipc.ts`**, so a phone test exercises
+  the hand-written mirror too. The file calling it mocks Tauri's three API modules with the
+  fake's **in the test file itself** — a `vi.mock` is hoisted per file — and calls it from inside
+  a test, which is what unmounts the world afterwards. **Never mock `@/lib/images`.**
+- **An empty container means the tree crashed, not that it is slow.** A throw in a render or an
+  effect unwinds React to nothing; a longer timeout waits on a tree that is not coming. Look for
+  the error.
+- **`src/lib/layers.test.ts` and `src/lib/motion.test.ts` read `mobile/` too**, so a z-index here
+  comes from `LAYER` and a text field here wears no press recipe. **`src/lib/tokens.test.ts` does
+  not** — it counts exactly one `MotionConfig` in the program, and the phone face rightly mounts
+  its own — so its other sweeps stop at `src/`: the retired colour classes, a transition with no
+  reduced-motion opt-out, the two `motion` APIs the shipped CSP disables. Follow those by hand;
+  [`src/CLAUDE.md`](../src/CLAUDE.md) has each.
+- **Storybook's globs stop at `src/`**, so there are no stories for phone UI. `CardTile` is in
+  `src/` and has one; the phone face's workbench is `mobile:dev`.
+
+## Not here yet
+
+- **The phone pages are a skeleton.** Each real page — the filters sheet, the card sheet, the two
+  cabinets, the deck editor — comes to the owner as built options before it is built, in phase 3,
+  under the `frontend-design` skill like all UI here.
+- **Scanner and Settings are placeholders**: a sentence each, no camera and no permission asked.
+- **The Collection and Wishlist walls draw open shelves only** — the desktop hooks fetch the
+  cards of the shelves the reader has left open, and the wall draws them as one run with no
+  heading, no fold and no way into a folder. Search is the box and the wall, with every other
+  filter still to come.
+- **Nothing on the phone face writes.**
+- **No Android host, no WASM host, no service worker** — `public/light.webmanifest` is the whole
+  of the PWA so far — **and no sync on a light install**: the phone face runs none and draws the
+  mana line at rest. `mobile:tauri` is the desktop binary, not a light host.

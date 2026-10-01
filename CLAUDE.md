@@ -164,6 +164,9 @@ no combo" and "we have never downloaded the list" have to be two different sente
   covered by definition, and reads ~14 points high. See
   [test-coverage.md](docs/reference/test-coverage.md) before quoting either figure.
 - `npm run storybook` / `build-storybook` — the component workbench
+- `npm run mobile:dev` / `mobile:tauri` — the light app, over the Storybook fake in a browser
+  (port 5175, no lock) or over the real core in a phone-sized window (**takes the `app` lock**).
+  See [`mobile/CLAUDE.md`](mobile/CLAUDE.md).
 
 ## Architecture
 
@@ -199,6 +202,7 @@ on — do not work from this page alone.
 | [`src/features/transfer/CLAUDE.md`](src/features/transfer/CLAUDE.md) | Decklist import and export — parsing, planning, the two dialogs |
 | [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md) | Stories, the fake, seeds and faults |
 | [`.github/CLAUDE.md`](.github/CLAUDE.md) | Workflows, the `changes` router, release-please |
+| [`mobile/CLAUDE.md`](mobile/CLAUDE.md) | The light app — the Android and web face: the two faces and the width that picks one, the URL as navigation, what the phone face may import, and the rule that nothing there asks where it is running |
 
 **Two rules load by file *extension* rather than by directory, and sit in `.claude/rules/`.**
 They cover the language servers, which are active for every `.rs` and `.ts`/`.tsx` file with no

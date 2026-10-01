@@ -103,9 +103,10 @@ export function CardArt({
   variant?: ImageVariant;
   /**
    * A picture from **somewhere other than the local cache**, drawn in place of the `mtgimg://`
-   * one — the share viewer's door, and its only caller. That page is a plain web page with no
-   * Tauri behind it and therefore no `mtgimg` protocol to ask, so it hands the frame the
-   * snapshot's own Scryfall URL with `cardId={null}`.
+   * one — the share viewer's door. **`components/CardTile` is the one caller that passes it, and
+   * `share/ShareTile.tsx` the only surface that supplies one**: that page is a plain web page
+   * with no Tauri behind it and therefore no `mtgimg` protocol to ask, so it hands the tile the
+   * snapshot's own Scryfall URL with `cardId={null}`, and the tile hands both on as given.
    *
    * **Absent means the cache**, which is every surface in the app: a frame there that drew
    * Scryfall's URL instead would refetch over the network a wall the cache has already paid for.

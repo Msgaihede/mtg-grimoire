@@ -6,7 +6,7 @@ import { LAYER } from "./layers";
  * `tokens.test.ts` gives: Tailwind's scanner reads prose as eagerly as code, so a class
  * named in a comment is a class the build emits a rule for.
  */
-const SOURCES = import.meta.glob<string>("/src/**/*.{ts,tsx,css}", {
+const SOURCES = import.meta.glob<string>(["/src/**/*.{ts,tsx,css}", "/mobile/**/*.{ts,tsx,css}"], {
   query: "?raw",
   import: "default",
   eager: true,
