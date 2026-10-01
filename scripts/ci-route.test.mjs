@@ -18,6 +18,7 @@ const TS_TESTS = import.meta.glob(
     "/relay/src/**/*.test.ts",
     "/share-worker/src/**/*.test.ts",
     "/share/**/*.test.{ts,tsx}",
+    "/mobile/**/*.test.{ts,tsx}",
     "/scripts/**/*.test.mjs",
   ],
   { query: "?raw", import: "default", eager: true },
