@@ -17,7 +17,15 @@ export interface CardTileProps {
   chin: ChinPrinting;
   money?: ReactNode;
   zoom?: number;
-  /** Drawn over the art — a count tag, say. Inside the button when there is one. */
+  /**
+   * Drawn over the art — a count tag, say. Inside the button when there is one.
+   *
+   * **So on a pressable tile the overlay must be decorative and non-interactive** — an
+   * `aria-hidden` mark like `CountTag` — because the button's `aria-label` replaces its contents
+   * for naming, which leaves text in here unreachable to a screen reader and makes a control in
+   * here interactive content nested in a button; a tile that needs a real control in a corner
+   * draws it as a sibling of the button, as `CardGrid` does.
+   */
   overlay?: ReactNode;
   /** Makes the art a button. Absent, the tile is not a control at all. */
   onPress?: () => void;

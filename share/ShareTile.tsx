@@ -24,10 +24,11 @@ export function wireFinish(f: string): Finish | null {
 /**
  * One published copy, drawn as the card it is.
  *
- * **`CardTile` rather than a frame of its own**, which is most of why a page with
- * no core imports from `src/` at all: several surfaces in the app draw a card and those two are
- * the one definition of what that looks like. A fresh drawing, on the one page a stranger sees,
- * is exactly the drift `src/CLAUDE.md` was written about.
+ * **`CardTile` rather than a frame of its own**, which is most of why a page with no core imports
+ * from `src/` at all: several surfaces in the app draw a card, and `CardTile` composes `CardArt`
+ * and `CardChin`, which are the one definition of what a card and its chin look like. A fresh
+ * drawing, on the one page a stranger sees, is exactly the drift `src/CLAUDE.md` was written
+ * about.
  *
  * Three things this tile is **not**, and each is a fact about the surface rather than a
  * simplification:
@@ -37,12 +38,13 @@ export function wireFinish(f: string): Finish | null {
  *   nothing would be a control the page cannot honour.
  * * **`cardId={null}`, always — but that is not what carries the picture.** `remoteSrc` is:
  *   this page has no Tauri behind it and so no `mtgimg://` protocol to ask, and `CardArt`'s
- *   `remoteSrc` is the one door for a picture from anywhere else — this tile is its only
- *   caller. ⚠️ **`card.img ?? null`, never bare `card.img`**: an absent `remoteSrc` means *the
- *   cache*, and a present `null` means *no picture*. A card the publisher's corpus had
- *   forgotten carries no `img`, which `CardArt` draws as a named frame rather than a broken
- *   image. The null id is kept as defence in depth: it means this bundle can never *ask* for
- *   the `mtgimg://` protocol a browser has never heard of.
+ *   `remoteSrc` is the one door for a picture from anywhere else — `CardTile` is what passes
+ *   it to `CardArt`, and this tile is the only surface that supplies one. ⚠️ **Always
+ *   `card.img ?? null`, never bare `card.img`**: an absent `remoteSrc` means *the cache*, and a
+ *   present `null` means *no picture*. A card the publisher's corpus had forgotten carries no
+ *   `img`, which `CardArt` draws as a named frame rather than a broken image. The null id is
+ *   kept as defence in depth: it means this bundle can never *ask* for the `mtgimg://` protocol
+ *   a browser has never heard of.
  * * **`rarity={null}` on the chin.** Rarity is not on the wire (spec §3's absences), so the gem
  *   says *unknown* rather than being derived from a corpus this page does not have.
  */

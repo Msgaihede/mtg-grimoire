@@ -58,7 +58,12 @@ describe("CardTile", () => {
   it("hands a present null picture through, which is not the same as none given", () => {
     // `remoteSrc` absent asks the image cache; a present `null` says there is no picture.
     // A tile that collapsed the two would ask a browser for `mtgimg://`.
-    draw(<CardTile {...BOLT} cardId={null} remoteSrc={null} />);
+    //
+    // **With a real card id, and that is the whole of what makes this bite.** `CardArt` draws no
+    // picture for a null id whatever `remoteSrc` is, so a tile that dropped the null — or never
+    // forwarded the prop at all — would pass a null-id version of this. Here the cache has a
+    // picture to offer, and only a forwarded `null` keeps the frame from asking for it.
+    draw(<CardTile {...BOLT} remoteSrc={null} />);
     expect(screen.queryByRole("img")).toBeNull();
   });
 });
