@@ -2043,6 +2043,18 @@ gaps of 991–1010 ms throughout, well past the ~5 minutes at which Chromium's i
 would bite. WebView2 reports a minimized window's page as `visibilityState: "visible"`, so the
 renderer never sees a hidden page at all.
 
+**So a minimized window is asked about through Tauri instead** (issue #556, 2026-10-01).
+`useWindowParked` re-reads `isMinimized()` on the window's resize and focus events — a minimize on
+Windows is a resize to 0×0 and a lost focus — and once on mount, ORed with `document.hidden` for an
+engine that does report it. **The pump pauses on the minimize itself; the camera and the heartbeat
+go `PARK_GRACE_MS` (five seconds) later**, so a quick restore finds the stream still open, and a
+window left on the taskbar puts the camera light out and lets the lease lapse two seconds after
+that. A restore reopens the camera and beats at once, and a refused beat is what sends it to the
+sentence if another window took the scanner meanwhile. **Focus alone pauses nothing**: a reader
+holding a card up to the lens may well have clicked another window. **A fully covered window is
+still not seen** — no event reports it — and keeps the scanner as it did. Not yet driven in the
+shipped window; the suite drives the hook against the workbench's fake window.
+
 ### The IPC seam
 
 `Core.call` widened to `call(command, args?: CallArgs, options?: CallOptions)`, where
