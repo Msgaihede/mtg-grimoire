@@ -28,16 +28,16 @@ function thisFrame(verdict: ScannerVerdict | null): string {
  *
  * **Never folded** — every other panel here answers "why did it decide that", which is a
  * question a reader asks occasionally; this one is the numbers under "what did it decide", which
- * is the whole screen. It is also the only panel with two presses in it, and both are about the
- * *evidence* rather than about the card: throw the accumulation away, or file this frame in
- * the dataset under the name a person read off the cardboard.
+ * is the whole screen. It is also the only panel with a press in it, and that press is about the
+ * *evidence* rather than about the card: file this frame in the dataset under the name a person
+ * read off the cardboard. Its sibling, *Reset evidence*, moved to the Match strip beside the bar
+ * on 2026-10-01 (issue #740), where every reader can reach it.
  */
 export function MatchPanel({
   status,
   verdict,
   lastCollector,
   rate,
-  onReset,
   onCapture,
 }: {
   status: ScannerStatus | null;
@@ -50,7 +50,6 @@ export function MatchPanel({
   lastCollector: ScannerCollector | null;
   /** Frames per second over the last twenty, or `null` before there have been twenty. */
   rate: number | null;
-  onReset: () => void;
   onCapture: (expected: string) => Promise<string>;
 }) {
   const [expected, setExpected] = useState("");
@@ -152,9 +151,6 @@ export function MatchPanel({
       </p>
 
       <div className="flex flex-wrap items-center gap-2">
-        <button type="button" onClick={onReset} className={BUTTON}>
-          Reset evidence
-        </button>
         <input
           type="text"
           aria-label="What it actually is"

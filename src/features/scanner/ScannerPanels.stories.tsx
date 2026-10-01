@@ -80,7 +80,6 @@ const meta = {
     sendPx: DEFAULT_SEND_PX,
     onOptions: fn(),
     onSendPx: fn(),
-    onReset: fn(),
     onCapture: fn(async () => "live-1.jpg"),
   },
   decorators: [

@@ -24,7 +24,6 @@ function props(over: Partial<ScannerPanelsProps> = {}): ScannerPanelsProps {
     sendPx: DEFAULT_SEND_PX,
     onOptions: vi.fn(),
     onSendPx: vi.fn(),
-    onReset: vi.fn(),
     onCapture: vi.fn(async () => "live-1.jpg"),
     ...over,
   };
@@ -132,11 +131,11 @@ describe("the match panel", () => {
     expect(within(match).getAllByRole("listitem")[0]).toHaveTextContent("Plains · 2XM 373");
   });
 
-  it("resets and captures through its two buttons", async () => {
+  /** Reset moved to the Match strip beside the bar (#740); one button by that name per screen. */
+  it("captures through its button, and leaves reset to the strip", async () => {
     const p = props();
     render(<ScannerPanels {...p} />);
-    await userEvent.click(screen.getByRole("button", { name: "Reset evidence" }));
-    expect(p.onReset).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "Reset evidence" })).not.toBeInTheDocument();
     await userEvent.type(screen.getByRole("textbox", { name: "What it actually is" }), "Plains");
     await userEvent.click(screen.getByRole("button", { name: "Add frame to dataset" }));
     expect(p.onCapture).toHaveBeenCalledWith("Plains");

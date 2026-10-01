@@ -494,6 +494,7 @@ function LiveScanner() {
               lastAdded={lastAdded}
               hasBundle={hasBundle}
               lastResolution={loop.lastResolution}
+              onReset={onReset}
             />
             {/* The column is the height, and the video box takes what the strip above it and the
                 asset notes under it leave. **Cropped rather than letterboxed** (`object-cover`, and
@@ -580,7 +581,6 @@ function LiveScanner() {
                   sendPx={sendPx}
                   onOptions={setOptions}
                   onSendPx={setSendPx}
-                  onReset={onReset}
                   onCapture={onCapture}
                 />
                 <TiersPanel resolution={loop.lastResolution} />
