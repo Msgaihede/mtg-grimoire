@@ -184,6 +184,13 @@ function put(group: string, bearer: string | null, id: string, body: BodyInit): 
   });
 }
 
+function revoke(group: string, bearer: string, id: string): Request {
+  return new Request(`https://share.example/g/${group}/share/${id}`, {
+    method: "DELETE",
+    headers: { authorization: `Bearer ${bearer}` },
+  });
+}
+
 /** Bytes that begin with gzip's two magic bytes, which is all this Worker ever inspects. */
 function gz(payload: string): Uint8Array {
   const tail = new TextEncoder().encode(payload);
@@ -315,6 +322,60 @@ describe("PUT /g/{group}/share/{id}", () => {
     expect((await worker.fetch(snapshot(id, first), fake.env)).status).toBe(200);
   });
 
+  /**
+   * Run `during` inside the next R2 `put`, after the bytes are stored and before the handler
+   * moves the row — the one window in which two requests about one share can interleave.
+   */
+  function interleave(fake: Fake, during: () => Promise<void>): void {
+    const bucket = fake.env.SHARES as unknown as { put: (k: string, v: unknown) => Promise<unknown> };
+    const real = bucket.put;
+    let fired = false;
+    bucket.put = async (key, value) => {
+      const stored = await real(key, value);
+      if (!fired) {
+        fired = true;
+        await during();
+      }
+      return stored;
+    };
+  }
+
+  it("leaves no orphan when two devices refresh one share at once", async () => {
+    // ⚠️ Both uploads read the same old key. With a blind `UPDATE` both deleted that key and the
+    // first device's new object stayed in R2 with nothing pointing at it — a plaintext snapshot
+    // nobody could reach or reclaim. The swap makes the second writer delete the first's.
+    const fake = shareEnv();
+    const id = await publish(fake);
+    await upload(fake, id, gz("snapshot zero"));
+
+    let other = "";
+    interleave(fake, async () => {
+      other = await upload(fake, id, gz("snapshot from the other device"));
+    });
+    const mine = await upload(fake, id, gz("snapshot from this device"));
+
+    expect(other).not.toBe(mine);
+    expect([...fake.r2.store.keys()]).toEqual([`shares/${id}/${mine}.json.gz`]);
+    expect(fake.tables.shares[0].object_key).toBe(`shares/${id}/${mine}.json.gz`);
+  });
+
+  it("deletes what it wrote when the share is withdrawn mid-upload", async () => {
+    const fake = shareEnv();
+    const id = await publish(fake);
+    await upload(fake, id, gz("snapshot zero"));
+
+    interleave(fake, async () => {
+      const res = await worker.fetch(revoke("g1", await token(), id), fake.env);
+      expect(res.status).toBe(204);
+    });
+    const res = await worker.fetch(put("g1", await token(), id, gz("too late")), fake.env);
+
+    expect(res.status).toBe(404);
+    expect(fake.r2.store.size).toBe(0);
+    expect(fake.tables.shares[0].state).toBe("revoked");
+    expect(fake.tables.shares[0].object_key).toBeNull();
+  });
+
   it("refuses a blob over the cap and names the size", async () => {
     const fake = shareEnv();
     const id = await publish(fake);
@@ -432,6 +493,36 @@ describe("GET /s/{id}/{hash}.json.gz", () => {
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(body);
   });
 
+  it("tells the runtime the body is already encoded", async () => {
+    // ⚠️ **jsdom cannot see this bug, so the option itself is pinned.** workerd *applies* a
+    // declared `content-encoding` unless the response says `encodeBody: "manual"`, and an R2
+    // stream is not the `fetch()` pass-through it exempts — so without it every snapshot left the
+    // Worker gzipped twice and every viewer failed to read it. The deploy runbook's `curl` is the
+    // check that runs against the real runtime.
+    const fake = shareEnv();
+    const id = await publish(fake);
+    const hash = await upload(fake, id, gz("snapshot one"));
+
+    const inits: ResponseInit[] = [];
+    const Real = globalThis.Response;
+    vi.stubGlobal(
+      "Response",
+      class extends Real {
+        constructor(body?: BodyInit | null, init?: ResponseInit) {
+          super(body, init);
+          if (init !== undefined) inits.push(init);
+        }
+      },
+    );
+    const res = await worker.fetch(snapshot(id, hash), fake.env);
+    vi.stubGlobal("Response", Real);
+
+    expect(res.status).toBe(200);
+    const served = inits.filter((init) => new Headers(init.headers).get("content-encoding") === "gzip");
+    expect(served).not.toHaveLength(0);
+    for (const init of served) expect(init.encodeBody).toBe("manual");
+  });
+
   it("needs no bearer at all — the link is the whole capability", async () => {
     const fake = shareEnv();
     const id = await publish(fake);
@@ -498,6 +589,25 @@ describe("GET /s/{id}/{hash}.json.gz", () => {
     const res = await worker.fetch(snapshot(id, hash), fake.env);
     expect(res.status).toBe(410);
     expect(await res.text()).not.toContain("snapshot one");
+  });
+
+  it("deletes the snapshot from R2 when the share is withdrawn", async () => {
+    // A snapshot is stored in the clear and `revoked` is terminal, so an object left behind is a
+    // binder the reader withdrew, readable in R2 for ever.
+    const fake = shareEnv();
+    const id = await publish(fake);
+    const hash = await upload(fake, id, gz("snapshot one"));
+    expect(fake.r2.store.has(`shares/${id}/${hash}.json.gz`)).toBe(true);
+
+    expect((await worker.fetch(revoke("g1", await token(), id), fake.env)).status).toBe(204);
+    expect(fake.r2.store.size).toBe(0);
+    expect(fake.tables.shares[0].object_key).toBeNull();
+    expect(fake.tables.shares[0].bytes).toBeNull();
+
+    // Idempotent, and the second press has nothing left to delete.
+    const deletes = fake.r2.deletes;
+    expect((await worker.fetch(revoke("g1", await token(), id), fake.env)).status).toBe(204);
+    expect(fake.r2.deletes).toBe(deletes);
   });
 
   it("answers 410 for a share that lapsed after the cache was warmed", async () => {

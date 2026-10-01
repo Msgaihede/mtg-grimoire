@@ -73,6 +73,20 @@ moved, and only when the key actually changed — a republish of an unchanged co
 content-addressed to the same key, and a delete that skipped that comparison would erase the
 object it had just written.
 
+**The row moves by compare-and-swap, never by a blind write.** The `UPDATE` names the key the
+request last read (`coalesce(object_key, '') = ?`) and `state <> 'revoked'`; a loser re-reads and
+tries again from where the row now stands, so each displaced object is deleted by exactly the
+request that displaced it. Until 2026-10-01 two devices refreshing one share at once both deleted
+the same old key and the loser's new object stayed in R2 with nothing pointing at it. An upload
+that finds the share withdrawn underneath it deletes what it wrote and answers 404.
+
+**Withdrawing deletes the snapshot.** `DELETE /g/{group}/share/{id}` flips the row to `revoked`
+and reads its `object_key` in **one** statement (`UPDATE … RETURNING`), then points the row at
+nothing and deletes the object. A snapshot is plaintext and `revoked` is terminal, so the object
+left behind until 2026-10-01 was a binder the reader had withdrawn sitting readable in R2 for ever.
+The single statement is the guard: an upload either committed before it — and its key is the one
+returned — or meets `revoked` in its own swap.
+
 The key is `shares/{id}/{hash}.json.gz`, where `hash` is the first 16 hex characters of the body's
 SHA-256. ⚠️ **That is why the `PUT` buffers rather than streaming straight into R2**: the digest
 has to be known before the object can be named, and R2's Workers binding has no rename. The buffer
@@ -80,7 +94,11 @@ is bounded by the 8 MB cap, which is checked as it fills, so a caller who omits 
 `content-length` still cannot make this Worker hold more than the cap.
 
 `GET /s/{id}/{hash}.json.gz` is `public, max-age=31536000, immutable` with `caches.default` in
-front of R2, so a warm view costs no storage read. What `immutable` costs is that revoking cannot
+front of R2, so a warm view costs no storage read. ⚠️ **The response sets `encodeBody: "manual"`**:
+by default the Workers runtime *applies* a declared `content-encoding` — gzips the body on the
+way out — and an R2 stream is not the unread `fetch()` pass-through it exempts. Without the option
+every snapshot left gzipped twice, which the jsdom suite cannot see; step 5 of the deploy is the
+check that can. What `immutable` costs is that revoking cannot
 recall an edge copy somebody already holds; what revoking *does* stop is every new viewer, because
 the shell is the only thing that hands out that URL and it is `max-age=300`.
 
@@ -128,6 +146,11 @@ trigger of the free plan's five. And because the verdict is written into the col
 query — so a link that goes viral costs a single-table read on the budget every paying reader's
 sync shares.
 
+**It never writes `updated_at`.** That column is the date the shell's OpenGraph card puts on the
+snapshot, and a lapse or a revival changes the row's state and not one byte of what the owner
+published — until 2026-10-01 both directions restamped it, so a share relit after a month
+previewed as *updated today*.
+
 A lapsed share **keeps its R2 object**. Reclaiming that storage is a sweep for later (spec §13),
 not a retention rule invented here: a revived membership wants the snapshot back.
 
@@ -169,7 +192,18 @@ because it has no address yet.**
    curl -sI              https://<address>/s/<id>/<hash>.json.gz   # asks for nothing
    ```
 
-   Read `content-encoding` on each. `gzip` on both is the case the app was written for; its
+   Then prove the body is gzipped **once**, cold and again warm (the second request is a
+   `caches.default` hit, which is a different code path at the edge):
+
+   ```
+   curl -s --compressed https://<address>/s/<id>/<hash>.json.gz | head -c 1; echo   # run twice
+   ```
+
+   Both must print `{`. Anything else — binary, `1f 8b` under `xxd` — is a body gzipped twice,
+   which is what `blob.ts`'s `encodeBody: "manual"` exists to prevent; every viewer would answer
+   it with a corruption sentence.
+
+   Read `content-encoding` on each of the two `-I` requests. `gzip` on both is the case the app was written for; its
    absence on the bare one is the case the app now survives anyway — `share::publish::open` sends
    `accept-encoding: gzip` and `parse_snapshot` sniffs the `1f 8b` magic rather than assuming it,
    so either answer opens. Record which one this deploy gives in
