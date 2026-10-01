@@ -456,7 +456,11 @@ the same NULL reason — `folder_uid = ?` matches nothing at all for a whole-col
 
 `share-worker/` — a **second** Cloudflare Worker beside `relay/`, binding the same D1 database and
 the same `RELAY_HMAC_KEY` so it can verify a token the relay minted without a service binding.
-**`relay/`'s source and its deploy are untouched by this feature.**
+**`relay/`'s source and its deploy were untouched by this feature until 2026-10-01**, when issue
+#548 added a `dev` claim to the token the relay mints: the share gate refuses a token minted before
+the group's newest rotation by a device that rotation's manifest omits, which closes the day a
+removed device's leftover token could still publish and withdraw. `share-worker/README.md` has the
+rule and what it leaves open; the relay has to be deployed first.
 
 **The reason is blast radius rather than tidiness.** Sync is a paid feature people depend on;
 sharing is new and will churn, and every deploy is done by hand by one person. One Worker carrying
@@ -515,6 +519,26 @@ and **only when the key actually changed**: a republish of an unchanged collecti
 content-addressed to the same key, and a delete that skipped that comparison would erase the object
 it had just written.
 
+**The row moves by compare-and-swap** (2026-10-01, issue #548): the `PUT`'s `UPDATE` names the key
+it last read, via `coalesce(object_key, '') = ?`, and `state <> 'revoked'`. A loser re-reads and
+swaps again from where the row now stands — up to five times, then a 409 — so every displaced
+object is deleted by exactly the request that displaced it. Before it, two devices refreshing one
+share at once both deleted the same old key and one new object was orphaned in R2, in plaintext,
+for good. An upload that finds the share withdrawn underneath it deletes its own object and
+answers 404.
+
+**Withdrawing deletes the snapshot** (same date): `handleRevoke` flips `state` and reads
+`object_key` in one `UPDATE … RETURNING`, nulls the column, and deletes the object. A snapshot is
+stored in the clear and `revoked` is terminal, so the object it used to leave behind was a binder
+the reader had withdrawn, readable in R2 for ever. `fakeD1` learned `UPDATE … RETURNING` for it.
+
+⚠️ **The snapshot response sets `encodeBody: "manual"`** (same date). By default the Workers runtime
+*applies* the `content-encoding` a response declares, and the only exemption is an unread `fetch()`
+response passed through — an R2 stream is not one. Without the option every snapshot left the
+Worker gzipped twice: the web viewer's `parseSnapshot` would have answered `SNAPSHOT_UNREADABLE`
+and the app's `parse_snapshot` invalid UTF-8. jsdom cannot see runtime encoding, so the suite pins
+the option and the deploy runbook's `curl … | head -c 1` is what proves it, cold and warm.
+
 ⚠️ **The `PUT` buffers rather than streaming straight into R2, and the plan's "no buffering" was not
 implementable.** A content-addressed key needs the digest *before* the object can be named, and
 R2's Workers binding has no rename and no server-side copy. The bound is preserved differently:
@@ -567,9 +591,11 @@ move. Narrowing it would be free and correct — and would make the `AND state =
 exists for. Choosing a slightly wider read to keep a guard testable is the trade at this size, and
 `lapse.ts` and the README both say so, so nobody optimises it away.
 
-**`updated_at` is written only to rows that actually moved**, pinned by two tests, because the
-public page renders that stamp and a nightly restamp would make every share claim it had been
-refreshed at 03:30.
+**The pass never writes `updated_at` at all** (2026-10-01, issue #548). It used to stamp the rows
+it moved, and the public page renders that stamp as the snapshot's date — so a share relit after a
+month of lapse told its OpenGraph card it had been *updated today*. A flip of `state` changes not
+one byte of what the owner published. The rows it does not move were already left alone, so no
+share claims it was refreshed at 03:30 either; both halves are pinned by a test.
 
 **And because the verdict is written into the column, `GET /s/{id}` reads one row and branches on
 `state`** — no join to `entitlements`, no second query. Putting the entitlement check on the read
@@ -1180,7 +1206,9 @@ branch acquires an unrelated red.
   `Brainstorm / No card` — which reads as an error rather than as *the publisher's corpus forgot
   this printing*. Fixing it means touching copy every wall in the app draws.
 * **Revoked tombstones and lapsed R2 objects both accumulate unbounded.** Two sweeps for the day
-  they matter, and spec §13 says so rather than inventing retention rules nobody has needed.
+  they matter, and spec §13 says so rather than inventing retention rules nobody has needed. A
+  *revoked* share's R2 object no longer does — withdrawing deletes it since 2026-10-01 — but its
+  D1 row stays, because it is what answers 410.
 * **A seconds-long window after a republish** shows the new metadata over the old blob — the same
   window the two-step's header caveat above describes.
 * **The 410 on `/s/{id}` is HTML**, so the app cannot tell withdrawn from lapsed and says one

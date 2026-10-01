@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { fakeEnvOver, type Tables } from "../../relay/src/fakeD1";
-import { mint } from "../../relay/src/token";
+import { mint, TOKEN_TTL_MS } from "../../relay/src/token";
 import worker, { type Env } from "./index";
 
 /**
@@ -441,5 +441,96 @@ describe("GET /g/{group}/shares and DELETE", () => {
     const env = shareEnv();
     const res = await worker.fetch(revoke("g1", await token(), "AAAAAAAAAAAAAAAA"), env);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("a device the group has removed", () => {
+  const STAYED = "aa".repeat(16);
+  const REMOVED = "bb".repeat(16);
+  const JOINED = "cc".repeat(16);
+
+  /**
+   * A group whose newest rotation was accepted a minute ago and names only `STAYED` — the row a
+   * removal leaves. The epoch before it is there too, naming both, so a gate that read the oldest
+   * row rather than the newest would let the removed device through.
+   */
+  function rotatedEnv(keys: Record<string, string> = { [STAYED]: "blob" }): {
+    env: Env;
+    rotatedAt: number;
+  } {
+    const rotatedAt = Date.now() - 60_000;
+    const env = shareEnv({
+      group_keys: [
+        {
+          group_id: "g1",
+          epoch: 1,
+          auth: "a1",
+          keys: JSON.stringify({ [STAYED]: "blob", [REMOVED]: "blob" }),
+          created_at: rotatedAt - 3_600_000,
+        },
+        { group_id: "g1", epoch: 3, auth: "a3", keys: JSON.stringify(keys), created_at: rotatedAt },
+      ],
+    } as Partial<Tables>);
+    return { env, rotatedAt };
+  }
+
+  /** A token minted at `mintedAt`, as `grantFor` would have: `exp` one TTL past its clock. */
+  async function mintedAt(at: number, dev?: string): Promise<string> {
+    const claims = { sub: "sub-0", grp: "g1", exp: at + TOKEN_TTL_MS };
+    return mint(dev === undefined ? claims : { ...claims, dev }, KEY);
+  }
+
+  it("refuses the token it was handed before the rotation that removed it", async () => {
+    // ⚠️ The token is still validly signed and still unexpired — that is the whole bug. A share is
+    // plaintext, so for up to a day a removed laptop could overwrite or withdraw the group's
+    // binders. Issue #548.
+    const { env, rotatedAt } = rotatedEnv();
+    const stale = await mintedAt(rotatedAt - 1_000, REMOVED);
+    const id = await idOf(
+      await worker.fetch(post("g1", await mintedAt(rotatedAt + 1, STAYED), META), env),
+    );
+
+    expect((await worker.fetch(post("g1", stale, META), env)).status).toBe(401);
+    expect((await worker.fetch(list("g1", stale), env)).status).toBe(401);
+    expect((await worker.fetch(revoke("g1", stale, id), env)).status).toBe(401);
+  });
+
+  it("goes on accepting a device the rotation kept, whenever its token was minted", async () => {
+    // A device that stayed keeps its cached token: refusing it would cost every remaining device a
+    // day of failed publishes after any removal.
+    const { env, rotatedAt } = rotatedEnv();
+    const res = await worker.fetch(post("g1", await mintedAt(rotatedAt - 1_000, STAYED), META), env);
+    expect(res.status).toBe(200);
+  });
+
+  it("accepts a device that joined after the newest manifest and is not on it yet", async () => {
+    // A join publishes its roster only when it can (`client::publish_join`), so a newly paired
+    // device can be missing from the newest manifest. It could only have minted with the group's
+    // *current* auth, which a removed device no longer derives — the mint time is the proof.
+    const { env, rotatedAt } = rotatedEnv();
+    const res = await worker.fetch(post("g1", await mintedAt(rotatedAt + 1, JOINED), META), env);
+    expect(res.status).toBe(200);
+  });
+
+  it("refuses a token with no device that predates the rotation, and accepts one after it", async () => {
+    // An older relay minted no `dev`; such a token can say when it was minted and nothing more.
+    const { env, rotatedAt } = rotatedEnv();
+    expect((await worker.fetch(post("g1", await mintedAt(rotatedAt - 1_000), META), env)).status).toBe(
+      401,
+    );
+    expect((await worker.fetch(post("g1", await mintedAt(rotatedAt), META), env)).status).toBe(200);
+  });
+
+  it("refuses the last device out when its departure left an empty manifest", async () => {
+    const { env, rotatedAt } = rotatedEnv({});
+    const res = await worker.fetch(post("g1", await mintedAt(rotatedAt - 1_000, STAYED), META), env);
+    expect(res.status).toBe(401);
+  });
+
+  it("asks nothing of a group that has never rotated", async () => {
+    // No `group_keys` row is a group nobody has ever been removed from.
+    const env = shareEnv();
+    const res = await worker.fetch(post("g1", await mintedAt(Date.now() - 1_000, REMOVED), META), env);
+    expect(res.status).toBe(200);
   });
 });

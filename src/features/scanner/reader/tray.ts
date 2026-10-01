@@ -266,6 +266,36 @@ export function unresolvedCount(rows: readonly ScannerTrayRow[]): number {
 }
 
 /**
+ * A row the reader still owes an answer: **a printing to pick, or a finish to name.** The two
+ * questions the tray asks, and the only two — a row with neither is one Add files as it stands.
+ */
+export function needsDecision(row: ScannerTrayRow): boolean {
+  return row.choices.length > 0 || !isKnownFinish(row.finish);
+}
+
+/**
+ * The key of the next row waiting on a decision **after** `afterKey`, in the order the tray draws
+ * — newest first — and round to the top again past the last; `null` when no row is waiting.
+ *
+ * **The cursor is a key, never an index**, because the tray moves under it: a scan lands at index
+ * 0 and pushes every row down, so an index remembered across one would skip a row. A cursor whose
+ * row has gone — removed, or filed by an Add — starts the walk from the top. The cursor's own row
+ * is the walk's last stop rather than its first, so a tray with one question left still answers
+ * with that row instead of `null`.
+ */
+export function nextDecisionKey(
+  rows: readonly ScannerTrayRow[],
+  afterKey: string | null,
+): string | null {
+  const from = afterKey === null ? -1 : rows.findIndex((row) => row.key === afterKey);
+  for (let step = 1; step <= rows.length; step++) {
+    const row = rows[(from + step) % rows.length];
+    if (row !== undefined && needsDecision(row)) return row.key;
+  }
+  return null;
+}
+
+/**
  * The stored layout word as a layout. **Anything but `list` is the grid**, the Rust default: the
  * row stores the word verbatim, so a value an older or newer build wrote must still draw a tray.
  */

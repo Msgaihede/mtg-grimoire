@@ -1,4 +1,6 @@
+import { RotateCcw } from "lucide-react";
 import type { ScanMode, ScannerResolution, ScannerVerdict } from "@/lib/ipc";
+import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { matchStrip, type LastAdded, type StripTone } from "./readerText";
 
@@ -10,6 +12,11 @@ export interface MatchStripProps {
   hasBundle: boolean;
   /** The page's latch of the last resolve, cleared when a frame has no card in it. */
   lastResolution: ScannerResolution | null;
+  /**
+   * Throw away the evidence the scanner is holding — the tracker's in the crate and the page's
+   * latched reads — so the next card is weighed from nothing.
+   */
+  onReset: () => void;
 }
 
 /**
@@ -39,7 +46,7 @@ const SENTENCE: Record<StripTone, string> = {
  * the card it is leaning towards or has settled on, and a bar for how close it is.
  *
  * **Pure** — everything it draws is one {@link matchStrip} value, so a story or a test can stand
- * up any state from the five props alone.
+ * up any state from the five props alone. The sixth is the one press it carries.
  *
  * **The row is the view's live region**, always mounted and named `Scanner status` as the one line
  * under the camera it replaces was, so a screen reader is watching it before the first card lands.
@@ -47,8 +54,21 @@ const SENTENCE: Record<StripTone, string> = {
  * changes from a sentence to a name or back. The bar sits outside the region on purpose: its value
  * moves on almost every frame, and a region that contained it would have something to say nine
  * times a second.
+ *
+ * **_Reset evidence_ sits at the bar's end, for every reader** (issue #740). It used to be a
+ * press in the Developer column's Match panel only, so a reader whose scanner had settled on the
+ * wrong card — or was still leaning towards the last one — had no way to make it start over short
+ * of moving the card out of frame. The bar is what it resets, so it is drawn beside the bar; and
+ * it is the one copy on the screen, so a Developer reader does not meet two buttons by one name.
  */
-export function MatchStrip({ verdict, mode, lastAdded, hasBundle, lastResolution }: MatchStripProps) {
+export function MatchStrip({
+  verdict,
+  mode,
+  lastAdded,
+  hasBundle,
+  lastResolution,
+  onReset,
+}: MatchStripProps) {
   const strip = matchStrip(verdict, mode, lastAdded, hasBundle, lastResolution);
   // **The leader is drawn and not announced.** While the tracker is still weighing, its leader can
   // change from one frame to the next, and a live region re-reading a new card name on every flip
@@ -114,31 +134,47 @@ export function MatchStrip({ verdict, mode, lastAdded, hasBundle, lastResolution
         )}
       </div>
 
-      <div
-        role="progressbar"
-        aria-label="Match progress"
-        aria-valuemin={0}
-        aria-valuemax={100}
-        aria-valuenow={Math.round(strip.fill * 100)}
-        className="relative h-1.5 overflow-hidden rounded-full bg-bg"
-      >
+      {/* The bar takes the row and the button its own width; `items-center` puts the 6px bar on
+          the button's middle rather than its top. */}
+      <div className="flex items-center gap-3">
         <div
-          className={cn(
-            "h-full transition-[width] motion-reduce:transition-none",
-            strip.committed ? "bg-accent" : "bg-dim",
-          )}
-          style={{ width: `${strip.fill * 100}%` }}
-        />
-        {/* The line the bar has to cross — drawn only while it is being crossed. Empty, there is
-            nothing approaching it; full, it has been crossed, and a dim mark at 70% of a gold bar
-            under the confidence rule would read as a bar that stopped short. */}
-        {leaning && (
-          <span
-            aria-hidden="true"
-            className="absolute inset-y-0 w-px bg-dim"
-            style={strip.threshold === "end" ? { right: 0 } : { left: `${strip.threshold * 100}%` }}
+          role="progressbar"
+          aria-label="Match progress"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={Math.round(strip.fill * 100)}
+          className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-bg"
+        >
+          <div
+            className={cn(
+              "h-full transition-[width] motion-reduce:transition-none",
+              strip.committed ? "bg-accent" : "bg-dim",
+            )}
+            style={{ width: `${strip.fill * 100}%` }}
           />
-        )}
+          {/* The line the bar has to cross — drawn only while it is being crossed. Empty, there is
+              nothing approaching it; full, it has been crossed, and a dim mark at 70% of a gold bar
+              under the confidence rule would read as a bar that stopped short. */}
+          {leaning && (
+            <span
+              aria-hidden="true"
+              className="absolute inset-y-0 w-px bg-dim"
+              style={strip.threshold === "end" ? { right: 0 } : { left: `${strip.threshold * 100}%` }}
+            />
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onReset}
+          className={cn(
+            "inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-0.5 text-xs text-dim",
+            "hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+            PRESS,
+          )}
+        >
+          <RotateCcw aria-hidden="true" className="size-3.5" />
+          Reset evidence
+        </button>
       </div>
     </div>
   );

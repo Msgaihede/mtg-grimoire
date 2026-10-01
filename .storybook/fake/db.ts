@@ -238,6 +238,7 @@ import type {
   PricePoint,
   Printing,
   QrMatrix,
+  PrintingPrices,
   PrintingTags,
   RecentCard,
   RelayOutcome,
@@ -9773,6 +9774,21 @@ export function readHandlers(db: FakeDb) {
     card_detail: (args: { id: string; marketplace?: string }): CardDetail | null => {
       const card = cardById(db, args.id);
       return card ? toCardDetail(db, card, marketplaceOf(args.marketplace)) : null;
+    },
+
+    /**
+     * `card::read_printing_prices` — every known printing in `cardIds`, priced per finish at the
+     * asked marketplace. Rust's shape exactly: an unknown id is left out rather than answered with
+     * nulls, a repeat answers once, and the rows come back in id order.
+     */
+    printing_prices: (args: { cardIds: string[]; marketplace?: string }): PrintingPrices[] => {
+      const mp = marketplaceOf(args.marketplace);
+      return [...new Set(args.cardIds)]
+        .sort(cmp)
+        .flatMap((id) => {
+          const card = cardById(db, id);
+          return card ? [{ cardId: id, finishPrices: finishPricesAt(db, card, mp) }] : [];
+        });
     },
 
     /**

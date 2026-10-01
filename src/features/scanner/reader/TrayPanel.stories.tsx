@@ -75,6 +75,7 @@ const meta = {
     // stories below say `grid`, which is what the page opens on.
     layout: "list",
     onLayout: fn(),
+    onClearAll: fn(),
   },
   parameters: { trayWidth: COLUMN_WIDTH },
   decorators: [
@@ -168,6 +169,26 @@ export const AllNeedFinish: Story = {
     await expect(
       canvas.getByRole("button", { name: "Add 0 to collection · 2 need a finish" }),
     ).toHaveAttribute("aria-disabled", "true");
+  },
+};
+
+/**
+ * A pile with two open questions — a printing to pick at the head and a finish further down — and
+ * the header's walk between them: each press scrolls the tray to the next card needing a decision
+ * and puts the caret on the control that answers it, round to the first again past the last.
+ */
+export const NextDecision: Story = {
+  args: {
+    rows: [waiting, ...TRAY_ROWS.filter((row) => row.choices.length === 0), NEEDS_A_FINISH_ROW],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const next = canvas.getByRole("button", { name: "Next card needing a decision" });
+    await userEvent.click(next);
+    const printings = canvas.getByRole("group", { name: `Printings of ${waiting.name}` });
+    await expect(within(printings).getAllByRole("button")[0]).toHaveFocus();
+    await userEvent.click(next);
+    await expect(canvas.getByRole("button", { name: "Finish of Lightning Bolt — STA 105" })).toHaveFocus();
   },
 };
 
