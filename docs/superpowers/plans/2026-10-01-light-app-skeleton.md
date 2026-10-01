@@ -16,6 +16,7 @@
 - **Never install `@types/node`.** TypeScript stays on 6.0.x.
 - **The desktop app must be unchanged.** No existing test in `src/components/AppShell.test.tsx`, `src/components/nav.test.ts`, `src/App.test.tsx` or `src/boot/DesktopBoot.test.tsx` may need editing. If one goes red, the change is wrong — fix the change.
 - **No platform check in a page.** There is an `Edition` handed to the shell and nothing else; do not add `isWeb()`, `isLight()` or a user-agent test anywhere under `src/`.
+- **The phone face is one face on Android and on the web (spec §3, Markus 2026-10-01).** Nothing under `mobile/` asks where it is running: no `navigator.userAgent`/`userAgentData`/`navigator.platform`, no `isTauri`, no `__TAURI`, no `isAndroid`, no `display-mode` query. The face is chosen by viewport width alone. Task 8's fence sweeps `mobile/` for those probes (`mobile/main.tsx`'s `import.meta.env.MODE === "fake"` is a build mode, not a platform, and stays).
 - **Files under `mobile/phone/` may not reach `@/lib/store`, `@/App`, `@/components/{AppShell,TitleBar,Ribbon}`, `@/boot/*`, `@/lib/window`, or any `@tauri-apps/*` module except through `@/lib/core`.** Task 8 adds the test that enforces it; write every phone file to pass it from the start.
 - **Tailwind scans source text for whole class names.** Never build a class by interpolation; a computed size is an inline `style`.
 - **Dim text is `text-dim`, never `text-muted`.** Card art is `CardArt`/`CardImage`, never a bare `<img>`.

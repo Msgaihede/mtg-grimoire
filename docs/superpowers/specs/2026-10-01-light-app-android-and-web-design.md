@@ -301,6 +301,27 @@ desktop's 700px height floor; what that costs is measured in phase 3 rather than
 **Each face is its own lazy chunk**, so a phone never downloads the deck editor's desktop build and
 a laptop never downloads the phone's sheets.
 
+**The Android app and the web app are the same program, and the phone face is one face — not two
+that resemble each other.** Markus's rule, 2026-10-01: *the web/PWA collapses down into the mobile
+view, and that view is 1:1 with the mobile app.* That is held by construction rather than by care:
+the Android host and the web host load one bundle built from one entry, the face is chosen by
+viewport width and by nothing else, and what differs between the two installs is entirely below
+the `Core` seam (§3.5). Three things follow, and each is a rule:
+
+- **Nothing under `mobile/` asks where it is running.** No user-agent test, no `isTauri`, no
+  `isAndroid`, no `display-mode` query deciding what a page draws. A source sweep refuses them
+  (§3.3's fence grows a second arm), because a resemblance kept by hand is N decisions that happen
+  to agree today.
+- **A narrowed browser window is the phone app.** Dragging a browser across 1024px swaps the face
+  live and keeps the destination, because the URL is the navigation state both faces read (§3.4).
+  The rule runs both ways: an Android tablet wide enough to cross 1024 gets the desktop face, for
+  the same reason a wide browser does.
+- **What only one host has comes from the host.** The system back gesture arrives as History
+  navigation, the safe area as `env()` insets, a file picker through the service modules. The one
+  affordance with no counterpart — the browser's install prompt (§6) — is the browser's own UI or
+  a Settings entry that states a host capability, never a banner one install draws and the other
+  does not.
+
 ### 3.1 The desktop face and the edition
 
 The desktop UI learns one thing: **which edition it is**. An `Edition` is a plain object provided
