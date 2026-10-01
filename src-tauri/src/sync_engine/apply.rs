@@ -22,12 +22,17 @@
 //! table but two has an `INTEGER PRIMARY KEY`, and those two have none at all — `muted_tags`
 //! is `WITHOUT ROWID` on `(namespace, tag_id)` and `device_names` on `device_id` — so a rowid
 //! would need a second spelling of every statement for both. The uid is `UNIQUE` on every one
-//! and every row has one, which is what `schema::mint_missing_uids` and the capture trigger's
-//! mint are between them for — plus `deck_tokens::convert_legacy_picks`, which names each entry it
-//! derives from a v51 art pick `<pick uid>-<list>` itself, and first gives the pick the trigger's
-//! own mint where a write behind `capture::suppressed` left it nameless. (This read "that rung's
-//! own derived names" while user schema v52's rung did the converting; the conversion has been a
-//! captured pass outside the ladder since the day it landed.)
+//! and every row a peer can name has one, which is what `schema::mint_missing_uids` and the
+//! capture trigger's mint are between them for — plus `deck_tokens::convert_legacy_picks`, which
+//! names each entry it derives from a v51 art pick `<pick uid>-<list>` itself, and first gives the
+//! pick the trigger's own mint where a write behind `capture::suppressed` left it nameless. (This
+//! read "that rung's own derived names" while user schema v52's rung did the converting; the
+//! conversion has been a captured pass outside the ladder since the day it landed.)
+//!
+//! **The rows with no uid are the ones a device derives for itself and never announces** — a
+//! managed wishlist's folders and wishes, written behind `capture::suppressed`, where the mint
+//! does not run. No statement addressed by uid can reach one, so the only read here that meets
+//! them is the one that walks a whole table: [`break_cycles`], which takes the uid as optional.
 //!
 //! # Add-wins needs this device's own history, and `sync_ops` is where it is
 //!
@@ -2268,6 +2273,16 @@ fn settle_soft_parents(conn: &Connection, g: &Group, uid: &str) -> Result<(), St
 /// `json_type(parents, '$.parent')` selects — and the incoming groups on top of it.
 /// `json_type` and not `json_extract`, because a move **to the root** is a JSON null and
 /// `json_extract` cannot tell that from a key that is not there.
+///
+/// # A folder can have no uid, and this is the one read here that meets it
+///
+/// This walks a whole table where every other statement in the module addresses a row by its
+/// uid, so it is the only place a nameless folder is ever read — and one is a designed state:
+/// `managed_wishlist` writes a theory deck's folders behind [`capture::suppressed`], where the
+/// insert trigger's mint does not run, and its **Tokens** child has a parent. Read as a `String`
+/// that row failed every apply on the device holding it. So the uid is optional: a nameless
+/// folder **stays in the walk**, because a loop can run through one, and it has no move on
+/// record, so the cut falls on it only where no folder in the loop has one.
 fn break_cycles(conn: &Connection, meta: &Meta, groups: &[Group]) -> Result<usize, String> {
     let col = meta.tree.expect("called only for a tree");
     let mut stmt = conn
@@ -2276,12 +2291,12 @@ fn break_cycles(conn: &Connection, meta: &Meta, groups: &[Group]) -> Result<usiz
             meta.table
         ))
         .map_err(|e| e.to_string())?;
-    let rows: Vec<(i64, i64, String)> = stmt
+    let rows: Vec<(i64, i64, Option<String>)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
         .map_err(|e| e.to_string())?
         .collect::<Result<_, _>>()
         .map_err(|e| e.to_string())?;
-    let parent: BTreeMap<i64, (i64, String)> = rows
+    let parent: BTreeMap<i64, (i64, Option<String>)> = rows
         .iter()
         .map(|(id, p, u)| (*id, (*p, u.clone())))
         .collect();
@@ -2342,8 +2357,10 @@ fn break_cycles(conn: &Connection, meta: &Meta, groups: &[Group]) -> Result<usiz
                 let victim = loop_members
                     .iter()
                     .max_by(|a, b| {
-                        let key =
-                            |id: &i64| parent.get(id).and_then(|(_, uid)| moved.get(uid)).cloned();
+                        let key = |id: &i64| {
+                            let (_, uid) = parent.get(id)?;
+                            moved.get(uid.as_ref()?).cloned()
+                        };
                         key(a).cmp(&key(b)).then_with(|| a.cmp(b))
                     })
                     .copied()

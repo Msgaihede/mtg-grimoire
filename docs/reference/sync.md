@@ -1670,6 +1670,20 @@ standing — the arrangement more devices have already seen and drawn. Convergen
 requirement and both directions satisfy it; what convergence needs is that both devices consult
 the same set of stamps.
 
+⚠️ **A folder can have no `sync_uid`, and the cycle check reads it as optional** (2026-10-01).
+The check walks every folder that has a parent, after **every** apply — an empty page included —
+and until then it read the uid as a `String`. One nameless child therefore failed the whole
+batch with `Invalid column type Null at index: 2, name: sync_uid`, on every pull, for as long as
+the row stood: the device went on pushing and never read again. The row is not an accident. A
+theory deck's managed wishlist writes its folders behind `capture::suppressed`, where the insert
+trigger's mint does not run, and they are nameless **on purpose** — the baseline's
+`WHERE sync_uid IS NOT NULL` is what keeps a folder every device derives for itself from being
+announced. User schema v55's **Tokens** subfolder was the first of them to have a parent, so
+this reached every paired device whose managed wishlist held a token. A nameless folder stays in
+the walk, because a loop can run through one, and it has no move on record, so the cut never
+prefers it. **A read over a whole synced table may not assume a uid; a statement addressed by
+uid cannot reach a nameless row at all, which is why nothing else in `apply` met one.**
+
 ### A resurrection is an event, not a state
 
 `combined.resurrected` stays true for as long as the tombstone sits in this device's own op log
