@@ -69,6 +69,7 @@ import lockRs from "../../crates/card-scanner/src/lock.rs?raw";
 import detectRs from "../../crates/card-scanner/src/detect.rs?raw";
 import cardnessRs from "../../crates/card-scanner/src/cardness.rs?raw";
 import trimRs from "../../crates/card-scanner/src/trim.rs?raw";
+import ocrRs from "../../crates/card-scanner/src/ocr.rs?raw";
 import ipcSource from "./ipc.ts?raw";
 import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import { DEFAULT_SCANNER_OPTIONS } from "@/features/scanner/scannerOptions";
@@ -5570,6 +5571,12 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["ScannerCollectorTry", sessionRs, "CollectorTry"],
     ["ScannerCollector", sessionRs, "CollectorView"],
     ["ScannerOcr", sessionRs, "OcrView"],
+    // **The finish mark** (2026-10-01), nested twice — in `DecisionView::finish_mark`, which is
+    // what files a row's finish under Detect, and in `CollectorView::mark` for the Readouts panel.
+    // `StandingView`'s reason once more: a renamed `reading` leaves both parents agreeing field for
+    // field while every mark arrives with no reading, and a tray under Detect files every
+    // two-finish printing as Unknown with nothing on screen to say why.
+    ["ScannerFinishMark", ocrRs, "FinishMark"],
     // **Modes, filters and the decision** (2026-09-15). `ScannerDecision` is what the page builds a
     // tray row from, and `ScannerResolution` nests `ScannerChoice` and `ScannerTier` for
     // `StandingView`'s reason above: a renamed `oracle_id` inside a choice leaves the resolution

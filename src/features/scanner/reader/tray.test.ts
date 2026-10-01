@@ -2,14 +2,19 @@ import { describe, expect, it } from "vitest";
 import type { ScannerDecision } from "@/lib/ipc";
 import {
   addDecision,
+  commitPlan,
   importItems,
+  NO_FINISHED_ROWS,
+  needsFinishCount,
   pickChoice,
+  readyRows,
   removeRow,
   rowFromDecision,
   setFinish,
   setPrinting,
   setQuantity,
   totalCopies,
+  trayLayoutOf,
   unresolvedCount,
 } from "./tray";
 import { VERDICTS } from "../fixtures";
@@ -25,6 +30,8 @@ const fastBolt: ScannerDecision = {
   outcome: "resolved",
   choices: [],
   replaces_previous: false,
+  finishes: ["nonfoil", "foil"],
+  finish_mark: null,
 };
 
 describe("tray", () => {
@@ -150,6 +157,26 @@ describe("tray", () => {
     expect(row.choices.map((c) => c.cardId)).toEqual(ambiguous.choices.map((c) => c.id));
   });
 
+  it("settles an Unknown finish when the picked printing exists in only one", () => {
+    // Live on 2026-10-01: Ruthless Invasion was PLST NPH-93 (non-foil only) or NPH 93, and the
+    // row waited as Unknown. Naming the printing answers the finish too.
+    const only = {
+      ...ambiguous,
+      choices: ambiguous.choices.map((c, i) => ({
+        ...c,
+        finishes: i === 2 ? ["nonfoil"] : ["nonfoil", "foil"],
+      })),
+    };
+    const rows = addDecision([], only, { finish: "unknown" }, 1, "a").rows;
+    expect(rows[0].finish).toBe("unknown");
+    expect(pickChoice(rows, "a", only.choices[2].id)[0].finish).toBe("nonfoil");
+    // A printing in several finishes leaves the question open.
+    expect(pickChoice(rows, "a", only.choices[0].id)[0].finish).toBe("unknown");
+    // And a finish the reader chose is never overwritten by the printing's.
+    const chosen = setFinish(rows, "a", "foil");
+    expect(pickChoice(chosen, "a", only.choices[2].id)[0].finish).toBe("foil");
+  });
+
   it("leaves a row alone when a pick names no candidate it offers", () => {
     const rows = addDecision([], ambiguous, { finish: "nonfoil" }, 1, "a").rows;
     expect(pickChoice(rows, "a", "not-a-candidate")[0]).toEqual(rows[0]);
@@ -199,9 +226,86 @@ describe("tray", () => {
     expect(() => importItems(mixed, "NM")).toThrow();
   });
 
+  /**
+   * **Two copies the scanner could not read may be one foil and one not**, and a row of two can only
+   * ever be set to one finish — so each Unknown copy lands on a row of its own.
+   */
+  it("never bumps a row of unknown finish", () => {
+    const first = addDecision([], resolved, { finish: "unknown" }, 1, "a").rows;
+    const { rows, bumped } = addDecision(first, resolved, { finish: "unknown" }, 2, "b");
+    expect(bumped).toBe(false);
+    expect(rows.map((r) => [r.key, r.finish, r.quantity])).toEqual([
+      ["b", "unknown", 1],
+      ["a", "unknown", 1],
+    ]);
+  });
+
+  /** A second opinion fills an Unknown finish, and never overwrites one the row already had. */
+  it("takes a second opinion's finish only when the row's was unknown", () => {
+    const fast = addDecision([], fastBolt, { finish: "unknown" }, 1, "a").rows;
+    const exact = { ...ambiguous, replaces_previous: true };
+    expect(addDecision(fast, exact, { finish: "foil" }, 2, "b").rows[0]).toMatchObject({
+      key: "a",
+      finish: "foil",
+    });
+    const set = setFinish(fast, "a", "etched");
+    expect(addDecision(set, exact, { finish: "foil" }, 2, "b").rows[0].finish).toBe("etched");
+  });
+
+  it("sets a row back to unknown, to hold it out of the next Add", () => {
+    const rows = addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows;
+    expect(setFinish(rows, "a", "unknown")[0].finish).toBe("unknown");
+  });
+
+  /**
+   * **Add files the known rows and leaves the rest, and says both** — `readyRows` and
+   * `needsFinishCount` are the button's two figures, counted in copies so they sum to the tray's.
+   */
+  it("splits a commit into the known-finish rows and the ones that need a finish", () => {
+    let rows = addDecision([], resolved, { finish: "foil" }, 1, "a").rows;
+    rows = addDecision(rows, resolved, { finish: "foil" }, 2, "a2").rows; // a bump: ×2
+    rows = addDecision(rows, fastBolt, { finish: "unknown" }, 3, "b").rows;
+    rows = setQuantity(rows, "b", 3);
+
+    expect(readyRows(rows).map((r) => r.key)).toEqual(["a"]);
+    expect(needsFinishCount(rows)).toBe(3);
+    expect(totalCopies(readyRows(rows)) + needsFinishCount(rows)).toBe(totalCopies(rows));
+
+    const plan = commitPlan(rows, "NM");
+    expect(plan.items).toEqual([{ cardId: resolved.printing, quantity: 2, finish: "foil", condition: "NM" }]);
+    expect(plan.taken.map((r) => r.key)).toEqual(["a"]);
+  });
+
+  it("refuses a commit of nothing but unknown finishes, in words", () => {
+    const rows = addDecision([], resolved, { finish: "unknown" }, 1, "a").rows;
+    expect(() => commitPlan(rows, "NM")).toThrow(NO_FINISHED_ROWS);
+  });
+
+  /** The older rule stands: an unresolved printing stops everything, whatever its finish. */
+  it("still refuses a commit while any row waits for a printing, unknown finish or not", () => {
+    const known = addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows;
+    const waiting = addDecision(known, ambiguous, { finish: "unknown" }, 2, "b").rows;
+    expect(() => commitPlan(waiting, "NM")).toThrow("still waiting for a printing");
+  });
+
+  /** A caller that skipped the split is refused rather than sending the collection a word it
+   *  does not file. */
+  it("refuses to build an import line for a row of unknown finish", () => {
+    const rows = addDecision([], resolved, { finish: "unknown" }, 1, "a").rows;
+    expect(() => importItems(rows, "NM")).toThrow("has no finish yet");
+  });
+
   it("counts copies and removes rows", () => {
     const rows = addDecision(addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows, resolved, { finish: "nonfoil" }, 2, "b").rows;
     expect(totalCopies(rows)).toBe(2);
     expect(removeRow(rows, "a")).toHaveLength(0);
+  });
+
+  it("reads the stored layout word, taking anything but list as the grid", () => {
+    expect(trayLayoutOf("list")).toBe("list");
+    expect(trayLayoutOf("grid")).toBe("grid");
+    // A word another build wrote, and the empty string a hand-edited row could hold, still draw a tray.
+    expect(trayLayoutOf("stacks")).toBe("grid");
+    expect(trayLayoutOf("")).toBe("grid");
   });
 });

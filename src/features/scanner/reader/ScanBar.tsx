@@ -1,5 +1,5 @@
 import { useId, type ReactNode } from "react";
-import { Bug, ChevronDown } from "lucide-react";
+import { Bug, Check, ChevronDown } from "lucide-react";
 import { AnchoredPopup } from "@/components/AnchoredPopup";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
@@ -7,12 +7,16 @@ import { FILTER_CONTROL, filterChipState } from "@/components/FilterChips";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { SetCombobox } from "@/features/search/SetCombobox";
 import { CONDITION_LABEL, CONDITION_NOT_SET, CONDITIONS, type Condition } from "@/lib/conditions";
-import { FINISH_LABEL, FINISHES, type Finish } from "@/lib/finish";
-import { FOCUS } from "@/lib/focus";
-import type { ScanFilters, ScanMode } from "@/lib/ipc";
+import { FINISHES } from "@/lib/finish";
+import { FOCUS, FOCUS_INSET } from "@/lib/focus";
+import type { ScanFilters, ScanMode, ScannerFinishPref } from "@/lib/ipc";
 import { PRESS, PRESS_STILL } from "@/lib/motion";
+import { sortOptions } from "@/lib/options";
+import { radioKeys } from "@/lib/radioGroup";
 import { cn } from "@/lib/utils";
+import type { CameraDevice } from "../useCamera";
 import { filterSummary } from "./readerText";
+import { DETECT, FINISH_PREF_LABEL } from "./trayFinish";
 
 export interface ScanBarProps {
   mode: ScanMode;
@@ -23,10 +27,19 @@ export interface ScanBarProps {
   filterError: string | null;
   /** A reason, or null when filters can be used. */
   filtersDisabled: string | null;
-  finish: Finish;
-  onFinish: (f: Finish) => void;
+  finish: ScannerFinishPref;
+  onFinish: (f: ScannerFinishPref) => void;
   condition: Condition;
   onCondition: (c: Condition) => void;
+  /** Every camera the machine has — `useCameraDevices`' list, in whatever order it came. */
+  cameras: readonly CameraDevice[];
+  /**
+   * The camera that is **open**, never the one the reader stored: when a stored camera has been
+   * unplugged the default opens in its place, and the picker says so rather than ticking a camera
+   * that is not the one on screen. `null` while nothing is live.
+   */
+  cameraId: string | null;
+  onCamera: (deviceId: string) => void;
   developer: boolean;
   onDeveloper: (on: boolean) => void;
 }
@@ -51,11 +64,15 @@ const MODES: readonly { id: ScanMode; label: string; hint: string }[] = [
 ];
 
 /**
- * **Deliberately not through `sortOptions` — the order is the information.** A printing's finishes
- * read plain before the premium treatments everywhere in this app, and `FINISHES` is written in
- * that order.
+ * **Deliberately not through `sortOptions` — the order is the information.** `Detect` first,
+ * because it is the default and the one choice that is not a finish; then a printing's finishes,
+ * plain before the premium treatments as everywhere in this app, which is the order `FINISHES` is
+ * written in.
  */
-const FINISH_OPTIONS: readonly DropdownOption[] = FINISHES.map((f) => ({ value: f, label: FINISH_LABEL[f] }));
+const FINISH_OPTIONS: readonly DropdownOption[] = [DETECT, ...FINISHES].map((f) => ({
+  value: f,
+  label: FINISH_PREF_LABEL[f],
+}));
 
 /**
  * **Deliberately not through `sortOptions` — the order is the information.** `CONDITIONS` is a
@@ -68,7 +85,7 @@ const CONDITION_OPTIONS: readonly DropdownOption[] = CONDITIONS.map((c) => ({
 
 /**
  * The reader's controls over the camera, in one row that wraps: the mode, the filters, the tray's
- * defaults, and the switch that brings the developer panels back.
+ * defaults, which camera is reading, and the switch that brings the developer panels back.
  *
  * **Everything here is controlled.** The page owns the prefs and pushes the filters to the session,
  * and a refusal comes back through `filterError`; this row holds nothing but which popover is
@@ -89,6 +106,9 @@ export function ScanBar({
   onFinish,
   condition,
   onCondition,
+  cameras,
+  cameraId,
+  onCamera,
   developer,
   onDeveloper,
 }: ScanBarProps) {
@@ -97,6 +117,12 @@ export function ScanBar({
     filters.sets.length > 0 || Boolean(filters.released_from) || Boolean(filters.released_to);
   const conditionWords =
     condition === CONDITION_NOT_SET ? "Condition not set" : CONDITION_LABEL[condition];
+  // `Detect` alone on the bar reads as a verb with no object; the menu row sits under a `Finish`
+  // label and needs none.
+  const finishWords = finish === DETECT ? "Detect finish" : FINISH_PREF_LABEL[finish];
+  // `Default` for a live camera the list has not caught up with yet, and for no camera at all —
+  // the trigger still has to read as something, and what opens with nothing chosen is the default.
+  const cameraName = cameras.find((c) => c.deviceId === cameraId)?.label ?? "Default";
 
   return (
     <div className="flex flex-wrap items-center gap-2">
@@ -115,7 +141,7 @@ export function ScanBar({
 
       <BarPopover
         caption="Defaults"
-        value={`${FINISH_LABEL[finish]} · ${conditionWords}`}
+        value={`${finishWords} · ${conditionWords}`}
         active={false}
         refusal={null}
         panelLabel="Defaults"
@@ -127,6 +153,29 @@ export function ScanBar({
           condition={condition}
           onCondition={onCondition}
         />
+      </BarPopover>
+
+      <BarPopover
+        caption="Camera"
+        value={cameraName}
+        active={false}
+        refusal={cameras.length === 0 ? "No camera found" : null}
+        panelLabel="Camera"
+        // `p-1.5` over the shell's `p-3`: the rows carry their own inset for their hover wash, as
+        // `FolderPicker`'s list does in the tray's footer.
+        panelClassName="w-75 p-1.5"
+      >
+        {(close) => (
+          <CameraBody
+            cameras={cameras}
+            cameraId={cameraId}
+            onCamera={onCamera}
+            onPress={(id) => {
+              onCamera(id);
+              close();
+            }}
+          />
+        )}
       </BarPopover>
 
       <DeveloperSwitch on={developer} onChange={onDeveloper} />
@@ -195,8 +244,11 @@ function ModeSwitch({ mode, onMode }: { mode: ScanMode; onMode: (m: ScanMode) =>
  * the order they are drawn.
  *
  * Pinned by its **left** edge and grown from its top-left corner, under the trigger rather than
- * over it: both triggers sit at the start of the row or of a wrapped line, so there is nothing to
- * their left for a panel to open back across.
+ * over it: every trigger sits in the left part of the row or at the start of a wrapped line, with
+ * only the Developer switch pushed to the far end, so the row's own width is to their right.
+ * **Camera is the one to watch**, third along and 300px wide: a Filters summary long enough to push
+ * it near the row's end without wrapping it could carry its panel past the edge, which only a live
+ * pass at the narrow rung can see.
  */
 function BarPopover({
   caption,
@@ -215,7 +267,9 @@ function BarPopover({
   refusal: string | null;
   panelLabel: string;
   panelClassName: string;
-  children: ReactNode;
+  /** Or a function of `close`, handed straight to `AnchoredPopup` — for a panel whose press is
+   *  the whole of what it is for, and shuts it (the Camera list). */
+  children: ReactNode | ((close: () => void) => ReactNode);
 }) {
   return (
     <AnchoredPopup
@@ -356,6 +410,9 @@ function FiltersBody({
  * is stamped on a row as it lands, so changing it moves the *next* card and leaves the rows already
  * there alone — a row the reader set to foil must not flip back. A condition is not a row field at
  * all: the whole tray commits in one condition, so this one is read at the press of Add.
+ *
+ * **`Detect` is a policy, and its caption says what it does when it cannot tell** — the one thing a
+ * reader has to know about it before a row reading `Unknown` turns up in the tray.
  */
 function DefaultsBody({
   finish,
@@ -363,8 +420,8 @@ function DefaultsBody({
   condition,
   onCondition,
 }: {
-  finish: Finish;
-  onFinish: (f: Finish) => void;
+  finish: ScannerFinishPref;
+  onFinish: (f: ScannerFinishPref) => void;
   condition: Condition;
   onCondition: (c: Condition) => void;
 }) {
@@ -379,11 +436,15 @@ function DefaultsBody({
           id={`${id}-finish`}
           labelledBy={`${id}-finish-label`}
           value={finish}
-          onChange={(v) => onFinish(v as Finish)}
+          onChange={(v) => onFinish(v as ScannerFinishPref)}
           options={FINISH_OPTIONS}
           fill
         />
-        <p className="text-[0.7rem] leading-snug text-dim">Each new card starts in this finish.</p>
+        <p className="text-[0.7rem] leading-snug text-dim">
+          {finish === DETECT
+            ? "The scanner reads each card's finish. A card it can't tell waits in the tray for you to pick."
+            : "Each new card starts in this finish."}
+        </p>
       </div>
       <div className="flex flex-col gap-1">
         <label id={`${id}-condition-label`} htmlFor={`${id}-condition`} className="text-xs text-dim">
@@ -401,6 +462,107 @@ function DefaultsBody({
           Every card in the tray is added in this condition.
         </p>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Which camera reads the cards: one radio per camera, the open one ticked and marked `Live`.
+ *
+ * **A radiogroup, where the mode beside it is a pair of toggles**, because this is a list of
+ * unknown length and exactly one value — the shape `ModeSwitch`'s comment says a two-way switch is
+ * not. One Tab stop and the arrows choose, through `radioKeys` like every group in the app.
+ *
+ * **A press chooses and closes; an arrow only chooses.** Both are the same choice — `onCamera` with
+ * the camera's id — and differ only in whether the panel stays: a press is "that one", while an
+ * arrow is a walk, and shutting the panel on its first step would have a keyboard reader reopen it
+ * for every camera they pass. Each step does restart the stream, which is what the line under the
+ * list warns of.
+ *
+ * **Alphabetical through `sortOptions`**: the order `enumerateDevices` answers in is the driver's
+ * and says nothing a reader could use.
+ *
+ * **The tick follows the camera that is open, not the one last pressed.** Between a press and the
+ * new stream nothing is ticked, which is true — the old camera has stopped and the new one has not
+ * started — and a stored camera that has been unplugged leaves the default ticked in its place.
+ */
+function CameraBody({
+  cameras,
+  cameraId,
+  onCamera,
+  onPress,
+}: {
+  cameras: readonly CameraDevice[];
+  cameraId: string | null;
+  /** An arrow's choice: the panel stays open. */
+  onCamera: (deviceId: string) => void;
+  /** A press's choice: the caller chooses and closes. */
+  onPress: (deviceId: string) => void;
+}) {
+  const sorted = sortOptions(cameras, (c) => c.label);
+  const ids = sorted.map((c) => c.deviceId);
+  const walk = (id: string | null) => {
+    if (id !== null) onCamera(id);
+  };
+
+  return (
+    <div className="flex flex-col gap-0.5">
+      {/* A caption for the eye only, as `FiltersBody`'s `Sets` is: the group names itself
+          `Camera`, and a second name here would be announced before the one it already carries. */}
+      <span aria-hidden="true" className="px-2 pb-1 pt-1.5 text-xs text-dim">
+        Camera
+      </span>
+      <div role="radiogroup" aria-label="Camera" className="flex flex-col gap-0.5">
+        {sorted.map((camera, i) => {
+          const live = camera.deviceId === cameraId;
+          return (
+            <button
+              key={camera.deviceId}
+              type="button"
+              role="radio"
+              aria-checked={live}
+              // **Named outright, because the visible name does not survive being computed**: the
+              // label and the `Live` mark are two elements a `gap` apart, which the name algorithm
+              // fuses into `Logitech BRIOLive`. `aria-checked` is what says which one is live.
+              aria-label={camera.label}
+              onClick={() => onPress(camera.deviceId)}
+              {...radioKeys<string | null>(ids, cameraId, walk, i)}
+              className={cn(
+                "flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-sm text-text",
+                "transition-colors duration-[var(--duration-fast)] motion-reduce:transition-none",
+                // The open camera sits on the page ground, the context menu's hover wash held
+                // still; the rest take a lighter wash of it under the pointer, so a hover never
+                // reads as a second camera being live.
+                live ? "bg-bg" : "hover:bg-bg/60",
+                // Inset: the rows are stacked 2px apart, and an outline standing off one would be
+                // drawn over its neighbour.
+                FOCUS_INSET,
+              )}
+            >
+              {/* `invisible` rather than absent, so every label starts at the same x whether or
+                  not its row is the ticked one — the context menu's radio rows, for their reason. */}
+              <Check
+                className={cn("size-4 shrink-0 text-accent", !live && "invisible")}
+                aria-hidden="true"
+              />
+              <span className="min-w-0 flex-1 truncate">{camera.label}</span>
+              {live && (
+                <span
+                  aria-hidden="true"
+                  className="inline-flex shrink-0 items-center gap-1.5 text-[0.6875rem] text-ok"
+                >
+                  <span className="size-1.5 rounded-full bg-ok" />
+                  Live
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+      <div aria-hidden="true" className="my-1 h-px bg-border" />
+      <p className="px-2 pb-1.5 pt-1 text-xs leading-snug text-dim">
+        Switching restarts the camera. Your choice is remembered on this computer.
+      </p>
     </div>
   );
 }

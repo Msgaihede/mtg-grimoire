@@ -49,9 +49,9 @@ export function Overlay({
       if (canvas === null || video === null) return;
 
       // Sized to the video's own pixels rather than to the element's CSS box: these two
-      // attributes are also the canvas's *intrinsic* size, which is what `object-contain` on
-      // the element letterboxes — so one coordinate system serves every layout and lands on
-      // the picture rather than beside it.
+      // attributes are also the canvas's *intrinsic* size, which is what `object-cover` on
+      // the element crops — so one coordinate system serves every layout and lands on the
+      // picture exactly where the video's own crop put it.
       // Assigning either dimension clears the canvas, so only do it when it actually changed.
       if (canvas.width !== video.videoWidth || canvas.height !== video.videoHeight) {
         canvas.width = video.videoWidth;
@@ -109,16 +109,18 @@ export function Overlay({
     // Decorative: the headline and the panels beside the video say everything a screen reader
     // needs, and a box drawn around a card has no description an `alt` could usefully carry.
     //
-    // **`object-contain` matches the `<video>` under it, and the box is wrong without it.** A
+    // **`object-cover` matches the `<video>` under it, and the box is wrong without it.** A
     // `<canvas>` is a replaced element whose intrinsic size is its `width`/`height` *attributes*
-    // — the video's own pixels, assigned in `draw()` — so `object-fit` letterboxes it exactly
-    // as the video is letterboxed. Left at the default `fill`, the 1920×1080 bitmap is stretched
-    // to the element's box while the picture inside that box is not: a 16:9 frame in the app's
-    // 1280×800 column draws the quad 25% too tall, and further out the narrower the column gets.
+    // — the video's own pixels, assigned in `draw()` — so `object-fit` crops it exactly as the
+    // video is cropped, both about the centre. Left at the default `fill`, the 1920×1080 bitmap is
+    // stretched to the element's box while the picture inside that box is not, and the quad lands
+    // off the card by however far the box's shape is from 16:9. **The two classes are one
+    // decision**: change the video's fit or position and this one moves with it, or the box
+    // drifts off the card with no error anywhere.
     <canvas
       ref={canvasRef}
       aria-hidden="true"
-      className="absolute inset-0 h-full w-full object-contain"
+      className="absolute inset-0 h-full w-full object-cover"
     />
   );
 }

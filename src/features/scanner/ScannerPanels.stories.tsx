@@ -106,20 +106,21 @@ type Story = StoryObj<typeof meta>;
 /**
  * Evidence accumulating under the vote rule, with a second candidate still arguing.
  *
- * Five votes of the eight it wants and a lead of ×4 over Honored Hierarch — so the bar is part
- * full and grey rather than gold, and the pill says `voting` rather than `decided`. This is
- * what most frames look like: the answer is probably right and the scanner has not said so yet.
+ * Five votes of the eight it wants and a lead of ×4 over Honored Hierarch. This is what most
+ * frames look like: the answer is probably right and the scanner has not said so yet. The card's
+ * name and the bar are the Match strip's above the camera (`Scanner/Reader/Match strip`); this
+ * panel is the numbers under them.
  */
 export const Voting: Story = {
   play: async ({ canvasElement }) => {
     const match = within(canvasElement).getByRole("region", { name: "Match" });
-    await expect(within(match).getByText("voting")).toBeInTheDocument();
-    await expect(within(match).getByText("Plains — 2XM 373")).toBeInTheDocument();
+    await expect(within(match).getByText("5.0/8 · 12f")).toBeInTheDocument();
+    await expect(within(match).getByText("×4.0")).toBeInTheDocument();
   },
 };
 
 /**
- * The bar full, the pill gold, and nothing left arguing with it.
+ * Nothing left arguing with it.
  *
  * `lead` reads `unopposed` rather than a multiple: the runner-up did not merely lose, it never
  * scored. A committed verdict freezes the tracker, which is why the frame count stops at eight.
@@ -128,25 +129,24 @@ export const Decided: Story = {
   args: { verdict: VERDICTS.decided },
   play: async ({ canvasElement }) => {
     const match = within(canvasElement).getByRole("region", { name: "Match" });
-    await expect(within(match).getByText("decided")).toBeInTheDocument();
+    await expect(within(match).getByText("8.0/8 · 8f")).toBeInTheDocument();
     await expect(within(match).getByText("unopposed")).toBeInTheDocument();
   },
 };
 
 /**
- * The other commit rule, and the two words that go with it.
+ * The other commit rule.
  *
- * Under `confidence` the bar is a decayed two-way share rather than a tally, so it commits at a
- * *proportion* — the hairline moves to 70% — and the pill reads `confirmed`/`gathering` where
- * the vote rule reads `decided`/`voting`. The same evidence, with a different question asked of
- * it.
+ * Under `confidence` the evidence is a decayed two-way share rather than a tally, so it commits at
+ * a *proportion* — the strip's hairline moves to 70% — and the standings read as shares rather
+ * than as votes. The same evidence, with a different question asked of it.
  */
 export const ConfidenceRule: Story = {
   args: { verdict: VERDICTS.confidence },
   play: async ({ canvasElement }) => {
     const match = within(canvasElement).getByRole("region", { name: "Match" });
-    await expect(within(match).getByText("confirmed")).toBeInTheDocument();
     await expect(within(match).getByText("80% over 12f")).toBeInTheDocument();
+    await expect(within(match).getAllByRole("listitem")[0]).toHaveTextContent("90%");
   },
 };
 
@@ -201,14 +201,16 @@ export const Panicked: Story = {
 /**
  * `card-hashes.bin` is not on disk, so nothing can be named at all.
  *
- * The sentence stands **where the card's name would**, and it carries the path it looked at —
- * the one thing a reader needs in order to fix it. Everything else about the panel still draws:
- * the detector works fine without a bundle, it simply has nothing to compare against.
+ * The sentence stands **at the top of the panel**, above the figures it explains, and it carries
+ * the path it looked at — the one thing a reader needs in order to fix it. Everything else about
+ * the panel still draws: the detector works fine without a bundle, it simply has nothing to
+ * compare against.
  */
 export const BundleMissing: Story = {
   args: { status: STATUS.missing, verdict: VERDICTS.noCard },
   play: async ({ canvasElement }) => {
-    await expect(within(canvasElement).getByText(/No reference bundle\. Put/)).toBeInTheDocument();
+    const match = within(canvasElement).getByRole("region", { name: "Match" });
+    await expect(within(match).getByText(/No reference bundle\. Put/)).toBeInTheDocument();
   },
 };
 

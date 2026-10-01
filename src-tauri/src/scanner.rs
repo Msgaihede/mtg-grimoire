@@ -93,6 +93,16 @@ pub const TRAY_ROW_NEEDS_A_COPY: &str = "A tray row needs at least one copy.";
 /// [`MAX_TRAY_ROWS`], in words.
 pub const TRAY_IS_FULL: &str =
     "The tray holds at most 5,000 rows — add these to the collection first.";
+/// [`ScannerPrefs::finish`]'s default: **let the scanner decide each card's finish**, from the
+/// collector line's separator (a ★ on a foil, a • on a non-foil) and the printing's own finishes.
+///
+/// **Deliberately not one of `schema::FINISHES`, and it must never become one.** It is a policy the
+/// page applies as each card lands — `reader/trayFinish.ts` turns it into a finish, or into
+/// `unknown` for the reader to settle — so it can reach neither a tray row nor the collection, and
+/// a word the collection's `CHECK` accepts would be a word that could be filed by mistake. A row
+/// stored before this existed holds a real finish and keeps it: a reader who chose `nonfoil` chose
+/// a fixed finish, and a new default is no reason to take that back.
+pub const DETECT_FINISH: &str = "detect";
 
 /// Where an asset came from — [`load`]'s order, first hit wins.
 ///
@@ -506,10 +516,11 @@ pub fn load(dir: &Path, corpus: &Path, top: usize, embedded: Embedded) -> Loaded
 /// How the reader last left the scanner: the mode, the filters, what a new tray row defaults to,
 /// and whether the developer panels are showing. One `app_meta` row, written whole.
 ///
-/// **`finish` and `condition` are strings here and `Finish`/`Condition` on the page**, and they
-/// are not validated on write: they are the defaults a tray row is *born* with, and the commit
-/// through `collection_import_commit` is where a grade or a finish the collection does not know is
-/// refused, in its own words. Language is deliberately absent (spec §3 decision 7): a tray row
+/// **`finish` and `condition` are strings here and `Finish | "detect"`/`Condition` on the page**,
+/// and they are not validated on write: they are the defaults a tray row is *born* with, and the
+/// commit through `collection_import_commit` is where a grade or a finish the collection does not
+/// know is refused, in its own words. `finish` defaults to [`DETECT_FINISH`], which is not a finish
+/// at all — see it. Language is deliberately absent (spec §3 decision 7): a tray row
 /// records none and the collection row takes the import's default.
 ///
 /// `#[serde(default)]` on the struct, so a row written by an older build with fewer fields — or a
@@ -525,6 +536,15 @@ pub struct ScannerPrefs {
     /// The folder a commit files into; `None` is the collection's root.
     pub folder_id: Option<i64>,
     pub developer: bool,
+    /// The camera the reader picked, as the webview's `deviceId` for it; `None` is whichever
+    /// camera the platform offers first. A fact about this computer: `app_meta` is on no sync
+    /// spec, and a `deviceId` names nothing on another machine. A stored id whose camera has
+    /// gone is not an error — the page opens the default and leaves the choice standing.
+    pub camera_id: Option<String>,
+    /// How the review tray lays out its cards: `grid` or `list`. Stored verbatim and not
+    /// validated, for `finish`'s reason: which layouts exist is the page's vocabulary, and it
+    /// reads a word it does not know as the grid.
+    pub tray_layout: String,
 }
 
 impl Default for ScannerPrefs {
@@ -532,13 +552,15 @@ impl Default for ScannerPrefs {
         ScannerPrefs {
             mode: ScanMode::default(),
             filters: ScanFilters::default(),
-            // `schema::FINISHES` is read by index, never respelled.
-            finish: crate::schema::FINISHES[0].to_owned(),
+            // A policy and not a finish — see the constant.
+            finish: DETECT_FINISH.to_owned(),
             // What a write that names no grade records — not the sentinel, though today they
             // hold one string; see `collection.rs`.
             condition: crate::collection::DEFAULT_CONDITION.to_owned(),
             folder_id: None,
             developer: false,
+            camera_id: None,
+            tray_layout: "grid".to_owned(),
         }
     }
 }
@@ -553,6 +575,9 @@ pub struct ScannerTrayChoice {
     pub name: String,
     pub set_code: String,
     pub collector_number: String,
+    /// The finishes the printing exists in — what settles an Unknown row's finish when the
+    /// reader picks this printing. Empty when unknown, and in a tray written before it existed.
+    pub finishes: Vec<String>,
 }
 
 /// One card waiting in the review tray.
@@ -561,6 +586,12 @@ pub struct ScannerTrayChoice {
 /// the row; `choices` is non-empty only while the row is still a choice to make; `added_at` is
 /// the page's clock in milliseconds, used for nothing here but kept so a restored tray orders the
 /// way it did.
+///
+/// **`finish` may be `unknown`** — a card whose finish the scanner could not read, waiting for the
+/// reader — and it is stored like any other string: [`valid_tray`] checks the copies and the count
+/// and nothing about the finish. The page never sends an `unknown` row as an import line; it keeps
+/// it in `remaining`, and were one to reach the import it would be refused there in the
+/// collection's own words.
 #[derive(Debug, Clone, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 pub struct ScannerTrayRow {
@@ -1039,6 +1070,7 @@ mod tests {
                 name: "Lightning Bolt".into(),
                 set_code: "sta".into(),
                 collector_number: "105".into(),
+                finishes: Vec::new(),
             }],
             added_at: 1_757_900_000_000,
         }
@@ -1169,13 +1201,55 @@ mod tests {
     }
 
     #[test]
-    fn the_default_row_is_nonfoil_and_ungraded() {
+    fn the_default_row_detects_the_finish_and_is_ungraded() {
         let p = ScannerPrefs::default();
-        assert_eq!(p.finish, "nonfoil");
+        assert_eq!(p.finish, "detect");
         assert_eq!(p.condition, "NONE");
         assert_eq!(p.mode, ScanMode::Fast);
         assert_eq!(p.folder_id, None);
         assert!(!p.developer);
+        assert_eq!(p.camera_id, None);
+        assert_eq!(p.tray_layout, "grid");
+    }
+
+    /// A row an older build wrote has no camera and no tray layout, and `#[serde(default)]` is
+    /// what reads it: the reader's mode and folder survive, and the two new fields take the
+    /// defaults rather than the whole row falling back to them.
+    #[test]
+    fn a_row_from_before_the_camera_and_the_layout_keeps_what_it_had() {
+        let conn = meta();
+        set_app_meta(
+            &conn,
+            K_SCANNER_PREFS,
+            r#"{"mode":"exact","folderId":4,"developer":true}"#,
+        )
+        .unwrap();
+        let p = stored_prefs(&conn);
+        assert_eq!(p.mode, ScanMode::Exact);
+        assert_eq!(p.folder_id, Some(4));
+        assert!(p.developer);
+        assert_eq!(p.camera_id, None);
+        assert_eq!(p.tray_layout, "grid");
+    }
+
+    /// **Detect is a policy, so it must never be a word the collection would file.**
+    #[test]
+    fn detect_is_not_a_finish() {
+        assert!(!crate::schema::FINISHES.contains(&DETECT_FINISH));
+    }
+
+    /// **A reader who chose a fixed finish keeps it** — the new default is for a row never
+    /// written, and a stored `nonfoil` is a choice rather than an old default to migrate away.
+    #[test]
+    fn a_stored_fixed_finish_survives_the_new_default() {
+        let conn = meta();
+        set_app_meta(
+            &conn,
+            K_SCANNER_PREFS,
+            r#"{"mode":"fast","finish":"nonfoil","condition":"NONE","developer":false}"#,
+        )
+        .unwrap();
+        assert_eq!(stored_prefs(&conn).finish, "nonfoil");
     }
 
     /// **The rename is the contract, and `ipc.test.ts` cannot see it** — its mirror table camel-cases
@@ -1185,11 +1259,14 @@ mod tests {
     fn prefs_and_tray_rows_travel_under_the_names_the_page_reads() {
         let p = serde_json::to_value(ScannerPrefs {
             folder_id: Some(4),
+            camera_id: Some("cam-1".to_owned()),
             ..Default::default()
         })
         .unwrap();
         assert_eq!(p["folderId"], 4);
         assert_eq!(p["mode"], "fast");
+        assert_eq!(p["cameraId"], "cam-1");
+        assert_eq!(p["trayLayout"], "grid");
         // The filters keep the crate's snake case inside the camel-case document.
         assert!(p["filters"].get("released_from").is_some(), "{p}");
 
@@ -1226,6 +1303,32 @@ mod tests {
             stored_tray(&conn).is_empty(),
             "an empty tray is a tray, not a missing row"
         );
+    }
+
+    /// **An `unknown` finish is a row like any other to the store**, and a tray commit that files
+    /// the known rows keeps it in what is left — the page's half of "Add 8 · 2 need a finish".
+    #[test]
+    fn a_row_of_unknown_finish_round_trips_and_stays_behind_a_commit() {
+        let unknown = ScannerTrayRow {
+            finish: "unknown".into(),
+            ..tray_row("u", 1)
+        };
+        let conn = meta();
+        store_tray(&conn, &[unknown.clone(), tray_row("k", 1)]).unwrap();
+        assert_eq!(stored_tray(&conn), vec![unknown.clone(), tray_row("k", 1)]);
+        assert_eq!(stored_tray(&conn)[0].finish, "unknown");
+
+        let conn = pair_with_a_card();
+        store_tray(&conn, &[unknown.clone(), tray_row("k", 1)]).unwrap();
+        tray_commit(
+            &conn,
+            &[import_line("card-1", 1)],
+            None,
+            std::slice::from_ref(&unknown),
+        )
+        .unwrap();
+        assert_eq!(copies(&conn), 1);
+        assert_eq!(stored_tray(&conn), vec![unknown]);
     }
 
     #[test]

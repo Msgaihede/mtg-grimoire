@@ -1231,7 +1231,7 @@ markup of its own. Every rule below has a failure behind it that shipped or near
 Full detail and every measurement: [docs/reference/motion.md](../docs/reference/motion.md).
 
 - **Timings live in `src/lib/motion.ts` and nowhere else.** Import a **preset** (`scrim`,
-  `dialog`, `popup`, `dockBar`, `statusLine`, `press`, `stackCard`) rather than a number. There
+  `dialog`, `popup`, `dockBar`, `statusLine`, `press`, `stackCard`, `landed`) rather than a number. There
   is no drawer preset: `drawerRight` was deleted on 2026-08-14 when the deck editor's two
   right-hand drawers became centred modals and it lost its last consumer.
   `src/index.css` carries the same scale so CSS-only sites agree. There is no `duration-base`

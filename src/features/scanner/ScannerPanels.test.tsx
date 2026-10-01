@@ -4,7 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore, type ScannerPanelId } from "@/lib/store";
 import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import { ScannerPanels, type ScannerPanelsProps } from "./ScannerPanels";
-import { READS, STATUS, VERDICTS } from "./fixtures";
+import { MARKS, READS, STATUS, VERDICTS } from "./fixtures";
 import type { ScannerVerdict } from "./types";
 
 function props(over: Partial<ScannerPanelsProps> = {}): ScannerPanelsProps {
@@ -59,46 +59,53 @@ beforeEach(() => {
 });
 
 describe("the match panel", () => {
-  it("draws the vote rule's verdict, bar, tally, lead and standings", () => {
+  it("draws the vote rule's tally, lead and standings", () => {
     render(<ScannerPanels {...props()} />);
     const match = screen.getByRole("region", { name: "Match" });
     // One level under the view's own `<h2>Scanner</h2>`: a panel heading level-equal with the
     // view's reads as six views to a screen reader's heading list.
     expect(within(match).getByRole("heading", { level: 3, name: "Match" })).toBeInTheDocument();
-    expect(within(match).getByText("Plains — 2XM 373")).toBeInTheDocument();
-    expect(within(match).getByText("voting")).toBeInTheDocument();
     expect(within(match).getByText("5.0/8 · 12f")).toBeInTheDocument();
     expect(within(match).getByText("×4.0")).toBeInTheDocument();
-    expect(within(match).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "63");
     const rows = within(match).getAllByRole("listitem");
     expect(rows[0]).toHaveTextContent("Plains · 2XM 373");
     expect(rows[0]).toHaveTextContent("5.0");
   });
 
-  it("says decided at the bar and fills it", () => {
+  /**
+   * **The bar moved to the Match strip above the camera**, which every reader sees — a developer
+   * included. A second one here would be one answer drawn twice on one screen, and two
+   * progressbars in one view are two a screen reader has to be told apart.
+   */
+  it("leaves the bar to the strip above the camera", () => {
+    render(<ScannerPanels {...props()} />);
+    const match = screen.getByRole("region", { name: "Match" });
+    expect(within(match).queryByRole("progressbar")).not.toBeInTheDocument();
+  });
+
+  it("says a decided card's runner-up never scored", () => {
     render(<ScannerPanels {...props({ verdict: VERDICTS.decided })} />);
     const match = screen.getByRole("region", { name: "Match" });
-    expect(within(match).getByText("decided")).toBeInTheDocument();
-    expect(within(match).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "100");
+    expect(within(match).getByText("8.0/8 · 8f")).toBeInTheDocument();
     expect(within(match).getByText("unopposed")).toBeInTheDocument();
   });
 
-  it("keeps the confidence rule's words and percentage", () => {
+  it("keeps the confidence rule's percentage and its shares in the standings", () => {
     render(<ScannerPanels {...props({ verdict: VERDICTS.confidence })} />);
     const match = screen.getByRole("region", { name: "Match" });
-    expect(within(match).getByText("confirmed")).toBeInTheDocument();
     expect(within(match).getByText("80% over 12f")).toBeInTheDocument();
-    expect(within(match).getByRole("progressbar")).toHaveAttribute("aria-valuenow", "80");
+    const rows = within(match).getAllByRole("listitem");
+    expect(rows[0]).toHaveTextContent("90%");
   });
 
-  it("names the missing bundle and where it looked, in place of a verdict", () => {
+  it("names the missing bundle and where it looked, at the top of the panel", () => {
     render(<ScannerPanels {...props({ status: STATUS.missing, verdict: VERDICTS.noCard })} />);
+    const match = screen.getByRole("region", { name: "Match" });
     // The path and the restart clause both matter and both belong to `verdictText.test.ts`,
     // which pins the wording; what this file owes is that the sentence reached the panel.
     expect(
-      screen.getByText(/^No reference bundle\. Put .card-hashes\.bin. at .+\. Restart the app/),
+      within(match).getByText(/^No reference bundle\. Put .card-hashes\.bin. at .+\. Restart the app/),
     ).toBeInTheDocument();
-    expect(screen.queryByText("voting")).not.toBeInTheDocument();
   });
 
   /**
@@ -113,16 +120,16 @@ describe("the match panel", () => {
   });
 
   /**
-   * Labels that failed under a bundle that did not. The scanner matches and answers ids, so
-   * the sentence goes **under** the verdict rather than in place of it — the head row still
-   * carries a name, and `voting` still says what the tracker is doing.
+   * Labels that failed under a bundle that did not. The scanner still matches and answers ids,
+   * so the sentence says why above figures that are still real — the tally and the standings
+   * draw as they would with names.
    */
-  it("says the names failed without taking the verdict's place", () => {
+  it("says the names failed above the figures it still has", () => {
     render(<ScannerPanels {...props({ status: STATUS.unlabelled })} />);
     const match = screen.getByRole("region", { name: "Match" });
     expect(within(match).getByText(/Bundle loaded, but card names didn't/)).toBeInTheDocument();
-    expect(within(match).getByText("Plains — 2XM 373")).toBeInTheDocument();
-    expect(within(match).getByText("voting")).toBeInTheDocument();
+    expect(within(match).getByText("5.0/8 · 12f")).toBeInTheDocument();
+    expect(within(match).getAllByRole("listitem")[0]).toHaveTextContent("Plains · 2XM 373");
   });
 
   it("resets and captures through its two buttons", async () => {
@@ -217,6 +224,29 @@ describe("the folded panels", () => {
     expect(within(readouts).getByText("960×540 frame · band 62×23 px")).toBeInTheDocument();
     expect(within(readouts).getByText("LTR 72 → —")).toBeInTheDocument();
     expect(within(readouts).getByText("+3 more pairings not shown")).toBeInTheDocument();
+  });
+
+  /**
+   * **The separator's row carries the figures, not just the word** — the reading is two cuts over
+   * them, set from twelve crops, and tuning those cuts needs the number a new card landed on. A
+   * mark the crate found nothing to measure reads `unknown` alone; no mark at all is an em dash.
+   */
+  it("draws the finish mark's reading and the figures it was read from", () => {
+    useAppStore.setState({ scannerFolds: { ...ALL_FOLDED, readouts: true } });
+    const markRow = (mark: typeof MARKS.dot | null) => {
+      const { unmount } = render(
+        <ScannerPanels {...props({ ...withReads, lastCollector: { ...READS.collector, mark } })} />,
+      );
+      const readouts = screen.getByRole("region", { name: "Readouts" });
+      const label = within(readouts).getByText("finish mark");
+      const value = label.nextElementSibling?.textContent;
+      unmount();
+      return value;
+    };
+    expect(markRow(MARKS.star)).toBe("foil · height 0.84 · area 0.44 · solidity 0.95");
+    expect(markRow(MARKS.dot)).toBe("nonfoil · height 0.52 · area 0.14 · solidity 1.08");
+    expect(markRow(MARKS.unmeasured)).toBe("unknown");
+    expect(markRow(null)).toBe("—");
   });
 
   /**

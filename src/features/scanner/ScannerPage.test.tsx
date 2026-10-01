@@ -4,7 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionFolder, ScannerPrefs, ScannerVerdict } from "@/lib/ipc";
 import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
-import { DEFAULT_SCANNER_PREFS, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
+import { DEFAULT_SCANNER_PREFS, MARKS, NEEDS_A_FINISH_ROW, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
 
 vi.mock("@/lib/ipc", async (orig) => {
   const real = await orig<typeof import("@/lib/ipc")>();
@@ -188,7 +188,7 @@ function strip(container: HTMLElement): HTMLElement {
   return found;
 }
 
-/** The reader's one line under the camera. */
+/** The reader's one line — the Match strip's row, above the camera. */
 function statusLine(): HTMLElement {
   return screen.getByRole("status", { name: "Scanner status" });
 }
@@ -283,7 +283,7 @@ describe("ScannerPage", () => {
     expect(strip(container)).toHaveTextContent("");
   });
 
-  it("names what the scanner is doing in one line under the camera", async () => {
+  it("names what the scanner is doing in the strip above the camera", async () => {
     refused();
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
     mount();
@@ -381,15 +381,15 @@ describe("ScannerPage", () => {
     const restore = shimVideo();
     opens();
     storedPrefs({ developer: true });
-    // A bundle that loaded, so the panel names the card rather than standing the placement
-    // sentence where the name would be.
+    // A bundle that loaded, so the Match panel's figures describe a named card.
     vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
     frames(VERDICTS.decided);
     try {
       mount();
-      // The Match panel's head row, which is the tell that the verdict has landed.
+      // The Match panel's this-frame line naming the card is the tell that the verdict has
+      // landed — its head row went to the strip above the camera, which every reader sees.
       const match = await screen.findByRole("region", { name: "Match" });
-      expect(await within(match).findByText("Storm of Saruman — LTR 72")).toBeInTheDocument();
+      await waitFor(() => expect(match).toHaveTextContent("this frame: Storm of Saruman"));
       await userEvent.type(
         screen.getByRole("textbox", { name: "What it actually is" }),
         "Storm of Saruman",
@@ -429,7 +429,8 @@ describe("ScannerPage", () => {
       expect(rows).toHaveLength(1);
       expect(within(rows[0]).getByText("Storm of Saruman")).toBeInTheDocument();
       expect(within(tray()).getByRole("button", { name: "Add 1 to collection" })).toBeInTheDocument();
-      expect(statusLine()).toHaveTextContent("Added Storm of Saruman — LTR 72");
+      // The strip names the card that was filed and says it was added.
+      expect(statusLine()).toHaveTextContent("Matched Storm of Saruman LTR 72 Added · swap in the next card");
       // …and the store gets the tray once the quiet window has passed.
       await waitFor(() => expect(ipc.setScannerTray).toHaveBeenCalled(), { timeout: 2000 });
       const [written] = vi.mocked(ipc.setScannerTray).mock.lastCall ?? [];
@@ -438,6 +439,63 @@ describe("ScannerPage", () => {
     } finally {
       restore();
     }
+  });
+
+  /** The card that just landed is laid over the camera, named as the tray filed it. */
+  it("lays the card that just landed over the camera", async () => {
+    const restore = shimVideo();
+    opens();
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    frames(VERDICTS.voting, VERDICTS.decided);
+    try {
+      const { container } = mount();
+      await waitFor(() => expect(videoBox(container)).toHaveTextContent("Added to scanned cards"));
+      expect(videoBox(container)).toHaveTextContent("Storm of Saruman");
+      expect(videoBox(container)).toHaveTextContent("LTR · 72 · Nonfoil");
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **The stored camera, by its id, and one request for it.** The camera is held shut until the
+   * prefs are in; opened on mount instead it would ask for the default and then again for the
+   * stored one.
+   */
+  it("opens the stored camera by its id, and asks for no other first", async () => {
+    const getUserMedia = vi.fn(() =>
+      Promise.resolve({
+        getTracks: () => [{ stop: () => {} }],
+        getVideoTracks: () => [{ getSettings: () => ({ deviceId: "brio" }) }],
+      } as unknown as MediaStream),
+    );
+    mediaDevices(getUserMedia);
+    storedPrefs({ cameraId: "brio" });
+    // The camera goes live under the shim, so the pump starts; every frame it sends is parked.
+    frames();
+    const restore = shimVideo();
+    try {
+      mount();
+      await waitFor(() => expect(getUserMedia).toHaveBeenCalled());
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+      expect(getUserMedia.mock.calls[0]).toMatchObject([{ video: { deviceId: { exact: "brio" } } }]);
+    } finally {
+      restore();
+    }
+  });
+
+  it("stores the tray layout the reader picks", async () => {
+    refused();
+    const user = userEvent.setup();
+    mount();
+    const layouts = await within(await screen.findByRole("region", { name: "Scanned cards" })).findByRole(
+      "group",
+      { name: "Tray layout" },
+    );
+    await user.click(within(layouts).getByRole("button", { name: "List" }));
+    await waitFor(() =>
+      expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith({ ...DEFAULT_SCANNER_PREFS, trayLayout: "list" }),
+    );
   });
 
   /** A new row is born in the Defaults popover's finish — the prefs', not a literal. */
@@ -455,6 +513,63 @@ describe("ScannerPage", () => {
     } finally {
       restore();
     }
+  });
+
+  /**
+   * **Detect is the default, and a card it cannot read lands as Unknown rather than as a guess.**
+   * Storm of Saruman exists in two finishes, so with no separator measured there is nothing to
+   * choose between them by — and the row says so instead of filing the first finish on the list.
+   */
+  it("stamps a new row Unknown under Detect when the separator did not read", async () => {
+    const restore = shimVideo();
+    opens();
+    expect(DEFAULT_SCANNER_PREFS.finish).toBe("detect");
+    const unread: ScannerVerdict = {
+      ...VERDICTS.decided,
+      decision: { ...VERDICTS.decided.decision!, finish_mark: MARKS.unmeasured },
+    };
+    frames(VERDICTS.voting, unread);
+    try {
+      mount();
+      await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
+      expect(
+        within(tray()).getByRole("button", { name: "Add 0 to collection · 1 needs a finish" }),
+      ).toHaveAttribute("aria-disabled", "true");
+      await waitFor(() => expect(ipc.setScannerTray).toHaveBeenCalled(), { timeout: 2000 });
+      const [written] = vi.mocked(ipc.setScannerTray).mock.lastCall ?? [];
+      expect(written?.[0]?.finish).toBe("unknown");
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **Add files the rows with a finish and leaves the one without**, in the same one call: the
+   * known rows are the import and the Unknown row is the whole of `remaining` — so it is still in
+   * the stored tray when the commit lands, not merely still on screen.
+   */
+  it("commits the known-finish rows and keeps the one that needs a finish", async () => {
+    refused();
+    const known = TRAY_ROWS.slice(1); // 3 + 1 + 1 copies
+    vi.mocked(ipc.scannerTray).mockResolvedValue([NEEDS_A_FINISH_ROW, ...known]);
+    const user = userEvent.setup();
+    mount();
+    await screen.findByRole("region", { name: "Scanned cards" });
+
+    await user.click(
+      await within(tray()).findByRole("button", { name: "Add 5 to collection · 1 needs a finish" }),
+    );
+    await waitFor(() => expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(1));
+    expect(ipc.scannerTrayCommit).toHaveBeenCalledWith(importItems(known, "NONE"), null, [
+      NEEDS_A_FINISH_ROW,
+    ]);
+    await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
+    expect(within(tray()).getByText("Lightning Bolt")).toBeInTheDocument();
+    const add = within(tray()).getByRole("button", { name: "Add 0 to collection · 1 needs a finish" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    // Refused on the press as well as drawn refused — the handler asks the same question.
+    await user.click(add);
+    expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(1);
   });
 
   /**
@@ -562,6 +677,9 @@ describe("ScannerPage", () => {
         outcome: "resolved",
         choices: [],
         replaces_previous: false,
+        // A dot on a two-finish printing: Detect files it nonfoil, the saga row's own finish.
+        finishes: ["nonfoil", "foil"],
+        finish_mark: MARKS.dot,
       },
     };
     let land!: (v: ScannerVerdict) => void;

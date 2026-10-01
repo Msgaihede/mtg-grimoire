@@ -13,17 +13,25 @@
  * the destination is the commit's argument, not a property of a row.
  */
 import type { Condition } from "@/lib/conditions";
-import type { Finish } from "@/lib/finish";
 import type {
   CollectionImportItem,
   ScannerDecision,
   ScannerTrayChoice,
+  ScannerTrayFinish,
+  ScannerTrayLayout,
   ScannerTrayRow,
 } from "@/lib/ipc";
+import { isFinish } from "@/lib/finish";
+import { isKnownFinish, UNKNOWN_FINISH } from "./trayFinish";
 
-/** What a new row starts as that the decision itself cannot say. */
+/**
+ * What a new row starts as that the decision itself cannot say.
+ *
+ * `finish` is already a conclusion — `trayFinish.ts`'s answer for this decision, `unknown`
+ * included — so the reducer never learns that the Defaults popover can say `detect`.
+ */
 export interface RowDefaults {
-  finish: Finish;
+  finish: ScannerTrayFinish;
 }
 
 /**
@@ -42,6 +50,7 @@ function choiceOf(choice: ScannerDecision["choices"][number]): ScannerTrayChoice
     name: choice.label?.name ?? UNKNOWN_NAME,
     setCode: choice.label?.set ?? "",
     collectorNumber: choice.label?.number ?? "",
+    finishes: choice.finishes,
   };
 }
 
@@ -83,14 +92,17 @@ export function rowFromDecision(
  * Put a decision into the tray.
  *
  * **Only the newest row can be bumped, only by a resolved decision naming its printing, and only
- * while that row is in the finish a new row would start in.** The collection's grain includes the
+ * while that row is in the finish a new row would start in — never `unknown`.** The collection's grain includes the
  * finish, so a foil row the reader set by hand and a nonfoil copy scanned after it are two rows in
  * the binder — counting the second onto the first would file a plain card as a foil one. A
  * card that leaves the frame and comes back is a second copy of the card just scanned — that is
  * the whole of the re-presentation gesture — while the same printing ten cards ago is a reader
  * sorting a pile out of order, and folding it into a row they have scrolled past would move a
  * number nobody is looking at. A row still waiting for a pick is never bumped: it has not decided
- * what it *is*, so "the same printing again" is not a question it can answer.
+ * what it *is*, so "the same printing again" is not a question it can answer. **A row of unknown
+ * finish is never bumped either, for the same reason one field over**: two copies the scanner could
+ * not read may be one foil and one not, and a row of two can only ever be set to one finish — so
+ * each lands on a row of its own, where the reader can answer it on its own.
  *
  * **A bump refreshes `addedAt`**, because it *is* an add — the row is the newest thing that
  * happened in the tray, and a surface keying a flash on that stamp replays it for the second copy.
@@ -100,7 +112,9 @@ export function rowFromDecision(
  * ids known. "Fast said Forest, switch to Exact to pin the printing" is one card on the mat, and
  * adding would file it twice. The row keeps its key, quantity and finish — the reader's own
  * answers, and the flash's identity — and takes everything that says *which printing* from the
- * decision, its choices included. The session's flag alone is not enough: a row the reader removed
+ * decision, its choices included. **An `unknown` finish is no answer to keep**, so a row still
+ * waiting on one takes the second opinion's — Exact's closer read of the same card may be the one
+ * that measured the separator. The session's flag alone is not enough: a row the reader removed
  * or scanned past is not the card the session remembers, and replacing it would overwrite a
  * different card. So a newest row of another card is an ordinary add.
  */
@@ -121,7 +135,14 @@ export function addDecision(
   ) {
     const fresh = rowFromDecision(d, defaults, now, newest.key);
     return {
-      rows: [{ ...fresh, quantity: newest.quantity, finish: newest.finish }, ...rows.slice(1)],
+      rows: [
+        {
+          ...fresh,
+          quantity: newest.quantity,
+          finish: isKnownFinish(newest.finish) ? newest.finish : fresh.finish,
+        },
+        ...rows.slice(1),
+      ],
       bumped: false,
       replaced: true,
     };
@@ -131,6 +152,7 @@ export function addDecision(
     d.outcome === "resolved" &&
     newest.choices.length === 0 &&
     newest.cardId === d.printing &&
+    isKnownFinish(newest.finish) &&
     newest.finish === defaults.finish
   ) {
     return {
@@ -168,19 +190,32 @@ export function setQuantity(
   return update(rows, key, (row) => ({ ...row, quantity: next }));
 }
 
+/** A row's finish, `unknown` included: a reader may set a row back to it to hold that card out of
+ *  the next Add without removing it. */
 export function setFinish(
   rows: readonly ScannerTrayRow[],
   key: string,
-  finish: Finish,
+  finish: ScannerTrayFinish,
 ): ScannerTrayRow[] {
   return update(rows, key, (row) => ({ ...row, finish }));
 }
 
-/** A printing adopted whole — every identifying field at once, so a row cannot end up half one
- *  printing and half another — and the question it was waiting on closed. */
+/**
+ * A printing adopted whole — every identifying field at once, so a row cannot end up half one
+ * printing and half another — and the question it was waiting on closed.
+ *
+ * **An Unknown finish is settled by a printing that exists in one finish.** An ambiguous decision
+ * files its row Unknown when its candidates disagree about finishes — measured live on
+ * 2026-10-01, Ruthless Invasion's two candidates were PLST NPH-93 (non-foil only) and NPH 93 —
+ * and once the reader names the printing that question has an answer. A finish the reader chose is
+ * never overwritten, and neither is Unknown by a printing that exists in several.
+ */
 function adopt(row: ScannerTrayRow, p: ScannerTrayChoice): ScannerTrayRow {
+  const only = p.finishes?.length === 1 ? p.finishes[0] : undefined;
+  const settled = row.finish === UNKNOWN_FINISH && only !== undefined && isFinish(only) ? only : null;
   return {
     ...row,
+    finish: settled ?? row.finish,
     cardId: p.cardId,
     oracleId: p.oracleId,
     name: p.name,
@@ -230,9 +265,31 @@ export function unresolvedCount(rows: readonly ScannerTrayRow[]): number {
   return rows.filter((row) => row.choices.length > 0).length;
 }
 
+/**
+ * The stored layout word as a layout. **Anything but `list` is the grid**, the Rust default: the
+ * row stores the word verbatim, so a value an older or newer build wrote must still draw a tray.
+ */
+export function trayLayoutOf(stored: string): ScannerTrayLayout {
+  return stored === "list" ? "list" : "grid";
+}
+
 /** Copies, not rows: a bumped row of three is three cards going into the collection. */
 export function totalCopies(rows: readonly ScannerTrayRow[]): number {
   return rows.reduce((sum, row) => sum + row.quantity, 0);
+}
+
+/** The rows an Add files: every one whose finish is known. */
+export function readyRows(rows: readonly ScannerTrayRow[]): ScannerTrayRow[] {
+  return rows.filter((row) => isKnownFinish(row.finish));
+}
+
+/**
+ * Copies still waiting on a finish — **copies, like {@link totalCopies}**, so the Add button's two
+ * figures (`Add 8 to collection · 2 need a finish`) sum to the count at the head of the tray rather
+ * than mixing copies with rows.
+ */
+export function needsFinishCount(rows: readonly ScannerTrayRow[]): number {
+  return totalCopies(rows.filter((row) => !isKnownFinish(row.finish)));
 }
 
 /**
@@ -243,6 +300,11 @@ export function totalCopies(rows: readonly ScannerTrayRow[]): number {
  * reads off a card. **It throws while any row is unresolved** rather than dropping those rows —
  * a commit that quietly left three cards behind is one the reader would believe had taken them,
  * and the panel greys its button on exactly this condition so a press never reaches here.
+ *
+ * **It throws on an `unknown` finish too, and that is a fence rather than a rule.** Rows waiting
+ * on a finish *are* left behind by an Add — but by {@link commitPlan}, out loud, with the button
+ * saying how many; a row of unknown finish reaching this function is a caller that skipped that
+ * split, and the collection would refuse the word anyway.
  */
 export function importItems(
   rows: readonly ScannerTrayRow[],
@@ -254,10 +316,36 @@ export function importItems(
       `${waiting} scanned ${waiting === 1 ? "card is" : "cards are"} still waiting for a printing to be picked.`,
     );
   }
-  return rows.map((row) => ({
-    cardId: row.cardId,
-    quantity: row.quantity,
-    finish: row.finish,
-    condition,
-  }));
+  return rows.map((row) => {
+    if (!isKnownFinish(row.finish)) {
+      throw new Error(`${row.name} has no finish yet. Pick one before adding it.`);
+    }
+    return { cardId: row.cardId, quantity: row.quantity, finish: row.finish, condition };
+  });
+}
+
+/** Why an Add cannot go: every card in the tray is still waiting on a finish. */
+export const NO_FINISHED_ROWS = "Pick a finish for at least one card first";
+
+/**
+ * **What one press of Add files, and which rows it takes** — the known-finish rows as import
+ * lines, and those same rows as `taken`, for the page to subtract from the tray once the commit
+ * answers. Rows of unknown finish are in neither and stay in the tray, marked, which is the whole
+ * of what `Add 8 to collection · 2 need a finish` promises.
+ *
+ * **An unresolved printing still stops everything, whatever its finish.** That rule is older than
+ * this one and its reason has not moved: the reader is being asked a question, and an Add that went
+ * ahead around it would read as having answered it. A tray of nothing but unknown finishes is
+ * refused with {@link NO_FINISHED_ROWS} rather than committing an empty import. Both refusals are
+ * the ones the panel greys its button on, so the press handler and the drawing agree.
+ */
+export function commitPlan(
+  rows: readonly ScannerTrayRow[],
+  condition: Condition,
+): { items: CollectionImportItem[]; taken: ScannerTrayRow[] } {
+  // The whole tray first, so an unresolved row of unknown finish still stops the press.
+  if (unresolvedCount(rows) > 0) importItems(rows, condition);
+  const taken = readyRows(rows);
+  if (rows.length > 0 && taken.length === 0) throw new Error(NO_FINISHED_ROWS);
+  return { items: importItems(taken, condition), taken };
 }

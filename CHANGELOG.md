@@ -30,6 +30,29 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.38.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.37.1...v0.38.0) (2026-10-01)
+
+
+### Features
+
+* **scanner:** match strip, camera picker, card-added overlay and a wider tray ([af3e182](https://github.com/Msgaihede/mtg-grimoire/commit/af3e18210ffdafe81157dd8f91ad3e3e1ccef9d2))
+* **scanner:** match strip, camera picker, card-added overlay and a wider tray ([066bd81](https://github.com/Msgaihede/mtg-grimoire/commit/066bd8119220ff200aa4bace8f815f661b12986c))
+
+## [0.37.1](https://github.com/Msgaihede/mtg-grimoire/compare/v0.37.0...v0.37.1) (2026-09-30)
+
+
+### Bug Fixes
+
+* **scanner:** Exact reads from the sharpest views, and fits after a conflicting parse ([1495a17](https://github.com/Msgaihede/mtg-grimoire/commit/1495a17dadb1afd136e096596cca755f0ae5ae0e))
+* **scanner:** Exact's collector panel says when the read fits the resolved printing ([7c826ed](https://github.com/Msgaihede/mtg-grimoire/commit/7c826ed8daedb2f5af6747bd00ec58704f48c3d6))
+* **scanner:** find a collector band's lines on its left 60% ([73183e7](https://github.com/Msgaihede/mtg-grimoire/commit/73183e783a1a51ebf0641764662de5cf2a09f8e5))
+* **scanner:** keep Douglas-Peucker's forced vertices on the card's corners ([a8192e3](https://github.com/Msgaihede/mtg-grimoire/commit/a8192e300e101e64b2bd069d8232c5cf722ff493))
+* **scanner:** limit a decision to the title's cards and fit blurry collector reads ([0a3e632](https://github.com/Msgaihede/mtg-grimoire/commit/0a3e6320302afbbe01fa0c8f240fefc91959ea75))
+* **scanner:** never relabel a held quad by a quarter-turn; fit a number with a stuck rarity letter ([2767a87](https://github.com/Msgaihede/mtg-grimoire/commit/2767a8786fa04c118be6656b770a7e245151baef))
+* **scanner:** read the collector band on every Fast card, from the detail frame ([3f01635](https://github.com/Msgaihede/mtg-grimoire/commit/3f01635a87ea263b8cb4cfd2dfb27b97d46713be))
+* **scanner:** read the collector band, limit decisions to the title's cards, fix two quad faults ([b2ed977](https://github.com/Msgaihede/mtg-grimoire/commit/b2ed977be5d5c833bd9381b033595f8dbb4a22be))
+* **scanner:** the title readout names each front face once ([21b1c01](https://github.com/Msgaihede/mtg-grimoire/commit/21b1c01527cbfdc7a7243edde39fe324e4401245))
+
 ## [0.37.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.36.0...v0.37.0) (2026-09-30)
 
 

@@ -71,6 +71,18 @@ describe("useScannerPrefs", () => {
     expect(SCANNER_PREFS_BEFORE_LOAD).toEqual(DEFAULT_SCANNER_PREFS);
   });
 
+  /**
+   * **Detect is the default finish** — `scanner::DETECT_FINISH`, the reader's decision. Named on its
+   * own because the equality above would stay green with both copies flipped back together.
+   */
+  it("defaults the finish to Detect, and keeps a stored fixed finish as it was", async () => {
+    expect(SCANNER_PREFS_BEFORE_LOAD.finish).toBe("detect");
+    scannerPrefs.mockResolvedValue({ ...DEFAULT_SCANNER_PREFS, finish: "nonfoil" });
+    const { result } = mount();
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.prefs.finish).toBe("nonfoil");
+  });
+
   it("starts on the defaults, loads the stored prefs and pushes their filters to the session", async () => {
     const stored: ScannerPrefs = { ...DEFAULT_SCANNER_PREFS, mode: "exact", filters: HOB, folderId: 3 };
     scannerPrefs.mockResolvedValue(stored);
