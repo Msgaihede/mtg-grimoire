@@ -662,6 +662,8 @@ export const DEFAULT_SCANNER_PREFS: ScannerPrefs = {
   condition: "NONE",
   folderId: null,
   developer: false,
+  cameraId: null,
+  trayLayout: "grid",
 };
 
 const boltTrayChoices: ScannerTrayChoice[] = boltChoices.map((c) => ({

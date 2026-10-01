@@ -51,12 +51,6 @@ export function headline(v: ScannerVerdict | null): string {
   return aspectOk(v) ? "card located" : "suspect shape";
 }
 
-export function verdictWord(t: ScannerTracked | null): "decided" | "voting" | "confirmed" | "gathering" | null {
-  if (t === null || t.standings.length === 0) return null;
-  if (t.rule === "votes") return t.committed ? "decided" : "voting";
-  return t.committed ? "confirmed" : "gathering";
-}
-
 /**
  * 0..1. Votes over the bar under the vote rule; the two-way confidence otherwise. A card Fast
  * decided on clear frames before the bar is full, because the bar is the question "decided yet?"

@@ -7,14 +7,16 @@ import { useAppStore } from "@/lib/store";
 import { invalidateOwnedWrite } from "@/lib/searchMarks";
 import { Overlay } from "./Overlay";
 import { TiersPanel } from "./panels/TiersPanel";
-import { statusLine, type LastAdded } from "./reader/readerText";
+import { AddedToast, landedFrom, type LandedCard } from "./reader/AddedToast";
+import { MatchStrip } from "./reader/MatchStrip";
+import type { LastAdded } from "./reader/readerText";
 import { ScanBar } from "./reader/ScanBar";
-import { addDecision, importItems, setPrinting } from "./reader/tray";
+import { addDecision, importItems, setPrinting, trayLayoutOf } from "./reader/tray";
 import { TrayPanel } from "./reader/TrayPanel";
 import { ScannerPanels } from "./ScannerPanels";
 import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import type { ScannerDecision, ScannerOptions, ScannerTrayRow } from "./types";
-import { useCamera } from "./useCamera";
+import { useCamera, useCameraDevices } from "./useCamera";
 import { useScanLoop } from "./useScanLoop";
 import { SCANNER_ELSEWHERE_KEY, SCANNER_ELSEWHERE_POLL_MS, useScannerElsewhere } from "./useScannerElsewhere";
 import { useScannerPrefs } from "./useScannerPrefs";
@@ -111,9 +113,16 @@ function ElsewhereSentence() {
 
 function LiveScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const camera = useCamera(videoRef);
   const queryClient = useQueryClient();
   const { prefs, update, filterError, loaded } = useScannerPrefs();
+  // **`undefined` until the prefs are in, which holds the camera shut.** The stored choice is one
+  // of them, and opening the default on mount only to reopen the stored camera a moment later is
+  // two `getUserMedia` calls, a flicker, and on some platforms a second permission prompt.
+  const camera = useCamera(videoRef, loaded ? prefs.cameraId : undefined);
+  // Keyed on the camera that opened, because a browser names no camera until one has been
+  // granted: the list read before that is `Camera 1`, `Camera 2`, and the one read after it has
+  // the real names.
+  const cameras = useCameraDevices(camera.kind === "live" ? camera.deviceId : null);
   const tray = useTray();
   const folderList = useCollectionFolderList();
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
@@ -177,6 +186,13 @@ function LiveScanner() {
   const writeRows = (rows: ScannerTrayRow[]) => tray.setRows(rows);
 
   const [lastAdded, setLastAdded] = useState<LastAdded>(null);
+  /**
+   * The card laid over the camera for the length of its hold — what just landed, drawn from the
+   * tray's head row rather than from the decision, because the row is what was filed: a bump,
+   * a re-read and a row waiting for a pick all say something different to a reader holding the
+   * card. Cleared by the overlay itself once its hold runs out.
+   */
+  const [landed, setLanded] = useState<LandedCard | null>(null);
   const [flashKey, setFlashKey] = useState<string | null>(null);
   const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(
@@ -213,6 +229,7 @@ function LiveScanner() {
       bumpedTo: bumped ? head.quantity : null,
       replaced,
     });
+    setLanded(landedFrom(head, bumped, replaced));
     setFlashKey(head.key);
     if (flashTimer.current !== null) clearTimeout(flashTimer.current);
     flashTimer.current = setTimeout(() => {
@@ -378,7 +395,6 @@ function LiveScanner() {
   const assetNotes = [bundleSentence(statusData), modelsSentence(statusData)].filter(
     (sentence): sentence is string => sentence !== null,
   );
-  const line = statusLine(loop.verdict, prefs.mode, lastAdded, hasBundle, loop.lastResolution);
   // The detector's own refusal is a developer's sentence — contours examined, a quad rejected —
   // and the reader has the status line for what it means to them. The loop's failures and a
   // refused reset are not the detector's, and every reader gets those.
@@ -388,7 +404,14 @@ function LiveScanner() {
       : (loop.error ?? resetError ?? "");
 
   return (
-    <section className="flex h-full flex-col gap-3">
+    // **`@container/scan` because the split answers this view's own width, never the window's** —
+    // there is no viewport branch in this app. Below 88rem the tray is a 400px column and the
+    // developer panels stack under it in one scroller; from 88rem the camera takes two thirds of
+    // what the developer column leaves, the tray the other third, and the panels get a column of
+    // their own. A container is the containing block for anything `fixed` inside it, so nothing
+    // that must cover the window may mount in here — and nothing does: the dropdowns measure the
+    // block they land in, and the all-printings dialog is drawn at the app root.
+    <section className="@container/scan flex h-full flex-col gap-3">
       {/* Not shown: the ribbon already says `Scanner`, and every pixel of this view's height is
           the camera's. It is here to name the view for assistive tech, as the other views' do. */}
       <h2 className="sr-only">Scanner</h2>
@@ -406,16 +429,37 @@ function LiveScanner() {
         onCondition={(condition) => update({ condition })}
         developer={prefs.developer}
         onDeveloper={(developer) => update({ developer })}
+        cameras={cameras}
+        // The camera that opened; while a switch is starting, the one asked for — so the trigger
+        // does not read `Default` for the moment between two cameras.
+        cameraId={camera.kind === "live" ? camera.deviceId : prefs.cameraId}
+        // A press on the camera already chosen changes nothing, and must not restart the stream.
+        onCamera={(cameraId) => {
+          if (cameraId !== prefs.cameraId) update({ cameraId });
+        }}
       />
 
       <div className="flex min-h-0 flex-1 gap-4">
-        {/* The camera's column: the picture, then the one line that says what it is doing. */}
-        <div className="flex min-w-0 flex-1 flex-col gap-2">
-          {/* The row is the height, and the video box takes what the `w-80` column beside it and
-              the status line under it leave. */}
+        {/* The camera's column: how close the scanner is to a card, then the picture. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-3 @min-[88rem]/scan:flex-[2_1_0%]">
+          {/* **The reader's one line, above the picture rather than under it**, with the card the
+              scanner is leaning towards and how close it is: a reader holding a card watches the
+              bar fill, and a line under a tall camera is a line below where they are looking. */}
+          <MatchStrip
+            verdict={loop.verdict}
+            mode={prefs.mode}
+            lastAdded={lastAdded}
+            hasBundle={hasBundle}
+            lastResolution={loop.lastResolution}
+          />
+          {/* The column is the height, and the video box takes what the strip above it and the
+              asset notes under it leave. **Cropped rather than letterboxed** (`object-cover`, and
+              `Overlay`'s canvas with it): at two thirds of a wide view the box is nearer square
+              than 16:9, and a letterboxed feed there is a strip with black above and below. */}
           <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
-            <video ref={videoRef} muted playsInline className="h-full w-full object-contain" />
+            <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
             <Overlay videoRef={videoRef} verdict={loop.verdict} />
+            <AddedToast card={landed} onDone={() => setLanded(null)} />
             {camera.kind === "error" && (
               <p
                 role="alert"
@@ -426,26 +470,13 @@ function LiveScanner() {
             )}
             {/* The detector's own sentence, in a strip that is *emptied* rather than removed: a
                 frame that fails is the ordinary case at nine answers a second, and a box that
-                grew and shrank under the video with each one would be the loudest thing on the
-                screen. Two lines of room, held whether or not there is anything to put in it. */}
-            <p className="absolute bottom-2 left-3 min-h-[2.5em] text-xs text-dim" aria-live="polite">
+                grew and shrank with each one would be the loudest thing on the screen. Two lines
+                of room, held whether or not there is anything to put in it. At the top of the
+                picture, because the bottom is where a landed card is laid. */}
+            <p className="absolute left-3 top-2 min-h-[2.5em] text-xs text-dim" aria-live="polite">
               {detectorSentence}
             </p>
           </div>
-
-          {/* **The reader's one line**, where the old headline pill sat over the picture. Under it
-              rather than on it, because it is a sentence to read rather than a label on a card, and
-              a sentence over live video is a sentence over whatever colour the table is. Always
-              mounted, so a screen reader is watching it before the first card lands; one line of
-              room held, so the camera above does not jump when the sentence wraps or changes. */}
-          <p
-            role="status"
-            aria-live="polite"
-            aria-label="Scanner status"
-            className="min-h-[1.5rem] text-base leading-snug text-text"
-          >
-            {line}
-          </p>
           {assetNotes.length > 0 && (
             <div className="space-y-1 text-xs text-dim">
               {assetNotes.map((note) => (
@@ -455,21 +486,27 @@ function LiveScanner() {
           )}
         </div>
 
-        {/* A fixed column. With the developer panels off it is the tray alone, and the tray is the
-            column's height — its rows scroll and its Add button stays put. With them on the column
-            scrolls by itself, so opening a panel never moves the video, and the tray is capped
-            rather than shrunk: a `min-h-0` item in a scroller hands its height to the panels
-            beside it. */}
+        {/* **The tray's side, and below 88rem it is one fixed column.** With the developer panels
+            off it is the tray alone, and the tray is the column's height — its cards scroll and
+            its Add button stays put. With them on the column scrolls by itself, so opening a panel
+            never moves the video, and the tray is capped rather than shrunk: a `min-h-0` item in a
+            scroller hands its height to the panels beside it.
+            **From 88rem it is a row instead**, grown from a basis of the developer column plus the
+            gap (22.25rem, or nothing with the panels off) against the camera's 2 — so the camera
+            gets two thirds of what the panels leave and the tray the third, and the panels scroll
+            in a column of their own beside it. */}
         <div
           className={
             prefs.developer
-              ? "relative flex w-80 shrink-0 flex-col gap-4 overflow-auto"
-              : "flex w-80 shrink-0 flex-col"
+              ? "relative flex w-[25rem] shrink-0 flex-col gap-4 overflow-auto @min-[88rem]/scan:w-auto @min-[88rem]/scan:flex-[1_1_22.25rem] @min-[88rem]/scan:flex-row @min-[88rem]/scan:overflow-visible"
+              : "flex w-[25rem] shrink-0 flex-col @min-[88rem]/scan:w-auto @min-[88rem]/scan:flex-[1_1_0%]"
           }
         >
           <div
             className={
-              prefs.developer ? "flex max-h-[70vh] shrink-0 flex-col" : "flex min-h-0 flex-col"
+              prefs.developer
+                ? "flex max-h-[70vh] shrink-0 flex-col @min-[88rem]/scan:max-h-none @min-[88rem]/scan:min-h-0 @min-[88rem]/scan:min-w-0 @min-[88rem]/scan:flex-1"
+                : "flex min-h-0 flex-1 flex-col"
             }
           >
             <TrayPanel
@@ -482,10 +519,12 @@ function LiveScanner() {
               commitError={commitError}
               onMorePrintings={onMorePrintings}
               flashKey={flashKey}
+              layout={trayLayoutOf(prefs.trayLayout)}
+              onLayout={(trayLayout) => update({ trayLayout })}
             />
           </div>
           {prefs.developer && (
-            <>
+            <div className="flex flex-col gap-4 @min-[88rem]/scan:min-h-0 @min-[88rem]/scan:w-[21.25rem] @min-[88rem]/scan:shrink-0 @min-[88rem]/scan:overflow-y-auto">
               <ScannerPanels
                 status={statusData}
                 verdict={loop.verdict}
@@ -501,7 +540,7 @@ function LiveScanner() {
                 onCapture={onCapture}
               />
               <TiersPanel resolution={loop.lastResolution} />
-            </>
+            </div>
           )}
         </div>
       </div>

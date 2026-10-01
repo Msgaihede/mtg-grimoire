@@ -232,6 +232,30 @@ export const dockBar: EnterExit = {
 };
 
 /**
+ * The Scanner's "card added" card, laid over the foot of the camera each time the tray takes a
+ * card (`features/scanner/reader/AddedToast`).
+ *
+ * **It rises 14px into place from the camera's bottom edge, which is what it is anchored to**,
+ * with {@link dialog}'s 0.97 start so it reads as arriving rather than as sliding. `base` in,
+ * because the reader is watching the camera for exactly this moment — a card that took the `slow`
+ * tier to appear would trail the flash round the camera's edge that fires with it.
+ *
+ * **It leaves on `slow`, the reverse of {@link popup}'s asymmetry, and deliberately.** A popup
+ * leaves fast because the reader dismissed it and has already looked away; this one is dismissed
+ * by a clock while the reader may still be reading the name, so it sinks and fades rather than
+ * vanishing mid-word. It sinks 8px where it rose 14, so the exit reads as settling rather than as
+ * the entrance played backwards.
+ *
+ * `y` and `scale` are transforms, so `MotionConfig reducedMotion="user"` takes the travel away
+ * and leaves the fade.
+ */
+export const landed: EnterExit = {
+  initial: { opacity: 0, y: 14, scale: 0.97 },
+  animate: { opacity: 1, y: 0, scale: 1, transition: arriving(DURATION.base) },
+  exit: { opacity: 0, y: 8, transition: leaving(DURATION.slow) },
+};
+
+/**
  * An inline `role="status"` / `role="alert"` line that **grows into place** instead of shoving
  * everything below it down by its full height the instant it appears.
  *

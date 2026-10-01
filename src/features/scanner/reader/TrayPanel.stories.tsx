@@ -1,21 +1,24 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, within } from "storybook/test";
-import type { ScannerTrayRow } from "@/lib/ipc";
+import { expect, fn, userEvent, within } from "storybook/test";
+import type { ScannerTrayLayout, ScannerTrayRow } from "@/lib/ipc";
 import { TRAY_ROWS, VERDICTS } from "../fixtures";
 import { rowFromDecision } from "./tray";
 import { TrayPanel, type TrayPanelProps } from "./TrayPanel";
 
 /**
- * The tray with its rows and folder held, so a press in the workbench does what it does in the app.
+ * The tray with its rows, folder and layout held, so a press in the workbench does what it does in
+ * the app.
  *
  * `TrayPanel` owns no copy of its rows — every write goes back through `onRows` — so a story drawn
- * straight from `args` would be a stepper that never moves and a pick that never settles. The args
- * seed the state and still receive every call, so the Actions panel shows what the page is handed.
+ * straight from `args` would be a stepper that never moves and a pick that never settles; the
+ * layout toggle is the same, a press the page stores. The args seed the state and still receive
+ * every call, so the Actions panel shows what the page is handed.
  */
 function Held(args: TrayPanelProps) {
   const [rows, setRows] = useState<ScannerTrayRow[]>(() => [...args.rows]);
   const [folderId, setFolderId] = useState<number | null>(args.folderId);
+  const [layout, setLayout] = useState<ScannerTrayLayout>(args.layout);
   return (
     <TrayPanel
       {...args}
@@ -30,9 +33,21 @@ function Held(args: TrayPanelProps) {
         setFolderId(id);
         args.onFolder(id);
       }}
+      layout={layout}
+      onLayout={(next) => {
+        setLayout(next);
+        args.onLayout(next);
+      }}
     />
   );
 }
+
+/**
+ * How wide the tray is drawn, by the page's own two answers: the fixed column below 88rem, and
+ * roughly the third of the view it takes from there on a wide window.
+ */
+const COLUMN_WIDTH = "25rem";
+const THIRD_WIDTH = "36rem";
 
 /**
  * A row waiting on a pick, built the way the page builds one — out of the Exact fixture's
@@ -56,13 +71,20 @@ const meta = {
     commitError: null,
     onMorePrintings: fn(),
     flashKey: null,
+    // The stories written before the grid are about the list, and keep drawing it; the grid's own
+    // stories below say `grid`, which is what the page opens on.
+    layout: "list",
+    onLayout: fn(),
   },
+  parameters: { trayWidth: COLUMN_WIDTH },
   decorators: [
-    // The column beside the camera on a wide window — `ScannerPage`'s `w-80` — at a height short
-    // enough that a real tray scrolls, because the footer staying in view while the rows scroll
-    // is the half of this layout a story at its natural height would never show.
-    (Story) => (
-      <div className="flex h-[36rem] w-80 flex-col p-2">
+    // The column beside the camera — `ScannerPage`'s 25rem below 88rem, or a story's own
+    // `trayWidth` — at a height short enough that a real tray scrolls, because the footer staying
+    // in view while the rows scroll is the half of this layout a story at its natural height would
+    // never show. A width rather than a class, so a story can name any width without a Tailwind
+    // class having to exist for it.
+    (Story, { parameters }) => (
+      <div className="flex h-[36rem] flex-col p-2" style={{ width: parameters.trayWidth as string }}>
         <Story />
       </div>
     ),
@@ -140,5 +162,72 @@ export const CommitRefused: Story = {
     await expect(canvas.getByRole("alert")).toHaveTextContent(
       "Could not add to your collection — the database is busy. Try again in a moment.",
     );
+  },
+};
+
+/**
+ * The grid, as the page opens on it, a third of a wide window across — `TRAY_ROWS` as tiles: the
+ * waiting Lightning Bolt two columns wide with its candidates to press, the playset in progress
+ * wearing its count, the foil wearing its chip, and the first card scanned. The second row is
+ * flashed as a bump would leave it.
+ */
+export const Grid: Story = {
+  args: { layout: "grid", flashKey: TRAY_ROWS[1]?.key ?? null },
+  parameters: { trayWidth: THIRD_WIDTH },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("button", { name: "Grid" })).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      canvas.getByRole("button", { name: "More printings of Urza's Saga — MH2 259" }),
+    ).toBeInTheDocument();
+    await expect(canvas.getByRole("group", { name: "Printings of Lightning Bolt" })).toBeInTheDocument();
+  },
+};
+
+/**
+ * The same tray in the 25rem column the page draws below 88rem: two columns, a tile too narrow for
+ * its finish and its stepper side by side, so the pair wraps under the name.
+ */
+export const GridInColumn: Story = {
+  args: { layout: "grid" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText("Pick a printing")).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("spinbutton", { name: "Quantity of Ancient Tomb — TMP 315" }),
+    ).toBeInTheDocument();
+  },
+};
+
+/** An empty grid: the sentence saying where cards will land, the toggle, and an add that refuses. */
+export const GridEmpty: Story = {
+  args: { layout: "grid", rows: [] },
+  parameters: { trayWidth: THIRD_WIDTH },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText("Cards you scan appear here.")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Grid" })).toHaveAttribute("aria-pressed", "true");
+    await expect(canvas.getByRole("button", { name: "Add 0 to collection" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  },
+};
+
+/**
+ * The toggle pressed: the page is asked for the list, and the same rows are drawn as lines — the
+ * card's *More printings…* press keeping the name it had on the tile.
+ */
+export const SwitchToList: Story = {
+  args: { layout: "grid" },
+  parameters: { trayWidth: THIRD_WIDTH },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "List" }));
+    await expect(args.onLayout).toHaveBeenCalledWith("list");
+    await expect(canvas.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
+    await expect(
+      canvas.getByRole("button", { name: "More printings of Urza's Saga — MH2 259" }),
+    ).toBeInTheDocument();
   },
 };

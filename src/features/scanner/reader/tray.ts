@@ -18,6 +18,7 @@ import type {
   CollectionImportItem,
   ScannerDecision,
   ScannerTrayChoice,
+  ScannerTrayLayout,
   ScannerTrayRow,
 } from "@/lib/ipc";
 
@@ -228,6 +229,14 @@ export function removeRow(rows: readonly ScannerTrayRow[], key: string): Scanner
 /** Rows still waiting for a pick — the one thing that stops a commit. */
 export function unresolvedCount(rows: readonly ScannerTrayRow[]): number {
   return rows.filter((row) => row.choices.length > 0).length;
+}
+
+/**
+ * The stored layout word as a layout. **Anything but `list` is the grid**, the Rust default: the
+ * row stores the word verbatim, so a value an older or newer build wrote must still draw a tray.
+ */
+export function trayLayoutOf(stored: string): ScannerTrayLayout {
+  return stored === "list" ? "list" : "grid";
 }
 
 /** Copies, not rows: a bumped row of three is three cards going into the collection. */
