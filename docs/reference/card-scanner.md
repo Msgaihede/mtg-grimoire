@@ -2086,13 +2086,13 @@ the next generated write is one editor away.
 | --- | --- |
 | `ScannerPage.tsx` | The view: the Match strip over the camera, the tray beside it, and the developer column |
 | `useCamera.ts` | The stream: `getUserMedia` with the debug page's constraints — or the reader's camera by `deviceId: { exact }`, falling back to the default when that camera has gone — one `stopAll` every exit path goes through, a tolerated `play()` rejection, and the wait for `loadedmetadata` before reporting a size. It opens nothing while its `deviceId` is `undefined`, which is how the page holds the camera shut until the stored choice has loaded. Its error state is **keyed on `verdictText.ts`'s `cameraSentence`**, which is where the wording lives. `useCameraDevices` lists the `videoinput`s for the picker, re-read on `devicechange` and once a camera is live, because a browser names no camera before one is granted |
-| `reader/MatchStrip.tsx` | The strip above the camera — `readerText.ts`'s `matchStrip` drawn: a pill, the card, one sentence, the bar |
+| `reader/MatchStrip.tsx` | The strip above the camera — `readerText.ts`'s `matchStrip` drawn: a pill, the card, one sentence, the bar, and *Reset evidence* beside it |
 | `reader/AddedToast.tsx` | The card laid over the camera for 2.2 s each time the tray takes one |
 | `useScanLoop.ts` | The pump: one request in flight, later frames dropped, the rate over twenty round trips, `grab` for the capture (**with a `catch` of its own** — a throwing `drawImage`/`toBlob` outside one rejects `pump()` and freezes the loop with `error` still `null`), and the two **kept reads** below |
 | `Overlay.tsx` | The canvas over the video — the smoothed quad, the raw one behind it |
 | `ScannerPanels.tsx` | Pure. The whole column from `{ status, verdict, options, … }` |
 | `panels/Panel.tsx` | The section chrome, the fold, and the shared `Row` / `FIGURES` / `BUTTON` |
-| `panels/MatchPanel.tsx` | The figures, the standings, reset and capture — its head row and evidence bar moved into the Match strip on 2026-10-01, where every reader sees them |
+| `panels/MatchPanel.tsx` | The figures, the standings and capture — its head row, evidence bar and Reset press moved into the Match strip on 2026-10-01, where every reader sees them |
 | `panels/ControlsPanel.tsx` | The rule and method segments, the stages toggle, the sliders |
 | `panels/PipelinePanel.tsx` | The three stage images, only when stages are on |
 | `panels/BudgetPanel.tsx` | The per-stage milliseconds as a stacked bar |
@@ -2899,6 +2899,14 @@ match — Try better lighting or clear the filters.* · *N printings — Pick a 
   time) under confidence — is drawn only while the scanner is still gathering.
 - **An ambiguous resolve names the card only when every choice shares one name**: a tie between two
   names is not a settled card.
+
+**_Reset evidence_ sits at the bar's end, for every reader** (issue #740). It was a press in the
+Developer column's Match panel only, so a reader whose scanner had settled on the wrong card had no
+way to make it start over short of taking the card out of frame. It is the same press — the page's
+`onReset`, `clearReads()` then `scanner_reset`, a refusal said in the strip under the video — and
+the panel's copy went with the move, so a Developer reader never meets two buttons by one name. It
+is outside the live region: a press is not news, and a button inside *Scanner status* would be read
+out with every change of the line.
 The asset sentences sit under the camera, so a missing bundle is still said with the Developer
 panels off.
 

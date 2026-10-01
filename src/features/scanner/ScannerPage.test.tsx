@@ -355,10 +355,11 @@ describe("ScannerPage", () => {
     );
   });
 
-  it("hands the reset press straight to the command", async () => {
+  /** Beside the bar for every reader since #740 — not behind the Developer switch. */
+  it("hands the reset press straight to the command, with the Developer panels off", async () => {
     refused();
-    storedPrefs({ developer: true });
     mount();
+    expect(screen.queryByRole("region", { name: "Match" })).not.toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
     expect(vi.mocked(ipc.scannerReset)).toHaveBeenCalled();
   });
@@ -370,7 +371,6 @@ describe("ScannerPage", () => {
    */
   it("puts a refused reset in the strip under the video", async () => {
     refused();
-    storedPrefs({ developer: true });
     vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
     const { container } = mount();
     await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));

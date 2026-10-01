@@ -33,7 +33,6 @@ export interface ScannerPanelsProps {
   sendPx: number;
   onOptions: (next: ScannerOptions) => void;
   onSendPx: (px: number) => void;
-  onReset: () => void;
   /** Resolves to the saved file name, rejects with a sentence the panel prints verbatim. */
   onCapture: (expected: string) => Promise<string>;
 }
@@ -67,7 +66,6 @@ export function ScannerPanels(p: ScannerPanelsProps) {
         verdict={p.verdict}
         lastCollector={p.lastCollector}
         rate={p.rate}
-        onReset={p.onReset}
         onCapture={p.onCapture}
       />
       <ControlsPanel

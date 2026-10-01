@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import type { ScannerTracked, ScannerVerdict } from "@/lib/ipc";
 import { VERDICTS } from "../fixtures";
 import { MatchStrip } from "./MatchStrip";
@@ -36,6 +36,7 @@ const meta = {
     lastAdded: null,
     hasBundle: true,
     lastResolution: null,
+    onReset: fn(),
   },
   decorators: [
     // The camera's column at the app's narrow rung: `ScanBar.stories.tsx`'s 1032px content column
@@ -64,9 +65,14 @@ export const Looking: Story = {
  * bar's end. The name is drawn and not announced — it can change on the next frame.
  */
 export const Matching: Story = {
-  play: async ({ canvasElement }) => {
+  play: async ({ args, canvasElement }) => {
     await expect(status(canvasElement)).toHaveTextContent("Matching Plains 2XM 373 Hold steady");
     await expect(within(canvasElement).getByText("Plains")).toHaveAttribute("aria-hidden", "true");
+    // Reset evidence sits at the bar's end, outside the live region, for every reader.
+    const reset = within(canvasElement).getByRole("button", { name: "Reset evidence" });
+    await expect(status(canvasElement)).not.toContainElement(reset);
+    await userEvent.click(reset);
+    await expect(args.onReset).toHaveBeenCalledOnce();
   },
 };
 
