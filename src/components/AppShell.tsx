@@ -32,6 +32,7 @@ import {
   updateActivity,
 } from "@/lib/activity";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { editionHas, useEdition } from "@/lib/edition";
 import { LAYER } from "@/lib/layers";
 import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
 import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
@@ -141,6 +142,9 @@ export function AppShell({ children, update }: { children: ReactNode; update: Up
 
 function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
+  // Which app this shell is drawing. A context value that never changes for the life of the
+  // window, so naming it in a dependency list below costs nothing.
+  const edition = useEdition();
   const setActiveView = useAppStore((s) => s.setActiveView);
   // Only its length is read, and only to decide whether the rail draws the Shared row — see
   // `entries` below.
@@ -292,12 +296,17 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
       // to two readers. Against a fixed list the digits never move — and the list is fixed
       // precisely because the conditional row is the one left out of it.
       if (i === -1 || i >= CHORD_NAV.length) return;
+      // **The digits do not move between editions.** A chord for a view this edition does not
+      // draw is inert rather than rebound to the next row, for `CHORD_NAV`'s own reason: one
+      // press must not mean two things to two readers. Ahead of `preventDefault`, so the press
+      // is left to whatever else wants it.
+      if (!editionHas(edition, CHORD_NAV[i].id)) return;
       e.preventDefault();
       setActiveView(CHORD_NAV[i].id);
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [setActiveView, setKeyMapOpen]);
+  }, [edition, setActiveView, setKeyMapOpen]);
   // The one `marketplace:progress` subscription in the app, for `useSyncProgress`' reason.
   // It renders nothing: the event goes into the query cache, and every `useMarketplace()`
   // observer — including the one two lines below — reads it back from there.
@@ -423,8 +432,12 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    */
   const entries = useMemo(
     () =>
-      NAV.filter((n) => n.id !== "shared" || openedShares.length > 0 || activeView === "shared"),
-    [openedShares.length, activeView],
+      NAV.filter(
+        (n) =>
+          editionHas(edition, n.id) &&
+          (n.id !== "shared" || openedShares.length > 0 || activeView === "shared"),
+      ),
+    [edition, openedShares.length, activeView],
   );
 
   return (
@@ -453,8 +466,11 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           the overlay, and there was no caption on screen for the whole ~90s sync. It is kept
           now by `LAYER.caption` in `TitleBar` itself, where the rung carries the argument; the
           claim lives here because this is where the row is placed, and `layers.test.ts` is
-          what holds the two together. */}
-      <TitleBar />
+          what holds the two together.
+
+          `edition.caption` is false wherever a browser or an OS owns the frame — the light
+          entry — and there this row is not drawn at all. */}
+      {edition.caption && <TitleBar />}
 
       <div className="flex min-h-0 flex-1">
         {/* **`w-52` is 208px and it is pinned, which is the one part of this shell that got
