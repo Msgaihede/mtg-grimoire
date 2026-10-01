@@ -477,6 +477,9 @@ pub struct Tracker {
     /// The card the last frames were clear about, and how many in a row. See
     /// [`TrackerOptions::early_frames`].
     clear: Option<([u8; ID_LEN], u32)>,
+    /// The card in hand was refused its early decision and decides at the bar. See
+    /// [`Tracker::refuse_early`].
+    early_refused: bool,
 }
 
 /// The id holding the most evidence — and on an exact tie, **the lower id**.
@@ -526,6 +529,7 @@ impl Tracker {
             frozen: false,
             other: None,
             clear: None,
+            early_refused: false,
         }
     }
 
@@ -571,6 +575,35 @@ impl Tracker {
         self.frozen = false;
         self.other = None;
         self.clear = None;
+        self.early_refused = false;
+    }
+
+    /// The verdict as it stands, without feeding a frame.
+    pub fn verdict(&self) -> Tracked {
+        self.snapshot()
+    }
+
+    /// Take back a decision the clear frames made, and send the card to the bar.
+    ///
+    /// **The early decision is the hash alone, on two frames.** Its thresholds were measured on
+    /// frames of a card held in view (`eval --trace`); a frame with no card in it at all, or a
+    /// card on its way across the lens, is not one of those, and two of them agreeing decided
+    /// a card nobody was showing (#735). So a caller that can read the card asks the bands, and
+    /// refuses a decision neither bears out. The tally is kept and thawed: the card goes on
+    /// voting and decides at `decide_at`, which is what every card did before the early path
+    /// existed. The refusal lasts until [`Tracker::reset`] — it is about the card in hand.
+    ///
+    /// A decision already at the bar is not the early path's and is left standing.
+    pub fn refuse_early(&mut self) {
+        self.early_refused = true;
+        self.clear = None;
+        self.frozen = self.frozen && self.snapshot().committed;
+    }
+
+    /// Whether the card in hand has been refused its early decision. See
+    /// [`Tracker::refuse_early`].
+    pub fn early_refused(&self) -> bool {
+        self.early_refused
     }
 
     /// Decide on `key`, reporting `member` as its printing, without gathering a single vote.
@@ -894,6 +927,7 @@ impl Tracker {
 
         // A run of clear frames, long enough, about the card that holds the lead.
         let early_run = self.opts.early_frames > 0
+            && !self.early_refused
             && self
                 .clear
                 .is_some_and(|(k, n)| n >= self.opts.early_frames && Some(k) == self.leader);
@@ -1727,6 +1761,32 @@ mod tests {
         assert!(t.last_committed());
         let r = t.observe(&contest(0.30, 0.12));
         assert!(r.frozen && r.committed, "an early decision thawed");
+    }
+
+    #[test]
+    fn an_early_decision_refused_goes_back_to_the_bar() {
+        // The session refuses one no read of the card bears out (#735). The votes it had are
+        // kept, the card goes on gathering, and it decides where a marginal card would.
+        let mut t = early();
+        let frame = contest(0.12, 0.30);
+        t.observe(&frame);
+        assert!(t.observe(&frame).early, "the premise: decided early");
+        t.refuse_early();
+        let r = t.verdict();
+        assert!(!r.committed && !r.frozen && !r.early, "a refused decision still stood");
+        assert_eq!(votes_of(&r, 1), 2.0, "the refusal threw the votes away");
+        // The page resending its options does not bring it back.
+        t.set_options(early().opts);
+        let at = (3..=12).find(|_| t.observe(&frame).committed);
+        assert_eq!(at, Some(8), "the refused card did not decide at the bar");
+        assert!(!t.verdict().early);
+        assert!(t.early_refused());
+
+        // It is this card's refusal: the next one may be decided early again.
+        t.reset();
+        assert!(!t.early_refused());
+        t.observe(&frame);
+        assert!(t.observe(&frame).early, "a refusal outlived its card");
     }
 
     #[test]

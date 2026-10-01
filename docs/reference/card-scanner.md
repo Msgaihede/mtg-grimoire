@@ -1329,6 +1329,62 @@ enough alone — one seed put a wrong card at 41 bits. Simulated over the three 
 before the bar on 371 of 480 bursts, on a wrong card never, and moves the median decision from frame
 10 to 4; three frames rather than two only reaches 5 and guards against nothing the traces show.
 
+### An early decision has to be read
+
+**Until 2026-10-01 a Fast decision was announced whatever its confirming read found**
+([#735](https://github.com/Msgaihede/mtg-grimoire/issues/735)). The report was two tray rows a
+moment apart when moving from one card to the next, at least one of them wrong — and, said another
+way by the reader, *a wrong card scanned instantly while moving*. The early decision is the hash
+alone on two frames. Its thresholds were read off frames of a card held in view (the table above);
+two frames of a card crossing the lens, or of no card at all, are not those frames, and nothing
+measured says they cannot agree on a printing as clearly. The read that followed could only choose
+a *printing* — it had no way to say "this is not that card", so a read that found no name and no
+collector line left the hash's answer standing.
+
+**So an early decision that no read bears out is taken back** (`Tracker::refuse_early`, from
+`Session::settle_fast_decision`). Borne out is any of: a binding title read, which names the
+decision's card itself; a title read naming the leader, binding or not; or a collector line that
+pins or fits one of the leader's printings. Otherwise:
+
+- **The card keeps its votes and goes to the bar** — `decide_at`, eight, which is what every card
+  needed before the early path existed. The refusal lasts until the tracker resets: it is about the
+  card in hand.
+- **A lock that lets go takes the refused card with it** (`count_stretch`): its votes and its
+  refusal are dropped on the first untrusted frame, where an honest tally waits out ten misses.
+  What gets refused is mostly a card crossing the lens, and the card the reader meant comes right
+  after it — it should not have a stranger's votes to out-vote, nor be sent to the bar for them.
+- **The readers go on asking.** The leaderless count is put at `FAST_RESCUE_AFTER`, so the rescue
+  is eligible at once rather than eight frames later — its next turn is within `OCR_EVERY` frames —
+  and a read that names the card is six votes: the bar, with the two it had.
+- **A decision at the bar is announced whatever its read found**, as it always was. So is every
+  decision in a session with no readers loaded, which has nothing to ask.
+
+**What it costs is the cards whose bands cannot be read**, which now take the eight frames they
+took before 2026-09-30. On the evaluation (Windows, release, 2026-10-01, 160 printings, seed 7,
+`main` at `697d45db` against this change) Fast went **96.2% → 95.0% decided** inside its twelve
+frames, wrong card **0 → 0**, printing 83.1% → 81.2%, and the **median decision from frame 4 to 7**;
+Exact did not move. **The evaluation overstates it**: `eval` calls `Session::frame`, with no detail
+frame, so its confirming read is of a title a few pixels tall in a 1280 px frame and finds nothing
+on most cards. The app sends the detail frame that read asks for (§4, *Where the bands come from*).
+How often a live read bears a decision out is not measured.
+
+**The page keeps a gap as well** — `useScanLoop`'s `DECISION_GAP_FRAMES`, §10 *`decision_seq` and
+`decision`* — which is what the issue asked for.
+
+**"Only scan a card at rest" was built first and refused**, and the measurements are worth keeping:
+
+| What decided a frame was at rest | What it did |
+| --- | --- |
+| Its look agreeing with the frame before (the watch's own 128-bit dHash and `AGREE_BITS`) | nothing: the rectification follows the card, so a sliding card looks the same frame to frame. An earlier `stacking carried` gave the identical table before and after — 24 of 160 cards decided on their way in, both times |
+| Its quad within 10% of the short edge of the frame before's, and of the lock's | no decision on the way in, and the evaluation paid for it: Fast 96.2% → 94.4% decided, Exact 96.2% → 91.9% |
+| The same at 15% | 95.6% and 95.6% |
+
+The evaluation's jitter — a hand holding a card — moves the quad a median 4% of its short edge a
+frame, 13% at the 95th percentile and 24% at the 99th, so no tolerance separates a held card from
+one in the last frames of a slide (a median 21% and 8% on the two frames before rest). What settled
+it was not a number: **the camera may be the thing in the hand**, and then no card is ever at rest
+in the frame.
+
 ### What ends a freeze
 
 Five things: **ten frames without the decided card**, **a different card come to rest where it
@@ -1365,6 +1421,7 @@ every foil after its read stands down, and that is not a card being swapped in.
 | Per-kind ranking, and tier weights | a foil committing to **`Suplex`** while OCR read the title right on all 400 runs |
 | Freeze counts presence, not the gate | the Plains 74 → 84-bit self-reset oscillation, 2026-09-08 |
 | A different card at rest ends a freeze the lock never let go of | a card stacked on a decided one held the old decision nine frames and decided seven after (§7); one the hash could not place, or a second printing of the same card, never ended it (#710) |
+| An early decision no read bears out goes back to the bar | a wrong card added at once while moving between cards: two clear frames decided it, and the read that found neither its name nor its collector line could only choose a printing (#735) |
 
 ## 6. The debug page and the server
 
@@ -2397,6 +2454,9 @@ printing was whichever reprint the hash liked best. Now (`Session::settle_fast_d
   the commit**, so a clear card that commits in two frames (below) is announced on its third. A
   rescue read on the committing frame has already read both, and settles at once. Every rescue read
   now reads the collector line beside the title. Without models loaded nothing is held back.
+- **An early commit that read bears nothing out for is taken back** (#735, 2026-10-01; §5, *An
+  early decision has to be read*): no name and no collector line of the card, and it goes to the
+  eight-vote bar instead of the tray.
 - **A binding title read limits the decision to the cards it names** (`resolve::title_binds`, or a
   prefix — below): an exact read, or a corrected one of at least 10 characters with at most one
   correction per 8. **The dhash is then compared against those cards' printings alone**, on the
@@ -2737,6 +2797,43 @@ the piles lay a reprint of the same card on top, which "decided" counts and a ca
 judge. The synthetic hand is a flat blob inside the card's outline and the per-frame jitter a card
 held in a hand, not one lying on a table — a fence, not a claim about a camera.
 
+#### A card carried in, measured
+
+`stacking carried` — release, Windows, 2026-10-01. `sequence`'s sessions with one thing changed:
+the card on top **arrives moving**. Its first four frames are the card 60%, 25%, 8% and 2% of its
+own width short of where it comes to rest, each smeared along the way by half the step to the
+next (the whole frame is shifted, which is the card's motion and nothing else), and then 30 frames
+at rest. Rows are decisions that add one, counted from the card on top's first frame. **Before**
+is `main` at `697d45db`; **after** is the same with #735's refusal of an unread early decision
+(§5). The page's three-frame gap is not in either: the tool reads `decision_seq` as the session
+moves it.
+
+| | Fast before | Fast after | Exact before | Exact after |
+| --- | ---: | ---: | ---: | ---: |
+| the card on top decided within its frames | 92.5% | 91.2% | 90.0% | 90.0% |
+| its first row added before it was at rest | 0 | 0 | 0 | 0 |
+| given two rows or more | 1 | **0** | 0 | 0 |
+| rows naming another card | 1 | 1 | 2 | 2 |
+| decisions that replaced the row before | 3 | 4 | 0 | 0 |
+| last decision, frames at rest, p50 / p90 / max | 4 / 11 / 29 | 6 / 13 / 23 | 6 / 10 / 17 | 6 / 10 / 17 |
+
+**It does not reproduce what was reported**, and that is the finding to keep: a reader moving
+between cards sees two rows *often*, and 160 synthetic piles give one. The first step is past the
+35% the lock calls the same quad, so the lock lets go and takes hold again as the card lands, and
+by then the frames are near enough at rest that nothing is decided on the way in. An earlier
+version with the whole slide inside the lock's reach (10%, 5.5%, 2.5% and 1% of the frame's short
+edge) decided 24 of 160 cards on their way in — and still gave one double row, because a
+rectification made from the card's own quad looks the same wherever the card is. Whatever makes
+the pair on a real camera — blur the smear does not model, a hand, the camera itself moving — is
+not in these frames. The fix was chosen from the mechanism and the report, not from this table.
+
+**`stacking sequence` on the same two trees** — the card on top laid at rest, as §10's table above
+has it: Fast decided the card on top in 90.0% of piles before and 89.4% after, the right card in
+88.1% and 86.9%, on its **4th frame at the median before and its 8th after** (p90 13 both times);
+no pile added a card twice on either tree, six decisions replaced a row on both, and Exact's row
+did not change at all. The four frames are §5's cost again, and for the same reason: these sessions
+send no detail frame either.
+
 #### What it cannot see
 
 - **A second copy of the same printing.** Nothing about it looks different. Lifting the first
@@ -2773,6 +2870,20 @@ final review it also carries `replaces_previous` (*Exact*, above), which the tra
 its newest row instead of adding one.
 `useScanLoop` takes the first `decision_seq` after the camera goes live as a baseline and calls
 `onDecision` only for a number that differs on a frame carrying a decision.
+
+**And not for one that moves again within `DECISION_GAP_FRAMES` (3) frames** (#735, 2026-10-01).
+The session can decide one physical card twice in a row: the watch calls a card changed on two
+frames unlike the decided one, so a card still settling — or a camera still moving — is decided
+again two frames after its first decision, three when the second waits a frame on its confirming
+read. A card really swapped in needs the old one lifted, the new one laid and at least three frames
+of its own. So a decision that many frames or fewer after the last is dropped by the loop, and the
+row already in the tray stays. **Frames, not milliseconds**: the pump runs from about five to a
+dozen frames a second, and a clock long enough for a three-frame pair on a slow build swallows a
+real card on a fast one. **Counted from every decision, a dropped one included**, so a session
+flapping between two answers every other frame adds the first and none after it. The cost is stated rather than hidden: the session
+still holds the dropped decision — the headline names that card — and nothing was added for it.
+The session's own `decision_seq` is untouched, so the debug page and the evaluation count as they
+did.
 
 ### The tray
 

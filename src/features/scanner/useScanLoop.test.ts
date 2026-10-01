@@ -336,6 +336,7 @@ describe("useScanLoop", () => {
       VERDICTS.decided, // seq 1
       VERDICTS.decided, // seq 1 again, still carrying its decision
       { ...VERDICTS.voting, decision_seq: 1 }, // seq 1 and nothing decided
+      { ...VERDICTS.voting, decision_seq: 1 }, // …for long enough to be a second card
       second, // seq 2
     ];
     let n = 0;
@@ -349,6 +350,81 @@ describe("useScanLoop", () => {
     expect(onDecision).toHaveBeenCalledTimes(2);
     expect(onDecision.mock.calls[0]).toEqual([VERDICTS.decided.decision, 1]);
     expect(onDecision.mock.calls[1]).toEqual([second.decision, 2]);
+  });
+
+  /**
+   * **Issue #735: two rows a moment apart.** The session calls a card changed on two frames that
+   * look unlike the decided one, so one card still settling is decided twice — two frames apart,
+   * or three when the second waits on its confirming read. A card really swapped in needs more
+   * frames than that, so the gap is what tells them apart, and the first of the pair stays.
+   */
+  it("drops a decision that follows the last one within the frame gap", async () => {
+    const decided = (seq: number): ScannerVerdict => ({
+      ...VERDICTS.decided,
+      decision_seq: seq,
+      decision: { ...VERDICTS.decided.decision!, printing: `printing-${seq}` },
+    });
+    const quiet = (seq: number): ScannerVerdict => ({ ...VERDICTS.voting, decision_seq: seq });
+    const answers: ScannerVerdict[] = [
+      quiet(0), // the baseline
+      decided(1), // the card
+      quiet(1),
+      decided(2), // two frames on: the same card, decided again
+      decided(2),
+      quiet(2),
+      decided(3), // three frames after *that* one — counted from the dropped decision too
+      quiet(3),
+      quiet(3),
+      quiet(3),
+      decided(4), // four frames on: a card of its own
+    ];
+    const onDecision = vi.fn();
+    let n = 0;
+    scannerFrame.mockImplementation(() => {
+      const v = answers[n++];
+      return v === undefined ? deferred<ScannerVerdict>().promise : answersIn(10, v);
+    });
+    mount({ onDecision });
+    await tick(600);
+    expect(scannerFrame).toHaveBeenCalledTimes(answers.length + 1);
+    expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1, 4]);
+  });
+
+  it("starts the frame gap over when the camera does", async () => {
+    // A camera that stops and starts takes a new baseline, and the first card after it is never
+    // inside a gap left over from the last stream.
+    const onDecision = vi.fn();
+    // Every frame answers — a request left hanging would hold the pump across the restart.
+    let next: ScannerVerdict[] = [{ ...VERDICTS.voting, decision_seq: 0 }, VERDICTS.decided];
+    let last: ScannerVerdict = { ...VERDICTS.voting, decision_seq: 1 };
+    scannerFrame.mockImplementation(() => answersIn(10, next.shift() ?? last));
+    const videoRef = { current: readyVideo() };
+    const grabFrame = vi.fn(async () => BYTES);
+    const { rerender } = renderHook(
+      ({ live }: { live: boolean }) =>
+        useScanLoop({
+          videoRef,
+          live,
+          options: DEFAULT_SCANNER_OPTIONS,
+          sendPx: DEFAULT_SEND_PX,
+          grabFrame,
+          onDecision,
+        }),
+      { initialProps: { live: true } },
+    );
+    // Two frames at ten milliseconds each: the baseline, and the card.
+    await tick(25);
+    expect(onDecision).toHaveBeenCalledTimes(1);
+
+    // Off at once and on again, with a second card decided on the new stream's second frame —
+    // two frames after the first card by the old count, and one after the new baseline.
+    rerender({ live: false });
+    await tick(60);
+    next = [{ ...VERDICTS.voting, decision_seq: 1 }, { ...VERDICTS.decided, decision_seq: 2 }];
+    last = { ...VERDICTS.voting, decision_seq: 2 };
+    rerender({ live: true });
+    await tick(100);
+    expect(onDecision.mock.calls.map(([, seq]) => seq)).toEqual([1, 2]);
   });
 
   /**
