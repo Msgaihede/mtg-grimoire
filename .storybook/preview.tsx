@@ -7,7 +7,7 @@ import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { installKeyboardModality } from "@/lib/keyboardModality";
 import { installWorld, type FakeParams, type FakeWorld } from "./fake/world";
-import { setArtMode } from "./fake/images";
+import { CARD_ART_DIR, setArtMode, setBundledArtRoot, type ArtMode } from "./fake/images";
 // The app's stylesheet *through* `preview.css`, never directly: that file adds `.storybook` as
 // a Tailwind source, which is the one thing the shipped bundle must not inherit. See its header.
 import "./preview.css";
@@ -151,8 +151,22 @@ const withFake: Decorator = (Story, context) => {
   //
   // Narrowed rather than cast: `globals` is untyped, and a global is `undefined` in a context
   // that never saw `initialGlobals` (a docs render, a portable story). Synthetic is the safe
-  // answer to anything that is not the literal `"live"` — it is the mode that needs no network.
-  setArtMode(context.globals.art === "live" ? "live" : "synthetic");
+  // answer to anything that is not the literal `"live"` or `"bundled"` — it is the mode that
+  // needs no network and no folder.
+  //
+  // `bundled` also needs to know where its folder is, and this is the file that knows:
+  // `main.ts` mounts `.design-sync/card-art/` at the Storybook root, which is the directory
+  // `iframe.html` is served from, so the page's own base URI is the answer on a dev server and
+  // in a static build alike. Every other mode clears the root, so a reader who flips the toolbar
+  // back leaves nothing behind that a later `bundled` could mistake for its own.
+  const art = context.globals.art;
+  if (art === "bundled") {
+    setBundledArtRoot(new URL(`${CARD_ART_DIR}/`, document.baseURI).href);
+    setArtMode("bundled");
+  } else {
+    setBundledArtRoot(null);
+    setArtMode(art === "live" ? "live" : "synthetic");
+  }
   // `<MotionConfig reducedMotion="user">` stands in for the one `src/App.tsx` mounts, because a
   // story renders its component and never the app around it. Without it a workbench built to
   // check accessibility would be the one place in the project where reduced motion is ignored —
@@ -196,6 +210,24 @@ const withFake: Decorator = (Story, context) => {
   );
 };
 
+/**
+ * The art a session opens on: synthetic, unless the build was started with
+ * `STORYBOOK_ART=bundled`.
+ *
+ * `.design-sync/build-reference.mjs` is what sets it, for the reference storybook the design
+ * sync compares every preview against — the previews draw the bundle's shipped JPGs, so a
+ * reference opening on synthetic art would make every card-bearing component a mismatch. Read
+ * through `import.meta.env` because Storybook's Vite builder adds `STORYBOOK_` to Vite's
+ * `envPrefix` (`storybook:config-plugin`), and Vite inlines a variable with a listed prefix into
+ * the preview and keeps the rest of the environment out of it. `vite/client`, listed in this
+ * program's `tsconfig.json`, types the read — as an `any`, hence a comparison and never a cast.
+ *
+ * **`src/stories.test.tsx` sees synthetic, and has to**: it runs every story through
+ * `setProjectAnnotations` with this file, and nothing sets the variable for Vitest. `live` is
+ * deliberately not honoured here — no build has a reason to open on the network.
+ */
+const OPENING_ART: ArtMode = import.meta.env.STORYBOOK_ART === "bundled" ? "bundled" : "synthetic";
+
 const preview: Preview = {
   parameters: {
     controls: { matchers: { color: /(background|color)$/i, date: /Date$/i } },
@@ -209,6 +241,14 @@ const preview: Preview = {
    * through the wall. Synthetic is the default so a checkout with no network — CI, a plane —
    * renders every story exactly as a checkout with one does, and so that `storybook build`
    * produces a static site that draws card art without ever touching Scryfall.
+   *
+   * **Bundled is the third, and it is the design system's art**: the fixture's own JPGs, which
+   * `.design-sync/card-art.mjs` downloads into a gitignored folder and `main.ts` serves at
+   * `/card-art` — only when the build was started with `STORYBOOK_ART=bundled` and the folder
+   * exists. It is the picture a design built from the bundle shows on claude.ai, where no page
+   * may load a remote image, so this is where a reader checks that picture. Chosen on a session
+   * with no folder mounted, every card draws the app's own no-image frame rather than falling
+   * back quietly: a missing download should look like one.
    */
   globalTypes: {
     art: {
@@ -219,12 +259,13 @@ const preview: Preview = {
         items: [
           { value: "synthetic", title: "Synthetic (offline)" },
           { value: "live", title: "Live (Scryfall CDN)" },
+          { value: "bundled", title: "Bundled (design-system art)" },
         ],
         dynamicTitle: true,
       },
     },
   },
-  initialGlobals: { art: "synthetic" },
+  initialGlobals: { art: OPENING_ART },
   decorators: [withFake],
 };
 

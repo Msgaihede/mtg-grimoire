@@ -66,14 +66,48 @@ export * from "../src/components/table/VirtualTable";
 // ── Deck affordances ─────────────────────────────────────────────────────────
 export * from "../src/features/decks/DropIndicator";
 
+// ── Deck editor ──────────────────────────────────────────────────────────────
+// Added 2026-10-01, by Markus's choice: the deck editor's own parts, so a design agent asked to
+// draw the editor mounts the real desk rather than redrawing it. (This reverses the 2026-09-27
+// decision in NOTES.md that declined `CardChin` — it is wanted now as part of this set.)
+// `StackView` is the whole Stacks desk; `CardStack` one pile of it; `DeckCardFace` the stacked
+// card's face (no stories — exported for designs to mount); `CardMarks` the family of marks laid
+// on a card (`QuantityTag` is what `titleMap` sends its title to, `FilterChips → ToggleChip`'s
+// move); `CountPill` the pile heading's count; `GroupHeader` the pile heading itself.
+// **`CardMarks` needs a shim line as well as this re-export**, for `FilterChips`' reason: no
+// export is named after the file, so rule 2 cannot recognise `./CardMarks` as a component module
+// and a story importing it would compile a second copy. `cfg.storyImports.shim` carries
+// `/features/decks/CardMarks`; the two are one mechanism in two files.
+export * from "../src/features/decks/views/StackView";
+export * from "../src/features/decks/CardStack";
+export * from "../src/features/decks/DeckCardFace";
+export * from "../src/features/decks/CardMarks";
+export * from "../src/features/decks/CountPill";
+export * from "../src/features/decks/views/GroupHeader";
+export * from "../src/components/CardChin";
+
 // ── Shared state and helpers ─────────────────────────────────────────────────
 // `store` first and alone on its line: it is the one export here whose *identity* matters.
 export * from "../src/lib/store";
+// The app's one `@dnd-kit/dom` manager — rule 2, and the second export here whose identity
+// matters. It is a module singleton that owns mutable state: the `DragDropManager` registry, the
+// drag-start payload `WeakMap`, an id counter, and monitor listeners it adds at module scope.
+// Added 2026-10-01 with the deck editor: `StackView.stories.tsx` imports `../dnd`, and
+// `CardStack.stories.tsx` imports `./dnd` and `./cardControl`; none of those is a component
+// module, so they compile from source into the preview and reach this file through
+// `@/lib/dndTarget` — constructing a second `DragDropManager` beside the bundle's. The matching
+// `cfg.storyImports.shim` entry (`/lib/dndManager`) points those imports at this one. One
+// mechanism in two files, exactly as with react-query below.
+export * from "../src/lib/dndManager";
 export * from "../src/lib/mana";
 export * from "../src/lib/rarity";
 export * from "../src/lib/sort";
 export * from "../src/lib/layers";
 export * from "../src/lib/utils";
+// `StackView` takes a required `marketplace` — one currency for the whole desk — and its stories
+// pass `MARKETPLACES.tcgplayer`. Pure data, exported so a design mounting the Stacks desk has the
+// same object to hand rather than a hand-written look-alike of its fields.
+export * from "../src/lib/marketplace";
 
 // ── react-query, as a singleton ──────────────────────────────────────────────
 // **Identity, not convenience** — the same reason `store` is called out above.

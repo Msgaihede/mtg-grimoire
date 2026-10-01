@@ -44,6 +44,8 @@ ds-bundle/
 .design-sync/dist/
 .design-sync/learnings/
 .design-sync/.cache/
+# Downloaded at sync time by `.design-sync/card-art.mjs`; card image bytes are never committed.
+.design-sync/card-art/
 .design-sync/node_modules
 .design-sync/*.log
 # Transient run logs. `npm run verify > verify.log` is the documented way to read a run

@@ -3,6 +3,54 @@ import { fileURLToPath } from "node:url";
 
 const fake = (name: string) => fileURLToPath(new URL(`./fake/${name}`, import.meta.url));
 
+/**
+ * The two pieces of Node's `process` this file reads, typed at the one place they are read.
+ *
+ * **Not `@types/node`, and not a `declare global` either**, for the reason `node-url.d.ts` gives
+ * at length: this program also type-checks `preview.tsx` and the whole fake, which run in a
+ * browser, so an ambient `process` would type-check `process.env.FOO` in every one of them. A
+ * cast on a single `globalThis` read keeps the claim inside the one file that runs in Node.
+ *
+ * **`getBuiltinModule` rather than `import … from "node:fs"`**, because an import needs a module
+ * declaration and `node-url.d.ts` holds exactly one, deliberately. This asks the running Node for
+ * the module instead — Node 22.3 and later; `.nvmrc` pins 24.
+ */
+const node = (
+  globalThis as unknown as {
+    process: {
+      env: Record<string, string | undefined>;
+      getBuiltinModule(id: "node:fs"): { existsSync(path: string): boolean };
+    };
+  }
+).process;
+
+/**
+ * The design system's card art, served at `/card-art` — for a build that asked for it, and only
+ * once it has been downloaded.
+ *
+ * `STORYBOOK_ART=bundled` is what `.design-sync/build-reference.mjs` sets, and it is the whole
+ * switch: `preview.tsx` reads the same variable to open the Art toolbar on `bundled`, so the
+ * reference storybook the sync compares against draws the same JPGs the bundle's previews do. The
+ * folder is `.design-sync/card-art.mjs`'s download, gitignored, and its name here is
+ * `CARD_ART_DIR` in `fake/images.ts` — restated rather than imported, because that module brings
+ * the whole fixture into a file that runs in Node.
+ *
+ * **Checked for, because Storybook refuses a static directory that is not there** — `storybook
+ * build` throws `Failed to load static files, no such directory`, and a dev server logs it and
+ * serves nothing. Without the folder the art still says `bundled` and every card draws the app's
+ * own no-image frame, which is the honest picture of a missing download, and the warning says so.
+ */
+const CARD_ART = "../.design-sync/card-art";
+const bundledArt =
+  node.env.STORYBOOK_ART === "bundled" &&
+  node.getBuiltinModule("node:fs").existsSync(fileURLToPath(new URL(CARD_ART, import.meta.url)));
+if (node.env.STORYBOOK_ART === "bundled" && !bundledArt) {
+  console.warn(
+    "STORYBOOK_ART=bundled, but .design-sync/card-art/ does not exist, so every card will draw " +
+      "its no-image frame. Run `node .design-sync/card-art.mjs` first.",
+  );
+}
+
 const config: StorybookConfig = {
   stories: ["../src/**/*.stories.tsx", "../.storybook/**/*.mdx"],
   addons: ["@storybook/addon-docs", "@storybook/addon-a11y", "@storybook/addon-mcp"],
@@ -13,7 +61,9 @@ const config: StorybookConfig = {
   // draws and the favicon `index.html` asks for are then the same bytes, so a workbench
   // branded with last month's logo is not a state this tree can reach. One directory, two
   // consumers. Nothing else in `public/` is served to a story, because nothing else is in it.
-  staticDirs: ["../public"],
+  //
+  // The card art joins it only under `STORYBOOK_ART=bundled`; see `bundledArt` above.
+  staticDirs: bundledArt ? ["../public", { from: CARD_ART, to: "/card-art" }] : ["../public"],
   // The manager document's own favicon. Storybook injects its own unless the custom head
   // already carries a `<link rel="icon">`, so this replaces it rather than competing with it
   // — the tab is then the app's mark whether it is the workbench or the app in front of you.

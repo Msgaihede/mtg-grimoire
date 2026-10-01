@@ -103,6 +103,109 @@ Three repo files carry sync state. All three look incidental and none is:
   `src/`. (Until 2026-09-27 the shim also covered `__CORE__`, a Vite `define` esbuild was never
   handed, and a second shim covered `@/pwa/target`; the define left with the web build.)
 
+## Real card art — the `bundled` mode (2026-10-01)
+
+**Until this date every card the design system drew was a synthetic SVG placeholder, and that
+was deliberate rather than a gap.** The fake's only other mode, `live`, points at
+`cards.scryfall.io`, and claude.ai's pages allow no remote image source — so a design built from
+the bundle drew named grey frames where the app draws cards. Markus asked for the cards as the app
+shows them, so the fake grew a third mode (`.storybook/fake/images.ts`):
+
+- **`bundled` serves exactly the rows `live` would, from a folder beside the bundle.** The
+  folder is `card-art/` at the design system's root, and a file's path inside it is Scryfall's
+  own — `normal/<file>.jpg`, `art_crop/<file>.jpg` (`bundledArtPath`). Keyed by the Scryfall
+  path and **never by the fixture id**, because the `large` seed's 5 200 minted printings copy
+  their URLs from real rows under ids of their own.
+- **The root is found from the bundle script's own URL** (`bundledArtRootFor`, captured from
+  `document.currentScript` at the top of `preview-runtime.tsx`). `_ds_bundle.js` at the root of a
+  claude.ai/design project and `components/bundle.js` in the Design System artifact — and in a
+  canvas that installs it under `ds/<folder>/` — both resolve to the same `card-art/` at the
+  system's root. No script URL (an ES module, which is Storybook) means no root, and no root means
+  `synthetic`: never a relative `<img>` that 404s.
+- **The bytes are downloaded at sync time and never committed** —
+  `node .design-sync/card-art.mjs` fetches every fixture image (116 files: 58 `normal`,
+  58 `art_crop`, **11.0 MB**, measured 2026-10-01) into the gitignored `.design-sync/card-art/`,
+  politely, and skips what it has.
+- **One fixture crop has already left Scryfall**: `A-Vivi Ornitier`'s `art_crop` (`fin A-248`, an
+  Alchemy rebalance) answers **404** at the fixture's stamped URL, and Scryfall's API answers
+  `not_found` for the card id. The same path without the `?` stamp still answered 200 from the
+  CDN's cache, so the script retries once without the stamp on a 404 only, and says so in a
+  `note` line. When that cached copy goes too the script fails loudly, and the fix is
+  regenerating the fixture (`scripts/gen-storybook-cards.mjs`), not another retry. `live` mode
+  draws that crop broken today.
+- **The reference storybook draws the same art, or grading breaks for every card-bearing
+  component.** `buildCmd` runs `.design-sync/build-reference.mjs`, which builds `sb-reference`
+  with `STORYBOOK_ART=bundled`: `main.ts` mounts `.design-sync/card-art` at `/card-art` and
+  `preview.tsx` opens on the Bundled toolbar item. Everywhere else — the dev workbench,
+  `build-storybook`, `src/stories.test.tsx` — the default is still `synthetic`.
+
+**Two steps the sync must now take that the skill does not know about:**
+
+1. **After every converter build, copy the art into the output**:
+   `node .design-sync/card-art.mjs --copy ds-bundle`. The converter wipes `--out` on every
+   rebuild, so a copy made before the build is gone after it — and a preview then draws the app's
+   own no-image frame where the reference draws the card, which fails compare loudly (good) and
+   for a reason the sheet does not name (bad).
+2. **Add `card-art/**` to the upload's `writes`.** The skill's fixed list
+   (`components/**`, `fonts/**`, `_vendor/**`, …) does not name it, and a bundle uploaded without
+   its art draws no-image frames on every card in every design. Chunk the writes: 11 MB of
+   JPEGs, and the server bounds bytes per call as well as files.
+
+**The provider takes a `cardArt` prop, because a consumer may inline the bundle.** The Design
+System artifact's format lets a consumer paste `bundle.js` into an inline `<script>`, which has
+no URL, so `document.currentScript.src` is empty and the script-address route finds nothing.
+`<GrimoirePreviewProvider cardArt="…">` names the folder outright, relative to the page, and wins
+over the script's own address. The artifact's page cards pass `../../card-art/`; a canvas passes
+`ds/<folder>/card-art/`.
+
+## Publishing to the Design System artifact (2026-10-01)
+
+**`/design-sync` no longer reaches the design system the canvases read.** That system is the
+**Design System artifact** `https://claude.ai/artifact/FvocuEAEkPVn6tcRfUvYVq` (also addressed as
+`claude.ai/code/artifact/78e3174c-a1be-4ceb-96de-5ae052092d1c`), migrated from the claude.ai/design
+project on **2026-09-20**. Read on 2026-10-01 it listed 21 components and none of the three the
+2026-09-27 sync added, so that sync's upload went to `config.json`'s `projectId` and stopped
+there. Until the two are tied together again, a change meant for canvases is published into the
+artifact with the Artifact tool, which needs no `/design-login`. What was done, in order:
+
+1. **Build and grade locally**: `buildCmd`, then `package-build.mjs`, then
+   `node .design-sync/card-art.mjs --copy ds-bundle`, `package-validate.mjs` and a scoped
+   `compare.mjs --components …`. No upload channel is involved.
+2. **`node .design-sync/artifact/bundle-css.mjs`** rebuilds `components/bundle.css`. The migration
+   made it by joining `styles.css`, `fonts/fonts.css` and `_ds_bundle.css` under section comments
+   and taking one declaration out for each of **103 token names** that `tokens.css` supplies.
+   The script first proves the rule against the artifact's own old files — it must reproduce the
+   old `bundle.css` byte for byte, and did — and then strips **only those same names** from the
+   new build. Not "every name in `tokens.css`": that generated file is stale (it still lists the
+   deleted `--color-pie-*` and lacks the creature colours), and `--ms-split-top` is a class-level
+   declaration the migration left alone.
+3. **`node .design-sync/artifact/page-cards.mjs`** writes the page's own cards,
+   `components/<Name>/preview.html`. These are hand-written scripts over `window.MtgGrimoire`, not
+   the converter's grids, and the page shows a component's preview only from that path.
+4. **`node .design-sync/artifact/assemble.mjs`** lays the build out in the artifact's layout —
+   `_ds_bundle.js` → `components/bundle.js`, `_preview/<Name>.js` → `assets/_preview/`, each
+   `<Name>.jsx` → `docs/components/…` — and writes the `files` lists for the publish calls.
+   `.d.ts` and the converter's `.html` go up as `text/plain`, as the migration stored them.
+5. **`node .design-sync/artifact/render-check.mjs`** mounts every page card on **React 18.3.1**
+   from the artifact's own `components/lib/`, with the bundle **inlined**, and photographs it.
+   Measured 2026-10-01: all six cards mounted with no script error and every image loaded from
+   `card-art/normal/`.
+6. **Publish in three calls** — the content files, then `card-art/**`, then
+   `project/design-system.json` alone and last, re-read right before, with only `lastChange`
+   moved. **Read the artifact itself (no `path`) first and publish to the `claude.ai/artifact/…`
+   address that read names.** Two publishes through the `/code/artifact/…` form were refused as
+   "not the latest version" after reading only files by path; the next, after both changes, went
+   through. Which of the two cleared it was not separated.
+
+**The artifact runs React 18.3.1 and the app is React 19**, and the converter vendors 19. Two
+components take `ref` as a plain prop, which only React 19 passes — `PopupListbox` (the dropdown's
+listbox) and a row in `metaRows.tsx` — so their refs are `null` in the artifact and on every
+canvas. The deck parts are unaffected: they hand ref *objects* to hooks. Not fixed here.
+
+**Three components are in the bundle with no page card yet**: `Dropdown`, `TooltipProvider` and
+`WorkInProgress`. Their `.prompt.md` and `.d.ts` are published; a `components/<Name>/preview.html`
+for each is the missing piece.
+
 ## Config decisions worth knowing
 
 - **Scope is deliberate**: the reusable primitives and the shell (no count here; see Re-sync
@@ -128,6 +231,26 @@ Three repo files carry sync state. All three look incidental and none is:
   `ParentFolderCard`, and `Dropdown/PlacementProbe` (see skipped stories). Do not re-raise them
   unless one becomes a general-purpose primitive. (`BottomTabBar` was a sixth until #604 deleted
   the phone layout.)
+- **The deck editor's parts joined on 2026-10-01, by Markus's choice, and `CardChin` is one of
+  them** — which reverses its 2026-09-27 decline above. Asked for the deck editor, a design agent
+  could only redraw it by hand, so the barrel's `Deck editor` section exports `StackView` (the
+  Stacks desk), `CardStack`, `DeckCardFace`, `CardMarks` (`QuantityTag`, `TheoryMatchMark`, …),
+  `CountPill`, `GroupHeader` and `CardChin`. Four have cards — `StackView`, `CardStack`,
+  `CardChin` and `QuantityTag`, which `titleMap` sends `CardMarks` to for `FilterChips`' reason
+  (the family module has no component of its own name; six of its seven stories render
+  `QuantityTag`). `StackView` is `single` on `Default` at `1280x720`: its meta decorator is a
+  672px-tall box, and 1280 is four 224px pile columns plus the rail — what the app's own 1920
+  window leaves the desk with the card search docked. `GridView`, `TableView`, `TextView` and
+  `TokenPile` are still out: each is a desk of its own needing its own audit and viewport.
+- **Two shim lines came with them, and one is a module the barrel had to start exporting.**
+  `/features/decks/CardMarks` — no export is named after that file, so rule 2 would compile a
+  second copy into every deck preview. `/lib/dndManager` — a module-level `new DragDropManager`
+  plus a payload `WeakMap` and an id counter, which `StackView`'s and `CardStack`'s stories reach
+  through `dnd.ts` → `dndTarget.ts`; a preview built from source would own a second drag manager.
+  So the barrel exports `dndManager` beside `store`, for `store`'s reason. **Check after the
+  build**: `grep -c "new DragDropManager" ds-bundle/_preview/{StackView,CardStack}.js` should be
+  0, and the shim reaches any older preview whose graph touches `dndManager` too (ContextMenu's
+  feature menus may) — compare its `createContext` count with the table below.
 - **Four owned previews exist only to re-enact a `play`**: `TooltipProvider`, `CardZoomIndicator`,
   `ContextMenu`, and the `Flanked` half of `Dialog`. The rule they follow is under "Stories with a
   `play`" below. `TooltipProvider` is `cardMode: "single"`, `primaryStory: "Interactive"`, because
@@ -336,7 +459,8 @@ not `$?`.
 - **`TooltipProvider.tsx`'s owned preview mirrors two plays by hand.** If `Interactive`'s or
   `OnFocus`'s play changes, `[STORY_CHANGED]` names it and this file has to follow. Its `compose`
   is the generated one verbatim, same as `AppShell.tsx` and `Dialog.tsx`.
-- **`cfg.storyImports.shim` holds one hook now (`useTooltip`).** A new story that imports a
+- **`cfg.storyImports.shim` holds one hook (`useTooltip`) and, since 2026-10-01, two modules
+  (`CardMarks`, `dndManager` — see Config decisions).** A new story that imports a
   context-reading hook from a module that is not a component (`useCardToDeckRefusal`, a
   `use…Context`) compiles a dead second copy, and the static render usually looks fine. Grep the
   compiled preview for `createContext`.

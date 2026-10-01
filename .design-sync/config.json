@@ -8,7 +8,7 @@
   "storybookConfigDir": ".storybook",
   "storybookStatic": ".design-sync/sb-reference",
   "readmeHeader": ".design-sync/conventions.md",
-  "buildCmd": "npx tsc -p .design-sync/tsconfig.dts.json && npx storybook build -c .storybook -o .design-sync/sb-reference",
+  "buildCmd": "npx tsc -p .design-sync/tsconfig.dts.json && node .design-sync/build-reference.mjs",
   "extraEntries": [
     "./.design-sync/preview-runtime.tsx"
   ],
@@ -95,6 +95,11 @@
         "primitives-dropdown-placementprobe--in-a-transformed-box",
         "primitives-dropdown-placementprobe--at-the-bottom"
       ]
+    },
+    "StackView": {
+      "cardMode": "single",
+      "primaryStory": "Default",
+      "viewport": "1280x720"
     }
   },
   "storyImports": {
@@ -103,13 +108,16 @@
       "/lib/store",
       ".storybook/fake/",
       "@tanstack/react-query",
-      "/components/tooltip/useTooltip"
+      "/components/tooltip/useTooltip",
+      "/features/decks/CardMarks",
+      "/lib/dndManager"
     ]
   },
   "titleMap": {
     "Contextmenu": "ContextMenu",
     "Dialogshell": "Dialog",
     "FilterChips": "ToggleChip",
+    "CardMarks": "QuantityTag",
     "Tooltip": "TooltipProvider",
     "Designsystem": null,
     "DetailPane": null,

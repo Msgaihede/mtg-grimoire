@@ -219,7 +219,9 @@ function playsIn(stories: Record<string, unknown>): [string, Played][] {
  * seeded fake backend — for every story here, including the props-only ones, which neither
  * need it nor notice it. Measured: the three CSS side-effect imports load fine under Vitest,
  * and `context.globals.art` being `undefined` in a portable story is already handled (the
- * decorator narrows anything that is not the literal `"live"` to synthetic art).
+ * decorator narrows anything that is not the literal `"live"` or `"bundled"` to synthetic art,
+ * and `"bundled"` is only the opening global when a build sets `STORYBOOK_ART`, which nothing
+ * here does).
  *
  * ## `testingLibraryRender`, which is what **unmounts** a story
  *

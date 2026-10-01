@@ -30,7 +30,7 @@ import { ContextMenuProvider } from "../src/components/menu/ContextMenuProvider"
 import { TooltipProvider } from "../src/components/tooltip/TooltipProvider";
 import { CardToDeckProvider } from "../src/features/card/cardMenu";
 import { installKeyboardModality } from "../src/lib/keyboardModality";
-import { setArtMode } from "../.storybook/fake/images";
+import { bundledArtRootFor, setArtMode, setBundledArtRoot } from "../.storybook/fake/images";
 
 export * from "../.storybook/fake/core";
 export * from "../.storybook/fake/scope";
@@ -107,14 +107,6 @@ export function GrimoireWorld({
 }
 
 /**
- * The default wrapper every preview card mounts inside — `cfg.provider`'s component.
- *
- * Synthetic art rather than live: it is what a checkout with no network renders, it is what the
- * reference storybook is built with (`initialGlobals.art`), and a card that reached out to
- * Scryfall would draw nothing at all on claude.ai/design, where the page's CSP allows no remote
- * source.
- */
-/**
  * The page environment `.storybook/preview-head.html` and `index.css`'s base layer supply, and
  * the preview card does not.
  *
@@ -181,9 +173,84 @@ function useKeyboardModality(): void {
   }, []);
 }
 
-export function GrimoirePreviewProvider({ children }: { children: ReactNode }) {
-  setArtMode("synthetic");
+/**
+ * The art folder beside this bundle, worked out once from the URL the bundle was loaded from —
+ * or `null` when there is no such URL.
+ *
+ * **Module scope, because `document.currentScript` only means anything now.** It names the
+ * `<script>` being run for as long as that script's synchronous evaluation lasts, and is `null`
+ * (or some other script) by the time a component renders. This module ships inside the bundle's
+ * IIFE, so its top level runs during exactly that evaluation. `bundledArtRootFor` turns the URL
+ * into the folder for both of the layouts the bundle ships in — `_ds_bundle.js` at a claude.ai
+ * project's root, `components/bundle.js` in the Design System artifact and every canvas that
+ * installs it.
+ *
+ * **A read, not a side effect** — which is what keeps it inside the rule {@link useAppSurface}
+ * and {@link useKeyboardModality} are written around. That rule is about what this module does
+ * to the page that imports it (a style, a listener), and reading which script is running does
+ * nothing to it: a design that loads the bundle and never mounts the provider is left exactly as
+ * it was. Guarded for no `document`, and for a `currentScript` that is not an HTML `<script>`
+ * (an SVG one has no string `src`), and `null` for a script with no URL at all — an inline
+ * script, or an ES module, for which `currentScript` is always `null` — and every one of those is
+ * synthetic art.
+ */
+const BUNDLED_ART_ROOT = bundledArtRootFor(
+  typeof document !== "undefined" && document.currentScript instanceof HTMLScriptElement
+    ? document.currentScript.src
+    : null,
+);
+
+/**
+ * The default wrapper every preview card mounts inside — `cfg.provider`'s component.
+ *
+ * **Real card art whenever the bundle was loaded from a URL**, which is every place a design is
+ * built: the claude.ai/design project, the Design System artifact, a canvas that installed it.
+ * The fixture's own Scryfall JPGs, served from the `card-art/` folder beside the bundle
+ * ({@link BUNDLED_ART_ROOT}) — never from Scryfall itself, which would draw nothing there, since
+ * the page's CSP allows no remote image source. **Synthetic art when there is no script URL to
+ * find the folder from**, which is the only state in which the folder cannot be found at all.
+ *
+ * **The folder has to ship beside the bundle**, and nothing in the bundle can check that it did:
+ * `.design-sync/card-art.mjs --copy <bundle dir>` puts it there after the converter's build,
+ * which wipes its output folder every time. A bundle uploaded without it draws every card as the
+ * app's own no-image frame — the `<img>` 404s and the frame names the card — which is the
+ * visible form of a missing folder rather than a silent fallback to placeholders.
+ *
+ * The reference storybook the sync compares against is built by `build-reference.mjs` with
+ * `STORYBOOK_ART=bundled`, so both sides of every compare draw the same files.
+ *
+ * **`cardArt` names the folder outright, and it is there for the consumer that inlines the
+ * bundle.** The Design System artifact's format says consumers may paste `bundle.js` into an
+ * inline `<script>`, and an inline script has no URL — so {@link BUNDLED_ART_ROOT} is `null`
+ * there and every card would fall back to synthetic art with the folder sitting right beside
+ * it. A relative `cardArt` resolves against the page (`document.baseURI`), which is what a
+ * preview card or a canvas artboard can state about itself: `../../card-art/` from
+ * `components/<Name>/preview.html`, `ds/<folder>/card-art/` from an artboard. It wins over the
+ * script's own URL when both exist, because the caller said where the folder is and the script
+ * only implied it.
+ */
+export function GrimoirePreviewProvider({
+  children,
+  cardArt,
+}: {
+  children: ReactNode;
+  /** The `card-art/` folder's address, absolute or relative to the page. Optional. */
+  cardArt?: string;
+}) {
+  const root = cardArt ? explicitArtRoot(cardArt) : BUNDLED_ART_ROOT;
+  setBundledArtRoot(root);
+  setArtMode(root ? "bundled" : "synthetic");
   useAppSurface();
   useKeyboardModality();
   return <GrimoireWorld>{children}</GrimoireWorld>;
+}
+
+/** `cardArt` as an absolute folder URL, or `null` for one that does not parse. A trailing slash
+ *  is added when missing: `bundledArtPath` answers `normal/<file>` to append to it. */
+function explicitArtRoot(cardArt: string): string | null {
+  try {
+    return new URL(cardArt.endsWith("/") ? cardArt : `${cardArt}/`, document.baseURI).href;
+  } catch {
+    return null;
+  }
 }
