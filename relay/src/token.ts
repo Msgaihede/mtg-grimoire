@@ -22,11 +22,21 @@
  * and a junk request reaching a parser.
  */
 
-/** One minted claim set. `sub` is the Patreon member, `grp` the sync group, `exp` a wall-clock ms. */
+/**
+ * One minted claim set. `sub` is the Patreon member, `grp` the sync group, `exp` a wall-clock ms.
+ *
+ * **`dev` is the device that presented itself to `/token` or `/claim`**, added 2026-10-01 for the
+ * share Worker (issue #548): a token outlives the device's removal by up to `TOKEN_TTL_MS`, and the
+ * relay's own routes do not care — a removed device can push nothing at an epoch it holds no key
+ * for — but a share is plaintext, so the share Worker checks `dev` against the group's newest
+ * manifest. **Optional because a token minted by an older relay has none**, and such a token lives
+ * at most a day; nothing in the relay reads it.
+ */
 export interface Claims {
   sub: string;
   grp: string;
   exp: number;
+  dev?: string;
 }
 
 /**
@@ -151,13 +161,16 @@ export async function verify(token: string, secret: string, nowMs: number): Prom
   }
   if (typeof parsed !== "object" || parsed === null) return null;
 
-  const { sub, grp, exp } = parsed as Partial<Claims>;
+  const { sub, grp, exp, dev } = parsed as Partial<Claims>;
   if (typeof sub !== "string" || typeof grp !== "string") return null;
   if (typeof exp !== "number" || !Number.isFinite(exp)) return null;
+  // Absent is an older relay's token; present and not a string is a shape no minter writes.
+  if (dev !== undefined && typeof dev !== "string") return null;
   // `<=` and not `<`: the instant it names is the first instant it is no longer good for.
   if (exp <= nowMs) return null;
 
-  // Rebuilt from the three fields rather than returned as-is, so a caller can never be handed a
-  // property this function did not check.
-  return { sub, grp, exp };
+  // Rebuilt from the checked fields rather than returned as-is, so a caller can never be handed a
+  // property this function did not check — and `dev` only when it was there, so a token without
+  // one reads back exactly as it was minted.
+  return dev === undefined ? { sub, grp, exp } : { sub, grp, exp, dev };
 }

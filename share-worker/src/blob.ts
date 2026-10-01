@@ -27,6 +27,15 @@ const BLOB_LIMIT = "blob_limit";
 /** `1f 8b` — the two bytes every gzip member starts with, and the whole of the format check. */
 const GZIP_MAGIC = [0x1f, 0x8b];
 
+/**
+ * How many times an upload re-reads the row after losing its compare-and-swap before giving up.
+ *
+ * Each loss means another upload *won*, so the loop always makes progress; the bound is for a
+ * group of five devices all pressing Refresh on one share at once, which is already absurd. Past
+ * it the answer is a 409 the app shows as a sentence, and nothing is left behind in R2.
+ */
+const MAX_SWAPS = 5;
+
 /** `shares/{id}/{hash}.json.gz` — spelled once, because the public route rebuilds it to compare. */
 function objectKey(id: string, hash: string): string {
   return `shares/${id}/${hash}.json.gz`;
@@ -172,11 +181,48 @@ export async function handleUpload(
   const key = objectKey(id, hash);
   await env.SHARES.put(key, bytes);
 
-  await env.DB.prepare(
-    `UPDATE shares SET object_key = ?, bytes = ?, updated_at = ? WHERE id = ? AND group_id = ?`,
-  )
-    .bind(key, bytes.byteLength, now, id, group)
-    .run();
+  // ⚠️ **A compare-and-swap on the key the row held, and never a blind write.** Two devices in one
+  // group refreshing one share at once both read the same `object_key` above; with a plain
+  // `UPDATE` both then wrote theirs, both deleted that same old key, and the loser's object was
+  // left in R2 with nothing pointing at it — a plaintext snapshot nobody could ever reach or
+  // reclaim. Now the row moves only from the key this request last saw, so each displaced object
+  // is deleted by exactly the request that displaced it.
+  //
+  // **`state <> 'revoked'` is in the swap too**, and it is the other race: a revoke that lands
+  // between the read above and this write must not have the row re-pointed at an object it never
+  // heard about. `handleRevoke` reads the key in the same statement that flips the state, so an
+  // upload either committed first — and its object is the one the revoke deletes — or fails here.
+  //
+  // `coalesce(object_key, ?)` bound to `''` rather than `IS ?`, because a first upload swaps from
+  // NULL and `= NULL` is never true. `''` is no key this file mints.
+  let previous = row.object_key;
+  for (let attempt = 1; ; attempt += 1) {
+    const { meta } = await env.DB.prepare(
+      `UPDATE shares SET object_key = ?, bytes = ?, updated_at = ?
+        WHERE id = ? AND group_id = ? AND state <> ? AND coalesce(object_key, ?) = ?`,
+    )
+      .bind(key, bytes.byteLength, now, id, group, REVOKED, "", previous ?? "")
+      .run();
+    if (meta.changes > 0) break;
+
+    // Lost the swap: somebody else moved the row. Read where it is now and try again from there —
+    // last writer wins, which is what a Refresh pressed on two devices should mean.
+    const current = await env.DB.prepare(
+      `SELECT object_key FROM shares WHERE id = ? AND group_id = ? AND state <> ?`,
+    )
+      .bind(id, group, REVOKED)
+      .first<{ object_key: string | null }>();
+    if (current === null || attempt >= MAX_SWAPS) {
+      // Withdrawn under us, or out-raced every time. What this request wrote is then nobody's,
+      // **unless** an identical upload made it the row's key — content addressing means the same
+      // bytes are the same object, and deleting it would 404 the link the row now serves.
+      if (current?.object_key !== key) await env.SHARES.delete(key);
+      return current === null
+        ? json({ error: "no such share" }, 404)
+        : json({ error: "another device is publishing this share; try again" }, 409);
+    }
+    previous = current.object_key;
+  }
 
   // **After the row has moved, and only when the key actually changed.** R2 deletes are free and
   // an orphaned object is cheaper than a missing one, so the ordering is not a nicety — a delete
@@ -184,7 +230,7 @@ export async function handleUpload(
   // an *unchanged* collection is content-addressed to the same key: a delete that skipped this
   // comparison would erase the object it had just written, leaving every link 404ing while the
   // row pointed confidently at it.
-  if (row.object_key !== null && row.object_key !== key) await env.SHARES.delete(row.object_key);
+  if (previous !== null && previous !== key) await env.SHARES.delete(previous);
 
   return json({ hash });
 }
@@ -256,7 +302,16 @@ export async function handleSnapshot(
   const object = await env.SHARES.get(key);
   if (object === null) return json({ error: "no such snapshot" }, 404);
 
+  // ⚠️ **`encodeBody: "manual"` is what makes `content-encoding: gzip` a statement about these
+  // bytes rather than an instruction.** By default the Workers runtime *applies* the encoding a
+  // response declares — it gzips the body on the way out — and the one exemption is an unread
+  // `fetch()` response passed straight through, which an R2 stream is not. Without it every
+  // snapshot left this Worker gzipped twice: the browser undid one layer, the web viewer's
+  // `parseSnapshot` met gzip where it expected JSON (SNAPSHOT_UNREADABLE), and the app's
+  // `parse_snapshot` failed on invalid UTF-8. The jsdom suite cannot see runtime encoding, so the
+  // test pins the option and `share-worker/README.md`'s deploy check is the `curl` that proves it.
   const response = new Response(object.body, {
+    encodeBody: "manual",
     headers: {
       "content-type": "application/json",
       "content-encoding": "gzip",

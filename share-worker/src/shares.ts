@@ -472,8 +472,25 @@ export async function handleList(env: Env, group: string): Promise<Response> {
  * this group's token; without this clause a share id — which is a *public* string, printed in
  * every link — would be enough for any entitled caller to revoke anyone's binder.
  *
+ * **And the snapshot goes with it.** A snapshot is stored in the clear (decision 2), and `revoked`
+ * is terminal — no route serves a revoked row's object and no upload can re-arm one — so an object
+ * left behind would be a reader's binder sitting readable in R2 for ever, after they pressed the
+ * one button that says it is gone. Until 2026-10-01 it was left there.
+ *
+ * ⚠️ **The flip and the read of the key are one statement, `RETURNING`, and that is the whole
+ * guard.** D1 has no interactive transaction, so a `SELECT object_key` first would leave a window
+ * in which an upload commits a new object the delete then never hears about. With the read inside
+ * the flip, an upload either committed before it — and its key is the one answered here — or
+ * meets `state = 'revoked'` in its own compare-and-swap and deletes what it wrote (`blob.ts`).
+ * The second statement then points the row at nothing, which is now the truth; it cannot race an
+ * upload, because nothing writes `object_key` on a revoked row.
+ *
+ * **The delete runs after both, and is not caught.** A failed R2 delete is a 500 the app can
+ * retry — revoking is idempotent — and the row is already revoked either way, so no viewer is
+ * served in between.
+ *
  * Idempotent: revoking an already-revoked share answers 204 again, because the state it asked
- * for is the state it is in.
+ * for is the state it is in — and its `object_key` is already NULL, so there is nothing to delete.
  */
 export async function handleRevoke(
   env: Env,
@@ -481,11 +498,17 @@ export async function handleRevoke(
   id: string,
   now: number,
 ): Promise<Response> {
-  const { meta } = await env.DB.prepare(
-    `UPDATE shares SET state = 'revoked', updated_at = ? WHERE id = ? AND group_id = ?`,
+  const revoked = await env.DB.prepare(
+    `UPDATE shares SET state = ?, updated_at = ? WHERE id = ? AND group_id = ? RETURNING object_key`,
   )
-    .bind(now, id, group)
-    .run();
-  if (meta.changes === 0) return json({ error: "no such share" }, 404);
+    .bind(REVOKED, now, id, group)
+    .first<{ object_key: string | null }>();
+  if (revoked === null) return json({ error: "no such share" }, 404);
+  if (revoked.object_key !== null) {
+    await env.DB.prepare(`UPDATE shares SET object_key = NULL, bytes = NULL WHERE id = ?`)
+      .bind(id)
+      .run();
+    await env.SHARES.delete(revoked.object_key);
+  }
   return new Response(null, { status: 204 });
 }
