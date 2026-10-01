@@ -237,9 +237,6 @@ purpose; the phase that owns the surface owns the fix.
 - `FaceBoundary` catches a face that throws — a lazy chunk that never arrives included — and
   offers a reload. What it does not do is recover: a deploy that renamed the chunks needs the
   service worker's update story, which is this phase's.
-- `package.json` declares `react ^19.1.0` and `mobile/phone/CardWall.tsx` uses `useEffectEvent`,
-  which is 19.2's. The lockfile pins 19.2.8, so every install is right; the declared floor is
-  one minor version too low.
 - A refused history **push** is swallowed like a refused replace, but costs more than a stale
   URL — the entry is never made. `back()`'s latch has one release, a `popstate`; a
   `history.back()` the browser drops leaves ✕ and Escape inert until the next one.
