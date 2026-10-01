@@ -66,7 +66,8 @@ const isExempt = (path: string): boolean =>
  * `[^;]*?` between the keyword and `from` also swallows `export type Face = "a" | "b"` on a line
  * with no semicolon, together with every real import down to the next quoted specifier — and a
  * fence that deletes edges fails open. An inline `import { type A } from "x"` is **not** matched:
- * with nothing else in the braces it still compiles to a side-effect import of `x`.
+ * it is counted as an edge, conservatively — whether a compiler elides it depends on a flag this
+ * test should not have to know, and `import type` is how to say "no edge" on purpose.
  *
  * The clause: an optional default binding and comma, then a name, a braced list or a star.
  */

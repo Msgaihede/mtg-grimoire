@@ -115,7 +115,7 @@ Every one of these has its measurement and its story in
   (`mobile/phone/CardWall.tsx`) and `ShareTile` draw it, and `features/search/CardGrid` still
   spells the pair out itself until somebody is next in that file.
   **Every wall of card faces draws it**: the search's, the collection's, the wishlist's and the
-  three docked search columns — all of them `features/search/CardGrid`, which is the one wall.
+  three docked search columns — all of them `features/search/CardGrid`, the desktop's one wall.
   Grep `from "@/components/CardArt"` for the census rather than trusting a list here. **This
   sentence named two callers that are not that wall — the deck's own `DeckTokensPanel` and
   `TokenArtPicker`, which draw tokens rather than deck rows — and that was never the whole

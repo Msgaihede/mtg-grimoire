@@ -8,9 +8,9 @@ read its §3 before changing anything here.
 **Light is the menu and the face, never the data.** A light install runs the same commands
 against the same two databases. What it leaves out is destinations.
 
-**What is here is phase 1, the skeleton, and nothing on this page has been checked in a browser
-or in the `mobile:tauri` window yet** (2026-10-01). Every rule below is held by a jsdom test or by
-construction; the first live pass owes this file its measurements.
+**What is here is phase 1, the skeleton.** Every rule below is held by a jsdom test or by
+construction, and what a browser was actually driven to show — on 2026-10-01, over the fake — is
+in [light-app.md](../docs/reference/light-app.md), with the date and the width of each figure.
 
 ## One entry, two faces
 
@@ -22,8 +22,9 @@ construction; the first live pass owes this file its measurements.
 | < 1024px | **The phone face** | `mobile/phone/` |
 
 - **The question is asked once, in `useFace.ts`**, as a `matchMedia` on `DESKTOP_FLOOR_PX` —
-  quoted from `src/lib/viewports.ts`, never typed again. The desktop app has no viewport branch
-  and must not grow one; this is the light entry's, and it is the only one.
+  quoted from `src/lib/viewports.ts`, never typed again. No page in `src/` picks a layout by the
+  viewport and none may start; which face to draw is the light entry's question, and this is
+  the only place it is asked.
 - **Each face is its own lazy chunk**, so a phone never downloads the desktop's deck editor and a
   laptop never downloads the phone's sheets. Neither is imported statically by `LightApp`, and an
   import that made one static would cost that without anything going red.
@@ -90,7 +91,7 @@ file under `mobile/phone/` and enforces it.**
   writing a second query for the same list.
 - **A type-only import is not an edge.** `lib/edition.ts` and `components/nav.ts` import `ViewId`
   from the store as a type, which costs nothing at runtime. An inline `import { type X }` *is*
-  one: with nothing else in the braces it still compiles to a side-effect import.
+  counted, conservatively — write `import type` for an import that should carry no edge.
 - **Tests and `phone/testing.tsx` are exempt, by name.** The harness installs a fake world and
   reaches the Storybook fake on purpose — which also makes it a dead end to the walk, so a real
   file that imports it is reported as an import the fence could not follow.
@@ -138,9 +139,9 @@ failure behind each at its own site:
 - **A control that changes the URL is a real link, not a button** — `<a {...linkTo(place)}>`, with
   a real `href`, so a middle click, "open in new tab" and "copy link" work and a screen reader
   hears *link*. The router takes **only an unmodified primary click that nothing else has
-  handled**; every other press is the browser's. The five tabs and the Settings control are links
-  today. **`DecksPage`'s rows and `DeckPage`'s Back to decks are still buttons that call
-  `navigate`** — skeleton pages, owed the same change when they are built for real.
+  handled**; every other press is the browser's. The tabs, the Settings control, a deck's row in
+  the gallery and a deck's way back to it are all links. **A card tile is not**: a card opens a
+  sheet over the page it is on, and `CardTile`'s control is a button by design.
 - **A card is a place here, and opening one is a push** — which is what lets Android's back
   gesture close the sheet. The two faces differ on this on purpose: a sheet over a phone page is
   something a reader leaves with Back, a modal over a desktop page is not.
@@ -157,7 +158,7 @@ failure behind each at its own site:
 
 | Command | Backend | Use it for |
 | --- | --- | --- |
-| `npm run mobile:dev` | The Storybook fake, by the four aliases Storybook uses | UI work in any browser. No Rust, **no lock**. `?art=live` draws real pictures |
+| `npm run mobile:dev` | The Storybook fake, by the aliases Storybook uses | UI work in any browser. No Rust, **no lock**. `?art=live` draws real pictures |
 | `npm run mobile:tauri` | The real Rust core and the dev database | The same UI against a real corpus, in a 412 × 915 window |
 | `npm run mobile:build` | — | `tsc`, then the bundle into `dist-mobile/` |
 
