@@ -12,7 +12,7 @@
  * `SearchRequest`/`CardSummary`/`SearchResponse`/`SetSummary` — `src-tauri/src/search.rs`
  * `FacetResponse`                                 — `src-tauri/src/index/facets.rs`
  * `CardFace`/`CardDetail`/`Printing`/`PrintingsResponse`/
- * `FinishPrices`/`MeldRelation`                  — `src-tauri/src/card.rs`
+ * `FinishPrices`/`PrintingPrices`/`MeldRelation` — `src-tauri/src/card.rs`
  * `SyncOutcome`/`SyncStatus`/`Progress`          — `src-tauri/src/sync.rs`
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
  * `CollectionPage`/`CollectionSummary`/`BreakdownRow` — `src-tauri/src/collection.rs`
@@ -756,6 +756,15 @@ export interface FinishPrices {
   nonfoil: number | null;
   foil: number | null;
   etched: number | null;
+}
+
+/**
+ * One printing's {@link FinishPrices}, keyed by its id — an entry of
+ * {@link ipc.printingPrices}' answer, and `PrintingPrices` in `card.rs`.
+ */
+export interface PrintingPrices {
+  cardId: string;
+  finishPrices: FinishPrices;
 }
 
 /** Everything the detail pane renders about one printing. */
@@ -8069,6 +8078,15 @@ export const ipc = {
    */
   cardPrintings: (oracleId: string, marketplace: MarketplaceId, limit?: number) =>
     invoke<PrintingsResponse>("card_printings", { oracleId, marketplace, limit }),
+  /**
+   * Every printing in `cardIds` priced per finish at `marketplace`, in one round trip — the
+   * scanner tray's read, whose rows are printings no priced list has carried yet.
+   *
+   * **An id the corpus does not hold is absent from the answer**, not an entry of nulls, and a
+   * repeated id answers once; the caller reads a missing entry as unpriced.
+   */
+  printingPrices: (cardIds: string[], marketplace: MarketplaceId) =>
+    invoke<PrintingPrices[]>("printing_prices", { cardIds, marketplace }),
   /**
    * The cards this printing melds with — see {@link MeldRelation}.
    *

@@ -1,6 +1,7 @@
-import { useId, useMemo } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { motion } from "motion/react";
 import {
+  ArrowDown,
   ChevronUp,
   Folder,
   LayoutGrid,
@@ -22,6 +23,8 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { plural } from "@/lib/counts";
+import type { Currency } from "@/lib/marketplace";
+import { formatPrice } from "@/lib/prices";
 import { FINISHES } from "@/lib/finish";
 import { buildFolderTree } from "@/lib/folderTree";
 import { FOCUS } from "@/lib/focus";
@@ -36,7 +39,9 @@ import { DURATION, PRESS, TRANSITION, seconds } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import {
   NO_FINISHED_ROWS,
+  needsDecision,
   needsFinishCount,
+  nextDecisionKey,
   pickChoice,
   readyRows,
   removeRow,
@@ -46,6 +51,7 @@ import {
   unresolvedCount,
 } from "./tray";
 import { isKnownFinish, TRAY_FINISH_LABEL, UNKNOWN_FINISH } from "./trayFinish";
+import { useTrayPrices } from "./useTrayPrices";
 
 export interface TrayPanelProps {
   rows: readonly ScannerTrayRow[];
@@ -108,6 +114,34 @@ export function addLabel(ready: number, needsFinish: number): string {
   const add = `Add ${ready} to collection`;
   if (needsFinish === 0) return add;
   return `${add} · ${needsFinish} ${needsFinish === 1 ? "needs" : "need"} a finish`;
+}
+
+/** The header's walk through the tray's open questions — the issue's words, and the press's name. */
+export const NEXT_DECISION_LABEL = "Next card needing a decision";
+
+/**
+ * How far a row the walk lands on is kept from the scroller's top edge when it is too tall to
+ * centre — `p-3.5`, the grid scroller's own padding, which is the room a card's lift and focus
+ * outline need inside the clip.
+ */
+const DECISION_ROOM_PX = 14;
+
+/**
+ * Bring a row into the middle of the tray's own scroller, and **only** that scroller.
+ *
+ * `scrollIntoView` would do the centring and also scroll every ancestor that can scroll, the app's
+ * `main` among them — taking the camera half of the page away to centre a tray row. So the offset is
+ * set on the one box instead: `offsetTop` is measured against the scroller because it is `relative`,
+ * which both layouts already are for the flash. A row taller than the tray is shown from its top,
+ * where its question starts. jsdom has no `scrollTo` on an element, hence the optional call.
+ */
+function scrollRowIntoTray(list: HTMLElement, row: HTMLElement) {
+  const centre = (list.clientHeight - row.offsetHeight) / 2;
+  const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+  list.scrollTo?.({
+    top: row.offsetTop - Math.max(DECISION_ROOM_PX, centre),
+    behavior: reduce ? "auto" : "smooth",
+  });
 }
 
 /** The two layouts in the order the toggle draws them, and the word each is called by. */
@@ -239,9 +273,33 @@ export function TrayPanel({
           ? NO_FINISHED_ROWS
           : null;
   const refused = refusal !== null || committing;
+  const deciding = rows.some(needsDecision);
+
+  // The walk's cursor: the row the last press landed on, by key — `nextDecisionKey` says why a key.
+  // Read-only over `rows`, so it is free of `onRows`' rule: nothing here writes the tray.
+  const [cursor, setCursor] = useState<string | null>(null);
+  const listRef = useRef<HTMLUListElement>(null);
+  const nextDecision = () => {
+    const key = nextDecisionKey(rows, cursor);
+    const list = listRef.current;
+    if (key === null || list === null) return;
+    setCursor(key);
+    const row = Array.from(list.querySelectorAll<HTMLElement>("[data-tray-row]")).find(
+      (el) => el.dataset.trayRow === key,
+    );
+    if (row === undefined) return;
+    scrollRowIntoTray(list, row);
+    // The caret goes to the question itself — the first candidate, or the finish — so the answer
+    // is one key away. `preventScroll`, because the scroll above has already put the row where it
+    // belongs and a focus scroll would only nudge it against the edge.
+    row.querySelector<HTMLElement>("[data-decision] button")?.focus({ preventScroll: true });
+  };
+
   // Nothing to clear, or a commit about to file these very rows — the Add button's two states that
   // are not about printings or finishes, since a card waiting on either can still be thrown away.
   const clearRefused = rows.length === 0 || committing;
+  const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows);
+  const money: Money = { currency, marketplaceLabel };
 
   // What a press on a card does — four writes, each a reducer call waiting for the latest rows, and
   // the printings dialog — built once here so the row and the tile cannot come to disagree.
@@ -280,6 +338,25 @@ export function TrayPanel({
         </h3>
         <div className="ml-auto flex items-center gap-3">
           {waiting > 0 && <span className="text-xs text-accent">{plural(waiting, "card")} to pick</span>}
+          {/* Hidden rather than greyed when nothing is waiting, like *More printings…* for a card
+              with no oracle id: a control that can do nothing is one a reader keeps trying. Gold,
+              because it walks the questions gold already marks — the dashed waiting tile and the
+              `Unknown` finish's border. */}
+          {deciding && (
+            <button
+              type="button"
+              onClick={nextDecision}
+              className={cn(
+                "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md border border-accent/60 px-2.5 text-xs text-accent",
+                "hover:bg-accent hover:text-accent-fg",
+                PRESS,
+                FOCUS,
+              )}
+            >
+              <ArrowDown className="size-3.5" aria-hidden="true" />
+              {NEXT_DECISION_LABEL}
+            </button>
+          )}
           {/* **Drawn greyed rather than hidden on an empty tray**: a confirmed clear empties the
               tray, and the caret the dialog hands back has to land on a control that is still
               there — a hidden button would be a detached node and a silent `focus()`. */}
@@ -318,6 +395,7 @@ export function TrayPanel({
         // both need room inside the clip. `content-start` so a short tray's rows stay at the top
         // instead of being stretched down the column.
         <ul
+          ref={listRef}
           className="relative grid min-h-0 flex-1 content-start gap-x-3 gap-y-[18px] overflow-y-auto p-3.5"
           style={{ gridTemplateColumns: TILE_COLUMNS }}
         >
@@ -336,6 +414,8 @@ export function TrayPanel({
                 key={row.key}
                 row={row}
                 flash={row.key === flashKey}
+                price={priceOf(row)}
+                money={money}
                 onQuantity={on.onQuantity}
                 onFinish={on.onFinish}
                 onRemove={on.onRemove}
@@ -349,9 +429,16 @@ export function TrayPanel({
         // absolutely positioned content — each row's flash overlay among it — or that content is
         // laid out against something further up and clipped by nothing. `p-1.5` is the room the
         // focus outline of a control flush against the scroller's edge needs to be seen at all.
-        <ul className="relative min-h-0 flex-1 overflow-y-auto p-1.5">
+        <ul ref={listRef} className="relative min-h-0 flex-1 overflow-y-auto p-1.5">
           {rows.map((row) => (
-            <TrayRow key={row.key} row={row} flash={row.key === flashKey} {...handlers(row)} />
+            <TrayRow
+              key={row.key}
+              row={row}
+              flash={row.key === flashKey}
+              price={priceOf(row)}
+              money={money}
+              {...handlers(row)}
+            />
           ))}
         </ul>
       )}
@@ -400,6 +487,51 @@ export function TrayPanel({
         </button>
       </footer>
     </section>
+  );
+}
+
+/** The marketplace a tray is priced at — how its figures are written, and whose they are. */
+interface Money {
+  currency: Currency;
+  marketplaceLabel: string;
+}
+
+/**
+ * One copy's price, at the marketplace the reader picked (issue #736) — `trayRowPrice`'s answer,
+ * drawn the way every price in the app is: `formatPrice`, mono, tabular figures.
+ *
+ * **Three states and the first draws nothing.** `undefined` is a read not answered yet — a card
+ * that has only just landed — and an em dash there would say "unpriced" about a card nobody has
+ * asked about. `null` *is* unpriced: the marketplace does not quote this printing in this finish,
+ * which `src/CLAUDE.md` says is drawn as an em dash and never filled in from another
+ * marketplace. The dash is `aria-hidden` and the words beside it say which marketplace was asked,
+ * because a bare dash is read out as "dash".
+ *
+ * **A unit price, never the row's total.** The stepper beside it and the count on a tile's card
+ * already say how many; a figure that changed with every press of `+` would read as the card's
+ * price moving.
+ */
+function TrayPrice({
+  price,
+  money,
+  className,
+}: {
+  price: number | null | undefined;
+  money: Money;
+  className?: string;
+}) {
+  if (price === undefined) return null;
+  return (
+    <span className={cn("shrink-0 font-mono tabular-nums", price === null ? "text-dim" : "text-text", className)}>
+      {price === null ? (
+        <>
+          <span aria-hidden="true">—</span>
+          <span className="sr-only">Not priced at {money.marketplaceLabel}</span>
+        </>
+      ) : (
+        formatPrice(price, money.currency)
+      )}
+    </span>
   );
 }
 
@@ -489,6 +621,8 @@ function LayoutToggle({
 function TrayRow({
   row,
   flash,
+  price,
+  money,
   onQuantity,
   onFinish,
   onPick,
@@ -497,6 +631,8 @@ function TrayRow({
 }: {
   row: ScannerTrayRow;
   flash: boolean;
+  price: number | null | undefined;
+  money: Money;
   onQuantity: (q: number) => void;
   onFinish: (f: ScannerTrayFinish) => void;
   onPick: (cardId: string) => void;
@@ -513,7 +649,7 @@ function TrayRow({
   const card = cardImageUrl(row.cardId, 0, "thumb");
 
   return (
-    <li className="relative rounded-md px-2 py-2">
+    <li data-tray-row={row.key} className="relative rounded-md px-2 py-2">
       {flash && <TrayFlash stamp={row.addedAt} className="rounded-md" />}
       <div className="relative flex items-start gap-2.5">
         {/* A 5:7 portrait slot, decoration beside the name — `aria-hidden`, empty alt and
@@ -543,6 +679,7 @@ function TrayRow({
             {!waiting && printing !== "" && (
               <span className="shrink-0 font-mono text-xs text-dim">{printing}</span>
             )}
+            <TrayPrice price={price} money={money} className="ml-auto text-xs" />
           </div>
 
           {waiting ? (
@@ -554,14 +691,19 @@ function TrayRow({
                   never the destructive red, which would say something had gone wrong. The trigger
                   reads `Unknown` and the Add button counts it out; the border is what finds it in a
                   long list. */}
-              <Dropdown
-                size="sm"
-                label={`Finish of ${label}`}
-                value={row.finish}
-                onChange={(v) => onFinish(v as ScannerTrayFinish)}
-                options={FINISH_OPTIONS}
-                active={!isKnownFinish(row.finish)}
-              />
+              {/* `contents`, so the mark the header's walk finds an unknown finish by adds no box to
+                  the wrapping row. On a known finish too: the walk only lands on a row whose
+                  finish is the question, so the mark costs nothing there. */}
+              <span data-decision="" className="contents">
+                <Dropdown
+                  size="sm"
+                  label={`Finish of ${label}`}
+                  value={row.finish}
+                  onChange={(v) => onFinish(v as ScannerTrayFinish)}
+                  options={FINISH_OPTIONS}
+                  active={!isKnownFinish(row.finish)}
+                />
+              </span>
               <QuantityStepper
                 size="sm"
                 min={1}
@@ -621,7 +763,12 @@ function Choices({ row, onPick }: { row: ScannerTrayRow; onPick: (cardId: string
   return (
     <div className="flex flex-col gap-1.5">
       <p className="text-xs font-medium text-accent">Pick a printing</p>
-      <div role="group" aria-label={`Printings of ${row.name}`} className="flex flex-wrap gap-1.5">
+      <div
+        role="group"
+        aria-label={`Printings of ${row.name}`}
+        data-decision=""
+        className="flex flex-wrap gap-1.5"
+      >
         {row.choices.map((choice) => (
           <ChoiceButton key={choice.cardId} choice={choice} onPick={() => onPick(choice.cardId)} />
         ))}
@@ -693,6 +840,8 @@ function ChoiceButton({ choice, onPick }: { choice: ScannerTrayChoice; onPick: (
 function TrayTile({
   row,
   flash,
+  price,
+  money,
   onQuantity,
   onFinish,
   onRemove,
@@ -700,6 +849,8 @@ function TrayTile({
 }: {
   row: ScannerTrayRow;
   flash: boolean;
+  price: number | null | undefined;
+  money: Money;
   onQuantity: (q: number) => void;
   onFinish: (f: ScannerTrayFinish) => void;
   onRemove: () => void;
@@ -732,7 +883,7 @@ function TrayTile({
   );
 
   return (
-    <li className="flex min-w-0 flex-col">
+    <li data-tray-row={row.key} className="flex min-w-0 flex-col">
       {row.oracleId !== null ? (
         // `overflow-hidden` clips what is laid on the card to its corners, and costs the lift
         // nothing: an element's own shadow and focus outline are outside what its overflow clips.
@@ -765,18 +916,31 @@ function TrayTile({
       )}
 
       <TileName name={row.name} label={label} onRemove={onRemove} />
-      {printing !== "" && <span className="truncate font-mono text-[11px] leading-4 text-dim">{printing}</span>}
+      {/* The printing and its price share a line, the price at the right end where a column of
+          tiles lines its figures up. A tile with neither — a printing the corpus has no number
+          for, its price not read yet — draws no empty line. */}
+      {(printing !== "" || price !== undefined) && (
+        <div className="flex min-w-0 items-baseline gap-2">
+          {printing !== "" && (
+            <span className="min-w-0 truncate font-mono text-[11px] leading-4 text-dim">{printing}</span>
+          )}
+          <TrayPrice price={price} money={money} className="ml-auto text-[11px] leading-4" />
+        </div>
+      )}
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
-        <Dropdown
-          size="sm"
-          label={`Finish of ${label}`}
-          value={row.finish}
-          onChange={(v) => onFinish(v as ScannerTrayFinish)}
-          options={FINISH_OPTIONS}
-          // The row's rule: an unknown finish wears the accent, so it is found in a wall of tiles too.
-          active={!isKnownFinish(row.finish)}
-        />
+        {/* The row's `contents` mark, for the header's walk. */}
+        <span data-decision="" className="contents">
+          <Dropdown
+            size="sm"
+            label={`Finish of ${label}`}
+            value={row.finish}
+            onChange={(v) => onFinish(v as ScannerTrayFinish)}
+            options={FINISH_OPTIONS}
+            // The row's rule: an unknown finish wears the accent, so it is found in a wall of tiles too.
+            active={!isKnownFinish(row.finish)}
+          />
+        </span>
         <QuantityStepper
           size="sm"
           min={1}
@@ -814,11 +978,12 @@ function WaitingTile({
   onRemove: () => void;
 }) {
   return (
-    <li className="col-span-2 flex min-w-0 flex-col">
+    <li data-tray-row={row.key} className="col-span-2 flex min-w-0 flex-col">
       <div className="relative">
         <div
           role="group"
           aria-label={`Printings of ${row.name}`}
+          data-decision=""
           className="grid grid-cols-2 gap-2 rounded-lg border border-dashed border-accent/60 p-2"
         >
           {row.choices.map((choice) => (

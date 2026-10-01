@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -52,6 +52,32 @@ vi.mock("@/lib/ipc", async (orig) => {
       })),
       collectionFolderList: vi.fn(async () => []),
     },
+  };
+});
+/**
+ * Whether the window is minimized, driven by the test — `useWindowParked`'s own suite owns the
+ * minimize, the grace and the restore, so this file asks only what the page does with each answer.
+ * Every test but the minimize ones is a window on screen.
+ */
+const parkedStore = vi.hoisted(() => {
+  let value = { paused: false, released: false };
+  const listeners = new Set<() => void>();
+  return {
+    get: () => value,
+    set(next: { paused: boolean; released: boolean }) {
+      value = next;
+      listeners.forEach((cb) => cb());
+    },
+    subscribe(cb: () => void) {
+      listeners.add(cb);
+      return () => listeners.delete(cb);
+    },
+  };
+});
+vi.mock("./useWindowParked", async () => {
+  const { useSyncExternalStore } = await import("react");
+  return {
+    useWindowParked: () => useSyncExternalStore(parkedStore.subscribe, parkedStore.get),
   };
 });
 import { ipc } from "@/lib/ipc";
@@ -167,6 +193,17 @@ function frames(...verdicts: ScannerVerdict[]) {
   });
 }
 
+/**
+ * Answers every frame, each a few milliseconds later. **Never `mockResolvedValue`**: an answer
+ * already settled lets the pump go round on microtasks alone, which starves every timer in the
+ * file — the test's own waits included — and the run hangs rather than fails.
+ */
+function paced() {
+  vi.mocked(ipc.scannerFrame).mockImplementation(
+    () => new Promise((resolve) => setTimeout(() => resolve(VERDICTS.voting), 10)),
+  );
+}
+
 /** The video box — the camera's picture, with the detector's strip laid over it. */
 function videoBox(container: HTMLElement): HTMLElement {
   const box = container.querySelector("video")?.parentElement;
@@ -239,6 +276,7 @@ afterEach(() => {
   // with, which is the state every test below expects to start from.
   COMMANDS.forEach((command) => vi.mocked(command).mockReset());
   Object.defineProperty(navigator, "mediaDevices", { value: undefined, configurable: true });
+  parkedStore.set({ paused: false, released: false });
 });
 
 describe("ScannerPage", () => {
@@ -355,10 +393,11 @@ describe("ScannerPage", () => {
     );
   });
 
-  it("hands the reset press straight to the command", async () => {
+  /** Beside the bar for every reader since #740 — not behind the Developer switch. */
+  it("hands the reset press straight to the command, with the Developer panels off", async () => {
     refused();
-    storedPrefs({ developer: true });
     mount();
+    expect(screen.queryByRole("region", { name: "Match" })).not.toBeInTheDocument();
     await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
     expect(vi.mocked(ipc.scannerReset)).toHaveBeenCalled();
   });
@@ -370,7 +409,6 @@ describe("ScannerPage", () => {
    */
   it("puts a refused reset in the strip under the video", async () => {
     refused();
-    storedPrefs({ developer: true });
     vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
     const { container } = mount();
     await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
@@ -948,6 +986,67 @@ describe("ScannerPage holding the scanner", () => {
       timeout: SCANNER_ELSEWHERE_POLL_MS * 2,
     });
     expect(ipc.scannerElsewhere).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * **A minimized window stands down** (issue #556). WebView2 reports a minimized page as visible,
+ * so before this the camera light stayed on, the detector ran at 5–9 fps and the lease never
+ * lapsed for as long as the window sat on the taskbar.
+ */
+describe("ScannerPage in a minimized window", () => {
+  it("pauses the pump on the minimize, keeping the camera and the lease through the grace", async () => {
+    const restore = shimVideo();
+    const stop = vi.fn();
+    mediaDevices(() =>
+      Promise.resolve({ getTracks: () => [{ stop }] } as unknown as MediaStream),
+    );
+    paced();
+    try {
+      mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      act(() => parkedStore.set({ paused: true, released: false }));
+      // One frame may already have been on the wire; nothing goes out after it.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      const held = vi.mocked(ipc.scannerHold).mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, SCANNER_ELSEWHERE_POLL_MS * 1.2));
+      expect(ipc.scannerFrame).toHaveBeenCalledTimes(sent);
+      expect(stop).not.toHaveBeenCalled();
+      expect(vi.mocked(ipc.scannerHold).mock.calls.length).toBeGreaterThan(held);
+    } finally {
+      restore();
+    }
+  });
+
+  it("closes the camera and lets the lease go once released, and takes both back on restore", async () => {
+    const restore = shimVideo();
+    const stop = vi.fn();
+    const getUserMedia = vi.fn(() =>
+      Promise.resolve({ getTracks: () => [{ stop }] } as unknown as MediaStream),
+    );
+    mediaDevices(getUserMedia);
+    paced();
+    try {
+      mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      act(() => parkedStore.set({ paused: true, released: true }));
+      await waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
+      const held = vi.mocked(ipc.scannerHold).mock.calls.length;
+      await new Promise((resolve) => setTimeout(resolve, SCANNER_ELSEWHERE_POLL_MS * 1.5));
+      expect(ipc.scannerHold).toHaveBeenCalledTimes(held);
+
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      act(() => parkedStore.set({ paused: false, released: false }));
+      // The restore beats at once, reopens the camera and starts the pump again.
+      await waitFor(() => expect(ipc.scannerHold).toHaveBeenCalledTimes(held + 1));
+      await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(2));
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent),
+      );
+    } finally {
+      restore();
+    }
   });
 });
 

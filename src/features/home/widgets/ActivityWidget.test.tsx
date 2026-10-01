@@ -91,6 +91,8 @@ const DEFAULT = fitOf(3, 3);
 interface World {
   /** Seeded under {@link activityKey}, which is the whole of how a case says "the read landed". */
   entries?: ActivityEntry[];
+  /** What the mount's own read answers, where it is not the seed — a write made elsewhere. */
+  answer?: ActivityEntry[];
   /** The limit the seed is filed under — the stored config's, or the default. */
   limit?: number;
   config?: unknown;
@@ -104,7 +106,14 @@ function wrapper({ children }: { children: ReactNode }) {
   return createElement(QueryClientProvider, { client }, children);
 }
 
-function draw({ entries, limit = 50, config = null, fit = ROOMY, still = false }: World = {}) {
+function draw({
+  entries,
+  answer = entries,
+  limit = 50,
+  config = null,
+  fit = ROOMY,
+  still = false,
+}: World = {}) {
   client = new QueryClient({
     defaultOptions: {
       // `Infinity` only where an answer was seeded: it is what stops the seed being refetched
@@ -112,7 +121,12 @@ function draw({ entries, limit = 50, config = null, fit = ROOMY, still = false }
       queries: { retry: false, staleTime: entries === undefined ? 0 : Infinity },
     },
   });
-  if (entries !== undefined) client.setQueryData<ActivityEntry[]>(activityKey(limit), entries);
+  if (entries !== undefined) {
+    client.setQueryData<ActivityEntry[]>(activityKey(limit), entries);
+    // The feed is read again on every mount (`refetchOnMount: "always"`), so a seeded world
+    // answers that read with its own seed rather than letting the stub's `[]` replace it.
+    activityRecent.mockResolvedValue(answer ?? entries);
+  }
   return render(
     <ActivityWidget
       widget={widgetOf(config)}
@@ -414,7 +428,8 @@ describe("staying fresh", () => {
     async (root) => {
       draw({ entries: [entry({ cardName: "Sol Ring" })] });
       expect(screen.getByText("Added Sol Ring")).toBeInTheDocument();
-      expect(activityRecent).not.toHaveBeenCalled();
+      // The mount's own read, and nothing else yet.
+      await waitFor(() => expect(activityRecent).toHaveBeenCalledTimes(1));
 
       activityRecent.mockResolvedValue([entry({ cardName: "Lightning Bolt" })]);
       await act(async () => {
@@ -429,24 +444,42 @@ describe("staying fresh", () => {
    *  or a corpus sync invalidates its own root many times a session and changes no history. */
   it("leaves the feed alone when an unrelated root is invalidated", async () => {
     draw({ entries: [entry({ cardName: "Sol Ring" })] });
+    await waitFor(() => expect(activityRecent).toHaveBeenCalledTimes(1));
 
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["cards", "search"] });
     });
 
-    expect(activityRecent).not.toHaveBeenCalled();
+    expect(activityRecent).toHaveBeenCalledTimes(1);
   });
 
   /** **A still body publishes nothing.** A catalogue preview draws the feed it was handed and
    *  leaves the bridging to the live card, so a write does not refetch through the picture. */
   it("does not bridge from a still body", async () => {
     draw({ entries: [entry({ cardName: "Sol Ring" })], still: true });
+    await waitFor(() => expect(activityRecent).toHaveBeenCalledTimes(1));
 
     await act(async () => {
       await client.invalidateQueries({ queryKey: ["collection"] });
     });
 
-    expect(activityRecent).not.toHaveBeenCalled();
+    expect(activityRecent).toHaveBeenCalledTimes(1);
     expect(screen.getByText("Added Sol Ring")).toBeInTheDocument();
+  });
+
+  /**
+   * **The bridge only exists while the widget does** (issue #556). A write made on another view
+   * reaches no subscription, so the feed it left cached — still fresh by the app's 30 s
+   * `staleTime` — would be drawn as it was on the way back to Home. The seed here is fresh for
+   * ever (`staleTime: Infinity`), which is the strongest form of that: the mount reads anyway.
+   */
+  it("reads the feed again on mount, however fresh the cached one is", async () => {
+    draw({
+      entries: [entry({ cardName: "Sol Ring" })],
+      answer: [entry({ cardName: "Lightning Bolt" })],
+    });
+
+    await waitFor(() => expect(screen.getByText("Added Lightning Bolt")).toBeInTheDocument());
+    expect(activityRecent).toHaveBeenCalledTimes(1);
   });
 });

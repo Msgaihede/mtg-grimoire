@@ -18,14 +18,23 @@ const collectionFolderList = vi.hoisted(() =>
   ]),
 );
 
+/**
+ * The tray's price read (issue #736) and the marketplace setting it is keyed on. Unpriced by
+ * default — every printing answered with nothing — so a test about something else draws the em
+ * dash and nothing it has to account for; the price tests below answer their own.
+ */
+const printingPrices = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+const getMarketplace = vi.hoisted(() => vi.fn().mockResolvedValue("tcgplayer"));
+const marketplaceFeedStatus = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { collectionFolderList },
+  ipc: { collectionFolderList, printingPrices, getMarketplace, marketplaceFeedStatus },
 }));
 
 import { VERDICTS } from "../fixtures";
 import { NO_FINISHED_ROWS, rowFromDecision } from "./tray";
-import { addLabel, TrayPanel, type TrayPanelProps } from "./TrayPanel";
+import { addLabel, NEXT_DECISION_LABEL, TrayPanel, type TrayPanelProps } from "./TrayPanel";
 
 const resolved = VERDICTS.exactResolved.decision!;
 const ambiguous = VERDICTS.exactAmbiguous.decision!;
@@ -161,6 +170,62 @@ describe("TrayPanel", () => {
     expect(add).not.toBeDisabled();
     await user.click(add);
     expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("offers the walk to the next decision only while a card is waiting on one", () => {
+    const { unmount } = wrap(<TrayPanel {...props()} />);
+    expect(screen.queryByRole("button", { name: NEXT_DECISION_LABEL })).not.toBeInTheDocument();
+    unmount();
+    wrap(<TrayPanel {...props({ rows: [newer, { ...older, finish: "unknown" }] })} />);
+    expect(screen.getByRole("button", { name: NEXT_DECISION_LABEL })).toBeInTheDocument();
+  });
+
+  /**
+   * **Each press lands on the next question — a printing to pick, then a finish — and wraps**, with
+   * the caret on the control that answers it. Settled rows are walked past.
+   */
+  it("walks the caret through each card needing a decision, in the tray's order, and wraps", async () => {
+    const user = userEvent.setup();
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    const unknown: ScannerTrayRow = { ...older, finish: "unknown" };
+    wrap(<TrayPanel {...props({ rows: [waiting, newer, unknown] })} />);
+    const next = screen.getByRole("button", { name: NEXT_DECISION_LABEL });
+    const first = waiting.choices[0];
+
+    await user.click(next);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", {
+        name: `${first.name} — ${first.setCode.toUpperCase()} ${first.collectorNumber}`,
+      }),
+    );
+    await user.click(next);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Finish of Honored Hierarch — ORI 17" }),
+    );
+    // Past the last question, round to the first again.
+    await user.click(next);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", {
+        name: `${first.name} — ${first.setCode.toUpperCase()} ${first.collectorNumber}`,
+      }),
+    );
+  });
+
+  /** Only the tray's own scroller moves — never the page around it — and the row is centred. */
+  it("scrolls the tray's own list to the row it lands on", async () => {
+    const user = userEvent.setup();
+    const scrollTo = vi.fn();
+    const original = Object.getOwnPropertyDescriptor(Element.prototype, "scrollTo");
+    Element.prototype.scrollTo = scrollTo as unknown as typeof Element.prototype.scrollTo;
+    try {
+      wrap(<TrayPanel {...props({ rows: [newer, { ...older, finish: "unknown" }] })} />);
+      await user.click(screen.getByRole("button", { name: NEXT_DECISION_LABEL }));
+      expect(scrollTo).toHaveBeenCalledTimes(1);
+      expect(scrollTo.mock.contexts[0]).toBe(screen.getAllByRole("list")[0]);
+    } finally {
+      if (original) Object.defineProperty(Element.prototype, "scrollTo", original);
+      else delete (Element.prototype as { scrollTo?: unknown }).scrollTo;
+    }
   });
 
   /**
@@ -397,6 +462,51 @@ describe("TrayPanel", () => {
   });
 });
 
+describe("TrayPanel's prices", () => {
+  /** Two printings this file can price apart — the shared fixture gives both rows one id. */
+  const storm = { ...newer, cardId: "storm", finish: "foil" as const };
+  const hierarch = { ...older, cardId: "hierarch", finish: "nonfoil" as const };
+  const quoted = [
+    { cardId: "storm", finishPrices: { nonfoil: 0.25, foil: 3.5, etched: null } },
+    { cardId: "hierarch", finishPrices: { nonfoil: null, foil: 1, etched: null } },
+  ];
+
+  it("quotes each row's own finish once, and asks for every printing in one read", async () => {
+    printingPrices.mockResolvedValueOnce(quoted);
+    wrap(<TrayPanel {...props({ rows: [storm, hierarch, { ...storm, key: "again" }] })} />);
+    const items = within(screen.getByRole("region", { name: "Scanned cards" })).getAllByRole("listitem");
+    // The foil row reads its foil figure, never the cheaper nonfoil one.
+    expect(await within(items[0]).findByText("$3.50")).toBeInTheDocument();
+    expect(printingPrices).toHaveBeenLastCalledWith(["hierarch", "storm"], "tcgplayer");
+    // A nonfoil row the marketplace has no nonfoil figure for is unpriced — not its foil price.
+    expect(within(items[1]).getByText("Not priced at TCGplayer")).toBeInTheDocument();
+    expect(within(items[1]).queryByText("$1.00")).not.toBeInTheDocument();
+  });
+
+  it("prices a tile under its card, beside the printing", async () => {
+    printingPrices.mockResolvedValueOnce(quoted);
+    wrap(<TrayPanel {...grid({ rows: [storm] })} />);
+    const tile = screen.getAllByRole("listitem")[0];
+    expect(await within(tile).findByText("$3.50")).toBeInTheDocument();
+    expect(tile).toHaveTextContent("LTR 72");
+  });
+
+  it("prices an Unknown finish along the printing's cheapest finish first", async () => {
+    printingPrices.mockResolvedValueOnce(quoted);
+    wrap(<TrayPanel {...props({ rows: [{ ...storm, finish: "unknown" }] })} />);
+    expect(await screen.findByText("$0.25")).toBeInTheDocument();
+  });
+
+  it("asks nothing for a row still waiting on a pick, and draws it no price", async () => {
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    printingPrices.mockClear();
+    wrap(<TrayPanel {...props({ rows: [waiting] })} />);
+    await screen.findByText("Pick a printing");
+    expect(printingPrices).not.toHaveBeenCalled();
+    expect(screen.queryByText(/^Not priced at/)).not.toBeInTheDocument();
+  });
+});
+
 describe("TrayPanel's grid", () => {
   /** The tray's tiles, found inside the region so nothing else on the page can be counted. */
   function tiles(): HTMLElement[] {
@@ -550,6 +660,22 @@ describe("TrayPanel's grid", () => {
     expect(next[0].cardId).toBe(choice.cardId);
     expect(next[0].choices).toEqual([]);
     expect(next[1]).toBe(newer);
+  });
+
+  it("walks the caret through the grid's questions too — a waiting tile's candidates, then a finish", async () => {
+    const user = userEvent.setup();
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    const unknown: ScannerTrayRow = { ...older, finish: "unknown" };
+    wrap(<TrayPanel {...grid({ rows: [newer, waiting, unknown] })} />);
+    const next = screen.getByRole("button", { name: NEXT_DECISION_LABEL });
+    await user.click(next);
+    expect(document.activeElement).toBe(
+      within(screen.getByRole("group", { name: `Printings of ${waiting.name}` })).getAllByRole("button")[0],
+    );
+    await user.click(next);
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Finish of Honored Hierarch — ORI 17" }),
+    );
   });
 
   it("removes a waiting tile by the card's name", async () => {

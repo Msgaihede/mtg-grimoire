@@ -264,6 +264,25 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * The scanner tray's batch price read. Both ends of the name and both arguments, for the reason
+   * the TCGplayer id test above gives: a wrapper invoking a command nothing registers fails
+   * quietly, and a tray whose prices never arrive draws an em dash on every row.
+   */
+  it("asks for a pile of printings' prices under `cardIds` and `marketplace`", async () => {
+    const answer = [{ cardId: "p1", finishPrices: { nonfoil: 1, foil: null, etched: null } }];
+    invoke.mockResolvedValue(answer);
+
+    expect(await ipc.printingPrices(["p1", "p2"], "cardkingdom")).toEqual(answer);
+    expect(invoke).toHaveBeenCalledWith("printing_prices", {
+      cardIds: ["p1", "p2"],
+      marketplace: "cardkingdom",
+    });
+    expect(cardRs).toMatch(
+      /pub async fn printing_prices\([^)]*\bcard_ids: Vec<String>,\s*marketplace: Option<String>/s,
+    );
+  });
+
+  /**
    * The page size, which only the printings modal names.
    *
    * `limit` is what `card_printings` declares. A wrapper that spelled it `pageSize` — or dropped
@@ -5263,6 +5282,11 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     // printing's TCGplayer product ids under `id`"* above: this row compares struct fields and
     // would say nothing about either.
     ["TcgplayerIds", cardRs, "TcgplayerIds"],
+    // The scanner tray's batch price read (issue #736): two fields, the second the nested
+    // `FinishPrices` every price surface reads. A renamed `cardId` keys the tray's map on
+    // `undefined`, and every row then reads unpriced — an em dash, which is also the honest answer
+    // for a printing nobody quotes, so nothing on screen would say the wire had drifted.
+    ["PrintingPrices", cardRs, "PrintingPrices"],
     // **The home page's six, added with the feature** (2026-09-10). None is a card wall's row, so
     // they are here rather than on `mirrors` above for `DecksCleared`'s reason — and the smallest
     // of them, `HomeLayout`, is two fields.

@@ -17,6 +17,19 @@ describe("token", () => {
     expect(await verify(token, SECRET, NOW)).toEqual(claims());
   });
 
+  it("carries the device it was minted for, and reads a token without one as it was minted", async () => {
+    // `dev` is optional because a token an older relay minted has none and lives a day; the share
+    // Worker is the only reader, and it must be able to tell "no device" from "this device".
+    const withDevice = claims({ dev: "9f".repeat(16) });
+    expect(await verify(await mint(withDevice, SECRET), SECRET, NOW)).toEqual(withDevice);
+    expect(await verify(await mint(claims(), SECRET), SECRET, NOW)).not.toHaveProperty("dev");
+  });
+
+  it("refuses a device claim that is not a string", async () => {
+    const odd = { ...claims(), dev: 7 } as unknown as Claims;
+    expect(await verify(await mint(odd, SECRET), SECRET, NOW)).toBeNull();
+  });
+
   it("refuses a token signed with a different secret", async () => {
     // This is what rotating RELAY_HMAC_KEY does to every outstanding token, and the break-glass
     // depends on it being a refusal rather than a silent acceptance.

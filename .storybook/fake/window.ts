@@ -18,21 +18,26 @@
 import { listen } from "./event";
 
 type ResizeListener = () => void;
+type FocusListener = (e: { payload: boolean }) => void;
 
 interface FakeWindowState {
   maximized: boolean;
+  minimized: boolean;
   minimizeCount: number;
   toggleMaximizeCount: number;
   closeCount: number;
   listeners: Set<ResizeListener>;
+  focusListeners: Set<FocusListener>;
 }
 
 const state: FakeWindowState = {
   maximized: false,
+  minimized: false,
   minimizeCount: 0,
   toggleMaximizeCount: 0,
   closeCount: 0,
   listeners: new Set(),
+  focusListeners: new Set(),
 };
 
 /**
@@ -60,9 +65,16 @@ export function getCurrentWindow() {
     async isMaximized(): Promise<boolean> {
       return state.maximized;
     },
+    async isMinimized(): Promise<boolean> {
+      return state.minimized;
+    },
     async onResized(cb: ResizeListener): Promise<() => void> {
       state.listeners.add(cb);
       return () => state.listeners.delete(cb);
+    },
+    async onFocusChanged(cb: FocusListener): Promise<() => void> {
+      state.focusListeners.add(cb);
+      return () => state.focusListeners.delete(cb);
     },
     /**
      * `Window.listen` — an event aimed at this window. There is one window here, so it is the
@@ -87,17 +99,30 @@ export function setMaximized(next: boolean): void {
   for (const cb of state.listeners) cb();
 }
 
+/**
+ * Minimize or restore the window, in the order Windows reports it: the state first, then a
+ * resize (to 0×0 and back) and the focus going or coming — so a handler re-reading
+ * `isMinimized()` on either event sees the new value.
+ */
+export function setMinimized(next: boolean): void {
+  state.minimized = next;
+  for (const cb of state.listeners) cb();
+  for (const cb of state.focusListeners) cb({ payload: !next });
+}
+
 /** What a story or a test asserts against. A copy, so a caller cannot write through it. */
-export function windowCalls(): Omit<FakeWindowState, "listeners"> {
-  const { maximized, minimizeCount, toggleMaximizeCount, closeCount } = state;
-  return { maximized, minimizeCount, toggleMaximizeCount, closeCount };
+export function windowCalls(): Omit<FakeWindowState, "listeners" | "focusListeners"> {
+  const { maximized, minimized, minimizeCount, toggleMaximizeCount, closeCount } = state;
+  return { maximized, minimized, minimizeCount, toggleMaximizeCount, closeCount };
 }
 
 /** Back to a restored window with no subscribers and nothing counted. */
 export function resetWindow(): void {
   state.maximized = false;
+  state.minimized = false;
   state.minimizeCount = 0;
   state.toggleMaximizeCount = 0;
   state.closeCount = 0;
   state.listeners.clear();
+  state.focusListeners.clear();
 }

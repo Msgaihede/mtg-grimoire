@@ -2693,7 +2693,10 @@ the relay keeps no directory of readers — one entitlement row bound to one gro
 that a reader logs into.
 
 `access` is `base64url(payload) "." base64url(HMAC-SHA256(payload, RELAY_HMAC_KEY))` over
-`{sub, grp, exp}`, minted by the relay with a 24-hour TTL. The Worker checks signature, expiry
+`{sub, grp, exp, dev}`, minted by the relay with a 24-hour TTL. `dev` — the device that presented
+itself to the door — was added on 2026-10-01 and is read only by the share Worker, which refuses a
+token minted before the group's newest rotation by a device that rotation's manifest omits
+([collection-sharing.md](collection-sharing.md), issue #548). The relay checks signature, expiry
 and `payload.grp` against the path segment with **zero storage reads**, so a junk request is
 refused in microseconds and **never bills a Durable Object request** — which is the line that
 actually costs money. What mints the token is a Patreon membership resolved server-side;

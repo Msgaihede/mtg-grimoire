@@ -5,7 +5,9 @@ import {
   commitPlan,
   importItems,
   NO_FINISHED_ROWS,
+  needsDecision,
   needsFinishCount,
+  nextDecisionKey,
   pickChoice,
   readyRows,
   removeRow,
@@ -299,6 +301,47 @@ describe("tray", () => {
     const rows = addDecision(addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows, resolved, { finish: "nonfoil" }, 2, "b").rows;
     expect(totalCopies(rows)).toBe(2);
     expect(removeRow(rows, "a")).toHaveLength(0);
+  });
+
+  describe("the walk through the rows waiting on a decision", () => {
+    const known = rowFromDecision(resolved, { finish: "nonfoil" }, 1, "known");
+    const pick = rowFromDecision(ambiguous, { finish: "nonfoil" }, 2, "pick");
+    const finish = rowFromDecision(resolved, { finish: "unknown" }, 3, "finish");
+
+    it("counts a printing to pick and a finish to name as decisions, and nothing else", () => {
+      expect(needsDecision(known)).toBe(false);
+      expect(needsDecision(pick)).toBe(true);
+      expect(needsDecision(finish)).toBe(true);
+    });
+
+    it("walks the waiting rows in the tray's order, skipping the settled ones, and wraps", () => {
+      const rows = [pick, known, finish];
+      expect(nextDecisionKey(rows, null)).toBe("pick");
+      expect(nextDecisionKey(rows, "pick")).toBe("finish");
+      expect(nextDecisionKey(rows, "finish")).toBe("pick");
+      // From a settled row — one the reader has just answered — the walk carries on past it.
+      expect(nextDecisionKey(rows, "known")).toBe("finish");
+    });
+
+    it("follows a row by its key when a scan lands above it", () => {
+      // A new card at the head shifts every index; the cursor still means the row it named.
+      const scanned = { ...finish, key: "scanned" };
+      expect(nextDecisionKey([scanned, pick, known, finish], "pick")).toBe("finish");
+    });
+
+    it("starts from the top when the cursor's row has gone", () => {
+      expect(nextDecisionKey([known, finish, pick], "removed")).toBe("finish");
+    });
+
+    it("answers with the one row left, even when it is the cursor's own", () => {
+      expect(nextDecisionKey([known, pick], "pick")).toBe("pick");
+    });
+
+    it("answers null when nothing is waiting, or the tray is empty", () => {
+      expect(nextDecisionKey([known], null)).toBeNull();
+      expect(nextDecisionKey([known], "known")).toBeNull();
+      expect(nextDecisionKey([], null)).toBeNull();
+    });
   });
 
   it("reads the stored layout word, taking anything but list as the grid", () => {

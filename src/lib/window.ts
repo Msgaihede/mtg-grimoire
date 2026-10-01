@@ -15,7 +15,9 @@
  * The four verbs match the four permissions granted in `src-tauri/capabilities/desktop.json`
  * — `core:window:allow-minimize`, `-toggle-maximize`, `-close`, `-start-dragging`. Adding a
  * fifth here means adding its permission there, and the reverse: a granted permission nothing
- * on this page calls is a widening nobody asked for.
+ * on this page calls is a widening nobody asked for. **The reads and the two window events are
+ * not verbs and need no line there**: `isMaximized`, `isMinimized` and the `onResized` /
+ * `onFocusChanged` listeners are all in `core:default`, which the capability already grants.
  */
 import { getCurrentWindow } from "@tauri-apps/api/window";
 
@@ -43,6 +45,26 @@ export async function closeWindow(): Promise<void> {
 /** Whether the window is maximized right now — which of two glyphs the middle button draws. */
 export async function isWindowMaximized(): Promise<boolean> {
   return getCurrentWindow().isMaximized();
+}
+
+/**
+ * Whether the window is minimized right now — the one question WebView2 will not answer from
+ * inside the page: it reports a minimized window's `visibilityState` as `"visible"`
+ * ([card-scanner.md](../../docs/reference/card-scanner.md), *One window scans at a time*).
+ */
+export async function isWindowMinimized(): Promise<boolean> {
+  return getCurrentWindow().isMinimized();
+}
+
+/**
+ * Subscribe to the window gaining or losing focus, and hand back the unsubscribe.
+ *
+ * A minimize takes the focus with it, so this is the second of the two signals
+ * {@link isWindowMinimized} is re-read on — alongside {@link onWindowResized}, which is the one a
+ * restore that does not hand the focus back still fires.
+ */
+export async function onWindowFocusChanged(cb: (focused: boolean) => void): Promise<() => void> {
+  return getCurrentWindow().onFocusChanged((event) => cb(event.payload));
 }
 
 /**

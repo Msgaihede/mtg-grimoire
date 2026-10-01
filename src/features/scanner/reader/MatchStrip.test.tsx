@@ -1,5 +1,6 @@
 import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import userEvent from "@testing-library/user-event";
+import { describe, expect, it, vi } from "vitest";
 import type { ScannerTracked, ScannerVerdict } from "@/lib/ipc";
 import { VERDICTS } from "../fixtures";
 import { MatchStrip, type MatchStripProps } from "./MatchStrip";
@@ -12,6 +13,7 @@ function props(over: Partial<MatchStripProps> = {}): MatchStripProps {
     lastAdded: null,
     hasBundle: true,
     lastResolution: null,
+    onReset: vi.fn(),
     ...over,
   };
 }
@@ -49,6 +51,26 @@ const saruman: LastAdded = {
 };
 
 describe("MatchStrip", () => {
+  /**
+   * Beside the bar and outside the live region (#740): a press is not news, and a button inside
+   * `Scanner status` would be read out with every change of the line.
+   */
+  it("draws Reset evidence beside the bar, outside the announcement, and hands the press up", async () => {
+    const onReset = vi.fn();
+    render(<MatchStrip {...props({ onReset })} />);
+    const reset = screen.getByRole("button", { name: "Reset evidence" });
+    expect(reset.parentElement).toBe(bar().parentElement);
+    expect(region()).not.toContainElement(reset);
+    await userEvent.click(reset);
+    expect(onReset).toHaveBeenCalledOnce();
+  });
+
+  /** A reader with nothing in frame may still want the last card's leftovers gone. */
+  it("offers Reset evidence before there is a card", () => {
+    render(<MatchStrip {...props({ verdict: null })} />);
+    expect(screen.getByRole("button", { name: "Reset evidence" })).toBeEnabled();
+  });
+
   it("asks for a card before there is one, with an empty bar and no line to cross", () => {
     render(<MatchStrip {...props({ verdict: null })} />);
     expect(region()).toHaveTextContent(/^Looking Point the camera at a card$/);
