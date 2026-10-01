@@ -30,7 +30,7 @@
 
 1. **A stored start view outside the light edition.** `mobile:tauri` shares the desktop's `user.db`, whose `start_view` may be `home` or `tags`. A reasonable person expects the light app to open on Search, not on a page with no rail row. → Task 5, *"lands on the URL's view even when the stored start view is outside the edition"*.
 2. **A URL that names nothing.** `/`, `/nope`, `/decks/abc`, `/decks/` and `/index.html` must all open somewhere sensible rather than throw or draw blank. → Task 5, `parsePlace` cases.
-3. **A viewport that crosses 1024px while the app is open.** Resizing a browser window, or rotating a tablet, must swap faces and land on the same destination. → Task 5, *"swaps the face when the viewport crosses the floor"* and *"keeps the destination across the swap"*.
+3. **A viewport that crosses 1024px while the app is open.** Resizing a browser window, or rotating a tablet, must swap faces and land on the same destination. → Task 5, *"swaps the face when the viewport crosses the floor"*. That the destination holds across the swap has no jsdom test — it holds by construction (both faces read one URL through `parsePlace`) and was driven live in both directions: `docs/reference/light-app.md` §2.
 4. **A wishlist row with no printing.** `WishRow.cardId`, `setCode` and `collectorNumber` are all nullable — a wish for *any* printing. The tile must draw "Any printing", not crash on a null spread and not print `null · null`. → Task 7, *"draws a wish for any printing without a set line"*.
 5. **A card or deck id that no longer exists.** `/decks/999` and `?card=<gone>` are one stale link away. The page must say so in a sentence and leave Back working. → Task 7, *"says so when the deck is gone"* and *"says so when the card cannot be read"*.
 
@@ -86,7 +86,7 @@
   - `isLightView(value: string): value is LightView`
   - `EditionContext: React.Context<Edition>` (default `FULL_EDITION`), `useEdition(): Edition`
 
-- [ ] **Step 1: Write the failing unit test**
+- [x] **Step 1: Write the failing unit test**
 
 Create `src/lib/edition.test.ts`:
 
@@ -133,12 +133,12 @@ describe("the two editions", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to make sure it fails**
+- [x] **Step 2: Run it to make sure it fails**
 
 Run: `npx vitest run src/lib/edition.test.ts`
 Expected: FAIL — `Failed to resolve import "@/lib/edition"`.
 
-- [ ] **Step 3: Write `src/lib/edition.ts`**
+- [x] **Step 3: Write `src/lib/edition.ts`**
 
 ```ts
 import { createContext, useContext } from "react";
@@ -211,12 +211,12 @@ export function useEdition(): Edition {
 }
 ```
 
-- [ ] **Step 4: Run the unit test**
+- [x] **Step 4: Run the unit test**
 
 Run: `npx vitest run src/lib/edition.test.ts`
 Expected: PASS, 5 tests.
 
-- [ ] **Step 5: Write the failing shell test**
+- [x] **Step 5: Write the failing shell test**
 
 Append to the end of `src/components/AppShell.test.tsx`. It uses helpers the file already defines — `render`, `noUpdate`, `useAppStore`, `userEvent`, `screen`, `within`, `act` — and adds one import beside the file's other `@/lib` imports:
 
@@ -285,12 +285,12 @@ describe("the light edition", () => {
 });
 ```
 
-- [ ] **Step 6: Run it to make sure it fails**
+- [x] **Step 6: Run it to make sure it fails**
 
 Run: `npx vitest run src/components/AppShell.test.tsx -t "the light edition"`
 Expected: FAIL — the rail lists `Home`, `Tagger`, `Trade`, `Playtesting`; the drag region is present; Ctrl+1 moves to Home.
 
-- [ ] **Step 7: Teach the shell its edition**
+- [x] **Step 7: Teach the shell its edition**
 
 In `src/components/AppShell.tsx`:
 
@@ -342,12 +342,12 @@ Replace `<TitleBar />` with:
 
 Leave every comment in place. Add one sentence to the comment above the caption: `` `edition.caption` is false wherever a browser or an OS owns the frame — the light entry — and there this row is not drawn at all. ``
 
-- [ ] **Step 8: Run the shell's whole file**
+- [x] **Step 8: Run the shell's whole file**
 
 Run: `npx vitest run src/components/AppShell.test.tsx`
 Expected: PASS — the three new tests and every existing one. **If an existing test fails, the edit is wrong.**
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```
 git add src/lib/edition.ts src/lib/edition.test.ts src/components/AppShell.tsx src/components/AppShell.test.tsx
@@ -366,7 +366,7 @@ git commit -m "feat(shell): an edition decides the rail's rows, the caption and 
 - Consumes: nothing from other tasks.
 - Produces: `npm run tauri -- dev --config src-tauri/tauri.light.conf.json` opens a 412 × 915 framed window on `http://localhost:5175`. Task 4 adds the npm script and the server.
 
-- [ ] **Step 1: Write the overlay**
+- [x] **Step 1: Write the overlay**
 
 Create `src-tauri/tauri.light.conf.json`. `--config` is a JSON merge patch, and **a merge patch replaces arrays whole**, so the window entry restates every field it needs:
 
@@ -396,7 +396,7 @@ Create `src-tauri/tauri.light.conf.json`. `--config` is a JSON merge patch, and 
 
 `decorations: true` because the light edition draws no caption — without the OS frame there would be no way to move or close the window. `visible: false` and `dragDropEnabled: false` are the main config's own, restated because the array is replaced.
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 In `src-tauri/src/window.rs`, inside `mod tests`, add:
 
@@ -433,7 +433,7 @@ In `src-tauri/src/window.rs`, inside `mod tests`, add:
     }
 ```
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src-tauri/src/window.rs`, directly after `opening_size`:
 
@@ -475,12 +475,12 @@ In `open_sized_to_monitor`, make this the first statement of the body:
     }
 ```
 
-- [ ] **Step 4: Run the module's tests**
+- [x] **Step 4: Run the module's tests**
 
 Run: `cargo test --manifest-path src-tauri/Cargo.toml --lib window::`
 Expected: PASS — the two new tests and every existing `window::tests` case. This compiles the crate; allow ten minutes on a cold target. **Run no second `cargo` beside it.**
 
-- [ ] **Step 5: Format and commit**
+- [x] **Step 5: Format and commit**
 
 ```
 cargo fmt --manifest-path src-tauri/Cargo.toml
@@ -526,11 +526,11 @@ export interface CardTileProps {
 export function CardTile(props: CardTileProps): ReactElement;
 ```
 
-- [ ] **Step 1: Export the chin's printing type**
+- [x] **Step 1: Export the chin's printing type**
 
 In `src/components/CardChin.tsx`, change `type ChinPrinting =` to `export type ChinPrinting =`. Nothing else in that file changes.
 
-- [ ] **Step 2: Write the failing test**
+- [x] **Step 2: Write the failing test**
 
 Create `src/components/CardTile.test.tsx`:
 
@@ -601,12 +601,12 @@ describe("CardTile", () => {
 });
 ```
 
-- [ ] **Step 3: Run it to make sure it fails**
+- [x] **Step 3: Run it to make sure it fails**
 
 Run: `npx vitest run src/components/CardTile.test.tsx`
 Expected: FAIL — `Failed to resolve import "@/components/CardTile"`.
 
-- [ ] **Step 4: Write `src/components/CardTile.tsx`**
+- [x] **Step 4: Write `src/components/CardTile.tsx`**
 
 ```tsx
 import type { ReactElement, ReactNode } from "react";
@@ -704,12 +704,12 @@ export function CardTile({
 }
 ```
 
-- [ ] **Step 5: Run the test**
+- [x] **Step 5: Run the test**
 
 Run: `npx vitest run src/components/CardTile.test.tsx`
 Expected: PASS, 6 tests.
 
-- [ ] **Step 6: Adopt it in the share viewer**
+- [x] **Step 6: Adopt it in the share viewer**
 
 In `share/ShareTile.tsx`, replace the two imports of `CardArt` and `CardChin` with:
 
@@ -762,12 +762,12 @@ and remove `cardScaleVars` from the `@/lib/cardZoom` import (keep `DEFAULT_ZOOM`
 
 Keep the component's doc comment; change its opening sentence of the second paragraph to `` **`CardTile` rather than a frame of its own** `` and leave the rest.
 
-- [ ] **Step 7: Run the share viewer's tests, which include its import fence**
+- [x] **Step 7: Run the share viewer's tests, which include its import fence**
 
 Run: `npx vitest run share/`
 Expected: PASS. The fence in `share/SharePage.test.tsx` walks into `CardTile.tsx`; it must still find no `@/lib/core`, `@/lib/ipc`, `@/features` or `@tauri-apps/`.
 
-- [ ] **Step 8: Write the story**
+- [x] **Step 8: Write the story**
 
 Create `src/components/CardTile.stories.tsx`. Before writing it, read one neighbouring story file — `src/components/CountTag.stories.tsx` — and match its conventions (`tags: ["autodocs"]`, the `Meta`/`StoryObj` import path, how it names a fixture card from `.storybook/fake/fixtures`):
 
@@ -829,7 +829,7 @@ export const FoilWithCount: Story = {
 
 `CARDS` rows carry `id`, `name`, `rarity`, `setCode` and `collectorNumber` (read on 2026-10-01); that file is generated, so if a name has moved, the file is the authority.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```
 git add src/components/CardChin.tsx src/components/CardTile.tsx src/components/CardTile.test.tsx src/components/CardTile.stories.tsx share/ShareTile.tsx
@@ -853,7 +853,7 @@ git commit -m "feat(components): CardTile, the one composition of a card and its
   - `npm run mobile:build` — `tsc` then a production build into `dist-mobile/`, with `index.html` at its root.
   - `mobile/LightApp.tsx` exporting `LightApp({ gate }: { gate: boolean })`.
 
-- [ ] **Step 1: Write the Vite config**
+- [x] **Step 1: Write the Vite config**
 
 Create `vite.mobile.config.ts`:
 
@@ -930,7 +930,7 @@ export default defineConfig(({ mode }) =>
 );
 ```
 
-- [ ] **Step 2: Write the entry document and stylesheet**
+- [x] **Step 2: Write the entry document and stylesheet**
 
 Create `mobile/index.html`:
 
@@ -986,7 +986,7 @@ Create `public/light.webmanifest`:
 }
 ```
 
-- [ ] **Step 3: Write the fake boot, the entry and a stub app**
+- [x] **Step 3: Write the fake boot, the entry and a stub app**
 
 Create `mobile/fakeBoot.ts`:
 
@@ -1070,7 +1070,7 @@ async function start(): Promise<void> {
 void start();
 ```
 
-- [ ] **Step 4: Wire the configs**
+- [x] **Step 4: Wire the configs**
 
 `tsconfig.json` — change `"include": ["src", "share"],` to `"include": ["src", "share", "mobile"],` and extend the comment above it with one paragraph:
 
@@ -1107,12 +1107,12 @@ void start();
       "dist-mobile/",
 ```
 
-- [ ] **Step 5: Type-check**
+- [x] **Step 5: Type-check**
 
 Run: `npx tsc --noEmit`
 Expected: no errors. `mobile/fakeBoot.ts` pulls `.storybook/fake/world.ts` into this program, as several `src/` tests already do; if `tsc` reports an error *inside* `.storybook/fake/`, stop and report it rather than editing that directory.
 
-- [ ] **Step 6: See the fake-mode page**
+- [x] **Step 6: See the fake-mode page**
 
 Run in the background: `npm run mobile:dev`
 Then open `http://localhost:5175/` and `http://localhost:5175/decks/12` in the built-in browser.
@@ -1120,12 +1120,12 @@ Expected at both: the sentence *"The light app (fake backend)."*, dark backgroun
 
 If the page shows the **desktop** app instead, the middleware is not rewriting — check that `lightEntry()` is in `plugins` and that the request carries `Accept: text/html`.
 
-- [ ] **Step 7: See the production build land at the root**
+- [x] **Step 7: See the production build land at the root**
 
 Run: `npm run mobile:build`
 Expected: exit 0, and `dist-mobile/index.html` exists while `dist-mobile/mobile/index.html` does not. Confirm with `Test-Path dist-mobile/index.html; Test-Path dist-mobile/mobile/index.html` → `True`, `False`.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```
 git add vite.mobile.config.ts mobile/ public/light.webmanifest tsconfig.json vite.config.ts package.json .gitignore eslint.config.js
@@ -1157,7 +1157,7 @@ git commit -m "feat(light): a second entry, its build, and the fake backend behi
   - `type Face = "phone" | "desktop"`, `faceFor(width: number): Face`, `useFace(): Face`
   - `mobile/phone/PhoneApp.tsx` with a **default export** component taking no props
 
-- [ ] **Step 1: Write the failing route tests**
+- [x] **Step 1: Write the failing route tests**
 
 Create `mobile/routes.test.ts`:
 
@@ -1222,12 +1222,12 @@ describe("placeHref", () => {
 });
 ```
 
-- [ ] **Step 2: Run them to make sure they fail**
+- [x] **Step 2: Run them to make sure they fail**
 
 Run: `npx vitest run mobile/routes.test.ts`
 Expected: FAIL — `Failed to resolve import "./routes"`.
 
-- [ ] **Step 3: Write `mobile/routes.ts`**
+- [x] **Step 3: Write `mobile/routes.ts`**
 
 ```ts
 import { isLightView, LIGHT_START, type LightView } from "@/lib/edition";
@@ -1267,12 +1267,12 @@ export function placeHref(place: Place): string {
 }
 ```
 
-- [ ] **Step 4: Run the route tests**
+- [x] **Step 4: Run the route tests**
 
 Run: `npx vitest run mobile/routes.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Lift the startup gate into a hook**
+- [x] **Step 5: Lift the startup gate into a hook**
 
 Create `src/boot/useStartup.ts` by **moving** `STARTUP_POLL_MS`, its doc comment, and the body of `DesktopBoot`'s `useState` + `useEffect` out of `src/boot/DesktopBoot.tsx`. The effect is unchanged except for the `enabled` guard:
 
@@ -1333,7 +1333,7 @@ export function DesktopBoot() {
 Run: `npx vitest run src/boot/`
 Expected: PASS with **no edit** to `DesktopBoot.test.tsx`.
 
-- [ ] **Step 6: Write `mobile/useFace.ts`**
+- [x] **Step 6: Write `mobile/useFace.ts`**
 
 ```ts
 import { useSyncExternalStore } from "react";
@@ -1368,7 +1368,7 @@ export function useFace(): Face {
 }
 ```
 
-- [ ] **Step 7: Write the failing desktop-place tests**
+- [x] **Step 7: Write the failing desktop-place tests**
 
 Create `mobile/useDesktopPlace.test.ts`:
 
@@ -1443,12 +1443,12 @@ describe("useDesktopPlace", () => {
 });
 ```
 
-- [ ] **Step 8: Run them to make sure they fail**
+- [x] **Step 8: Run them to make sure they fail**
 
 Run: `npx vitest run mobile/useDesktopPlace.test.ts`
 Expected: FAIL — `Failed to resolve import "./useDesktopPlace"`.
 
-- [ ] **Step 9: Write `mobile/useDesktopPlace.ts`**
+- [x] **Step 9: Write `mobile/useDesktopPlace.ts`**
 
 ```ts
 import { useEffect, useState } from "react";
@@ -1526,12 +1526,12 @@ export function useDesktopPlace(): void {
 }
 ```
 
-- [ ] **Step 10: Run the desktop-place tests**
+- [x] **Step 10: Run the desktop-place tests**
 
 Run: `npx vitest run mobile/useDesktopPlace.test.ts`
 Expected: PASS, 7 tests.
 
-- [ ] **Step 11: Write the two faces' hosts and the boot screen**
+- [x] **Step 11: Write the two faces' hosts and the boot screen**
 
 Create `mobile/DesktopFace.tsx`:
 
@@ -1590,7 +1590,7 @@ export default function PhoneApp() {
 }
 ```
 
-- [ ] **Step 12: Write the failing switch test**
+- [x] **Step 12: Write the failing switch test**
 
 Create `mobile/LightApp.test.tsx`:
 
@@ -1679,12 +1679,12 @@ describe("LightApp", () => {
 });
 ```
 
-- [ ] **Step 13: Run it to make sure it fails**
+- [x] **Step 13: Run it to make sure it fails**
 
 Run: `npx vitest run mobile/LightApp.test.tsx`
 Expected: FAIL — the stub draws its own sentence and neither face.
 
-- [ ] **Step 14: Write the real `mobile/LightApp.tsx`**
+- [x] **Step 14: Write the real `mobile/LightApp.tsx`**
 
 ```tsx
 import { lazy, Suspense } from "react";
@@ -1721,12 +1721,12 @@ export function LightApp({ gate }: { gate: boolean }) {
 }
 ```
 
-- [ ] **Step 15: Run the switch test**
+- [x] **Step 15: Run the switch test**
 
 Run: `npx vitest run mobile/LightApp.test.tsx`
 Expected: PASS, 6 tests.
 
-- [ ] **Step 16: Commit**
+- [x] **Step 16: Commit**
 
 ```
 git add src/boot/useStartup.ts src/boot/DesktopBoot.tsx mobile/
@@ -1757,7 +1757,7 @@ git commit -m "feat(light): a startup gate, URL routes, and a face chosen by the
   - `mobile/phone/testing.tsx`: `renderPhone(ui: ReactElement, options?: { path?: string }): RenderResult` and `installLayout(): void`
   - `PhoneApp` default export, drawing `<Shell>` around a `Pages` switch that Task 7 fills.
 
-- [ ] **Step 1: Write the failing router test**
+- [x] **Step 1: Write the failing router test**
 
 Create `mobile/phone/router.test.ts`:
 
@@ -1824,12 +1824,12 @@ describe("the phone router", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to make sure it fails**
+- [x] **Step 2: Run it to make sure it fails**
 
 Run: `npx vitest run mobile/phone/router.test.ts`
 Expected: FAIL — `Failed to resolve import "./router"`.
 
-- [ ] **Step 3: Write `mobile/phone/router.ts`**
+- [x] **Step 3: Write `mobile/phone/router.ts`**
 
 ```ts
 import { useMemo, useSyncExternalStore } from "react";
@@ -1879,12 +1879,12 @@ export function usePlace(): Place {
 }
 ```
 
-- [ ] **Step 4: Run the router test**
+- [x] **Step 4: Run the router test**
 
 Run: `npx vitest run mobile/phone/router.test.ts`
 Expected: PASS, 6 tests.
 
-- [ ] **Step 5: Write the failing wall-arithmetic test**
+- [x] **Step 5: Write the failing wall-arithmetic test**
 
 Create `mobile/phone/wall.test.ts`:
 
@@ -1935,12 +1935,12 @@ describe("the wall's arithmetic", () => {
 });
 ```
 
-- [ ] **Step 6: Run it to make sure it fails**
+- [x] **Step 6: Run it to make sure it fails**
 
 Run: `npx vitest run mobile/phone/wall.test.ts`
 Expected: FAIL — `Failed to resolve import "./wall"`.
 
-- [ ] **Step 7: Write `mobile/phone/wall.ts`**
+- [x] **Step 7: Write `mobile/phone/wall.ts`**
 
 ```ts
 import { CHIN_HEIGHT, CHIN_RISE } from "@/lib/cardZoom";
@@ -1993,12 +1993,12 @@ export function rowHeightFor(tileWidth: number): number {
 }
 ```
 
-- [ ] **Step 8: Run the wall test**
+- [x] **Step 8: Run the wall test**
 
 Run: `npx vitest run mobile/phone/wall.test.ts`
 Expected: PASS, 8 tests.
 
-- [ ] **Step 9: Write `mobile/phone/CardWall.tsx`**
+- [x] **Step 9: Write `mobile/phone/CardWall.tsx`**
 
 ```tsx
 import { useEffect, useRef } from "react";
@@ -2135,7 +2135,7 @@ export function CardWall({
 }
 ```
 
-- [ ] **Step 10: Write the shell**
+- [x] **Step 10: Write the shell**
 
 Create `mobile/phone/TabBar.tsx`:
 
@@ -2246,7 +2246,7 @@ export function Shell({ title, children }: { title: string; children: ReactNode 
 
 `ManaLine` takes one required prop, `sync: ManaLineSync | null`, and `font-heading` is the class `Ribbon.tsx`'s own `<h1>` carries (Cinzel; never set it below 18px, which is why the title is `text-lg`). `Ribbon` itself must **not** be imported: the fence forbids it.
 
-- [ ] **Step 11: Write the test harness**
+- [x] **Step 11: Write the test harness**
 
 Create `mobile/phone/testing.tsx`:
 
@@ -2298,7 +2298,7 @@ export function renderPhone(
 }
 ```
 
-- [ ] **Step 12: Write the failing shell test**
+- [x] **Step 12: Write the failing shell test**
 
 Create `mobile/phone/Shell.test.tsx`:
 
@@ -2370,12 +2370,12 @@ describe("the phone shell", () => {
 });
 ```
 
-- [ ] **Step 13: Run it to make sure it fails**
+- [x] **Step 13: Run it to make sure it fails**
 
 Run: `npx vitest run mobile/phone/Shell.test.tsx`
 Expected: FAIL — `PhoneFace` is not exported from `./PhoneApp`.
 
-- [ ] **Step 14: Write the real `mobile/phone/PhoneApp.tsx`**
+- [x] **Step 14: Write the real `mobile/phone/PhoneApp.tsx`**
 
 Task 7 replaces `Pages`' placeholders with real pages; the shape here is final.
 
@@ -2430,12 +2430,12 @@ export default function PhoneApp() {
 }
 ```
 
-- [ ] **Step 15: Run the shell test**
+- [x] **Step 15: Run the shell test**
 
 Run: `npx vitest run mobile/phone/Shell.test.tsx`
 Expected: PASS, 6 tests.
 
-- [ ] **Step 16: Commit**
+- [x] **Step 16: Commit**
 
 ```
 git add mobile/phone/
@@ -2463,7 +2463,7 @@ git commit -m "feat(light): the phone face's shell, router and virtualised wall"
 - `useCollection()` → `rows` (`CollectionRow[]`), `query`, `marketplace`, `total`, `scrollKey`
 - `useWishlist()` → `rows` (`WishRow[]`), `query`, `hasMore`, `marketplace`, `total`, `queryKeyString`
 
-- [ ] **Step 1: Write the failing item tests**
+- [x] **Step 1: Write the failing item tests**
 
 Create `mobile/phone/items.test.ts`:
 
@@ -2576,12 +2576,12 @@ describe("wishItem", () => {
 });
 ```
 
-- [ ] **Step 2: Run them to make sure they fail**
+- [x] **Step 2: Run them to make sure they fail**
 
 Run: `npx vitest run mobile/phone/items.test.ts`
 Expected: FAIL — `Failed to resolve import "./items"`.
 
-- [ ] **Step 3: Write `mobile/phone/items.ts`**
+- [x] **Step 3: Write `mobile/phone/items.ts`**
 
 ```ts
 import { isFinish, type Finish } from "@/lib/finish";
@@ -2672,12 +2672,12 @@ export function deckCardItem(card: DeckCard, currency: Currency): WallItem {
 }
 ```
 
-- [ ] **Step 4: Run the item tests**
+- [x] **Step 4: Run the item tests**
 
 Run: `npx vitest run mobile/phone/items.test.ts`
 Expected: PASS.
 
-- [ ] **Step 5: Write the failing page tests**
+- [x] **Step 5: Write the failing page tests**
 
 Create `mobile/phone/pages/pages.test.tsx`:
 
@@ -2825,12 +2825,12 @@ describe("Scanner and Settings", () => {
 });
 ```
 
-- [ ] **Step 6: Run them to make sure they fail**
+- [x] **Step 6: Run them to make sure they fail**
 
 Run: `npx vitest run mobile/phone/pages/pages.test.tsx`
 Expected: FAIL — every page still draws Task 6's placeholder sentence.
 
-- [ ] **Step 7: Write the card sheet**
+- [x] **Step 7: Write the card sheet**
 
 Create `mobile/phone/CardSheet.tsx`:
 
@@ -2916,7 +2916,7 @@ export function CardSheet({ cardId, onClose }: { cardId: string | null; onClose:
 
 `FinishPrices` is `{ nonfoil, foil, etched }`, each `number | null` — confirm in `src/lib/ipc.ts` and index it as above.
 
-- [ ] **Step 8: Write the seven pages**
+- [x] **Step 8: Write the seven pages**
 
 Create `mobile/phone/pages/SearchPage.tsx`:
 
@@ -3203,7 +3203,7 @@ export function SettingsPage() {
 }
 ```
 
-- [ ] **Step 9: Wire the pages and the sheet into `mobile/phone/PhoneApp.tsx`**
+- [x] **Step 9: Wire the pages and the sheet into `mobile/phone/PhoneApp.tsx`**
 
 Replace `Pages` and `PhoneFace`:
 
@@ -3260,14 +3260,14 @@ export function PhoneFace() {
 
 with the imports to match (`navigate` and `usePlace` from `./router`; `CardSheet`; the seven pages; `type WallItem` from `./CardWall`). A `switch` over `LightView` with no `default` — a seventh view added to the edition is then a compile error here.
 
-- [ ] **Step 10: Run the page tests**
+- [x] **Step 10: Run the page tests**
 
 Run: `npx vitest run mobile/phone/`
 Expected: PASS — `router`, `wall`, `items`, `Shell` and `pages`.
 
 If a list is empty under the `starter` seed where a test expects rows, read what the fake seeds for that list (`.storybook/fake/seeds.ts`) before changing the test — `.storybook/CLAUDE.md` describes each seed.
 
-- [ ] **Step 11: Commit**
+- [x] **Step 11: Commit**
 
 ```
 git add mobile/phone/
@@ -3288,7 +3288,7 @@ git commit -m "feat(light): the phone face's pages - search, decks, collection, 
 - Consumes: everything under `mobile/phone/`.
 - Produces: a red build when a phone file reaches the desktop store, the desktop shell or Tauri's window API.
 
-- [ ] **Step 1: Write the fence**
+- [x] **Step 1: Write the fence**
 
 Create `mobile/phone/fence.test.ts`:
 
@@ -3431,17 +3431,17 @@ describe("the phone face's import graph", () => {
 });
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `npx vitest run mobile/phone/fence.test.ts`
 Expected: PASS, 2 tests. **If `found` is not empty, do not weaken the fence** — the listed file reaches something it may not. Fix the import: use the data hook rather than the page, or pass the value in as a prop.
 
-- [ ] **Step 3: Prove the fence can fail**
+- [x] **Step 3: Prove the fence can fail**
 
 Temporarily add `import { useAppStore } from "@/lib/store";` and `void useAppStore;` to `mobile/phone/Shell.tsx`. Run the fence again.
 Expected: FAIL, naming `Shell.tsx → ../../src/lib/store.ts`. Remove the two lines and run once more — PASS.
 
-- [ ] **Step 4: Write `mobile/CLAUDE.md`**
+- [x] **Step 4: Write `mobile/CLAUDE.md`**
 
 ```markdown
 # mobile — the light app
@@ -3530,7 +3530,7 @@ Android, the WASM core, a service worker, sync and pairing UI, any write from th
 filters sheet, and Storybook stories for phone UI — Storybook's globs do not reach `mobile/`.
 ```
 
-- [ ] **Step 5: Point the root files at it**
+- [x] **Step 5: Point the root files at it**
 
 Root `CLAUDE.md`, in the "Where the rules live" table, after the `.github/CLAUDE.md` row:
 
@@ -3563,7 +3563,7 @@ And in `src/CLAUDE.md`'s Binding rules, replace the bullet that begins **"There 
   whether to draw the caption. **A page never reads it.**
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```
 git add mobile/phone/fence.test.ts mobile/CLAUDE.md CLAUDE.md src/CLAUDE.md
@@ -3576,7 +3576,7 @@ git commit -m "test(light): fence the phone face's imports, and write the light 
 
 **Files:** none created. Fixes land in the files the earlier tasks own.
 
-- [ ] **Step 1: The whole suite, once**
+- [x] **Step 1: The whole suite, once**
 
 Run: `npm run verify`
 Expected: green — build, lint, `cargo fmt --check`, clippy, Vitest, `cargo test`, and the scanner crate's tests. This is the first time anything outside a task's own file has run. **Never run two `verify`s at once**, in this worktree or beside another.
@@ -3586,7 +3586,7 @@ Likely first failures, and what each means:
 - A source sweep under `src/lib/*.test.ts` (tokens, layers, motion) naming a `mobile/` or `src/components/CardTile.tsx` line — read the sweep's own message; it names the class it refuses.
 - `ipc.test.ts` or `fake/parity.test.ts` — nothing in this plan adds a command, so one of these red means an unintended edit.
 
-- [ ] **Step 2: Drive fake mode at phone width**
+- [x] **Step 2: Drive fake mode at phone width**
 
 Start `npm run mobile:dev` in the background and open `http://localhost:5175/` in the built-in browser, sized to **360 × 800** (`resize_window` with a custom size, then reload so load-time gates re-run).
 
@@ -3599,7 +3599,7 @@ Confirm, reading the page rather than screenshots where possible:
 - Decks lists decks; one opens to its cards; Back returns to the list.
 - The console holds no error.
 
-- [ ] **Step 3: Drive fake mode at desktop width, in the same tab**
+- [x] **Step 3: Drive fake mode at desktop width, in the same tab**
 
 Resize to **1280 × 800** without reloading.
 
@@ -3611,7 +3611,7 @@ Confirm:
 - Pressing a rail row moves the URL; Back moves the rail.
 - Resize back to 360 × 800: the phone face returns, on the same destination.
 
-- [ ] **Step 4: Drive the real core**
+- [x] **Step 4: Drive the real core**
 
 Stop the fake server (both use 5175). Follow the `running-the-app` skill to take the `app` lock, then run `npm run mobile:tauri`. First launch compiles the crate.
 
@@ -3624,16 +3624,16 @@ Confirm:
 
 Release the lock when done.
 
-- [ ] **Step 5: Confirm the desktop is untouched**
+- [x] **Step 5: Confirm the desktop is untouched**
 
 With the light app stopped and the lock taken again, run `npm run tauri dev`.
 Confirm: the window opens at its usual size with its own caption, the rail has all eleven rows with Home first, and `Ctrl+1` lands on Home. Release the lock.
 
-- [ ] **Step 6: Record what the live pass measured**
+- [x] **Step 6: Record what the live pass measured**
 
 Create `docs/reference/light-app.md` holding what Steps 2–5 actually read, each figure with its date, the build (debug) and the viewport: the phone wall's column count and tile width at 360px, the tab bar's height, the widths at which the face swaps, and anything the pass found that the suite could not. Add a row for it to the root `CLAUDE.md`'s Reference docs table. **Write down only what was measured** — no figure from this plan is a measurement.
 
-- [ ] **Step 7: Commit, and stop**
+- [x] **Step 7: Commit, and stop**
 
 ```
 git add docs/reference/light-app.md CLAUDE.md

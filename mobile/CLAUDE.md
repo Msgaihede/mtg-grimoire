@@ -22,9 +22,10 @@ in [light-app.md](../docs/reference/light-app.md), with the date and the width o
 | < 1024px | **The phone face** | `mobile/phone/` |
 
 - **The question is asked once, in `useFace.ts`**, as a `matchMedia` on `DESKTOP_FLOOR_PX` —
-  quoted from `src/lib/viewports.ts`, never typed again. No page in `src/` picks a layout by the
-  viewport and none may start; which face to draw is the light entry's question, and this is
-  the only place it is asked.
+  quoted from `src/lib/viewports.ts`, never typed again. No page in `src/` picks a *face* and
+  none may start; which one to draw is the light entry's question, and this is the only place
+  it is asked. (A few things in `src/` do answer to the viewport for a detail — the card modal's
+  flanks at 900px, `Dialog`'s inset at 640 — and each is always true at the desktop's own floor.)
 - **Each face is its own lazy chunk**, so a phone never downloads the desktop's deck editor and a
   laptop never downloads the phone's sheets. Neither is imported statically by `LightApp`, and an
   import that made one static would cost that without anything going red.
@@ -37,7 +38,13 @@ in [light-app.md](../docs/reference/light-app.md), with the date and the width o
   narrow branch to a desktop page, and do not stretch a phone page past 1024.
 - **Both faces are whole apps with their own providers, and they share one `queryClient`**
   (`@/lib/query`), so what one face read is still in the cache when a resize draws the other.
-  Filter state does not survive the crossing; the destination and the open card do.
+  **A crossing unmounts the whole face it leaves.** The destination and the open card survive
+  it; filter state does not, and neither does anything half-typed on the desktop face — a note,
+  an import's text, a rename.
+- **`FaceBoundary` stands between a face that threw and a blank page**, keyed by the face so a
+  failure in one does not follow the reader into the other. A lazy chunk that never arrives —
+  offline, or a deploy that renamed it before a resize crossed the floor — is the ordinary way
+  to need it.
 
 ## Nothing here asks where it is running
 

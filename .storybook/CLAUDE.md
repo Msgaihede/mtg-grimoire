@@ -28,6 +28,12 @@ deliberately**: no screenshots are stored.
   module that boundary sits under** (added 2026-08-20): it mirrors four Tauri window methods and
   the four ACL permissions in `capabilities/default.json`, and a fake replacing *it* would prove
   nothing about the one file that can drift from that capability.
+- **The fake has a second consumer since 2026-10-01: `npm run mobile:dev`**, the light app in a
+  plain browser (`vite.mobile.config.ts`, port 5175). It declares the same four aliases — a copy,
+  with no fence between the two lists, so an alias added here is owed there — and installs one
+  world, `starter`, before React (`mobile/fakeBoot.ts`). **A handler the light app's pages reach
+  and the fake does not answer shows up there as a broken page rather than as a broken story.**
+  [`mobile/CLAUDE.md`](../mobile/CLAUDE.md) has the rest.
 - **The window fake keeps module state where the other three keep per-world state**, and that is
   the honest model rather than an oversight: a story's *backend* is its own, and two docs-page
   stories may hold different databases — but **a story is one window**. What it

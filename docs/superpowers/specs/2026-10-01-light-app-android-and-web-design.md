@@ -658,7 +658,9 @@ built.**
 
 **The phone face**
 
-- The shell: top bar, bottom tab bar, the router, an error boundary.
+- The shell: top bar, bottom tab bar, the router. An error boundary stands around *both* faces,
+  in the light entry (`mobile/FaceBoundary.tsx`), rather than inside the phone shell: the failure
+  it is most needed for is a face's lazy chunk not arriving, which is above either shell.
 - `components/CardTile`, adopted by the phone wall and by `ShareTile`.
 - **Search, for real**: the query box sends the same request `SearchPage` sends; the wall is
   virtualised, two columns at 360px; a tile opens a card sheet showing the picture, the name, the

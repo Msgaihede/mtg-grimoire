@@ -2,8 +2,9 @@
 
 The Android and web face of MTG Grimoire — card search, decks, collection, wishlist and scanner —
 as one second entry over the desktop's own components. **What is built is phase 1, the skeleton:
-it runs in a browser over the Storybook fake and in a phone-sized window over the real Rust core.
-There is no Android host, no WASM host, no service worker and no sync on a light install yet.**
+it runs in a browser over the Storybook fake (§2.1) and in a phone-sized window over the real
+Rust core (§2.2), and both were driven. There is no Android host, no WASM host, no service worker
+and no sync on a light install yet.**
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md).
@@ -25,12 +26,18 @@ the design, not the engine. Here every component is drawn only at the widths it 
 
 ## 2. What was driven, and on what
 
-**Every figure in this section: 2026-10-01, Windows 11, `npm run mobile:dev` (Vite's dev server,
-not a build), the Storybook fake's `starter` seed, driven in the Claude desktop app's built-in
-Chromium pane with its viewport emulated.** Nothing here was measured on a phone, in Firefox or
-Safari, or against a production bundle. `?art=live` was on, so the pictures are Scryfall's.
+Two passes, both on 2026-10-01 on Windows 11, and they are kept apart because they prove
+different things. **§2.1 is the browser over the fake; §2.2 is the Tauri window over the real
+Rust core.** Nothing here was measured on a phone, in Firefox or Safari, or against a production
+bundle.
 
-### The phone face, 360 × 800
+### 2.1 In a browser, over the fake
+
+**`npm run mobile:dev` (Vite's dev server, not a build), the Storybook fake's `starter` seed,
+driven in the Claude desktop app's built-in Chromium pane with its viewport emulated.**
+`?art=live` was on, so the pictures are Scryfall's.
+
+#### The phone face, 360 × 800
 
 | What | Measured |
 | --- | --- |
@@ -49,7 +56,7 @@ Safari, or against a production bundle. `?art=live` was on, so the pictures are 
 - Scanner and Settings each draw their one placeholder sentence.
 - The console carried no error and no warning from the app.
 
-### The desktop face, 1280 × 800
+#### The desktop face, 1280 × 800
 
 - The rail's rows are **Search, Decks, Collection, Wishlist, Scanner, Settings**, and Collapse.
   No caption row is drawn (`data-tauri-drag-region` matches nothing).
@@ -57,7 +64,7 @@ Safari, or against a production bundle. `?art=live` was on, so the pictures are 
   pair, the decks gallery with its folder tree, the deck editor with its docked search column.
 - `documentElement.scrollWidth` 1280.
 
-### The crossing
+#### The crossing
 
 | Sequence | Result |
 | --- | --- |
@@ -66,7 +73,7 @@ Safari, or against a production bundle. `?art=live` was on, so the pictures are 
 | Desktop: rail → Decks → a deck | `/decks`, then `/decks/2`; one history entry each |
 | Desktop on `/decks/2` → narrow to 360 | The phone face on the same deck, its name in the heading and its cards on the wall |
 
-### History on the phone face
+#### History on the phone face
 
 | Step | URL | `history.length` | Sheet |
 | --- | --- | --- | --- |
@@ -74,6 +81,55 @@ Safari, or against a production bundle. `?art=live` was on, so the pictures are 
 | Press a tile | `/decks/2?card=…`, `history.state` `{ pushed: true }` | 6 | open |
 | Escape | `/decks/2` | 6 — the router went *back*, it did not push | closed |
 | Browser Back | `/decks` | — | closed; the card did not reopen |
+
+### 2.2 In the Tauri window, over the real core
+
+**`npm run mobile:tauri` — a debug build, under the `app` lock, WebView2 driven over CDP on 9222
+(`scripts/cdp.mjs`), the frame measured with Win32.** The database was a copy of the main
+checkout's dev `data/` folder, so the corpus, the decks and the picture cache are real. The desk
+is one 2560 × 1392 work area at 100% scale.
+
+| What | Measured |
+| --- | --- |
+| Cold build, after a `verify` had built the desktop config | 2 m 09 s; the process was up 136 s after launch |
+| Client area | **412 × 915** logical, exactly the overlay's size |
+| Outer frame | 428 × 954 at (1066, 222) — OS-framed, centred, titled `MTG Grimoire — light` |
+| The page | `http://localhost:5175/`, `innerWidth` 412, the phone face, the startup gate passed |
+| The wall | 2 columns, tile **180.5px**, `scrollWidth` 412 |
+| Pictures | `http://mtgimg.localhost/display/<id>/0`, loaded — the app's own protocol and cache |
+
+- **A real search narrows**: `lightning bolt` typed into the box took the wall to three tiles,
+  named `Lightning Bolt, PLST CLB-187`, `Emeritus of Conflict // Lightning Bolt, SOS 113` and
+  `Toralf's Disciple, MB2 261, Foil` — the last one a foil-only printing, marked and said.
+- **A tile opens the sheet** with a marked push (`history.state` `{ pushed: true }`) and the
+  card's real text and set line; Escape went back to `/` with `history.length` unchanged.
+- **Decks** listed the reader's five decks as links; one opened to `/decks/3` with its name in
+  the heading and its cards on the wall. **Wishlist** drew a full window of tiles.
+- **Collection drew one tile.** That is the open-shelves rule of §5 on real data: this reader's
+  copies are filed in their decks' own groups, which start shut.
+- **Widened to a 1280 × 915 client, the window drew the desktop face over the real core**: the
+  rail's six rows and Collapse, no in-app caption, heading *Search* — not Home, which is where
+  the same database opens the desktop app. The ribbon was mid-ingest (`Importing cards · 42,000
+  cards`) and the wall drew regardless. Narrowed again, it was the phone face on the same place.
+- After the lock's `release`, nothing was left listening on 5175 or 1420.
+
+**Then `npm run tauri dev`, to see the desktop app had not moved** (27 s rebuild — the overlay
+arrives through the build's environment, so each switch rebuilds): client **1920 × 1080** (the
+ladder's top rung on this desk), `http://localhost:1420/` with no path written, the in-app
+caption drawn, the rail's rows Home, Search, Tagger, Decks, Collection, Wishlist, Scanner, Trade,
+Playtesting, Settings, and the app open on **Home**.
+
+### 2.3 The suites
+
+`npm run verify` on the branch with `main` merged in, 2026-10-01: exit 0 in 847 s — the build's
+four `tsc` programs, ESLint, `cargo fmt --check`, clippy, Vitest and both cargo test runs. No
+total is written here; a count is a fact about one tree.
+
+Two builds `verify` does not run were run by hand on the same tree, both exit 0:
+`npm run mobile:build` (§3's checks repeated — the page at the root, no fake in any chunk) and
+`npm run share:build`, because `share/ShareTile.tsx` now draws through `CardTile` and nothing
+else bundles the public viewer. **The share viewer was built, not looked at**: its tile gained
+one wrapper element, and whether that moved a pixel on the public page is unmeasured.
 
 ## 3. The build
 
@@ -116,6 +172,14 @@ reached a plugin.
 Every jsdom suite was green over this. It is the repo's standing rule — a green suite proves
 nothing about the running app — arriving on schedule.
 
+**The same server then died a second way, left up while `npm run verify` ran**: `EBUSY: resource
+busy or locked, watch '…\crates\card-scanner\target\…\sqlite3.o'`, the moment cargo reached that
+crate, having already reloaded the page once for `dist/index.html`. The root is the whole
+repository, so Vite watches all of it, and Windows refuses a watch on a file a compiler is still
+writing. `vite.mobile.config.ts` now keeps the watcher out of every build output under the root.
+**The base config ignores `src-tauri` only, so the desktop's and the share viewer's dev servers
+have the same exposure** — outside this branch, and flagged rather than fixed.
+
 ## 5. Open, and where each belongs
 
 Nothing below blocks the skeleton. Each was found by a review or the live pass and left on
@@ -144,11 +208,27 @@ purpose; the phase that owns the surface owns the fix.
   pass's call.
 - In the light edition `Ctrl+Shift+N` still asks for a new window, and on the desktop face the
   key map has no mount (so `F1` is left to the browser).
+- **The desktop face can reach a view the light edition does not draw.** The collection's
+  share menu opens a shared binder with `setActiveView("shared")`; the URL has no word for it, so
+  the adapter writes `/search` while the binder is on screen, no rail row is lit, and a reload, a
+  resize or Forward lands on Search. It is the one such path besides `Ctrl+Shift+N`.
+- **A crossing unmounts the face it leaves**, so anything half-typed on the desktop face — a
+  note, an import's text, a rename — is discarded by a browser resize or a tablet's rotation; a
+  zoom gesture still inside its trailing write is not persisted; and the desktop's launch reads
+  run again on each widening.
+- **History across the floor has two warts.** A card the phone face *pushed*, closed on the
+  desktop face by `replaceState`, leaves two entries for one place — one Back that shows nothing.
+  And a card opened on the desktop face is written by replace, so carried to the phone face its
+  sheet is not an entry of the router's: ✕ and Escape close it, Back leaves the page beneath.
 
 ### Phase 5 — the web host
 
-- No error boundary around the lazy faces: a failed chunk fetch (offline, or a deploy that
-  changed hashes before a resize crosses the floor) leaves a blank page.
+- `FaceBoundary` catches a face that throws — a lazy chunk that never arrives included — and
+  offers a reload. What it does not do is recover: a deploy that renamed the chunks needs the
+  service worker's update story, which is this phase's.
+- `package.json` declares `react ^19.1.0` and `mobile/phone/CardWall.tsx` uses `useEffectEvent`,
+  which is 19.2's. The lockfile pins 19.2.8, so every install is right; the declared floor is
+  one minor version too low.
 - A refused history **push** is swallowed like a refused replace, but costs more than a stale
   URL — the entry is never made. `back()`'s latch has one release, a `popstate`; a
   `history.back()` the browser drops leaves ✕ and Escape inert until the next one.
@@ -159,7 +239,11 @@ purpose; the phase that owns the surface owns the fix.
 ### The fences
 
 - `fence.test.ts`'s import walk cannot see `import.meta.glob`, a template-literal `import()` or
-  a root-absolute specifier; none exists under `mobile/` today.
+  a root-absolute specifier; none exists under `mobile/` today. Its comment stripper is not
+  string-aware either: a `/*` inside a string or a regex literal would swallow the text after it,
+  import edges included. No reachable file has one.
+- `vite.mobile.config.ts` restates Storybook's four fake aliases by hand, with nothing holding
+  the two lists together.
 - Its probe sweep is literal about spelling — a destructured `userAgent`, a bracket access or
   `@tauri-apps/plugin-os` would pass — and reads `.ts`, `.tsx`, `.css` and `.html` only.
 - `src/lib/tokens.test.ts` still stops at `src/`: it counts exactly one `MotionConfig`, and the

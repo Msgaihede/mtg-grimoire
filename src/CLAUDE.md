@@ -458,9 +458,12 @@ Every one of these has its measurement and its story in
   host spells neither** (2026-09-08). `Dialog`'s scrim is `p-0 sm:px-6 sm:py-[max(1.5rem,5vh)]`:
   24px across, 5vh down, so a dialog whose body outgrows the window leaves glass above and below
   and reads as a panel over the app rather than as a page. The below-`sm` rung is under the
-  desktop floor and no shipped window draws it; it stays on purpose (the owner's call, 2026-09-27,
-  when the phone layout went) because it is correct at any width — never read it as a phone
-  target. It is stated as an **inset** rather than as
+  desktop floor, so no *desktop* window draws it; it stays on purpose (the owner's call,
+  2026-09-27, when the phone layout went) because it is correct at any width. **Since 2026-10-01
+  it has one reader: the light app's phone face draws its card sheet through this shell
+  (`mobile/phone/CardSheet.tsx`), and that rung is what makes the sheet span the window there** —
+  so it is not dead code to tidy away, and it is still not a design for a phone: phase 3 of the
+  light app decides what the sheet is. It is stated as an **inset** rather than as
   a `max-h` on the panel for two reasons that are both load-bearing. The scrim is where this shell
   states insets, so `max-h-full` stays the one height rule and only the box it is a percentage of
   moves; and a `sm:max-h-…` would sit on the same property as `CardDetailModal`'s
