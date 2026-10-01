@@ -95,7 +95,7 @@ is one 2560 × 1392 work area at 100% scale.
 | Client area | **412 × 915** logical, exactly the overlay's size |
 | Outer frame | 428 × 954 at (1066, 222) — OS-framed, centred, titled `MTG Grimoire — light` |
 | The page | `http://localhost:5175/`, `innerWidth` 412, the phone face, the startup gate passed |
-| The wall | 2 columns, tile **180.5px**, `scrollWidth` 412 |
+| The wall | 2 columns, tile **180.5px**, `scrollWidth` 412. That width is (412 − 36 of padding and gap − 15) / 2, so the wall's scroller is wearing a classic 15px scrollbar here — inferred from the sum, not read off the element |
 | Pictures | `http://mtgimg.localhost/display/<id>/0`, loaded — the app's own protocol and cache |
 
 - **A real search narrows**: `lightning bolt` typed into the box took the wall to three tiles,
@@ -105,8 +105,9 @@ is one 2560 × 1392 work area at 100% scale.
   card's real text and set line; Escape went back to `/` with `history.length` unchanged.
 - **Decks** listed the reader's five decks as links; one opened to `/decks/3` with its name in
   the heading and its cards on the wall. **Wishlist** drew a full window of tiles.
-- **Collection drew one tile.** That is the open-shelves rule of §5 on real data: this reader's
-  copies are filed in their decks' own groups, which start shut.
+- **Collection drew one tile.** That is what the open-shelves rule of §5 predicts for a reader
+  whose copies are filed in their decks' own groups, which start shut — the likely reading, and
+  not one this pass confirmed by counting the shelves.
 - **Widened to a 1280 × 915 client, the window drew the desktop face over the real core**: the
   rail's six rows and Collapse, no in-app caption, heading *Search* — not Home, which is where
   the same database opens the desktop app. The ribbon was mid-ingest (`Importing cards · 42,000
@@ -117,15 +118,20 @@ is one 2560 × 1392 work area at 100% scale.
 arrives through the build's environment, so each switch rebuilds): client **1920 × 1080** (the
 ladder's top rung on this desk), `http://localhost:1420/` with no path written, the in-app
 caption drawn, the rail's rows Home, Search, Tagger, Decks, Collection, Wishlist, Scanner, Trade,
-Playtesting, Settings, and the app open on **Home**.
+Playtesting, Settings, and the app open on **Home**. That is ten rows, and it is all of them:
+the eleventh the spec counts is Shared, which the rail draws only while a shared binder is open.
+**The plan's `Ctrl+1` goes Home check was not driven** — `cdp.mjs key` has no digit — so the
+chord guard's desktop half rests on `AppShell.test.tsx`.
 
 ### 2.3 The suites
 
-`npm run verify` on the branch with `main` merged in, 2026-10-01: exit 0 in 847 s — the build's
-four `tsc` programs, ESLint, `cargo fmt --check`, clippy, Vitest and both cargo test runs. No
-total is written here; a count is a fact about one tree.
+`npm run verify` on the branch with `main` merged in — the build's four `tsc` programs, ESLint,
+`cargo fmt --check`, clippy, Vitest and both cargo test runs — was run twice: once before the
+whole-branch review's fixes (2026-10-01, exit 0 in 847 s) and once on the last commit that
+changed code, `f2c6fb99` (2026-10-02, exit 0 in 576 s). Everything after that commit is prose.
+No total is written here; a count is a fact about one tree.
 
-Two builds `verify` does not run were run by hand on the same tree, both exit 0:
+Two builds `verify` does not run were run by hand between those two runs, both exit 0:
 `npm run mobile:build` (§3's checks repeated — the page at the root, no fake in any chunk) and
 `npm run share:build`, because `share/ShareTile.tsx` now draws through `CardTile` and nothing
 else bundles the public viewer. **The share viewer was built, not looked at**: its tile gained
@@ -176,7 +182,9 @@ nothing about the running app — arriving on schedule.
 busy or locked, watch '…\crates\card-scanner\target\…\sqlite3.o'`, the moment cargo reached that
 crate, having already reloaded the page once for `dist/index.html`. The root is the whole
 repository, so Vite watches all of it, and Windows refuses a watch on a file a compiler is still
-writing. `vite.mobile.config.ts` now keeps the watcher out of every build output under the root.
+writing. `vite.mobile.config.ts` now keeps the watcher out of every build output under the root,
+**and that was driven the same way it was found**: the server was left up through the second
+`verify` of §2.3, cargo's run over that crate included, and was still listening when it ended.
 **The base config ignores `src-tauri` only, so the desktop's and the share viewer's dev servers
 have the same exposure** — outside this branch, and flagged rather than fixed.
 
@@ -206,6 +214,9 @@ purpose; the phase that owns the surface owns the fix.
 - In landscape the bars stop short of the screen's edge beside a cutout — the shell pads the
   root by the side insets. Whether the bars should bleed with their content inset is a device
   pass's call.
+- **A constraint on the sheet's design, not a defect yet**: a step from one card to another
+  *inside* the sheet must be `navigate(…, { replace: true })`. A plain `navigate` is a second
+  marked push, and one close would then land on the first card instead of the page.
 - In the light edition `Ctrl+Shift+N` still asks for a new window, and on the desktop face the
   key map has no mount (so `F1` is left to the browser).
 - **The desktop face can reach a view the light edition does not draw.** The collection's

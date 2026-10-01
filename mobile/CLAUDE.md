@@ -9,8 +9,9 @@ read its §3 before changing anything here.
 against the same two databases. What it leaves out is destinations.
 
 **What is here is phase 1, the skeleton.** Every rule below is held by a jsdom test or by
-construction, and what a browser was actually driven to show — on 2026-10-01, over the fake — is
-in [light-app.md](../docs/reference/light-app.md), with the date and the width of each figure.
+construction, and what was actually driven on 2026-10-01 — a browser over the fake, and the
+`mobile:tauri` window over the real core — is in [light-app.md](../docs/reference/light-app.md),
+with the date, the build and the width of each figure.
 
 ## One entry, two faces
 
@@ -24,8 +25,8 @@ in [light-app.md](../docs/reference/light-app.md), with the date and the width o
 - **The question is asked once, in `useFace.ts`**, as a `matchMedia` on `DESKTOP_FLOOR_PX` —
   quoted from `src/lib/viewports.ts`, never typed again. No page in `src/` picks a *face* and
   none may start; which one to draw is the light entry's question, and this is the only place
-  it is asked. (A few things in `src/` do answer to the viewport for a detail — the card modal's
-  flanks at 900px, `Dialog`'s inset at 640 — and each is always true at the desktop's own floor.)
+  it is asked. (Details in `src/` do answer to the viewport — the card modal's flanks at 900px,
+  `Dialog`'s inset at 640, a few `min-[1200px]:` rungs — and none of them chooses a face.)
 - **Each face is its own lazy chunk**, so a phone never downloads the desktop's deck editor and a
   laptop never downloads the phone's sheets. Neither is imported statically by `LightApp`, and an
   import that made one static would cost that without anything going red.
