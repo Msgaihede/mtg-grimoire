@@ -133,11 +133,9 @@ export const Default: Story = {
  * pointer would be half a board — the same gap `WidgetCard`'s own grip and resize corner answer
  * with their arrow keys.
  *
- * ⚠️ **The second tile rather than the first, because `Pinned note first` outranks the
- * arrangement.** The board writes the order it is drawing and `orderedNotes` then lifts the
- * pinned note back to the front, so stepping *that* note along writes a real change the reader
- * cannot see. Moving anything else is visible immediately — which is the toggle working, and is
- * worth having a story stand on rather than a sentence.
+ * ⚠️ **The second tile rather than the first, because `Pinned note first` keeps each note in its
+ * own group.** The pinned note is the only one in its group here, so stepping it along is clamped
+ * straight back and writes nothing; moving anything else is visible immediately.
  *
  * The caret is placed rather than walked in, which a unit test must not do and a story may: what
  * is being shown here is what the chord does, and `StickyNotesWidget.test.tsx` is where the tab

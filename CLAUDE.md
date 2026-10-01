@@ -92,8 +92,10 @@ key distribution are all live. This sentence briefly said `/rotate` and `/keys` 
 routes still missing; that was true for part of one day. **The device roll and the pairing
 rendezvous are deployed too**, which this file denied until 2026-09-28 on a probe that could not
 fail — [the runbook](docs/reference/hosted-relay-deploy.md)'s step 0 has one that can. **The last
-deploy was 2026-09-28, from `main` at `1512ea68`**, and carried the refresh-secret change (#541).
-The next deploy is an **update** with a D1 that holds real entitlements, not a
+deploy was 2026-10-01, from `main` at `2b845048`**, and carried issue #548's `dev` claim on the
+tokens the relay mints. ⚠️ **This sentence named `1512ea68` and #541 until that day, and was two
+deploys behind**: issue #546's half went out on 2026-09-28 at 19:57 UTC, nobody wrote it down, and
+step 0's sixth probe found it live three days later. The next deploy is an **update** with a D1 that holds real entitlements, not a
 first landing. **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
 real id now**, public on the same terms and verified live against Patreon's authorize endpoint.
 
@@ -121,16 +123,21 @@ matched on the code and never on the sentence.
 wants their own relay still can: `relay/` is the whole source and a fork changes that one
 constant. [sync.md](docs/reference/sync.md) has the whole record.
 
-**A read-only shared collection is the fifth, it is a _second_ Worker beside the relay, and it is
-the only one of the five that is written and not deployed.** A share is a snapshot the owner
+**A read-only shared collection is the fifth, it is a _second_ Worker beside the relay, and it
+has been deployed since 2026-10-01 without a single share published through it.** A share is a snapshot the owner
 publishes rather than a window onto their database, so a viewer needs no account and no app and
 the link is the whole of the capability — while *publishing* is Patreon-gated by the same bearer
 token sync mints. It is the one place the relay's "it can decrypt nothing it stores" stops
 holding: **a snapshot is stored in the clear**, which is what buys the OpenGraph card in Discord,
 and is why six collection columns are _absent_ from the format rather than switched off in it.
-**`share::publish::SHARE_BASE` is a placeholder**, so a press today refuses in words rather than
-publishing; ask the host before you believe that sentence or its opposite.
-[collection-sharing.md](docs/reference/collection-sharing.md) is the record.
+**`share::publish::SHARE_BASE` is that Worker's address**,
+`https://mtg-grimoire-share.denmark-east.workers.dev`, compiled in and public on `RELAY_BASE`'s
+terms, and equal byte for byte to the `SHARE_BASE` var in `share-worker/wrangler.jsonc`. It was a
+placeholder until the deploy, so **every release before the one that carries it still refuses a
+press in words rather than publishing**. Its one secret is the relay's own `RELAY_HMAC_KEY`, the
+same value on both Workers; ask the host before you believe any of this or its opposite.
+[collection-sharing.md](docs/reference/collection-sharing.md) is the record, and lists what only a
+real publish can settle.
 
 **Commander Spellbook's combo database is the third optional feed, and the first that is neither
 Scryfall nor a price list.** `variants.json.gz` is where a Commander deck's bracket estimate gets
@@ -260,7 +267,7 @@ number to compare against.
 | [home-page.md](docs/reference/home-page.md) | The landing view — the layout document (version 2, the cell grid) and the three files that keep its round-trip promise, why an empty widget list is a layout, the widget kinds and the registry their settings are built from — and why the default layout holds fewer of them than the catalogue offers — the grid measured in JavaScript and why it is still not a container query, the `activity` table with its three rules and the write-site census, the commands, the chord renumbering, the grid redesign's own record — recently viewed, set completion's slot rule and the thinned `price_snapshots` table — the sticky notes of v46, including the reorder that was built before anything pressed it — and the collection value graph of v50, whose history is `price_snapshots` with a `copies` column, read back with the table's own weekly thinning and ended by a live point that equals the Collection value widget's figure |
 | [decks-live-findings.md](docs/reference/decks-live-findings.md) | What driving the shipped window found — **including the bugs still open** |
 | [tags-live-findings.md](docs/reference/tags-live-findings.md) | The Tags page in the shipped window — the art ingest timed, both performance gates settled, and the bugs still open |
-| [card-scanner.md](docs/reference/card-scanner.md) | The crate, the pipeline and every measurement behind it, the three evidence tiers and their weights, both tracker verdicts and the failures that shaped them, the debug server and how to drive it without a camera, and the app's Scanner view — plus the bundle a release build embeds and the weekly workflow that publishes it, the set and date filters, Fast and Exact with the six tiers and the eval that tightened two of them, Fast's early decision and two-frame lock with the `eval --trace` distributions they were set from, one decision per card and the failures behind each of its rules, a card laid on the last one and the appearance watch that sees it (with its threshold measured against four other descriptors), the `app_meta` review tray, and **a synthetic evaluation that is a regression fence and never an accuracy claim** |
+| [card-scanner.md](docs/reference/card-scanner.md) | The crate, the pipeline and every measurement behind it, the three evidence tiers and their weights, both tracker verdicts and the failures that shaped them, the debug server and how to drive it without a camera, and the app's Scanner view — plus the bundle a release build embeds and the weekly workflow that publishes it, the set and date filters, Fast and Exact with the six tiers and the eval that tightened two of them, Fast's early decision and two-frame lock with the `eval --trace` distributions they were set from, why an early decision has to be borne out by a read and the three-frame gap between adds (and the at-rest rule that was measured and refused), one decision per card and the failures behind each of its rules, a card laid on the last one and the appearance watch that sees it (with its threshold measured against four other descriptors), the `app_meta` review tray, and **a synthetic evaluation that is a regression fence and never an accuracy claim** |
 | [frontend-design.md](docs/reference/frontend-design.md) | The ribbon, card images, foil, layers, tables, the Settings rail and its two lopsided flex numbers |
 | [keyboard-shortcuts.md](docs/reference/keyboard-shortcuts.md) | The chord catalogue — the fence and the four rows outside it, exact modifier matching and the two chords it narrowed away, where the text-field yield lives, and the live pass that proved the panel needs no `LAYER` rung |
 | [multi-window.md](docs/reference/multi-window.md) | More than one window on one collection — why a second *process* stays refused and a second window costs nothing, the cascade and its two traps, the commit-driven change mask with both of the update hook's blind spots, the table map and the fence that keeps a view preference per window, the scanner's lease and what renews it, and a live pass that measured every one of them |
@@ -270,7 +277,7 @@ number to compare against.
 | [tauri-mcp-bridge.md](docs/reference/tauri-mcp-bridge.md) | The other way to drive the window — its five pieces, the environment variable that opens it, three permissions, and the one tool that cannot reach an app command |
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
 | [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
-| [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what is not deployed** |
+| [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what the 2026-10-01 deploy has not proved** |
 | [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the eighteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 

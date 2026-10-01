@@ -456,6 +456,36 @@ it("does not ask for combos for a printing with no oracle card", async () => {
   expect(combosForCard).not.toHaveBeenCalled();
 });
 
+/**
+ * **A refused card read is a refusal, not a missing printing** (issue #556). A failed query is not
+ * pending and carries no data, so it used to fall through to the `card === null` sentence — telling
+ * a reader whose card is right there that the database had dropped it.
+ */
+it("says a refused card read was refused, in the backend's words", async () => {
+  useAppStore.setState({ selectedCardId: "c1" });
+  useAppStore.getState().openCardOverlay("combos");
+  cardDetail.mockRejectedValue("the database is locked");
+  render(wrap(<CombosDialog />));
+
+  expect(
+    await screen.findByText("Couldn't read this card — the database is locked."),
+  ).toBeInTheDocument();
+  expect(screen.queryByText(/no longer in the card database/i)).not.toBeInTheDocument();
+  expect(combosForCard).not.toHaveBeenCalled();
+});
+
+/** The other half: `card_detail` answering `null` is the real "not in the corpus" state. */
+it("says a printing the corpus has dropped is no longer in the card database", async () => {
+  useAppStore.setState({ selectedCardId: "c1" });
+  useAppStore.getState().openCardOverlay("combos");
+  cardDetail.mockResolvedValue(null);
+  render(wrap(<CombosDialog />));
+
+  expect(
+    await screen.findByText("This printing is no longer in the card database."),
+  ).toBeInTheDocument();
+});
+
 it("says the combo list has never been downloaded rather than claiming the card is in none", async () => {
   // An empty page and a database with no combo table are the same three zeros, so the status row
   // is what makes either sentence sayable. This is the half that is about the reader's *database*.

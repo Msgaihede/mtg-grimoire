@@ -22,9 +22,10 @@
  *
  * **Everything else is refused as a sentence rather than as a constraint failure.** A locked
  * folder greys the row with its reason; the backend's refusals are drawn as themselves. That
- * matters on every build today: `share::publish::SHARE_BASE` is still a placeholder, so
- * `share_create` answers *"Sharing a collection is not available in this build yet"* and this
- * surface has to read as a state rather than as a crash.
+ * mattered on every build until 2026-10-01, while `share::publish::SHARE_BASE` was a
+ * placeholder and `share_create` answered *"Sharing a collection is not available in this
+ * build yet"* to every press — and it is still how a cap, an ended membership or a share
+ * service that will not answer has to read: as a state rather than as a crash.
  *
  * ## The stale mark, and the press it is not
  *

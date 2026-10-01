@@ -43,7 +43,14 @@ release carrying `entitlement::refused_secret`, then the `refresh_device` column
 check or a live claim code — so it is known to be live from the tree that was deployed, not from a
 probe. Step 6 has the one read that can prove it from outside.
 
-**A sixth half, issue #546's, is written and is not deployed.** The Worker admits a push
+⚠️ **A sixth half, issue #546's, is deployed — and this page said "written and not deployed" until
+2026-10-01, the third time it has been behind the host.** `deployments` on the script lists two
+deploys on 2026-09-28: 17:58 UTC, the refresh-secret one above, and **19:57 UTC**, nine minutes
+after PR #660 merged this half into `main`. Nobody wrote the second one down. Step 0's sixth probe
+— added that day and never run — answered `400 that is not an epoch` on 2026-10-01, the cron
+registered on the script is `0 * * * *` (created 19:57:54 UTC), and `sqlite_master` lists
+`reconciled_at` and `entitlements_reconcile`. **Which tree the 19:57 deploy was cut from is
+inferred from the clock, not recorded.** The Worker admits a push
 before the Durable Object hop — `413 too_large`, `409 stale_epoch`, `422 epoch_ahead`,
 `422 clock_ahead`, and the object's own `507 quota` — `/keys` answers `?epoch=` and advertises
 `removalStep: 2`, `/rotate` accepts a removal's two-epoch step, an accepted rotation posts its
@@ -54,6 +61,14 @@ It adds **one migration file** to step 2, run as two `--command`s, and no public
 `/roster` is internal. The cron's move from `0 3 * * *` to `0 * * * *` is in `wrangler.jsonc`, so
 step 6 carries it with nothing else to do. **Its app and its relay ship in either order**; "The
 order" says why, and [relay/README.md](../../relay/README.md) holds the whole of what it changes.
+
+**A seventh half — issue #548's `dev` claim (`f5223fdf`) — was deployed 2026-10-01 at 19:17 UTC**,
+from `main` at `2b845048`, version `ca3dfd11`. `token.ts` stamps the presenting device into every
+token and `verify` carries it through; nothing in the relay reads it, and it exists for the share
+Worker's gate. **No migration, no route, and no credential-free tell** — like the refresh-secret
+change it is known to be live from the tree that was deployed. Step 0's six probes and the two
+secret probes of item 8 were re-run straight after and answered as before. It was the first deploy
+an agent ran, at Markus's instruction that day; the rule below is otherwise unchanged.
 
 Designs: [2026-08-29-hosted-relay-and-patreon-design.md](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md),
 [2026-08-30-group-wide-membership-and-removal-design.md](../superpowers/specs/2026-08-30-group-wide-membership-and-removal-design.md),
@@ -75,17 +90,18 @@ run — it runs workerd locally, contacts nothing and needs no login. Everything
 | The **device roll** | **deployed, and no route path gives it away.** The tell is a body: `POST /token {"refresh":"x"}` **with no `device`** answers **400 `that is not a device id`** (probed 2026-09-28), and the same body with `"device":"deadbeef"` answers **401** — so the 400 is the device check and not an earlier one. ⚠️ **This row said "not deployed" until 2026-09-28**, on a probe that could not tell the two apart — step 0 says why. |
 | The **pairing rendezvous** | **deployed.** `GET /p/{32 hex}/offer` answers **404 with a JSON body, `{"error":"nothing there"}`** — the handler's answer after a D1 read — where the router's own 404 is plain-text `not found` and a missing `pairing_rendezvous` table would be a **500**. `GET /pair` answers **200**. |
 | The **refresh-secret change** | **deployed 2026-09-28**, from `main` at `1512ea68`, after `refresh_device` was added. No probe without a credential can see it; step 6 has the read that can. |
-| Issue #546's **half** | **not deployed, and no public route path gives it away either.** The tell is a query parameter: `/g/{group}/keys?device=…&epoch=x` with any well-formed bearer answers **400 `that is not an epoch`** from this tree — `handleKeys` checks the epoch's shape before the credential's value — and **401** from a Worker that ignores `epoch`. **Read off the code, not probed**: the sandbox it was written in could not reach the host on 2026-09-28 — its egress proxy refused the connection. From inside a group the same fact is a `/keys` 200 that carries `removalStep: 2`, which the live Worker's does not. |
-| The D1 database | **exists.** `wrangler.jsonc`'s `database_id` is a real uuid, and has been since before this branch. It holds live entitlement rows, so step 2's `ALTER TABLE`s run against real data. `sqlite_master` listed `entitlements`, `claim_codes`, `group_keys`, `group_devices` and `pairing_rendezvous` on 2026-09-28, beside D1's own `_cf_KV`. |
+| Issue #546's **half** | **deployed 2026-09-28 at 19:57 UTC, and no public route path gives it away.** The tell is a query parameter: `/g/{group}/keys?device=…&epoch=x` with any well-formed bearer answers **400 `that is not an epoch`** from this tree — `handleKeys` checks the epoch's shape before the credential's value — and **401** from a Worker that ignores `epoch`. **Probed 2026-10-01: 400.** ⚠️ **This row said "not deployed" until then**, with a probe read off the code and never run. From inside a group the same fact is a `/keys` 200 that carries `removalStep: 2`. |
+| Issue #548's **`dev` claim** | **deployed 2026-10-01**, from `main` at `2b845048`. No probe without a credential can see it. |
+| The D1 database | **exists.** `wrangler.jsonc`'s `database_id` is a real uuid, and has been since before this branch. It holds live entitlement rows, so step 2's `ALTER TABLE`s run against real data. `sqlite_master` listed `entitlements`, `claim_codes`, `group_keys`, `group_devices` and `pairing_rendezvous` on 2026-09-28, beside D1's own `_cf_KV`. **On 2026-10-01** `entitlements` carried fourteen columns, `refresh_device` and `reconciled_at` among them, with both CHECKs of item 5 in its stored SQL and the `entitlements_reconcile` index beside it — and the share Worker's `shares` table was added that day. |
 | The Patreon OAuth app | **the client exists.** `PATREON_CLIENT_ID` is real in `entitlement.rs` since `a0eb0c6` (2026-08-30) and was verified live: `GET /oauth2/authorize` with it and `/oauth/patreon/callback` answered 302 to Patreon's login, preserving both parameters, which an unregistered id or an unregistered redirect does not do. **`wrangler.jsonc`'s `vars` carry the relay's own copy of it and `PATREON_CAMPAIGN_ID`**, both real, the client id byte for byte equal to the Rust constant. |
 
 A device pointed at that host today reaches a relay that speaks the whole membership flow, the
-whole log, the key distribution, the device cap and the pairing rendezvous. **As of 2026-09-28
-nothing in `relay/` on `main` was undeployed until issue #546's half merged** — its row in the table, and
-the one change on this page that is not live: a column with its index, and the deploy that reads
-them, none of it visible in a route list. That is the sentence on this page most certain to rot,
-because the next branch that touches `relay/` makes it false without editing it — this one did.
-Step 0 is the authority, not it.
+whole log, the key distribution, the device cap and the pairing rendezvous. **As of 2026-10-01,
+19:17 UTC, nothing in `relay/` on `main` at `2b845048` is undeployed.** That is the sentence on
+this page most certain to rot, because the next branch that touches `relay/` makes it false
+without editing it — and the last two that did each left it wrong, once in each direction. Step 0
+is the authority, not it; so is `deployments` on the script, which dates every deploy whether or
+not anybody wrote one down.
 
 ⚠️ **The first two rows above were the opposite until 2026-08-30, in four files at once**, and no
 build could go red for any of it. The claim "the hosted Worker is not deployed" was written once
@@ -152,11 +168,12 @@ Until both are out, that device goes on saying *Supporting since …*, as it alw
    curl -si "$H/p/$(printf '0%.0s' {1..32})/offer"
    curl -si -H "authorization: Bearer $(printf 'ab%.0s' {1..32})" "$H/g/abc/keys?device=deadbeef&epoch=x"
    ```
-   **As of 2026-09-28 the expected answers are `400 malformed token request`, `401`,
-   `400 that is not a device id`, `401 unauthorized`, `404 {"error":"nothing there"}` and `401`** — a
-   Worker with every table applied and both the device roll and the rendezvous deployed, and
-   issue #546's half not. The sixth was added on 2026-09-28 and has never been run. Read them in
-   that order and branch:
+   **As of 2026-10-01 the answers are `400 malformed token request`, `401`,
+   `400 that is not a device id`, `401 unauthorized`, `404 {"error":"nothing there"}` and
+   `400 that is not an epoch`** — a Worker with every table applied and the device roll, the
+   rendezvous and issue #546's half all deployed. All six were run that day, before and after its
+   deploy; until then the sixth had never been run and this line expected `401` from it. Read them
+   in that order and branch:
    - **404 on the first** means the baseline Worker is still there and none of this has run: do
      every step below.
    - **500 on the second** means the router is deployed and `group_keys` is **missing** — the
@@ -365,8 +382,9 @@ Until both are out, that device goes on saying *Supporting since …*, as it alw
    ```
 5. **Register the webhook** for `members:pledge:create`, `members:pledge:update`,
    `members:pledge:delete` and `members:update`, pointing at `/webhook/patreon`.
-6. **`npx wrangler deploy`.** **Last run 2026-09-28, from `main` at `1512ea68`**, and both bullets
-   below are still open. Then, for the refresh-secret change:
+6. **`npx wrangler deploy`.** **Last run 2026-10-01, from `main` at `2b845048`** — and twice on
+   2026-09-28 before it, at `1512ea68` and then with issue #546's half. Both bullets below are
+   still open. Then, for the refresh-secret change:
    - **Press Connect Patreon once on the paying device.** Not required, but it records which
      device holds the secret, so the group's next rotation keeps it rather than retiring it as
      *holder unknown* — and it spares any device still on 0.30.1 or earlier the *Membership ended*
@@ -555,8 +573,9 @@ four checks has been driven**, which is the state this section exists to name. F
 
 ### 12. Issue #546's half — the object's own migration, the hourly cron, and two ceilings nobody could read
 
-Added 2026-09-28, and **none of it has run**. Five things, and the first is the one that can take
-sync down.
+Added 2026-09-28. **The code has been live since that evening and none of these five checks has
+been recorded as driven** — the state item 11 was in for four weeks. Five things, and the first is
+the one that can take sync down.
 
 - ⚠️ **`PRAGMA table_info(acks)` inside a Durable Object's constructor.** Every object asks it on
   every wake, a brand-new one included, to decide whether `acks.heard_at` still has to be added —

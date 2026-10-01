@@ -21,44 +21,69 @@ creates exactly that. Nothing is missing — the second table was designed away 
 not re-read. It is the failure this repository's own rule warns about: a prose-only edit routes to
 neither CI job, so nothing goes red when a count rots.
 
-⚠️ **None of it is deployed, and the constant in the binary says so.** Read
-[the next section](#nothing-is-deployed-and-the-binary-says-so-in-words) before you draw any
-conclusion from a link, a route or a request figure on this page.
+⚠️ **The Worker is deployed since 2026-10-01 and no share has been published through it.** Read
+[the next section](#what-is-deployed-and-what-no-publish-has-proved) before you draw any
+conclusion from a link, a route or a request figure on this page — every figure below was
+measured against a fake or a local `wrangler dev`, never against the deployed Worker.
 
 ---
 
-## Nothing is deployed, and the binary says so in words
+## What is deployed, and what no publish has proved
 
-**`share::publish::SHARE_BASE` is `<set on first deploy>`**, and so is the `SHARE_BASE` var in
-`share-worker/wrangler.jsonc`. They are one value in two languages and
-`share::publish::tests::the_share_base_matches_the_workers_own_placeholder` reads the Worker's
-config and asserts they agree byte for byte, so whoever changes one is asked about the other.
+**The Worker is live at `https://mtg-grimoire-share.denmark-east.workers.dev`**, first deployed
+2026-10-01 at 20:10 UTC (version `e32f3155`) from this branch at `e3198a44` — `main` at `2b845048`
+plus a docs commit, so `share-worker/`, `share/` and `src/` were `main`'s. That address is
+**`share::publish::SHARE_BASE`** and the `SHARE_BASE` var in `share-worker/wrangler.jsonc`: one
+value in two languages, and `share::publish::tests::the_share_base_is_the_workers_own` reads the
+Worker's config and asserts they agree byte for byte, so whoever changes one is asked about the
+other. Both were the placeholder `<set on first deploy>` until that day.
 
-**A placeholder that cannot be mistaken for an address is the point.** A plausible invented URL is
-worse than an obvious hole, because it is what gets copied into documentation and deployed
-against — the failure `relay/wrangler.jsonc`'s `database_id` comment already records happening.
+**The placeholder that could not be mistaken for an address was the point, and it held for the
+feature's first three weeks.** A plausible invented URL is worse than an obvious hole, because it
+is what gets copied into documentation and deployed against — the failure
+`relay/wrangler.jsonc`'s `database_id` comment already records happening. The address is the
+Worker's name and the account's subdomain and so was knowable in advance; it was still written
+into the two files only after the deploy printed it and a probe answered there.
 
-**And the app refuses in words rather than in reqwest's.** `share::publish::endpoint` asks whether
-the effective base carries an `http(s)` scheme and answers `NOT_DEPLOYED` when it does not,
-**before any request and before any `error_log` row**. Without that guard a connected reader
+**The app's refusal in words survives the deploy for a mistyped override.**
+`share::publish::endpoint` asks whether the effective base carries an `http(s)` scheme and answers
+`NOT_DEPLOYED` when it does not, **before any request and before any `error_log` row**. While the
+constant was a placeholder that was every build's answer; without the guard a connected reader
 pressing *Share* met `builder error: relative URL without a base` — reqwest's sentence about a
-mistake nobody made — and every list press folded an error row under `Source::Relay`. The test is
-the **scheme** and not an equality against the constant, deliberately: `base == SHARE_BASE` would
-start refusing everything on the day that constant became a real host, because no override is the
-ordinary case.
+mistake nobody made. The test is the **scheme** and not an equality against the constant,
+deliberately: `base == SHARE_BASE` would have started refusing everything on the day that constant
+became a real host, because no override is the ordinary case. **A build released before the
+constant changed still refuses every press**, so sharing reaches a reader only with the first
+release that carries the address.
 
-The only way to exercise any of this today is the `sync_state` key **`share_url`**, a dev override
-with no UI that mirrors `relay_url` exactly.
+The `sync_state` key **`share_url`** is still the dev override, with no UI, mirroring `relay_url`
+exactly — it is what points a dev build at `wrangler dev --local`.
 
-**What is missing is more than the address.** As of 2026-09-08:
+**As of 2026-10-01, 20:30 UTC, asked of the account and the host rather than of this page:**
 
 | | State |
 | --- | --- |
-| The Worker | never deployed; it has no address to probe |
-| `shares` in D1 | `share-worker/schema.sql` is written and has never been applied to the remote database |
-| The R2 bucket | **R2 may not be enabled on the account at all** — a dashboard action only Markus can take (spec §14 item 2) |
-| `RELAY_HMAC_KEY` on this Worker | not set; it must be the *same value* the relay holds or every publish is a 401 and nothing says why |
-| `dist-share/` | built by no automated command — see [what nothing runs](#what-no-build-runs-and-what-that-costs) |
+| The Worker | **deployed.** `GET /s/{16 chars}` answers the Worker's own **404 HTML page** with `noindex` and `cache-control: no-store` — a D1 read that found no share, where a missing `shares` table would be a 500; `/g/abc/shares` answers **401** JSON with no bearer, `/g/abc/share` **405** to a GET, `/g/abc/bogus` **404** JSON, and `/s/{id}/{hash}.json.gz` **404** JSON |
+| The viewer bundle | **served at the edge**: `GET /assets/share.js` answers 200 `text/javascript`, 507 153 bytes, 21 files uploaded from `dist-share/` |
+| `shares` in D1 | **applied 2026-10-01**, one statement per request and never `--file`: the table and both indexes, read back from `sqlite_master` with the `CHECK` and `shares_folder`'s `WHERE state <> 'revoked'` intact |
+| The R2 bucket | **`mtg-grimoire-shares` exists** (`WEUR`, Standard), created the same day once Markus had enabled R2 in the dashboard — until then the API answered `10042: Please enable R2 through the Cloudflare Dashboard`. Empty: nothing has been published |
+| The cron | `30 3 * * *` is registered on the script, beside the relay's `0 * * * *` — two of the free plan's five |
+| `RELAY_HMAC_KEY` on this Worker | **set at 20:15 UTC**, five minutes after the deploy. The relay's was rotated at 20:03 — Cloudflare never shows a secret back and the old value had not been kept — and `wrangler secret put` here could not stick before the Worker existed, so it was put a second time once it did. **The tell is a malformed bearer**: `GET /g/abc/shares` with `authorization: Bearer nonsense` answered **500** between the deploy and the secret, because `required()` throws before `verify` can refuse, and **401** after it. A bearer-less probe answers 401 either way and proves nothing. ⚠️ **What no probe can show is that the two Workers hold the _same_ value**: a different one also answers 401 — to every real publish — and only a token the relay minted can tell the two apart |
+| The relay's `dev` claim | **deployed 2026-10-01** — the gate's precondition, see [the Worker](#the-worker) |
+| `dist-share/` | built by no automated command — see [what nothing runs](#what-no-build-runs-and-what-that-costs). ⚠️ **In a worktree with no `node_modules` of its own, `npm run share:build` exits 0 and writes the wrong thing**: Node resolves the main checkout's Vite, a Vite 7 ignores `rolldownOptions`, and `dist-share/assets/` holds the *app's* `index-*.js` and no `share.js` — which `wrangler deploy` would upload happily and the shell would then link to nothing. Measured 2026-10-01; check that `dist-share/assets/share.js` exists before any deploy |
+
+**What only a real publish can settle, and none has been made:**
+
+- **The gate accepting a token the relay minted** — the two keys agreeing, and `dev` being read.
+- **The two-step against real R2 and real D1**: the `PUT`'s compare-and-swap, `UPDATE … RETURNING`
+  on revoke, and `shares_folder` refusing a second live share of one folder. `fakeD1` models none
+  of the index.
+- **The blob's encoding at the edge** — `share-worker/README.md` step 5's `curl`s, cold and warm:
+  `encodeBody: "manual"` leaving the body gzipped once, and which `content-encoding` an
+  `accept-encoding`-less client is handed.
+- **Whether `caches.default` does anything on `workers.dev`** — see
+  [the request budget](#the-request-budget-and-what-the-caching-actually-buys).
+- **The OpenGraph card**, pasted into a real Discord.
 
 ⚠️ **Do not conclude any of that from this page on the day you read it.**
 [hosted-relay-deploy.md](hosted-relay-deploy.md) opens with the rule and this feature inherits it:
@@ -66,9 +91,10 @@ with no UI that mirrors `relay_url` exactly.
 undeployed and all five were wrong within a day. A `curl -I` is the only sentence that cannot rot.
 `share-worker/README.md` carries the deploy runbook, and its step 0 is that same instruction.
 
-**No agent may deploy.** `wrangler deploy`, `wrangler d1 execute --remote` and
+**No agent may deploy unasked.** `wrangler deploy`, `wrangler d1 execute --remote` and
 `wrangler secret put` are the repo owner's; `wrangler dev --local` is the only wrangler command an
-agent may run.
+agent may run on its own. The first deploy above was run by an agent because Markus asked for it
+in so many words that day, and a secret's value is his to type whoever runs the rest.
 
 ---
 
@@ -827,7 +853,8 @@ perfectly healthy share** — and whether Cloudflare does that on this deploy is
 deploy. So `open` sends `accept-encoding: gzip` explicitly and `parse_snapshot` branches on the
 `1f 8b` magic, reading anything else as the JSON it may well be; either answer opens.
 `share-worker/README.md`'s step 5 is the two `curl`s (`-sI --compressed` and bare `-sI`) that say
-which answer the deploy actually gives, and **nobody has run them, because nothing is deployed.**
+which answer the deploy actually gives, and **nobody has run them**: the Worker is deployed since
+2026-10-01, and they need the URL of a published snapshot, which nothing has made yet.
 
 **The in-app viewer's field guards are the public page's, crossed** (2026-09-08). `parseSnapshotValue`
 guarantees three things — an object, a `v` that is not newer, and two arrays — and everything past
@@ -932,7 +959,8 @@ redirecting to — the other is the proxy's exact shape, and the second server i
 test holds the page back ten seconds against a 300 ms clock and asserts the open answered in under
 five. **No test drives `share_open` itself**, because it needs a managed `AppState`: that the row
 is written after the answer rests on the command's own body and on `publish::open` having no
-`Connection` to hold. **Nothing here was measured against a deployed Worker**, because none is.
+`Connection` to hold. **Nothing here was measured against a deployed Worker**: none was when this
+was written, and the one deployed on 2026-10-01 has not been driven through an open.
 
 ### The entry point, which decision 6 left nowhere to put
 
@@ -1175,7 +1203,7 @@ to promise *"on app launch and after a sync that touched a shared folder, deboun
 Update now"*; **only the manual press exists.** The reasoning: the viewer is *told* how stale a
 snapshot is (the page renders *as of …*), the owner has an explicit press and a stale mark — so
 this is a convenience rather than a correctness gap; and an on-launch re-publish for every share is
-real network on the account's shared budget, with nothing deployed to measure it against. **What it
+real network on the account's shared budget, decided with nothing deployed to measure it against. **What it
 costs is that a snapshot can sit stale for as long as an owner does not press Update**, visible to
 them in the app and to viewers as an older *as of* date.
 

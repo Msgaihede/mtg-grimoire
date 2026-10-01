@@ -96,8 +96,9 @@ const SUPPORTING: SupporterStatus = {
  *  connected *something* — and the publish is what refuses. */
 const MEMBERSHIP_ENDED: SupporterStatus = { ...NOTHING_CONNECTED, groupBound: true };
 
-/** The crate's own sentence for a build whose `SHARE_BASE` is still the placeholder —
- *  `share::publish::NOT_DEPLOYED`, which is what every build answers today. */
+/** The crate's own sentence for a base that names no host — `share::publish::NOT_DEPLOYED`,
+ *  every build's answer until `SHARE_BASE` became a real address on 2026-10-01 and a mistyped
+ *  override's since. */
 const NOT_DEPLOYED =
   "Sharing a collection is not available in this build yet - the service it publishes to has " +
   "no address here.";
@@ -412,8 +413,8 @@ describe("the link", () => {
 
 describe("publishing", () => {
   /**
-   * **`SHARE_BASE` is a placeholder on every build today**, so this refusal is what a reader
-   * actually meets — and it has to read as a state rather than as a crash.
+   * **Every backend refusal is a sentence**, and this is the one every build answered while
+   * `SHARE_BASE` was a placeholder — it has to read as a state rather than as a crash.
    */
   it("draws a refusal as a sentence and keeps the dialog open", async () => {
     shareCreate.mockRejectedValue(NOT_DEPLOYED);

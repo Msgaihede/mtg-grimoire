@@ -78,6 +78,10 @@ pub const FAST_RESCUE_AFTER: u32 = 8;
 ///
 /// Two frames rather than three: with these thresholds no wrong frame is clear at all, so a
 /// third frame guards against nothing the eval has seen and costs a frame on every card.
+///
+/// **The eval's frames all have the card in them.** What it could not see is two frames of a
+/// card crossing the lens, or of none, so with readers loaded an early decision stands only
+/// when the read after it bears it out (#735, [`Session::settle_fast_decision`]).
 pub const FAST_EARLY_FRAMES: u32 = 2;
 /// How close a clear frame's best card must be, normalized: 0.20 is 51 bits of 256, well inside
 /// the 26% where §3's margin median is 21 bits.
@@ -855,6 +859,11 @@ pub struct Session {
     /// The printing of `title_cards` nearest by dhash on the frame that read them — the hash
     /// compared against those cards' printings alone. Cleared with `title_cards`.
     title_pick: Option<Id>,
+    /// The card named by this stretch's last title read to name exactly one, binding or not —
+    /// the read that votes in the tracker. What an early decision is borne out by when the read
+    /// is too short or too corrected to bind. A later read that names nothing leaves it, as it
+    /// leaves `title_cards`; cleared with them.
+    title_named: Option<Id>,
     /// The printing this stretch's last collector read resolved to under the mask, in Fast.
     /// Cleared with `title_cards`.
     collector_pin: Option<Id>,
@@ -916,6 +925,7 @@ impl Session {
             held_rotated: None,
             title_cards: Vec::new(),
             title_pick: None,
+            title_named: None,
             collector_pin: None,
             collector_raw: None,
             collector_band: None,
@@ -1052,6 +1062,7 @@ impl Session {
     fn forget_reads(&mut self) {
         self.title_cards.clear();
         self.title_pick = None;
+        self.title_named = None;
         self.collector_pin = None;
         self.collector_raw = None;
         self.collector_band = None;
@@ -1156,6 +1167,12 @@ impl Session {
             self.held_rotated = None;
             self.forget_reads();
             self.drop_pending_resolve();
+            // A refused early decision was about a card the lock has now let go of. Its votes
+            // and its refusal go with it, so whatever comes next starts level rather than
+            // behind a card that was never there — and may be decided early in its turn.
+            if !settled && self.tracker.early_refused() {
+                self.tracker.reset();
+            }
         } else if detected {
             self.steady += 1;
             if !settled {
@@ -1269,6 +1286,16 @@ impl Session {
     /// Then [`fast_printing`]: a binding title read limits the decision to the cards it named,
     /// and a collector read of one of those names the printing.
     ///
+    /// **An early decision has to be borne out by that read** (#735). It is the hash alone on
+    /// two frames, and its thresholds were measured on frames of a card held in view; two frames
+    /// of a card crossing the lens, or of no card at all, can agree on a printing as clearly, and
+    /// the reader saw a card they never showed land in the tray at once. So when the read has
+    /// run and neither band says so — no title naming a card, no collector line of the leader's
+    /// — the decision is taken back ([`Tracker::refuse_early`]): the card keeps its votes and
+    /// goes to the bar, the readers keep asking on the rescue's cadence, and a read that names
+    /// it gets it there at once. A decision at the bar is announced whatever its read found, as
+    /// it always was, and a session with no readers has nothing to ask and holds nothing back.
+    ///
     /// Answers the printing when it was the collector line that chose it, so the frame's
     /// collector view can say what it matched — which the blind parse alone often cannot.
     fn settle_fast_decision(&mut self, t: &Tracked, r: &Reference, read: bool) -> Option<Id> {
@@ -1293,6 +1320,16 @@ impl Session {
             collector_raw: self.collector_raw.as_deref(),
         };
         let (printing, by_collector) = fast_printing(r, &self.mask, leader, &reads);
+        let borne_out = by_collector
+            || !self.title_cards.is_empty()
+            || self.title_named == Some(leader.id);
+        if read && t.early && !borne_out {
+            self.tracker.refuse_early();
+            // No wait for eight more leaderless frames: the card has had its chance at the
+            // hash's quick answer, and the readers are what is being waited for.
+            self.leaderless_locked = self.leaderless_locked.max(FAST_RESCUE_AFTER);
+            return None;
+        }
         self.fast_decided = Some((leader.id, printing));
         // The separator is measured once the printing is known, because where it sits on the
         // line depends on how long that printing's set code is.
@@ -1302,6 +1339,18 @@ impl Session {
             .zip(r.label_for(&printing))
             .map(|(band, l)| crate::ocr::finish_mark(band, l.set.chars().count()));
         by_collector.then_some(printing)
+    }
+
+    /// [`Session::settle_fast_decision`] on a frame's verdict, answering the verdict the frame
+    /// concludes on: the one it was handed, or — when the read refused an early decision — the
+    /// tracker's as the refusal left it. Concluding on the stale one counts the refused card as
+    /// a decision after all, which is how it would reach the tray.
+    fn settle_fast(&mut self, t: Tracked, r: &Reference, read: bool) -> (Tracked, Option<Id>) {
+        let chosen = self.settle_fast_decision(&t, r, read);
+        if t.committed && !self.tracker.last_committed() {
+            return (self.tracker.verdict(), chosen);
+        }
+        (t, chosen)
     }
 
     /// Whether the standing decision replaces the one before it — decided on its first frame
@@ -1791,6 +1840,7 @@ impl Session {
                     };
                     let reads = fast_reads(reader, r, &self.mask, &src, report.rotated, eligible);
                     if let Some(o) = reads.observation {
+                        self.title_named = Some(o.key);
                         observations.insert(0, o);
                     }
                     // **The title limits the hash to its own cards** (the reader's rule,
@@ -1885,11 +1935,14 @@ impl Session {
             }
             self.stacked.push(observations.clone());
         }
-        let t = self.tracker.observe(&observations);
+        let mut t = self.tracker.observe(&observations);
         if self.mode == ScanMode::Fast {
+            // An early decision its read refused is no longer one, and the frame says so.
+            let (settled_on, chosen) = self.settle_fast(t, r, read);
+            t = settled_on;
             // A printing the collector line chose by fitting its read to the decided card says
             // so on the frame's collector view, which the blind parse left at "no printing".
-            if let Some(p) = self.settle_fast_decision(&t, r, read) {
+            if let Some(p) = chosen {
                 if let Some(c) = v.collector.as_mut() {
                     c.matched = r.label_for(&p).map(|l| l.display());
                 }
@@ -3050,6 +3103,125 @@ mod tests {
         // And the collector line outranks the dhash among the title's cards.
         let (d, _) = fast_settled_with(&[10, 20], Some(3), Some("U 0001 HOB EN"));
         assert_eq!(d.printing, format_uuid(&id(1)));
+    }
+
+    // ---- An early decision has to be read (#735) -------------------------------------------------
+
+    /// A Fast session whose tracker has just decided card 20 early — two clear frames, short of
+    /// the bar — with nothing read off the card yet.
+    fn decided_early() -> (Session, Tracked, [Observation; 2]) {
+        let mut s = inline(labelled());
+        s.tracker.set_options(FrameOptions::default().tracker_options());
+        let clear = [
+            Observation::appearance(id(20), id(3), 0.12),
+            Observation::appearance(id(10), id(1), 0.30),
+        ];
+        s.tracker.observe(&clear);
+        let t = s.tracker.observe(&clear);
+        assert!(t.committed && t.early, "the premise: two clear frames decided early");
+        (s, t, clear)
+    }
+
+    #[test]
+    fn an_early_decision_no_read_bears_out_goes_back_to_the_bar() {
+        // **The instant scan of a card nobody was showing.** Two frames of a card crossing the
+        // lens, or of no card at all, agree on some printing and Fast decided it there and then.
+        // The confirming read then found no such name and no such collector line, and the
+        // decision was announced regardless.
+        let (mut s, t, clear) = decided_early();
+        let r = Arc::clone(s.reference.as_ref().expect("reference"));
+        // As `match_locked` settles it: the frame concludes on the verdict this hands back.
+        let (t, chosen) = s.settle_fast(t, &r, true);
+        assert!(chosen.is_none());
+        assert!(!t.committed, "the frame concluded on the decision its read refused");
+        assert!(!s.tracker.last_committed(), "an early decision nothing read still stood");
+        assert!(s.fast_decided.is_none() && !s.decision_read_due);
+        s.record_decision(t.committed);
+        assert_eq!(s.decision_seq, 0, "announced on the hash alone, two frames in");
+        assert!(s.decision_view(&t).is_none(), "the refused card was still the frame's decision");
+        // The readers go on asking while it gathers, rather than waiting eight more frames.
+        assert!(s.leaderless_locked >= FAST_RESCUE_AFTER, "the rescue cadence was not armed");
+
+        // The hash alone still decides it — at the bar, as it did before the early path existed.
+        let mut t = s.tracker.verdict();
+        let mut frames = 2;
+        while !t.committed {
+            t = s.tracker.observe(&clear);
+            frames += 1;
+            assert!(frames <= 8, "the refused card never reached the bar");
+        }
+        assert_eq!(frames, 8);
+        assert!(!t.early);
+        // And a decision at the bar is announced whether or not its read finds anything.
+        s.settle_fast_decision(&t, &r, true);
+        s.record_decision(t.committed);
+        assert_eq!(s.decision_seq, 1);
+        assert_eq!(s.decision_view(&t).expect("decision").printing, format_uuid(&id(3)));
+    }
+
+    #[test]
+    fn an_early_decision_a_read_bears_out_is_announced_at_once() {
+        // A name or a collector line off the card is what two frames of the hash cannot fake.
+        type Read = fn(&mut Session);
+        let reads: [(&str, Read); 4] = [
+            ("a binding title", |s| s.title_cards = vec![id(20)]),
+            ("a title naming the card", |s| s.title_named = Some(id(20))),
+            ("the collector line's printing", |s| s.collector_pin = Some(id(3))),
+            ("the collector line fitted", |s| s.collector_raw = Some("U 0003 HOB EN".into())),
+        ];
+        for (what, read) in reads {
+            let (mut s, t, _) = decided_early();
+            let r = Arc::clone(s.reference.as_ref().expect("reference"));
+            read(&mut s);
+            s.settle_fast_decision(&t, &r, true);
+            assert!(s.tracker.last_committed(), "{what} did not bear the decision out");
+            s.record_decision(t.committed);
+            assert_eq!(s.decision_seq, 1, "{what}");
+            assert_eq!(s.decision_view(&t).expect("decision").printing, format_uuid(&id(3)));
+        }
+
+        // A read of some other card bears nothing out.
+        let (mut s, t, _) = decided_early();
+        let r = Arc::clone(s.reference.as_ref().expect("reference"));
+        s.title_named = Some(id(10));
+        s.collector_pin = Some(id(1));
+        s.settle_fast_decision(&t, &r, true);
+        assert!(!s.tracker.last_committed(), "a read of another card bore the decision out");
+    }
+
+    #[test]
+    fn a_refused_card_the_lock_lets_go_of_takes_its_votes_and_its_refusal_with_it() {
+        // What gets refused is mostly a card crossing the lens, and the card the reader meant
+        // comes right after it. Left standing, the stranger's votes would be a rival to out-vote
+        // and its refusal would send the real card to the bar too.
+        let (mut s, t, clear) = decided_early();
+        let r = Arc::clone(s.reference.as_ref().expect("reference"));
+        let (t, _) = s.settle_fast(t, &r, true);
+        s.record_decision(t.committed);
+        assert!(s.tracker.early_refused(), "the premise: refused");
+        lost_frame(&mut s);
+        assert!(!s.tracker.early_refused(), "the refusal outlived the lock");
+        assert!(s.tracker.verdict().standings.is_empty(), "the refused card kept its votes");
+        s.tracker.observe(&clear);
+        assert!(s.tracker.observe(&clear).early, "the next card could not be decided early");
+
+        // A card still gathering that was never refused keeps its votes through a lock blip.
+        let mut s = inline(labelled());
+        s.tracker.observe(&clear);
+        lost_frame(&mut s);
+        assert!(!s.tracker.verdict().standings.is_empty(), "a blip threw away honest votes");
+    }
+
+    #[test]
+    fn without_readers_an_early_decision_stands_as_it_did() {
+        // Nothing can be asked of the card, so nothing is held back — the debug server with no
+        // models, and every session test that decides early.
+        let (mut s, t, _) = decided_early();
+        let r = Arc::clone(s.reference.as_ref().expect("reference"));
+        s.settle_fast_decision(&t, &r, false);
+        assert!(s.tracker.last_committed());
+        s.record_decision(t.committed);
+        assert_eq!(s.decision_seq, 1);
     }
 
     #[test]

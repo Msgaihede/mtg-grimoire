@@ -162,6 +162,30 @@ describe("useUpdate's status effect", () => {
     await settle();
     expect(backend.updateStatus.mock.calls.length).toBeGreaterThan(1);
   });
+
+  /**
+   * **A read still in flight when the effect is torn down must not reschedule** (issue #556). The
+   * cleanup clears a timer that has not been set yet, so the reschedule after the `await` was the
+   * one thing nothing could stop: every StrictMode remount and every failed install's re-run left
+   * another minute loop running behind the live one.
+   */
+  it("stops polling when unmounted while a read is still in flight", async () => {
+    let answer!: (s: UpdateStatus) => void;
+    backend.updateStatus.mockImplementationOnce(
+      () => new Promise<UpdateStatus>((resolve) => (answer = resolve)),
+    );
+    const { unmount } = renderHook(() => useUpdate());
+    expect(backend.updateStatus).toHaveBeenCalledTimes(1);
+
+    unmount();
+    answer(status());
+    await settle();
+    await act(async () => {
+      vi.advanceTimersByTime(5 * 60_000);
+    });
+    await settle();
+    expect(backend.updateStatus).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("formatBytes", () => {
