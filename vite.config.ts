@@ -6,6 +6,7 @@ import tailwindcss from "@tailwindcss/vite";
 // `src/lib/iconFont.ts` for why, and `iconFont.test.ts` for the guarantee that it leaves
 // every glyph class alone.
 import { woff2IconFonts } from "./src/lib/iconFont.ts";
+import { WATCH_IGNORED } from "./vite.watch.ts";
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -36,8 +37,10 @@ export default defineConfig({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri` — and every other build output under the
+      //    root, where a watch on a file cargo is still writing kills the server on Windows.
+      //    `vite.watch.ts` holds the list and the measurement.
+      ignored: WATCH_IGNORED,
     },
   },
   test: {
