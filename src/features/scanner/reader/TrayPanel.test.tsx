@@ -18,9 +18,18 @@ const collectionFolderList = vi.hoisted(() =>
   ]),
 );
 
+/**
+ * The tray's price read (issue #736) and the marketplace setting it is keyed on. Unpriced by
+ * default — every printing answered with nothing — so a test about something else draws the em
+ * dash and nothing it has to account for; the price tests below answer their own.
+ */
+const printingPrices = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+const getMarketplace = vi.hoisted(() => vi.fn().mockResolvedValue("tcgplayer"));
+const marketplaceFeedStatus = vi.hoisted(() => vi.fn().mockResolvedValue([]));
+
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { collectionFolderList },
+  ipc: { collectionFolderList, printingPrices, getMarketplace, marketplaceFeedStatus },
 }));
 
 import { VERDICTS } from "../fixtures";
@@ -394,6 +403,51 @@ describe("TrayPanel", () => {
     const flashes = container.querySelectorAll("[data-tray-flash]");
     expect(flashes).toHaveLength(1);
     expect(flashes[0].closest("li")).toHaveTextContent("Honored Hierarch");
+  });
+});
+
+describe("TrayPanel's prices", () => {
+  /** Two printings this file can price apart — the shared fixture gives both rows one id. */
+  const storm = { ...newer, cardId: "storm", finish: "foil" as const };
+  const hierarch = { ...older, cardId: "hierarch", finish: "nonfoil" as const };
+  const quoted = [
+    { cardId: "storm", finishPrices: { nonfoil: 0.25, foil: 3.5, etched: null } },
+    { cardId: "hierarch", finishPrices: { nonfoil: null, foil: 1, etched: null } },
+  ];
+
+  it("quotes each row's own finish once, and asks for every printing in one read", async () => {
+    printingPrices.mockResolvedValueOnce(quoted);
+    wrap(<TrayPanel {...props({ rows: [storm, hierarch, { ...storm, key: "again" }] })} />);
+    const items = within(screen.getByRole("region", { name: "Scanned cards" })).getAllByRole("listitem");
+    // The foil row reads its foil figure, never the cheaper nonfoil one.
+    expect(await within(items[0]).findByText("$3.50")).toBeInTheDocument();
+    expect(printingPrices).toHaveBeenLastCalledWith(["hierarch", "storm"], "tcgplayer");
+    // A nonfoil row the marketplace has no nonfoil figure for is unpriced — not its foil price.
+    expect(within(items[1]).getByText("Not priced at TCGplayer")).toBeInTheDocument();
+    expect(within(items[1]).queryByText("$1.00")).not.toBeInTheDocument();
+  });
+
+  it("prices a tile under its card, beside the printing", async () => {
+    printingPrices.mockResolvedValueOnce(quoted);
+    wrap(<TrayPanel {...grid({ rows: [storm] })} />);
+    const tile = screen.getAllByRole("listitem")[0];
+    expect(await within(tile).findByText("$3.50")).toBeInTheDocument();
+    expect(tile).toHaveTextContent("LTR 72");
+  });
+
+  it("prices an Unknown finish along the printing's cheapest finish first", async () => {
+    printingPrices.mockResolvedValueOnce(quoted);
+    wrap(<TrayPanel {...props({ rows: [{ ...storm, finish: "unknown" }] })} />);
+    expect(await screen.findByText("$0.25")).toBeInTheDocument();
+  });
+
+  it("asks nothing for a row still waiting on a pick, and draws it no price", async () => {
+    const waiting = rowFromDecision(ambiguous, { finish: "nonfoil" }, 3, "waiting");
+    printingPrices.mockClear();
+    wrap(<TrayPanel {...props({ rows: [waiting] })} />);
+    await screen.findByText("Pick a printing");
+    expect(printingPrices).not.toHaveBeenCalled();
+    expect(screen.queryByText(/^Not priced at/)).not.toBeInTheDocument();
   });
 });
 

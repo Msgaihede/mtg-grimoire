@@ -2902,6 +2902,22 @@ off — [`src/CLAUDE.md`](../../src/CLAUDE.md)'s art-credit rule, met by its sec
 cards on an ambiguous row are whole cards for a second reason: reprints share art, and what tells two
 printings apart is the frame — the set symbol, the border, the treatment.
 
+**Every resolved row carries one copy's price, at the marketplace the reader picked** (2026-10-01,
+[issue #736](https://github.com/Msgaihede/mtg-grimoire/issues/736)) — at the right end of the
+list row's name line, and beside the printing under a tile. The whole tray is one
+`printing_prices(cardIds, marketplace)` read (`card.rs`'s `read_printing_prices`, three figures
+per printing from `sorting::price_expr`), keyed on the marketplace and the sorted ids of the
+resolved rows, so a bump, a finish change or a reorder asks nothing and a new printing asks once;
+it sits under `["cards", "prices"]`, which a feed refresh invalidates. Which of the three figures a
+row is, is `reader/trayPrice.ts`'s: the row's own finish and no other, and for `unknown` the chain
+`nonfoil → foil → etched` every row that names no finish is priced at. **A row waiting on a pick
+asks nothing and draws nothing** — there is no card to price until the reader says which. **A
+unit price, never the row's total**: the stepper and the `CountTag` already say how many. **Three
+states**: nothing while the read for that printing is unanswered (a new scan keeps the other rows'
+figures through `keepPreviousData` and draws its own when it lands), the figure, or an em dash with
+*Not priced at …* for a screen reader when the marketplace does not quote that printing in that
+finish.
+
 **The Match strip above the camera is the reader's whole view of the session** (2026-10-01; it was
 one status line *under* the camera until then, and the bar and the decided card lived only in the
 Developer panels). `readerText.ts`'s `matchStrip` turns the verdict into a pill, the card's name and

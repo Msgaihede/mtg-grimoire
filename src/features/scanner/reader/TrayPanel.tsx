@@ -22,6 +22,8 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { plural } from "@/lib/counts";
+import type { Currency } from "@/lib/marketplace";
+import { formatPrice } from "@/lib/prices";
 import { FINISHES } from "@/lib/finish";
 import { buildFolderTree } from "@/lib/folderTree";
 import { FOCUS } from "@/lib/focus";
@@ -46,6 +48,7 @@ import {
   unresolvedCount,
 } from "./tray";
 import { isKnownFinish, TRAY_FINISH_LABEL, UNKNOWN_FINISH } from "./trayFinish";
+import { useTrayPrices } from "./useTrayPrices";
 
 export interface TrayPanelProps {
   rows: readonly ScannerTrayRow[];
@@ -242,6 +245,8 @@ export function TrayPanel({
   // Nothing to clear, or a commit about to file these very rows — the Add button's two states that
   // are not about printings or finishes, since a card waiting on either can still be thrown away.
   const clearRefused = rows.length === 0 || committing;
+  const { priceOf, currency, marketplaceLabel } = useTrayPrices(rows);
+  const money: Money = { currency, marketplaceLabel };
 
   // What a press on a card does — four writes, each a reducer call waiting for the latest rows, and
   // the printings dialog — built once here so the row and the tile cannot come to disagree.
@@ -336,6 +341,8 @@ export function TrayPanel({
                 key={row.key}
                 row={row}
                 flash={row.key === flashKey}
+                price={priceOf(row)}
+                money={money}
                 onQuantity={on.onQuantity}
                 onFinish={on.onFinish}
                 onRemove={on.onRemove}
@@ -351,7 +358,14 @@ export function TrayPanel({
         // focus outline of a control flush against the scroller's edge needs to be seen at all.
         <ul className="relative min-h-0 flex-1 overflow-y-auto p-1.5">
           {rows.map((row) => (
-            <TrayRow key={row.key} row={row} flash={row.key === flashKey} {...handlers(row)} />
+            <TrayRow
+              key={row.key}
+              row={row}
+              flash={row.key === flashKey}
+              price={priceOf(row)}
+              money={money}
+              {...handlers(row)}
+            />
           ))}
         </ul>
       )}
@@ -400,6 +414,51 @@ export function TrayPanel({
         </button>
       </footer>
     </section>
+  );
+}
+
+/** The marketplace a tray is priced at — how its figures are written, and whose they are. */
+interface Money {
+  currency: Currency;
+  marketplaceLabel: string;
+}
+
+/**
+ * One copy's price, at the marketplace the reader picked (issue #736) — `trayRowPrice`'s answer,
+ * drawn the way every price in the app is: `formatPrice`, mono, tabular figures.
+ *
+ * **Three states and the first draws nothing.** `undefined` is a read not answered yet — a card
+ * that has only just landed — and an em dash there would say "unpriced" about a card nobody has
+ * asked about. `null` *is* unpriced: the marketplace does not quote this printing in this finish,
+ * which `src/CLAUDE.md` says is drawn as an em dash and never filled in from another
+ * marketplace. The dash is `aria-hidden` and the words beside it say which marketplace was asked,
+ * because a bare dash is read out as "dash".
+ *
+ * **A unit price, never the row's total.** The stepper beside it and the count on a tile's card
+ * already say how many; a figure that changed with every press of `+` would read as the card's
+ * price moving.
+ */
+function TrayPrice({
+  price,
+  money,
+  className,
+}: {
+  price: number | null | undefined;
+  money: Money;
+  className?: string;
+}) {
+  if (price === undefined) return null;
+  return (
+    <span className={cn("shrink-0 font-mono tabular-nums", price === null ? "text-dim" : "text-text", className)}>
+      {price === null ? (
+        <>
+          <span aria-hidden="true">—</span>
+          <span className="sr-only">Not priced at {money.marketplaceLabel}</span>
+        </>
+      ) : (
+        formatPrice(price, money.currency)
+      )}
+    </span>
   );
 }
 
@@ -489,6 +548,8 @@ function LayoutToggle({
 function TrayRow({
   row,
   flash,
+  price,
+  money,
   onQuantity,
   onFinish,
   onPick,
@@ -497,6 +558,8 @@ function TrayRow({
 }: {
   row: ScannerTrayRow;
   flash: boolean;
+  price: number | null | undefined;
+  money: Money;
   onQuantity: (q: number) => void;
   onFinish: (f: ScannerTrayFinish) => void;
   onPick: (cardId: string) => void;
@@ -543,6 +606,7 @@ function TrayRow({
             {!waiting && printing !== "" && (
               <span className="shrink-0 font-mono text-xs text-dim">{printing}</span>
             )}
+            <TrayPrice price={price} money={money} className="ml-auto text-xs" />
           </div>
 
           {waiting ? (
@@ -693,6 +757,8 @@ function ChoiceButton({ choice, onPick }: { choice: ScannerTrayChoice; onPick: (
 function TrayTile({
   row,
   flash,
+  price,
+  money,
   onQuantity,
   onFinish,
   onRemove,
@@ -700,6 +766,8 @@ function TrayTile({
 }: {
   row: ScannerTrayRow;
   flash: boolean;
+  price: number | null | undefined;
+  money: Money;
   onQuantity: (q: number) => void;
   onFinish: (f: ScannerTrayFinish) => void;
   onRemove: () => void;
@@ -765,7 +833,17 @@ function TrayTile({
       )}
 
       <TileName name={row.name} label={label} onRemove={onRemove} />
-      {printing !== "" && <span className="truncate font-mono text-[11px] leading-4 text-dim">{printing}</span>}
+      {/* The printing and its price share a line, the price at the right end where a column of
+          tiles lines its figures up. A tile with neither — a printing the corpus has no number
+          for, its price not read yet — draws no empty line. */}
+      {(printing !== "" || price !== undefined) && (
+        <div className="flex min-w-0 items-baseline gap-2">
+          {printing !== "" && (
+            <span className="min-w-0 truncate font-mono text-[11px] leading-4 text-dim">{printing}</span>
+          )}
+          <TrayPrice price={price} money={money} className="ml-auto text-[11px] leading-4" />
+        </div>
+      )}
 
       <div className="mt-2 flex flex-wrap items-center gap-1.5">
         <Dropdown

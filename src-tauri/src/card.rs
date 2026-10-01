@@ -443,6 +443,73 @@ pub async fn card_detail(
         .map_err(|e| format!("card could not be read: {e}"))?
 }
 
+/// One printing's [`FinishPrices`], keyed by its id — an entry of [`read_printing_prices`]' answer.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrintingPrices {
+    pub card_id: String,
+    pub finish_prices: FinishPrices,
+}
+
+/// Every printing in `card_ids` priced per finish at `market`, in one statement.
+///
+/// **The scanner tray's read**: a tray is a pile of printings the reader has not filed yet, so
+/// none of them is in a list query that already carries a price, and asking [`get_card`] once
+/// per row would be forty round trips for forty numbers. The ids go in as one JSON array
+/// through `json_each`, so the statement is the same text for any tray length and no id is ever
+/// spliced into the SQL.
+///
+/// **An id the corpus does not hold is simply absent from the answer** — not an error and not an
+/// entry of nulls — and a repeated id answers once. The page reads a missing entry as unpriced,
+/// which is what it is. The figures are [`finish_price_columns`]', so each marketplace's own
+/// holes (Cardmarket's etched, a feed that never listed the printing) travel with them.
+pub fn read_printing_prices(
+    conn: &Connection,
+    card_ids: &[String],
+    market: Marketplace,
+) -> Result<Vec<PrintingPrices>, String> {
+    if card_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids = serde_json::to_string(card_ids).map_err(|e| e.to_string())?;
+    let sql = format!(
+        "SELECT c.id, {prices} FROM cards c
+          WHERE c.id IN (SELECT value FROM json_each(?1))
+          ORDER BY c.id",
+        prices = finish_price_columns(market)
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![ids], |r| {
+            Ok(PrintingPrices {
+                card_id: r.get(0)?,
+                finish_prices: read_finish_prices(r, 1)?,
+            })
+        })
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+    Ok(rows)
+}
+
+/// [`read_printing_prices`] as a command. Read-only connection, blocking pool, and the marketplace
+/// resolved by [`Marketplace::from_opt`] like [`card_detail`]'s — a price read never refuses
+/// over a setting.
+#[tauri::command]
+pub async fn printing_prices(
+    state: tauri::State<'_, Arc<AppState>>,
+    card_ids: Vec<String>,
+    marketplace: Option<String>,
+) -> Result<Vec<PrintingPrices>, String> {
+    let state = state.inner().clone();
+    let market = Marketplace::from_opt(marketplace.as_deref());
+    tauri::async_runtime::spawn_blocking(move || {
+        read_printing_prices(&lock_db_read(&state), &card_ids, market)
+    })
+    .await
+    .map_err(|e| format!("prices could not be read: {e}"))?
+}
+
 /// Every paper printing of one oracle card, priced at `marketplace`. Read-only connection,
 /// blocking pool.
 ///
@@ -1288,6 +1355,44 @@ mod tests {
         // Cardmarket prices the two finishes it has keys for, and only those.
         let cm = at(Marketplace::Cardmarket);
         assert_eq!((cm.nonfoil, cm.foil), (Some(2.10), Some(2.60)));
+    }
+
+    /// The scanner tray's batch read: the same three figures `get_card` answers, for every id at
+    /// once — an unknown id left out rather than answered with nulls, and a repeat answered once.
+    #[test]
+    fn printing_prices_answers_each_known_printing_once_at_the_asked_marketplace() {
+        let conn = seeded();
+        seed_etched(&conn);
+        seed_feed(&conn, "manapool", "etch", "etched", 2.99);
+        let ids = ["etch", "p1", "nope", "p1"].map(String::from);
+
+        let tcg = read_printing_prices(&conn, &ids, Marketplace::Tcgplayer).unwrap();
+        let got: Vec<_> = tcg
+            .iter()
+            .map(|p| {
+                let f = &p.finish_prices;
+                (p.card_id.as_str(), f.nonfoil, f.foil, f.etched)
+            })
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("etch", Some(2.95), Some(3.19), Some(3.25)),
+                ("p1", Some(5.00), Some(40.00), None),
+            ]
+        );
+
+        let mp = read_printing_prices(&conn, &ids, Marketplace::Manapool).unwrap();
+        assert_eq!(mp[0].finish_prices.etched, Some(2.99));
+        assert_eq!(
+            (mp[1].finish_prices.nonfoil, mp[1].finish_prices.foil),
+            (None, None),
+            "a feed that never listed the printing quotes nothing for it"
+        );
+
+        assert!(read_printing_prices(&conn, &[], Marketplace::Tcgplayer)
+            .unwrap()
+            .is_empty());
     }
 
     /// **The etched contrast**, which is the one place the four marketplaces visibly disagree

@@ -377,6 +377,7 @@ pub fn run() {
             index::facets::facet_cards,
             card::card_detail,
             card::card_printings,
+            card::printing_prices,
             card::card_meld_parts,
             card::card_tcgplayer_ids,
             card::card_holdings,
