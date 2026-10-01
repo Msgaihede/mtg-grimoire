@@ -3075,6 +3075,20 @@ frame is a hint and is never itself the cursor advancing.
    wait rather than a reason never to build it — see the cost below for what spending looks like
    now that something does.
 
+⚠️ **No socket came up from the day this was built until 2026-10-01, and nothing went red.**
+`connect_once` handed `connect_async` a hand-built `http::Request` carrying the bearer and
+nothing else. tungstenite passes such a request through untouched and its handshake refuses one
+without `Sec-WebSocket-Key` before a byte leaves — `WebSocket protocol error: Missing, duplicated
+or incorrect header sec-websocket-key`, folded into one `error_log` row with a rising count. The
+five handshake headers are only generated when the request is built **from the URL**, so
+`live::upgrade_request` does that and then adds the bearer. Sync still worked throughout, because
+the round trip ahead of the socket is plain HTTPS — one trip per backoff cycle instead of a
+doorbell — which is exactly why it went unnoticed. The route was live the whole time (probed
+2026-10-01: `/g/{group}/ws` **401** from the bearer gate, `/g/{group}/bogus` **404**).
+`the_upgrade_request_passes_the_handshakes_own_check` runs tungstenite's own check over the
+request, with no relay. **The cost table below has therefore never been measured against real
+traffic.**
+
 **The cost, re-derived** (spec §11; Cloudflare limits verified 2026-08-31):
 
 | | DO requests/group/day | Groups on free |
