@@ -14,9 +14,13 @@
  * the refusal can say how long to wait, and `ratelimit.test.ts` holds the two together.
  *
  * **Cloudflare counts per location and eventually** — the binding's own documentation calls it
- * permissive and "not … an accurate accounting system" — so a limit of 10 is a caller refused
- * somewhere after their tenth request in a minute at one data centre, not a promise about the
- * eleventh. That is the right instrument for bounding junk and the wrong one for anything exact.
+ * permissive and "not … an accurate accounting system" — **and measured, that is far looser than
+ * the number reads.** Against the deployed Worker on 2026-10-01, one machine and a limit of 10 a
+ * minute: sixteen requests one after another drew no refusal, seventy more in the same minute drew
+ * two, and four hundred in eight seconds drew 347 and then every request after them. So this
+ * bounds a flood and does not meter a trickle. That is the right instrument for the D1 reads junk
+ * can cost and the wrong one for anything exact: nothing may rest on the eleventh request being
+ * refused. `docs/reference/hosted-relay-deploy.md` step 8 has the table.
  */
 
 /** The three limiter bindings, and the limit `wrangler.jsonc` gives each. */

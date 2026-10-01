@@ -2656,8 +2656,9 @@ can meet, `claim.ts` and `patreon.ts` the OAuth hop, the webhook and the reconci
 and `log.ts` the object and who its floor waits for, and `wrangler.jsonc` a D1 binding and an
 hourly cron — `0 * * * *` since issue #546, `0 3 * * *` before it.
 **The device cap, `/claim`'s rebind and the `group_devices` table are deployed too**, and so are
-the pairing rendezvous and the refresh-secret change — the last deploy was 2026-10-01, from `main`
-at `2b845048`, carrying issue #548's `dev` claim. Settled by the same kind of probe rather than by reading this file:
+the pairing rendezvous and the refresh-secret change — and since 2026-10-01 issue #548's `dev`
+claim and, from that day's last deploy at 22:09 UTC, rate limits on the five routes a caller
+reaches with no token. Settled by the same kind of probe rather than by reading this file:
 `POST /token {"refresh":"x"}` **with no `device` field** answers **400 `that is not a device id`**,
 and **401** once a `device` is added. ⚠️ **This paragraph called that half undeployed until
 2026-09-28**, on a `{group, auth}` probe whose short `auth` is refused as `malformed` before
@@ -3011,8 +3012,8 @@ key distribution** are all live — an earlier reading of this line, taken befor
 `/rotate` and `/keys` were the two routes still missing, and that is history. `wrangler.jsonc`
 carries a real `database_id`, so the D1 exists too and may hold live rows. **The device roll and
 the pairing rendezvous are live too** — probed 2026-09-28, after this line had called the device
-roll missing for four weeks on a probe that could not tell — and the last deploy was 2026-10-01,
-from `main` at `2b845048`. The next deploy is an update to a running service, and
+roll missing for four weeks on a probe that could not tell — and the last deploy was 2026-10-01
+at 22:09 UTC, with the rate limits. The next deploy is an update to a running service, and
 [hosted-relay-deploy.md](hosted-relay-deploy.md)'s step 0 is how to check rather than assume —
 this paragraph is why it exists. **`PATREON_CLIENT_ID` is no longer the exception it was**: it was a placeholder until
 `a0eb0c6` (2026-08-30) and holds the real id now, verified live — `GET /oauth2/authorize` with it
