@@ -1,6 +1,7 @@
 import { lazy, Suspense } from "react";
 import { useStartup } from "@/boot/useStartup";
 import { BootScreen } from "./BootScreen";
+import { FaceBoundary } from "./FaceBoundary";
 import { useFace } from "./useFace";
 
 // **Each face is its own chunk.** A phone never downloads the desktop's deck editor and a laptop
@@ -25,8 +26,11 @@ export function LightApp({ gate }: { gate: boolean }) {
   if (status.state !== "ready") return <BootScreen status={status} />;
 
   return (
-    <Suspense fallback={<BootScreen status={{ state: "loading" }} />}>
-      {face === "desktop" ? <DesktopFace /> : <PhoneApp />}
-    </Suspense>
+    // Keyed by the face: a face that failed must not take the other one down with it.
+    <FaceBoundary key={face}>
+      <Suspense fallback={<BootScreen status={{ state: "loading" }} />}>
+        {face === "desktop" ? <DesktopFace /> : <PhoneApp />}
+      </Suspense>
+    </FaceBoundary>
   );
 }
