@@ -2865,6 +2865,18 @@ once the folder list answers — the import accepts a deck's group, because the 
 files there on purpose, so a stale id naming one would put scanned cards in a deck's box. §8 item
 13 is the case the list never answers.
 
+**`Clear all…` empties the tray, and only after a question** (issue #738, 2026-10-01). It sits in
+the tray's header beside the layout toggle and is refused — drawn greyed, never hidden — on an
+empty tray and while a commit is in flight. A press is a *request* (`TrayPanel`'s `onClearAll`):
+the question is `ScannerPage`'s, a `ConfirmDialog` with no typed word, mounted as a sibling of the
+view's `@container/scan` box rather than inside it, because a container is the containing block for
+a `fixed` scrim ([`src/CLAUDE.md`](../../src/CLAUDE.md)'s `@container` rule). **It clears the rows
+it asked about, not the tray at the moment of Confirm**: the camera keeps running behind the
+dialog, so the confirmed clear is the commit's own `withoutCommitted` against a snapshot taken
+when the dialog opened — a card that landed meanwhile stays, a bump keeps the copies added since.
+Nothing is filed, so there is no command; the emptied tray is stored by the ordinary debounced
+tray write. The caret returns to the button, which is why it stays drawn on the tray it emptied.
+
 **The tray has two layouts, a grid of card tiles and the list of rows** (2026-10-01), switched in
 its header and stored as the prefs' `trayLayout`. A grid tile is `CardArt` at the `grid` variant —
 a tile is 144–221px wide, and `thumb` is 146px — inside a button that opens *More printings…*, with
