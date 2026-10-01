@@ -20,7 +20,8 @@ use std::sync::Arc;
 /// **`url` is on it for the same kind of reason and one degree harder**: a share list with no
 /// links is not a share list, and this one has to be drawable with no network — so the link is a
 /// column of `collection_shares` rather than something rebuilt from
-/// [`super::publish::SHARE_BASE`], which is a placeholder until the Worker is deployed.
+/// [`super::publish::SHARE_BASE`] — the Worker builds it from its own binding, and one string
+/// built on both sides is two chances to disagree.
 ///
 /// `published` is **this device's** stamp and the relay knows nothing about it: `None` means
 /// this device has never uploaded, which is what a second device in the group reads before it

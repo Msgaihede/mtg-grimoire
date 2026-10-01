@@ -181,8 +181,33 @@ Those are the repo owner's. `wrangler dev --local` is the only wrangler command 
 
 **Step 0 is to ask the host rather than a document**, for the reason `relay/README.md` opens with:
 that file has been wrong twice about what was deployed, in the same week, and the only sentence
-that cannot rot is a `curl`. As of 2026-09-08 **nothing is deployed at this Worker's address,
-because it has no address yet.**
+that cannot rot is a `curl`. **The Worker was first deployed on 2026-10-01 at 20:10 UTC**, at
+`https://mtg-grimoire-share.denmark-east.workers.dev`, and the five against it are:
+
+```
+S=https://mtg-grimoire-share.denmark-east.workers.dev
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "$S/s/AAAAAAAAAAAAAAAA"
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "$S/assets/share.js"
+curl -s -w " %{http_code}\n" "$S/g/abc/shares"
+curl -s -o /dev/null -w "%{http_code}\n" -H "authorization: Bearer nonsense" "$S/g/abc/shares"
+curl -s -w " %{http_code}\n" "$S/g/abc/bogus"
+```
+
+**That day's answers were `404 text/html`, `200 text/javascript`, `{"error":"unauthorized"} 401`,
+`401` and `{"error":"not found"} 404`.** The first is a D1 read that found no share — a missing
+`shares` table is a 500 there. ⚠️ **The fourth is the secret's tell, and 500 means it is unset**:
+`authorised` calls `required(env.RELAY_HMAC_KEY, …)` before `verify` can refuse a malformed
+bearer. It answered **500** for the five minutes between the deploy and step 3, and **401**
+since. The third is its control — no bearer is 401 either way.
+
+**Every step below has been run except step 5's `curl`s**: the bucket exists, the table and both
+indexes were read back from `sqlite_master`, the secret is set, and `SHARE_BASE` went into both
+files before that first deploy — the address is the Worker's name and the account's subdomain —
+so the second deploy step 6 asks for was not needed. ⚠️ **Step 3 ran after step 5, not before
+it**: `wrangler secret put` against a Worker that does not exist yet did not stick, and the
+account listed no script at all until the deploy made one. **Step 5's `curl`s have never been
+run** — they need a published snapshot, and nothing has published one, which is also the only
+thing that can show the two Workers hold the same key.
 
 1. **Enable R2 on the account** — a dashboard action, and spec §14's open item 2. Then
    `npx wrangler r2 bucket create mtg-grimoire-shares`.
