@@ -3089,6 +3089,31 @@ doorbell — which is exactly why it went unnoticed. The route was live the whol
 request, with no relay. **The cost table below has therefore never been measured against real
 traffic.**
 
+**The first pass with a socket up** (2026-10-01, debug build, Windows; the relay was this tree's
+`relay/` under `wrangler dev` 4.143 on `127.0.0.1`, reached through the `relay_url` override with
+a membership seeded into the local D1 — the deployed relay and Patreon were not involved, and
+the peer was a script pushing envelopes the app could not open, so this times the doorbell and
+not an apply):
+
+| | Measured |
+| --- | --- |
+| Claim → `connecting` → `live` | 1.7 s, 1.9 s; the relay logged `GET …/ws 101` |
+| A peer's push → this device's cursor at the relay's head | 1.2–1.3 s, 6 of 6 (`FRAME_DEBOUNCE_MS` plus the trip) |
+| The relay's frame itself, push to socket | 22 ms |
+| This device's write → its envelope on the relay | 3.1–3.3 s after the commit, 5 of 5 (`WRITE_DEBOUNCE_MS` plus the trip) |
+| Relay stopped 20 s, then restarted | `offline` within a second of the stop; `live` again 11 s after the restart was issued, on the ladder's next rung |
+
+So a change crosses in about four and a half seconds where the backoff ladder's one trip per
+cycle took a minute or two ([issue #751](https://github.com/Msgaihede/mtg-grimoire/issues/751)).
+A device's own push is not echoed to it, and a protocol ping is answered with a pong. **One
+write waited 27 s**, and it is the design rather than a fault: it was made while the first-run
+card ingest was inside its swap, `outbox_has_work` gave up on the write connection after its one
+second, and the swap's own commit rang the bell again — the trip could not have had the
+connection any sooner. The same pass held a managed wishlist's nameless **Tokens** folder
+(`parent_id` set, `sync_uid` NULL, made by the real `settle_deck`) through three pulls with no
+error, which is the cycle check's fix above seen in the window. **Not driven: two real devices
+through the deployed relay.**
+
 **The cost, re-derived** (spec §11; Cloudflare limits verified 2026-08-31):
 
 | | DO requests/group/day | Groups on free |
