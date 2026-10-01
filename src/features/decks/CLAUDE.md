@@ -5612,6 +5612,22 @@ The mode kept its name and changed its document, from *one task list* to **a to-
   paragraph**, so the list ends where the reader stopped — under #672 it did nothing, because
   nothing but a to-do could exist. Enter on a paragraph or heading is ordinary (a heading's Enter
   makes a paragraph).
+- **A plain-text paste on a to-do's line is the lines typed with Enter between them, less the
+  blank ones** (`ChecklistPaste`, 2026-10-01): each line with words is a to-do at the caret's
+  level, the first joins the words before the caret, and the last takes the words after it and
+  the to-do's sub-to-dos — Enter's split. ProseMirror's own parse makes a paragraph per line, and
+  since a to-do holds one, the fitter placed lines 2..n by the document's shape: `x\ny` came out a
+  sub-to-do of the to-do pasted into, with an empty to-do left holding its sub-to-dos — a document
+  `doc.check()` passes. A blank line is never a to-do: at either end it is a break only against
+  the reader's words. Whitespace at a to-do's edge is trimmed, because the reader trims a to-do's
+  line on load. **An extension in
+  `CHECKLIST_EXTENSIONS`, never `editorProps`**, so the note's kit cannot carry it. Off a to-do's
+  line, and for one line with no break, it declines and the paste is ProseMirror's own.
+  ⚠️ **HTML is never this parser's** (ProseMirror asks it only when there is no HTML), so to-dos
+  copied inside the editor paste as they always did — **and that path still leaves an empty to-do
+  holding the sub-to-dos of the to-do pasted into**, measured in jsdom: the copied slice is closed
+  at its end, so the tail becomes a to-do of its own. `NoteEditor.test.tsx` pins the HTML path as
+  unchanged, deliberately not as right.
 - **The placeholder** reads *Write, or add a to-do — Enter for the next, Tab to nest.* #672's was
   *Add a to-do — Enter for the next, Tab to nest.*
 - **A body is repaired as it loads, keeping text.** Paragraphs and headings pass through; a stray

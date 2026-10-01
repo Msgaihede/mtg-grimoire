@@ -11,6 +11,7 @@ import {
 import { groupEpoch } from "./groupauth";
 import { handlePair } from "./pair";
 import { required } from "./patreon";
+import { limited, type LimitedRoute, type Limiters } from "./ratelimit";
 import { handleRendezvousGet, handleRendezvousPut, sweepRendezvous } from "./rendezvous";
 import { handleKeys, handleRotate } from "./rotate";
 import { verify } from "./token";
@@ -44,9 +45,16 @@ import { verify } from "./token";
  * invocation and one D1 point read, where inside the object it would cost the Durable Object
  * request the gate exists to protect. The object keeps only the check it alone can make — whether
  * the group's log has room. `admitPush` below is the order.
+ *
+ * **The five routes a caller reaches with no token are rate limited, and the bill is why again.**
+ * `/claim`, `/token`, `/rotate`, `/keys` and the rendezvous each read D1 before they can refuse
+ * anything, so the argument above — junk costs an invocation and nothing else — does not hold for
+ * them. `ratelimit.ts` refuses a caller past its limit ahead of that read, after the method check
+ * so a 405 spends none of anybody's budget. The routes behind the gate take no limit: an HMAC over
+ * memory already refuses their junk for free.
  */
 
-export interface Env {
+export interface Env extends Limiters {
   GROUP: DurableObjectNamespace;
 
   /** The entitlement store. `relay/schema.sql` is its shape. */
@@ -124,14 +132,22 @@ const METHOD: Record<string, string> = {
  *
  * A `Map` and not a `Record`, so a path that is not a route reads as `undefined` rather than as
  * a value the type system has promised is there.
+ *
+ * **`limit` is on the two that read D1 for a caller who has shown nothing yet.** The callback is
+ * refused by Patreon's own answer to a code it never issued and the webhook by an HMAC over
+ * memory, so neither has anything a limit would spare; `/pair` is a static page.
  */
 const CLAIM_ROUTES = new Map<
   string,
-  { method: string; handle: (request: Request, env: Env) => Promise<Response> }
+  {
+    method: string;
+    limit?: LimitedRoute;
+    handle: (request: Request, env: Env) => Promise<Response>;
+  }
 >([
   ["/oauth/patreon/callback", { method: "GET", handle: handleCallback }],
-  ["/claim", { method: "POST", handle: handleClaim }],
-  ["/token", { method: "POST", handle: handleToken }],
+  ["/claim", { method: "POST", limit: "claim", handle: handleClaim }],
+  ["/token", { method: "POST", limit: "token", handle: handleToken }],
   ["/webhook/patreon", { method: "POST", handle: handleWebhook }],
   ["/pair", { method: "GET", handle: (_request, env) => Promise.resolve(handlePair(env)) }],
 ]);
@@ -218,16 +234,24 @@ export default {
     const entitlement = CLAIM_ROUTES.get(url.pathname);
     if (entitlement !== undefined) {
       if (request.method !== entitlement.method) return methodNotAllowed(entitlement.method);
-      return entitlement.handle(request, env);
+      const refused = entitlement.limit ? await limited(request, env, entitlement.limit) : null;
+      return refused ?? entitlement.handle(request, env);
     }
 
     const rv = RENDEZVOUS.exec(url.pathname);
     if (rv) {
       const [, id, slot] = rv;
+      if (request.method !== "POST" && request.method !== "GET") {
+        return methodNotAllowed("GET, POST");
+      }
+      // One bucket for both slots and both methods: a pairing is one offer, one answer and the
+      // polls between them, and junk aimed at either slot is the same junk.
+      const refused = await limited(request, env, "rendezvous");
+      if (refused) return refused;
       // D1 only, never a Durable Object — which is what lets it stand ahead of the gate.
-      if (request.method === "POST") return handleRendezvousPut(request, env, id, slot, Date.now());
-      if (request.method === "GET") return handleRendezvousGet(env, id, slot, Date.now());
-      return methodNotAllowed("GET, POST");
+      return request.method === "POST"
+        ? handleRendezvousPut(request, env, id, slot, Date.now())
+        : handleRendezvousGet(env, id, slot, Date.now());
     }
 
     const match = ROUTE.exec(url.pathname);
@@ -242,9 +266,14 @@ export default {
     // stale — so a `/keys` behind the gate would refuse exactly the caller it exists to serve.
     // They carry their own credential and refuse out of D1; the one Durable Object request either
     // makes is an accepted rotation's roster post, which only the group's current auth can cause,
-    // so nothing metered is exposed by their standing outside it.
-    if (action === "rotate") return handleRotate(request, env, group);
-    if (action === "keys") return handleKeys(request, url, env, group);
+    // so nothing metered is exposed by their standing outside it. What standing outside it does
+    // cost is a D1 read per request from anyone, which is what the limit in front of each bounds.
+    if (action === "rotate") {
+      return (await limited(request, env, "rotate")) ?? handleRotate(request, env, group);
+    }
+    if (action === "keys") {
+      return (await limited(request, env, "keys")) ?? handleKeys(request, url, env, group);
+    }
 
     // **The gate stands here and not inside the Durable Object, and the reason is the bill.**
     // A request that reaches a DO costs a Durable Object request whether it is honoured or

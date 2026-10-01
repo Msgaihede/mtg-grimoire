@@ -92,8 +92,11 @@ key distribution are all live. This sentence briefly said `/rotate` and `/keys` 
 routes still missing; that was true for part of one day. **The device roll and the pairing
 rendezvous are deployed too**, which this file denied until 2026-09-28 on a probe that could not
 fail — [the runbook](docs/reference/hosted-relay-deploy.md)'s step 0 has one that can. **The last
-deploy was 2026-10-01, from `main` at `2b845048`**, and carried issue #548's `dev` claim on the
-tokens the relay mints. ⚠️ **This sentence named `1512ea68` and #541 until that day, and was two
+deploy was 2026-10-01 at 22:09 UTC**, and carried rate limits on the five routes a caller reaches
+with no token — in the Worker, because `workers.dev` has no zone for a rule, so they spare the D1
+read and not the request, and they bound a flood rather than metering a trickle. The deploy before
+it, the same day from `main` at `2b845048`, carried issue #548's `dev` claim on the tokens the
+relay mints. ⚠️ **This sentence named `1512ea68` and #541 until that day, and was two
 deploys behind**: issue #546's half went out on 2026-09-28 at 19:57 UTC, nobody wrote it down, and
 step 0's sixth probe found it live three days later. The next deploy is an **update** with a D1 that holds real entitlements, not a
 first landing. **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the

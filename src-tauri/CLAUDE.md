@@ -1969,8 +1969,10 @@ record, with every measurement, is
   until then**, on a `{group, auth}` probe whose 8-character `auth` the group door refuses as
   `malformed` before it reads `device` — a probe that could not tell. The pairing rendezvous is live
   as well, **and so is issue #546's half** — deployed 2026-09-28 at 19:57 UTC and unrecorded until
-  step 0's sixth probe answered `400 that is not an epoch` on 2026-10-01. The last deploy was that
-  day, from `main` at `2b845048`, carrying issue #548's `dev` claim. `wrangler.jsonc` carries a real `database_id`, so the D1 holds live entitlement
+  step 0's sixth probe answered `400 that is not an epoch` on 2026-10-01. Two deploys followed that
+  day: `main` at `2b845048` with issue #548's `dev` claim, then at 22:09 UTC the rate limits on the
+  five tokenless routes — a **429 with `code: "rate_limited"`**, which this crate reads as an
+  ordinary failure and never as a lapse. `wrangler.jsonc` carries a real `database_id`, so the D1 holds live entitlement
   rows. That makes the next deploy an **update to a running service**, not a first landing, and the
   `ALTER TABLE`s in `schema.sql` run against real data.
   [hosted-relay-deploy.md](../docs/reference/hosted-relay-deploy.md)'s step 0 is those `curl`s

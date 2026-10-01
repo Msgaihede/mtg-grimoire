@@ -33,9 +33,10 @@ live Worker (2026-09-28), and **401** once `"device":"deadbeef"` is added. ⚠�
 it was not deployed until that day**, on a `{"group":…,"auth":…}` probe the group door refuses as
 `malformed token request` — its `auth` was not 64 hex — before it reads `device` at all. **The
 pairing rendezvous is live too**: `GET /p/{32 hex}/offer` answers a JSON `nothing there`, not the
-router's plain-text `not found`. **The last deploy was 2026-10-01, from `main` at `2b845048`**, and
-carried issue #548's `dev` claim — `token.ts` and `claim.ts`, no migration, and nothing a probe
-without a credential can see. Deploying this tree is `npx wrangler deploy` from here, and it
+router's plain-text `not found`. **The last deploy was 2026-10-01 at 22:09 UTC, from
+`claude/relay-rate-limits` at `7f6d6f50`**, and carried the rate limits below; the one before it,
+the same day from `main` at `2b845048`, carried issue #548's `dev` claim — `token.ts` and
+`claim.ts`, no migration, and nothing a probe without a credential can see. Deploying this tree is `npx wrangler deploy` from here, and it
 is the last of the steps under **Deploying** below rather than the whole of them.
 
 **Issue #546's half is deployed, and it adds no public route either** — the push admission,
@@ -411,8 +412,16 @@ the DO because a request that reaches one bills a Durable Object request whether
 refused. `/keys` never reaches it at all. `/rotate` reaches it **exactly once, after D1 has
 accepted the rotation**, to post the roster below — and a caller that gets that far holds the
 group's current auth, which mints a bearer token at `/token`'s group door and opens the gated
-routes anyway, so it can spend nothing here it could not already spend there. Both belong on the
-rate-limiting list — runbook step 8.
+routes anyway, so it can spend nothing here it could not already spend there. **Both are rate
+limited since 2026-10-01**, with `/claim`, `/token` and the pairing rendezvous: what standing
+outside the gate costs is a D1 read per request from anyone, and `src/ratelimit.ts` refuses a
+caller past its limit ahead of that read — per client address, through three `ratelimits`
+bindings in `wrangler.jsonc`, as a **429 with `code: "rate_limited"`** and never a 401. It fails
+open, and it spares the read rather than the request. ⚠️ **It bounds a flood and does not meter a
+trickle**: measured against the live Worker, sixteen requests against a limit of ten drew no
+refusal and four hundred in eight seconds drew 347. The runbook's step 8 has the limits, that
+measurement, the burst that says whether a deployed Worker has them, and what a limit inside the
+Worker cannot do.
 
 **The epoch must be one or two past the group's newest, and nothing else.** A join plans its own
 epoch plus one and a removal or a departure plus two (`REMOVAL_STEP`), and the auth a device
