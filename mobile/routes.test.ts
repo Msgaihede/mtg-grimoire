@@ -35,6 +35,18 @@ describe("parsePlace", () => {
     },
   );
 
+  it("opens the gallery for a deck id too large to be one", () => {
+    // Every character is a digit, so the pattern alone lets it through — as 1e20, which
+    // `placeHref` would spell back as `/decks/100000000000000000000` and Rust cannot read as an id.
+    expect(parsePlace("/decks/99999999999999999999", "")).toEqual({
+      view: "decks",
+      deckId: null,
+      cardId: null,
+    });
+    // The largest id that is still an exact integer is still an id.
+    expect(parsePlace(`/decks/${Number.MAX_SAFE_INTEGER}`, "").deckId).toBe(Number.MAX_SAFE_INTEGER);
+  });
+
   it("ignores a deck id under a destination that is not Decks", () => {
     expect(parsePlace("/search/12", "").deckId).toBeNull();
   });
