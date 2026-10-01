@@ -2,6 +2,7 @@ import { NAV } from "@/components/nav";
 import { LIGHT_VIEWS, type LightView } from "@/lib/edition";
 import { FOCUS_INSET } from "@/lib/focus";
 import { cn } from "@/lib/utils";
+import { linkTo } from "./router";
 
 /**
  * The five destinations a thumb reaches for. Settings is the top bar's.
@@ -14,7 +15,12 @@ const TABS = NAV.filter(
     (LIGHT_VIEWS as readonly string[]).includes(entry.id) && entry.id !== "settings",
 );
 
-export function TabBar({ view, onSelect }: { view: LightView; onSelect: (view: LightView) => void }) {
+/**
+ * **Each tab is a link, not a button.** A tab changes the URL, so in a browser it has to answer
+ * what a link answers — a middle click, "open in new tab", "copy link" — and a screen reader has
+ * to hear *link*. `linkTo` keeps a plain press inside the page.
+ */
+export function TabBar({ view }: { view: LightView }) {
   return (
     <nav
       aria-label="Views"
@@ -22,11 +28,10 @@ export function TabBar({ view, onSelect }: { view: LightView; onSelect: (view: L
       className="flex shrink-0 border-t border-border bg-surface pb-[env(safe-area-inset-bottom)]"
     >
       {TABS.map(({ id, label, Icon }) => (
-        <button
+        <a
           key={id}
-          type="button"
+          {...linkTo({ view: id, deckId: null, cardId: null })}
           aria-current={id === view ? "page" : undefined}
-          onClick={() => onSelect(id)}
           className={cn(
             // 52px: over the 44px touch floor in both directions at five tabs on 360px.
             "flex h-13 min-w-0 flex-1 flex-col items-center justify-center gap-0.5 text-xs",
@@ -36,7 +41,7 @@ export function TabBar({ view, onSelect }: { view: LightView; onSelect: (view: L
         >
           <Icon aria-hidden className="size-5" />
           <span className="truncate">{label}</span>
-        </button>
+        </a>
       ))}
     </nav>
   );

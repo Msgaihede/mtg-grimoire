@@ -72,16 +72,33 @@ describe("Search", () => {
     expect(window.location.search).toBe("");
   });
 
-  it("closes the card from the sheet's own button, and stays on the page", async () => {
-    renderPhone(<PhoneFace />, { path: "/search" });
+  it("closes the card from the sheet's own button, and leaves no Back that reopens it", async () => {
+    // Search by way of Decks, so there is a page beneath it for a Back to land on.
+    renderPhone(<PhoneFace />, { path: "/decks" });
+    await userEvent.click(screen.getByRole("link", { name: "Search" }));
     const wall = await screen.findByRole("list", { name: "Search results" });
     await userEvent.click(await waitFor(() => within(wall).getAllByRole("button")[0], SETTLE));
     const sheet = await screen.findByRole("dialog");
+    const opened = window.history.length;
 
     await userEvent.click(within(sheet).getByRole("button", { name: "Close card" }));
 
+    // The close is a Back, and a traversal is a task of its own — in jsdom as in a browser.
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(window.location.pathname + window.location.search).toBe("/search");
+    // It adds no entry. A second push here is what left the card one Back beneath the page.
+    expect(window.history.length).toBe(opened);
+
+    const left = new Promise<void>((resolve) =>
+      window.addEventListener("popstate", () => resolve(), { once: true }),
+    );
+    window.history.back();
+    await left;
+
+    // The page beneath Search, not the card again.
+    expect(window.location.pathname + window.location.search).toBe("/decks");
+    expect(await screen.findByRole("heading", { level: 1, name: "Decks" })).toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });
 

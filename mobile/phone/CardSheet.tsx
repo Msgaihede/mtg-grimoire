@@ -7,6 +7,7 @@ import { FINISH_LABEL, FINISHES } from "@/lib/finish";
 import { ipc } from "@/lib/ipc";
 import { formatPrice } from "@/lib/prices";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { back, usePlace } from "./router";
 
 /**
  * One card, over whatever the reader was looking at.
@@ -15,9 +16,26 @@ import { useMarketplace } from "@/lib/useMarketplace";
  * which is the gesture a phone reader reaches for. `Dialog` is the desktop's own shell; below
  * 640px it is full-bleed by its own rule, which is this face's whole width.
  *
+ * **Closing it is that same Back, not a second push** — the ✕, Escape and the scrim all go
+ * through `back`. A push here left the card one Back beneath the page it was closed over, so the
+ * gesture that should leave the page reopened the card instead. `back` falls to a replace for a
+ * reader who arrived on the card's own link and has no entry of the app's beneath them.
+ *
  * Reading only, for the skeleton: the picture, the words, and what each finish costs.
  */
-export function CardSheet({ cardId, onClose }: { cardId: string | null; onClose: () => void }) {
+export function CardSheet({
+  cardId,
+}: {
+  cardId: string | null;
+  /**
+   * **Not called.** The sheet closes itself through the router, because only the router knows
+   * whether the entry beneath this one is the app's. Still in the type because `PhoneFace` still
+   * passes one; it goes when that call site does.
+   */
+  onClose?: () => void;
+}) {
+  const place = usePlace();
+  const close = () => back({ ...place, cardId: null });
   const { marketplace, currency } = useMarketplace();
   const detail = useQuery({
     // The desktop card modal's own entry: the two faces share one query client, and the card open
@@ -37,8 +55,8 @@ export function CardSheet({ cardId, onClose }: { cardId: string | null; onClose:
       title={card?.name ?? "Card"}
       closeLabel="Close card"
       size="w-[28rem]"
-      onDismiss={onClose}
-      onClose={onClose}
+      onDismiss={close}
+      onClose={close}
     >
       <div className="min-h-0 flex-1 select-text overflow-y-auto p-4">
         {detail.isPending && cardId !== null && (
