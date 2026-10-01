@@ -68,28 +68,30 @@ use std::time::Duration;
 
 /// The share Worker's address.
 ///
-/// ⚠️ **A placeholder, and deliberately one that cannot be mistaken for an address.** Only a
-/// deploy can produce the real host, and it must then be written **here** and into
-/// `share-worker/wrangler.jsonc`'s `SHARE_BASE` var **byte for byte** — the trap
-/// `relay/wrangler.jsonc` documents for `RELAY_BASE` and the OAuth redirect URI. That file
-/// carries the same placeholder and the same warning; the two are one value in two languages.
+/// **Real since the Worker's first deploy on 2026-10-01** — `mtg-grimoire-share` is its name in
+/// `share-worker/wrangler.jsonc` and `denmark-east` is the account's subdomain, read back from
+/// the deploy and probed rather than guessed. Until that day it was the placeholder
+/// `<set on first deploy>`, deliberately a string that could not be mistaken for an address: a
+/// guessed host gets copied into documentation and deployed against, which is what the
+/// `database_id` comment in the relay's config records happening.
 ///
-/// **Inventing a plausible URL is the mistake this constant exists to refuse.** A guessed host
-/// gets copied into documentation and deployed against, which is what the `database_id` comment
-/// in the relay's config records happening. An obvious hole does not.
+/// ⚠️ **It must equal `share-worker/wrangler.jsonc`'s `SHARE_BASE` var byte for byte** — the
+/// trap `relay/wrangler.jsonc` documents for `RELAY_BASE` and the OAuth redirect URI. The two
+/// are one value in two languages: the Worker builds every link from its copy and this side
+/// sends every request to its own, so a mismatch is a link that resolves to nothing rather than
+/// an error anybody sees. `the_share_base_is_the_workers_own` reads that file and compares.
 ///
-/// [`entitlement::RELAY_BASE`] is the sibling of this constant and is real, because that Worker
-/// is deployed: `https://mtg-grimoire-relay.denmark-east.workers.dev`. Both are public on the
-/// same terms — an API base is on the wire of every request that uses it and ships inside the
-/// binary whatever this tree says. Spec §14 open item 5.
-pub const SHARE_BASE: &str = "<set on first deploy>";
+/// [`entitlement::RELAY_BASE`] is the sibling of this constant. Both are public on the same
+/// terms — an API base is on the wire of every request that uses it and ships inside the binary
+/// whatever this tree says. Spec §14 open item 5.
+pub const SHARE_BASE: &str = "https://mtg-grimoire-share.denmark-east.workers.dev";
 
 /// The `sync_state` key holding an override for [`SHARE_BASE`] — a test/dev knob with no UI,
 /// exactly as [`client::RELAY_URL`] is for the relay.
 ///
-/// **It is the only way to exercise this file before the first deploy**, which is what makes it
-/// worth its ten lines rather than dead weight: until [`SHARE_BASE`] is real, every request here
-/// goes to a string that is not a URL.
+/// **It was the only way to exercise this file before the first deploy**, when [`SHARE_BASE`]
+/// was a string that is not a URL, and it is what points a dev build at `wrangler dev --local`
+/// or a fork's own Worker now.
 pub const SHARE_URL: &str = "share_url";
 
 /// The share Worker's base URL: the override if there is one, [`SHARE_BASE`] otherwise.
@@ -112,18 +114,17 @@ pub fn base(conn: &Connection) -> String {
 
 /// The base to send to, or the sentence that says there is nowhere to send.
 ///
-/// ⚠️ **[`SHARE_BASE`] is a placeholder, and a placeholder is not a URL.** [`base`]'s own doc
-/// already refuses this shape for a *blank* override — "reading it as a base would build the
-/// relative URL `/g/…` and fail with a message about nothing the reader did" — and
-/// `<set on first deploy>` does exactly that while being the **default**. Without this guard a
-/// connected reader pressing *Share* meets `builder error: relative URL without a base`, which
-/// is reqwest's sentence about a mistake nobody made, and every list press folds an `error_log`
-/// row under `Source::Relay` for it.
+/// ⚠️ **A base with no scheme is not a URL.** [`base`]'s own doc already refuses this shape for
+/// a *blank* override — "reading it as a base would build the relative URL `/g/…` and fail with
+/// a message about nothing the reader did" — and until 2026-10-01 [`SHARE_BASE`] itself was
+/// such a string, `<set on first deploy>`, while being the **default**. Without this guard a
+/// connected reader pressing *Share* met `builder error: relative URL without a base`, which is
+/// reqwest's sentence about a mistake nobody made, and every list press folded an `error_log`
+/// row under `Source::Relay` for it. What reaches the refusal today is a mistyped override.
 ///
 /// **The test is the scheme rather than an equality against the constant**, and the difference
-/// matters on the day of the deploy: `base == SHARE_BASE` would refuse every request the moment
-/// that constant became a real host, because no override is the ordinary case. A mistyped
-/// override lands here too, which is the same improvement one step further.
+/// was the day of the deploy: `base == SHARE_BASE` would have refused every request the moment
+/// that constant became a real host, because no override is the ordinary case.
 fn endpoint(conn: &Connection) -> Result<String, String> {
     let base = base(conn);
     if base.starts_with("https://") || base.starts_with("http://") {
@@ -145,10 +146,11 @@ const SHARE_LIMIT: &str = "share_limit";
 /// The same for the blob cap — `413 { error, code }`.
 const BLOB_LIMIT: &str = "blob_limit";
 
-/// [`SHARE_BASE`] is still its placeholder and no override names a host, so there is nowhere to
-/// publish to. **Refused before any request and before any `error_log` row**, because a build
-/// with no address for the service is a state rather than a failure — nothing went wrong, and a
-/// row in the Errors panel would send the reader to look at a network that is fine.
+/// The effective base names no host, so there is nowhere to publish to — every build's answer
+/// while [`SHARE_BASE`] was a placeholder, and since 2026-10-01 the answer to an override that
+/// carries no scheme. **Refused before any request and before any `error_log` row**, because a
+/// build with no address for the service is a state rather than a failure — nothing went wrong,
+/// and a row in the Errors panel would send the reader to look at a network that is fine.
 pub const NOT_DEPLOYED: &str = "Sharing a collection is not available in this build yet - \
                                 the service it publishes to has no address here.";
 
@@ -1675,8 +1677,8 @@ mod tests {
         assert!(parse_snapshot(&[0x1f, 0x8b, 0x00, 0x01], MAX_SNAPSHOT_BYTES).is_err());
     }
 
-    /// The base is the compiled-in placeholder until a `sync_state` row overrides it, and a
-    /// blank row is not an override — `entitlement::base`'s rule, and for its reason.
+    /// The base is the compiled-in host until a `sync_state` row overrides it, and a blank row
+    /// is not an override — `entitlement::base`'s rule, and for its reason.
     #[test]
     fn the_share_base_takes_an_override_but_not_a_blank_one() {
         let conn = open_db();
@@ -1750,12 +1752,16 @@ mod tests {
         assert_eq!(err, super::super::FOLDER_IS_LOCKED);
     }
 
-    /// One rung down: the folder is fine, so the next thing that can be wrong is that this build
-    /// has nowhere to publish to. **Ahead of the token**, because minting a grant for a press
-    /// with no destination is a round trip spent on nothing.
+    /// One rung down: the folder is fine, so the next thing that can be wrong is that there is
+    /// nowhere to publish to. **Ahead of the token**, because minting a grant for a press with
+    /// no destination is a round trip spent on nothing.
+    ///
+    /// **An override with no scheme is how a build reaches this since 2026-10-01.** Until then
+    /// the compiled-in [`SHARE_BASE`] was itself such a string and this test needed no setup.
     #[tokio::test]
-    async fn a_build_with_no_host_refuses_in_words_rather_than_in_reqwests() {
+    async fn a_base_that_names_no_host_refuses_in_words_rather_than_in_reqwests() {
         let conn = open_db();
+        client::set_state(&conn, SHARE_URL, "share.example").unwrap();
         let uid = folder(&conn, "Binder", false);
         let err = publish(&conn, Some(&uid), "Giradeli", ShareFields::default())
             .await
@@ -1792,18 +1798,25 @@ mod tests {
         assert_eq!(err, OWNER_NAME_REQUIRED);
     }
 
-    /// A list on a build with no host is the cache, silently — no request, no `error_log` row,
-    /// and no refusal for a reader who has simply never shared anything.
+    /// A list with nowhere to ask is the cache, silently — no request, no `error_log` row, and
+    /// no refusal for a reader who has simply never shared anything. **Both ways of having
+    /// nowhere to ask**: a base that names no host, and the compiled-in host on a device with no
+    /// membership, which is every unconnected reader's list since [`SHARE_BASE`] became real.
     #[tokio::test]
-    async fn a_list_on_a_build_with_no_host_is_the_cache_and_says_nothing() {
-        let conn = open_db();
-        cache::store(&conn, &row("kQ2p7fMx9Lb0RtVw")).unwrap();
-        let rows = list(&conn).await.unwrap();
-        assert_eq!(rows.len(), 1);
-        let logged: i64 = conn
-            .query_row("SELECT count(*) FROM error_log", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(logged, 0, "nothing went wrong, so nothing is a failure");
+    async fn a_list_with_nowhere_to_ask_is_the_cache_and_says_nothing() {
+        for override_base in [Some("share.example"), None] {
+            let conn = open_db();
+            if let Some(base) = override_base {
+                client::set_state(&conn, SHARE_URL, base).unwrap();
+            }
+            cache::store(&conn, &row("kQ2p7fMx9Lb0RtVw")).unwrap();
+            let rows = list(&conn).await.unwrap();
+            assert_eq!(rows.len(), 1, "{override_base:?}");
+            let logged: i64 = conn
+                .query_row("SELECT count(*) FROM error_log", [], |r| r.get(0))
+                .unwrap();
+            assert_eq!(logged, 0, "nothing went wrong, so nothing is a failure");
+        }
     }
 
     // -----------------------------------------------------------------------------------
@@ -1843,17 +1856,28 @@ mod tests {
         }
     }
 
-    /// ⚠️ The one thing about [`SHARE_BASE`] a build can check: it is still the placeholder, and
-    /// `share-worker/wrangler.jsonc` still carries the same one. The day either becomes a host,
-    /// both do — and this test is what asks the person changing one whether they changed both.
+    /// ⚠️ The one thing about [`SHARE_BASE`] a build can check: `share-worker/wrangler.jsonc`
+    /// carries the same string. They moved from the placeholder to the host together on
+    /// 2026-10-01, and this test is what asks the person changing one whether they changed both.
     #[test]
-    fn the_share_base_matches_the_workers_own_placeholder() {
+    fn the_share_base_is_the_workers_own() {
         let wrangler = include_str!("../../../share-worker/wrangler.jsonc");
         assert!(
             wrangler.contains(&format!("\"SHARE_BASE\": \"{SHARE_BASE}\"")),
             "share::SHARE_BASE and share-worker/wrangler.jsonc's SHARE_BASE must be the same \
              string, byte for byte"
         );
+    }
+
+    /// **And it is a host a request can be sent to**: `endpoint` accepts it with no override,
+    /// which is what ended `NOT_DEPLOYED` as every build's answer — and it carries no trailing
+    /// slash, because every caller here and `shareUrl` in the Worker appends its own path.
+    #[test]
+    fn the_compiled_in_base_is_a_host_and_carries_no_trailing_slash() {
+        let conn = open_db();
+        assert_eq!(endpoint(&conn).as_deref(), Ok(SHARE_BASE));
+        assert!(SHARE_BASE.starts_with("https://"), "{SHARE_BASE}");
+        assert!(!SHARE_BASE.ends_with('/'), "{SHARE_BASE}");
     }
 
     /// ⚠️ **[`MAX_BLOB_BYTES`] is `env.ts`'s number in a second language**, and the viewer's

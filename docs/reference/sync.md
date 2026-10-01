@@ -2587,8 +2587,9 @@ consequences reach this page: **publishing is gated by the same bearer token syn
 share is an entitlement of the *group* exactly as everything else here is; and **its lapse pass
 reads the `status` the relay's own `reconcile` wrote and never re-runs `decide`**, because one
 account with two opinions about when a membership ended is the failure that arrangement exists to
-avoid. It is written and **not deployed** — [collection-sharing.md](collection-sharing.md) is the
-record, and *ask the host* applies there exactly as it does here.
+avoid. **It is deployed since 2026-10-01** and nothing has been published through it —
+[collection-sharing.md](collection-sharing.md) is the record, and *ask the host* applies there
+exactly as it does here.
 
 ### The rendezvous: outside the gate, same reasoning, a different namespace
 

@@ -23803,15 +23803,15 @@ export function writeHandlers(db: FakeDb) {
 /**
  * Where this workbench's share Worker lives.
  *
- * ⚠️ **The crate's `share::publish::SHARE_BASE` is still the placeholder `<set on first deploy>`,
- * and this is deliberately not a copy of it.** That constant refuses every request through
- * `endpoint`, because a placeholder is not a URL — so a fake that mirrored it would answer
- * `NOT_DEPLOYED` to every press and put the entire feature out of a story's reach. The crate's
- * own way through that is `sync_state.share_url`, the test/dev override it keeps precisely
- * because "until `SHARE_BASE` is real, every request here goes to a string that is not a URL";
- * this host is that override, standing in for the day the constant is.
+ * ⚠️ **This is deliberately not a copy of the crate's `share::publish::SHARE_BASE`**, which was
+ * the placeholder `<set on first deploy>` when this was written and is the deployed Worker's
+ * real address since 2026-10-01. Mirroring the placeholder would have answered `NOT_DEPLOYED`
+ * to every press and put the entire feature out of a story's reach; mirroring the real host
+ * would put a live service's name on links a workbench invented. The crate's own way to point
+ * somewhere else is `sync_state.share_url`, its test/dev override, and this host is that
+ * override.
  *
- * `share.example` and not a plausible workers.dev name, for the reason the crate gives for its
+ * `share.example` and not a plausible workers.dev name, for the reason the crate gave for its
  * hole: a guessed host is what gets copied into documentation and deployed against. It is also
  * the host the golden's own links carry.
  */

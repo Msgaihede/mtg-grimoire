@@ -123,16 +123,21 @@ matched on the code and never on the sentence.
 wants their own relay still can: `relay/` is the whole source and a fork changes that one
 constant. [sync.md](docs/reference/sync.md) has the whole record.
 
-**A read-only shared collection is the fifth, it is a _second_ Worker beside the relay, and it is
-the only one of the five that is written and not deployed.** A share is a snapshot the owner
+**A read-only shared collection is the fifth, it is a _second_ Worker beside the relay, and it
+has been deployed since 2026-10-01 without a single share published through it.** A share is a snapshot the owner
 publishes rather than a window onto their database, so a viewer needs no account and no app and
 the link is the whole of the capability — while *publishing* is Patreon-gated by the same bearer
 token sync mints. It is the one place the relay's "it can decrypt nothing it stores" stops
 holding: **a snapshot is stored in the clear**, which is what buys the OpenGraph card in Discord,
 and is why six collection columns are _absent_ from the format rather than switched off in it.
-**`share::publish::SHARE_BASE` is a placeholder**, so a press today refuses in words rather than
-publishing; ask the host before you believe that sentence or its opposite.
-[collection-sharing.md](docs/reference/collection-sharing.md) is the record.
+**`share::publish::SHARE_BASE` is that Worker's address**,
+`https://mtg-grimoire-share.denmark-east.workers.dev`, compiled in and public on `RELAY_BASE`'s
+terms, and equal byte for byte to the `SHARE_BASE` var in `share-worker/wrangler.jsonc`. It was a
+placeholder until the deploy, so **every release before the one that carries it still refuses a
+press in words rather than publishing**. Its one secret is the relay's own `RELAY_HMAC_KEY`, the
+same value on both Workers; ask the host before you believe any of this or its opposite.
+[collection-sharing.md](docs/reference/collection-sharing.md) is the record, and lists what only a
+real publish can settle.
 
 **Commander Spellbook's combo database is the third optional feed, and the first that is neither
 Scryfall nor a price list.** `variants.json.gz` is where a Commander deck's bracket estimate gets
@@ -268,7 +273,7 @@ number to compare against.
 | [tauri-mcp-bridge.md](docs/reference/tauri-mcp-bridge.md) | The other way to drive the window — its five pieces, the environment variable that opens it, three permissions, and the one tool that cannot reach an app command |
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
 | [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
-| [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what is not deployed** |
+| [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what the 2026-10-01 deploy has not proved** |
 | [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the eighteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 
