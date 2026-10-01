@@ -22,7 +22,7 @@ import { cn } from "@/lib/utils";
  * exact defect `printing` exists to prevent, one layer down. Required, it is a question the
  * caller answered; optional, it is one they inherited.
  */
-type ChinPrinting =
+export type ChinPrinting =
   | {
       /**
        * What this line says about the printing, in the caller's own words.

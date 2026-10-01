@@ -1,7 +1,6 @@
-import { CardArt } from "@/components/CardArt";
-import { CardChin } from "@/components/CardChin";
+import { CardTile } from "@/components/CardTile";
 import { CountTag } from "@/components/CountTag";
-import { cardScaleVars, DEFAULT_ZOOM } from "@/lib/cardZoom";
+import { DEFAULT_ZOOM } from "@/lib/cardZoom";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { isFinish, type Finish } from "@/lib/finish";
 import type { Currency } from "@/lib/marketplace";
@@ -25,7 +24,7 @@ export function wireFinish(f: string): Finish | null {
 /**
  * One published copy, drawn as the card it is.
  *
- * **`CardArt` and `CardChin` rather than a frame of its own**, which is most of why a page with
+ * **`CardTile` rather than a frame of its own**, which is most of why a page with
  * no core imports from `src/` at all: several surfaces in the app draw a card and those two are
  * the one definition of what that looks like. A fresh drawing, on the one page a stranger sees,
  * is exactly the drift `src/CLAUDE.md` was written about.
@@ -81,30 +80,30 @@ export function ShareTile({
   const condition = card.c == null ? NOTHING : (CONDITION_LABEL[card.c as Condition] ?? card.c);
 
   return (
-    <li className="group flex flex-col" style={cardScaleVars(DEFAULT_ZOOM)}>
-      <div className="relative">
-        <CardArt cardId={null} name={card.n} remoteSrc={card.img ?? null} finish={marked} />
-        {card.q > 1 && (
-          // Bottom-left. The art's top-right corner is the finish chip's on every wall in this
-          // app, and a bare number laid *on* a card is `CountTag` — no `×`. The tag is
-          // `aria-hidden`, so the words are owed elsewhere: the tile's own sr-only line below
-          // carries them.
-          <span className="absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5">
-            <CountTag count={card.q} title={`${card.q} copies`} />
-          </span>
-        )}
-      </div>
-      <CardChin
-        zoom={DEFAULT_ZOOM}
-        rarity={null}
-        setCode={card.s}
-        collectorNumber={card.cn}
+    <li className="flex flex-col">
+      <CardTile
+        cardId={null}
+        name={card.n}
+        remoteSrc={card.img ?? null}
         finish={marked}
+        rarity={null}
+        chin={{ setCode: card.s, collectorNumber: card.cn }}
+        zoom={DEFAULT_ZOOM}
         // `undefined` rather than `null`: the chin draws no money slot for the first and an em
         // dash for the second, which is precisely the difference between "nobody asked" and
         // "nobody quoted". Both are live states on this page.
         money={showValue ? formatPrice(card.p ?? null, currency) : undefined}
-        seam="art"
+        overlay={
+          card.q > 1 ? (
+            // Bottom-left. The art's top-right corner is the finish chip's on every wall in this
+            // app, and a bare number laid *on* a card is `CountTag` — no `×`. The tag is
+            // `aria-hidden`, so the words are owed elsewhere: the tile's own sr-only line below
+            // carries them.
+            <span className="absolute bottom-1 left-1 rounded bg-bg/85 px-1.5 py-0.5">
+              <CountTag count={card.q} title={`${card.q} copies`} />
+            </span>
+          ) : undefined
+        }
       />
       {(showCondition || showLang) && (
         // **Two spans and a gap, not one string joined by a middle dot.** Each column has to be
