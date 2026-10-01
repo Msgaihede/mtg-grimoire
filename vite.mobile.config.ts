@@ -103,6 +103,26 @@ export default defineConfig(({ mode }) =>
       rolldownOptions: { input: ENTRY },
     },
     // Not 1420 (`tauri dev`), not 5174 (the share viewer), not 6006 (Storybook).
-    server: { port: 5175, strictPort: true },
+    //
+    // **The watcher is kept out of every build output under the root.** The root is the whole
+    // repository, so Vite watches all of it, and a watch taken on a file a compiler is still
+    // writing is refused on Windows with `EBUSY` — which chokidar raises as an unhandled error
+    // and the server dies of. Driven 2026-10-01: this server, left up while `npm run verify`
+    // ran, exited on `crates/card-scanner/target/…/sqlite3.o` the moment cargo reached that
+    // crate, having already reloaded the page once for `dist/index.html`. `mergeConfig` appends
+    // to the base config's own entry (`src-tauri`), it does not replace it.
+    server: {
+      port: 5175,
+      strictPort: true,
+      watch: {
+        ignored: [
+          "**/crates/**/target/**",
+          "**/dist/**",
+          "**/dist-mobile/**",
+          "**/dist-share/**",
+          "**/storybook-static/**",
+        ],
+      },
+    },
   }),
 );
