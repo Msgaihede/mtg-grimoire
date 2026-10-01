@@ -98,6 +98,24 @@ const DETAIL_QUALITY = 0.85;
 const IDLE_MS = 16;
 /** How many round trips the rate averages over. */
 const WINDOW = 20;
+/**
+ * A decision this many frames or fewer after the one before it is not a second card, and is not
+ * passed on (issue #735).
+ *
+ * The session can decide twice in a row on one physical card: it calls a card *changed* on two
+ * frames that look unlike the decided one, so a card still settling — or a camera still moving —
+ * is decided again two frames after its first decision, three when that decision waits a frame
+ * for its confirming read. A card a reader really did swap in needs the old one lifted, the new
+ * one laid down and at least three frames of its own, which is more than this at any frame rate.
+ *
+ * **Frames, not milliseconds.** The session works in frames and the pump runs anywhere from
+ * five to a dozen a second, so a clock would be one machine's number: long enough to catch a
+ * three-frame pair on a slow build is long enough to swallow a real card on a fast one.
+ *
+ * **The first of the two stays.** Nothing here can tell which read was the better one, and the
+ * row already in the tray is the one the reader has seen land.
+ */
+export const DECISION_GAP_FRAMES = 3;
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -151,6 +169,9 @@ export function useScanLoop({
    * view switch is still frozen when the camera comes back, and its decision rides every committed
    * frame; adding on that first frame would re-add the card the tray already holds. Read through a
    * ref like `options`, so a page passing a fresh closure each render does not restart the pump.
+   *
+   * **Nor is a number that moves again within {@link DECISION_GAP_FRAMES} frames**: that is the
+   * session deciding one card twice, and the second is dropped.
    */
   onDecision?: (decision: ScannerDecision, seq: number) => void;
 }): ScanLoop {
@@ -210,6 +231,13 @@ export function useScanLoop({
    */
   const lastSeqRef = useRef<number | null>(null);
   /**
+   * Verdicts since the last decision, the one that carried it not counted — `Infinity` until the
+   * camera's first, so a session's first card is never inside the gap. Counted from **every**
+   * decision, a dropped one included: a session flapping between two answers every other frame
+   * would otherwise get every second one through.
+   */
+  const sinceDecisionRef = useRef(Infinity);
+  /**
    * The last verdict's `wants_detail`: whether the next frame goes out as a pair. A ref for
    * `lastSeqRef`'s reason — nothing draws it, and the pump reads it on its very next iteration.
    *
@@ -236,6 +264,7 @@ export function useScanLoop({
     // A camera that has just started has seen no number yet; see `lastSeqRef`. Nor has it been
     // asked for a detail image — a latch left from the last stream belongs to a card it saw.
     lastSeqRef.current = null;
+    sinceDecisionRef.current = Infinity;
     wantsDetailRef.current = false;
 
     async function pump() {
@@ -306,11 +335,17 @@ export function useScanLoop({
           // The decision edge. The ref moves on every verdict — a frame that repeats the number
           // is the frozen card still in front of the lens, and one with no decision is a card
           // nobody has settled on — and only a number that differs from the last one, on a frame
-          // carrying the decision, is an add.
+          // carrying the decision, is an add — unless it comes too soon after the last one to be
+          // a second card (`DECISION_GAP_FRAMES`).
           const seenSeq = lastSeqRef.current;
           lastSeqRef.current = answer.decision_seq;
+          sinceDecisionRef.current += 1;
           if (seenSeq !== null && answer.decision !== null && answer.decision_seq !== seenSeq) {
-            onDecisionRef.current?.(answer.decision, answer.decision_seq);
+            const gap = sinceDecisionRef.current;
+            sinceDecisionRef.current = 0;
+            if (gap > DECISION_GAP_FRAMES) {
+              onDecisionRef.current?.(answer.decision, answer.decision_seq);
+            }
           }
         } catch (e) {
           // The loop does not stop on a failure. A missing bundle rejects every frame the same

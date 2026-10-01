@@ -117,10 +117,13 @@ fn stamp_column(table: &str) -> &'static str {
 /// and not an absence — and a parent at the root travels as a JSON null too, which
 /// [`super::merge`] reads back as `Some(None)`.
 ///
-/// `WHERE sync_uid IS NOT NULL` is a fence and not a filter: the capture trigger mints on insert
-/// and [`crate::schema::mint_missing_uids`] covers the other two creation paths, so a nameless
-/// row is unreachable at head. An op carrying an empty name would be worse than a missing row —
-/// every device would file every anonymous row under one uid.
+/// `WHERE sync_uid IS NOT NULL` is a fence **and** a filter. The capture trigger mints on insert
+/// and [`crate::schema::mint_missing_uids`] covers the other two creation paths, so the only
+/// nameless rows at head are the ones written behind `capture::suppressed`, where the mint does
+/// not run: a managed wishlist's folders and wishes, which every device derives for itself and
+/// which must not be announced — this clause is what keeps them out. An op carrying an empty
+/// name would be worse than a missing row — every device would file every anonymous row under
+/// one uid.
 fn select_for(spec: &Spec) -> String {
     let mut cols: Vec<String> = vec!["t.sync_uid".to_owned()];
     for f in spec.fields {

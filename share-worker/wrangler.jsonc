@@ -80,16 +80,17 @@
   },
 
   "vars": {
-    // ⚠️ **A placeholder, and deliberately one that cannot be mistaken for an address.** Only a
-    // deploy can produce the real host, and it must then be written here **and** into the Rust's
-    // `share::SHARE_BASE` byte for byte — the trap `relay/wrangler.jsonc` documents for
-    // `RELAY_BASE` and the OAuth redirect URI. A plausible invented URL is worse than an obvious
-    // hole: it gets copied into documentation and deployed against, which is exactly what
-    // `database_id`'s comment in the relay's config records happening.
+    // **This Worker's own address, real since the first deploy on 2026-10-01** — the Worker's
+    // name and the account's `workers.dev` subdomain, read back from the deploy rather than
+    // guessed. It was the placeholder `<set on first deploy>` until then, deliberately one that
+    // could not be mistaken for an address.
     //
-    // Every link the app shows is `{SHARE_BASE}/s/{id}` built by `env.ts`'s `shareUrl`, so until
-    // this is set the links say so in the loudest possible way.
-    "SHARE_BASE": "<set on first deploy>",
+    // ⚠️ **It must equal the Rust's `share::publish::SHARE_BASE` byte for byte** — the trap
+    // `relay/wrangler.jsonc` documents for `RELAY_BASE` and the OAuth redirect URI, with less
+    // mercy: a mismatch produces links that resolve to nothing rather than an error anybody
+    // sees. `share::publish`'s tests read this file and compare. No trailing slash: every link
+    // the app shows is `{SHARE_BASE}/s/{id}`, built by `env.ts`'s `shareUrl`.
+    "SHARE_BASE": "https://mtg-grimoire-share.denmark-east.workers.dev",
   },
 
   // The three secrets stay in `wrangler secret put` and are never committed (spec §9). This
