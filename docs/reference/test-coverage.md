@@ -101,7 +101,11 @@ with either; they are different metrics with the same name. **Quote one source o
 never subtract across them.**
 
 So `scripts/coverage-rust.mjs` reads the LCOV export back and splits each file at its first
-column-0 `#[cfg(test)]`, counting only `DA:` records above it. That cut is safe here because in
+column-0 `#[cfg(test)]` **that gates a module**, counting only `DA:` records above it. (Until
+2026-10-02 it cut at the first `#[cfg(test)]` of any kind, and eleven files carry one — a
+test-only `use`, a helper — far above their tests: everything below it was dropped from the
+shipped figure, the whole of `wishlist.rs` among them. Every figure on this page predates that
+fix.) That cut is safe here because in
 all 28 files that carry the attribute it is the last item in the file (`main.rs`, the 29th, has
 none and is left whole), and the single file with two of them — `index/mod.rs`, a
 `pub(crate) mod fixtures` and then `mod tests` — has nothing but test code between them.

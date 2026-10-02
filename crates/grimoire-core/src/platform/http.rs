@@ -17,16 +17,23 @@
 //! readers sniff the gzip magic off the first chunk (`feed::frame::Decoder`) and never trust a
 //! header.
 //!
-//! **The browser arm has never run.** CI's `core` job compiles it for `wasm32-unknown-unknown`;
-//! the first thing to call it is phase 5's Worker.
+//! **The browser arm has never run, and CORS is the part nobody has measured.** CI's `core`
+//! job compiles it for `wasm32-unknown-unknown`; the first thing to call it is phase 5's
+//! Worker. A request there is cross-origin, so a request header outside the safelist
+//! (`If-None-Match`, `Range`) costs a pre-flight, and a response header outside it (`ETag`,
+//! `Retry-After`, `Content-Range`) reads as absent from [`Response::header`] unless the host
+//! exposes it — in which case a bulk check stores no ETag, a 429 falls back to its default
+//! thirty seconds and a resume is refused. Which of those Scryfall and the feeds expose is a
+//! measurement for that phase, against the real hosts.
 
 use std::time::Duration;
 
 /// What a client is built from. The two timeouts are honoured where the host has sockets.
 #[derive(Debug, Clone, Copy)]
 pub struct Config<'a> {
-    /// Sent on every request. In a browser the page's own `User-Agent` wins: `fetch` treats the
-    /// header as the browser's to set.
+    /// Sent on every request. **What a browser does with it has not been measured**: an
+    /// engine may drop a script-set `User-Agent` and send its own, or send this one and
+    /// pre-flight the request for it.
     pub user_agent: &'a str,
     /// Bounds a dead host, not a slow one.
     pub connect_timeout: Option<Duration>,
@@ -87,7 +94,7 @@ impl Response {
     /// The whole body, in memory. For a body whose size is not the caller's to trust, read
     /// [`Response::into_body`] against a running total instead.
     pub async fn bytes(self) -> Result<Vec<u8>, Error> {
-        self.0.bytes().await.map(|b| b.to_vec()).map_err(Error)
+        self.0.bytes().await.map(Vec::from).map_err(Error)
     }
 
     /// The body as a stream of chunks.

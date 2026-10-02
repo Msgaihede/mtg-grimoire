@@ -69,7 +69,7 @@ Pacing, retry, the 429 lockout and the size checks stay in `scryfall::Client` �
 
 ### The fence's fifth rule
 
-`reqwest`, `tokio`, `std::fs` and `std::thread` are refused outside `src/platform/` in **shipped** code — above a file's first column-0 `#[cfg(test)]`, skipping files their parent declares behind a test gate. The existing rules sweep test code too; this one cannot, because a test of a download writes a file and `#[tokio::test]` is how an async test runs.
+`reqwest`, `tokio`, `std`'s `fs`, `thread`, `net`, `process` and `env`, and a disk asked through a path are refused outside `src/platform/` in **shipped** code — above a file's first column-0 `#[cfg(test)]` that gates a module, skipping files their parent declares behind a test gate. The existing rules sweep test code too; this one cannot, because a test of a download writes a file and `#[tokio::test]` is how an async test runs.
 
 ## Global Constraints
 
@@ -132,7 +132,7 @@ Pacing, retry, the 429 lockout and the size checks stay in `scryfall::Client` �
 - [x] `npm run build`, `npm run lint`, `npm run test:run`.
 - [x] An existing database upgraded by `main`'s binary and by this branch's, compared row for row.
 - [x] `tauri dev` (the `app` lock): a real card sync against Scryfall — the check, the download with its progress, the ingest, the migration log — and an image fetch.
-- [ ] A fresh reviewer over the diff.
+- [x] A fresh reviewer over the diff. **No behaviour change found; four things fixed**: the fence's cut (it stopped at a file's first `#[cfg(test)]`, which in four files gates one item far above the tests — about 3 500 shipped lines unread), the same cut in `scripts/coverage-rust.mjs`, an assertion that depended on directory order, and the shapes the rule walked past (`pub(crate) use std::{…}`, a glob, `path.is_file()`, `std::net`, `std::process`, `std::env`). And the browser arms' docs: CORS is unmeasured, a browser's `Tick` is the wall clock, `setTimeout` rounds up now.
 
 ### Task 6 — the record, and ship
 

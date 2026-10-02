@@ -18,8 +18,10 @@
 //! shape is belongs to the web host (the light-app spec §6), which is the first thing that could
 //! run it. Until then every function here answers `Unsupported` in a browser, and the two
 //! questions answer `false`. That is a refusal a caller already handles: a download that cannot
-//! be written is a failed sync with its reason in `error_log`, and a corpus that is not a file
-//! is one the launch does not try to replace.
+//! be written is a failed sync with its reason in `error_log` (the request is sent first — the
+//! refusal comes when the first byte has somewhere to go), a backup before a climb is logged
+//! and skipped, and `schema::replace_unreadable_corpus` — which a browser's host has no reason
+//! to call — would try, be refused, say so and leave everything as it was.
 //!
 //! `std::fs` itself compiles for a browser and fails there when called, which is why `schema`
 //! could name it directly until the I/O step. `tokio::fs` does not compile there at all.

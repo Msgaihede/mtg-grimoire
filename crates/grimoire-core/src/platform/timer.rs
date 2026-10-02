@@ -10,12 +10,14 @@
 //! always has.
 //!
 //! **The browser arm has never run.** It reads `setTimeout` off the global object rather than
-//! off `window`, because the host that will call it is a Worker and has none.
+//! off `window`, because the host that will call it is a Worker and has none. A deadline that
+//! was beaten leaves its timer to fire into nothing: the promise is dropped and the timeout is
+//! not cleared, which costs a pending timer for at most the length of the deadline.
 
 use std::future::Future;
 use std::time::Duration;
 
-/// Come back after `duration`. A zero wait still yields once.
+/// Come back after `duration`, and never before it.
 pub async fn sleep(duration: Duration) {
     imp::sleep(duration).await
 }
@@ -47,7 +49,9 @@ mod imp {
     use wasm_bindgen::JsCast as _;
 
     pub async fn sleep(duration: Duration) {
-        let ms = duration.as_millis().min(i32::MAX as u128) as i32;
+        // Rounded up: `setTimeout` counts whole milliseconds, and a wait cut short is the one
+        // thing a pacing gate cannot be given.
+        let ms = duration.as_micros().div_ceil(1000).min(i32::MAX as u128) as i32;
         let promise = js_sys::Promise::new(&mut |resolve, _reject| {
             let global = js_sys::global();
             // A host with no `setTimeout` has no timer at all; resolving at once is the only

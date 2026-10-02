@@ -1408,10 +1408,14 @@ mod tests {
         );
 
         // And the release tooling is told about both manifests and both lockfile entries.
-        let config = include_str!("../../release-please-config.json");
+        // Whitespace taken out, so a reformatted file is the same file.
+        let config: String = include_str!("../../release-please-config.json")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
         for path in [
-            "\"path\": \"src-tauri/Cargo.toml\"",
-            "\"path\": \"crates/grimoire-core/Cargo.toml\"",
+            "\"path\":\"src-tauri/Cargo.toml\"",
+            "\"path\":\"crates/grimoire-core/Cargo.toml\"",
             "$.package[?(@.name.value=='mtg-grimoire')].version",
             "$.package[?(@.name.value=='grimoire-core')].version",
         ] {

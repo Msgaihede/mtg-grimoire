@@ -50,7 +50,7 @@ over there is this crate's item unless that file defines one.
 | **No `tauri` dependency** — not the crate, not its build script's, not a plugin, not `wry` or `tao`, not under another name | `platform::fence`, which reads `Cargo.toml` |
 | **`cfg(target_…)`, `cfg(windows)` and `cfg(unix)` appear only under `src/platform/`** | `platform::fence`, which reads every source file |
 | **Nothing outside `src/platform/` names `SystemTime`, `UNIX_EPOCH` or `std::time::Instant`** — reading any of them panics on `wasm32-unknown-unknown`, at run time, in a build that compiled clean | The same sweep |
-| **Nothing the crate ships names `reqwest`, `tokio`, `std::fs` or `std::thread` outside `src/platform/`** (since the I/O step) — a request, a timer, a file and a thread each have one implementation per kind of host there | The same file, a second sweep: shipped code only |
+| **Nothing the crate ships names `reqwest`, `tokio`, or `std`'s `fs`, `thread`, `net`, `process` or `env` outside `src/platform/`, or asks a disk through a path** (`.exists()`, `.is_file()`, `.metadata()`) — since the I/O step. A request, a timer, a file and a thread each have one implementation per kind of host there | The same file, a second sweep: shipped code only |
 | **It compiles for `x86_64-pc-windows-msvc`, `aarch64-linux-android` and `wasm32-unknown-unknown`** | CI: the `core` job for the last two, the `rust` job for the desktop, where the tests run |
 
 - **The fence reads code lines and skips comment lines**, so prose may name what it refuses. A
@@ -60,12 +60,16 @@ over there is this crate's item unless that file defines one.
   but the sweep does not parse `#[cfg(test)]`, so a clock read in a test is refused like any
   other. Take the time from `platform::clock` — `Tick::now()` and `elapsed()` are what a test
   that times something uses, as `db`'s and `scryfall`'s do — or from SQLite.
-- **The I/O rule reads shipped code only**: above a file's first column-0 `#[cfg(test)]`, and
-  not at all in a file its parent declares behind a test gate (`scratch.rs`,
-  `sync_engine/apply/tests.rs` — derived, and pinned by name). A test of a download writes a file,
-  a test of a lock starts a thread, and `#[tokio::test]` is how an async test runs. So **tests and
-  fixtures go at the foot of the file and nothing that ships goes below them** — code under that
-  line is not read.
+- **The I/O rule reads shipped code only**: above a file's first column-0 `#[cfg(test)]` **that
+  gates a module**, and not at all in a file its parent declares behind a test gate (`scratch.rs`,
+  `sync_engine/apply/tests.rs` — derived, sorted, and pinned by name). A test of a download
+  writes a file, a test of a lock starts a thread, and `#[tokio::test]` is how an async test
+  runs. So **tests and fixtures go at the foot of the file and nothing that ships goes below
+  them** — code under that line is not read. A gate over a single item higher up (a test-only
+  `use`, a helper function) is *not* the cut: it and everything below it are read as shipped,
+  which is why a `#[cfg(test)]` helper may not name `std::fs` either. (It cut at the first gate
+  of any kind for one afternoon, and four files' worth of shipped code went unread.)
+  `scripts/coverage-rust.mjs` makes the same cut.
 - **It is a text sweep, and three things pass it**: a clock reached through a re-export or
   another crate's `now()`, a gate inside a macro this crate does not define, and a host that
   arrives as somebody else's dependency. The first two fail the `core` job or a browser; the

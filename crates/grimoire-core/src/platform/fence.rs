@@ -25,11 +25,25 @@
 //! **The fifth rule reads shipped code only, and that is a decision rather than a gap.** A test
 //! of a download has to put a file on a disk and read it back, a test of a lock has to start a
 //! thread, and `#[tokio::test]` is how an async test runs at all — none of which a browser will
-//! ever be asked to do. So that sweep stops at a file's first column-0 `#[cfg(test)]`, the cut
-//! `scripts/coverage-rust.mjs` already makes, and skips a file its parent declares behind a
-//! test gate. What it costs is the thing the paragraph above refuses to trust: code below that
-//! line which is *not* test code is not read. Every file here keeps its tests and its fixtures
-//! at the foot, and nothing else below them.
+//! ever be asked to do. So that sweep stops at a file's first column-0 `#[cfg(test)]` **that
+//! gates a module** — `mod tests {`, `mod tests;`, a `fixtures` module above one — which is
+//! the cut `scripts/coverage-rust.mjs` makes, and skips a file its parent declares behind a
+//! test gate. It reads `src/` and nothing else: an integration test under `tests/` is a test.
+//!
+//! **The cut has to be a module's gate and not the first gate in the file**: four files here
+//! carry a test-only `use`, a `thread_local!` or a helper function far above their tests
+//! (`wishlist.rs` at line 22), and cutting there left everything below it unread — about 3 500
+//! shipped lines, until a reviewer counted them. A single gated item is read as shipped now,
+//! which refuses too much and is the cheap direction. What it still costs is the thing the
+//! paragraph above refuses to trust: code below a file's test modules which is *not* test code
+//! is not read. Every file here keeps its tests and its fixtures at the foot, and nothing else
+//! below them.
+//!
+//! **And it is a list of spellings, so it can be walked around.** A glob over `std` is refused
+//! and so is a grouped import on one line, but a grouped import the formatter broke across
+//! lines passes, as does an alias (`use std as s`) — each then has to *call* something, which
+//! is what a reviewer reads. A disk asked through a path (`path.exists()`, `.is_file()`) names
+//! no module at all, so those spellings are on the list by hand.
 //!
 //! **It is a text sweep, and what it cannot see is written down rather than hoped away.** A
 //! clock reached through a re-export or another crate's `now()`, a gate hidden inside a macro
@@ -97,8 +111,22 @@ mod tests {
     /// The two crates that are a host's network and its async runtime, as whole words.
     const IO_CRATES: [&str; 2] = ["reqwest", "tokio"];
 
-    /// The two modules of `std` that are a disk and another thread.
-    const IO_MODULES: [&str; 2] = ["fs", "thread"];
+    /// The modules of `std` that are a disk, another thread, a socket, a child process and the
+    /// process's environment — the last because `std::env::temp_dir()` is a path on a disk a
+    /// browser does not have, and nothing else in that module has a caller here.
+    const IO_MODULES: [&str; 5] = ["fs", "thread", "net", "process", "env"];
+
+    /// A disk asked through a path, which names no module: `Path`'s own questions. Matched with
+    /// their empty parentheses, so `statement.exists(params)` — rusqlite's — is not one.
+    const PATH_QUESTIONS: [&str; 7] = [
+        ".exists()",
+        ".is_file()",
+        ".is_dir()",
+        ".read_dir()",
+        ".metadata()",
+        ".symlink_metadata()",
+        ".canonicalize()",
+    ];
 
     /// The two spellings of a gate that makes the `mod` below it test code.
     const TEST_GATES: [&str; 2] = ["#[cfg(test)]", "#[cfg(any(test, feature = \"testing\"))]"];
@@ -169,34 +197,70 @@ mod tests {
         found
     }
 
+    /// `line` without its indentation or its visibility: `pub`, `pub(crate)`, `pub(super)`.
+    fn bare(line: &str) -> &str {
+        let line = line.trim_start();
+        let Some(rest) = line.strip_prefix("pub") else {
+            return line;
+        };
+        let rest = match rest.strip_prefix('(').and_then(|r| r.split_once(')')) {
+            Some((_, after)) => after,
+            None => rest,
+        };
+        // `public_key` is not a visibility: what follows `pub` has to be a space.
+        if rest.starts_with(' ') {
+            rest.trim_start()
+        } else {
+            line
+        }
+    }
+
+    /// Whether `line` opens or declares a module.
+    fn declares_module(line: &str) -> bool {
+        bare(line).starts_with("mod ")
+    }
+
     /// What one shipped code line names that only `platform` may, if anything.
     ///
-    /// `std::fs` and `std::thread` are matched as paths, so `std::thread_local!` is not one —
-    /// and in a grouped `use std::{…}` as bare words, on that line only. A grouped import the
-    /// formatter broke across lines passes; so does an alias (`use std as s`). Both then have
-    /// to *call* something, and the call is what a reviewer reads.
+    /// The modules of `std` are matched as paths, so `std::thread_local!` is not one — and in
+    /// a grouped `use std::{…}` as bare words, on that line only.
     fn io_offence(line: &str) -> Option<&'static str> {
         if IO_CRATES.iter().any(|name| has_word(line, name)) {
             return Some(
                 "names the HTTP client or the async runtime; ask `platform::http`, `timer` or `files`",
             );
         }
-        let import = line.trim_start().trim_start_matches("pub ");
+        let import = bare(line);
+        if import.starts_with("use std::*") {
+            return Some("globs `std`, which hides what it brings; name it");
+        }
         let grouped = import.starts_with("use std::{");
         let named = |module: &&str| {
             has_word(line, &format!("std::{module}")) || (grouped && has_word(line, module))
         };
         if IO_MODULES.iter().any(named) {
-            return Some("reaches a disk or a thread; ask `platform::files` or `platform::pause`");
+            return Some(
+                "reaches a disk, a thread, a socket or the process; ask `platform::files` or `platform::pause`",
+            );
+        }
+        if PATH_QUESTIONS.iter().any(|call| line.contains(call)) {
+            return Some("asks a disk through a path; ask `platform::files`");
         }
         None
     }
 
-    /// Every such line in what one file ships: above its first column-0 `#[cfg(test)]`.
+    /// Every such line in what one file ships: above its first column-0 `#[cfg(test)]` that
+    /// gates a module. A gate over a single item — a test-only `use`, a helper — is not the
+    /// cut, or everything below it would go unread.
     fn io_offences(rel: &str, text: &str) -> Vec<String> {
-        text.lines()
+        let lines: Vec<&str> = text.lines().collect();
+        let cut = lines
+            .windows(2)
+            .position(|pair| pair[0].starts_with("#[cfg(test)]") && declares_module(pair[1]))
+            .unwrap_or(lines.len());
+        lines[..cut]
+            .iter()
             .enumerate()
-            .take_while(|(_, line)| !line.starts_with("#[cfg(test)]"))
             .filter(|(_, line)| !is_comment(line))
             .filter_map(|(i, line)| Some(format!("{rel}:{}: {}", i + 1, io_offence(line)?)))
             .collect()
@@ -204,7 +268,9 @@ mod tests {
 
     /// The files that are test code from their first line: a module its parent declares
     /// directly under a test gate — `#[cfg(test)] mod tests;`, and `scratch`, which `lib.rs`
-    /// gates on the `testing` feature. As paths relative to the package.
+    /// gates on the `testing` feature. As paths relative to the package, **sorted**: a
+    /// directory is read in whatever order the filesystem keeps it, which is by name on NTFS and
+    /// by nothing in particular elsewhere, and CI runs this on both.
     fn test_only(files: &[(String, String)]) -> Vec<String> {
         let mut found = Vec::new();
         for (rel, text) in files {
@@ -219,8 +285,7 @@ mod tests {
                 if !TEST_GATES.contains(&pair[0]) {
                     continue;
                 }
-                let declared = pair[1].trim_start_matches("pub ");
-                let Some(name) = declared
+                let Some(name) = bare(pair[1])
                     .strip_prefix("mod ")
                     .and_then(|rest| rest.strip_suffix(';'))
                 else {
@@ -233,6 +298,8 @@ mod tests {
                 }
             }
         }
+        found.sort();
+        found.dedup();
         found
     }
 
@@ -453,6 +520,9 @@ mod tests {
 
         let found: Vec<String> = files
             .iter()
+            // `src/` and nothing else: what is under `tests/`, `benches/` or `examples/` is
+            // test code by where it sits, and a build script runs on the machine that builds.
+            .filter(|(rel, _)| rel.starts_with("src/"))
             .filter(|(rel, _)| !rel.starts_with(PLATFORM) && !tests.contains(rel))
             .flat_map(|(rel, text)| io_offences(rel, text))
             .collect();
@@ -491,6 +561,17 @@ mod tests {
             "pub use std::{io, thread};",
             "std::thread::sleep(wait);",
             "let worker = ::std::thread::spawn(run);",
+            "pub(crate) use std::{fs, io};",
+            "use std::*;",
+            "let socket = std::net::TcpStream::connect(addr)?;",
+            "let scratch = std::env::temp_dir();",
+            "std::process::exit(1);",
+            "    if dest.exists() {",
+            "let marked = data_dir.join(MARK).is_file();",
+            "let size = path.metadata()?.len();",
+            // A gate over one item is not where a file's tests start: what is below it ships.
+            "#[cfg(test)]\nuse crate::deck_meta::FOLDER_GONE;\n\npub fn f() { std::fs::write(p, b).unwrap(); }",
+            "#[cfg(test)]\npub(crate) fn held() -> usize { 0 }\nfn g() { tokio::spawn(run()); }",
         ] {
             assert!(!io_offences("x.rs", text).is_empty(), "let through: {text}");
         }
@@ -501,6 +582,9 @@ mod tests {
             "std::thread_local! { static STORE: Store = Store::new(); }",
             "use std::{io, path::Path};",
             "let offs = offsets(&fs);",
+            "if statement.exists([id])? {",
+            "let public_key = keys.public_key;",
+            "#[cfg(test)]\npub(crate) mod fixtures {\n    pub fn f() { std::fs::write(p, b).unwrap(); }\n}",
             "// `tokio::fs` does not compile for a browser, which is why this asks `platform`.",
             "    /// reqwest is built without its `json` feature.",
             // Below the cut a file is its tests, and a test may put a file on a disk.
@@ -524,14 +608,14 @@ mod tests {
             ),
             file("src/a.rs", "pub fn f() {}\n#[cfg(test)]\nmod tests;\n"),
             file("src/a/tests.rs", ""),
-            file("src/b/mod.rs", "    #[cfg(test)]\n    mod checks;\n#[cfg(feature = \"x\")]\nmod kept;\n"),
+            file("src/b/mod.rs", "    #[cfg(test)]\n    pub(crate) mod checks;\n#[cfg(feature = \"x\")]\nmod kept;\n"),
             file("src/b/checks/mod.rs", ""),
             file("src/b/kept.rs", ""),
             file("src/scratch.rs", ""),
         ];
         assert_eq!(
             test_only(&files),
-            ["src/scratch.rs", "src/a/tests.rs", "src/b/checks/mod.rs"]
+            ["src/a/tests.rs", "src/b/checks/mod.rs", "src/scratch.rs"]
         );
     }
 

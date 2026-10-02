@@ -9,9 +9,18 @@
 // live in the same files as the code they test.
 //
 // So this reads the LCOV export back and splits each file at its first column-0
-// `#[cfg(test)]`. Everything from that line down is test-only: in every file here the
-// attribute is the last item, and the one file with two (`index/mod.rs`, a `fixtures`
-// module then `mod tests`) has nothing but test code between them.
+// `#[cfg(test)]` **that gates a module** — `mod tests {`, `mod tests;`, or a `fixtures` module
+// above one. Everything from that line down is test-only: every file here keeps its test
+// modules at the foot, and the one with two (`index/mod.rs`, a `fixtures` module then
+// `mod tests`) has nothing but test code between them.
+//
+// **It cut at the first `#[cfg(test)]` of any kind until 2026-10-02, and eleven files have one
+// far above their tests** — a test-only `use`, a `thread_local!`, a helper function. In those
+// the whole of the file below that line was dropped from the shipped figure: all of
+// `wishlist.rs` from line 22, most of `sync_engine/apply.rs`. The single items such a gate
+// covers are counted as shipped now, which is a few lines wrong in the other direction and
+// the cheaper mistake. `platform::fence`'s I/O sweep in `grimoire-core` makes the same cut,
+// for the same reason.
 //
 // **Both workspace members are measured, since 2026-10-02**: the app in `src-tauri` and the
 // engine in `crates/grimoire-core`, which is where the app's modules are moving. One run, one
@@ -65,16 +74,22 @@ function sources(dir) {
   });
 }
 
+/** Whether `line` opens or declares a module — what a test gate has to be followed by to be the cut. */
+const declaresModule = (line) => /^(pub(\([a-z]+\))? )?mod \w/.test(line ?? "");
+
 /**
- * file -> 1-based line of its first `#[cfg(test)]`, or Infinity if it has none. The key is the
- * member's prefix and the path below its `src/`, `/`-separated — the name the table prints.
+ * file -> 1-based line of the first `#[cfg(test)]` that gates a module, or Infinity if it has
+ * none. The key is the member's prefix and the path below its `src/`, `/`-separated — the name
+ * the table prints.
  */
 const boundary = new Map();
 for (const { src, prefix } of MEMBERS) {
   const dir = join(...src.split("/"));
   for (const path of sources(dir)) {
     const lines = readFileSync(path, "utf8").split("\n");
-    const at = lines.findIndex((l) => l.startsWith("#[cfg(test)]"));
+    const at = lines.findIndex(
+      (l, i) => l.startsWith("#[cfg(test)]") && declaresModule(lines[i + 1]),
+    );
     const key = prefix + relative(dir, path).split(sep).join("/");
     boundary.set(key, at === -1 ? Infinity : at + 1);
   }

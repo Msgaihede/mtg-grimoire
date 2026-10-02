@@ -31,9 +31,12 @@ pub fn now_secs() -> i64 {
 /// is not comparable across a restart. `db::lock_for` is why it exists — a bounded wait has to
 /// know when its bound has passed.
 ///
-/// A browser's arm is the wall clock, which a reader or an NTP step can move. A step backwards
-/// reads as no time having passed, so a wait there runs long rather than ending early; nothing
-/// else is promised.
+/// A browser's arm is the wall clock, which a reader or an NTP step can move, and which counts
+/// whole milliseconds. A step backwards reads as no time having passed, so a wait there runs
+/// long; **a step forwards reads as time having passed, so a wait there can end early**, and
+/// the rounding alone can overstate a wait by a millisecond. `db::lock_for` gives up a little
+/// soon; `scryfall`'s pacing gate, the second caller, would send a little soon — which is why
+/// the web host should give this arm `performance.now()` before it paces anything.
 #[derive(Debug, Clone, Copy)]
 pub struct Tick(imp::Tick);
 

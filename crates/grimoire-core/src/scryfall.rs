@@ -22,7 +22,7 @@
 //!
 //! Every request to `api.scryfall.com` must carry a real `User-Agent` *and* an
 //! `Accept` header; Cloudflare answers 403 without them, so the UA is pinned on the
-//! client itself and [`Client::api_get`] is the only way this module builds an API
+//! client itself and [`Client::api_send`] is the only way this module builds an API
 //! request. The API host is rate limited (a 429 locks the caller out for 30 seconds,
 //! and Scryfall bans repeat offenders), so 429 gets its own error variant carrying the
 //! duration the caller must wait — a bare marker leaves it guessing. The file origins
@@ -465,6 +465,10 @@ impl Client {
     /// leave together. The waits are the documented intervals — 100 ms for everything this
     /// app calls — so a queue of them is bounded by the number of requests in flight, which
     /// for this app is one.
+    ///
+    /// What is waited is what is left of the last request's gap, measured with a
+    /// [`Tick`] — monotonic natively. A browser's tick is the wall clock, which can step
+    /// forwards and open the gate early; see `platform::clock`.
     async fn await_slot(&self, url: &str) {
         let interval = min_interval(url);
         let mut slot = self.next_api_slot.lock().await;
@@ -1300,6 +1304,8 @@ mod tests {
         assert_send(&c.check_bulk_update(None));
         assert_send(&c.fetch_sets());
         assert_send(&c.fetch_migrations());
+        // The image cache spawns this one, and its body is a boxed stream that has to say so.
+        assert_send(&c.fetch_image("http://127.0.0.1:1/x.webp"));
         assert_send(&c.download(
             "http://127.0.0.1:1/x.gz",
             Path::new("unused"),

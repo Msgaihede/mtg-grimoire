@@ -999,10 +999,11 @@ damage mark — go through `platform::files` too, so nothing the crate ships nam
 - **The tag datasets' names changed hands.** `scryfall::BULK_ORACLE_TAGS` aliased
   `tags::oracle::BULK_NAME`; `tags` is still the desktop's, so the string lives in `scryfall`
   and `tags` aliases it. One definition either way.
-- **The fence has a fifth rule**: `reqwest`, `tokio`, `std::fs` and `std::thread` are refused
-  outside `src/platform/` in what the crate ships. It reads above a file's first column-0
-  `#[cfg(test)]` only — a test of a download has to write a file — and derives the two files
-  that are tests throughout from the gate on their `mod` line.
+- **The fence has a fifth rule**: `reqwest`, `tokio`, and `std`'s `fs`, `thread`, `net`,
+  `process` and `env` are refused outside `src/platform/` in what the crate ships, as is a
+  disk asked through a path (`.exists()`, `.is_file()`). It reads above a file's first column-0
+  `#[cfg(test)]` **that gates a module** — a test of a download has to write a file — and
+  derives the two files that are tests throughout from the gate on their `mod` line.
 
 **What was checked.**
 
@@ -1053,10 +1054,37 @@ deleted — the documented way to force a resync:
 | The image cache | 211 files, 15.5 MB, from empty — each a `fetch_image` under `timer::timeout` |
 | `error_log`; the app's stderr | the two rows it arrived with; nothing |
 
+**What a fresh reviewer found**, reading the commit against `main` item by item with no cargo:
+no behaviour change on the desktop — every request, status arm, file call and error string
+compared equal — and four things that were wrong anyway.
+
+- **The fifth rule was not reading about 3 500 shipped lines.** It cut at a file's first
+  column-0 `#[cfg(test)]`, and four files in the core carry one far above their tests: a
+  test-only `use` at `wishlist.rs:22`, a `thread_local!` in `sync_engine/apply.rs`, a helper in
+  `bulk_undo.rs`, a constant in `apply/rehome.rs`. Everything below each was unread. The cut is
+  a gate over a *module* now, and the rule's own tests carry both shapes.
+- **`scripts/coverage-rust.mjs` made the same cut, and had since it was written** — eleven files
+  across both crates, the whole of `wishlist.rs` among them, counted as test code. Fixed the
+  same way; the figure below is from after it.
+- **An assertion that depended on the order a directory is read in.** By name on NTFS, by
+  nothing in particular on the ext4 that CI's Linux leg runs. The derived list is sorted.
+- **Shapes the rule walked past**: `pub(crate) use std::{fs, io}`, a glob over `std`,
+  `path.is_file()`, `std::net`, `std::process`, `std::env::temp_dir()`. All refused now; the
+  crate was clean under every one of them.
+
 **Open after this part:**
 
 - **No browser arm has run.** `http`, `timer` and `files` compile for `wasm32` and are linted
   there; the first thing to call one is phase 5's Worker.
+- **CORS is unmeasured, and it decides whether the browser arm of the client works at all.** A
+  request from a Worker is cross-origin: `If-None-Match` and `Range` cost a pre-flight, and
+  `ETag`, `Retry-After` and `Content-Range` read as absent unless the host exposes them — in
+  which case a bulk check stores no ETag, every 429 falls to thirty seconds and a resume is
+  refused. Which of those `api.scryfall.com`, `data.scryfall.io` and `cards.scryfall.io` expose
+  is the first thing phase 5 measures, against the real hosts.
+- **A browser's `Tick` is the wall clock**, in whole milliseconds, so a clock stepped forwards
+  opens the pacing gate early there. `performance.now()` is monotonic and a Worker has it; the
+  web host should give `platform::clock` that arm before it paces a request.
 - **`futures_util`'s mutex is not FIFO-fair** where tokio's was. The gate promises spacing, not
   order, and one request is in flight at a time in this app — but a caller that needed the order
   would not get it.
@@ -1070,12 +1098,15 @@ deleted — the documented way to force a resync:
   `State` gains no field here: `scryfall::Client` is the core's type, held by `AppState`.
 - **`npm run test:coverage:rust` ran for the first time since it was rewritten for two workspace
   members**, and works: one `cargo llvm-cov --workspace` run, 93.77% of 105 876 lines with the
-  test modules in and **82.20% of 31 399 shipped lines** with them out. The moved client scores
+  test modules in and **82.93% of 35 234 shipped lines** with them out — 82.20% of 31 399 before
+  the script's cut was fixed (above), which is 3 835 shipped lines it had been calling tests.
+  The moved client scores
   96.36% of its 357 shipped lines, `ingest` 97.86%, `reconcile` 90.35%, `platform::files` 97.17%
   and `platform::http` 76.92%: the twelve lines it misses are `Error`'s three predicates, which run
   only when a request fails in transit — and no test makes one do that, before the move or
   after. Every `<module>/mod.rs` of command wrappers reads 0%: a wrapper needs a window. **README.md and [test-coverage.md](test-coverage.md) still quote 77.45% of
-  7 503 lines**, a run from before most of the app existed; neither was edited here. The run
+  7 503 lines**, a run from before most of the app existed; only the sentence about the cut
+  was edited there. The run
   installed rustup's `llvm-tools-preview` component for the pinned toolchain, which the script
   needs and this machine did not have.
 - The card-scanner suite was not run locally: nothing under `crates/card-scanner` changed, and
