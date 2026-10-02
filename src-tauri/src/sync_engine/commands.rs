@@ -12,6 +12,7 @@ use crate::sync_engine::client::{self, RelayOutcome};
 use crate::sync_engine::entitlement;
 use crate::sync_engine::live::{self, LiveState};
 use crate::sync_pair::{crypto, identity};
+use grimoire_core::state::Store;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::Arc;
@@ -359,9 +360,9 @@ pub async fn sync_patreon_begin(state: tauri::State<'_, Arc<AppState>>) -> Resul
 
 /// Trade the code the reader pasted for a grant, and answer what the panel should now say.
 ///
-/// **On the blocking pool with a runtime of its own**, which is [`sync_now`]'s shape and taken
-/// for its reason: the write connection is behind a `Mutex`, so a guard on it cannot cross an
-/// `await` on a multi-threaded runtime, and `entitlement::claim` is both `async` and a write.
+/// On a worker ([`sync::on_a_worker`]) and under the lane, a press's: a claim seeds the group's
+/// auth on the relay and stores the grant, and neither may interleave with a sync in flight —
+/// whose own 401 would otherwise wipe the grant this has just written.
 ///
 /// [`ensure_group`] runs first, so this can never answer [`entitlement::NO_GROUP`] — spec §6.3's
 /// group of one is made here, before the request that has to name it.
@@ -372,16 +373,11 @@ pub async fn sync_patreon_claim(
 ) -> Result<SupporterStatus, String> {
     let state = state.inner().clone();
     let marks = state.clone();
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        sync::with_write(&state, |conn| {
-            ensure_group(conn)?;
-            runtime.block_on(entitlement::claim(conn, &code))?;
-            Ok(supporter_status(conn))
-        })
+    let out = sync::on_a_worker(move || async move {
+        let lane = state.lane_for_press().await?;
+        lane.with(ensure_group)?;
+        entitlement::claim(&lane, &code).await?;
+        lane.with(|conn| Ok(supporter_status(conn)))
     })
     .await;
     // The grant is `sync_state` rows, and `sync_state` is `WITHOUT ROWID`, which the update hook
@@ -399,31 +395,27 @@ pub async fn sync_patreon_claim(
 
 /// One round trip now.
 ///
-/// **On the blocking pool with a runtime of its own**, and that is not ceremony. The write
-/// connection is behind a `Mutex`, so a guard on it cannot cross an `await` on a multi-threaded
-/// runtime; `spawn_blocking` moves the whole trip to a thread where a `block_on` is legal and
-/// the guard never has to be `Send`.
+/// On a worker ([`sync::on_a_worker`]) and under the lane, a press's: a trip already in flight —
+/// the live socket's — answers `BUSY` after five seconds, as it did while that trip held the
+/// connection.
 ///
 /// **Emits `sync:applied`, on the same condition [`live::trip`] uses** (the trip pushed, or it
 /// `changed` the synced tables here, which is wider than applying something), so a manual press
 /// reports through the one event Task 10's listener invalidates on — the automatic path is not
 /// the only source of that event any more. `app` is taken by value into this function and used
-/// only after the blocking call has returned; it is never captured *into* the `spawn_blocking`
-/// closure, which is `state`'s shape here and not `app`'s — `AppHandle` has no business on the
-/// thread doing the write, and reaching for it from inside that closure would be the mistake to
-/// watch for in a diff, not the shape this one takes.
+/// only after the worker has answered; it is never captured *into* the worker's closure, which is
+/// `state`'s shape here and not `app`'s — `AppHandle` has no business on the thread doing the
+/// write, and reaching for it from inside that closure would be the mistake to watch for in a
+/// diff, not the shape this one takes.
 #[tauri::command]
 pub async fn sync_now(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<Option<RelayOutcome>, String> {
     let state = state.inner().clone();
-    let outcome = tauri::async_runtime::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        sync::with_write(&state, |conn| runtime.block_on(client::run_once(conn)))
+    let outcome = sync::on_a_worker(move || async move {
+        let lane = state.lane_for_press().await?;
+        client::run_once(&lane).await
     })
     .await
     .map_err(|e| e.to_string())??;

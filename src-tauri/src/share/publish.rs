@@ -61,6 +61,7 @@ use super::{gzip, snapshot, ShareFields};
 use crate::errors::{self, Kind, Source};
 use crate::sync_engine::{client, entitlement};
 use crate::sync_pair::identity::{self, Group};
+use grimoire_core::state::Store;
 use reqwest::Url;
 use rusqlite::Connection;
 use serde::Deserialize;
@@ -333,8 +334,13 @@ fn now(conn: &Connection) -> Result<i64, String> {
 /// **`None` from [`entitlement::access_token`] is "not connected" and is not an error there** —
 /// it is where every installation that has connected nothing stands. It becomes one here,
 /// because a publish that was asked for cannot silently not happen.
-async fn credentials(conn: &Connection) -> Result<(String, Group), String> {
-    let Some(token) = entitlement::access_token(conn).await? else {
+///
+/// **`tokens` is the store the token is asked through, and it is not `conn`'s type by accident.**
+/// A token is the sync client's to mint and it mints under the lane; this module still holds the
+/// connection for a whole publish, so its caller takes the lane first and hands the connection it
+/// holds back in as a store (`Lane::in_hand`).
+async fn credentials(conn: &Connection, tokens: &impl Store) -> Result<(String, Group), String> {
+    let Some(token) = entitlement::access_token(tokens).await? else {
         return Err(NOT_CONNECTED.to_owned());
     };
     // The gate compares the token's `grp` claim against the path, so a token with no group to
@@ -633,6 +639,7 @@ pub fn commit_publish(
 /// have left a row on the relay.
 pub async fn publish(
     conn: &Connection,
+    tokens: &impl Store,
     folder_uid: Option<&str>,
     owner_name: &str,
     fields: ShareFields,
@@ -655,7 +662,7 @@ pub async fn publish(
     // `credentials` posts to the relay's `/token`, and minting a grant for a press that has
     // nowhere to send it is a round trip spent on nothing.
     endpoint(conn)?;
-    let (token, group) = credentials(conn).await?;
+    let (token, group) = credentials(conn, tokens).await?;
     let created = post_meta(
         conn,
         &token,
@@ -707,12 +714,19 @@ fn fields_from_names(names: &[String]) -> ShareFields {
 }
 
 /// Republish one share this device already knows about, under the name and fields it carries.
-pub async fn refresh(conn: &Connection, id: &str) -> Result<ShareRow, String> {
+pub async fn refresh(conn: &Connection, tokens: &impl Store, id: &str) -> Result<ShareRow, String> {
     let Some(known) = cache::get(conn, id)? else {
         return Err(UNKNOWN_SHARE.to_owned());
     };
     let fields = fields_from_names(&known.fields);
-    publish(conn, known.folder_uid.as_deref(), &known.owner_name, fields).await
+    publish(
+        conn,
+        tokens,
+        known.folder_uid.as_deref(),
+        &known.owner_name,
+        fields,
+    )
+    .await
 }
 
 /// Withdraw one share. Terminal, and the reader's own press.
@@ -720,9 +734,9 @@ pub async fn refresh(conn: &Connection, id: &str) -> Result<ShareRow, String> {
 /// **The local row moves only after the relay has taken it**, which is [`commit_publish`]'s rule
 /// applied to the other direction: a withdrawal this device believes in and the relay does not
 /// is a link the reader thinks is dead.
-pub async fn revoke(conn: &Connection, id: &str) -> Result<(), String> {
+pub async fn revoke(conn: &Connection, tokens: &impl Store, id: &str) -> Result<(), String> {
     endpoint(conn)?;
-    let (token, group) = credentials(conn).await?;
+    let (token, group) = credentials(conn, tokens).await?;
     delete_share(conn, &token, &group, id).await?;
     // The row survives its own revocation until the next reconcile drops it, so the page can
     // say *withdrawn* rather than having the folder's badge vanish with no explanation.
@@ -740,14 +754,14 @@ pub async fn revoke(conn: &Connection, id: &str) -> Result<(), String> {
 /// **Best effort, and the cache is the answer either way.** A device with no membership makes no
 /// request at all; a device whose request fails answers what it last heard, which is the whole
 /// point of the table being a cache. Only the *reconcile* is optional — the list never is.
-pub async fn list(conn: &Connection) -> Result<Vec<ShareRow>, String> {
+pub async fn list(conn: &Connection, tokens: &impl Store) -> Result<Vec<ShareRow>, String> {
     // **Asked before the token and never as a refusal.** `endpoint` is the only thing here that
     // can say "there is nowhere to ask", and on a build with no host that has to stop the
     // `/token` round trip `access_token` would otherwise make on every press of this list.
     if endpoint(conn).is_ok() {
         // Not [`credentials`], because an unconnected device must not read this as a refusal: it
         // has a perfectly good empty list, and `NOT_CONNECTED` belongs on a press to publish.
-        let token = entitlement::access_token(conn).await.ok().flatten();
+        let token = entitlement::access_token(tokens).await.ok().flatten();
         let group = identity::group(conn).ok().flatten();
         if let (Some(token), Some(group)) = (token, group) {
             if let Ok(remote) = get_shares(conn, &token, &group).await {
@@ -1746,7 +1760,7 @@ mod tests {
     async fn a_locked_folder_is_refused_before_anything_reaches_the_network() {
         let conn = open_db();
         let uid = folder(&conn, "Vault", true);
-        let err = publish(&conn, Some(&uid), "Giradeli", ShareFields::default())
+        let err = publish(&conn, &conn, Some(&uid), "Giradeli", ShareFields::default())
             .await
             .unwrap_err();
         assert_eq!(err, super::super::FOLDER_IS_LOCKED);
@@ -1763,7 +1777,7 @@ mod tests {
         let conn = open_db();
         client::set_state(&conn, SHARE_URL, "share.example").unwrap();
         let uid = folder(&conn, "Binder", false);
-        let err = publish(&conn, Some(&uid), "Giradeli", ShareFields::default())
+        let err = publish(&conn, &conn, Some(&uid), "Giradeli", ShareFields::default())
             .await
             .unwrap_err();
         assert_eq!(err, NOT_DEPLOYED);
@@ -1780,7 +1794,7 @@ mod tests {
         let conn = open_db();
         client::set_state(&conn, SHARE_URL, "http://127.0.0.1:1").unwrap();
         let uid = folder(&conn, "Binder", false);
-        let err = publish(&conn, Some(&uid), "Giradeli", ShareFields::default())
+        let err = publish(&conn, &conn, Some(&uid), "Giradeli", ShareFields::default())
             .await
             .unwrap_err();
         assert_eq!(err, NOT_CONNECTED);
@@ -1792,7 +1806,7 @@ mod tests {
     async fn a_blank_owner_name_is_refused_before_the_folder_is_even_read() {
         let conn = open_db();
         let uid = folder(&conn, "Vault", true);
-        let err = publish(&conn, Some(&uid), "   ", ShareFields::default())
+        let err = publish(&conn, &conn, Some(&uid), "   ", ShareFields::default())
             .await
             .unwrap_err();
         assert_eq!(err, OWNER_NAME_REQUIRED);
@@ -1810,7 +1824,7 @@ mod tests {
                 client::set_state(&conn, SHARE_URL, base).unwrap();
             }
             cache::store(&conn, &row("kQ2p7fMx9Lb0RtVw")).unwrap();
-            let rows = list(&conn).await.unwrap();
+            let rows = list(&conn, &conn).await.unwrap();
             assert_eq!(rows.len(), 1, "{override_base:?}");
             let logged: i64 = conn
                 .query_row("SELECT count(*) FROM error_log", [], |r| r.get(0))

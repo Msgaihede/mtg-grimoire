@@ -79,6 +79,7 @@
 
 use crate::sync_engine::client;
 use crate::sync_pair::{crypto, identity};
+use grimoire_core::state::{Lane, Store};
 use rusqlite::Connection;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
@@ -685,11 +686,11 @@ enum Answer<T> {
 /// `Option<String>` would have made the two indistinguishable at the type level, which is exactly
 /// the distinction [`store_grant`]'s blank-secret guard rests on.
 async fn post_for_grant<T: DeserializeOwned>(
-    conn: &Connection,
+    base: &str,
     path: &str,
     body: String,
 ) -> Result<Answer<T>, String> {
-    let url = format!("{}{path}", base(conn));
+    let url = format!("{base}{path}");
     let response = http()
         .post(&url)
         // By hand rather than through reqwest's `json` feature, which this crate does not
@@ -773,33 +774,68 @@ async fn post_for_grant<T: DeserializeOwned>(
 ///   see that constant.
 /// * **`Err`** — the relay could not be reached, or answered something else. A network failure is
 ///   a network failure and the caller reports it.
-pub async fn access_token(conn: &Connection) -> Result<Option<String>, String> {
-    let refresh = refresh_secret(conn);
-    let group = identity::group(conn).map_err(|e| e.to_string())?;
-    // **Neither is sync off, and it is the one silence this module answers rather than reports.**
-    // A device in a group is now worth a request even with no secret of its own, so the guard
-    // that used to be "no refresh secret" had to widen — but not to nothing, or a device that has
-    // neither paired nor connected would post to the relay on every press.
-    if refresh.is_none() && group.is_none() {
-        return Ok(None);
-    }
-    let stored = client::get_state(conn, ACCESS_TOKEN).filter(|t| !t.trim().is_empty());
-    let expires: Option<i64> = client::get_state(conn, ACCESS_EXPIRES).and_then(|v| v.parse().ok());
-    if let (Some(token), Some(expires)) = (stored, expires) {
-        // A missing or unreadable expiry is treated as expired rather than as "forever": the one
-        // thing worse than a needless refresh is a request the relay refuses.
-        if expires - now(conn)? > REFRESH_MARGIN_SECS {
-            return Ok(Some(token));
+pub async fn access_token(db: &impl Store) -> Result<Option<String>, String> {
+    // **One stretch decides which of the four this is**, and reads everything the door it
+    // names will send: nothing below comes back for a value the request depends on.
+    let ask = db.with(|conn| {
+        let refresh = refresh_secret(conn);
+        let group = identity::group(conn).map_err(|e| e.to_string())?;
+        // **Neither is sync off, and it is the one silence this module answers rather than
+        // reports.** A device in a group is now worth a request even with no secret of its own,
+        // so the guard that used to be "no refresh secret" had to widen — but not to nothing, or
+        // a device that has neither paired nor connected would post to the relay on every press.
+        if refresh.is_none() && group.is_none() {
+            return Ok(Ask::Nothing);
         }
+        let stored = client::get_state(conn, ACCESS_TOKEN).filter(|t| !t.trim().is_empty());
+        let expires: Option<i64> =
+            client::get_state(conn, ACCESS_EXPIRES).and_then(|v| v.parse().ok());
+        if let (Some(token), Some(expires)) = (stored, expires) {
+            // A missing or unreadable expiry is treated as expired rather than as "forever": the
+            // one thing worse than a needless refresh is a request the relay refuses.
+            if expires - now(conn)? > REFRESH_MARGIN_SECS {
+                return Ok(Ask::Held(token));
+            }
+        }
+        // **Only now, where a request is about to be made** — see [`this_device`].
+        let door = Door {
+            base: base(conn),
+            device: this_device(conn)?,
+        };
+        Ok(match (refresh, group) {
+            (Some(refresh), _) => Ask::Refresh(door, refresh),
+            (None, Some(group)) => Ask::Group(door, group),
+            // Unreachable past the guard above, and **answered rather than panicked**: this arm
+            // and that guard mean the same thing, so the only cost of stating it twice is two
+            // lines, where an `unreachable!()` would put a panic in a network path to save one.
+            (None, None) => Ask::Nothing,
+        })
+    })?;
+    match ask {
+        Ask::Nothing => Ok(None),
+        Ask::Held(token) => Ok(Some(token)),
+        Ask::Refresh(door, refresh) => refresh_door(db, &door, &refresh).await,
+        Ask::Group(door, group) => group_door(db, &door, &group).await,
     }
-    match (refresh, group) {
-        (Some(refresh), _) => refresh_door(conn, &refresh).await,
-        (None, Some(group)) => group_door(conn, &group).await,
-        // Unreachable past the guard above, and **answered rather than panicked**: this arm and
-        // that guard mean the same thing, so the only cost of stating it twice is two lines,
-        // where an `unreachable!()` would put a panic in a network path to save one of them.
-        (None, None) => Ok(None),
-    }
+}
+
+/// What [`access_token`]'s first stretch found.
+enum Ask {
+    /// No refresh secret and no group: sync is off.
+    Nothing,
+    /// A token with life left in it.
+    Held(String),
+    /// The refresh door, with the secret to present.
+    Refresh(Door, String),
+    /// The group door, with the group whose key proves membership.
+    Group(Door, identity::Group),
+}
+
+/// Where a door's request goes and who it says is asking: the relay's base and this device's
+/// id, read once in the stretch that decided a request was owed.
+struct Door {
+    base: String,
+    device: String,
 }
 
 /// Trade the long-lived secret for the next access token.
@@ -816,18 +852,25 @@ pub async fn access_token(conn: &Connection) -> Result<Option<String>, String> {
 /// takes this door and never the group one — a roll fed only by `group_door` would never count
 /// the one device that is certainly signed in, and the reader's own words are that the limit
 /// covers accounts inheriting the sign-in from another grouped device *too*.
-async fn refresh_door(conn: &Connection, refresh: &str) -> Result<Option<String>, String> {
-    let body = serde_json::json!({ "refresh": refresh, "device": this_device(conn)? }).to_string();
+async fn refresh_door(
+    db: &impl Store,
+    door: &Door,
+    refresh: &str,
+) -> Result<Option<String>, String> {
+    let body = serde_json::json!({ "refresh": refresh, "device": door.device }).to_string();
     // **Either 401, and [`MEMBERSHIP_ENDED`] is not special on this door.** The relay stamps it
     // only on the group door: a secret it no longer holds is a lapse *or* one a later Connect
     // press superseded, and it cannot say which. Were the code to arrive here anyway, the group
     // door that [`refused_secret`] asks next is where a lapse is decided, and it will say the
     // same thing again if it is true.
-    let Answer::Grant(grant) = post_for_grant::<Grant>(conn, "/token", body).await? else {
-        return refused_secret(conn).await;
+    let Answer::Grant(grant) = post_for_grant::<Grant>(&door.base, "/token", body).await? else {
+        return refused_secret(db, door).await;
     };
-    store_grant(conn, &grant.access, &grant.refresh, grant.expires)?;
-    store_status(conn, &grant.status, grant.since)?;
+    // The grant and what it says of the membership are one fact, written in one stretch.
+    db.with(|conn| {
+        store_grant(conn, &grant.access, &grant.refresh, grant.expires)?;
+        store_status(conn, &grant.status, grant.since)
+    })?;
     Ok(Some(grant.access))
 }
 
@@ -863,19 +906,29 @@ async fn refresh_door(conn: &Connection, refresh: &str) -> Result<Option<String>
 ///
 /// A device in **no** group has no second door, so the refresh door's refusal is the whole answer,
 /// as it always was.
-async fn refused_secret(conn: &Connection) -> Result<Option<String>, String> {
-    let Some(group) = identity::group(conn).map_err(|e| e.to_string())? else {
-        revoke(conn)?;
+async fn refused_secret(db: &impl Store, door: &Door) -> Result<Option<String>, String> {
+    // The group as it stands now, and the lapse recorded in the same stretch when there is none
+    // to ask about.
+    let group = db.with(|conn| {
+        let group = identity::group(conn).map_err(|e| e.to_string())?;
+        if group.is_none() {
+            revoke(conn)?;
+        }
+        Ok(group)
+    })?;
+    let Some(group) = group else {
         return Ok(None);
     };
-    let Answer::Grant(grant) = request_group_grant(conn, &group).await? else {
-        revoke(conn)?;
+    let Answer::Grant(grant) = request_group_grant(door, &group).await? else {
+        db.with(revoke)?;
         return Ok(None);
     };
-    let access = keep_group_grant(conn, grant)?;
-    conn.execute("DELETE FROM sync_state WHERE key = ?1", [REFRESH_SECRET])
-        .map_err(|e| e.to_string())?;
-    Ok(access)
+    db.with(|conn| {
+        let access = keep_group_grant(conn, grant)?;
+        conn.execute("DELETE FROM sync_state WHERE key = ?1", [REFRESH_SECRET])
+            .map_err(|e| e.to_string())?;
+        Ok(access)
+    })
 }
 
 /// Mint a token by proving membership of the group, with no Patreon-side secret at all.
@@ -901,11 +954,15 @@ async fn refused_secret(conn: &Connection) -> Result<Option<String>, String> {
 ///
 /// The grant is written through [`store_access`] and never [`store_grant`]: there is no refresh
 /// secret in this answer and this device must not appear to hold one.
-async fn group_door(conn: &Connection, group: &identity::Group) -> Result<Option<String>, String> {
-    match request_group_grant(conn, group).await? {
-        Answer::Grant(grant) => keep_group_grant(conn, grant),
+async fn group_door(
+    db: &impl Store,
+    door: &Door,
+    group: &identity::Group,
+) -> Result<Option<String>, String> {
+    match request_group_grant(door, group).await? {
+        Answer::Grant(grant) => db.with(|conn| keep_group_grant(conn, grant)),
         Answer::Ended => {
-            revoke(conn)?;
+            db.with(revoke)?;
             Ok(None)
         }
         Answer::Refused => Err(STALE_GROUP_AUTH.to_owned()),
@@ -919,7 +976,7 @@ async fn group_door(conn: &Connection, group: &identity::Group) -> Result<Option
 /// relay says [`MEMBERSHIP_ENDED`]; [`refused_secret`] has already been refused by the refresh door
 /// and reads a second refusal of either kind as the lapse it is.
 async fn request_group_grant(
-    conn: &Connection,
+    door: &Door,
     group: &identity::Group,
 ) -> Result<Answer<GroupGrant>, String> {
     let auth = crypto::relay_auth(&group.group_key, &group.group_id, group.epoch);
@@ -929,10 +986,10 @@ async fn request_group_grant(
     let body = serde_json::json!({
         "group": group.group_id,
         "auth": auth,
-        "device": this_device(conn)?,
+        "device": door.device,
     })
     .to_string();
-    post_for_grant::<GroupGrant>(conn, "/token", body).await
+    post_for_grant::<GroupGrant>(&door.base, "/token", body).await
 }
 
 /// Store what the group door minted — through [`store_access`], never [`store_grant`].
@@ -960,10 +1017,18 @@ fn keep_group_grant(conn: &Connection, grant: GroupGrant) -> Result<Option<Strin
 /// it is a **refusal of this press** and says so, where the same status from `/token` means the
 /// membership is over. Nothing is cleared: a reader mistyping a code must not lose an entitlement
 /// they already hold.
-pub async fn claim(conn: &Connection, code: &str) -> Result<(), String> {
-    let Some(group) = identity::group(conn).map_err(|e| e.to_string())? else {
-        return Err(NO_GROUP.to_owned());
-    };
+pub async fn claim(db: &impl Store, code: &str) -> Result<(), String> {
+    // One stretch: the group the code is claimed for, and where and as whom it is claimed.
+    let (group, door) = db.with(|conn| {
+        let Some(group) = identity::group(conn).map_err(|e| e.to_string())? else {
+            return Err(NO_GROUP.to_owned());
+        };
+        let door = Door {
+            base: base(conn),
+            device: this_device(conn)?,
+        };
+        Ok((group, door))
+    })?;
     // **The `group`, `epoch` and `auth` fields are what register the group's relay key** (spec
     // §2.1). A claim is the only moment the relay is ever told about a group, so it is the only
     // place the first `relay_auth` can be seeded — and `recordRotation` will accept nothing but
@@ -983,17 +1048,30 @@ pub async fn claim(conn: &Connection, code: &str) -> Result<(), String> {
         "group": group.group_id,
         "epoch": group.epoch,
         "auth": crypto::relay_auth(&group.group_key, &group.group_id, group.epoch),
-        "device": this_device(conn)?,
+        "device": door.device,
     })
     .to_string();
     // `/claim` answers the **full** [`Grant`]: a claim is the one moment the refresh secret is
     // minted, so this is the door that must receive one. **Either 401 is this press refused** —
     // the code is the group door's, and nothing a claim code is refused for ends a membership.
-    let Answer::Grant(grant) = post_for_grant::<Grant>(conn, "/claim", body).await? else {
+    let Answer::Grant(grant) = post_for_grant::<Grant>(&door.base, "/claim", body).await? else {
         return Err("the relay refused that claim code".to_owned());
     };
-    store_grant(conn, &grant.access, &grant.refresh, grant.expires)?;
-    store_status(conn, &grant.status, grant.since)
+    // **The code is spent and the relay has bound the group**, so this stretch is the one a
+    // claim cannot afford to lose — which is why a stretch waits for the connection rather than
+    // answering that it is busy.
+    db.with(|conn| {
+        store_grant(conn, &grant.access, &grant.refresh, grant.expires)?;
+        store_status(conn, &grant.status, grant.since)
+    })
+}
+
+/// **The fence, and it is the compiler's** — `client`'s has the reason. Never called.
+#[allow(dead_code)]
+fn nothing_is_held_across_a_request(lane: &Lane<'_>) {
+    fn sendable<T: Send>(_: T) {}
+    sendable(access_token(lane));
+    sendable(claim(lane, ""));
 }
 
 // ---------------------------------------------------------------------------------------

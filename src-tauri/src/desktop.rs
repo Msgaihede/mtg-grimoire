@@ -811,19 +811,24 @@ pub fn run() {
                 tauri::async_runtime::spawn(async move {
                     // **The timeout bounds the *wait*, not the *work*.** `push_now` runs on
                     // `spawn_blocking`'s OS thread pool, and `tokio::time::timeout` can only stop
-                    // *awaiting* that future — it cannot cancel the thread. If the round trip is
-                    // stuck inside `client::run_once` (a slow or unresponsive relay, bounded only
-                    // by `reqwest`'s own `connect_timeout`/`read_timeout` in `client.rs`), the
-                    // orphaned thread is still holding `state.db`'s write lock when this timeout
-                    // elapses and `handle.exit(0)` is called below.
+                    // *awaiting* that future — it cannot cancel the thread. A round trip stuck
+                    // inside `client::run_once` (a slow or unresponsive relay, bounded only by
+                    // `reqwest`'s own `connect_timeout`/`read_timeout` in `client.rs`) is still
+                    // running when this timeout elapses and `handle.exit(0)` is called below.
+                    //
+                    // **What that thread holds is the sync lane, and the write connection only
+                    // for a stretch** — since the light app's step 6 a trip waits on the relay
+                    // with nothing in hand, where it used to wait holding `state.db`. So the
+                    // checkpoint below almost always finds the connection free. The exception is
+                    // a trip that is in a stretch at that instant — applying a large page, say.
                     //
                     // `exit(0)` does not skip straight to the OS: it synchronously drives
                     // `RunEvent::Exit` → `checkpoint_on_exit` on this same process, **before**
-                    // anything actually terminates — and that handler makes two more bounded
-                    // attempts on the very same mutex (`flush_records` then `lock_for`). Without
-                    // `EXIT_PUSH_TIMED_OUT` below, a stuck push would compound worst-case shutdown
-                    // to roughly `EXIT_PUSH_BUDGET + 2×EXIT_CHECKPOINT_WAIT` (≈12s) rather than the
-                    // 2s this budget promises on its own.
+                    // anything actually terminates — and that handler makes two bounded attempts
+                    // on the connection (`flush_records` then `lock_for`). `EXIT_PUSH_TIMED_OUT`
+                    // below shortens both for that exception, so the worst case stays near the
+                    // 2s this budget promises rather than `EXIT_PUSH_BUDGET +
+                    // 2×EXIT_CHECKPOINT_WAIT` (≈12s).
                     if tokio::time::timeout(
                         EXIT_PUSH_BUDGET,
                         crate::sync_engine::live::push_now(owned),
@@ -1114,9 +1119,10 @@ static EXIT_PUSH_TRIED: std::sync::atomic::AtomicBool = std::sync::atomic::Atomi
 /// Set when the last-push `timeout` above elapsed rather than the push finishing.
 ///
 /// **What this actually records:** the *wait* was given up on, not that the *work* stopped —
-/// the `spawn_blocking` thread it was watching may still be running, and may still hold
-/// `state.db`'s write lock, when `checkpoint_on_exit` runs moments later. `checkpoint_on_exit`
-/// reads this to shorten its own two bounded attempts on that same lock
+/// the `spawn_blocking` thread it was watching may still be running when `checkpoint_on_exit`
+/// runs moments later, and **may be in a stretch**, the one part of a trip that holds
+/// `state.db`'s write lock (it held it for the whole trip until the light app's step 6).
+/// `checkpoint_on_exit` reads this to shorten its own two bounded attempts on that lock
 /// (`EXIT_CHECKPOINT_WAIT_AFTER_A_STUCK_PUSH`) rather than spending the usual 5s on each —
 /// see the comment beside the timeout above for why the two would otherwise compound.
 static EXIT_PUSH_TIMED_OUT: std::sync::atomic::AtomicBool =
@@ -1132,10 +1138,11 @@ static EXIT_PUSH_TIMED_OUT: std::sync::atomic::AtomicBool =
 const EXIT_CHECKPOINT_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// The same wait, shortened, for the one case where it is very likely to be spent for nothing:
-/// [`EXIT_PUSH_TIMED_OUT`] is set only when the last-push `timeout` already gave up on the write
-/// lock once, after `EXIT_PUSH_BUDGET` (2s) of a relay that was slow or not answering at all. A
-/// thread that has already outlasted that budget rarely releases the lock in the next moment
-/// either, so a second full `EXIT_CHECKPOINT_WAIT` mostly buys nothing — one second is still a
+/// [`EXIT_PUSH_TIMED_OUT`] is set only when the last-push `timeout` already gave up once, after
+/// `EXIT_PUSH_BUDGET` (2s) of a relay that was slow or not answering at all. A trip waiting on
+/// the relay holds no connection, so this wait is then nearly always instant; a trip that is
+/// instead two seconds into a long stretch rarely finishes it in the next moment either, so a
+/// second full `EXIT_CHECKPOINT_WAIT` mostly buys nothing — one second is still a
 /// real, honest attempt (the checkpoint is fast whenever the lock is actually free, which is
 /// every ordinary shutdown), and caps the compounded worst case at
 /// `EXIT_PUSH_BUDGET + 2×this` ≈ 4s instead of ≈ 12s, which is the whole point: the checkpoint
@@ -1167,11 +1174,11 @@ fn checkpoint_on_exit(app: &tauri::AppHandle) {
     // `state`, and a `match` at the end of the body would still hold it when `state` is
     // dropped.
     //
-    // **Shortened when the last-push `timeout` in `ExitRequested` already gave up on this
-    // same lock** — see [`EXIT_PUSH_TIMED_OUT`]'s doc. `push_now`'s `spawn_blocking` thread may
-    // still be holding it here: a `timeout` around a `spawn_blocking` future stops *awaiting*
-    // it, not the OS thread underneath, so a push stuck in the network can still own the write
-    // connection when `RunEvent::Exit` runs this function moments later. Two full
+    // **Shortened when the last-push `timeout` in `ExitRequested` already gave up** — see
+    // [`EXIT_PUSH_TIMED_OUT`]'s doc. `push_now`'s `spawn_blocking` thread may still be running
+    // here: a `timeout` around a `spawn_blocking` future stops *awaiting* it, not the OS thread
+    // underneath. A push stuck in the network holds no connection, but one that is in a stretch
+    // does, when `RunEvent::Exit` runs this function moments later. Two full
     // `EXIT_CHECKPOINT_WAIT`s stacked on top of a budget already spent waiting on a slow relay
     // is exactly the "process the user believes has quit" symptom this whole feature exists to
     // avoid — see [`EXIT_CHECKPOINT_WAIT_AFTER_A_STUCK_PUSH`] for the arithmetic.
@@ -1318,7 +1325,7 @@ fn init_state(
         mirror,
         mirror_status: Mutex::new(mirror::watch::LastPass::default()),
         changes,
-        pairing: Mutex::new(None),
+        pairing: tokio::sync::Mutex::new(None),
     })
 }
 

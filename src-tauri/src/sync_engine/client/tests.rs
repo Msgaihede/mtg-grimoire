@@ -5272,3 +5272,317 @@ async fn a_trip_whose_only_write_is_a_conversion_behind_its_pull_reports_a_chang
     assert!(again.pushed > 0, "{again:?}");
     assert!(!again.changed, "{again:?}");
 }
+
+// ---------------------------------------------------------------------------------------
+// A trip that holds nothing across a request (step 6's spike)
+// ---------------------------------------------------------------------------------------
+
+/// A database the reader writes to **between two stretches of a trip** — the one thing a trip
+/// that no longer holds the write connection for its whole length can newly meet.
+struct Interrupted<'a> {
+    conn: &'a Connection,
+    /// The stretch the write lands behind, counted from 1. `0` is never.
+    behind: usize,
+    stretches: std::cell::Cell<usize>,
+    write: &'a dyn Fn(&Connection),
+}
+
+impl Store for Interrupted<'_> {
+    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
+        let out = f(self.conn);
+        let done = self.stretches.get() + 1;
+        self.stretches.set(done);
+        if done == self.behind {
+            (self.write)(self.conn);
+        }
+        out
+    }
+}
+
+fn copies_held(conn: &Connection, card: &str) -> i64 {
+    conn.query_row(
+        "SELECT coalesce(sum(quantity), 0) FROM collection_entries WHERE card_id = ?1",
+        [card],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// **Wherever in a baseline's emission the reader adds a copy, the peer ends with what this
+/// device holds.** `dev-a` holds two of a card and owes `dev-b` a baseline; the reader steps the
+/// row to three behind stretch *n*, for every *n* the emission has. `dev-b` already holds the
+/// row — it is being baselined again, as every peer is behind a join — and reads the baseline and
+/// what `dev-a` wrote since in one page.
+///
+/// **A peer that has never held the row is a different case and not this test's**: there the
+/// claim and a later delta meet as `max`, which under-counts by design (the baseline spec's §8.2,
+/// "the window between emission and delivery") whatever a trip holds.
+///
+/// **What makes it red**: the baseline's rows and its horizon read in two stretches. The write
+/// between them is inside the horizon and outside the rows, so `dev-b` is handed the row at two
+/// and drops the `+1` as already counted — with its cursor past both.
+#[tokio::test]
+async fn a_write_anywhere_in_a_baselines_emission_reaches_the_peer() {
+    let step = |conn: &Connection| {
+        conn.execute(
+            "UPDATE collection_entries
+                SET quantity = quantity + 1, updated_at = unixepoch()
+              WHERE card_id = 'bolt'",
+            [],
+        )
+        .unwrap();
+    };
+    let mut lost: Vec<String> = Vec::new();
+    let mut stretches = usize::MAX;
+    let mut behind = 0;
+    while behind <= stretches {
+        let server = MockServer::start_async().await;
+        let sent = Sent::default();
+        server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/g/{GROUP}/push"))
+                .is_true(tap(&sent));
+            then.status(200)
+                .json_body(serde_json::json!({ "cursor": 1 }));
+        });
+        let a = paired("dev-a", 0);
+        roster(&a, "dev-b");
+        add_copy(&a, "bolt", 2);
+        // **The copies were added ten seconds ago.** A baseline's op is stamped from its row's
+        // `updated_at`, a whole second, and `dev-b` skips as seen whatever `dev-a` stamped at or
+        // below the watermark it holds for it — so the add has to sit clear of that second.
+        a.execute_batch(
+            "UPDATE sync_ops SET hlc_ms = hlc_ms - 10000;
+             UPDATE sync_clock SET ms = ms - 10000;",
+        )
+        .unwrap();
+        let group = identity::group(&a).unwrap().unwrap();
+        let before = outbox(&a);
+
+        let db = Interrupted {
+            conn: &a,
+            behind,
+            stretches: std::cell::Cell::new(0),
+            write: &step,
+        };
+        // The trip read its outbox before the reader's hand moved: the add is on the relay.
+        a.execute("UPDATE sync_ops SET pushed_at = unixepoch()", [])
+            .unwrap();
+        let through = last_op(&a).unwrap();
+        emit_baselines(&db, &server.base_url(), "access-1", through)
+            .await
+            .unwrap();
+        if behind == 0 {
+            // The run nothing interrupts is the one that says how many stretches there are.
+            stretches = db.stretches.get();
+            assert!(stretches > 2, "an emission of {stretches} stretches");
+        }
+
+        let b = paired("dev-b", 0);
+        apply::apply(&b, &before).unwrap();
+        let mut page: Vec<Op> = Vec::new();
+        for batch in pushed_baselines(&sent, &group) {
+            page.extend(batch);
+        }
+        page.extend(outbox(&a).into_iter().skip(before.len()));
+        apply::apply(&b, &page).unwrap();
+        let (here, there) = (copies_held(&a, "bolt"), copies_held(&b, "bolt"));
+        if here != there {
+            lost.push(format!(
+                "behind stretch {behind}: {here} here, {there} there"
+            ));
+        }
+        behind += 1;
+    }
+    assert!(lost.is_empty(), "of {stretches} stretches: {lost:#?}");
+}
+
+/// Every batch the relay was pushed, in the order it was pushed them — ordinary ops and a
+/// baseline's alike. A body is counted once, for [`pushed_baselines`]' reason.
+fn pushed_in_order(sent: &Sent, group: &Group) -> Vec<Vec<Op>> {
+    let seen = sent.lock().unwrap();
+    let mut bodies: Vec<&str> = Vec::new();
+    for request in seen.iter() {
+        if request.path.ends_with("/push") && !bodies.contains(&request.body.as_str()) {
+            bodies.push(&request.body);
+        }
+    }
+    bodies
+        .into_iter()
+        .filter_map(|body| serde_json::from_str::<Envelope>(body).ok())
+        .filter_map(|envelope| wire::open_batch(group, &envelope).ok())
+        .collect()
+}
+
+/// The reader adds a copy of `bolt`, as the app writes it.
+fn one_more_bolt(conn: &Connection) {
+    conn.execute(
+        "UPDATE collection_entries
+            SET quantity = quantity + 1, updated_at = unixepoch()
+          WHERE card_id = 'bolt'",
+        [],
+    )
+    .unwrap();
+}
+
+/// **Wherever in a round trip the reader adds a copy, the peer ends with what this device
+/// holds, and nothing is left pending behind the trip after it.** `dev-a` holds two of a card,
+/// unpushed, and owes `dev-b` a baseline; the reader steps the row to three behind stretch *n* of
+/// the trip, for every *n* a trip has, and a second trip follows. `dev-b` pulls after each trip —
+/// as a device with the doorbell does — and reads what the relay was pushed, in order.
+///
+/// **What makes it red**: a baseline that goes out while something is pending. The write is in
+/// its rows and under its horizon and not yet on the relay's log, so it arrives a page later,
+/// where no horizon filters it, and is counted on top of the claim that already held it — a card
+/// out of nothing, which is the one direction a baseline may never fail in.
+#[tokio::test]
+async fn a_write_anywhere_in_a_round_trip_is_carried_by_the_next() {
+    let mut wrong: Vec<String> = Vec::new();
+    let mut stretches = usize::MAX;
+    let mut behind = 0;
+    while behind <= stretches {
+        let server = MockServer::start_async().await;
+        keys_mock(&server, 0);
+        let sent = Sent::default();
+        server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/g/{GROUP}/push"))
+                .is_true(tap(&sent));
+            then.status(200)
+                .json_body(serde_json::json!({ "cursor": 1 }));
+        });
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{GROUP}/pull"));
+            then.status(200)
+                .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+        });
+        server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{GROUP}/ack"));
+            then.status(204);
+        });
+        let a = paired("dev-a", 0);
+        roster(&a, "dev-b");
+        add_copy(&a, "bolt", 2);
+        // **The copies were added ten seconds ago**, for the reason the emission test above gives:
+        // a baseline's op is stamped from its row's whole second, and `dev-b` skips as seen what
+        // `dev-a` stamped at or below the watermark it holds for it. That is `apply`'s, not the
+        // trip's, and this test stands clear of it.
+        a.execute_batch(
+            "UPDATE sync_ops SET hlc_ms = hlc_ms - 10000;
+             UPDATE sync_clock SET ms = ms - 10000;",
+        )
+        .unwrap();
+        set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+        grant(&a);
+        let group = identity::group(&a).unwrap().unwrap();
+
+        let db = Interrupted {
+            conn: &a,
+            behind,
+            stretches: std::cell::Cell::new(0),
+            write: &one_more_bolt,
+        };
+        run_once(&db).await.unwrap().unwrap();
+        if behind == 0 {
+            // The trip nothing interrupts is the one that says how many stretches there are.
+            stretches = db.stretches.get();
+            assert!(stretches > 8, "a trip of {stretches} stretches");
+        }
+        let first = pushed_in_order(&sent, &group).len();
+        run_once(&a).await.unwrap().unwrap();
+        let pushed = pushed_in_order(&sent, &group);
+
+        let b = paired("dev-b", 0);
+        for page in [&pushed[..first], &pushed[first..]] {
+            let ops: Vec<Op> = page.iter().flatten().cloned().collect();
+            if !ops.is_empty() {
+                apply::apply(&b, &ops).unwrap();
+            }
+        }
+        let (here, there) = (copies_held(&a, "bolt"), copies_held(&b, "bolt"));
+        let pending = unpushed_count(&a);
+        let baselined = baselined_at(&a, "dev-b").is_some();
+        if here != there || pending != 0 || !baselined {
+            wrong.push(format!(
+                "behind stretch {behind}: {here} here, {there} there, {pending} pending, \
+                 baselined: {baselined}"
+            ));
+        }
+        behind += 1;
+    }
+    assert!(wrong.is_empty(), "of {stretches} stretches: {wrong:#?}");
+}
+
+/// **And with a page to pull**: `dev-b` has added a copy of the same row, which this trip
+/// applies, while the reader adds one here behind stretch *n*. Both devices end at four —
+/// two, and one from each — wherever the write lands beside the apply.
+#[tokio::test]
+async fn a_write_anywhere_beside_a_pull_is_counted_once_on_both_devices() {
+    let mut wrong: Vec<String> = Vec::new();
+    let mut stretches = usize::MAX;
+    let mut behind = 0;
+    while behind <= stretches {
+        // An earlier trip: `dev-a`'s two copies are on the relay, and `dev-b` has them.
+        let a = paired("dev-a", 0);
+        add_copy(&a, "bolt", 2);
+        let earlier = outbox(&a);
+        a.execute("UPDATE sync_ops SET pushed_at = unixepoch()", [])
+            .unwrap();
+        let b = paired("dev-b", 0);
+        apply::apply(&b, &earlier).unwrap();
+        one_more_bolt(&b);
+        let group = identity::group(&a).unwrap().unwrap();
+        let envelope = wire::seal_batch(&group, "dev-b", &outbox(&b)).unwrap();
+
+        let server = MockServer::start_async().await;
+        keys_mock(&server, 0);
+        let sent = Sent::default();
+        server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/g/{GROUP}/push"))
+                .is_true(tap(&sent));
+            then.status(200)
+                .json_body(serde_json::json!({ "cursor": 1 }));
+        });
+        server.mock(|when, then| {
+            when.method(GET).path(format!("/g/{GROUP}/pull"));
+            then.status(200).json_body(serde_json::json!({
+                "envelopes": [serde_json::to_value(&envelope).unwrap()],
+                "cursor": 3,
+            }));
+        });
+        server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{GROUP}/ack"));
+            then.status(204);
+        });
+        set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+        grant(&a);
+
+        let db = Interrupted {
+            conn: &a,
+            behind,
+            stretches: std::cell::Cell::new(0),
+            write: &one_more_bolt,
+        };
+        run_once(&db).await.unwrap().unwrap();
+        if behind == 0 {
+            stretches = db.stretches.get();
+        }
+        run_once(&a).await.unwrap().unwrap();
+
+        for batch in pushed_in_order(&sent, &group) {
+            apply::apply(&b, &batch).unwrap();
+        }
+        // Behind stretch 0 nobody added a copy here: two, and `dev-b`'s one.
+        let wanted = if behind == 0 { 3 } else { 4 };
+        let (here, there) = (copies_held(&a, "bolt"), copies_held(&b, "bolt"));
+        let pending = unpushed_count(&a);
+        if here != wanted || there != wanted || pending != 0 {
+            wrong.push(format!(
+                "behind stretch {behind}: {here} here, {there} there, {pending} pending"
+            ));
+        }
+        behind += 1;
+    }
+    assert!(wrong.is_empty(), "of {stretches} stretches: {wrong:#?}");
+}

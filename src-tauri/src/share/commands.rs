@@ -8,6 +8,7 @@
 use serde::Serialize;
 
 use crate::sync::{self, AppState};
+use grimoire_core::state::InHand;
 use std::sync::Arc;
 
 /// One published share, as the page draws it.
@@ -82,17 +83,25 @@ fn unfinished(e: tauri::Error) -> String {
 /// write to `collection_shares` — the list's reconcile, a publish's cached row, a withdrawal's
 /// state.
 ///
-/// **This is [`crate::sync_engine::commands::sync_now`]'s shape and it is not ceremony.** The
-/// write connection is behind a `Mutex`, so a guard on it cannot cross an `await` on a
+/// **This was [`crate::sync_engine::commands::sync_now`]'s shape until the light app's step 6
+/// took the connection out of a sync trip's hands, and it is still this module's.** The write
+/// connection is behind a `Mutex`, so a guard on it cannot cross an `await` on a
 /// multi-threaded runtime; `spawn_blocking` moves the whole trip to a thread where a `block_on`
 /// is legal and the guard never has to be `Send`.
 ///
 /// ⚠️ **It holds the writer for the whole trip, which is only tolerable because the far end is
 /// the reader's own Worker.** [`share_open`] talks to whatever host a stranger's link names, and
 /// ran in here until 2026-09-28 — see its doc for what that cost and why it no longer does.
+///
+/// **And it takes the sync lane first** (the light app's step 6). A publish is not a sync
+/// operation, but it mints its bearer through one — `entitlement::access_token` — and that
+/// writes the grant a trip or a claim in flight is writing too. So the lane is taken as a press
+/// takes it, the connection after it, and the connection in hand is passed down as the store
+/// the token is asked through (`Lane::in_hand`): asking through the lane itself would be this
+/// thread waiting for the connection it already holds.
 async fn on_the_write_connection<T: Send + 'static>(
     state: Arc<AppState>,
-    work: impl FnOnce(&rusqlite::Connection, &tokio::runtime::Runtime) -> Result<T, String>
+    work: impl FnOnce(&rusqlite::Connection, &InHand<'_>, &tokio::runtime::Runtime) -> Result<T, String>
         + Send
         + 'static,
 ) -> Result<T, String> {
@@ -101,7 +110,8 @@ async fn on_the_write_connection<T: Send + 'static>(
             .enable_all()
             .build()
             .map_err(|e| e.to_string())?;
-        sync::with_write(&state, |conn| work(conn, &runtime))
+        let lane = runtime.block_on(state.lane_for_press())?;
+        sync::with_write(&state, |conn| work(conn, &lane.in_hand(conn), &runtime))
     })
     .await
     .map_err(unfinished)?
@@ -116,8 +126,8 @@ async fn on_the_write_connection<T: Send + 'static>(
 #[tauri::command]
 pub async fn share_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<ShareRow>, String> {
     let state = state.inner().clone();
-    on_the_write_connection(state, |conn, runtime| {
-        runtime.block_on(super::publish::list(conn))
+    on_the_write_connection(state, |conn, tokens, runtime| {
+        runtime.block_on(super::publish::list(conn, tokens))
     })
     .await
 }
@@ -131,9 +141,10 @@ pub async fn share_create(
     fields: ShareFieldsArg,
 ) -> Result<ShareRow, String> {
     let state = state.inner().clone();
-    on_the_write_connection(state, move |conn, runtime| {
+    on_the_write_connection(state, move |conn, tokens, runtime| {
         runtime.block_on(super::publish::publish(
             conn,
+            tokens,
             folder_uid.as_deref(),
             &owner_name,
             fields.into(),
@@ -149,8 +160,8 @@ pub async fn share_refresh(
     id: String,
 ) -> Result<ShareRow, String> {
     let state = state.inner().clone();
-    on_the_write_connection(state, move |conn, runtime| {
-        runtime.block_on(super::publish::refresh(conn, &id))
+    on_the_write_connection(state, move |conn, tokens, runtime| {
+        runtime.block_on(super::publish::refresh(conn, tokens, &id))
     })
     .await
 }
@@ -162,8 +173,8 @@ pub async fn share_revoke(
     id: String,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    on_the_write_connection(state, move |conn, runtime| {
-        runtime.block_on(super::publish::revoke(conn, &id))
+    on_the_write_connection(state, move |conn, tokens, runtime| {
+        runtime.block_on(super::publish::revoke(conn, tokens, &id))
     })
     .await
 }

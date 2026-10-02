@@ -17,8 +17,9 @@ here**: `platform`'s request, timer, files and background work; the three module
 their first callers — `scryfall`, `ingest` and `reconcile`; what drives them — `sync`, the
 card sync, and `index/`, the facet index with its lifecycle; and the three feeds (`combos`,
 `marketplace_feed`, `tags/`) with `images`, the image cache. **What is not here yet**: the
-sync client and pairing, and the scanner's session. `share/`, the mirror and the updater are
-the desktop's for good.
+sync client and pairing — restated where they are, in `src-tauri`, in the sync step's first
+part, over `state::Store` and the lane, which *are* here — and the scanner's session.
+`share/`, the mirror and the updater are the desktop's for good.
 Every rule in [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) about a
 module binds that module wherever it lives — moving a file changes which crate compiles it and
 nothing about what it must do. **That file's database and deck rules are this crate's now**: a
@@ -235,7 +236,7 @@ domain step.** `with_write`, `with_write_waiting` and the private `written` they
 managed wishlists armed, the caller's closure, the token reconcile, the settle, and the fence's
 `debug_assert` — in that order, on both the bounded path and the waiting one. They are free
 functions over `&State` rather than methods, so every caller in `src-tauri` reads as it did:
-`sync` re-exports the two, and an `Arc<AppState>` passes as `&state` through the deref. The body
+`sync` re-exports `with_write`, and an `Arc<AppState>` passes as `&state` through the deref. The body
 is byte for byte what it was but for the parameter's type. **It waited a step** because it has no
 line to be cut at — the three calls sit between the lock and the assertion — and a write with no
 settle would have been a second definition of a user-facing write.
@@ -245,6 +246,38 @@ settle would have been a second definition of a user-facing write.
   into a caller's transaction, and none does.
 - `collection_source::with_write_owned` — `with_write` plus the facet index's `owned` rebuild,
   on success only — is here since the index's lifecycle is. It takes `&State` like `with_write`.
+
+## A sync operation: a stretch at a time, on a lane
+
+**The one kind of function here that does not take `&Connection` is an `async fn` that talks to
+the relay.** It takes `db: &impl state::Store` and reaches the database inside
+`db.with(|conn| …)` — a *stretch*, one closure run to its end — with each request made between
+two stretches and nothing held. A browser has one thread: a lock held across an `.await` there is
+a lock nobody else can ever take. [The spike](../../docs/superpowers/research/2026-10-02-light-app-step-6-sync-trip-spike.md)
+is the record; the functions themselves are still in `src-tauri` and arrive with the sync step's
+second part.
+
+- **`State::lane()` is one sync operation at a time, and its guard is the app's store.**
+  `state::Lane` is the only `Store` a shipped build has for a host's database — the trait is
+  deliberately not implemented for `State`, and for a bare `Connection` only under `testing` —
+  so a stretch outside the lane does not compile. `lane()` waits its turn (a background trip, a
+  departure); `lane_for_press()` gives up after `db::WRITE_LOCK_WAIT` and answers `db::BUSY`, on
+  the lane and on the connection alike.
+- **A stretch is `with_write_waiting`**: it waits for the connection rather than answering
+  `BUSY`, because it may be recording an answer the relay will not give twice, and it is a
+  user-facing write like any other — armed, reconciled, settled, fenced. That function has no
+  other caller. **Never call `with` while holding the connection**: a same-thread second lock is
+  a deadlock. A caller that already holds it hands it to `Lane::in_hand`.
+- **What can land between two stretches is a reader's write**, so two reads that must agree —
+  a baseline's rows and its horizon, a commit's rows — go in one stretch.
+- **Two fences, one of them the compiler.** A future that keeps a `MutexGuard` across an
+  `.await` is not `Send`, and each entry point is checked by a function that is never called
+  (`fn sendable<T: Send>(_: T) {}`); `clippy::await_holding_lock` refuses the same in every
+  function, tests included, which is why a test that needs the connection held holds it from
+  another thread.
+- **The lane's wait ends because every operation on it does**: each relay request is bounded.
+  ⚠️ **That is not yet true in a browser**, where `platform::http` sets no timeout — the move
+  owes every relay request a deadline there before a web host runs one.
 
 ## The image cache: the pass is here, the schedule is the host's
 

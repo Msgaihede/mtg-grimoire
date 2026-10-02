@@ -26,6 +26,7 @@ use super::{client, entitlement};
 use crate::errors::{Kind, Source};
 use crate::sync::AppState;
 use crate::sync_pair::identity;
+use grimoire_core::state::Store;
 
 /// What `error_log` calls a failure of the background loop.
 ///
@@ -475,28 +476,23 @@ async fn note(state: &Arc<AppState>, message: String) {
 /// Everything the upgrade request needs: the relay's address, a bearer, this device's id and the
 /// group whose Durable Object to knock on.
 ///
-/// **On the blocking pool with a runtime of its own**, and for the same reason `commands.rs`'s
-/// `sync_now` is — the reason [`trip`] below repeats rather than re-derives.
-/// [`entitlement::access_token`] is `async` and may *write* a refreshed grant, so it needs the
-/// write connection; that connection is behind a `Mutex` whose guard is not `Send` and so cannot
-/// cross an `.await` on a multi-threaded runtime. `spawn_blocking` moves the whole read to a
-/// thread where a `block_on` is legal and the guard never has to be `Send`.
+/// On a worker ([`crate::sync::on_a_worker`]) and under the lane, waited for: a token is the
+/// sync client's to mint, [`entitlement::access_token`] may *write* a refreshed grant, and a
+/// trip or a claim in flight is writing the same rows. The lane is let go before the socket is
+/// opened — what it guards is the token's minting, not the connection that uses it.
 ///
 /// `Err` for a device with no group or no grant, and its distinctive sentences are worth
 /// keeping: a 403 `device_limit`, a rotated-away device that cannot mint a token, a grant that
 /// vanished. [`run`] records them through [`note`].
 async fn credentials(state: &Arc<AppState>) -> Result<(String, String, String, String), String> {
     let owned = state.clone();
-    tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        crate::sync::with_write(&owned, |conn| {
+    crate::sync::on_a_worker(move || async move {
+        let lane = owned.lane().await;
+        let token = entitlement::access_token(&lane)
+            .await?
+            .ok_or_else(|| entitlement::NO_GROUP.to_owned())?;
+        lane.with(|conn| {
             let base = entitlement::base(conn);
-            let token = rt
-                .block_on(entitlement::access_token(conn))?
-                .ok_or_else(|| entitlement::NO_GROUP.to_owned())?;
             let device: String = conn
                 .query_row(
                     "SELECT device_id FROM sync_identity WHERE id = 1",
@@ -583,33 +579,29 @@ fn jitter() -> f64 {
 
 /// One round trip, the event that says it changed something, and the row that says it failed.
 ///
-/// **On the blocking pool with a runtime of its own**, and that is not ceremony: it is the same
-/// constraint `commands.rs`'s `sync_now` is written around. The write connection is behind a
-/// `Mutex`, so a guard on it cannot cross an `await` on a multi-threaded runtime;
-/// `spawn_blocking` moves the whole trip to a thread where a `block_on` is legal and the guard
-/// never has to be `Send`.
+/// On a worker ([`crate::sync::on_a_worker`]) and under the lane, **waited for**: a press's trip
+/// in flight is one this trip queues behind, where it used to be told the connection was busy and
+/// lose its wake.
 ///
-/// **The failure is recorded inside that same closure**, which is `sync.rs`'s reentrancy rule
-/// rather than a convenience: the connection is already in hand, and coming back for it through
-/// [`note`] would spend the whole `WRITE_LOCK_WAIT` failing to take a lock this very thread
-/// holds, then silently drop the row. The lapse exclusion is [`note`]'s, for [`note`]'s reasons.
+/// **The failure is recorded behind the trip, in a stretch of its own on the same lane** — so a
+/// press that follows reads the row, and nothing else can have revoked or restored the grant
+/// between the trip's answer and the question that row turns on. The lapse exclusion is
+/// [`note`]'s, for [`note`]'s reasons.
 async fn trip(app: &tauri::AppHandle, state: &Arc<AppState>, sched: &mut Scheduler) {
     sched.started();
     let owned = state.clone();
-    let outcome = tokio::task::spawn_blocking(move || {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        crate::sync::with_write(&owned, |conn| {
-            let outcome = rt.block_on(client::run_once(conn));
-            if let Err(e) = &outcome {
+    let outcome = crate::sync::on_a_worker(move || async move {
+        let lane = owned.lane().await;
+        let outcome = client::run_once(&lane).await;
+        if let Err(e) = &outcome {
+            let _ = lane.with(|conn| {
                 if !entitlement::membership_ended(conn) {
                     crate::errors::record(conn, Source::Relay, OPERATION, Kind::Other, e, None);
                 }
-            }
-            outcome
-        })
+                Ok(())
+            });
+        }
+        outcome
     })
     .await;
     sched.finished();
@@ -686,12 +678,14 @@ const WAKE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 /// [`crate::sync::with_write`], so taking that same mutex is what orders this question *after*
 /// the commit that asked it.
 ///
-/// **It cannot contend with a round trip**, which is the other reason it can afford the write
-/// connection: trips are single-flight and [`trip`] is awaited inside the same `select!` as this
-/// arm, so the loop is never in both places at once.
+/// **It contends with a round trip for a stretch at most**, which is the other reason it can
+/// afford the write connection: this loop's own [`trip`] is awaited inside the same `select!` as
+/// this arm, so the loop is never in both places at once, and a *press's* trip — which used to
+/// hold the connection for its whole length, a second longer than this waits — now holds it only
+/// while it reads or writes.
 ///
-/// On the blocking pool for [`credentials`]' reason — a `MutexGuard` on a connection is not
-/// `Send` and must not be held across an `.await`.
+/// On the blocking pool because the wait for the connection blocks, and a `MutexGuard` on one
+/// is not `Send` and must not be held across an `.await`.
 async fn outbox_has_work(state: &Arc<AppState>) -> bool {
     let owned = state.clone();
     tokio::task::spawn_blocking(move || unpushed(&owned.db, WAKE_LOCK_WAIT))
@@ -708,19 +702,13 @@ async fn outbox_has_work(state: &Arc<AppState>) -> bool {
 /// durable row: the op this trip was trying to push is still `pushed_at IS NULL`, exactly the
 /// state [`anything_pending`] reads, and the very next launch's ordinary sync tries it again.
 ///
-/// On the blocking pool for [`trip`]'s reason: the write connection's guard is not `Send` and
-/// cannot cross an `.await` on a multi-threaded runtime, so the whole round trip — the token
-/// fetch, the push, the pull, the ack — moves to a thread where a nested `block_on` is legal
-/// and the guard never has to be `Send`.
+/// On a worker and under the lane, as [`trip`] is. **A trip already in flight is waited for**,
+/// and the caller's budget is what ends that wait: what this would have pushed, that trip has
+/// read already or the next launch's will.
 pub async fn push_now(state: Arc<AppState>) {
-    let _ = tokio::task::spawn_blocking(move || {
-        let Ok(rt) = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-        else {
-            return;
-        };
-        let _ = crate::sync::with_write(&state, |conn| rt.block_on(client::run_once(conn)));
+    let _ = crate::sync::on_a_worker(move || async move {
+        let lane = state.lane().await;
+        client::run_once(&lane).await
     })
     .await;
 }
@@ -764,7 +752,7 @@ mod tests {
             mirror,
             mirror_status: Mutex::new(crate::mirror::watch::LastPass::default()),
             changes,
-            pairing: Mutex::new(None),
+            pairing: tokio::sync::Mutex::new(None),
         })
     }
 

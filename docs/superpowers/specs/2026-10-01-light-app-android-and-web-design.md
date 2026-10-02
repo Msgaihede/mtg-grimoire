@@ -360,6 +360,18 @@ has to be restated so that no lock is held across an `await` — read what is pe
 to the relay, take the lock again, apply — and `sync_group_leave`'s "always possible" has to
 survive it. **That phase opens with a spike, not a plan.**
 
+**Spiked 2026-10-02, and decided by Markus the same day**:
+[the spike](../research/2026-10-02-light-app-step-6-sync-trip-spike.md) counted thirty-one functions
+holding a connection across an `.await` and prototyped the restatement — each takes a `Store` and
+reaches the database a *stretch* at a time, and one async lock on `State`, the *lane*, keeps one
+sync operation running at a time. He chose that shape over a rewrite into plan / request /
+commit functions and over a separate browser trip; *Leave group* waits for the lane as it waited
+for the connection; and the step is two pull requests — restate in place, then move.
+**The first is built** (2026-10-03): none of the thirty-one holds a connection across a request,
+a press during a sync is still told the database is busy, and a reader's write during one is
+not. [The step's plan](../plans/2026-10-02-light-app-core-step-6-sync.md) has the tasks, and what
+a test that lands a write behind every stretch of a trip found.
+
 ### 2.9 Decided here, and deliberately left to the extraction's own plan
 
 - **A Cargo workspace or not.** A workspace moves `target/` to the repository root, and a great

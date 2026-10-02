@@ -1750,11 +1750,14 @@ with the arithmetic behind the 105-character code and the crate pins, is
 - **A device can leave its group, and "always possible" is literal.** `sync_group_leave` →
   `pairing::leave_group_now` is `identity::plan_departure_by` with `client::removal_step` (the
   manifest is everyone *but* this device), `client::post_rotation` **best effort**, then
-  `identity::leave_group` **and** `entitlement::clear` **unconditionally**. **And it waits for the
-  write connection as long as a sync trip holds it** (`sync::with_write_waiting`, issue #546): every
-  other press answers `db::BUSY` after `WRITE_LOCK_WAIT`, which made a leave pressed during a slow
-  trip fail — "always possible" had quietly depended on the lock. It is the one sanctioned
-  unbounded wait: a trip always ends, because every request it makes has a timeout. ⚠️ **Everything after the in-a-group check is best
+  `identity::leave_group` **and** `entitlement::clear` **unconditionally**, in one stretch. **And
+  it waits for the sync lane for as long as an operation in flight holds it** (`State::lane`, and
+  never `State::lane_for_press`; issue #546): every other press answers `db::BUSY` after
+  `WRITE_LOCK_WAIT`, which made a leave pressed during a slow trip fail — "always possible" had
+  quietly depended on the lock. It is the one press that waits: a trip always ends, because
+  every request it makes has a timeout. (It waited for the *write connection* until the light
+  app's step 6, when a trip held that across its requests; see *A sync operation reaches the
+  database a stretch at a time*, below.) ⚠️ **Everything after the in-a-group check is best
   effort, planning included** — `plan_departure` seals a blob to every peer, so one bad roster row
   would otherwise be a device that can never get out of its group. What a failed plan costs is the
   courtesy, never the departure: nothing is published and the others go on listing this device
@@ -1802,7 +1805,11 @@ with the arithmetic behind the 105-character code and the crate pins, is
   a restart would be an invite a reader printed last month still being accepted today; it
   outlives the webview, which is what a reader who opens Settings twice needs, and dies with the
   process, which is what makes the token one-time in fact. It holds the derived pair key, which
-  is the second reason it is not a table.
+  is the second reason it is not a table. **Its lock is an async one, held across the request**
+  an `accept`, a `confirm` or a `poll` makes — that is what makes a Cancel wait behind the request
+  in flight and win, and what stops two polls (two windows with Settings open) both finding the
+  offer unspent and both completing it, which rolled a group's epoch back. **Taken before the
+  lane, never after.**
 - **Both blobs put one public field in the clear ahead of the sealed remainder**, and each is bound
   to its seal: the joiner's key is repeated inside the sealed bytes and compared, and the
   initiator's device id is the AEAD's associated data. Each side needs that value to derive the key
@@ -1828,6 +1835,45 @@ fact about a tree and every open branch has a different one, so it is not writte
 record, with every measurement, is
 [sync.md](../docs/reference/sync.md). The binding rules:
 
+- ⚠️ **A sync operation reaches the database a stretch at a time, on a lane, and holds nothing
+  across a request** (2026-10-03, the light app's step 6). Every `async fn` in `client.rs`,
+  `entitlement.rs` and `pairing.rs` takes `db: &impl Store` (`grimoire_core::state`) and reads or
+  writes inside `db.with(|conn| …)`; a request is made between two stretches. It used to be
+  `with_write(&state, |conn| runtime.block_on(run_once(conn)))` — the write connection held for a
+  whole network round trip, every other writer told `db::BUSY` — and a browser has no thread to
+  block. Five things bind a change here:
+  - **The app's store is the lane's guard**: `state.lane().await` for an operation that waits
+    its turn (the socket's trip, the socket's token, a departure) and `state.lane_for_press()`
+    for a press, which is told `db::BUSY` after `WRITE_LOCK_WAIT` of a sync in flight, as it
+    always was. `Store` is **not** implemented for `State`, and for a bare `Connection` only in a
+    test build — so a stretch on the app's database outside the lane does not compile. Every
+    operation that writes the group, the roster's membership, the grant, the cursor or the hold
+    takes it; the spike's §4 has the five ways two of them corrupt each other without it. **Three
+    writers stay outside it, deliberately**: `sync_device_rename` and `identity::ensure` (through
+    the pairing panel's status and begin) write a device's *name*, and `sync_patreon_begin` its
+    OAuth state — none of which a sync operation reads across a request.
+  - **What can land between two stretches is a reader's own write, and reads that must agree
+    share a stretch.** A baseline's rows, its clock and its horizon are one; so is everything a
+    pull does behind its response; so are a commit's rows (`found_group` + `add_device`,
+    `leave_group` + `entitlement::clear`, a grant + its status).
+  - **No baseline is begun while an op written since the trip read its outbox is pending**
+    (`emit_baselines`' `through`). It is in the rows and under the horizon and not yet on the
+    relay's log, so a peer that pulls between this trip and the next counts it twice — a card
+    out of nothing. `a_write_anywhere_in_a_round_trip_is_carried_by_the_next` lands a write
+    behind every stretch of a trip and is red without the rule at exactly those boundaries.
+  - **A stretch waits for the connection; it never answers `db::BUSY`.** It may be recording an
+    answer the relay will not give twice (a spent claim code's grant, a founding `confirm`'s
+    group). What it waits behind is local work, since nothing holds the connection across a
+    request any more.
+  - **Three fences**: each entry point's future is checked `Send` by a function that is never
+    called (`nothing_is_held_across_a_request`, in each of the three files) — a `MutexGuard`
+    across an `.await` is not; `clippy::await_holding_lock` refuses the same thing everywhere,
+    tests included; and `scripts/core-step-6-census.test.mjs` holds the eight files at no function
+    that takes a connection and awaits with it, and none that calls `block_on`.
+  A new sync command is `sync::on_a_worker(|| async { let lane = state.lane_for_press().await?;
+  … })`: still a blocking worker, because a stretch is SQLite work, and no longer one that keeps
+  every other writer out. [The spike](../docs/superpowers/research/2026-10-02-light-app-step-6-sync-trip-spike.md)
+  has every measurement.
 - **The conflict engine is Rust's, and the boundary is unchanged rather than bent.** "Two devices
   each added one copy and the row must end at +2" is a statement about *rows*, not about Magic —
   the second kind of question, which is this crate's. `reconcile.rs` already merges two versions
@@ -2819,6 +2865,14 @@ open — is [collection-sharing.md](../docs/reference/collection-sharing.md). Th
 - **`collection_shares` is a cache and is not synced** — the relay's list is the roster. Its
   whole-collection unique index is on the **expression** `(folder_uid IS NULL)`; the column form
   refuses nothing, because SQLite holds NULLs in a UNIQUE index as distinct.
+- **A publish takes the sync lane before it takes the connection** (2026-10-03).
+  `on_the_write_connection` still holds the writer for the whole trip — the far end is the
+  reader's own Worker — but it mints its bearer through `entitlement::access_token`, which writes
+  the grant a sync trip or a claim in flight is writing too. So the lane first, as a press takes
+  it, and the connection in hand goes down as the store the token is asked through
+  (`Lane::in_hand`): asking through the lane itself would be a thread waiting for the connection
+  it already holds. That is why `publish`, `refresh`, `revoke` and `list` take a `tokens`
+  argument beside `conn`.
 - ⚠️ **`share_open` fetches a stranger's URL, so it holds no connection and trusts nothing it is
   sent** (2026-09-28, [issue #545](https://github.com/Msgaihede/mtg-grimoire/issues/545)).
   `publish::open` takes no `Connection` — it ran on the write one until then, and a host
