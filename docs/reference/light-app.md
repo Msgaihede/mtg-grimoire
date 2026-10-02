@@ -909,7 +909,7 @@ entries, 89 wishes, `foreign_key_check` 0, `integrity_check` `ok`.
 
 **The frontend**: `ipc.test.ts` reads each split module as both halves, joined under the name
 its assertions already used, and passes unedited below its imports; `npm run test:run`, 459
-files and 12 891 tests; `npm run build` and `npm run lint` clean.
+files and 12 904 tests with `main` at `7e397710` merged in; `npm run build` and `npm run lint` clean.
 
 **Nothing in [data-and-sync.md](data-and-sync.md) or [search-faceting.md](search-faceting.md)
 was re-taken, and this is the step that could have moved a release figure most.** A debug build
