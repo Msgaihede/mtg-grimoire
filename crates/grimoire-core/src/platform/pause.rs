@@ -11,6 +11,10 @@
 //! did, and in a browser `lock_for` gives up on its first contended attempt, which every caller
 //! already reads as `db::BUSY`.
 //!
+//! `maintenance::reclaim_freed_pages` is a third, since the domain step: it stands aside between
+//! chunks so a waiter can take the connection, and ignores the answer — with nobody to stand
+//! aside for, the next chunk is simply taken at once.
+//!
 //! **This is not the async sleep.** A timer a future can await is a different interface with a
 //! different caller — the feeds' pacing — and arrives with the I/O step.
 

@@ -9,22 +9,22 @@
  * contract (`invoke` matches them by name, and a typo is a runtime rejection).
  *
  * Sources, verified field by field:
- * `SearchRequest`/`CardSummary`/`SearchResponse`/`SetSummary` — `src-tauri/src/search.rs`
+ * `SearchRequest`/`CardSummary`/`SearchResponse`/`SetSummary` — `crates/grimoire-core/src/search.rs`
  * `FacetResponse`                                 — `src-tauri/src/index/facets.rs`
  * `CardFace`/`CardDetail`/`Printing`/`PrintingsResponse`/
- * `FinishPrices`/`PrintingPrices`/`MeldRelation` — `src-tauri/src/card.rs`
+ * `FinishPrices`/`PrintingPrices`/`MeldRelation` — `crates/grimoire-core/src/card.rs`
  * `SyncOutcome`/`SyncStatus`/`Progress`          — `src-tauri/src/sync.rs`
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
- * `CollectionPage`/`CollectionSummary`/`BreakdownRow` — `src-tauri/src/collection.rs`
- * `MoveOutcome`                                  — `src-tauri/src/collection_alloc.rs`
+ * `CollectionPage`/`CollectionSummary`/`BreakdownRow` — `crates/grimoire-core/src/collection.rs`
+ * `MoveOutcome`                                  — `crates/grimoire-core/src/collection_alloc.rs`
  * `WishInput`/`WishlistQuery`/`WishRow`/`WishlistPage`/
- * `WishlistSummary`                              — `src-tauri/src/wishlist.rs`
+ * `WishlistSummary`                              — `crates/grimoire-core/src/wishlist.rs`
  * `DeckInput`/`DeckPatch`/`DeckViewState`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
  * `FormatSpecRow`/`PipCost`/`DeckPipCosts`/
- * `BracketCardRow`/`DeckBracketRead`/`DeckValue`   — `src-tauri/src/deck.rs`
- * `ActivityEntry`                                — `src-tauri/src/activity.rs`
- * `HomeWidget`/`HomeLayout`                      — `src-tauri/src/home.rs`
- * `StickyNoteRow`                                — `src-tauri/src/sticky_notes.rs`
+ * `BracketCardRow`/`DeckBracketRead`/`DeckValue`   — `crates/grimoire-core/src/deck.rs`
+ * `ActivityEntry`                                — `crates/grimoire-core/src/activity.rs`
+ * `HomeWidget`/`HomeLayout`                      — `crates/grimoire-core/src/home.rs`
+ * `StickyNoteRow`                                — `crates/grimoire-core/src/sticky_notes.rs`
  * `CardFilters`, flattened into both list queries — `crates/grimoire-core/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
  * `CardTags`/`PrintingTags`                     — `src-tauri/src/tags/oracle.rs`
@@ -41,7 +41,7 @@
  * `PairingStatus`/`PairingOffer`/`PairingHandshake`/`PairingSealedKey`/
  * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `src-tauri/src/sync_pair/pairing.rs`,
  *                                                  `.../identity.rs`, `.../invite.rs`
- * `DeckFolderPane`                                — `src-tauri/src/deckpane.rs`
+ * `DeckFolderPane`                                — `crates/grimoire-core/src/deckpane.rs`
  * `ShareRow`/`ShareFields`                        — `src-tauri/src/share/commands.rs`
  * `ScannerAsset`/`ScannerStatus`/`ScannerSidecar`/
  * `ScannerCaptured`/`ScannerPrefs`/
@@ -71,15 +71,15 @@
  * **The stored settings are one `app_meta` row each, and most of them carry no struct at all.**
  * (The scanner's two rows, `scanner_prefs` and `scanner_tray`, carry structs; see
  * {@link ScannerPrefs} and {@link ScannerTrayRow}.) Of the settings without one, some answer as a
- * bare string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`),
- * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`),
- * `deckSort`/`setDeckSort` (`src-tauri/src/decksort.rs`) and
- * `startView`/`setStartView` (`src-tauri/src/startview.rs`) — some as a bare map,
- * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`), `listView`/`setListView`
- * (`src-tauri/src/listview.rs`), `markColors`/`setMarkColor`
- * (`src-tauri/src/markcolors.rs`) and `searchOpen`/`setSearchOpen`
- * (`src-tauri/src/searchopen.rs`), and one as a bare `boolean`:
- * `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`). The settings that do carry a struct
+ * bare string — `getMarketplace`/`setMarketplace` (`crates/grimoire-core/src/marketplace.rs`),
+ * `printingGroupBy`/`setPrintingGroupBy` (`crates/grimoire-core/src/card.rs`),
+ * `deckSort`/`setDeckSort` (`crates/grimoire-core/src/decksort.rs`) and
+ * `startView`/`setStartView` (`crates/grimoire-core/src/startview.rs`) — some as a bare map,
+ * `cardZoom`/`setCardZoom` (`crates/grimoire-core/src/zoom.rs`), `listView`/`setListView`
+ * (`crates/grimoire-core/src/listview.rs`), `markColors`/`setMarkColor`
+ * (`crates/grimoire-core/src/markcolors.rs`) and `searchOpen`/`setSearchOpen`
+ * (`crates/grimoire-core/src/searchopen.rs`), and one as a bare `boolean`:
+ * `navCollapsed`/`setNavCollapsed` (`crates/grimoire-core/src/nav.rs`). The settings that do carry a struct
  * are `deckFolderPane`, `homeLayout` and `shelfFolds`, below. Every one of them is the shape a
  * stored preference has to have: the read falls back on its default for a row that is missing
  * *or* holds a value this build does not recognise, and only the *write* refuses. **They are
@@ -114,7 +114,7 @@
  * paragraph and into the map one without a word of either argument changing.
  *
  * **The folder pane is the first stored preference that carried a struct**: {@link DeckFolderPane}
- * (`src-tauri/src/deckpane.rs`) is how wide the decks page's folder tree was dragged *and*
+ * (`crates/grimoire-core/src/deckpane.rs`) is how wide the decks page's folder tree was dragged *and*
  * whether it is folded to its rail, and the two are one row because they are one gesture's worth
  * of state — a reader who folds a tree they had widened must come back to both facts, and two
  * rows would be two writes that can half-land. **A struct rather than a map** for the reason
@@ -132,7 +132,7 @@
  * pixel count, and `FolderTree` owns that number.
  *
  * **The home layout is the second, and it is a struct for the opposite reason.** {@link HomeLayout}
- * (`src-tauri/src/home.rs`) is the home page's tiles — their order, their widths and whatever each
+ * (`crates/grimoire-core/src/home.rs`) is the home page's tiles — their order, their widths and whatever each
  * one remembers — and where the folder pane is a struct because its two *known* fields must land
  * together, this one is a struct because most of what it holds is **unknown to the backend
  * entirely**: `kind` is a word this side invents and `config` is a shape only the widget that
@@ -143,7 +143,7 @@
  * checking for; nothing on this side can fence the rest, and nothing should try.
  *
  * **The shelf folds are the third, and the struct is the one vocabulary both sides spell.**
- * {@link ShelfFolds} (`src-tauri/src/shelffolds.rs`, `shelfFolds`/`setShelfFolds`) is which
+ * {@link ShelfFolds} (`crates/grimoire-core/src/shelffolds.rs`, `shelfFolds`/`setShelfFolds`) is which
  * shelves the reader folded away from their default, per page. The *pages* are named on both
  * sides — {@link ShelfFoldPage} here and the Rust struct's fields there, held together by
  * `ipc.test.ts` (and `shelffolds::PAGES` held to those fields by the crate's own test) — and
@@ -231,7 +231,7 @@ function asciiJson(value: unknown): string {
 }
 
 /**
- * The search's sortable columns. Mirrors `SEARCH_SORTS` in `src-tauri/src/search.rs`; a key
+ * The search's sortable columns. Mirrors `SEARCH_SORTS` in `crates/grimoire-core/src/search.rs`; a key
  * that is not there is dropped at the far end, which is a control that does nothing.
  *
  * The first five are the table's headers. `manaValue` and `released` have **no column to
@@ -250,7 +250,7 @@ export type SearchSortKey = "name" | "set" | "type" | "rarity" | "price" | "mana
  * is worth (unit × copies — the figure the cell prints, and what its header sorts by), and
  * `price` what one copy costs. `added` has no column at all. Both of the latter are
  * reachable only from the filter bar's select. Mirrors `COLLECTION_SORTS` in
- * `src-tauri/src/collection.rs`.
+ * `crates/grimoire-core/src/collection.rs`.
  */
 export type CollectionSortKey =
   "name" | "set" | "finish" | "quantity" | "value" | "price" | "added";
@@ -264,7 +264,7 @@ export type CollectionSortKey =
  *
  * **There is no `owned` either, since 2026-09-08.** It ordered by the copies the collection
  * held against each wish, and the wishlist compares itself to the collection nowhere any more.
- * Mirrors `WISHLIST_SORTS` in `src-tauri/src/wishlist.rs`.
+ * Mirrors `WISHLIST_SORTS` in `crates/grimoire-core/src/wishlist.rs`.
  */
 export type WishlistSortKey = "name" | "quantity" | "cost" | "price" | "added";
 
@@ -303,7 +303,7 @@ export interface SearchRequest {
    * Every printing of one oracle card — the card, not the cardboard. Absent means unset,
    * like every other filter here; it ANDs with the rest. Mirrors
    * `CardFilters::oracle_id` in `crates/grimoire-core/src/filters.rs` and
-   * `SearchRequest::oracle_id` in `src-tauri/src/search.rs`.
+   * `SearchRequest::oracle_id` in `crates/grimoire-core/src/search.rs`.
    */
   oracleId?: string;
   /** Set codes. ORed with each other, ANDed with every other filter. */
@@ -442,7 +442,7 @@ export interface SearchRequest {
    *
    * **The two halves move together.** Narrowing the count and leaving the filter alone would
    * put a card under the Owned chip wearing `×0`. `Availability` in
-   * `src-tauri/src/collection_source.rs` is the one place the arms are written.
+   * `crates/grimoire-core/src/collection_source.rs` is the one place the arms are written.
    */
   availableForDeck?: number;
   /**
@@ -544,7 +544,7 @@ export interface CardSummary {
    * One of the cards the Commander bracket system counts as a **game changer** — a crown on
    * the tile and in the table's Name cell, beside the foil and etched marks.
    *
-   * Mirrors `CardSummary::game_changer` in `src-tauri/src/search.rs`, which is `bool` and not
+   * Mirrors `CardSummary::game_changer` in `crates/grimoire-core/src/search.rs`, which is `bool` and not
    * `Option<bool>`: `cards.game_changer` is nullable, a NULL there means *not on the list*, and
    * the backend reads it as an `Option` and flattens it rather than handing this side a third
    * state every crown would have to fence.
@@ -6505,7 +6505,7 @@ export interface ErrorEntry {
 }
 
 /**
- * What emptying the collection took with it — `src-tauri/src/reset.rs`.
+ * What emptying the collection took with it — `crates/grimoire-core/src/reset.rs`.
  *
  * A shape rather than a bare count so the panel's sentence has somewhere to grow, and because
  * the command has always answered an object. The decks themselves stay: a deck is a list of
@@ -9935,7 +9935,7 @@ export const ipc = {
   /** Empty the log. Answers how many rows went. */
   errorLogClear: () => invoke<number>("error_log_clear"),
   /**
-   * The four Settings can throw away — `src-tauri/src/reset.rs`.
+   * The four Settings can throw away — `crates/grimoire-core/src/reset.rs`.
    *
    * **The first three are irreversible and write no history**, which is not an oversight: the
    * deck audit log is per-deck and cascades away with the decks it describes, so there is

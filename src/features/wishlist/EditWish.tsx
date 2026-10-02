@@ -293,7 +293,7 @@ function EditWishPanel({
           //
           // The backend has agreed the whole time: `set_wish_quantity` returns
           // `remove_wish(conn, id)` at zero, because `wishlist_entries.quantity` carries
-          // `CHECK (quantity > 0)` (`src-tauri/src/wishlist.rs`). What moved is the front of
+          // `CHECK (quantity > 0)` (`crates/grimoire-core/src/wishlist.rs`). What moved is the front of
           // the control, not what it is allowed to ask for. Do not restore the floor of one on
           // the strength of the sentence that used to be here: a comment left standing after
           // the behaviour it describes was reversed stays green forever and encodes a state

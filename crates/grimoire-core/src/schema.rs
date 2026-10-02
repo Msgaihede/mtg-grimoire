@@ -5232,12 +5232,14 @@ fn create_fts_in(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
 /// capture triggers are missing goes on working perfectly and records nothing. What a launch
 /// does *after* this — the search index an interrupted compaction owes, the staging table a
 /// killed ingest left, the trims and the passes that settle derived rows — is logged and left
-/// owing, and is the host's `prepare_database`, which calls this first.
+/// owing, and is [`prepare_database`], directly below, which calls this first.
 ///
-/// **That function is `src-tauri`'s until the modules its passes call have moved here**
-/// (`maintenance`, `managed_wishlist`, `deck_tokens`, `deck_meta` — the extraction's step 4).
-/// The cut between the two is the line the launch already drew between a failure that stops it
-/// and one that does not; no statement on either side of it changed, and none changed order.
+/// **The two were one function, and were in two crates between the extraction's storage step
+/// and its domain step**: the passes call `maintenance`, `managed_wishlist`, `deck_tokens` and
+/// `deck_meta`, which moved here later than this did. The cut between them is the line the launch
+/// already drew between a failure that stops it and one that does not; no statement on either
+/// side of it changed, and none changed order. They stay two because a host may want the first
+/// without the second — a test that needs a schema at head and no launch.
 pub fn bring_to_head(conn: &Connection) -> rusqlite::Result<()> {
     migrate_user(conn).map_err(|e| in_file(e, "your collection (user.db)"))?;
     // **A corpus that will not migrate is a corpus to replace, not a launch to stop** (issue
@@ -8539,7 +8541,7 @@ pub fn swap_staging(conn: &Connection) -> rusqlite::Result<()> {
     // A rebuild an interrupted compaction was still owed has just been paid off, by this.
     // Clearing it inside the same transaction is what keeps the two honest: the debt and
     // the work that discharges it commit together or not at all.
-    crate::sync_meta::set_meta_opt(&tx, crate::sync_meta::K_FTS_REBUILD_PENDING, None)?;
+    crate::sync_meta::set_meta_opt(&tx, crate::maintenance::K_FTS_REBUILD_PENDING, None)?;
     tx.commit()
 }
 
@@ -22388,10 +22390,11 @@ pub(crate) mod tests {
 /// feature: a dependency's `cfg(test)` is off while another crate's tests build.
 ///
 /// Everything here was a private helper of `tests` until the storage step moved this file to
-/// `grimoire-core`. The tests that name a module still in `src-tauri` — the launch, the token
-/// conversion, the tag search — stayed there, in that crate's `schema::tests`, and these are
-/// the fixtures they share with the ones that moved: the seeds, the rewind chain, the
-/// version-pinned databases. They come back into `tests` when those tests do.
+/// `grimoire-core`. The tests that name a module still in `src-tauri` stayed there, in that
+/// crate's `schema::tests`, and these are the fixtures they share with the ones that moved: the
+/// seeds, the rewind chain, the version-pinned databases. **Nine of those tests came home with
+/// the domain step** — the launch, the token conversion, the bracket fence. The eight still there
+/// drive `split`, which only the desktop has, or the tag search, which the I/O step moves.
 ///
 /// **At the foot of the file on purpose.** `scripts/coverage-rust.mjs` counts everything from
 /// the first column-0 `#[cfg(test)]` down as test code, and this is test code.

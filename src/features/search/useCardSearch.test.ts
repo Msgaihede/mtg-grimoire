@@ -1032,7 +1032,7 @@ describe("the retired one-card mode", () => {
  * Until it landed the table's headers were the only way into `sort`, so the grid, which has
  * none, could not be ordered at all. Two of the seven keys it offers have no header either,
  * and that is what the payload test at the bottom is for: `SEARCH_SORTS` in
- * `src-tauri/src/search.rs` drops a key it does not recognise **silently**, so a spelling that
+ * `crates/grimoire-core/src/search.rs` drops a key it does not recognise **silently**, so a spelling that
  * drifts from Rust's is a row of the picker that quietly reorders nothing, with every other
  * assertion in this file still green.
  */

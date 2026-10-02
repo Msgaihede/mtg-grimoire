@@ -94,7 +94,10 @@ describe("the census", () => {
   it("finds the crossings that motivated it", () => {
     const tsPaths = ts.map((r) => r.path);
     const rustPaths = rust.map((r) => r.path);
-    expect(tsPaths).toContain("src-tauri/src/deck.rs");
+    // Both halves of a module the core extraction split: the engine's file, and the desktop's
+    // command wrappers beside it.
+    expect(tsPaths).toContain("crates/grimoire-core/src/deck.rs");
+    expect(tsPaths).toContain("src-tauri/src/deck/mod.rs");
     expect(tsPaths).toContain("src-tauri/src/share/__golden__/snapshot.json");
     expect(tsPaths).toContain("src-tauri/tauri.conf.json");
     expect(tsPaths).toContain("crates/card-scanner/src/session.rs");
@@ -169,7 +172,9 @@ describe("the arms", () => {
     [".claude/skills/running-the-app/lock.ps1", F, F, F, T, F],
     ["src-tauri/x.psm1", F, F, F, T, F],
     ["tools/x.psd1", F, F, F, T, F],
-    ["src-tauri/src/deck.rs", T, T, F, F, F],
+    // A module the core extraction split: the desktop keeps its command wrappers at the old
+    // module path, and the engine's half — a `core` row — is below.
+    ["src-tauri/src/deck/mod.rs", T, T, F, F, F],
     ["src-tauri/src/desktop.rs", T, T, F, F, F],
     ["src-tauri/src/schema/mod.rs", T, T, F, F, F],
     ["src-tauri/Cargo.toml", T, T, F, F, F],
@@ -190,7 +195,9 @@ describe("the arms", () => {
     ["scripts/golden.mjs", T, F, F, F, F],
     ["crates/grimoire-core/src/lib.rs", T, T, T, F, F],
     // The schema since 2026-10-02. `src-tauri/src/schema/mod.rs` above is what the desktop host
-    // kept of it — the launch — so both rows are true, and this is the one a new rung changes.
+    // kept of it — the conversion from a single file — so both rows are true, and this is the
+    // one a new rung changes. The deck's row is the same pair, one step later.
+    ["crates/grimoire-core/src/deck.rs", T, T, T, F, F],
     ["crates/grimoire-core/src/schema.rs", T, T, T, F, F],
     ["crates/grimoire-core/Cargo.toml", T, T, T, F, F],
     ["crates/card-scanner/src/session.rs", T, T, F, F, F],

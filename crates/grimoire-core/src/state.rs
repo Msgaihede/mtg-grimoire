@@ -8,14 +8,16 @@
 //! **It is the every-host half as far as the extraction has got.** The Scryfall client, the
 //! image cache, the facet index, the sync-in-flight flag and the pending pairing offer are every
 //! host's too, and are still fields of the desktop's `AppState` — each is a type that has not
-//! moved here yet, and arrives with the step that moves it. `with_write`, the one definition of
-//! a user-facing write, is still the desktop's for the same reason: its body calls the managed
-//! wishlist and the token reconcile.
+//! moved here yet, and arrives with the step that moves it.
 //!
-//! **A host opens the connections; this does not.** Bringing the pair to head is
-//! [`crate::schema::bring_to_head`], and until the modules behind the launch's logged passes
-//! move, what follows it is the host's. So [`State::new`] takes connections that are already
-//! at head.
+//! **[`with_write`] is the one definition of a user-facing write**, and it is here since the
+//! extraction's domain step brought the managed wishlist and the token reconcile its body calls.
+//!
+//! **A host opens the connections; this does not.** Bringing the pair to head and running the
+//! launch's logged passes is [`crate::schema::prepare_database`], which is this crate's too —
+//! but the desktop converts a pre-27 single file first, with a module only it has, so what a
+//! host-neutral "open the data folder" should be is left to the first host that is not the
+//! desktop. [`State::new`] takes connections that are already at head.
 
 use crate::db::{self, CrossFileFence};
 use crate::events::EventSink;
@@ -112,7 +114,7 @@ impl State {
 /// Run `f` with the write connection, or answer [`crate::db::BUSY`].
 ///
 /// Bounded rather than blocking: every caller is a button press on a worker thread, and the
-/// one thing that can hold `AppState.db` for any length of time is a sync — which, since the
+/// one thing that can hold [`State::db`] for any length of time is a sync — which, since the
 /// ingest was chunked, holds it for one batch at a time.
 ///
 /// **This is the one definition of that rule**, the way [`crate::db::lock_plain`] is the one
@@ -121,10 +123,16 @@ impl State {
 /// each documented as "kept per-module the way every other one in this crate is" — which was
 /// true, and was the problem.
 ///
-/// Here rather than in [`crate::db`] because the parameter is [`AppState`]: `db` is the layer
-/// below and must not learn about the app's state. `&AppState` rather than `&Arc<AppState>`
-/// so that both shapes of caller fit — a command holding an `Arc` gets deref coercion for
-/// free, and [`crate::index::lifecycle`], which holds a bare reference, needs no clone.
+/// Here rather than in [`crate::db`] because the parameter is [`State`]: `db` is the layer
+/// below and must not learn about the app's state. **`&State`, and it was `&AppState` until the
+/// extraction's domain step** — the desktop's `AppState` derefs to this struct, so a command
+/// there holding an `Arc<AppState>` still passes `&state`, and `index::lifecycle`, which holds a
+/// bare reference, needs no clone. A free function rather than a method so that every one of
+/// those callers reads as it did; `src-tauri`'s `sync` re-exports it under its old name.
+///
+/// **It could not move before the modules its body names did**: [`written`] arms and settles
+/// [`crate::managed_wishlist`] and runs [`crate::deck_tokens`]' reconcile around the caller's
+/// closure, with no line to be cut at.
 ///
 /// **Never call this while holding a guard on `state.db`** — it does not deadlock, because
 /// [`crate::db::lock_for`] is a `try_lock`-plus-sleep loop rather than a blocking one, but a
@@ -144,7 +152,7 @@ pub fn with_write<T>(
 }
 
 /// [`with_write`] that **waits for the write connection as long as it takes** instead of
-/// answering [`crate::db::BUSY`]. ⚠️ **The one sanctioned unbounded wait on `AppState.db`, and a
+/// answering [`crate::db::BUSY`]. ⚠️ **The one sanctioned unbounded wait on [`State::db`], and a
 /// departure is the only press that earns it.**
 ///
 /// Every other press is optional: the reader can press again, and a five-second "busy" is kinder

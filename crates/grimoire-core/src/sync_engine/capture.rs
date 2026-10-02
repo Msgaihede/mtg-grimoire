@@ -2462,9 +2462,10 @@ mod tests {
     }
 }
 
-/// **The two fixtures every capture test starts from**, shared with the three tests that stayed
-/// in `src-tauri` because they drive `reconcile` and the launch, which have not moved yet. Those
-/// reach it through the `testing` feature; see `schema::fixtures`.
+/// **The two fixtures every capture test starts from**, shared with the two tests that stayed
+/// in `src-tauri` because they drive `reconcile`, which has not moved yet. (A third, over the
+/// launch, came home with the domain step.) Those reach it through the `testing` feature; see
+/// `schema::fixtures`.
 #[cfg(any(test, feature = "testing"))]
 pub mod fixtures {
     use super::*;

@@ -261,7 +261,7 @@ export const NarrowedToALand: Story = {
  *
  * This is the footer's standing sentence made visible: cutting a card never takes the note with
  * it. **The crop is the half that surprises**, and it is why this story carries a corpus card id
- * rather than a bare name: `attachments_by_note` (`src-tauri/src/deck_notes.rs`) resolves each
+ * rather than a bare name: `attachments_by_note` (`crates/grimoire-core/src/deck_notes.rs`) resolves each
  * named card's printing over the *whole corpus* — a printing the deck holds first, any printing
  * otherwise — so a `DeckNoteCard` for a cut card still carries a `cardId`.
  * {@link NamesACardWithNoPrinting} is the other shape, and it is the rare one.

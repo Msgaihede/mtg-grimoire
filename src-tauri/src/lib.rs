@@ -4,6 +4,12 @@
 //! **A `pub use grimoire_core::…` in this map is a module that has moved to the shared core**
 //! (`crates/grimoire-core`, the light app's spec §2.8) and is re-exported at the path it always
 //! had, so `crate::legalities` here is that crate's `legalities` and no caller changed.
+//!
+//! **A `pub mod` here is not always a module that has not moved.** Since the extraction's domain
+//! step most of them are the *desktop's half* of one that has: `deck/mod.rs` is
+//! `pub use grimoire_core::deck::*;` and, below it, deck's `#[tauri::command]` wrappers — a
+//! wrapper names a window, so it cannot move. The doc comment on each line below describes the
+//! module, wherever its code now is; each `<module>/mod.rs` says what it kept and why.
 
 /// **The collection's and the wishlist's history, and the feed that reads it beside
 /// [`deck_audit`].** A table, a `record` that takes the caller's `&Connection` so a row lands

@@ -43,7 +43,7 @@ import { useCardSearch, type CardSearch } from "./useCardSearch";
  * the pane open every column keeps a readable share, and closed they measure 381/190 where
  * the cap gave 315/256 — the name, which is what identifies a row, now truncates last.
  *
- * The keys are the backend's, verbatim: `SEARCH_SORTS` in `src-tauri/src/search.rs`. A key
+ * The keys are the backend's, verbatim: `SEARCH_SORTS` in `crates/grimoire-core/src/search.rs`. A key
  * that does not match one there is dropped silently at the far end, which is a header that
  * does nothing.
  *

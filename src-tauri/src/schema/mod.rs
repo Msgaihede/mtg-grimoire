@@ -1,22 +1,24 @@
-//! **The schema is `grimoire-core`'s, re-exported here whole — beside the two functions that
-//! could not move with it.**
+//! **The schema is `grimoire-core`'s, re-exported here whole — beside the one function that
+//! cannot move with it.**
 //!
 //! Every `crate::schema::…` in this crate is that crate's `schema` (the DDL, both ladders, the
-//! grains, the staging swaps) except [`prepare_database`] and [`prepare_data_dir`], which are
-//! defined here: an item a module defines shadows a glob import of the same name.
+//! grains, the staging swaps, `prepare_database`) except [`prepare_data_dir`], which is defined
+//! here: an item a module defines shadows a glob import of the same name.
 //!
-//! * [`prepare_database`] is `schema::bring_to_head` — the two ladders and the capture
-//!   triggers, everything that may stop a launch — followed by the launch's logged passes. Those
-//!   call `maintenance`, `managed_wishlist`, `deck_tokens` and `deck_meta`, none of which has
-//!   moved yet. **The cut is the line the function already drew**, between a failure that stops
-//!   a launch and one that is logged and left owing; no statement on either side changed, and
-//!   none changed order. It goes home with the extraction's step 4.
-//! * [`prepare_data_dir`] is [`crate::split::convert`] followed by
-//!   `schema::replace_unreadable_corpus`. `split` takes a pre-27 single file apart, which only
-//!   the desktop has ever had, so this one stays as long as `split` does.
+//! [`prepare_data_dir`] is [`crate::split::convert`] followed by
+//! `schema::replace_unreadable_corpus`. `split` takes a pre-27 single file apart, which only the
+//! desktop has ever had, so this one stays as long as `split` does.
 //!
-//! The tests below are the ones of `schema`'s that name a module still in this crate. They are
-//! here unedited, and each goes back when what it names moves.
+//! **`prepare_database` was here too, between the extraction's storage step and its domain
+//! step**: the launch's logged passes call `maintenance`, `managed_wishlist`, `deck_tokens` and
+//! `deck_meta`, which moved later than the ladders did. It is the core's again, directly below
+//! `bring_to_head`, and nine of the tests that waited here with it went home.
+//!
+//! The tests below are the ones of `schema`'s that still name a module in this crate: `split`,
+//! through this function or through a converted fixture, and the tag search. They are here
+//! unedited; the tag search's goes back when `tags` moves, and the rest stay as long as `split`
+//! does. ⚠️ **One of them is `#[ignore]`d and carries a rewind chain**, so a new user rung still
+//! owes its `UNDO_V<N>` here as well as in the core's fixtures, and nothing goes red without it.
 
 pub use grimoire_core::schema::*;
 
@@ -31,9 +33,9 @@ pub fn prepare_data_dir(data_dir: &std::path::Path) -> Result<bool, String> {
     Ok(replace_unreadable_corpus(data_dir) || converted)
 }
 
-/// **The tests of `schema` that name a module this crate still holds** — the launch, the token
-/// conversion, the to-do lists, the tag search, the bracket fence — and, re-exported, the
-/// fixtures every other test module here reaches as `crate::schema::tests::…`.
+/// **The tests of `schema` that name a module this crate still holds** — the conversion from a
+/// single file and the tag search — and, re-exported, the fixtures every other test module here
+/// reaches as `crate::schema::tests::…`.
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;

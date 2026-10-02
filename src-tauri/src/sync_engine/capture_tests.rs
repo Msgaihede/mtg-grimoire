@@ -1,7 +1,7 @@
-//! **The three of `capture`'s tests that name a module still in this crate** — the launch
-//! (`schema::prepare_database`) and `reconcile`. `capture` itself is `grimoire-core`'s; these
-//! are here unedited, and go back to it when `reconcile` and the launch passes move (the
-//! extraction's step 4).
+//! **The two of `capture`'s tests that name a module still in this crate** — `reconcile`.
+//! `capture` itself is `grimoire-core`'s; these are here unedited, and go back to it when
+//! `reconcile` moves (the extraction's I/O step, with the Scryfall type it takes). A third, over
+//! the launch, went home with the domain step.
 
 use grimoire_core::sync_engine::capture::fixtures::*;
 

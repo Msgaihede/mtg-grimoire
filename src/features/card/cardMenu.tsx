@@ -1577,7 +1577,7 @@ function separated(groups: readonly MenuItem[][], idPrefix: string): MenuItem[] 
  * ## The deck rows are not folder writes, and that is the whole design
  *
  * `set_entry_folder` calls `user_folder` on its destination and answers `FOLDER_NOT_YOURS` for a
- * deck group (`src-tauri/src/collection_folders.rs`). It is right to: a copy reaches a group only
+ * deck group (`crates/grimoire-core/src/collection_folders.rs`). It is right to: a copy reaches a group only
  * through `collection_alloc::collection_to_deck`, which writes the `deck_cards` row in the same
  * transaction. A bare folder write would file the copies into the group and leave the deck's list
  * saying nothing about them — a placement with no deck card behind it, which reads to the reader

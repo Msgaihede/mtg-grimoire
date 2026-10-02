@@ -99,7 +99,7 @@ function copyLabel(row: CollectionRow): string {
  * That squeeze is also why the two orders with no column stay on the filter bar's select
  * rather than becoming columns: there is no room, and this table has already given one up.
  *
- * The keys are the backend's, verbatim: `COLLECTION_SORTS` in `src-tauri/src/collection.rs`.
+ * The keys are the backend's, verbatim: `COLLECTION_SORTS` in `crates/grimoire-core/src/collection.rs`.
  */
 function columnsFor(
   onSetQuantity: (row: CollectionRow, quantity: number) => void,
