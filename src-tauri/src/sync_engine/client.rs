@@ -449,6 +449,58 @@ pub struct Pushed {
 }
 
 // ---------------------------------------------------------------------------------------
+// The database, a stretch at a time (step 6's spike)
+// ---------------------------------------------------------------------------------------
+
+/// How a trip reaches the database: **inside [`Store::with`], and never across an `.await`**.
+///
+/// A trip used to be handed the write connection for its whole length, network requests
+/// included. This is the restatement: what a function reads or writes is a *stretch* — one
+/// closure, run to its end with the connection — and a request is made between two of them with
+/// nothing held.
+pub trait Store {
+    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String>;
+}
+
+/// A bare connection is a store whose stretches run back to back — what every test here hands
+/// over, and why none of them changed.
+impl Store for Connection {
+    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
+        f(self)
+    }
+}
+
+/// The app's: each stretch takes the write connection for its own length and gives it back.
+impl Store for grimoire_core::state::State {
+    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
+        grimoire_core::state::with_write_waiting(self, f)
+    }
+}
+
+/// [`note`] as a stretch of its own.
+fn say(db: &impl Store, operation: &str, kind: Kind, message: &str, detail: Option<&str>) {
+    let _ = db.with(|conn| {
+        note(conn, operation, kind, message, detail);
+        Ok(())
+    });
+}
+
+/// [`lapsed`] as a stretch of its own.
+fn lapsed_in(db: &impl Store, what: &str) -> String {
+    db.with(|conn| Ok(lapsed(conn, what))).unwrap_or_else(|e| e)
+}
+
+/// **The fence, and it is the compiler's**: a trip over the app's state is a future that can be
+/// sent to another thread, which it cannot be while it holds a `MutexGuard` — or a `&Connection`
+/// — across an `.await`. Never called.
+#[allow(dead_code)]
+fn a_trip_holds_nothing_across_a_request(state: &grimoire_core::state::State) {
+    fn sendable<T: Send>(_: T) {}
+    sendable(ack(state, "", ""));
+    sendable(emit_baselines(state, "", ""));
+}
+
+// ---------------------------------------------------------------------------------------
 // `sync_state`
 // ---------------------------------------------------------------------------------------
 
@@ -1361,7 +1413,7 @@ enum Refusal {
 /// refusal an updated relay explains is recorded in its own sentence** ([`refused_push`]),
 /// matched on its `code`.
 async fn post_ops(
-    conn: &Connection,
+    db: &impl Store,
     base: &str,
     token: &str,
     group: &Group,
@@ -1372,7 +1424,7 @@ async fn post_ops(
     let envelope = match wire::seal_batch(group, device, ops) {
         Ok(e) => e,
         Err(e) => {
-            note(conn, "push", Kind::Other, &e.to_string(), None);
+            say(db, "push", Kind::Other, &e.to_string(), None);
             return Err(Refusal::Failed(e.to_string()));
         }
     };
@@ -1387,13 +1439,13 @@ async fn post_ops(
     let response = match response {
         Ok(r) => r,
         Err(e) => {
-            note(conn, "push", kind_of(&e), &e.to_string(), Some(&url));
+            say(db, "push", kind_of(&e), &e.to_string(), Some(&url));
             return Err(Refusal::Failed(e.to_string()));
         }
     };
     let status = response.status().as_u16();
     if status == 401 {
-        return Err(Refusal::Failed(lapsed(conn, "a push")));
+        return Err(Refusal::Failed(lapsed_in(db, "a push")));
     }
     if !(200..300).contains(&status) {
         let code = refusal_code(&response.text().await.unwrap_or_default());
@@ -1403,7 +1455,7 @@ async fn post_ops(
             _ => {}
         }
         let message = refused_push(status, code.as_deref());
-        note(conn, "push", Kind::Http, &message, Some(&url));
+        say(db, "push", Kind::Http, &message, Some(&url));
         return Err(match Deferral::of(code.as_deref()) {
             Some(deferral) => Refusal::Deferred(deferral),
             None => Refusal::Failed(message),
@@ -1412,12 +1464,12 @@ async fn post_ops(
     match response.text().await {
         Ok(text) => {
             if let Err(e) = serde_json::from_str::<PushReceipt>(&text) {
-                note(conn, "push", Kind::Parse, &e.to_string(), Some(&url));
+                say(db, "push", Kind::Parse, &e.to_string(), Some(&url));
                 return Err(Refusal::Failed(e.to_string()));
             }
         }
         Err(e) => {
-            note(conn, "push", kind_of(&e), &e.to_string(), Some(&url));
+            say(db, "push", kind_of(&e), &e.to_string(), Some(&url));
             return Err(Refusal::Failed(e.to_string()));
         }
     }
@@ -2258,17 +2310,21 @@ fn watermarks(conn: &Connection) -> Result<std::collections::BTreeMap<String, (i
 }
 
 /// Tell the relay how far this device has consumed, which is what compaction reads.
-pub async fn ack(conn: &Connection, base: &str, token: &str) -> Result<(), String> {
-    let Some((device, group)) = me(conn)? else {
+pub async fn ack(db: &impl Store, base: &str, token: &str) -> Result<(), String> {
+    // One stretch: who this is, how far it has consumed, and whether the relay already knows.
+    let owed = db.with(|conn| {
+        let Some((device, group)) = me(conn)? else {
+            return Ok(None);
+        };
+        let cursor: i64 = get_state(conn, PULL_CURSOR)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let acked: Option<i64> = get_state(conn, LAST_ACKED).and_then(|v| v.parse().ok());
+        Ok((acked != Some(cursor)).then_some((device, group, cursor)))
+    })?;
+    let Some((device, group, cursor)) = owed else {
         return Ok(());
     };
-    let cursor: i64 = get_state(conn, PULL_CURSOR)
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
-    let acked: Option<i64> = get_state(conn, LAST_ACKED).and_then(|v| v.parse().ok());
-    if acked == Some(cursor) {
-        return Ok(());
-    }
     let url = format!("{base}/g/{}/ack", group.group_id);
     // Written by hand rather than through reqwest's `json` feature, which this crate does not
     // enable: `serde_json` is already here, and a feature that changes what every other request
@@ -2284,21 +2340,22 @@ pub async fn ack(conn: &Connection, base: &str, token: &str) -> Result<(), Strin
     {
         Ok(r) => r,
         Err(e) => {
-            note(conn, "ack", kind_of(&e), &e.to_string(), Some(&url));
+            say(db, "ack", kind_of(&e), &e.to_string(), Some(&url));
             return Err(e.to_string());
         }
     };
     let status = response.status().as_u16();
     if status == 401 {
-        return Err(lapsed(conn, "an ack"));
+        return Err(lapsed_in(db, "an ack"));
     }
     if !(200..300).contains(&status) {
         let message = format!("the relay answered {status} to an ack");
-        note(conn, "ack", Kind::Http, &message, Some(&url));
+        say(db, "ack", Kind::Http, &message, Some(&url));
         return Err(message);
     }
-    set_state(conn, LAST_ACKED, &cursor.to_string()).map_err(|e| e.to_string())?;
-    Ok(())
+    // **The cursor the relay was told, not the cursor as it stands now**: both are the same
+    // while one trip runs at a time, and the one that was sent is the one this records.
+    db.with(|conn| set_state(conn, LAST_ACKED, &cursor.to_string()).map_err(|e| e.to_string()))
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2350,40 +2407,43 @@ const BASELINE_CLOCK_AHEAD: &str = "the relay refused a device's first sync as s
 /// before it, which the next trip then pushes again. Recorded once a trip
 /// ([`BASELINE_WAITS_FOR_THE_CLOCK`]), and it goes once real time reaches the row.
 async fn emit_baselines(
-    conn: &Connection,
+    db: &impl Store,
     base: &str,
     token: &str,
 ) -> Result<(usize, usize), String> {
-    let Some((device, group)) = me(conn)? else {
+    let Some((device, group)) = db.with(me)? else {
         return Ok((0, 0));
     };
     let url = format!("{base}/g/{}/push", group.group_id);
-    let wall = wall_ms(conn)?;
     let mut emitted = 0usize;
     let mut history = 0usize;
-    for peer in baseline::peers_needing(conn)? {
-        let mut ops = baseline::build(conn, &device)?;
+    for peer in db.with(baseline::peers_needing)? {
+        // **The rows, the clock and the horizon are read in ONE stretch, and that is the rule
+        // this function has that no other in the trip does.** The horizon says how far each
+        // device's ops are already inside the rows; a write landing between the two reads is
+        // inside the horizon and outside the rows, so the peer would be handed neither its
+        // value nor — the horizon filtering it — its delta. Lost, with nothing to say so.
+        let (mut ops, wall, horizon) = db.with(|conn| {
+            Ok((
+                baseline::build(conn, &device)?,
+                wall_ms(conn)?,
+                baseline::horizon(conn, &device)?,
+            ))
+        })?;
         // A device holding nothing has still answered the question, so the marker is stamped
         // and the peer is not asked again next minute. There is no envelope to send: an empty
         // batch is `WireError::Empty`, deliberately, because a relay row holding no ops is a
         // row nobody can act on.
         if ops.is_empty() {
-            baseline::mark_sent(conn, &peer)?;
+            db.with(|conn| baseline::mark_sent(conn, &peer))?;
             continue;
         }
         // **Every peer's baseline is these same rows**, so one too far ahead for this peer is too
         // far ahead for all of them: recorded once, and none is begun.
         if ops.iter().any(|op| hlc::too_far_ahead(op.at.ms, wall)) {
-            note(
-                conn,
-                "push",
-                Kind::Other,
-                BASELINE_WAITS_FOR_THE_CLOCK,
-                None,
-            );
+            say(db, "push", Kind::Other, BASELINE_WAITS_FOR_THE_CLOCK, None);
             break;
         }
-        let horizon = baseline::horizon(conn, &device)?;
         // **Cut where `wire::batches` would cut** — by count and by bytes — and walked as mutable
         // slices of those lengths, because `batches` hands out shared ones and the horizon has to
         // be written in. The lengths are measured before the horizon rides on, which is the few
@@ -2410,8 +2470,8 @@ async fn emit_baselines(
             // without it.
             if length == 1 && wire::oversized(chunk) {
                 let op = &chunk[0];
-                note(
-                    conn,
+                say(
+                    db,
                     "push",
                     Kind::Other,
                     &unsendable(op, "a device's first sync"),
@@ -2423,21 +2483,21 @@ async fn emit_baselines(
             // next trip's `check_keys` adopts before it gets here, and the baseline is built and
             // sealed again under the new key — a baseline is never filed, so there is nothing
             // to re-seal in place.
-            match post_ops(conn, base, token, &group, &device, chunk).await {
+            match post_ops(db, base, token, &group, &device, chunk).await {
                 Ok(()) => {}
                 Err(Refusal::Stale) => {
                     let message = "the relay refused a device's first sync as sealed under a \
                                    group key it has moved past; it is sent again on the next \
                                    sync, under the new key"
                         .to_owned();
-                    note(conn, "push", Kind::Http, &message, Some(&url));
+                    say(db, "push", Kind::Http, &message, Some(&url));
                     return Err(message);
                 }
                 Err(Refusal::Failed(message)) => return Err(message),
                 // What landed of this peer's baseline is counted — the relay stored it — and the
                 // marker is left NULL, so the next trip sends the whole of it again.
                 Err(Refusal::ClockAhead) => {
-                    note(conn, "push", Kind::Http, BASELINE_CLOCK_AHEAD, Some(&url));
+                    say(db, "push", Kind::Http, BASELINE_CLOCK_AHEAD, Some(&url));
                     return Ok((emitted + sent, history + sent_history));
                 }
                 Err(Refusal::Deferred(_)) => return Ok((emitted + sent, history + sent_history)),
@@ -2451,7 +2511,7 @@ async fn emit_baselines(
         // for ever, which is the whole failure this feature exists to remove. (A chunk left out
         // above has not *failed*: it can never land, so the rest landing is the whole of what
         // can.)
-        baseline::mark_sent(conn, &peer)?;
+        db.with(|conn| baseline::mark_sent(conn, &peer))?;
         emitted += sent;
         history += sent_history;
     }

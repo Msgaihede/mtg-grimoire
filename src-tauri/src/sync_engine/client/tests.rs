@@ -5272,3 +5272,123 @@ async fn a_trip_whose_only_write_is_a_conversion_behind_its_pull_reports_a_chang
     assert!(again.pushed > 0, "{again:?}");
     assert!(!again.changed, "{again:?}");
 }
+
+// ---------------------------------------------------------------------------------------
+// A trip that holds nothing across a request (step 6's spike)
+// ---------------------------------------------------------------------------------------
+
+/// A database the reader writes to **between two stretches of a trip** — the one thing a trip
+/// that no longer holds the write connection for its whole length can newly meet.
+struct Interrupted<'a> {
+    conn: &'a Connection,
+    /// The stretch the write lands behind, counted from 1. `0` is never.
+    behind: usize,
+    stretches: std::cell::Cell<usize>,
+    write: &'a dyn Fn(&Connection),
+}
+
+impl Store for Interrupted<'_> {
+    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
+        let out = f(self.conn);
+        let done = self.stretches.get() + 1;
+        self.stretches.set(done);
+        if done == self.behind {
+            (self.write)(self.conn);
+        }
+        out
+    }
+}
+
+fn copies_held(conn: &Connection, card: &str) -> i64 {
+    conn.query_row(
+        "SELECT coalesce(sum(quantity), 0) FROM collection_entries WHERE card_id = ?1",
+        [card],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// **Wherever in a baseline's emission the reader adds a copy, the peer ends with what this
+/// device holds.** `dev-a` holds two of a card and owes `dev-b` a baseline; the reader steps the
+/// row to three behind stretch *n*, for every *n* the emission has. `dev-b` already holds the
+/// row — it is being baselined again, as every peer is behind a join — and reads the baseline and
+/// what `dev-a` wrote since in one page.
+///
+/// **A peer that has never held the row is a different case and not this test's**: there the
+/// claim and a later delta meet as `max`, which under-counts by design (the baseline spec's §8.2,
+/// "the window between emission and delivery") whatever a trip holds.
+///
+/// **What makes it red**: the baseline's rows and its horizon read in two stretches. The write
+/// between them is inside the horizon and outside the rows, so `dev-b` is handed the row at two
+/// and drops the `+1` as already counted — with its cursor past both.
+#[tokio::test]
+async fn a_write_anywhere_in_a_baselines_emission_reaches_the_peer() {
+    let step = |conn: &Connection| {
+        conn.execute(
+            "UPDATE collection_entries
+                SET quantity = quantity + 1, updated_at = unixepoch()
+              WHERE card_id = 'bolt'",
+            [],
+        )
+        .unwrap();
+    };
+    let mut lost: Vec<String> = Vec::new();
+    let mut stretches = usize::MAX;
+    let mut behind = 0;
+    while behind <= stretches {
+        let server = MockServer::start_async().await;
+        let sent = Sent::default();
+        server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/g/{GROUP}/push"))
+                .is_true(tap(&sent));
+            then.status(200)
+                .json_body(serde_json::json!({ "cursor": 1 }));
+        });
+        let a = paired("dev-a", 0);
+        roster(&a, "dev-b");
+        add_copy(&a, "bolt", 2);
+        // **The copies were added ten seconds ago.** A baseline's op is stamped from its row's
+        // `updated_at`, a whole second, and `dev-b` skips as seen whatever `dev-a` stamped at or
+        // below the watermark it holds for it — so the add has to sit clear of that second.
+        a.execute_batch(
+            "UPDATE sync_ops SET hlc_ms = hlc_ms - 10000;
+             UPDATE sync_clock SET ms = ms - 10000;",
+        )
+        .unwrap();
+        let group = identity::group(&a).unwrap().unwrap();
+        let before = outbox(&a);
+
+        let db = Interrupted {
+            conn: &a,
+            behind,
+            stretches: std::cell::Cell::new(0),
+            write: &step,
+        };
+        emit_baselines(&db, &server.base_url(), "access-1")
+            .await
+            .unwrap();
+        if behind == 0 {
+            // The run nothing interrupts is the one that says how many stretches there are.
+            stretches = db.stretches.get();
+            assert!(stretches > 2, "an emission of {stretches} stretches");
+        }
+
+        let b = paired("dev-b", 0);
+        apply::apply(&b, &before).unwrap();
+        let mut page: Vec<Op> = Vec::new();
+        for batch in pushed_baselines(&sent, &group) {
+            page.extend(batch);
+        }
+        page.extend(outbox(&a).into_iter().skip(before.len()));
+        apply::apply(&b, &page).unwrap();
+        let (here, there) = (copies_held(&a, "bolt"), copies_held(&b, "bolt"));
+        if here != there {
+            lost.push(format!(
+                "behind stretch {behind}: {here} here, {there} there"
+            ));
+        }
+        behind += 1;
+    }
+    assert!(lost.is_empty(), "of {stretches} stretches: {lost:#?}");
+}
