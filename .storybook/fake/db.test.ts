@@ -11865,7 +11865,7 @@ describe("the busy fault", () => {
       // `mirror_set_root`, it was in the loop below.
       "mirror_pick_root",
       // The eleventh, and the first that touches **no connection of any kind**: pairing's
-      // cancel clears `AppState.pairing`, a mutex of its own that has nothing to do with
+      // cancel clears the core's `State.pairing`, a lock of its own that has nothing to do with
       // the database, so there is no `BUSY` for it to answer. Its seven neighbours all take
       // `sync::with_write` — or, since the light app's step 6, the sync lane, which answers the
       // same `BUSY` after the same five seconds — and are in the loop below — `sync_pairing_status` included,

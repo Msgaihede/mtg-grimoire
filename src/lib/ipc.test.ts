@@ -114,10 +114,6 @@ import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import { DEFAULT_SCANNER_OPTIONS } from "@/features/scanner/scannerOptions";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "@/features/scanner/fixtures";
 import { SCANNER_OPEN_ELSEWHERE } from "@/features/scanner/verdictText";
-
-// `sync_engine::commands` is two files since the sync step: the functions and DTOs in the core,
-// the `#[tauri::command]` wrappers in `src-tauri`.
-const syncCommandsRs = syncCommandsRsCore + "\n" + syncCommandsRsDesktop;
 import {
   AUTO_BRACKET,
   ipc,
@@ -175,6 +171,7 @@ const shelffoldsRs = shelffoldsRsCore + "\n" + shelffoldsRsDesktop;
 const stackhideRs = stackhideRsCore + "\n" + stackhideRsDesktop;
 const startviewRs = startviewRsCore + "\n" + startviewRsDesktop;
 const stickyNotesRs = stickyNotesRsCore + "\n" + stickyNotesRsDesktop;
+const syncCommandsRs = syncCommandsRsCore + "\n" + syncCommandsRsDesktop;
 const upcomingSetsRs = upcomingSetsRsCore + "\n" + upcomingSetsRsDesktop;
 const valueHistoryRs = valueHistoryRsCore + "\n" + valueHistoryRsDesktop;
 const wishlistFoldersRs = wishlistFoldersRsCore + "\n" + wishlistFoldersRsDesktop;

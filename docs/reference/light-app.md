@@ -1520,8 +1520,10 @@ when, is the core's. Git records all eight as renames.
 | A device's default name | the environment, read in `identity` | `platform::device::name()`, `None` in a browser |
 | The relay clients' per-call test client | `cfg(test)` | `any(test, feature = "testing")`, because the desktop's sync tests link the core with the feature on and a dependency's `cfg(test)` is off |
 
-**Nothing a request sends changed**: the modules' own mock-relay tests moved unedited and pass
-where they now live. Core **2 954** passed and 5 ignored, desktop **460** and 1 — one more than
+**Nothing a request sends changed**: the modules' own mock-relay tests moved with their mock
+expectations unedited and pass where they now live — the only edits are paths: a fixture's in
+the client's tests, and the clock's at pairing's 23 `now_ms` sites — and a fresh reviewer
+compared all eight requests old against new. Core **2 954** passed and 5 ignored, desktop **460** and 1 — one more than
 6a's 3 413 between them, the `Shared` test, and none lost; clippy for the workspace and for
 `wasm32`; the WASM build; `cargo check --locked`; no `testing` in the shipped tree; the
 frontend's build, lint and suite.

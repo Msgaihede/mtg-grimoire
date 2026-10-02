@@ -777,7 +777,7 @@ fn from_hex16(s: &str) -> Option<[u8; 16]> {
 // [`leave_group_now`], which is not a pairing: a device that has left the group must not keep a
 // credential that still opens it.
 
-/// What [`sync_device_revoke`] says when the round trip it makes first does not complete.
+/// What `sync_device_revoke` says when the round trip it makes first does not complete.
 ///
 /// A sentence rather than the bare transport error, because the reader pressed Remove and what
 /// they need told is that nothing was removed — the `reqwest` message underneath it is appended
@@ -785,7 +785,7 @@ fn from_hex16(s: &str) -> Option<[u8; 16]> {
 const COULD_NOT_COLLECT: &str =
     "Could not reach the relay to collect that device's last changes, so it was not removed.";
 
-/// What [`sync_device_revoke`] says while a join paired on this device is still unpublished
+/// What `sync_device_revoke` says while a join paired on this device is still unpublished
 /// (`identity::roster_is_dirty`, after the round trip in front of the removal has tried to pay it).
 ///
 /// **The other devices do not know that device yet**, so a manifest that drops it drops nobody

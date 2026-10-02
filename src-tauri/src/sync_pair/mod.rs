@@ -13,7 +13,7 @@
 //! crosses is either a public key or a sealed blob.
 //!
 //! **All four are `grimoire-core`'s** since the sync step's second part, re-exported here at
-//! the paths they always had. What is still this crate's is [`pairing`]'s nine
+//! the paths they always had. What is still this crate's is [`pairing`]'s
 //! `#[tauri::command]` wrappers, beside a glob re-export of the core's module of that name.
 
 pub use grimoire_core::sync_pair::crypto;

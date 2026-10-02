@@ -3344,8 +3344,9 @@ the real relay.**
 `sync_pair::{identity, pairing}` are files under `crates/grimoire-core/src/`, re-exported in
 `src-tauri` at the paths they always had. What stayed is `sync_engine::live` — the socket, its
 timers and the two events it emits through a window — and every `#[tauri::command]`, in
-`sync_engine/commands/mod.rs` and `sync_pair/pairing/mod.rs`. Four things changed on the way, and
-nothing a request sends did:
+`sync_engine/commands/mod.rs` and `sync_pair/pairing/mod.rs`. These changed on the way, and
+nothing a request sends did — a reviewer compared all eight requests, old against new, route,
+verb, headers and body:
 
 | What | Was | Is |
 | --- | --- | --- |
@@ -3353,6 +3354,9 @@ nothing a request sends did:
 | The pending offer | `AppState.pairing`, a `tokio::sync::Mutex` | `State.pairing`, a `platform::sync::Shared` — the same lock, on every host |
 | A device's default name | `COMPUTERNAME` / `HOSTNAME` read in `identity` | `platform::device::name()`; `None` in a browser, where `mint_name` falls back to its word |
 | The relay clients' per-call test client | `cfg(test)` | `cfg(any(test, feature = "testing"))`, because the desktop's sync tests link the core with `testing` on, and a dependency's `cfg(test)` is off |
+| A client that cannot be built | `reqwest`'s builder `.unwrap_or_default()`, a client with no timeouts | `platform::http::Client::new`'s `expect`, as every other client in the core has panicked since the I/O step — unreachable with a fixed configuration, and a panic beats a client with no bounds |
+| `client::kind_of` | an `is_status()` arm answering `Http` | gone: only `error_for_status` builds that error, and neither file ever called it |
+| `sync_pairing_begin` | `spawn_blocking` and the offer's `blocking_lock` | `sync::on_a_worker` and `.lock().await`, as the other pairing presses are — one runtime per press |
 
 The same pass in `tauri dev` against the loopback mock, on the moved code: a claim 12 ms; a trip
 21 ms; a sticky note written during an 8 s trip **7 ms**; a second Sync now during it `db::BUSY`

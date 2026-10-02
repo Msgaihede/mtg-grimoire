@@ -1889,7 +1889,7 @@ binding rules:
     across an `.await` is not. It bounds by `platform::Sendable`, which is `Send` natively and
     anything in a browser, where no request's future is `Send` and a `Send` bound fails the WASM
     compile; `clippy::await_holding_lock` refuses the same thing everywhere,
-    tests included; and `scripts/core-step-6-census.test.mjs` holds the eight files at no function
+    tests included; and `scripts/core-step-6-census.test.mjs` holds the files it names at no function
     that takes a connection and awaits with it, and none that calls `block_on`.
   A new sync command is `sync::on_a_worker(|| async { let lane = state.lane_for_press().await?;
   … })`: still a blocking worker, because a stretch is SQLite work, and no longer one that keeps
