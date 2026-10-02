@@ -43,17 +43,33 @@ pub struct Config<'a> {
 
 /// A client: one connection pool, one `User-Agent`. Cloning it shares both.
 #[derive(Debug, Clone)]
-pub struct Client(reqwest::Client);
+pub struct Client(reqwest::Client, Option<Duration>);
 
 impl Client {
     pub fn new(config: &Config<'_>) -> Client {
-        Client(imp::build(config))
+        Client(imp::build(config), None)
     }
 
-    /// **`GET` is the only verb, because it is the only one with a caller.** The sync client's
-    /// `POST` arrives with the step that moves it.
+    /// **A deadline on every request this client makes, where the host has no socket to bound**
+    /// — a browser, whose `fetch` has no connect phase and no per-read timeout, so a host that
+    /// never answers is otherwise never given up on. Natively it is not applied: the connect and
+    /// read bounds already end a request that stops answering, and a whole-request deadline
+    /// there would also end one that is merely long.
+    ///
+    /// The sync client asks for one, because the sync *lane* is held across its requests and a
+    /// departure waits for the lane: a request that never ended would be a Leave that never
+    /// ran. The bulk downloads do not, because a deadline long enough for one is no deadline.
+    pub fn deadline(self, deadline: Duration) -> Client {
+        Client(self.0, Some(deadline))
+    }
+
     pub fn get(&self, url: &str) -> Request {
-        Request(self.0.get(url))
+        Request(imp::deadline(self.0.get(url), self.1))
+    }
+
+    /// The sync client's verb: a JSON body written by hand, `content-type` set by the caller.
+    pub fn post(&self, url: &str) -> Request {
+        Request(imp::deadline(self.0.post(url), self.1))
     }
 }
 
@@ -64,6 +80,11 @@ pub struct Request(reqwest::RequestBuilder);
 impl Request {
     pub fn header(self, name: &str, value: &str) -> Request {
         Request(self.0.header(name, value))
+    }
+
+    /// The body, as text the caller has already serialised.
+    pub fn body(self, body: String) -> Request {
+        Request(self.0.body(body))
     }
 
     /// Send it. Any status is an `Ok`: reading 304, 404 and 429 is the caller's.
@@ -95,6 +116,12 @@ impl Response {
     /// [`Response::into_body`] against a running total instead.
     pub async fn bytes(self) -> Result<Vec<u8>, Error> {
         self.0.bytes().await.map(Vec::from).map_err(Error)
+    }
+
+    /// The whole body as text, decoded as the response says it is — the relay's small JSON
+    /// answers. A body that is not text is [`Error::is_decode`].
+    pub async fn text(self) -> Result<String, Error> {
+        self.0.text().await.map_err(Error)
     }
 
     /// The body as a stream of chunks.
@@ -136,6 +163,11 @@ impl Error {
     pub fn is_request(&self) -> bool {
         self.0.is_request()
     }
+
+    /// A body arrived and could not be read as what it was asked for.
+    pub fn is_decode(&self) -> bool {
+        self.0.is_decode()
+    }
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -160,6 +192,14 @@ mod imp {
     pub fn is_connect(e: &reqwest::Error) -> bool {
         e.is_connect()
     }
+
+    /// Not applied: see [`super::Client::deadline`].
+    pub fn deadline(
+        request: reqwest::RequestBuilder,
+        _deadline: Option<std::time::Duration>,
+    ) -> reqwest::RequestBuilder {
+        request
+    }
 }
 
 #[cfg(target_family = "wasm")]
@@ -171,7 +211,8 @@ mod imp {
     pub type Stream = Pin<Box<dyn futures_util::Stream<Item = reqwest::Result<bytes::Bytes>>>>;
 
     /// No timeout is set: `fetch` has no connect phase to bound and no per-read one. A caller
-    /// that must not wait for ever races the request with `platform::timer::timeout`.
+    /// that must not wait for ever gives its client a [`super::Client::deadline`], or races
+    /// the request with `platform::timer::timeout`.
     pub fn build(config: &Config<'_>) -> reqwest::Client {
         reqwest::Client::builder()
             .user_agent(config.user_agent)
@@ -181,5 +222,16 @@ mod imp {
 
     pub fn is_connect(_e: &reqwest::Error) -> bool {
         false
+    }
+
+    /// `reqwest`'s own per-request timeout, which in a browser is an `AbortController`.
+    pub fn deadline(
+        request: reqwest::RequestBuilder,
+        deadline: Option<std::time::Duration>,
+    ) -> reqwest::RequestBuilder {
+        match deadline {
+            Some(d) => request.timeout(d),
+            None => request,
+        }
     }
 }
