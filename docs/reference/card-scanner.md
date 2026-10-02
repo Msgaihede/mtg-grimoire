@@ -174,7 +174,7 @@ constant exists to prevent. The burnt numbers, kept at the definition:
 
 The key is **the image URI, not a timestamp**. Scryfall's image URLs carry a cache-buster
 (`…/0/0/<id>.webp?1783910776`) equal to the printing's `image_updated_at`, so "are these bytes
-still current" is a string comparison — the same rule `src-tauri/src/images.rs` already relies
+still current" is a string comparison — the same rule `crates/grimoire-core/src/images.rs` already relies
 on. No clock, no mtime, nothing a filesystem can round away. A newly released set costs a few
 hundred fetches; a full build from empty costs 168,582 images and roughly 4.5 GB.
 

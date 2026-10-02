@@ -43,10 +43,35 @@ Every rule below about either still binds it there. Three things changed for a c
   gone: `do_sync` calls `State::corpus_replaced()` where the swap lands, and `Mask`'s
   `WriteObserver::corpus_replaced` is `mark_all()`. The same moment, by a door the core can use.
 
-What is still here of `sync` is `src/sync/mod.rs`: `AppState`, the four lock helpers and
-`status` — which reads the image cache's failure count and goes home with the cache. Of `index`,
-the `facet_cards` command (`src/index/facets/mod.rs`). The feeds and the
-image cache are the step's third part.
+What is still here of `sync` is `src/sync/mod.rs`: `AppState` and three lock helpers. Of
+`index`, the `facet_cards` command (`src/index/facets/mod.rs`).
+
+**The three feeds and the image cache followed, in the step's third part** (2026-10-02).
+`combos.rs`, `marketplace_feed.rs`, `tags/` and `images.rs` are files under
+`crates/grimoire-core/src/`, and every rule below about any of them still binds it there —
+*Commander Spellbook's combos*, *Marketplace prices*, the Tagger bullets, and the whole of
+*Images and the `mtgimg://` protocol*. Four things changed for a caller here:
+
+- **A feed takes no window.** `combos::refresh(&state.core, force, &mut |p, d, t|
+  combos::emit(&state, p, d, t))` is a refresh command's whole body, and the launch's
+  `refresh_if_due(&state.core)` hands the same `emit`. Each `emit` says its event through
+  `state.events`. Where this file says a refresh takes an `AppHandle`, it took one.
+- **`state.images` is the core's field**, read through the deref as it always was, and
+  `AppState` no longer declares one. A test that builds an `AppState` hands the cache to
+  `State::new`, its seventh argument.
+- **A finished price refresh tells the mirror as an observer.** `marketplace_feed::refresh`
+  calls `State::corpus_replaced()` where it called `state.mirror.mark_all()` — the door the
+  card sync has used since the second part.
+- **What is still here of each is `src/<module>/mod.rs`**, as for every moved module: the
+  `#[tauri::command]` wrappers under a glob re-export. `tags/` is five such files. `images/`
+  keeps three more things, because each names this app rather than the engine: **the
+  `mtgimg://` answer** (`serve`, `respond`, `fail`, `not_ready`), **the upkeep thread**
+  (`spawn_upkeep`, which sleeps and calls the core's `images::upkeep_tick`), and the seven
+  tests of that answer.
+
+What earlier steps had left here because it named one of those went home with them:
+`deck::bracket_reads`, `reset::clear_cache`, `sync::status`, and a test each of `card`,
+`search` and `schema`.
 
 ⚠️ **Most of what this file is about is no longer in this package** (2026-10-02, the extraction's
 domain step). `deck`, `deck_meta`, `deck_tokens`, `deck_undo`, `collection`,
@@ -69,12 +94,11 @@ capture spec is edited there.
 - **`sync::with_write` is the core's `state::with_write`**, re-exported under its old name; it
   takes `&State`, which an `&AppState` derefs to. `collection_source::with_write_owned` is the
   core's too, since the facet index's lifecycle is.
-- **A few functions stayed beside the wrappers**, each named in its file's own doc:
-  `deck::bracket_reads` (it calls `combos`), `reset::clear_cache` (the image cache and the
-  feeds), `sync::status` (the image cache), `marketplace::set_marketplace_now` (the mirror),
-  `import::read_import_file` (a path this app's dialog answered). `tags/` did not move at all:
-  its queries take a type that sits in the feed engine, which the I/O step's third part moves.
-  (`reconcile` waited the same way for `scryfall::Migration`, and went with it.)
+- **Two functions stayed beside the wrappers**, each named in its file's own doc:
+  `marketplace::set_marketplace_now` (the mirror) and `import::read_import_file` (a path this
+  app's dialog answered). (`deck::bracket_reads`, `reset::clear_cache` and `sync::status`
+  waited for the feeds and the image cache, and `tags/` and `reconcile` for a type in the
+  fetch engine; each went home in the I/O step with what it named.)
 - **A module's tests are in the core with it**, and `cargo test -p grimoire-core <module>::` runs
   them; `cargo test -p mtg-grimoire <module>::` runs only the few that name something still
   here. A test that needs a helper from the other crate reaches it through
@@ -1554,7 +1578,8 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   the whole `cards` table and a feed refresh rewrites `marketplace_prices` wholesale; mapping
   either to a surface would fire the hook a hundred thousand times per refresh and make every
   sync a mirror rebuild. What those two change enters through **one full pass after the refresh
-  completes** — `sync::run_sync` and `marketplace_feed::refresh` each call `Mask::mark_all`.
+  completes** — `sync::run_sync` and `marketplace_feed::refresh` each call
+  `State::corpus_replaced()`, and `Mask`'s `WriteObserver::corpus_replaced` is `mark_all()`.
 - **`app_meta` maps to nothing on purpose, so a setting that changes what a file would say marks
   by hand.** `mirror::settings::set_root_now` and `marketplace::set_marketplace_now` each call
   `mark_all()` **on success only** — a refused value changed nothing and must not cost a full

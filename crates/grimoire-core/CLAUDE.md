@@ -12,12 +12,13 @@ ladders, `sync_meta`, `filters`, `sorting`, `card_row`, `image_uri`, `errors`, `
 `sync_engine::capture`; the state a host holds over it — `state`, `hooks` and `events`; and the
 **domain** — the decks, the collection, the wishlist, the search, the card pane, the view-state
 modules, `maintenance`, and the sync engine's `apply` and `baseline`: forty-nine modules, moved in
-one pass by `scripts/core-step-4.mjs`. **The I/O step is arriving in three parts and two are
+one pass by `scripts/core-step-4.mjs`. **The I/O step arrived in three parts and all three are
 here**: `platform`'s request, timer, files and background work; the three modules that were
-their first callers — `scryfall`, `ingest` and `reconcile`; and what drives them — `sync`, the
-card sync, and `index/`, the facet index with its lifecycle. **What is not here yet**: the three
-feeds (`combos`, `marketplace_feed`, `tags/`), `images`, the sync client and pairing, `share/`
-and the scanner.
+their first callers — `scryfall`, `ingest` and `reconcile`; what drives them — `sync`, the
+card sync, and `index/`, the facet index with its lifecycle; and the three feeds (`combos`,
+`marketplace_feed`, `tags/`) with `images`, the image cache. **What is not here yet**: the
+sync client and pairing, and the scanner's session. `share/`, the mirror and the updater are
+the desktop's for good.
 Every rule in [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) about a
 module binds that module wherever it lives — moving a file changes which crate compiles it and
 nothing about what it must do. **That file's database and deck rules are this crate's now**: a
@@ -33,8 +34,9 @@ over there is this crate's item unless that file defines one.
 
 - **A new command is written in `src-tauri/src/<module>/mod.rs`; the function it calls is
   written here**, `&Connection` in and a DTO out, and is `pub` — a `pub(crate)` item does not
-  cross the glob. Forty-six modules have such a file; `managed_wishlist` and the sync engine's
-  `apply` and `baseline` have none, because nothing of theirs stayed.
+  cross the glob. `managed_wishlist` and the sync engine's `apply` and `baseline` have no such
+  file, because nothing of theirs stayed. (This line carried a count of the files that do;
+  `ls -d src-tauri/src/*/mod.rs` answers it.)
 - **A module's own `//!` doc may still say its wrappers are "in one block at the foot".** They are
   at the foot of `src-tauri`'s file. The docs moved with the code, unedited.
 - **`ipc.test.ts` reads such a module as both halves**, joined under the name its assertions
@@ -86,10 +88,12 @@ over there is this crate's item unless that file defines one.
 | --- | --- | --- |
 | `platform::clock::now_ms`, `now_secs` | `SystemTime` | `Date.now()` |
 | `platform::clock::Tick` — `now()`, `elapsed()`, for how long a wait has run | `Instant` | `Date.now()`, never negative |
+| `platform::clock::Wall` — a moment that can be **stored and compared**: `now()`, `+` and `-` a `Duration`, `as_secs()` | whole milliseconds since the epoch | the same |
 | `platform::pause(Duration) -> bool` — stand aside for another thread | `thread::sleep`, `true` | **`false`, at once**: a Worker has no other thread to wait for |
 | `platform::timer::sleep`, `timeout` — a wait a future awaits, and a deadline on one | `tokio::time` | a `Promise` around the global `setTimeout` |
 | `platform::http` — `Client`, `Request`, `Response`, `Body`, `Error` | `reqwest` over rustls, with a connect bound and a per-read bound | `reqwest` over `fetch`: **no timeouts to set**, and `is_connect()` is always `false` |
-| `platform::files` — `open`, `write`, `remove`, `create_dir_all`, `entries`, `is_file`, `exists`; and `files::aio` for an `async fn` | `std::fs`; `tokio::fs` | **refused**, `ErrorKind::Unsupported`; the two questions answer `false` |
+| `platform::files` — `open`, `write`, `remove`, `remove_dir`, `create_dir_all`, `entries`, `listing`, `set_modified`, `is_file`, `exists`; and `files::aio` for an `async fn`, with `read` and `rename` | `std::fs`; `tokio::fs` | **refused**, `ErrorKind::Unsupported`; the two questions answer `false` |
+| `platform::sync::Semaphore`, `Lock` — a permit and a lock an `async fn` holds across an `.await`, **first come, first served** | `tokio::sync` | `tokio::sync`: it needs no runtime |
 | `platform::spawn::blocking(f).await` — synchronous work under an `async fn`; `spawn::background(f)` — work nobody waits for | the async runtime's blocking pool, **started by the call**; a thread | **run where it stands**: a Worker has no second thread, so `blocking` runs at its first poll and `background` before it returns |
 
 `db::lock_for` and `db::lock_background` are why `Tick` and `pause` exist. **A wait that polls is
@@ -109,7 +113,16 @@ there and its caller answers `db::BUSY`. **No browser arm has ever run** — the
   SQLite's own VFS, and a download with no temp file is a different shape that the web host
   decides (spec §6). Until then a download that cannot be written is a failed sync — it stops
   at the folder it cannot make, after the bulk check and before the download is asked for, with
-  its reason in `sync_meta`'s `last_error` — and `schema`'s backup before a climb is logged and skipped.
+  its reason in `sync_meta`'s `last_error` — and `schema`'s backup before a climb is logged and
+  skipped. ⚠️ **The combo feed and the price feeds are the other way round**: each sends its
+  request and only then makes the folder, so in a browser every launch would spend a request
+  (27.5 MB asked for, the body abandoned) and fold an `error_log` row, with no backoff —
+  `Unsupported` is not one of the failures that rests a feed. Reorder them, or give them a
+  stream, before a web host runs either.
+- ⚠️ **A feed's request has no deadline in a browser.** `http` sets no timeout there and
+  neither feed races its `send()` with `timer::timeout`, as `scryfall::fetch_image` does. A
+  host that never answers holds that feed's refresh claim for good: every later refresh says
+  "already being refreshed", and `reset::cache_clear_refusal` says a download is running.
 - **`spawn` takes work off the caller only where there is somewhere to put it.** The card
   sync's ingest, its migration pass, its reclaim and its compaction go through `blocking`; the
   facet index's build through `background`. In a browser both run on the caller, to completion —
@@ -124,8 +137,27 @@ there and its caller answers `db::BUSY`. **No browser arm has ever run** — the
   the read connection every search waits on. A browser's storage permits one connection (spec
   §6), so that open is the first thing the web host has to answer differently, and nothing in
   this crate does yet.
-- **An interface grows with a caller, not ahead of one.** A rename and a modified time are the
-  image cache's, and arrive with it.
+- **`files::listing` is whole or it is an error.** A directory that is not there answers
+  `None`, which is an ordinary state; a directory or an entry that cannot be read is the error,
+  so a partial listing is never mistaken for a whole one — the image cache's eviction reaps the
+  row of every file it did not find, and must not find fewer than there are. An entry carries
+  what it is (a link is a link, never what it points at), and anything but a directory carries
+  its length and its modified time.
+- **`Wall` is for a stamp and `Tick` is for a wait**, and they are not interchangeable: a
+  `Wall` can be written to a file and read back next month, and a reader can move it; a `Tick`
+  only ever says how long ago it was taken. The image cache's used-stamp is a `Wall` and its
+  429 deadline is a `Tick` and how long the penalty runs.
+- **A permit or a lock an `async fn` holds across an `.await` is `platform::sync`'s** — the
+  image cache's permits and its lock per key — and it is `tokio::sync` on every host, the
+  primitive the cache always had. **First come, first served, and that is why it is not
+  another crate's**: a pre-warm asks for its next picture the instant it lets go of the last,
+  so a semaphore that hands a freed permit to whoever asks first lets it keep one for its whole
+  run, ahead of every tile on screen. The move went through `async-lock` for an afternoon and
+  a reviewer found exactly that in its source; `platform::sync`'s own test holds the order.
+  (Scryfall's pacing gate is `futures_util::lock::Mutex`, which promises spacing and not
+  order.)
+- **An interface grows with a caller, not ahead of one.** `POST` is the sync client's, and
+  arrives with it.
 
 **Most of the engine never asks for the time.** The domain modules use SQLite's `unixepoch()`
 and `date('now')` inside the statement that needs them, which is the same on every host.
@@ -133,11 +165,13 @@ and `date('now')` inside the statement that needs them, which is the same on eve
 ## State, the hook and events
 
 **A host builds one `state::State` and everything else is handed it.**
-`State::new(write, read, data_dir, events, observers, client)` takes connections the host opened
-and brought to head, installs the hooks on the write connection, and only then puts it behind
-its mutex. So there is no `State` whose cross-file fence is not riding. It starts with no sync
-in flight and a cold facet index; **the Scryfall client is the host's to build**, because where
-the API lives and what 429 lockout an earlier run earned are the host's to know.
+`State::new(write, read, data_dir, events, observers, client, images)` takes connections the
+host opened and brought to head, installs the hooks on the write connection, and only then puts
+it behind its mutex. So there is no `State` whose cross-file fence is not riding. It starts
+with no sync in flight and a cold facet index; **the Scryfall client and the image cache are
+the host's to build**, because where the API lives, what 429 lockout an earlier run earned and
+where the pictures are kept are the host's to know. ⚠️ **Seven arguments is clippy's ceiling**
+(`too_many_arguments` fires at eight): the next thing a host hands the state wants a struct.
 
 - **A host keeps its state in an `Arc`**, because two things outlive the call that starts them
   and each takes one: `sync::run_sync(state: Arc<State>, force)` and
@@ -169,15 +203,20 @@ the API lives and what 429 lockout an earlier run earned are the host's to know.
   thread holds the write connection is a lock taken twice, which the desktop's two connections
   never notice. `reader()` is also what a caller passes on where it used to pass
   `&state.db_read`; the field is private.
-- **`events::EventSink` is how an event leaves the crate, and the card sync is its first
-  caller.** A host gives the state one sink; code with something to say calls `events::emit`
-  with `&*state.events` — `sync:progress`, and `collection:reconciled` when the migration log
-  moved something. Never an `AppHandle`, a window or a channel as a parameter. The feeds and
-  live sync still emit through the desktop's window from `src-tauri`, and move onto the sink as
-  each arrives.
+- **`events::EventSink` is how an event leaves the crate.** A host gives the state one sink;
+  code with something to say calls `events::emit` with `&*state.events` — `sync:progress`, and
+  `collection:reconciled` when the migration log moved something; `combos:progress`,
+  `marketplace:progress` and each tag binding's own, through that module's `emit`. Never an
+  `AppHandle`, a window or a channel as a parameter. Live sync still emits through the
+  desktop's window from `src-tauri`, and moves onto the sink with the sync step.
+- **A feed's `refresh` takes its progress as a callback and its `emit` is what a host hands
+  it.** `refresh(&state, force, &mut |phase, done, total| emit(&state, phase, done, total))` is
+  the whole of a command's body. The callback is what lets a test drive the path and read what
+  it said; the launch's `refresh_if_due` hands the same `emit`.
 - **`WriteObserver::corpus_replaced` is the one thing an observer hears that no hook carries.**
   A sync that swapped `cards` calls `State::corpus_replaced()` the moment the swap lands, and
-  every observer the host gave the state is told once, in list order. It is how the desktop's
+  so does a price refresh that rewrote `marketplace_prices`; every observer the host gave the
+  state is told once, in list order. It is how the desktop's
   mirror learns that every price it has written is a corpus old — `cards` maps to no surface in
   its row map on purpose, because a swap is 116 700 rows. An observer that does not care
   implements nothing: the method defaults to nothing.
@@ -188,7 +227,6 @@ the API lives and what 429 lockout an earlier run earned are the host's to know.
 
 | Field | Its type | Comes here with |
 | --- | --- | --- |
-| `images` | `images::Cache` | step 5, with the image cache |
 | `pairing` | `sync_pair::pairing::Pending` | step 6 |
 | `mirror`, `mirror_status`, `changes` | the mirror's and the other windows' | never: the desktop's |
 
@@ -207,6 +245,28 @@ settle would have been a second definition of a user-facing write.
   into a caller's transaction, and none does.
 - `collection_source::with_write_owned` — `with_write` plus the facet index's `owned` rebuild,
   on success only — is here since the index's lifecycle is. It takes `&State` like `with_write`.
+
+## The image cache: the pass is here, the schedule is the host's
+
+`images::Cache` is a field of `State`, and everything about a picture but how it reaches a
+page is in `images.rs`: the resolution rule, one fetch per key, the owed-row queue, the keys a
+pre-warm fetches, and the eviction pass that spares exactly those.
+
+- **`images::upkeep_tick(&State, &mut last)` is one wake of a host's upkeep loop**, and the
+  loop is the host's: the desktop sleeps `UPKEEP_TICK` on a thread of its own between calls
+  (`spawn_upkeep`, in `src-tauri`). An Android host owes the same ten lines. **A browser must
+  not call it in a loop** — it has no thread to sleep on, and no files to evict.
+- **How the bytes reach a page is not here.** `serve`, `respond`, `fail` and `not_ready` build
+  a `tauri::http::Response` for the `mtgimg://` protocol and stayed, with the seven tests of
+  that answer. A web host answers a `fetch`.
+- **In a browser the cache stores nothing, and that is a counted failure rather than a crash**:
+  `platform::files` refuses, so every fetch serves its bytes, counts a `store_failure` and
+  folds one `error_log` row. What a web host keeps pictures in — the HTTP cache, the Cache API
+  — is phase 5's decision, and until it is made the cache there is a fetcher.
+- **`reset::clear_cache` is here with it**, over `platform::files`. Its sweep takes a listing
+  that is whole or an error, so one unreadable entry now skips its directory where the old walk
+  skipped the entry — and **a directory that would not list is counted once in `failed`**,
+  where the old walk skipped one in silence. A sweep that left a folder behind says so.
 
 ## Moving a module here
 
@@ -278,13 +338,13 @@ src-tauri/src/<module>/mod.rs` counts them:
 | Module | Still in `src-tauri` | Because it names | Home with |
 | --- | --- | --- | --- |
 | `schema` (`src/schema/mod.rs`) | `prepare_data_dir` — `split::convert`, then `schema::replace_unreadable_corpus` here | `split`, which only the desktop has | never: `split` stays |
-| `schema` | 8 of its tests | `split`, through that function or a converted fixture; one, `tags::query` | never, and step 5 |
+| `schema` | 7 of its tests | `split`, through that function or a converted fixture | never: `split` stays |
 | `ingest` (`src/ingest/mod.rs`) | 1 of its tests | `split::convert`, which builds that test's database | never: `split` stays |
-| `deck` | `bracket_reads`, `DeckBracketRead`, their two SQL constants and 5 tests | `combos::match_combos` — `combos` is a feed | step 5 |
-| `reset` | `clear_cache`, what only it calls, and 8 tests | `images::Cache`, the three feeds' `any_refresh_running` | step 5 |
-| `sync` (`src/sync/mod.rs`) | `AppState` and its `Deref`; `lock_db`, `lock_db_read`, `lock_conn`, `lock_plain`; `status`; 5 tests and the `file_state` they share | the mirror's fields and the change mask; `images::Cache`, whose failure count `status` reads; an `AppState` on a file `split` converted | `status` with the image cache, in step 5; `AppState` never |
+| `reset` | 1 test, `the_cache_sweep_unlinks_rather_than_follows` | a platform: it makes a symlink with a Windows call behind `#[cfg(windows)]`, which the fence keeps out of this crate's tests too | never |
+| `sync` (`src/sync/mod.rs`) | `AppState` and its `Deref`; `lock_db`, `lock_db_read`, `lock_plain` | the mirror's fields, the change mask, the pending pairing | never |
 | `index` (`src/index/mod.rs`, `src/index/facets/mod.rs`) | the `facet_cards` command, and no test: every one moved, onto a fixture this crate builds at head | a window | never |
-| `deck_tokens`, `card`, `search` | 1 test each | `sync_engine::client`, `images`, an `AppState` built whole | steps 5 and 6 |
+| `images` (`src/images/mod.rs`) | `serve`, `respond`, `fail`, `not_ready`, `IMAGE_MAX_AGE`; `spawn_upkeep`; 7 tests | `tauri::http`, an `AppHandle`; a thread that sleeps | never: how a picture reaches a page, and when to wake for a pass, are a host's |
+| `deck_tokens` | 1 test | `sync_engine::client` | step 6 |
 | `maintenance` | 9 tests — nothing of its code | a database `split` converted | never |
 | `import` | `read_import_file`, two helpers and 5 tests | a path the desktop's file dialog answered | never: a host reads its own file |
 | `marketplace` | `set_marketplace_now` | `AppState.mirror` | never: the mirror is the desktop's |
@@ -295,7 +355,10 @@ sits in the fetch engine) and `deck::bracket_reads`. The alternative was to hois
 small pieces into this crate ahead of their modules; Markus declined, as he had for the sync
 client's cursor keys in step 2. **`reconcile` arrived with `scryfall`**, in the I/O step's first
 part, and with it what the same rule had kept back: `errors::kind_of`, and `capture`'s two
-tests that drive the reconciler. `tags/` and `bracket_reads` arrive with the feeds.
+tests that drive the reconciler. **`tags/` and `bracket_reads` arrived with the feeds**, in its
+third, and so did everything else that had waited on them or on the image cache:
+`reset::clear_cache`, `sync::status`, and the tests of `card`, `search` and `schema` that
+named one.
 
 **`schema::prepare_database` is the launch**: `bring_to_head`, then the logged passes — the FTS
 rebuild an interrupted compaction owes, the staging table a killed ingest left, the trims, the
@@ -322,7 +385,9 @@ is `#[ignore]`d and so never goes red for it. (The v59 conversion test's chain c
   nothing on wasm, where `reqwest` is `fetch`. **No `gzip` feature, ever** — Scryfall's bulk data
   is a real `.gz` file, and transparent decompression corrupts the download.
 - **`tokio` is in the native table only**, with the features this crate's own source names.
-  `tokio::fs` does not compile for a browser, and a Worker has no tokio runtime.
+  `tokio::fs` does not compile for a browser, and a Worker has no tokio runtime. **The one
+  exception is `sync`**, which the web table asks for and nothing else: a semaphore and a
+  mutex need no runtime, and they are `platform::sync`. Never widen that line.
 - **`rusqlite` is two lines**: `bundled` plus `hooks` everywhere but WASM, and `hooks` alone
   there. ⚠️ **Never `default-features = false` on the WASM line** — the backend that makes
   SQLite build for a browser is in rusqlite's default set, and switching it off fails with
@@ -333,7 +398,10 @@ is `#[ignore]`d and so never goes red for it. (The v59 conversion test's chain c
 - **The `testing` feature is test scaffolding and nothing a build ships**: `schema::memory_pair`,
   `scratch`, `CardRow::from_json`, and every `pub mod fixtures` — `schema`'s,
   `sync_engine::capture`'s, and since the domain step `card`'s, `collection`'s, `deck`'s,
-  `deck_tokens`', `maintenance`'s and `reset`'s. `src-tauri` asks for it under
+  `deck_tokens`', `maintenance`'s and `reset`'s; since the I/O step `index`'s, `ingest`'s,
+  `events`' (a sink that keeps what it is told) and `state`'s — `state::fixtures::on_files` is
+  a `State` over a pair of files at head, and what a test that needs one should reach for
+  before it builds its own. `src-tauri` asks for it under
   `[dev-dependencies]` only, and resolver 2 leaves that out of every build that is not a test.
   ⚠️ **Never name it on a host's `[dependencies]` line, never make it a default, never have
   another feature imply it — because two things behind it are not scaffolding**:
@@ -358,11 +426,12 @@ The crate is a member of the workspace at the repository root, so it shares `Car
 | | |
 | --- | --- |
 | `cargo test -p grimoire-core` | This crate's tests alone, natively |
-| `cargo test -p grimoire-core schema::` | The schema's — `cargo test -p mtg-grimoire schema::` runs only the 8 that stayed |
+| `cargo test -p grimoire-core schema::` | The schema's — `cargo test -p mtg-grimoire schema::` runs only the 7 that stayed |
 | `cargo test -p grimoire-core scryfall::` | The client's, against a local mock server — never Scryfall |
 | `cargo test -p grimoire-core index::` | The facet index's — `-p mtg-grimoire index::` runs none: only a command stayed |
-| `cargo test -p grimoire-core sync::` | The card sync's, `sync::run_tests` among them: a whole run against a local mock Scryfall — `-p mtg-grimoire sync::` runs the 5 that stayed, and `sync_engine`'s and `sync_pair`'s with them |
-| `cargo test -p grimoire-core deck::` | A domain module's — the same, for any of the forty-nine; `-p mtg-grimoire deck::` runs only the 5 that stayed |
+| `cargo test -p grimoire-core sync::` | The card sync's, `sync::run_tests` among them: a whole run against a local mock Scryfall — `-p mtg-grimoire sync::` runs none of them, only `sync_engine`'s and `sync_pair`'s |
+| `cargo test -p grimoire-core combos::` (`marketplace_feed::`, `tags::`, `images::`) | A feed's, or the image cache's, each against a local mock server — never the real host. `combos::tests::live_ingest` is the one that asks Commander Spellbook, and it is `#[ignore]`d |
+| `cargo test -p grimoire-core deck::` | A domain module's — the same, for any of the forty-nine; `-p mtg-grimoire deck::` runs none: only wrappers stayed |
 | `npm run verify` | Both members: `fmt --check`, `clippy -D warnings`, `cargo test --workspace` |
 | `cargo build --lib -p grimoire-core --target wasm32-unknown-unknown` | The WASM compile. Needs clang 18 or newer for SQLite's C |
 

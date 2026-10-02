@@ -271,12 +271,12 @@ The engine is moving out of `src-tauri` into `crates/grimoire-core`, a crate wit
 dependency that the desktop, the Android host and the WASM host will all link (spec §2). The
 rules for working in it are [`crates/grimoire-core/CLAUDE.md`](../../crates/grimoire-core/CLAUDE.md);
 this section is what each step built and measured. **Nothing here runs on a phone or in a
-browser yet**: what exists is a crate the desktop links, compiled for two more targets. Four
+browser yet**: what exists is a crate the desktop links, compiled for two more targets. Five
 steps of seven have landed — the leaves, the storage layer, the state a host holds over it, and
-the domain: the decks, the collection, the wishlist and the search — and two of the fifth
-step's three parts: a request, a timer, a file and background work under `platform/`; the
-Scryfall client, the ingest and the reconciler over them; and the card sync and the facet index
-that drive those.
+the domain: the decks, the collection, the wishlist and the search — and the whole of the
+fifth, in three parts: a request, a timer, a file, a lock and background work under
+`platform/`; the Scryfall client, the ingest and the reconciler over them; the card sync and
+the facet index that drive those; and the three feeds and the image cache.
 
 ### 6.1 Step 1 — the workspace, the crate and the leaves (2026-10-02)
 
@@ -1245,3 +1245,170 @@ change on the desktop, and six things worth fixing.
   phase 5's to measure.
 - **`sync::status`, the three feeds and the image cache are still the desktop's** — the third
   part. `AppState` keeps `images` and `pairing` until then and until step 6.
+
+### 6.7 Step 5, third part — the three feeds and the image cache (2026-10-02)
+
+[The plan](../superpowers/plans/2026-10-02-light-app-core-step-5-io.md), Part 5c. Measured that
+day on Windows 11, debug builds, on the branch's own tree over `main` at `bdd1b80e`.
+
+**Every `refresh` already took its progress as a callback**, "for `ingest`'s reason", so the
+window was named only by the two things that called one: a command, and the launch. That made
+the feeds a move with the small rewrite 5b had made — a window becomes the state's event sink,
+tauri's blocking pool becomes `platform::spawn::blocking` — plus each feed's client onto
+`platform::http` and its temp file onto `platform::files`. **The image cache was the part that
+was not regular**: the one module that reads a file's modified time, walks a directory tree,
+renames into place and bounds its own concurrency.
+
+| | Before, in `src-tauri` | Now, in the core | What stayed |
+| --- | --- | --- | --- |
+| `combos.rs` | 5 042 lines | 4 920 | `combos/mod.rs`, 159: five commands |
+| `marketplace_feed.rs` | 2 182 | 2 235 | `marketplace_feed/mod.rs`, 58: two commands |
+| `tags/mod.rs` | 2 255 | 2 278 | 18: the re-export and four `pub mod` lines |
+| `tags/{oracle,art,query,muted}.rs` | 3 719 | 3 440 | four `mod.rs` files, 271: twelve commands |
+| `images.rs` | 3 825 | 3 472 | `images/mod.rs`, 363: the `mtgimg://` answer, two commands, the upkeep thread, seven tests |
+| `reset::clear_cache`, `deck::bracket_reads`, `sync::status` | in three `mod.rs` remainders | home | one of `reset`'s tests |
+
+`crates/grimoire-core/src` went from 157 318 lines to 175 393 and `src-tauri/src` from 66 801
+to 49 414. `scripts/core-step-5c.mjs` made the move: 30 files written, 8 removed, every
+rewrite an exact replacement that has to match the number of times it says.
+
+**`platform/` grew three things, each with its first caller:**
+
+| | What | For |
+| --- | --- | --- |
+| `clock::Wall` | a wall-clock moment that can be stored and compared: whole milliseconds since the epoch, with `+` and `-` a `Duration` | the cache's used-stamp, which is a file's modified time |
+| `files::{listing, set_modified, remove_dir}`, `aio::{read, create_dir_all, rename}` | a directory's entries with each one's kind, length and time; a stamp that never creates the file; an empty folder removed; a file read whole; a rename that replaces | the cache's store, its eviction walk, and the cache sweep |
+| `sync::{Semaphore, Lock}` | a permit and a lock an `async fn` holds across an `.await`, first come first served — `tokio::sync` on every host, since it needs no runtime | the cache's sixteen fetches at once, and its one fetch per key |
+
+**What is not a move:**
+
+- **A feed says what it is doing through the sink.** `combos::emit`, `tags::emit` and a new
+  `marketplace_feed::emit` — the last was one closure written out twice — and
+  `refresh_if_due(&Arc<State>)` takes no window. Same four event names, same payload keys.
+- **A finished price refresh tells the observers.** `state.mirror.mark_all()` became
+  `state.corpus_replaced()`: `marketplace_prices` is a corpus table rewritten whole, and the
+  mirror's mask is an observer. `WriteObserver::corpus_replaced` now means *a* corpus table was
+  replaced, and does not say which.
+- **`State` holds `images`**, and `State::new` takes a seventh argument: the cache, which the
+  host builds. Seven is clippy's ceiling; the next thing a host hands the state wants a struct.
+- **The cache's 429 deadline is a `Tick` and how long the penalty runs**, where it was a
+  `tokio::time::Instant` moved forward. *The later of the two* is kept as *replace it only when
+  the new penalty outlasts what is left*; `lockout_remaining` is the one read of it, and the
+  fetch and the tests share it.
+- **The eviction walk reads a listing.** Same files found, same files skipped, and the same
+  rule that a walk which fails deletes nothing. An entry's name that is not Unicode is given
+  lossily and its path exactly, so nothing is dropped for its name.
+- **The upkeep pass is the core's and the thread is the host's.** `images::upkeep_tick` is one
+  wake of the old loop, cut where it slept; `spawn_upkeep` stays in `src-tauri` as a thread that
+  sleeps and calls it.
+- **The cache sweep counts a directory it could not list.** `files::listing` is whole or an
+  error, so one unreadable entry skips its directory where the old walk skipped the entry — and
+  that directory is one `failed` now, where an unreadable one was skipped in silence.
+- **Fixtures build a core `State` at head.** Every test that built an `AppState` over a file
+  `split` converted now builds through `state::fixtures::on_files` and `schema::build_pair`. No
+  assertion read the desktop's three observers or the capture triggers those fixtures also
+  installed; the feeds' and `with_write`'s paths are no longer exercised with them riding.
+- **One test stayed for a reason of its own**: `the_cache_sweep_unlinks_rather_than_follows`
+  makes a symlink with a Windows call behind `#[cfg(windows)]`, and the core's fence keeps a
+  platform gate out of every file but `platform/`'s, tests included. It drives the core's
+  `clear_cache` from `src-tauri`.
+
+**New tests**, ten: `Wall`'s arithmetic; a listing that tells a file from a folder and carries
+a stamp that can be set; a rename that replaces; a freed permit going to whoever has waited
+longest; a lock held by one at a time; **a whole price refresh** through a seam that takes the
+feed's address (`refresh_from` — a provider's own address is the live host), telling its
+observers once and a refused download telling nobody; **what each feed's `emit` hands the
+sink**, by name and by key; and a lockout that runs out.
+
+**What was checked.**
+
+| | |
+| --- | --- |
+| The move, item by item | 728 items and tests across the fourteen files: 616 byte-identical but for whitespace, 110 changed — each on the script's replacement list — and 2 gone (`read_dir_if_present`, `sync::lock_conn`) |
+| The script and the hand edits, re-run on a checkout from before the move | every file they write identical to the tree's |
+| `#[test]` and `#[tokio::test]` attributes | 3 398 before, 3 408 after: 231 moved from `src-tauri` to the core, 10 new, none lost |
+| `cargo test --workspace` | core 2 654 passed and 5 ignored; desktop 748 passed and 1 ignored |
+| `cargo clippy --workspace --all-targets -- -D warnings`; `cargo check -p mtg-grimoire --locked` | clean |
+| `cargo build` and `clippy --lib -p grimoire-core --target wasm32-unknown-unknown` | clean |
+| `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` | no `testing` |
+| `Cargo.lock` | 653 packages before and after |
+| `npm run build`, `npm run lint`, `npm run test:run` | clean; 459 files, 12 916 tests |
+
+**An existing database, upgraded by `main`'s binary and by this branch's** — §6.5's check, on
+two fresh byte copies of the main checkout's dev data (user schema v46, 4 645 rows):
+
+| | `main` | This branch |
+| --- | --- | --- |
+| `user_version` reached | 59, after 1 350 ms | 59, after 1 169 ms |
+| Schema objects, tables, rows | 148, 33, 5 209 | 148, 33, 5 209 |
+| `foreign_key_check`, `integrity_check` | 0, `ok` | 0, `ok` |
+| `backups/user.v46.db` | 2 007 040 bytes | **byte-identical** |
+| The four files each launch downloaded | 78 689 871, 5 977 157, 12 973 147 and 28 824 583 bytes | **byte-identical, all four** |
+
+30 of the 33 tables are identical row for row; the other three differ in the same clock and the
+same random name as in every A/B before. **All four downloads on the branch's side went through
+moved code** — the tag files through `tags`, the combos through `combos`' own client — and each
+launch was stopped with the same three ingests under way.
+
+One thing looked like a difference and was not. The branch's first run was stopped with a
+1.89 GB write-ahead log beside its corpus where `main`'s stood at 64 MB. Sampled once a second
+over six further launches — two under `main`'s binary, four under the branch's — both grow the
+log for about five seconds (the samples that caught the top read 176 to 293 MB) and then reset
+it to 64 MB, where it stays. A log cannot restart under a reader, and the launch's `corpus-check` reads every
+page of the corpus in one read transaction; that thread is the desktop's and this part does
+not touch it. Its duration on a copy the system had not cached is the likeliest reason for
+the one long run, and is not a measured one.
+
+**Then the window**, `tauri dev` over a copy with both tag closures emptied so a forced refresh
+had to download, with a listener on each feed's event installed in the page first:
+
+| | |
+| --- | --- |
+| `oracle_tags_refresh` | `checking`, `downloading` to 5 977 157 of 5 977 157, `ingesting`, `done` — 16 events over 61.7 s; 4 560 tags over 235 017 taggings afterwards |
+| `art_tags_refresh` | the same four phases, 29 events over 80.8 s; 11 611 tags over 492 668 taggings |
+| `combos_clear`, then `combos_refresh` | cleared to zero; `checking`, `downloading` to 28 824 583, `ingesting`, `done` — 33 events over 49.1 s; 111 410 combos over 7 386 cards. A second press while it ran was refused: "Combo data is already being refreshed." |
+| `marketplace_feed_refresh`, Card Kingdom | `downloading`, `ingesting`, `done` in 10.0 s, each event carrying `marketplace`; 151 684 rows, the feed's own stamp read back |
+| The mirror after the price refresh | one full pass about two seconds after `done`, 128 files compared, none rewritten — `corpus_replaced` reaching the desktop's mask. No pass after the tag or combo refreshes, which is right: neither changes what a mirrored file says |
+| The moved reads | `tag_search`, `oracle_tags_for_printings` (40 of 40 tagged), `deck_bracket_reads` (five decks; one holds 2 combos), `sync_status` with its eight fields |
+| Forty pictures, from an empty cache | 40 of 40 loaded through `mtgimg://` at 672 × 936, 40 files and 4 132 174 bytes on disk; loaded again, the slowest took 43 ms. An unknown card, an id that is a path, and a variant that is not one each loaded nothing |
+| The upkeep tick | three served pictures written at 22:40:53 carried a modified time of 22:41:39 a minute later: `upkeep_tick` on the desktop's thread, stamping through `files::set_modified` |
+| `prewarm_collection` | 401 queued; 442 files and 36 075 254 bytes on disk when it finished |
+| `cache_clear` | 442 files, 36 075 254 bytes and 442 rows gone, 0 failed; no file left under `images/` |
+| `error_log`; the app's stderr | the two rows it arrived with; nothing |
+
+**What a fresh reviewer found**, reading the move against its parent with no cargo: no request,
+event, error sentence or file order changed on the desktop — and these, each fixed here.
+
+- **The cache's permits had stopped being first come, first served.** The move had put the
+  semaphore on `async-lock`, which needs no runtime; the reviewer read that crate's source and
+  found a released permit goes to whoever asks first. A pre-warm asks for its next picture the
+  instant it lets go of the last, so it would have kept one of the sixteen for its whole run,
+  ahead of every tile on screen. `tokio::sync` needs no runtime either and builds for a
+  browser, so `platform::sync` is the primitive the cache always had, and a test holds the order.
+- **The cache sweep could leave a directory behind and answer as if it had not** — the count
+  that is now `failed`, above — and would have left a file whose name it could not spell.
+- **The move script deleted before it wrote.** A write that failed would have left sources
+  gone and outputs half there. It writes first now, and says how to finish if `rustfmt` fails.
+- **Stale prose**: twenty-odd comments in both crates that still said "the desktop's", "takes
+  an `AppHandle`", or named a file by its old path.
+- **Nothing tested a lockout running out**, before the rewrite or after. One does now.
+
+Two things it found are a browser's and are written down rather than changed: **the combo feed
+and the price feeds send their request before they make the folder**, so a host with no files
+spends a request per launch with no backoff; and **neither races its request with a deadline**
+there, so a host that never answers holds that feed's refresh claim for good.
+
+**Open after this part:**
+
+- **No browser arm has run**, and the image cache there is a fetcher: `files` refuses, so every
+  picture is fetched, served and counted as a store failure. What a web host keeps pictures in
+  is phase 5's.
+- **The two findings above**, before a web host runs a feed.
+- **Card Kingdom's refresh emitted 4 426 progress events for one 67.8 MB download.** The host
+  declares no length, so the throttle's `done >= total` is true for every chunk. The code is
+  unchanged from `main`; the page it floods is too.
+- **`live_ingest`** — the one test that asks Commander Spellbook for the real file — moved with
+  the feed and was rewritten onto a tokio runtime of its own and a database built at head. It
+  is `#[ignore]`d and was not run.
+- **Step 5 is whole.** What is left of the engine in `src-tauri` is the sync client, the
+  entitlement and pairing (step 6), and the scanner's session (step 7).

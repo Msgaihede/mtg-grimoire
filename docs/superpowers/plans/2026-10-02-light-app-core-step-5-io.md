@@ -204,7 +204,7 @@ Every `refresh` already takes its progress as a callback, "for `ingest`'s reason
 - **A finished price refresh tells the observers.** `state.mirror.mark_all()` becomes `state.corpus_replaced()`: `marketplace_prices` is a corpus table rewritten whole, which is the sentence that method already says.
 - **`platform::files` grows what the cache calls**: `rename`, `set_modified`, `listing` — a directory's entries with each one's kind, length and modified time — and, for an `async fn`, `aio::{read, create_dir_all, rename}`. Refused in a browser, like the rest.
 - **`platform::clock::Wall`** — a moment on the wall clock that can be written to a file and compared: milliseconds since the epoch, with `now()`, `+` and `-` a `Duration`. The cache's used-stamp is one. `SystemTime` stays under `platform/`.
-- **The cache's permits and its per-key locks are `async-lock`'s**, which needs no runtime and builds for a browser. It was already in `Cargo.lock`, under `httpmock`; this is one new edge and no new package. The 429 deadline becomes `(Tick, Duration)` behind a plain mutex — it was never held across an `.await` that mattered — with the same *later of the two* rule.
+- **The cache's permits and its per-key locks are `platform::sync`'s, which is `tokio::sync` on every host** — it needs no runtime, so it builds for a browser. *(This said `async-lock` until the reviewer read that crate and found its semaphore hands a freed permit to whoever asks first; the cache's pre-warm would have kept one for its whole run. The primitive the cache always had is first come, first served.)* The 429 deadline becomes `(Tick, Duration)` behind a plain mutex — it was never held across an `.await` that mattered — with the same *later of the two* rule.
 - **`State` gains `images`**, and `State::new` a seventh argument: the cache, which the host builds because it knows where the pictures live.
 - **The upkeep *pass* is the core's and the upkeep *thread* is the host's.** `images::upkeep_tick(&State, &mut last)` is one wake of today's loop, cut where the loop sleeps; `spawn_upkeep` stays in `src-tauri` as a thread that sleeps and calls it. A browser has no files to evict and no thread to sleep on, and an Android host owes the same ten lines.
 - **The `mtgimg://` answer stays**: `serve`, `respond`, `fail`, `not_ready`, `IMAGE_MAX_AGE` and their six tests name `tauri::http`.
@@ -213,19 +213,19 @@ Every `refresh` already takes its progress as a callback, "for `ingest`'s reason
 
 ### Tasks
 
-- [ ] `platform::clock::Wall`; `platform::files::{rename, set_modified, listing}` and `aio::{read, create_dir_all, rename}`; tests for each — a stamp written and read back, a listing that tells a file from a folder, a rename that replaces.
-- [ ] `scripts/core-step-5c.mjs`: the eight files split item by item, every rewrite an exact replacement; the homecomings; `ipc.test.ts`'s `?raw` imports as both halves. `--dry` first. No git state.
-- [ ] By hand: `state.rs` (`images`, the seventh argument), both module maps, `desktop.rs` (the cache built, the feeds started, the upkeep thread), the fence's pinned list, `Cargo.toml`.
-- [ ] The cache's tests onto `Wall` and `Tick`; the feeds' tests onto a core `State`.
-- [ ] One test per feed that the sink receives its progress, and one that a finished price refresh tells an observer once.
-- [ ] Item by item, old against new: only what is on the replacement list changed.
-- [ ] `cargo fmt`; clippy for the workspace; `cargo check -p mtg-grimoire --locked`; the wasm build and its clippy; the fence; `cargo tree` for `testing`.
-- [ ] `#[test]` attributes before and after.
-- [ ] `cargo test --workspace`; `npm run build`, `lint`, `test:run`.
-- [ ] An existing database upgraded by `main`'s binary and by this branch's, compared row for row, with the four downloads compared by hash.
-- [ ] `tauri dev`: each feed refreshed by its button with its progress read in the page; a search wall's pictures from an empty cache; the upkeep pass a minute in; the mirror's pass after a price refresh.
-- [ ] A fresh reviewer over the diff.
-- [ ] The record, the pull request, the issue.
+- [x] `platform::clock::Wall`; `platform::files::{rename, set_modified, listing}` and `aio::{read, create_dir_all, rename}`; tests for each — a stamp written and read back, a listing that tells a file from a folder, a rename that replaces.
+- [x] `scripts/core-step-5c.mjs`: the eight files split item by item, every rewrite an exact replacement; the homecomings; `ipc.test.ts`'s `?raw` imports as both halves. `--dry` first. No git state.
+- [x] By hand: `state.rs` (`images`, the seventh argument), both module maps, `desktop.rs` (the cache built, the feeds started, the upkeep thread), the fence's pinned list, `Cargo.toml`.
+- [x] The cache's tests onto `Wall` and `Tick`; the feeds' tests onto a core `State`.
+- [x] One test per feed that the sink receives its progress, and one that a finished price refresh tells an observer once.
+- [x] Item by item, old against new: only what is on the replacement list changed.
+- [x] `cargo fmt`; clippy for the workspace; `cargo check -p mtg-grimoire --locked`; the wasm build and its clippy; the fence; `cargo tree` for `testing`.
+- [x] `#[test]` attributes before and after.
+- [x] `cargo test --workspace`; `npm run build`, `lint`, `test:run`.
+- [x] An existing database upgraded by `main`'s binary and by this branch's, compared row for row, with the four downloads compared by hash.
+- [x] `tauri dev`: each feed refreshed by its button with its progress read in the page; a search wall's pictures from an empty cache; the upkeep pass a minute in; the mirror's pass after a price refresh.
+- [x] A fresh reviewer over the diff — and what it found, fixed: the semaphore's order; a sweep that could leave a folder behind uncounted, or a file it could not spell; a script that deleted before it wrote; about two dozen stale comments; and no test of a lockout running out.
+- [x] The record, the pull request, the issue.
 
 ## What step 6 inherits
 
