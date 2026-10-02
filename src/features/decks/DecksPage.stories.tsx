@@ -150,7 +150,12 @@ const meta = {
           "up-tile it used to be denied, and a dashed `New deck` placeholder that files into " +
           "the drawer the reader is standing in. {@link EmptyFolder}. The **root** keeps its " +
           "sentence: there the folder cards are the wall, so nothing is withheld and there is " +
-          "no level above for a way out to point at.",
+          "no level above for a way out to point at.\n\n" +
+          "**`View all` lays every deck on one wall, with the folders left out** (issue #750) " +
+          "— a toggle in the heading row, drawn wherever there is a folder to leave out. The " +
+          "wall reads `Every deck`, keeps the filter, the sort and the `Archived` disclosure, " +
+          "and goes back to the drawer underneath when pressed again, when a tree row is " +
+          "picked, or on Escape. {@link ViewAll}.",
       },
     },
   },
@@ -549,6 +554,46 @@ export const Folders: Story = {
     ).toBeVisible();
     // An empty folder says so rather than drawing a blank strip.
     await expect(within(wall).getByText("Empty")).toBeInTheDocument();
+  },
+};
+
+/**
+ * **Every deck at once, the folders left out** — the heading row's `View all` toggle (issue #750).
+ *
+ * {@link Folders} is the other half of the same seed: standing at the root, `Rhystic Testbed` is
+ * behind the `Constructed` folder card while the tree's `All decks` row counts it. Pressed, the
+ * wall is all three live decks side by side under `Every deck` — never `All decks`, which is that
+ * tree row's name for the top level — with no folder card and no tree row marked current. Pressed
+ * again, the reader is back in the drawer underneath.
+ *
+ * **Its own frame**, because the toggle is session state in `useAppStore` (it has to survive the
+ * page being swapped out for the editor), and a press on a docs page that shares one store would
+ * flatten every other story drawn there.
+ */
+export const ViewAll: Story = {
+  parameters: { docs: { story: { inline: false, height: "680px" } } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const toggle = await canvas.findByRole("button", { name: "View all decks" });
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(toggle);
+
+    await expect(toggle).toHaveAttribute("aria-pressed", "true");
+    await expect(canvas.getByRole("heading", { name: "Every deck" })).toBeVisible();
+    const wall = await canvas.findByRole("list", { name: "Your decks" });
+    for (const name of ["Modern Goodstuff", "Rhystic Testbed", "Kenrith Two-Drops"]) {
+      await expect(within(wall).getByText(name)).toBeInTheDocument();
+    }
+    await expect(within(wall).queryByRole("button", { name: /folder, \d+ decks?$/ })).toBeNull();
+    const tree = canvas.getByRole("navigation", { name: "Folders" });
+    await expect(tree.querySelectorAll("[aria-current]")).toHaveLength(0);
+
+    await userEvent.click(toggle);
+
+    await expect(toggle).toHaveAttribute("aria-pressed", "false");
+    await expect(canvas.getByRole("heading", { name: "All decks" })).toBeVisible();
+    await waitFor(() => expect(within(wall).queryByText("Rhystic Testbed")).toBeNull());
   },
 };
 
