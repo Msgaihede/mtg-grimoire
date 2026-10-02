@@ -661,8 +661,8 @@ mod tests {
                 Vec::new(),
                 // Never called: nothing in this module reaches the network or an image.
                 crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+                crate::images::Cache::new(dir.join("images")),
             )),
-            images: crate::images::Cache::new(dir.join("images")),
             mirror: Arc::new(Mask::default()),
             mirror_status: std::sync::Mutex::new(LastPass::default()),
             changes: Default::default(),
@@ -1847,6 +1847,7 @@ mod tests {
             grimoire_core::events::silent(),
             observers(mask.clone(), Default::default(), Default::default()),
             crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            crate::images::Cache::new(dir.path().join("images")),
         );
         assert_eq!(mask.take(), None);
 

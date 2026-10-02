@@ -67,6 +67,10 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # `scryfall`'s pacing gate — an async mutex that is not the runtime's, because the browser has
 # no runtime to borrow one from.
 futures-util = "0.3"
+# The image cache's permits and its one-lock-per-key: a semaphore and a mutex an `async fn`
+# can hold across an `.await`, with no runtime behind them, so they build for a browser where
+# `tokio::sync`'s home crate does not. Already in `Cargo.lock`, under `httpmock`.
+async-lock = "3"
 # What a chunk of a response body is. `reqwest` hands these out; naming the crate is what lets
 # `platform::http::Body::chunk` say so in its signature.
 bytes = "1"
@@ -158,4 +162,4 @@ tempfile = "3"
 # `scryfall`'s tests answer from a local mock server, and never from Scryfall.
 httpmock = "0.8"
 # `#[tokio::test]`, for the tests of what is async here.
-tokio = { version = "1", features = ["macros", "rt"] }
+tokio = { version = "1", features = ["macros", "rt", "sync"] }

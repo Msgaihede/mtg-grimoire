@@ -114,3 +114,29 @@ mod tests {
         assert!(sink.0.lock().unwrap().is_empty());
     }
 }
+
+/// A sink for a test that asks what was said.
+///
+/// **At the foot of the file, and behind `testing`**, as every fixture here is.
+#[cfg(any(test, feature = "testing"))]
+pub mod fixtures {
+    use super::EventSink;
+    use std::sync::Mutex;
+
+    /// Every event it was given, in order.
+    #[derive(Default)]
+    pub struct Recording(Mutex<Vec<(String, serde_json::Value)>>);
+
+    impl Recording {
+        /// What has arrived since the last call. Taking it empties it.
+        pub fn taken(&self) -> Vec<(String, serde_json::Value)> {
+            std::mem::take(&mut *self.0.lock().unwrap())
+        }
+    }
+
+    impl EventSink for Recording {
+        fn emit(&self, name: &str, payload: serde_json::Value) {
+            self.0.lock().unwrap().push((name.to_owned(), payload));
+        }
+    }
+}

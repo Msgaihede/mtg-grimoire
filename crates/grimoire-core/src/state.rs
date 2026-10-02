@@ -55,6 +55,10 @@ pub struct State {
     /// The one Scryfall client: one pacing gate and one 429 lockout for everything that asks
     /// `api.scryfall.com` — the card sync here, and the tag feeds, which borrow it.
     pub client: scryfall::Client,
+    /// The image cache: what resolves a `(card, face, variant)` to bytes, and the one thing
+    /// here that owns a folder of files. How those bytes reach a page — a protocol handler, a
+    /// `fetch` — is the host's.
+    pub images: crate::images::Cache,
     /// The in-memory facet index and the generation of the corpus it describes — cold, which
     /// is a supported state and not an error, until the first build lands. Read it through
     /// [`crate::index::lifecycle::current`]; everything else about it is that module's.
@@ -86,6 +90,10 @@ impl State {
     /// an earlier run earned are the host's to know: the desktop restores a persisted 429
     /// deadline into it before handing it over. No sync is in flight and the index is cold —
     /// the host starts the first build once the state is in an `Arc`.
+    ///
+    /// **`images` is the host's to build too**, because where the pictures live is the host's
+    /// to know. A cache creates nothing until it is asked for a picture, so a host that never
+    /// serves one pays for a path.
     pub fn new(
         write: Connection,
         read: Option<Connection>,
@@ -93,6 +101,7 @@ impl State {
         events: Arc<dyn EventSink>,
         observers: Vec<Arc<dyn WriteObserver>>,
         client: scryfall::Client,
+        images: crate::images::Cache,
     ) -> State {
         let fence = Arc::new(CrossFileFence::new());
         hooks::install(&write, fence.clone(), observers.clone());
@@ -104,6 +113,7 @@ impl State {
             events,
             syncing: AtomicBool::new(false),
             client,
+            images,
             index: RwLock::default(),
             observers,
         }
@@ -291,6 +301,7 @@ mod tests {
             crate::events::silent(),
             observers,
             scryfall::Client::new("http://127.0.0.1:1".into()),
+            crate::images::Cache::new(PathBuf::from("nowhere").join("images")),
         )
     }
 
@@ -426,6 +437,7 @@ mod tests {
             .unwrap();
         let read = db::open_read(&dir).unwrap();
         let counter = Arc::new(Counter::default());
+        let images = crate::images::Cache::new(dir.join("images"));
         let state = State::new(
             write,
             Some(read),
@@ -433,6 +445,7 @@ mod tests {
             crate::events::silent(),
             vec![counter.clone()],
             scryfall::Client::new("http://127.0.0.1:1".into()),
+            images,
         );
         assert!(!std::ptr::eq(state.reader(), &state.db));
 
@@ -469,5 +482,62 @@ mod tests {
                 .is_err(),
             "the read connection is opened read-only"
         );
+    }
+}
+
+/// A host's state for a test.
+///
+/// **At the foot of the file, and behind `testing`**: everything below a file's `mod tests` is
+/// test code to the fence and to the coverage script alike, and another crate's tests can reach
+/// this through the feature.
+#[cfg(any(test, feature = "testing"))]
+pub mod fixtures {
+    use super::State;
+    use crate::events::fixtures::Recording;
+    use crate::events::EventSink;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    /// A [`State`] over a pair of **files** at head in a scratch directory of its own, with
+    /// nobody listening, nothing observing, its Scryfall client pointed at `scryfall` and its
+    /// image cache under `images/` there. Answers the directory too, for a test that looks at
+    /// what was left in it.
+    ///
+    /// Files and not `:memory:`, because a state's read connection is a second connection and
+    /// two in-memory connections are two databases. Built at head with
+    /// [`crate::schema::build_pair`], as a fresh install's are: no capture triggers and no
+    /// launch passes, which a test that wants them asks for itself.
+    ///
+    /// `name` labels the directory under [`crate::scratch::path`], so two tests that run at
+    /// once need two names.
+    pub fn on_files(name: &str, scryfall: &str) -> (Arc<State>, PathBuf) {
+        build(name, scryfall, crate::events::silent())
+    }
+
+    /// [`on_files`] with a sink that keeps what it is told, for a test that asks what a page
+    /// would have heard. Its Scryfall client points nowhere.
+    pub fn listening(name: &str) -> (Arc<State>, Arc<Recording>, PathBuf) {
+        let heard = Arc::new(Recording::default());
+        let (state, dir) = build(name, "http://127.0.0.1:1", heard.clone());
+        (state, heard, dir)
+    }
+
+    fn build(name: &str, scryfall: &str, events: Arc<dyn EventSink>) -> (Arc<State>, PathBuf) {
+        let dir = crate::scratch::path(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
+        crate::schema::build_pair(&conn);
+        let read = crate::db::open_read(&dir).unwrap();
+        let state = State::new(
+            conn,
+            Some(read),
+            dir.clone(),
+            events,
+            Vec::new(),
+            crate::scryfall::Client::new(scryfall.to_owned()),
+            crate::images::Cache::new(dir.join("images")),
+        );
+        (Arc::new(state), dir)
     }
 }

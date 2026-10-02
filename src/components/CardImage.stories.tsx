@@ -12,7 +12,8 @@ const LOTUS = printing("lea", "232");
 
 /**
  * Half the `grid` variant's 488 x 680 (`.storybook/fake/images.ts`'s `SIZE`, copied from
- * `Variant::dimensions` in `src-tauri/src/images.rs`), so the picture is downscaled by exactly
+ * `Variant::dimensions` in `crates/grimoire-core/src/images.rs`), so the picture is downscaled by
+ * exactly
  * two and never resampled onto a fractional box. Both attributes are given rather than width
  * alone: an `<img>` that has not decoded anything is 0px tall with only a width, and the two
  * frames in `SwapCard` have to hold their place across a swap for the swap to show anything.

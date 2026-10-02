@@ -38,7 +38,7 @@ import type { ImageVariant } from "../../src/lib/images";
 import { CARDS, type FakeCard } from "./cards";
 
 /**
- * `Variant::dimensions`, `src-tauri/src/images.rs:94-101`.
+ * `Variant::dimensions`, `crates/grimoire-core/src/images.rs`.
  *
  * The whole point of the synthetic art: the placeholder occupies exactly the space the real
  * bytes would, so a story's layout is the app's layout. There is no way to import a number out

@@ -65,6 +65,10 @@ pub mod collection;
 pub mod collection_alloc;
 pub mod collection_folders;
 pub mod collection_source;
+/// **Commander Spellbook's combos**: the feed streamed into `combos` over its own
+/// [`platform::http`] client, and the two questions asked of it — which combos a pile of
+/// printings holds, and which combos name one card.
+pub mod combos;
 /// **The connections**: the pair `user.db` + `corpus.db`, the pragmas each file needs, and the
 /// two ways of asking for the write connection — a bounded ask that answers `BUSY`, and a
 /// background batch that stands aside for one.
@@ -102,6 +106,10 @@ pub mod hooks;
 /// **The resolution rule under the image cache.** Two columns of `cards`, the precedence
 /// between them and one predicate over a string.
 pub mod image_uri;
+/// **The image cache**: lazy, bounded, one fetch per key — what resolves a
+/// `(card, face, variant)` to bytes, the keys a pre-warm fetches, and the eviction pass that
+/// spares exactly those. How its bytes reach a page is the host's.
+pub mod images;
 pub mod import;
 /// **The in-memory facet index**: `CardIndex`, the facet pass over it, and the lifecycle that
 /// keeps it — cold, built, and amended when the collection moves.
@@ -115,6 +123,9 @@ pub mod maintenance;
 pub mod managed_wishlist;
 pub mod markcolors;
 pub mod marketplace;
+/// **The two price feeds** — Card Kingdom's and Mana Pool's bulk pricelists, each parsed in one
+/// streaming pass and stored whole — over a client of their own, never Scryfall's.
+pub mod marketplace_feed;
 pub mod nav;
 pub mod new_printings;
 /// **The one place this crate knows which machine it is on.**
@@ -160,6 +171,10 @@ pub mod sync_engine;
 pub mod sync_meta;
 /// **Pairing's pure half** — the cryptography and the invite.
 pub mod sync_pair;
+/// **Scryfall's two Tagger taxonomies** — Oracle Tags and Art Tags: one engine with two
+/// bindings, the tag search over both, and the reader's mute list. They share Scryfall's
+/// client, its pacing gate and its lockout.
+pub mod tags;
 pub mod upcoming_sets;
 pub mod value_history;
 pub mod wishlist;

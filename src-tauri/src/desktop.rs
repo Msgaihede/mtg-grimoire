@@ -962,18 +962,17 @@ fn start(app: &tauri::AppHandle) {
         let conn = sync::lock_db_read(&state);
         !sync::has_cards(&conn)
     };
-    let handle = app.clone();
     let sync_state = state.clone();
     tauri::async_runtime::spawn(async move {
         if let Err(e) = sync::run_sync(sync_state.core.clone(), false).await {
             eprintln!("initial sync failed: {e}");
         }
         if first_run {
-            spawn_optional_feeds(&handle, &sync_state);
+            spawn_optional_feeds(&sync_state);
         }
     });
     if !first_run {
-        spawn_optional_feeds(app, &state);
+        spawn_optional_feeds(&state);
     }
 
     // The daily update check, in its own task rather than chained onto the sync:
@@ -999,7 +998,7 @@ fn start(app: &tauri::AppHandle) {
 /// Start the launch's optional feeds, each on a task of its own: the selected marketplace's
 /// price feed, both Tagger files and the combos. [`start`] calls this beside the card sync, or
 /// behind it on a first run — see the comment there.
-fn spawn_optional_feeds(app: &tauri::AppHandle, state: &Arc<AppState>) {
+fn spawn_optional_feeds(state: &Arc<AppState>) {
     // The selected marketplace's price feed, if it is one this app downloads and it is
     // due. Its own task for the update check's reason — three services, three
     // schedules, and none of them may be the reason another stops running — and
@@ -1007,10 +1006,9 @@ fn spawn_optional_feeds(app: &tauri::AppHandle, state: &Arc<AppState>) {
     // marketplace they never picked, which is the whole shape of
     // `refresh_selected_if_due`. Silent and best-effort; a failure is already in
     // `error_log` and the honest fallback is the prices already on disk.
-    let feed_state = state.clone();
-    let feed_app = app.clone();
+    let feed_state = state.core.clone();
     tauri::async_runtime::spawn(async move {
-        marketplace_feed::refresh_selected_if_due(&feed_state, &feed_app).await;
+        marketplace_feed::refresh_selected_if_due(&feed_state).await;
     });
 
     // Scryfall's Oracle Tags, if the stored copy is due. Its own task for the same
@@ -1022,10 +1020,9 @@ fn spawn_optional_feeds(app: &tauri::AppHandle, state: &Arc<AppState>) {
     // there it is the *card* download that must not be made to wait — see `start`.) Silent and best-effort; a failure is
     // already in `error_log` and the honest fallback is categorising by card type,
     // which is what the app did before this existed.
-    let tags_state = state.clone();
-    let tags_app = app.clone();
+    let tags_state = state.core.clone();
     tauri::async_runtime::spawn(async move {
-        tags::oracle::refresh_if_due(&tags_state, &tags_app).await;
+        tags::oracle::refresh_if_due(&tags_state).await;
     });
 
     // Scryfall's Art Tags, on a fifth task rather than chained onto the oracle one
@@ -1037,10 +1034,9 @@ fn spawn_optional_feeds(app: &tauri::AppHandle, state: &Arc<AppState>) {
     // connection a batch at a time, which is the engine's job and not the launch's —
     // and `db::lock_background` is what keeps that contention from starving a user
     // write. Silent and best-effort, like every one of its siblings.
-    let art_state = state.clone();
-    let art_app = app.clone();
+    let art_state = state.core.clone();
     tauri::async_runtime::spawn(async move {
-        tags::art::refresh_if_due(&art_state, &art_app).await;
+        tags::art::refresh_if_due(&art_state).await;
     });
 
     // Commander Spellbook's combo database, on a sixth task — a sixth service on a
@@ -1066,10 +1062,9 @@ fn spawn_optional_feeds(app: &tauri::AppHandle, state: &Arc<AppState>) {
     // connection a batch at a time, which is the engine's job and not the launch's.
     // Silent and best-effort, like every one of its siblings: a failure is already in
     // `error_log` and the honest fallback is the combos already on disk.
-    let combo_state = state.clone();
-    let combo_app = app.clone();
+    let combo_state = state.core.clone();
     tauri::async_runtime::spawn(async move {
-        combos::refresh_if_due(&combo_state, &combo_app).await;
+        combos::refresh_if_due(&combo_state).await;
     });
 }
 
@@ -1315,11 +1310,11 @@ fn init_state(
         Arc::new(WindowEvents(app.clone())),
         mirror::watch::observers(mirror.clone(), changes.clone(), writes.clone()),
         client,
+        images,
     );
 
     Ok(AppState {
         core: Arc::new(core),
-        images,
         mirror,
         mirror_status: Mutex::new(mirror::watch::LastPass::default()),
         changes,
@@ -1330,10 +1325,11 @@ fn init_state(
 /// The desktop's [`grimoire_core::events::EventSink`]: an event the engine raises goes to every
 /// window, as `app.emit` sends one.
 ///
-/// **The card sync is its first caller**: `sync:progress` and `collection:reconciled` arrive
-/// here from `grimoire_core::sync`, which takes no window. The three feeds and live sync still
-/// name their `AppHandle`, and move onto the sink as each moves to the core. A dropped event
-/// is never worth failing anything over, here as at those call sites.
+/// **Everything the engine says arrives here**: `sync:progress` and `collection:reconciled`
+/// from the card sync, and each feed's progress — `marketplace:progress`, `combos:progress`
+/// and the two tag bindings' — none of which takes a window. Live sync still names its
+/// `AppHandle`, and moves onto the sink with the sync step. A dropped event is never worth
+/// failing anything over.
 struct WindowEvents(tauri::AppHandle);
 
 impl grimoire_core::events::EventSink for WindowEvents {

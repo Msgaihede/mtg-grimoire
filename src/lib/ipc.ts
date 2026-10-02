@@ -26,15 +26,15 @@
  * `HomeWidget`/`HomeLayout`                      — `crates/grimoire-core/src/home.rs`
  * `StickyNoteRow`                                — `crates/grimoire-core/src/sticky_notes.rs`
  * `CardFilters`, flattened into both list queries — `crates/grimoire-core/src/filters.rs`
- * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
- * `CardTags`/`PrintingTags`                     — `src-tauri/src/tags/oracle.rs`
- * `TagStatus`/`TagProgressEvent`                 — `src-tauri/src/tags/mod.rs`, aliased per
+ * `MarketplaceFeedStatus`                        — `crates/grimoire-core/src/marketplace_feed.rs`
+ * `CardTags`/`PrintingTags`                     — `crates/grimoire-core/src/tags/oracle.rs`
+ * `TagStatus`/`TagProgressEvent`                 — `crates/grimoire-core/src/tags/mod.rs`, aliased per
  *                                                  dataset by `tags/oracle.rs`/`tags/art.rs`
- * `TagHit`/`TagRef`                              — `src-tauri/src/tags/query.rs`
- * `MutedTag`                                     — `src-tauri/src/tags/muted.rs`
+ * `TagHit`/`TagRef`                              — `crates/grimoire-core/src/tags/query.rs`
+ * `MutedTag`                                     — `crates/grimoire-core/src/tags/muted.rs`
  * `ComboBracketTag`/`DeckCombo`/`ComboStatus`/
  * `ComboProgress`/`ComboPiece`/`CardCombo`/
- * `ComboCountBucket`/`CardCombosPage`            — `src-tauri/src/combos.rs`
+ * `ComboCountBucket`/`CardCombosPage`            — `crates/grimoire-core/src/combos.rs`
  * `MirrorStatus`                                 — `src-tauri/src/mirror/settings.rs`
  * `PassReport`                                   — `src-tauri/src/mirror/run.rs`
  * `TagTerms`                                     — `crates/grimoire-core/src/filters.rs`

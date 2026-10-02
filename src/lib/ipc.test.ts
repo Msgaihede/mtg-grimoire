@@ -22,7 +22,8 @@ import collectionFoldersRsCore from "../../crates/grimoire-core/src/collection_f
 import collectionFoldersRsDesktop from "../../src-tauri/src/collection_folders/mod.rs?raw";
 import importRsCore from "../../crates/grimoire-core/src/import.rs?raw";
 import importRsDesktop from "../../src-tauri/src/import/mod.rs?raw";
-import combosRs from "../../src-tauri/src/combos.rs?raw";
+import combosRsCore from "../../crates/grimoire-core/src/combos.rs?raw";
+import combosRsDesktop from "../../src-tauri/src/combos/mod.rs?raw";
 import deckRsCore from "../../crates/grimoire-core/src/deck.rs?raw";
 import deckRsDesktop from "../../src-tauri/src/deck/mod.rs?raw";
 import deckpaneRsCore from "../../crates/grimoire-core/src/deckpane.rs?raw";
@@ -141,6 +142,7 @@ const activityRs = activityRsCore + "\n" + activityRsDesktop;
 const cardRs = cardRsCore + "\n" + cardRsDesktop;
 const bulkUndoRs = bulkUndoRsCore + "\n" + bulkUndoRsDesktop;
 const collectionRs = collectionRsCore + "\n" + collectionRsDesktop;
+const combosRs = combosRsCore + "\n" + combosRsDesktop;
 const collectionFoldersRs = collectionFoldersRsCore + "\n" + collectionFoldersRsDesktop;
 const importRs = importRsCore + "\n" + importRsDesktop;
 const deckRs = deckRsCore + "\n" + deckRsDesktop;

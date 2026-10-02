@@ -22,7 +22,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { COMBO_PHASE_LABEL, useComboProgress } from "./useComboProgress";
 
 /**
- * The phase strings are a hand-mirrored union of `combos::PHASES` in `src-tauri/src/combos.rs`,
+ * The phase strings are a hand-mirrored union of `combos::PHASES` in
+ * `crates/grimoire-core/src/combos.rs`,
  * and a phase Rust emits that is missing here has no label — the ribbon renders `undefined`
  * while the download runs perfectly, so nothing fails except what the reader is told. The Rust
  * half is pinned by `the_progress_phases_are_the_ones_the_frontend_mirrors`; this is the other
