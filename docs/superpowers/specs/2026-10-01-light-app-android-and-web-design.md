@@ -259,15 +259,28 @@ Each step is its own PR. **The light UI waits for none of them** (§9).
    each.
 2. **Storage** — `db`, `schema`, `filters`, `collection_source`, `reconcile`, `managed_wishlist`,
    `sync_engine/{capture,apply,baseline}`, `sync_pair/identity`.
+   **Built 2026-10-02, and seven of the sixteen this step had by then were not storage**: read
+   against the tree, `reconcile`, `managed_wishlist`, `collection_source` and
+   `sync_engine/{apply,baseline}` call the deck, collection and wishlist modules and go with
+   step 4; `sync_pair/identity` and `sync_engine/wire` name the sync client and go with step 6.
+   What moved is `db`, `schema`, `filters`, `sorting`, `card_row`, `image_uri`, `errors`,
+   `feed/backoff`, `sync_engine/capture` and a `sync_meta` carved out of `sync` — with
+   `schema`'s `prepare_database` and `errors`' `kind_of` left in `src-tauri`, each in a module
+   that re-exports the rest, because each names code a later step moves.
+   [The step's plan](../plans/2026-10-02-light-app-core-step-2-storage.md) has the table.
 3. **State** — the `AppState` split, `with_write`, the hook installer and its observers, `EventSink`.
 4. **The domain cluster, atomically** — decks, collection, wishlist, search, card, the tag queries
-   and the view-state modules: on the order of 120 000 lines. Round one found the cluster mutually
+   and the view-state modules: on the order of 120 000 lines. **And, since step 2 found they
+   belong to it**: `reconcile`, `managed_wishlist`, `collection_source`,
+   `sync_engine/{apply,baseline}`, and `schema::prepare_database` with the launch passes it
+   runs. Round one found the cluster mutually
    recursive ("no leaf modules"), so it cannot go piecemeal. **It is done by a re-runnable script on
    an announced day**: it will touch every open branch, and a branch that merges `main` afterwards
    re-runs the script rather than resolving the move by hand.
 5. **I/O** — `scryfall`, `ingest`, `run_sync` behind a progress sink, the three feeds,
    `index/lifecycle`, `images`.
-6. **The sync client, entitlement and pairing** — see below.
+6. **The sync client, entitlement and pairing** — see below. `sync_pair/identity` and
+   `sync_engine/wire` arrive here rather than in step 2.
 7. **The scanner's session glue.**
 
 **Step 6 is the one where code changes rather than moves.** A sync trip today is

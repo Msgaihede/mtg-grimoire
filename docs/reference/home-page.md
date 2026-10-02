@@ -795,7 +795,7 @@ Two things happened in that merge that still matter, and they are not the same s
   happened had the field been typed loosely.
 
 The counts this branch moved, and the command that answers each, so the next reader re-derives
-rather than trusts (a rule the grid redesign below followed for its own two rungs): `USER_SCHEMA_VERSION` is `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs`;
+rather than trusts (a rule the grid redesign below followed for its own two rungs): `USER_SCHEMA_VERSION` is `grep USER_SCHEMA_VERSION crates/grimoire-core/src/schema.rs` (`src-tauri/src/schema.rs` until 2026-10-02);
 the user-table count is the `Side::User` entries in `schema::TABLES`.
 
 ## 11. The grid redesign (2026-09-15)

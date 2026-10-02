@@ -211,7 +211,7 @@ impl BulkCard {
     /// `None` for a card with no images anywhere — the row the corpus query leaves out too.
     ///
     /// The faces become an array with a `null` for a face that has no images, and nothing at
-    /// all when no face has any: the rule `src-tauri/src/card_row.rs` writes the corpus's
+    /// all when no face has any: the rule `grimoire-core`'s `card_row.rs` writes the corpus's
     /// `face_image_uris` by, so a split card's two imageless faces are not a column here either.
     fn into_row(self) -> Option<Row> {
         let faces = self.card_faces.and_then(|faces| {

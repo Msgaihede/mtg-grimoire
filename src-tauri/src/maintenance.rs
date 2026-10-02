@@ -13,24 +13,11 @@ use std::sync::Mutex;
 
 /// `sync_meta` key: the search index is owed a rebuild, and nothing may assume otherwise.
 ///
-/// This exists because **the conversion's completion marker is not ours to write.**
-/// `auto_vacuum` flips in the file header the instant the `VACUUM` commits, which is one
-/// statement *before* [`convert_to_incremental`] is finished — and the rebuild that follows
-/// is itself three commits (drop, create, and a populate that walks every card). A process
-/// killed anywhere in that window leaves a database that reports itself converted and
-/// carries an index pointing at the wrong rows, with no error and nothing to notice it: the
-/// swap that would rebuild the index only happens on a sync that actually ingests, and the
-/// common answer is a 304.
-///
-/// So the flag is written and committed *before* the `VACUUM` and cleared only once
-/// `create_fts` has returned. Whoever finds it set owes the rebuild:
-/// [`crate::schema::prepare_database`] at every launch, `sync::compact_once` at every sync,
-/// and [`crate::schema::swap_staging`], which settles the debt simply by doing the work.
-///
-/// It is cleared on the *failure* path too, when the failure was the `VACUUM` itself — that
-/// rolls back, so nothing was desynced and a rebuild would repair damage never done. See
-/// [`convert_to_incremental`].
-pub const K_FTS_REBUILD_PENDING: &str = "fts_rebuild_pending";
+/// **The constant and its argument are `grimoire_core::sync_meta`'s** since the storage step:
+/// [`crate::schema::swap_staging`] clears the flag and moved to that crate ahead of this module.
+/// Whoever finds it set owes the rebuild — [`crate::schema::prepare_database`] at every launch,
+/// `sync::compact_once` at every sync, and the swap, which settles the debt by doing the work.
+pub use grimoire_core::sync_meta::K_FTS_REBUILD_PENDING;
 
 /// `sync_meta` key holding why the one-time conversion failed, if it ever did.
 ///

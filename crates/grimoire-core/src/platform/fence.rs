@@ -201,6 +201,103 @@ mod tests {
             })
     }
 
+    /// Every line of one manifest that turns this crate's `testing` feature on outside a
+    /// `dev-dependencies` table, as `line number: text`.
+    ///
+    /// Three spellings reach it: `grimoire-core = { …, features = ["testing"] }` in a
+    /// dependencies table, a `[dependencies.grimoire-core]` table with the feature in it, and a
+    /// feature of the host's own that forwards `grimoire-core/testing`.
+    fn asks_for_testing(manifest: &str) -> Vec<String> {
+        let mut found = Vec::new();
+        let mut dev = false;
+        let mut own_table = false;
+        for (i, raw) in manifest.lines().enumerate() {
+            let line = raw.trim();
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            if line.starts_with('[') {
+                dev = line.contains("dev-dependencies");
+                own_table = line
+                    .trim_end_matches(']')
+                    .ends_with("dependencies.grimoire-core");
+                continue;
+            }
+            if dev {
+                continue;
+            }
+            let names_it = line.contains("\"testing\"") || line.contains("'testing'");
+            let on_its_line = line.starts_with("grimoire-core") && names_it;
+            let in_its_table = own_table && names_it;
+            let forwarded = line.contains("grimoire-core/testing");
+            if on_its_line || in_its_table || forwarded {
+                found.push(format!("{}: {line}", i + 1));
+            }
+        }
+        found
+    }
+
+    /// **The `testing` feature is test scaffolding, and one thing in it is not harmless in a
+    /// shipped build**: `image_uri::is_allowed_host` lets a loopback host through under it, so
+    /// the image fetcher's tests can run against a mock server. A host that named the feature
+    /// on its ordinary dependency line would ship that. This reads every workspace member's
+    /// manifest — the hosts that exist and the ones that join later — and refuses the feature
+    /// anywhere but a `dev-dependencies` table.
+    #[test]
+    fn no_member_asks_for_the_test_scaffolding_outside_its_tests() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let workspace = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+        let members: Vec<&str> = workspace
+            .lines()
+            .find(|l| l.trim_start().starts_with("members"))
+            .expect("the workspace's member list")
+            .split('"')
+            .skip(1)
+            .step_by(2)
+            .collect();
+        // The right list, and one with this crate and a host in it.
+        assert!(members.contains(&"crates/grimoire-core"), "{members:?}");
+        assert!(members.len() >= 2, "{members:?}");
+
+        for member in &members {
+            let path = root.join(member).join("Cargo.toml");
+            let manifest =
+                fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+            let found = asks_for_testing(&manifest);
+            assert!(
+                found.is_empty(),
+                "{member}/Cargo.toml turns on `testing` outside [dev-dependencies]: {found:?}"
+            );
+        }
+
+        // The detector, over each spelling — and over the one place the feature belongs.
+        for manifest in [
+            "[dependencies]\ngrimoire-core = { path = \"../x\", features = [\"testing\"] }",
+            "[target.'cfg(windows)'.dependencies]\ngrimoire-core = { path = \"x\", features = ['testing'] }",
+            "[dependencies.grimoire-core]\npath = \"../x\"\nfeatures = [\"testing\"]",
+            "[features]\ndefault = [\"grimoire-core/testing\"]",
+            "[build-dependencies]\ngrimoire-core = { path = \"x\", features = [\"testing\"] }",
+        ] {
+            assert!(
+                !asks_for_testing(manifest).is_empty(),
+                "let through: {manifest}"
+            );
+        }
+        for manifest in [
+            "[dev-dependencies]\ngrimoire-core = { path = \"../x\", features = [\"testing\"] }",
+            "[dev-dependencies.grimoire-core]\npath = \"../x\"\nfeatures = [\"testing\"]",
+            "[dependencies]\ngrimoire-core = { path = \"../crates/grimoire-core\" }",
+            "[features]\ntesting = []",
+            "# grimoire-core = { features = [\"testing\"] }",
+        ] {
+            assert_eq!(
+                asks_for_testing(manifest),
+                Vec::<String>::new(),
+                "refused: {manifest}"
+            );
+        }
+    }
+
     #[test]
     fn nothing_outside_platform_names_a_target_or_reads_the_clock() {
         let mut files = Vec::new();
@@ -217,6 +314,8 @@ mod tests {
         // A walk that found nothing would pass everything below.
         for known in [
             "src/legalities.rs",
+            "src/schema.rs",
+            "src/sync_engine/capture.rs",
             "src/sync_pair/crypto.rs",
             "src/platform/clock.rs",
         ] {

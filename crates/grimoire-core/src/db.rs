@@ -1,8 +1,9 @@
+use crate::platform::clock::Tick;
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Ceiling on the write-ahead log *file* after a checkpoint, in bytes.
 ///
@@ -339,7 +340,7 @@ pub fn lock_for(
     mutex: &Mutex<Connection>,
     timeout: Duration,
 ) -> Option<MutexGuard<'_, Connection>> {
-    let deadline = Instant::now() + timeout;
+    let started = Tick::now();
     // Held until this returns, the lock or `None` alike, and withdrawn by its `Drop`.
     let mut waiting: Option<Waiting> = None;
     loop {
@@ -347,11 +348,15 @@ pub fn lock_for(
             Ok(guard) => return Some(guard),
             Err(TryLockError::Poisoned(e)) => return Some(e.into_inner()),
             Err(TryLockError::WouldBlock) => {
-                if Instant::now() >= deadline {
+                if started.elapsed() >= timeout {
                     return None;
                 }
                 waiting.get_or_insert_with(|| Waiting::register(key_of(mutex)));
-                std::thread::sleep(LOCK_POLL_INTERVAL);
+                // A host with no second thread has nobody to wait for: the lock is held by
+                // this thread's own caller, and it will not be let go while this one polls.
+                if !crate::platform::pause(LOCK_POLL_INTERVAL) {
+                    return None;
+                }
             }
         }
     }
@@ -430,9 +435,11 @@ fn someone_is_waiting(key: usize) -> bool {
 /// they did. The deference is capped at [`BACKGROUND_DEFERENCE_CAP`].
 pub fn lock_background(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
     let key = key_of(mutex);
-    let deadline = Instant::now() + BACKGROUND_DEFERENCE_CAP;
-    while someone_is_waiting(key) && Instant::now() < deadline {
-        std::thread::sleep(BACKGROUND_DEFERENCE_POLL);
+    let started = Tick::now();
+    while someone_is_waiting(key) && started.elapsed() < BACKGROUND_DEFERENCE_CAP {
+        if !crate::platform::pause(BACKGROUND_DEFERENCE_POLL) {
+            break;
+        }
     }
     lock_blocking(mutex)
 }
@@ -556,7 +563,7 @@ mod tests {
         let taken = lock_for(&mutex, Duration::from_millis(50));
         assert!(taken.is_some(), "an uncontended lock is taken immediately");
 
-        let started = std::time::Instant::now();
+        let started = Tick::now();
         let blocked = lock_for(&mutex, Duration::from_millis(50));
         assert!(blocked.is_none(), "a held lock must not be waited out");
         assert!(
@@ -572,7 +579,7 @@ mod tests {
         // Zero is a plain `try_lock`, and not sleeping is the whole point of it: the image
         // cache asks from an async worker thread, where even one 20 ms poll is a pool
         // thread parked on a lock, for a row it is perfectly happy to skip.
-        let started = std::time::Instant::now();
+        let started = Tick::now();
         assert!(lock_for(&mutex, Duration::ZERO).is_none());
         assert!(
             started.elapsed() < LOCK_POLL_INTERVAL,
@@ -620,7 +627,7 @@ mod tests {
             // Both loops are running before the first ask.
             std::thread::sleep(Duration::from_millis(60));
             for _ in 0..5 {
-                let asked = Instant::now();
+                let asked = Tick::now();
                 let got = lock_for(&mutex, Duration::from_secs(2)).is_some();
                 asks.push((asked.elapsed(), got));
                 std::thread::sleep(Duration::from_millis(10));

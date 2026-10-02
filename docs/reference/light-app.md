@@ -271,7 +271,8 @@ The engine is moving out of `src-tauri` into `crates/grimoire-core`, a crate wit
 dependency that the desktop, the Android host and the WASM host will all link (spec §2). The
 rules for working in it are [`crates/grimoire-core/CLAUDE.md`](../../crates/grimoire-core/CLAUDE.md);
 this section is what each step built and measured. **Nothing here runs on a phone or in a
-browser yet**: what exists is a crate the desktop links, compiled for two more targets.
+browser yet**: what exists is a crate the desktop links, compiled for two more targets. Two
+steps of seven have landed — the leaves, and the storage layer.
 
 ### 6.1 Step 1 — the workspace, the crate and the leaves (2026-10-02)
 
@@ -399,3 +400,152 @@ says never to exclude `.claude`.
   place a storage-step module depends on a later step's.
 - Doc links in the core to modules still in `src-tauri` (`crate::filters`, `super::apply`) do
   not resolve until those arrive. Nothing builds docs, so nothing is red.
+
+### 6.2 Step 2 — storage (2026-10-02)
+
+[The plan](../superpowers/plans/2026-10-02-light-app-core-step-2-storage.md). Everything below was
+measured that day on Windows 11, debug builds, on the branch's own tree over `main` at
+`fb290538`.
+
+**The core holds the database now, and seven of the sixteen modules this step had on its list
+are not in it.** Each one's code and tests were read for what they name:
+
+| Moved | |
+| --- | --- |
+| `db` | The connections, the pragmas, `lock_for` and `lock_background` |
+| `schema` | Every table, both ladders, the grains, the staging swaps — 22 900 of its 23 900 lines |
+| `sync_meta` | **New**: `get_meta`, `set_meta`, `set_meta_opt`, carved out of `sync` as `app_meta` was out of `update` |
+| `filters`, `sorting`, `card_row`, `image_uri` | Whole |
+| `errors` | All but `kind_of` |
+| `feed::backoff`, `sync_engine::capture` | Whole; `src-tauri/src/feed/` is gone |
+| `scratch` | The test helper, behind a feature |
+
+| Waits | For | It calls |
+| --- | --- | --- |
+| `reconcile` | step 4 | `collection::fold_entry` |
+| `managed_wishlist` | step 4 | `deck_theory::wanted`, `wishlist::add_wish_silent` |
+| `sync_engine::apply`, `baseline` | step 4 | `collection_folders::refile_entry`, `wishlist_folders::refile_wish` |
+| `collection_source` | step 4 | `AppState`, `sync::with_write`, `index::lifecycle` |
+| `sync_pair::identity`, `sync_engine::wire` | step 6 | `sync_engine::client`'s cursor keys; `identity::Group` |
+
+Markus was shown that table with two alternatives — moving `identity` and `wire` now by hoisting
+the client's keys, or moving all sixteen through callbacks the desktop supplies — and chose
+this: nothing gets a seam the next step deletes.
+
+**`schema` and `errors` each left one function in `src-tauri`**, in a module that re-exports the
+rest (`src-tauri/src/schema/mod.rs`, `errors/mod.rs`). An item a module defines shadows a glob
+import of the same name, so no caller changed.
+
+- **`prepare_database` is cut at the line it already drew.** `schema::bring_to_head` is the two
+  ladders and the capture triggers — every step of a launch that may stop it. The desktop's
+  `prepare_database` is that call followed by the logged passes, which call `maintenance`,
+  `managed_wishlist`, `deck_tokens` and `deck_meta`. **The two halves rejoin to the original
+  130-line body byte for byte**, checked by a script against `main`'s file.
+- `prepare_data_dir` is `split::convert`, then `schema::replace_unreadable_corpus`.
+- `errors::kind_of` names `scryfall::ScryfallError` and waits for the I/O step.
+- **Named `x/mod.rs` rather than `x.rs` on purpose**: with the old path gone, git records
+  `schema.rs` as a rename at 95% similarity and its history follows.
+
+**Twenty-one tests stayed, unedited**, because each names a module still in `src-tauri`: 17 of
+`schema`'s 280, 3 of `capture`'s 42, 1 of `errors`' 10. Compared by a script, test by test: 310
+bodies identical in the core, 21 identical in `src-tauri`, and one changed — a `capture`
+benchmark that timed itself with `Instant::now()`, as two of `db`'s tests did. `#[test]` attributes: 3 362 before, 3 366
+after (2 810 in `src-tauri`, 556 in the core); the four are this step's own.
+
+**Test scaffolding crosses the crate through a `testing` feature.** 77 files in `src-tauri` open
+`schema::memory_pair()`, 20 use `schema::tests::{seed_card, deck, category}`, 19 take a path from
+`scratch`. A dependency's `cfg(test)` is off while another crate's tests build, so the core
+gates those on `any(test, feature = "testing")` and `src-tauri` asks for the feature under
+`[dev-dependencies]` only.
+
+- 48 helpers of `schema`'s test module — the seeds, the `UNDO_V*` rewind chain, the
+  version-pinned databases — became `schema::fixtures`, at the foot of the file.
+- ⚠️ **One thing behind that feature is not scaffolding, and the suite found it**:
+  `image_uri::is_allowed_host` lets a loopback host through under `cfg!(test)` so the image
+  fetcher's tests can use a mock server. Moved, it refused, and ten `images` tests were served
+  the placeholder. It follows the feature now, which makes it the one thing behind `testing`
+  that would matter in a shipped build. **Two fences**: `platform::fence` sweeps every workspace
+  member's manifest and refuses the feature outside a `dev-dependencies` table — as text, so a
+  `[workspace.dependencies]` entry or a renamed dependency passes it — and CI's `rust` job fails
+  when `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` prints
+  `feature "testing"`, which no spelling passes. Today it prints `default` and nothing else.
+- **CI stopped compiling the host as it ships, and the review caught it.** `clippy
+  --all-targets` and `cargo test` both build test targets, so both switch `testing` on for the
+  app's ordinary library as well; a non-test use of `memory_pair` would have passed them and
+  first failed in `tauri build`. `cargo check -p mtg-grimoire --locked` is now the last line of
+  `lint:rust` and a step of the `rust` job — 14 to 36 s here, warm.
+
+**`platform/` gained a tick and a pause**, for `db::lock_for` and `lock_background`:
+`clock::Tick` (`Instant` natively, `Date.now()` in a browser) and `pause(Duration) -> bool`
+(`thread::sleep` natively; `false` at once in a browser, where no other thread can let a lock
+go). On the desktop the arithmetic is unchanged. **Neither browser arm has run.** The fence
+found one clock read the plan had missed, in an `#[ignore]`d benchmark.
+
+**It compiles for WASM with SQLite's storage layer in it**: `cargo build --lib -p grimoire-core
+--target wasm32-unknown-unknown`, 24 s, and `clippy -- -D warnings` clean. Compiles is still all
+that proves. The Android compile is CI's.
+
+**An existing database, upgraded by this build and by `main`, side by side.** The main
+checkout's dev data turned out to be at user schema **v46** — thirteen rungs behind head — so
+the check was a real upgrade rather than a reopen. Two byte copies of it (30 tables, 4 645 rows),
+one launched under `main`'s binary and one under this branch's, each stopped 20 s after its
+`user_version` read 59:
+
+| | `main` | this branch |
+| --- | --- | --- |
+| `user_version` reached 59 after | 1 426 ms | 1 438 ms |
+| Tables / rows / schema objects | 33 / 5 209 / 145 | 33 / 5 209 / 145 |
+| `foreign_key_check`, `integrity_check` | 0, `ok` | 0, `ok` |
+| `backups/user.v46.db` | written | written, and equal to the file before the climb row for row |
+
+Compared row by row, 30 of the 33 tables are identical. The three that differ, differ in a
+clock and a random number: two `app_meta` values (`mirror_installation`, minted per install, and
+`update_last_check_at`), and three `unixepoch()` stamps on the token rows the v52 conversion
+wrote — 31 s apart, which is the gap between the two launches.
+
+What the climb itself changes is the ladder's, and the same under both: `deck_undo` loses 36
+steps (the v53 rung clears the journal of every deck with a plan), `deck_categories` grows
+70 → 121 and 336 `deck_cards` are repointed (v53's plan piles), `price_snapshots` gains the
+day's rows. **No collection, wishlist or deck row goes.**
+
+**The real window, on this branch**, `tauri dev` over a third copy:
+
+| Asked | Answer |
+| --- | --- |
+| `startup_status` | `ready` |
+| `search_cards`, `lightning bolt` | 78 printings, 6–8 ms warm |
+| `facet_cards`, `bolt` | `ready: true` |
+| `deck_list`; `deck_get` on the largest | 5 decks; 122 rows in 14 piles |
+| `collection_list`, `collection_folder_list` | 277 entries; 7 folders of all three kinds |
+| `wishlist_list` | 87 |
+| Search, Collection, Wishlist, Decks, the deck editor — pressed and read | Each drew: 340 cards / 273 unique, 89 wishes, 5 decks, a 100+3 card deck with its stats |
+| A deck made, renamed and deleted; a sticky note made and deleted | Each landed, through `with_write` and so `db::lock_for` |
+| **The launch's own card sync, left to finish** | 118 610 → 118 467 printings, 0 skipped, no error — through `create_staging` and `swap_staging`, which moved; the collection still 340 / 273 / 277, nothing flagged |
+| `error_log` | The two rows it arrived with |
+
+**Nothing in [data-and-sync.md](data-and-sync.md) or
+[search-faceting.md](search-faceting.md) was re-taken.** Step 1's caveat stands and is wider
+now: a release build inlines a non-generic function across crates only when it says so, there
+is no LTO, and `filters`, `sorting` and `card_row` are now a crate away from `search` and
+`ingest`. Their functions build a SQL string or one row per call; a boundary costs a call. The
+row above is a debug build answering, not a timing.
+
+**Open after step 2:**
+
+- **`schema` reaches the filesystem in seven functions** — `remove_database_files`,
+  `back_up_user_file`, `prune_user_backups`, `replace_unreadable_corpus`,
+  `corpus_is_readable`, `check_corpus` and `mark_corpus_damaged`. Each compiles for a browser and fails there when called. The I/O step's
+  files interface inherits them.
+- **`db::lock_for` in a browser answers `BUSY` on its first contended attempt.** Right for one
+  thread; whether one write connection in a Worker is the shape at all is step 3's.
+- **A new user rung owes its rewind constant in two files** while the launch tests stay behind:
+  `schema::fixtures` in the core, and the two chains left in `src-tauri/src/schema/mod.rs` —
+  the v59 conversion test's, which goes red by itself, and
+  `migrate_the_real_database_to_v29`'s, which is `#[ignore]`d and does not.
+- **`scripts/coverage-rust.mjs` was not run**, again. It splits a file at its first column-0
+  `#[cfg(test)]`; `schema::memory_pair` carried one and now carries
+  `any(test, feature = "testing")`, so the staging functions below it count as shipped code for
+  the first time, and `scratch.rs` does too.
+- `index/mod.rs`'s tests still time themselves with `Instant::now()`; they arrive with the index.
+- The card-scanner suite was not run locally for this step: nothing under `crates/card-scanner`
+  changed, and CI's `rust` job runs it.

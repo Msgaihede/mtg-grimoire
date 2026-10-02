@@ -8,15 +8,21 @@ _facts_; TypeScript draws _conclusions_. Keep that boundary.
 (2026-10-02); the other is [`crates/grimoire-core`](../crates/grimoire-core/CLAUDE.md), the
 engine being extracted for the Android and web hosts. A `pub use grimoire_core::…` in `lib.rs`'s
 module map is a module that has moved there and is re-exported at the path it always had — so a
-rule below about `legalities`, `sync_pair::crypto` or any other moved module still binds it, in
-its new file. `Cargo.lock` and the `[profile.*]` blocks are at the root; the build tree is still
+rule below about `legalities`, `sync_pair::crypto`, `db` or any other moved module still binds it,
+in its new file. **`schema` and `errors` moved too and still have a file here** —
+`src/schema/mod.rs` and `src/errors/mod.rs`: each is
+`pub use grimoire_core::x::*;` plus what could not go with it — `schema::prepare_database` and
+`prepare_data_dir`, `errors::kind_of` — so the ladders, the DDL, every `schema::` constant below
+and all but seventeen of the schema's tests are in `crates/grimoire-core/src/schema.rs`.
+`Cargo.lock` and the `[profile.*]` blocks are at the root; the build tree is still
 `src-tauri/target`, pinned by `.cargo/config.toml`. ⚠️ **A worktree whose branch predates the
 workspace fails every cargo command** (`current package believes it's in a workspace when it's
 not`) once the main checkout has it, because cargo walks up parent directories and worktrees
 sit under the main checkout: merge `main`. The root `Cargo.toml` has the reproduction and why
 `.claude` must never be added to its `exclude`.
 
-`cargo test` and `cargo clippy -D warnings` run from here for this package alone, and from the
+`cargo test` and `cargo clippy -D warnings` run from here for this package alone — a moved
+module's tests are not in it, and `cargo test -p grimoire-core` is what runs those — and from the
 root with `--workspace` for both; `npm run verify` at the root runs the workspace forms,
 `cargo fmt --check` and the frontend. **Never `cargo fmt --all`** — it follows path dependencies
 into `crates/card-scanner`, which is hand-formatted. (It ran neither `clippy` nor `fmt` until 2026-09-27,
@@ -27,8 +33,9 @@ picks it up from any directory under the root.
 `std::env::temp_dir()` directly.** The temp directory is one folder for every worktree's
 `cargo test`, so a fixed name there is one database written by two runs at once — measured
 2026-09-28 at 11 failing runs of 12 for two concurrent `ingest::tests`, and 0 of 12 through the
-helper. `scratch.rs` has the layout and why a run's files are deleted by the next run rather
-than by the test.
+helper. `crates/grimoire-core/src/scratch.rs` has the layout and why a run's files are deleted by
+the next run rather than by the test; this package's tests reach it through the core's `testing`
+feature.
 
 ## Hard rules — database
 
@@ -115,8 +122,8 @@ than by the test.
 - **The data folder holds two databases, and which one is `main` is the whole design**
   (schema 27). `data/user.db` is the reader's — the tables in `schema::TABLES` marked
   `Side::User`, which nothing outside this app can produce again
-  (`grep -c '^\s*("[a-z_]*", Side::User),' src-tauri/src/schema.rs` is the count; this line
-  carried the number too, and said thirty through v51 and thirty-one through v53 until user schema
+  (`grep -c '^\s*("[a-z_]*", Side::User),' crates/grimoire-core/src/schema.rs` is the count; this
+  line carried the number too, and said thirty through v51 and thirty-one through v53 until user schema
   v54's `sync_gone` moved it again) — and it is what
   `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
   rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
@@ -219,11 +226,12 @@ than by the test.
   index definition must `DROP` it first or the widening is a silent no-op on exactly the
   machines that need it. **A step whose DDL is not idempotent (`ADD COLUMN`, unlike
   `CREATE TABLE IF NOT EXISTS`) also owes a line in every rewind fixture in `schema.rs`'s
-  tests** — those walk to head and undo the steps above the version they claim, so anything
-  above them is replayed over them; that is what `UNDO_V12` and `UNDO_V13` are for, one named
-  constant per rung. **And a version that has shipped is spent.** v12 and v13 were written the
-  same day on two branches, each numbered 12 against a head of 11 — a collision `git` cannot
-  see, because two `ALTER TABLE decks ADD COLUMN`s in two files conflict in neither. The one
+  tests** (the core's, **and the tests left in this package's `schema/mod.rs`** — one of them
+  `#[ignore]`d, so no suite reads its chain) — those walk to head and undo the steps above the
+  version they claim, so anything above them is replayed over them; that is what `UNDO_V12` and
+  `UNDO_V13` are for, one named constant per rung. **And a version that has shipped is spent.**
+  v12 and v13 were written the same day on two branches, each numbered 12 against a head of 11 —
+  a collision `git` cannot see, because two `ALTER TABLE decks ADD COLUMN`s in two files conflict in neither. The one
   that landed first kept the number; folding the second into it would have left the column
   existing on fresh installs and on nobody else's disk, because a machine that already ran v12
   never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
@@ -239,8 +247,8 @@ than by the test.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
   numbers from there (the user half's head is **not written here** — `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` answers it, and the history at the end of this bullet is why. **v59**
-  (2026-09-29, [issue #688](https://github.com/Msgaihede/mtg-grimoire/issues/688)) is
+  crates/grimoire-core/src/schema.rs` answers it, and the history at the end of this bullet is
+  why. **v59** (2026-09-29, [issue #688](https://github.com/Msgaihede/mtg-grimoire/issues/688)) is
   `deck_todo_lists`, a deck's **titled to-do lists, several to a deck** — the eighteenth synced
   table, and **the rung below it reversed the same day**: v58 had argued one list to a deck into two
   columns so as to owe no census, and several lists are a table's shape. `deck_notes`' v43 shape
@@ -479,8 +487,8 @@ than by the test.
   folders, v24 the collection's and v25 the deck groups, and nothing went red for any of them.
   **Then the user half's number read 30 for two more rungs, through v31 and v32**, and
   `data-and-sync.md` carried the same wrong pair on the same day — the same failure as the six
-  above, in the one place a `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs` settles it. v31
-  added `device_names`, the twelfth synced table; v32 flips every `decks.cover_kind` still
+  above, in the one place a `grep USER_SCHEMA_VERSION crates/grimoire-core/src/schema.rs` settles
+  it. v31 added `device_names`, the twelfth synced table; v32 flips every `decks.cover_kind` still
   reading `'custom'` to `'card_art'` and is the first rung on either ladder that changes no
   shape at all; v33 renames `deck_tags` to `deck_labels`, `deck_cards.tag_id` to `label_id`, both
   of that table's indexes, and the `deck_audit` kind and payload key `'tag'` to `'label'`, so that
@@ -594,9 +602,9 @@ than by the test.
   **What made every one of those collisions invisible is worth more than the numbers**: each
   time, both branches wrote the *same* `USER_SCHEMA_VERSION`, so git reported no conflict on that
   line at all and only the rungs underneath it collided. `grep USER_SCHEMA_VERSION
-  src-tauri/src/schema.rs` settles it in one command and nothing else does. It is the strongest
-  form of the rule above: **take the next free number at the moment you land, never at the moment
-  you start**, and never assume the number you wrote is the one you ship.
+  crates/grimoire-core/src/schema.rs` settles it in one command and nothing else does. It is the
+  strongest form of the rule above: **take the next free number at the moment you land, never at
+  the moment you start**, and never assume the number you wrote is the one you ship.
   **And this bullet's user head read 45 through v46, v47, v48 and v49** — four rungs, each a
   shape change with its own `USER_SCHEMA_SQL` line, none of which went red here. So since v50 it
   names rungs and no head: a line that states the head goes stale at the next rung and says
@@ -2074,8 +2082,8 @@ Full detail, with the measurements and the traps behind each rule, is in
   read twice: the three keys that join a folder to the thing it *files* all SET NULL, and this one
   CASCADEs because it points the other way — a folder that **stands for** a deck has no meaning
   once that deck is gone, which is the opposite of what its contents get.
-  `schema.rs`'s module doc is the copy of record for both lists, and a rung that adds one half of a
-  filing cabinet and forgets the other is what it exists to catch.
+  The core's `schema.rs` module doc is the copy of record for both lists, and a rung that adds one
+  half of a filing cabinet and forgets the other is what it exists to catch.
 - **A label is one app-wide row, and `deck_labels` has no `deck_id`** (schema v21). Its grain is
   `schema::DECK_LABEL_GRAIN` — `name_key`, one name for the whole app — where it was
   `deck_id, name`

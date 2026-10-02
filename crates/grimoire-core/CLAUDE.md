@@ -7,9 +7,13 @@ a Worker later. The design is
 [light-app.md](../../docs/reference/light-app.md).
 
 **It is being filled a step at a time, and most of the engine is still in `src-tauri`.** What is
-here is what `src/lib.rs` declares. Every rule in [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md)
-about a module binds that module wherever it lives — moving a file changes which crate compiles
-it and nothing about what it must do.
+here is what `src/lib.rs` declares: the leaves, and since 2026-10-02 the storage layer — `db`,
+`schema` with both ladders, `sync_meta`, `filters`, `sorting`, `card_row`, `image_uri`, `errors`,
+`feed::backoff` and `sync_engine::capture`. Every rule in
+[`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) about a module binds that module wherever it
+lives — moving a file changes which crate compiles it and nothing about what it must do. **That
+file's database rules are this crate's now**: a schema rung, a grain, a capture spec is edited
+here.
 
 ## Four rules, and what goes red for each
 
@@ -25,7 +29,8 @@ it and nothing about what it must do.
   are read as code.
 - **It sweeps test code too.** A test never compiles for a browser, but the sweep does not
   parse `#[cfg(test)]`, so a clock read in a test is refused like any other. Take the time from
-  `platform::clock`, or from SQLite.
+  `platform::clock` — `Tick::now()` and `elapsed()` are what a test that times something uses,
+  as `db`'s do — or from SQLite.
 - **It is a text sweep, and three things pass it**: a clock reached through a re-export or
   another crate's `now()`, a gate inside a macro this crate does not define, and a host that
   arrives as somebody else's dependency. The first two fail the `core` job or a browser; the
@@ -37,9 +42,22 @@ it and nothing about what it must do.
 
 ## `platform/`
 
-Only the wall clock is there (`platform::clock::now_ms`, `now_secs`). HTTP, files, a sleep and
-background work are named in `platform/mod.rs` with the step that brings each — an interface is
-written with its first caller, not ahead of it.
+| | Native | Browser |
+| --- | --- | --- |
+| `platform::clock::now_ms`, `now_secs` | `SystemTime` | `Date.now()` |
+| `platform::clock::Tick` — `now()`, `elapsed()`, for how long a wait has run | `Instant` | `Date.now()`, never negative |
+| `platform::pause(Duration) -> bool` — stand aside for another thread | `thread::sleep`, `true` | **`false`, at once**: a Worker has no other thread to wait for |
+
+`db::lock_for` and `db::lock_background` are why the last two exist. **A wait that polls is a wait
+that cannot succeed in a browser**, so `lock_for` gives up on its first contended attempt there
+and its caller answers `db::BUSY`. Neither browser arm has ever run — the crate compiles for
+`wasm32` and nothing instantiates it.
+
+HTTP, files, a sleep a future awaits and background work are named in `platform/mod.rs` with the
+step that brings each — an interface is written with its first caller, not ahead of it.
+**`schema` names `std::fs` directly** (the corpus it replaces, the backup before a climb, the
+damage mark): that compiles for a browser and fails there when called, and waits for the I/O
+step.
 
 **Most of the engine never asks for the time.** The domain modules use SQLite's `unixepoch()`
 and `date('now')` inside the statement that needs them, which is the same on every host.
@@ -62,6 +80,52 @@ and `date('now')` inside the statement that needs them, which is the same on eve
    the comment that argued its version.
 7. A doc link to a module still in `src-tauri` is left as it is. It resolves again when that
    module arrives.
+8. **A function that names a later step's code stays behind, alone.** `src-tauri` keeps a module
+   of the same name — **as `x/mod.rs`, never `x.rs`**, so the old path is gone and git records
+   the moved file as a rename — that is `pub use grimoire_core::x::*;` plus that function — an item a module
+   defines shadows a glob import of the same name, so every other `crate::x::…` there is this
+   crate's. Cut where the function already draws a line, and prove the halves rejoin to the
+   original body byte for byte. Never a callback the host passes in: the next step would delete
+   it.
+9. **A test that names a module still in `src-tauri` stays there, unedited**, beside the
+   re-export. Everything else in the test module moves.
+10. **Test scaffolding another crate's tests reach is gated
+    `#[cfg(any(test, feature = "testing"))]`**, never plain `#[cfg(test)]` — a dependency's
+    `cfg(test)` is off while another crate's tests build. Helpers both sides need go in a
+    `pub mod fixtures` at the **foot** of the file, below `mod tests`: `scripts/coverage-rust.mjs`
+    counts everything from the first column-0 `#[cfg(test)]` down as test code.
+11. ⚠️ **Grep the module for `cfg!(test)` and `#[cfg(not(test))]` as well — a behaviour that
+    switches on `test` goes dark without a compile error.** `image_uri` allowed a loopback host
+    under `cfg!(test)`; moved, it refused, and ten of `src-tauri`'s `images` tests were served
+    the placeholder. Rule 10's gate is the fix, and anything it widens is then something the
+    `testing` feature ships if it leaks — say so beside it. Three `#[cfg(not(test))]` sites wait
+    in modules that have not moved: `bulk_undo.rs`, `sync_engine/entitlement.rs` and
+    `sync_engine/client.rs`.
+
+## What a moved module left in `src-tauri`
+
+Each row goes home in the step that moves what it names.
+
+| Module | Still in `src-tauri` | Because it names | Home with |
+| --- | --- | --- | --- |
+| `schema` (`src/schema/mod.rs`) | `prepare_database` — `schema::bring_to_head` here, then the launch's logged passes | `maintenance`, `managed_wishlist`, `deck_tokens`, `deck_meta` | step 4 |
+| `schema` | `prepare_data_dir` — `split::convert`, then `schema::replace_unreadable_corpus` here | `split`, which only the desktop has | never: `split` stays |
+| `schema` | 17 of its 280 tests | the launch, `split`, `deck_tokens`, `deck_todos`, `deck`, `tags::query`, `maintenance` | steps 4 and 5 |
+| `sync_engine::capture` | 3 of its 42 tests, in `sync_engine/capture_tests.rs` | `reconcile`, the launch | step 4 |
+| `errors` (`src/errors/mod.rs`) | `kind_of` and its test | `scryfall::ScryfallError` | step 5 |
+
+**`bring_to_head` is every step of a launch that may stop it**: `migrate_user`, `migrate_corpus`
+(or the corpus replaced), then `capture::clear_stale_guard` and `capture::install`. A host that
+opens a database calls it; what the desktop does after it is logged and left owing.
+
+⚠️ **A new user rung owes its `UNDO_V<N>` in two files while this lasts**: the constant goes in
+`schema::fixtures` here, at the head of every chain in this file's tests — and at the head of
+the two chains that stayed in `src-tauri/src/schema/mod.rs`. The v59 conversion test's goes red
+by itself. `migrate_the_real_database_to_v29`'s does not: that test is `#[ignore]`d.
+
+The other direction, once: `sync_meta` holds `K_FTS_REBUILD_PENDING`, which is
+`maintenance`'s flag, because `schema::swap_staging` clears it. `maintenance` re-exports it and
+takes it back when it moves.
 
 ## The manifest
 
@@ -72,6 +136,21 @@ and `date('now')` inside the statement that needs them, which is the same on eve
 - **`getrandom` gains `wasm_js` on WASM** and needs no build flag at 0.4.
 - A target-specific dependency goes in a `[target.'cfg(…)'.dependencies]` table. That is the one
   place outside `src/platform/` a target is named, and the fence does not read it for that.
+- **The `testing` feature is test scaffolding and nothing a build ships**: `schema::memory_pair`,
+  `schema::fixtures`, `sync_engine::capture::fixtures`, `scratch` and `CardRow::from_json`.
+  `src-tauri` asks for it under `[dev-dependencies]` only, and resolver 2 leaves that out of
+  every build that is not a test. ⚠️ **Never name it on a host's `[dependencies]` line, never
+  make it a default, never have another feature imply it — because one thing behind it is not
+  scaffolding**: `image_uri::is_allowed_host` lets a loopback host through under it, for the
+  image fetcher's mock server. Two things hold that, and only the second is complete:
+  `platform::fence` sweeps every workspace member's manifest as text (a
+  `[workspace.dependencies]` entry, a renamed dependency and a command-line `--features` all
+  pass it), and CI's `rust` job fails when
+  `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` prints
+  `feature "testing"`. **A new host owes that step its own package name.**
+- **`clippy --all-targets` and `cargo test` both turn `testing` on for the host's ordinary
+  library too**, so neither notices a non-test use of the scaffolding. `cargo check -p
+  mtg-grimoire --locked` is the build that ships; `npm run verify` and the `rust` job both run it.
 
 ## Commands
 
@@ -82,6 +161,7 @@ The crate is a member of the workspace at the repository root, so it shares `Car
 | | |
 | --- | --- |
 | `cargo test -p grimoire-core` | This crate's tests alone, natively |
+| `cargo test -p grimoire-core schema::` | The schema's — `cargo test -p mtg-grimoire schema::` runs only the 17 that stayed |
 | `npm run verify` | Both members: `fmt --check`, `clippy -D warnings`, `cargo test --workspace` |
 | `cargo build --lib -p grimoire-core --target wasm32-unknown-unknown` | The WASM compile. Needs clang 18 or newer for SQLite's C |
 

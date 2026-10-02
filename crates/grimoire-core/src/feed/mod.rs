@@ -1,8 +1,6 @@
-//! Reading a bulk feed a chunk at a time.
-//!
-//! `src-tauri`'s `feed` re-exports everything here beside its own `backoff` — when to stop
-//! asking for a feed — which reads `sync_meta` and so waits for the storage step.
+//! Reading a bulk feed a chunk at a time — and, in [`backoff`], when to stop asking for one.
 
+pub mod backoff;
 pub mod frame;
 
 /// **The floor every bulk ingest holds before it swaps: a file more unusable than usable is a bad

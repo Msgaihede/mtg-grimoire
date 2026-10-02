@@ -29,7 +29,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   and `collection_entries.folder_id` (v24) each repeat `decks.folder_id` exactly, one list over,
   because both of those got the same filing cabinet — and `wishlist_folders.parent_id` and
   `collection_folders.parent_id` joined the CASCADE list in the same two rungs.
-  `schema.rs`'s module doc carries the whole-schema list and is the copy of record; this
+  The core's `schema.rs` module doc carries the whole-schema list and is the copy of record; this
   bullet is the deck slice of it, and both want checking against the DDL rather than trusting
   either copy. **The app's one non-user delete no longer has anything to repoint**:
   `reconcile::fold_into_existing` calls `collection::fold_entry`, which since v25 is a sum and a

@@ -117,8 +117,8 @@ export const ARMS = [
   // Rust — and the frontend too. **Every build job but `storybook` reads this tree**:
   //   - `rust` compiles and tests it;
   //   - `frontend` reads files here as text — `ipc.test.ts`'s mirror of every command module
-  //     it wraps, `db.rs`, `image_uri.rs`, `share/publish.rs`, `tauri.conf.json` and the share
-  //     golden `share/__golden__/snapshot.json`, and `desktop.rs`'s `generate_handler!` list,
+  //     it wraps, `share/publish.rs`, `tauri.conf.json` and the share golden
+  //     `share/__golden__/snapshot.json`, and `desktop.rs`'s `generate_handler!` list,
   //     which `.storybook/fake/parity.test.ts` holds the Storybook fake to — so a Rust change
   //     that drifts from `src/lib/ipc.ts` or from the fake is red only in `frontend`.
   // Narrowing `frontend` to exactly those paths was considered and not done: a new `?raw` import
@@ -166,7 +166,8 @@ export const ARMS = [
   // The engine: `grimoire-core`, a workspace member three hosts link. `rust` compiles it for
   // the desktop and runs its tests, `core` compiles it for the two targets `rust` never builds,
   // and `frontend` because a module that moves here takes its `?raw` readers with it —
-  // `ipc.test.ts`'s mirror rows follow the file, and the census holds this arm to them.
+  // `ipc.test.ts`'s mirror rows follow the file (`filters.rs`, since 2026-10-02), as does
+  // `useTray.test.ts`'s pin on `db.rs`, and the census holds this arm to them.
   // **Above `crates/*`**, and the order is the rule: first match wins, so that arm would take
   // this tree and skip `core`, the one job that exists for it.
   { match: ["crates/grimoire-core/*"], jobs: CORE_SIDE },

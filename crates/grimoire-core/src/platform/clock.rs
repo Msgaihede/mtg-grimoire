@@ -1,4 +1,4 @@
-//! The wall clock.
+//! The wall clock, and a [`Tick`] to measure a wait from.
 //!
 //! **`SystemTime::now()` panics on `wasm32-unknown-unknown`** — at run time, in a build that
 //! compiled without a warning — and the first web build hit that five separate times. So
@@ -24,9 +24,35 @@ pub fn now_secs() -> i64 {
     now_ms().div_euclid(1000)
 }
 
+/// A moment to measure a wait from — what `Instant::now()` is everywhere but a browser, where
+/// reading it panics exactly as the wall clock does.
+///
+/// **For how long something took and nothing else**: a tick has no date, cannot be stored and
+/// is not comparable across a restart. `db::lock_for` is why it exists — a bounded wait has to
+/// know when its bound has passed.
+///
+/// A browser's arm is the wall clock, which a reader or an NTP step can move. A step backwards
+/// reads as no time having passed, so a wait there runs long rather than ending early; nothing
+/// else is promised.
+#[derive(Debug, Clone, Copy)]
+pub struct Tick(imp::Tick);
+
+impl Tick {
+    pub fn now() -> Tick {
+        Tick(imp::tick())
+    }
+
+    /// How long ago this tick was taken. Never negative.
+    pub fn elapsed(&self) -> std::time::Duration {
+        imp::elapsed(&self.0)
+    }
+}
+
 #[cfg(not(target_family = "wasm"))]
 mod imp {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    pub type Tick = Instant;
 
     pub fn now_ms() -> i64 {
         SystemTime::now()
@@ -35,10 +61,23 @@ mod imp {
                 i64::try_from(since.as_millis()).unwrap_or(i64::MAX)
             })
     }
+
+    pub fn tick() -> Tick {
+        Instant::now()
+    }
+
+    pub fn elapsed(tick: &Tick) -> Duration {
+        tick.elapsed()
+    }
 }
 
 #[cfg(target_family = "wasm")]
 mod imp {
+    use std::time::Duration;
+
+    /// Milliseconds since the epoch, as [`now_ms`] answered them.
+    pub type Tick = i64;
+
     /// `Date.now()` is a whole number of milliseconds in a double, and a negative one for a
     /// clock set before 1970 — which reads as `0`, the native arm's answer.
     pub fn now_ms() -> i64 {
@@ -48,6 +87,14 @@ mod imp {
         } else {
             0
         }
+    }
+
+    pub fn tick() -> Tick {
+        now_ms()
+    }
+
+    pub fn elapsed(tick: &Tick) -> Duration {
+        Duration::from_millis(u64::try_from(now_ms().saturating_sub(*tick)).unwrap_or(0))
     }
 }
 
@@ -74,6 +121,21 @@ mod tests {
         assert!(
             (before..=after).contains(&secs),
             "{before} <= {secs} <= {after}"
+        );
+    }
+
+    /// A wait measured with a tick is at least as long as the pause inside it, and two reads
+    /// of one tick never run backwards — the two things `db::lock_for`'s bound rests on.
+    #[test]
+    fn a_tick_measures_the_pause_taken_after_it() {
+        let tick = Tick::now();
+        let first = tick.elapsed();
+        assert!(crate::platform::pause(std::time::Duration::from_millis(20)));
+        let second = tick.elapsed();
+        assert!(second >= first, "{second:?} after {first:?}");
+        assert!(
+            second >= std::time::Duration::from_millis(20),
+            "a 20 ms pause measured as {second:?}"
         );
     }
 }

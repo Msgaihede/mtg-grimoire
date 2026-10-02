@@ -82,8 +82,19 @@ pub fn is_fetchable(uri: &str) -> bool {
 /// tested in both configurations rather than being swapped for something weaker. The
 /// widening exists because `images`' fetch tests run against an `httpmock` server on
 /// loopback, and it is the only seam in this predicate.
+///
+/// **`test` or the `testing` feature, since this module moved to `grimoire-core`**: `images`
+/// and its tests are still `src-tauri`'s, and a dependency's `cfg(test)` is off while another
+/// crate's tests build — with `cfg!(test)` alone every one of those fetch tests was served the
+/// placeholder. So the widening follows the feature that crate asks for under
+/// `[dev-dependencies]`. **That makes this the one thing behind `testing` that is not
+/// scaffolding**: a host that named the feature on its ordinary dependency line would ship an
+/// image fetcher that accepts a loopback URI. Two things hold that it does not —
+/// `platform::fence` sweeps every workspace member's manifest, as text, and CI's `rust` job
+/// asks the resolver itself (`cargo tree -e features,normal,build`), which sees the spellings
+/// a text sweep cannot.
 pub fn is_allowed_host(uri: &str) -> bool {
-    is_image_host(uri) || (cfg!(test) && is_loopback(uri))
+    is_image_host(uri) || (cfg!(any(test, feature = "testing")) && is_loopback(uri))
 }
 
 pub fn is_image_host(uri: &str) -> bool {

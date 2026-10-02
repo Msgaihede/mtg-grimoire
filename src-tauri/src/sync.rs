@@ -33,7 +33,7 @@
 
 use crate::ingest;
 use crate::scryfall;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -242,40 +242,9 @@ impl Progress {
     }
 }
 
-/// Read `sync_meta`. A missing row and an unreadable one both read as `None`: this is
-/// cache metadata, and the correct response to losing it is to check again.
-pub fn get_meta(conn: &Connection, key: &str) -> Option<String> {
-    conn.query_row(
-        "SELECT value FROM sync_meta WHERE key = ?1",
-        params![key],
-        |r| r.get(0),
-    )
-    .optional()
-    .ok()
-    .flatten()
-}
-
-pub fn set_meta(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO sync_meta (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![key, value],
-    )?;
-    Ok(())
-}
-
-/// Write-or-delete. `sync_meta.value` is `NOT NULL`, so an absent value is stored as
-/// the absence of the row — never as NULL, and never as `""`, which for an ETag would
-/// mean replaying an `If-None-Match` header that can only fail to match.
-pub fn set_meta_opt(conn: &Connection, key: &str, value: Option<&str>) -> rusqlite::Result<()> {
-    match value.filter(|v| !v.is_empty()) {
-        Some(v) => set_meta(conn, key, v),
-        None => {
-            conn.execute("DELETE FROM sync_meta WHERE key = ?1", params![key])?;
-            Ok(())
-        }
-    }
-}
+/// The `sync_meta` store's three functions — `grimoire_core::sync_meta`'s since the storage step,
+/// re-exported at the names every caller here knows them by.
+pub use grimoire_core::sync_meta::{get_meta, set_meta, set_meta_opt};
 
 /// Should this run talk to the API at all?
 ///

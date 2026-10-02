@@ -292,7 +292,8 @@ export const DeckTooSmall: Story = {
  * `deckMin`, and all nine rows of `FORMAT_SPECS_SEED` that set a maximum set it *equal* to the
  * minimum — Commander 100/100, Oathbreaker 60/60, Standard Brawl, Brawl, Competitive Brawl,
  * Pauper Commander, Duel Commander, PreDH and Tiny Leaders: Reborn
- * (`src-tauri/src/schema.rs:264-275`, read 2026-08-09). So every real format that has a ceiling
+ * (`crates/grimoire-core/src/schema.rs` since 2026-10-02; read 2026-08-09 at lines 264-275 of
+ * `src-tauri/src/schema.rs`, where the seed lived then). So every real format that has a ceiling
  * is *exactly* sized, and
  * `deckSizeIssues` (`validation/engine.ts`) answers both directions in one sentence: the same
  * wording says too small and too large, and names the commander as part of the count.

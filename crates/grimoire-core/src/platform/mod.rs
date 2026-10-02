@@ -12,16 +12,25 @@
 //!
 //! | Interface | Native | Web | Lands with |
 //! | --- | --- | --- | --- |
-//! | [`clock`] — the wall clock | `SystemTime` | `Date.now()` | this step |
-//! | a sleep | `thread::sleep`, the async runtime's | a timer | the I/O step, with its first caller |
+//! | [`clock`] — the wall clock, and a tick to measure a wait from | `SystemTime`, `Instant` | `Date.now()` | the leaves; the tick with the storage step |
+//! | [`pause`] — standing aside for another thread | `thread::sleep` | nothing: there is no other thread | the storage step, for `db::lock_for` |
+//! | a sleep a future awaits | the async runtime's | a timer | the I/O step, with its first caller |
 //! | HTTP — a request, a streamed body | `reqwest` | `fetch` | the I/O step |
 //! | files — the data directory, temp files | `std::fs` | OPFS | the I/O step |
 //! | background work | a thread, the async runtime | a microtask | the state step |
 //!
-//! **Only the clock is here, because only the clock has a caller's shape to copy.** The other
-//! four are named so the next step knows where they go; an interface written before the code
-//! that calls it is a guess, and this crate's leaves call none of them.
+//! **Each is here because something calls it.** The rows without a link are named so the step
+//! that brings their first caller knows where they go; an interface written before the code
+//! that calls it is a guess.
+//!
+//! **`std::fs` is named outside this directory today**, by `schema` — the corpus it replaces,
+//! the backup it takes before a climb, the mark a damaged corpus leaves. That compiles for a
+//! browser and fails there when called. It waits for the I/O step, where an OPFS arm has a host
+//! to be written against.
 
 pub mod clock;
+mod pause;
+
+pub use pause::pause;
 
 mod fence;

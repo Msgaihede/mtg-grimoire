@@ -1032,7 +1032,7 @@ pub fn mint_missing_uids(conn: &Connection, schema: &str) -> rusqlite::Result<()
 ///
 /// It must run while every pile is still `'live'`, which both callers guarantee: the rung runs
 /// once in a transaction and a conversion writes a file nothing has touched yet.
-pub(crate) fn split_theory_piles(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+pub fn split_theory_piles(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
     let planned = format!(
         "SELECT id FROM {schema}.decks WHERE theory_enabled = 1
          UNION
@@ -1088,7 +1088,7 @@ pub(crate) fn split_theory_piles(conn: &Connection, schema: &str) -> rusqlite::R
 /// characters, the shape `lower(hex(randomblob(16)))` mints, so nothing that reads a uid can
 /// tell the two kinds apart. A pile with no uid gives a clone with none, and the mint names
 /// both later like any other row.
-pub(crate) fn theory_pile_uid(live_uid: &str) -> String {
+pub fn theory_pile_uid(live_uid: &str) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(format!("deck_categories/theory/{live_uid}").as_bytes())[..16]
         .iter()
@@ -1110,7 +1110,7 @@ pub(crate) fn theory_pile_uid(live_uid: &str) -> String {
 /// `legacy/` segment keeps the preimage apart from any other derivation a later rung might make
 /// from a deck's uid. A deck with no uid gives a row with none, and the mint names it later like
 /// any other row.
-pub(crate) fn todo_list_uid(deck_uid: &str) -> String {
+pub fn todo_list_uid(deck_uid: &str) -> String {
     use sha2::{Digest, Sha256};
     Sha256::digest(format!("deck_todo_lists/legacy/{deck_uid}").as_bytes())[..16]
         .iter()
@@ -5225,54 +5225,20 @@ fn create_fts_in(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
     ))
 }
 
-/// Everything a freshly opened database needs before the app touches it: the schema is
-/// brought to head, a search index an interrupted compaction owes is rebuilt, and any
-/// `cards_staging` an interrupted ingest left behind is dropped.
+/// Bring a freshly opened pair to head: both ladders, then the capture triggers.
 ///
-/// The rebuild is second because it is the one that cannot wait for a sync. A compaction
-/// killed between its `VACUUM` and its `create_fts` leaves a database whose header says it
-/// is converted and whose index answers with the wrong cards; nothing else would notice,
-/// because the sync that rebuilds the index is the one that ingests and most syncs get a
-/// 304. See [`crate::maintenance::K_FTS_REBUILD_PENDING`]. It costs one `sync_meta` lookup
-/// on every launch that does not need it.
+/// **This is every step of a launch that is allowed to stop it**, and nothing else. A schema
+/// that cannot be brought to head means the database cannot be used at all, and a device whose
+/// capture triggers are missing goes on working perfectly and records nothing. What a launch
+/// does *after* this — the search index an interrupted compaction owes, the staging table a
+/// killed ingest left, the trims and the passes that settle derived rows — is logged and left
+/// owing, and is the host's `prepare_database`, which calls this first.
 ///
-/// **[`migrate_single_file`] is the only step here allowed to stop a launch.** A schema that cannot be
-/// brought to head means the database cannot be used at all. The other two mean something is
-/// *worse* rather than unusable — a rebuild that fails means search is wrong, a drop that
-/// fails means a few hundred megabytes stay parked — and both failures have the same likely
-/// cause: a disk that is full, read-only, or held open by something else. Making either
-/// fatal would turn that into an app which refuses to start and tells the user to move a
-/// perfectly good `mtg.db` aside, which is the one remedy a full disk is deaf to. So both
-/// are logged, their debt is left exactly where it was, and the next launch — or the next
-/// sync, through `compact_once` and `create_staging` — tries again.
-///
-/// The drop is not tidiness. The ingest commits its staging load a batch at a time, so a
-/// sync that is killed partway — a closed lid, a pulled stick, a crash — leaves a
-/// *committed* staging table holding most of a card database: measured against the ~2 GB
-/// `mtg.db`, that is several hundred megabytes.
-///
-/// **What bounds that residue's life is the throttle, not Scryfall's rotation.** The only
-/// other `DROP` is inside [`create_staging`], and the metadata that lets a check
-/// short-circuit (`bulk_etag`, `bulk_updated_at`) is written *after* a successful ingest —
-/// so a killed run stores nothing, and the next run that is actually due sees the same
-/// changed bulk file it died downloading and re-enters `create_staging`. The residue
-/// therefore survives the rest of the 24 h check window, and survives indefinitely only
-/// while the app stays offline or unlaunched. That is still a day of a USB stick carrying
-/// hundreds of megabytes of nothing, and a launch is the moment it is free to hand back.
-///
-/// This returns those pages to SQLite's freelist, so the next ingest reuses them instead of
-/// growing the file past them — and on an incremental-auto-vacuum database, which is every
-/// database this app creates (see [`crate::db::open`]), the freelist is exactly what
-/// [`crate::maintenance::reclaim_freed_pages`] hands back to the filesystem after the next
-/// swap. Reuse is the part that matters for a USB stick either way: without it a killed
-/// sync's residue and the next sync's staging table both want room at once.
-///
-/// What startup deliberately does *not* do is `VACUUM`. It rewrites the whole file — minutes
-/// on the measured 2.02 GB database, before there is a window to say so in — and it renumbers
-/// rowids, which owes the external-content FTS index a full rebuild. The one conversion that
-/// does need a `VACUUM` runs after a sync instead, once per database: see
-/// [`crate::maintenance::convert_to_incremental`].
-pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
+/// **That function is `src-tauri`'s until the modules its passes call have moved here**
+/// (`maintenance`, `managed_wishlist`, `deck_tokens`, `deck_meta` — the extraction's step 4).
+/// The cut between the two is the line the launch already drew between a failure that stops it
+/// and one that does not; no statement on either side of it changed, and none changed order.
+pub fn bring_to_head(conn: &Connection) -> rusqlite::Result<()> {
     migrate_user(conn).map_err(|e| in_file(e, "your collection (user.db)"))?;
     // **A corpus that will not migrate is a corpus to replace, not a launch to stop** (issue
     // #550). Everything in it comes back from a feed, so the price of a rebuild is a resync —
@@ -5297,111 +5263,6 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
     // installed below reads it and records nothing.
     crate::sync_engine::capture::clear_stale_guard(conn)?;
     crate::sync_engine::capture::install(conn)?;
-    if let Err(e) = crate::maintenance::rebuild_fts_if_pending(conn) {
-        eprintln!(
-            "the search index still owes a rebuild from an interrupted compaction, and it \
-             could not be done now: {e}\nSearch results may be wrong until the next sync."
-        );
-    }
-    if let Err(e) = conn.execute_batch(&format!("DROP TABLE IF EXISTS {CORPUS}.cards_staging")) {
-        eprintln!(
-            "an interrupted sync left a `cards_staging` table behind and it could not be \
-             dropped now: {e}\nThe data folder is using more space than it needs to until \
-             the next sync reuses it."
-        );
-    }
-    // Logged and left owing, like the two repairs above it and unlike the two migrations: a feed
-    // longer than its ceiling is a database that works perfectly, and nothing a reader could act
-    // on would be gained by refusing to start over one.
-    if let Err(e) = crate::maintenance::prune_activity_log(conn) {
-        eprintln!(
-            "the home page's activity log could not be trimmed at launch: {e}\nIt will be \
-             trimmed at the next launch; nothing else is affected."
-        );
-    }
-    // Logged and left owing for the same reason: a day missing from the price history is a gap
-    // in a widget, and the next sync or feed refresh fills the day anyway. At launch at all so
-    // that a reader's first launch after upgrading already has a baseline — a widget that waits
-    // for the first *sync* to start its clock can go a day with nothing to measure against.
-    if let Err(e) = crate::maintenance::snapshot_prices(conn) {
-        eprintln!(
-            "today's prices could not be recorded at launch: {e}\nThe next sync or price \
-             refresh records them; nothing else is affected."
-        );
-    }
-    // Logged and left owing, the same reason again: a managed wishlist that is a launch behind
-    // is a folder that catches up at the next write to its deck. At launch at all because the
-    // v48 rung's `DEFAULT 1` promises every existing theory deck a folder, and a reader who
-    // opens the wishlist before touching a deck must find it there.
-    if let Err(e) = crate::managed_wishlist::settle_all(conn) {
-        eprintln!(
-            "the managed wishlists could not be brought up to date at launch: {e}\nEach one \
-             catches up at the next change to its deck."
-        );
-    }
-    // Logged and left owing, the same reason again: a v51 art pick not yet converted draws as
-    // the token's implicit entry — the resolver's printing — until a later pass converts it,
-    // and nothing a reader could act on is gained by refusing to start over one. **After
-    // `capture::install` and never inside a rung**, because this is the one launch step whose
-    // writes must be captured: every entry it derives has to reach the peers that never derived
-    // it, or their edits to it stall a sync stream (the v52 rung's comment and the function's own
-    // say how). **Gated**: a device in no sync group converts here, and a device in one only once
-    // a pull at v52 has landed — until then `sync_engine::client::pull` converts behind its first
-    // pull instead, because a conversion before the device has heard its group can revert what a
-    // peer did since (`convert_legacy_picks_at_launch`'s doc). Idempotent, so every later launch
-    // costs one read that finds nothing.
-    if let Err(e) = crate::deck_tokens::convert_legacy_picks_at_launch(conn) {
-        eprintln!(
-            "the decks' pre-v52 token art picks could not be converted at launch: {e}\nThey \
-             are tried again at the next launch; until then each draws its default printing."
-        );
-    }
-    // Logged and left owing, the same reason once more: a token entry in a finish its printing
-    // is not sold in draws the wrong chin until the next launch, and nothing a reader could act
-    // on is gained by refusing to start over one. **After the conversion**, as its net: the
-    // conversion files each pick in the printing's own default finish, read from the corpus it
-    // runs after, and falls back to `nonfoil` only where this device's corpus cannot say — those
-    // entries, and a printing whose sold finishes changed after its entry was filed, are what
-    // this moves. Idempotent, so every later launch costs one read that finds nothing.
-    if let Err(e) = crate::deck_tokens::repair_entry_finishes(conn) {
-        eprintln!(
-            "the finishes of the decks' token printings could not be checked at launch: \
-             {e}\nThey are checked again at the next launch."
-        );
-    }
-    // Logged and left owing, the same reason once more: a theory card a v52 peer filed into a
-    // live pile draws on neither tab until it is refiled, and nothing a reader could act on is
-    // gained by refusing to start over one. **After `capture::install`**, for the conversion's
-    // reason: the plan pile it makes and the card it moves must reach the peers that never made
-    // them. **Gated** the conversion's way — a paired device repairs behind a pull at v53 instead
-    // (`deck_meta::refile_stray_theory_cards`' doc says why). Idempotent: one read at a launch
-    // with nothing stray, which is every launch on a device whose group all climbed together.
-    if let Err(e) = crate::deck_meta::refile_stray_theory_cards_at_launch(conn) {
-        eprintln!(
-            "the plans' cards filed in the actual list's categories could not be refiled at \
-             launch: {e}\nThey are tried again at the next launch."
-        );
-    }
-    // Logged and left owing, the same reason once more: a token dismissed before v55 that this
-    // pass has not retired draws as an ordinary token anyway — no reader treats `hidden` as
-    // hidden any more — and nothing a reader could act on is gained by refusing to start over
-    // one. **After the conversion and the repair**, because it zeroes entries they may have
-    // filed, and **after `migrate_corpus`**, because whether the deck still makes the token is a
-    // derivation over `cards.raw`, which is why this is a pass and not part of the v55 rung.
-    // Behind `capture::suppressed` and idempotent, so a `hidden` an older peer sends later is
-    // retired at the next launch and every launch after costs one read that finds nothing.
-    crate::deck_tokens::retire_hidden_logged(conn);
-    // **And then the dirty marks every pass since `settle_all` left, drained the way
-    // `sync::with_write` drains a write's — rule 7's backstop first, then the managed wishlist.**
-    // `settle_all` above armed this connection, so the conversion, the repair, the refile and the
-    // retire pass each marked the decks they wrote, and nothing read those marks until the first
-    // write of the session. Worse, `settle_all` ran *before* the retire pass: on the first v55
-    // launch a theory deck following `all` or `tokens` built its Tokens subfolder from a
-    // dismissed token's counts, which the pass then zeroed under it — a shopping list for tokens
-    // the reader had said they did not want (the final review's M2). Logged, for the reason
-    // every step here is.
-    crate::deck_tokens::reconcile_dirty_logged(conn);
-    crate::managed_wishlist::settle_logged(conn);
     Ok(())
 }
 
@@ -5539,7 +5400,7 @@ const USER_BACKUPS_KEPT: usize = 3;
 /// [`USER_BACKUPS_KEPT`] are removed after a new one is written.
 ///
 /// An in-memory `main` (the tests) has no path and is skipped.
-pub(crate) fn back_up_user_file(
+pub fn back_up_user_file(
     conn: &Connection,
     from: i64,
 ) -> Result<Option<std::path::PathBuf>, String> {
@@ -5613,7 +5474,7 @@ fn prune_user_backups(backups: &std::path::Path) {
 /// `main`, which is one of the three smaller reasons the *user* file is the one
 /// `Connection::open` names: the version that gates compatibility is the one an unqualified
 /// read returns.
-fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
+pub fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     let v: i64 = conn.query_row("PRAGMA main.user_version", [], |r| r.get(0))?;
     if v > USER_SCHEMA_VERSION {
         return Err(rusqlite::Error::SqliteFailure(
@@ -7855,7 +7716,7 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// any launch produces, because every launch goes through `prepare_database`, and the gap was invisible until a corpus rung finally changed a table shape: the fixture
 /// carried a v26-shaped `combos` under a header claiming head, which is precisely the state
 /// [`combos_are_at_head`] exists to repair.
-pub(crate) fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
+pub fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
     let v: i64 = conn.query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))?;
     // **One transaction around the build or every owed rung, and the stamp inside it** — issue
     // #550, and [`migrate_user`]'s rule arriving on this side at last. Until 2026-09-27 the v0
@@ -8224,23 +8085,24 @@ fn rebuild_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()>
     create_combo_tables(conn, schema)
 }
 
-/// Bring `data_dir` to a state the app can open: convert if a single file is there, and
-/// replace a corpus that will not open at all — or that an earlier session found damaged.
+/// Replace a corpus that will not open at all — or that an earlier session found damaged.
+/// `true` means it was deleted, and the next open builds it again.
 ///
-/// `Ok(true)` means something was rebuilt or converted. **A corpus that fails to open is a
-/// file to replace, not a failure to report**: that is what having two files buys, and it is
-/// checked here — before any connection the app keeps — because the check is "can this be
-/// opened", and the honest way to ask is to try.
+/// **A corpus that fails to open is a file to replace, not a failure to report**: that is what
+/// having two files buys, and it is checked here — before any connection the app keeps —
+/// because the check is "can this be opened", and the honest way to ask is to try.
 ///
 /// Deleting it is enough. `ATTACH` on a path that does not exist creates the file, and
 /// [`migrate_corpus`] finds a version of 0 there and builds the shape back; the rows come
 /// from the next sync. Nothing in the collection, the decks or the wishlist is touched,
 /// which is the whole point of the split stated as code.
-pub fn prepare_data_dir(data_dir: &std::path::Path) -> Result<bool, String> {
-    let converted = crate::split::convert(data_dir)?;
+///
+/// The desktop's `prepare_data_dir` is this behind `split::convert`, which takes a pre-27
+/// single file apart first and stays in `src-tauri`.
+pub fn replace_unreadable_corpus(data_dir: &std::path::Path) -> bool {
     let marked = data_dir.join(CORPUS_DAMAGED_MARK).is_file();
     if !marked && corpus_is_readable(data_dir) {
-        return Ok(converted);
+        return false;
     }
     // **The mark goes only when the corpus did** (issue #550). A delete refused by a sharing
     // violation — antivirus or the indexer holding the file for a moment, on Windows — used to
@@ -8253,7 +8115,7 @@ pub fn prepare_data_dir(data_dir: &std::path::Path) -> Result<bool, String> {
              tried again at the next launch. Nothing in your collection, decks or wishlist was \
              touched."
         );
-        return Ok(converted);
+        return false;
     }
     // After the corpus and never before it: a crash between the two leaves a mark over a missing
     // file, which the next launch deletes again for nothing, where the other order could leave a
@@ -8263,7 +8125,7 @@ pub fn prepare_data_dir(data_dir: &std::path::Path) -> Result<bool, String> {
         "the card database could not be opened and has been replaced; the next sync \
          will rebuild it. Nothing in your collection, decks or wishlist was touched."
     );
-    Ok(true)
+    true
 }
 
 /// Whether `corpus.db` opens as a database at all: its header and its schema read back.
@@ -8279,7 +8141,7 @@ pub fn prepare_data_dir(data_dir: &std::path::Path) -> Result<bool, String> {
 /// Asked by opening it rather than by reading its header bytes, because "can this be opened" has
 /// no cheaper honest answer: `sqlite_master` is what every later statement parses first, and a
 /// file that is not a database, or whose schema page is gone, fails here.
-fn corpus_is_readable(data_dir: &std::path::Path) -> bool {
+pub fn corpus_is_readable(data_dir: &std::path::Path) -> bool {
     let path = data_dir.join(crate::db::CORPUS_DB);
     if !path.is_file() {
         return false;
@@ -8403,7 +8265,7 @@ const USER_SEED_SQL: &str = "
 /// wrong one, which is the whole class of bug the split introduces. The ~100 setups still on
 /// the ladder are the exception that proves it — they build *pre-split* databases on
 /// purpose, which is what those tests are about.
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 pub fn memory_pair() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(&format!("ATTACH DATABASE ':memory:' AS {CORPUS}"))
@@ -8520,7 +8382,7 @@ pub fn swap_staging(conn: &Connection) -> rusqlite::Result<()> {
     // A rebuild an interrupted compaction was still owed has just been paid off, by this.
     // Clearing it inside the same transaction is what keeps the two honest: the debt and
     // the work that discharges it commit together or not at all.
-    crate::sync::set_meta_opt(&tx, crate::maintenance::K_FTS_REBUILD_PENDING, None)?;
+    crate::sync_meta::set_meta_opt(&tx, crate::sync_meta::K_FTS_REBUILD_PENDING, None)?;
     tx.commit()
 }
 
@@ -8874,144 +8736,8 @@ pub fn swap_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
 /// it is a second thing to keep true. `#[cfg(test)]` still bounds all of it to test builds.
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::fixtures::*;
     use super::*;
-
-    /// A fresh split pair in a temp folder, with a corpus big enough to have pages past the
-    /// first — a `damage` table of a few hundred pages, checkpointed so they are in the file
-    /// rather than in its log.
-    fn corpus_with_pages() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        crate::split::convert(dir.path()).unwrap();
-        let conn = crate::db::open(&dir.path().join(crate::db::CORPUS_DB)).unwrap();
-        conn.execute_batch(
-            "CREATE TABLE damage (id INTEGER PRIMARY KEY, body TEXT NOT NULL);
-             WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 20000)
-             INSERT INTO damage (id, body) SELECT i, printf('%.200c', 'x') FROM n;",
-        )
-        .unwrap();
-        crate::db::checkpoint_truncate(&conn).unwrap();
-        drop(conn);
-        dir
-    }
-
-    /// Overwrite one whole page in the middle of `corpus.db` — never page one, which holds the
-    /// header and the schema the launch probe reads.
-    fn damage_a_middle_page(dir: &std::path::Path) {
-        use std::io::{Seek, SeekFrom, Write};
-        let path = dir.join(crate::db::CORPUS_DB);
-        let len = std::fs::metadata(&path).unwrap().len();
-        let page = 4096;
-        let offset = (len / 2 / page) * page;
-        assert!(
-            offset >= page * 2,
-            "the fixture corpus is too small to damage past page one"
-        );
-        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-        file.seek(SeekFrom::Start(offset)).unwrap();
-        file.write_all(&vec![0xFF; page as usize]).unwrap();
-    }
-
-    /// **The launch probe is deliberately blind to this, and the background check is not.** A
-    /// page damaged past the first used to be caught by the `quick_check` every launch ran before
-    /// a window could draw; the probe that replaced it reads only the header and the schema, so
-    /// the file opens and the app starts. What still has to be true is that the damage is
-    /// *found* and that the next launch replaces the file before any connection holds it — which
-    /// is the old guarantee, one session later.
-    #[test]
-    fn a_corpus_damaged_past_its_first_page_starts_and_is_replaced_the_launch_after() {
-        let dir = corpus_with_pages();
-        damage_a_middle_page(dir.path());
-        let corpus = dir.path().join(crate::db::CORPUS_DB);
-        let size = std::fs::metadata(&corpus).unwrap().len();
-
-        assert!(
-            corpus_is_readable(dir.path()),
-            "page one is sound, so the launch probe passes"
-        );
-        assert!(
-            !prepare_data_dir(dir.path()).unwrap(),
-            "and nothing is replaced this launch"
-        );
-        assert_eq!(std::fs::metadata(&corpus).unwrap().len(), size);
-
-        let CorpusCheck::Damaged(answer) = check_corpus(dir.path()) else {
-            panic!("the full check must find a damaged page");
-        };
-        mark_corpus_damaged(dir.path(), &answer).unwrap();
-
-        assert!(
-            prepare_data_dir(dir.path()).unwrap(),
-            "the marked corpus is replaced"
-        );
-        assert!(
-            !dir.path().join(CORPUS_DAMAGED_MARK).exists(),
-            "and the mark goes with it"
-        );
-        assert!(
-            !corpus.exists() || std::fs::metadata(&corpus).unwrap().len() < size,
-            "the damaged file must not survive the launch after the check"
-        );
-        assert!(
-            dir.path().join(crate::db::USER_DB).is_file(),
-            "the reader's file is untouched"
-        );
-    }
-
-    /// A data folder as a launch leaves it: converted, opened and migrated, with one row the
-    /// reader wrote and one card a sync wrote. Answers the folder; the connection is closed.
-    fn launched_pair() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
-        prepare_data_dir(dir.path()).unwrap();
-        let conn = crate::db::open_write(dir.path()).unwrap();
-        prepare_database(&conn).unwrap();
-        conn.execute_batch(
-            "INSERT INTO app_meta (key, value) VALUES ('reader_wrote', 'this');
-             INSERT INTO cards (id, oracle_id, name, set_code, set_name, collector_number, lang,
-                                layout, raw)
-               VALUES ('bolt', 'o1', 'Lightning Bolt', 'lea', 'Alpha', '161', 'en', 'normal',
-                       '{}');",
-        )
-        .unwrap();
-        crate::db::checkpoint_truncate(&conn).unwrap();
-        dir
-    }
-
-    fn corpus_version(conn: &Connection) -> i64 {
-        conn.query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
-            .unwrap()
-    }
-
-    /// Issue #550, the state the old ladder could leave behind: every corpus table built, the
-    /// stamp never written. It used to stop every launch on `table cards already exists`; now it
-    /// is replaced, and the reader's file is not touched.
-    #[test]
-    fn a_corpus_shaped_under_version_zero_is_replaced_and_the_launch_goes_on() {
-        let dir = launched_pair();
-        {
-            let conn = crate::db::open_write(dir.path()).unwrap();
-            conn.execute_batch(&format!("PRAGMA {CORPUS}.user_version = 0;"))
-                .unwrap();
-        }
-
-        let conn = crate::db::open_write(dir.path()).unwrap();
-        prepare_database(&conn).expect("the launch must go on");
-        assert_eq!(corpus_version(&conn), CORPUS_SCHEMA_VERSION);
-        let cards: i64 = conn
-            .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(
-            cards, 0,
-            "the corpus was rebuilt empty, for the next sync to fill"
-        );
-        let kept: String = conn
-            .query_row(
-                "SELECT value FROM app_meta WHERE key = 'reader_wrote'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(kept, "this", "and the reader's own file was not touched");
-    }
 
     /// Issue #550, rung 5's half: a rung that fails after its `ALTER` must take the `ALTER` back
     /// with it, or the shape gate is satisfied and never fires again over a column of zeroes.
@@ -9082,99 +8808,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// Issue #550: a copy of the reader's file before a rung moves anything, never overwritten,
-    /// and only the newest three kept — beside a file of the reader's own that is left alone.
-    #[test]
-    fn the_user_file_is_copied_before_an_upgrade_and_only_three_copies_are_kept() {
-        let dir = launched_pair();
-        let conn = crate::db::open_write(dir.path()).unwrap();
-        let backups = dir.path().join(USER_BACKUPS_DIR);
-
-        let copy = back_up_user_file(&conn, 40)
-            .unwrap()
-            .expect("a copy is written");
-        assert_eq!(copy, backups.join("user.v40.db"));
-        let read = Connection::open(&copy).unwrap();
-        let kept: String = read
-            .query_row(
-                "SELECT value FROM app_meta WHERE key = 'reader_wrote'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(kept, "this");
-        let has_cards: i64 = read
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE name = 'cards'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            has_cards, 0,
-            "the copy is the user file alone, not the corpus"
-        );
-        drop(read);
-
-        assert_eq!(
-            back_up_user_file(&conn, 40).unwrap(),
-            None,
-            "an existing copy is never overwritten"
-        );
-
-        std::fs::write(backups.join("mine.db"), b"the reader's own").unwrap();
-        for from in [41, 42, 43] {
-            back_up_user_file(&conn, from).unwrap().unwrap();
-        }
-        let mut left: Vec<String> = std::fs::read_dir(&backups)
-            .unwrap()
-            .map(|e| e.unwrap().file_name().into_string().unwrap())
-            .collect();
-        left.sort();
-        assert_eq!(
-            left,
-            ["mine.db", "user.v41.db", "user.v42.db", "user.v43.db"]
-        );
-    }
-
-    /// Issue #550: a corpus that could not be deleted keeps its mark, so the next launch tries
-    /// again rather than living with a damaged file nothing remembers. A directory in the file's
-    /// place is a delete that fails on every platform.
-    #[test]
-    fn a_corpus_that_could_not_be_deleted_keeps_its_damage_mark() {
-        let dir = launched_pair();
-        let corpus = dir.path().join(crate::db::CORPUS_DB);
-        std::fs::remove_file(&corpus).unwrap();
-        std::fs::create_dir(&corpus).unwrap();
-        mark_corpus_damaged(dir.path(), "*** in database main ***").unwrap();
-
-        assert!(
-            !prepare_data_dir(dir.path()).unwrap(),
-            "nothing was replaced, and it does not say so"
-        );
-        assert!(dir.path().join(CORPUS_DAMAGED_MARK).exists());
-
-        std::fs::remove_dir(&corpus).unwrap();
-        assert!(prepare_data_dir(dir.path()).unwrap());
-        assert!(
-            !dir.path().join(CORPUS_DAMAGED_MARK).exists(),
-            "once the delete succeeds, the mark goes"
-        );
-    }
-
-    #[test]
-    fn a_sound_corpus_checks_sound_and_a_file_that_is_no_database_checks_damaged() {
-        let dir = corpus_with_pages();
-        assert_eq!(check_corpus(dir.path()), CorpusCheck::Sound);
-
-        std::fs::write(
-            dir.path().join(crate::db::CORPUS_DB),
-            b"not a database at all",
-        )
-        .unwrap();
-        assert!(matches!(check_corpus(dir.path()), CorpusCheck::Damaged(_)));
-    }
-
     /// Deleting a corpus costs the reader a full resync, so nothing that fails to say anything
     /// about the pages may count as damage.
     #[test]
@@ -9184,65 +8817,6 @@ pub(crate) mod tests {
             check_corpus(dir.path()),
             CorpusCheck::Unanswered(_)
         ));
-    }
-
-    /// **A pair whose user half is an empty file gets its shape from `prepare_database`.**
-    ///
-    /// A launch never meets one — a fresh install builds a legacy `mtg.db` at 26 and
-    /// `split::convert` takes it apart — so this is the only thing that reaches the arm. Without
-    /// it the facet index is what would notice: it reads `collection_entries` for its `owned`
-    /// dimension.
-    ///
-    /// A bare `ATTACH ':memory:'` pair is the right fixture precisely because it is what an
-    /// unshaped database looks like: two empty schemas at `user_version = 0`.
-    #[test]
-    fn an_unshaped_user_file_is_built_by_prepare_database() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch(&format!("ATTACH DATABASE ':memory:' AS {CORPUS}"))
-            .unwrap();
-        let before: i64 = conn
-            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(before, 0, "the fixture must start with no shape at all");
-
-        prepare_database(&conn).unwrap();
-
-        let version: i64 = conn
-            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(version, USER_SCHEMA_VERSION);
-
-        // The table whose absence was the only symptom.
-        let owned: i64 = conn
-            .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(owned, 0);
-
-        // And the one seeded row, without which no deck can ever release a card.
-        let removed: String = conn
-            .query_row(
-                "SELECT name FROM collection_folders WHERE kind = 'removed'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(removed, "Recently removed");
-
-        // Every user table, against the registry - so a table added to `TABLES` and not to
-        // `USER_SCHEMA_SQL` fails here rather than on somebody's first web launch.
-        for (table, side) in TABLES {
-            if *side != Side::User {
-                continue;
-            }
-            let n: i64 = conn
-                .query_row(
-                    "SELECT count(*) FROM main.sqlite_master WHERE type='table' AND name=?1",
-                    [table],
-                    |r| r.get(0),
-                )
-                .unwrap();
-            assert_eq!(n, 1, "`{table}` is a user table and was not created");
-        }
     }
 
     /// `sqlite_master` over **every** database attached to `conn`, as a subquery.
@@ -9652,752 +9226,6 @@ pub(crate) mod tests {
          DROP TABLE IF EXISTS sync_group;
          DROP TABLE IF EXISTS sync_identity;";
 
-    /// And v29's uids, its op log and the error log's widened CHECK.
-    ///
-    /// **The longest rewind on this ladder, and every line of it is owed.** `ADD COLUMN` is not
-    /// idempotent ([`UNDO_V13`]'s loud reason), so a fixture that kept `sync_uid` dies at
-    /// `duplicate column name` on the way back up — a failure no real upgrade can produce. The
-    /// unique indexes have to go **first**, because `DROP COLUMN` refuses a column an index
-    /// names. The `error_log` half is rewound by rebuilding it narrow again: a fixture below
-    /// v29 that kept the widened CHECK would accept a `relay` row while claiming to be a
-    /// version that never had one.
-    ///
-    /// **It runs first, before [`UNDO_V28`]**, for that constant's stated reason — a rewind
-    /// walks the ladder backwards.
-    const UNDO_V29: &str = "DROP TABLE IF EXISTS sync_peers;
-         DROP TABLE IF EXISTS sync_state;
-         DROP TABLE IF EXISTS sync_clock;
-         DROP TABLE IF EXISTS sync_ops;
-         ALTER TABLE deck_folders DROP COLUMN needs_review;
-         ALTER TABLE wishlist_folders DROP COLUMN needs_review;
-         ALTER TABLE collection_folders DROP COLUMN needs_review;
-         DROP INDEX IF EXISTS idx_collection_entries_uid;
-         DROP INDEX IF EXISTS idx_collection_folders_uid;
-         DROP INDEX IF EXISTS idx_deck_audit_uid;
-         DROP INDEX IF EXISTS idx_deck_cards_uid;
-         DROP INDEX IF EXISTS idx_deck_categories_uid;
-         DROP INDEX IF EXISTS idx_deck_folders_uid;
-         DROP INDEX IF EXISTS idx_deck_tags_uid;
-         DROP INDEX IF EXISTS idx_decks_uid;
-         DROP INDEX IF EXISTS idx_muted_tags_uid;
-         DROP INDEX IF EXISTS idx_wishlist_entries_uid;
-         DROP INDEX IF EXISTS idx_wishlist_folders_uid;
-         ALTER TABLE collection_entries DROP COLUMN sync_uid;
-         ALTER TABLE collection_folders DROP COLUMN sync_uid;
-         ALTER TABLE deck_audit DROP COLUMN sync_uid;
-         ALTER TABLE deck_cards DROP COLUMN sync_uid;
-         ALTER TABLE deck_categories DROP COLUMN sync_uid;
-         ALTER TABLE deck_folders DROP COLUMN sync_uid;
-         ALTER TABLE deck_tags DROP COLUMN sync_uid;
-         ALTER TABLE decks DROP COLUMN sync_uid;
-         ALTER TABLE muted_tags DROP COLUMN sync_uid;
-         ALTER TABLE wishlist_entries DROP COLUMN sync_uid;
-         ALTER TABLE wishlist_folders DROP COLUMN sync_uid;
-         CREATE TABLE error_log_pre29 (
-             id INTEGER PRIMARY KEY,
-             first_at INTEGER NOT NULL,
-             last_at INTEGER NOT NULL,
-             source TEXT NOT NULL CHECK (source IN
-                 ('scryfall_api','scryfall_image','github_update','database','image_store')),
-             operation TEXT NOT NULL,
-             kind TEXT NOT NULL CHECK (kind IN
-                 ('rate_limited','timeout','http','io','parse','other')),
-             message TEXT NOT NULL,
-             detail TEXT,
-             count INTEGER NOT NULL DEFAULT 1 CHECK (count > 0)
-         );
-         INSERT INTO error_log_pre29
-             (id, first_at, last_at, source, operation, kind, message, detail, count)
-             SELECT id, first_at, last_at, source, operation, kind, message, detail, count
-               FROM error_log WHERE source <> 'relay';
-         DROP TABLE error_log;
-         ALTER TABLE error_log_pre29 RENAME TO error_log;
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_error_log_grain
-             ON error_log (source, operation, kind, message);
-         CREATE INDEX IF NOT EXISTS idx_error_log_recent ON error_log (last_at DESC);";
-
-    /// And v30's marker column.
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
-    /// `ALTER TABLE sync_devices ADD COLUMN baselined_at` is not idempotent, so a fixture that
-    /// kept the column dies at `duplicate column name` on the way back up — a failure no real
-    /// upgrade can produce. [`user_file_at_28`] is where that bites, because its rewind stops
-    /// above [`UNDO_V28`] and leaves `sync_devices` standing.
-    ///
-    /// **It runs first, before [`UNDO_V29`]**, for that constant's stated reason: a rewind walks
-    /// the ladder backwards. [`user_file_at_27`] would survive without it — [`UNDO_V28`] drops
-    /// the whole table — and spells it anyway, so that one chain is not the odd one out.
-    ///
-    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
-    /// `DROP COLUMN` would refuse a column an index named.
-    const UNDO_V30: &str = "ALTER TABLE sync_devices DROP COLUMN baselined_at;";
-
-    /// And v31's synced name table.
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one: the rung
-    /// is a plain `CREATE TABLE`, not `CREATE TABLE IF NOT EXISTS`, so a fixture that left
-    /// `device_names` standing dies at `table already exists` on the way back up — a failure
-    /// no real upgrade can produce, and one that takes every unrelated test in the chain with
-    /// it rather than only the ones about names.
-    ///
-    /// **It runs first, before [`UNDO_V30`]**, for that constant's stated reason: a rewind
-    /// walks the ladder backwards.
-    ///
-    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: `DROP TABLE` takes
-    /// `idx_device_names_uid` with it.
-    const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
-
-    /// v59's titled to-do lists — the newest rewind on the user ladder, directly above
-    /// [`UNDO_V58`], and prepended to every chain that starts with it.
-    ///
-    /// Owed twice over. For [`UNDO_V13`]'s **loud** reason: the rung's `CREATE TABLE` is not
-    /// `IF NOT EXISTS`, so a fixture that kept `deck_todo_lists` dies at `table already exists` on
-    /// the way back up. And for [`UNDO_V43`]'s: the rung takes a column away, so the rewind has to
-    /// **put `decks.todos` back** or [`UNDO_V58`] beneath it dies at `no such column`.
-    ///
-    /// ⚠️ **`todos_open` comes off and goes back on after `todos`, and the order is the point.** An
-    /// `ADD COLUMN` appends, so re-adding `todos` alone would leave the tail reading `…, todos_open,
-    /// todos)` where v58 left `…, todos, todos_open)` — a shape no v58 file ever had, and one
-    /// `a_rewind_from_v59_lands_on_v58s_exact_shape` compares against byte for byte. Dropping the
-    /// last column and adding both back in v58's own order is what puts the stored `CREATE TABLE`
-    /// text back exactly. It loses every deck's `todos_open`, which no chain below asserts, and
-    /// converts no list back into the column: a v58 deck with no list is a state v58 could hold.
-    ///
-    /// **The three `decks` capture triggers come off first**, [`UNDO_V58`]'s reason: on a fixture
-    /// that ran `capture::install`, `sync_ins_decks` and `sync_upd_decks` read `NEW.todos_open`.
-    /// The table's indexes are spelled out for [`UNDO_V46`]'s reason — the rewind names everything
-    /// the rung created.
-    const UNDO_V59: &str = "DROP TRIGGER IF EXISTS sync_ins_decks;
-         DROP TRIGGER IF EXISTS sync_upd_decks;
-         DROP TRIGGER IF EXISTS sync_del_decks;
-         DROP INDEX IF EXISTS idx_deck_todo_lists_uid;
-         DROP INDEX IF EXISTS idx_deck_todo_lists_deck;
-         DROP TABLE IF EXISTS deck_todo_lists;
-         ALTER TABLE decks DROP COLUMN todos_open;
-         ALTER TABLE decks ADD COLUMN todos TEXT NOT NULL DEFAULT '';
-         ALTER TABLE decks ADD COLUMN todos_open INTEGER NOT NULL DEFAULT 0;";
-
-    /// v58's deck to-do list and its band's disclosure — the rewind directly under [`UNDO_V59`]
-    /// and directly above [`UNDO_V57`], and prepended to every chain that starts with it. It read
-    /// "the newest rewind on the user ladder" until v59 landed above it and put back the `todos`
-    /// column this drops.
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason: two `ALTER TABLE decks ADD COLUMN`s are not
-    /// idempotent, so a fixture that kept either column dies at `duplicate column name` on the
-    /// way back up. [`UNDO_V56`]'s shape otherwise: **the three `decks` capture triggers come off
-    /// first**, because on a fixture that ran `capture::install` both `sync_ins_decks` and
-    /// `sync_upd_decks` read `NEW.todos` and `NEW.todos_open`, and SQLite refuses a `DROP COLUMN`
-    /// on a column a trigger names. The columns go in the reverse of the order the rung adds them.
-    const UNDO_V58: &str = "DROP TRIGGER IF EXISTS sync_ins_decks;
-         DROP TRIGGER IF EXISTS sync_upd_decks;
-         DROP TRIGGER IF EXISTS sync_del_decks;
-         ALTER TABLE decks DROP COLUMN todos_open;
-         ALTER TABLE decks DROP COLUMN todos;";
-
-    /// v57's managed-wishlist tokens switch — the rewind directly under [`UNDO_V58`] and directly
-    /// above [`UNDO_V56`], and prepended to every chain that starts with it.
-    ///
-    /// [`UNDO_V56`]'s shape and both of its reasons: `ADD COLUMN` is not idempotent, and the three
-    /// `decks` capture triggers read `NEW.managed_wishlist_tokens` once `capture::install` has run,
-    /// so they come off before the `DROP COLUMN`. **The mode is not converted back**: a v56 row
-    /// reading `missing` where the reader had chosen `tokens` is a fixture v56 could have held, and
-    /// no chain below this asserts a mode.
-    const UNDO_V57: &str = "DROP TRIGGER IF EXISTS sync_ins_decks;
-         DROP TRIGGER IF EXISTS sync_upd_decks;
-         DROP TRIGGER IF EXISTS sync_del_decks;
-         ALTER TABLE decks DROP COLUMN managed_wishlist_tokens;";
-
-    /// v56's Mana curve split — the rewind directly under [`UNDO_V57`] and directly above
-    /// [`UNDO_V55`], and prepended to every chain that starts with it.
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V51`]'s exactly: `ALTER TABLE decks ADD
-    /// COLUMN` is not idempotent, so a fixture that kept `curve_creatures` dies at `duplicate
-    /// column name` on the way back up.
-    ///
-    /// ⚠️ **The three `decks` capture triggers come off first**, v43's move in the rewind
-    /// direction. On a fixture that ran `capture::install` before rewinding — the v54 rung's test
-    /// is one, and it rewinds no further than 53, so this is the first `decks` column its chain
-    /// drops — `sync_ins_decks` and `sync_upd_decks` read `NEW.curve_creatures`, and SQLite
-    /// refuses the `DROP COLUMN` with `error in trigger sync_ins_decks after drop column`
-    /// (measured). `IF EXISTS`, so every chain run on a fixture that never installed them is
-    /// unchanged; nothing in these chains needs them back, and `install` rebuilds all three from
-    /// the spec whenever a launch runs it.
-    const UNDO_V56: &str = "DROP TRIGGER IF EXISTS sync_ins_decks;
-         DROP TRIGGER IF EXISTS sync_upd_decks;
-         DROP TRIGGER IF EXISTS sync_del_decks;
-         ALTER TABLE decks DROP COLUMN curve_creatures;";
-
-    /// v55's Tokens subfolder column — the rewind directly under [`UNDO_V56`] and directly above
-    /// [`UNDO_V54`], and prepended to every chain that starts with it. (Written as `UNDO_V54`,
-    /// with its rung; renumbered to 55 at the merge with the tombstones, which took 54 first.)
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason: `ADD COLUMN` is not idempotent, so a fixture that
-    /// kept `managed_tokens` dies at `duplicate column name` on the way back up. **The widened
-    /// index goes first**, because SQLite refuses `DROP COLUMN` on a column an index names, and
-    /// v48's one-column index comes back last, so the rewind lands on v54's shape rather than
-    /// near it — the climb drops it again before it widens it.
-    ///
-    /// **It runs before [`UNDO_V54`]** — straight after [`UNDO_V56`]; it read "It runs first"
-    /// until v56 landed above it — because a rewind walks the ladder backwards, and
-    /// on a fixture that ran `capture::install` that order is what lets it run at all:
-    /// `sync_gone` is still there, so the `sync_gone_wishlist_folders` trigger [`UNDO_V54`]'s ⚠️
-    /// describes does not refuse this `DROP COLUMN`.
-    const UNDO_V55: &str = "DROP INDEX IF EXISTS idx_wishlist_folders_managed;
-         ALTER TABLE wishlist_folders DROP COLUMN managed_tokens;
-         CREATE UNIQUE INDEX idx_wishlist_folders_managed ON wishlist_folders (managed_deck_id);";
-
-    /// v54's tombstones — the rewind directly under [`UNDO_V55`] and directly above
-    /// [`UNDO_V53`].
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V37`]'s and [`UNDO_V31`]'s exactly: the rung
-    /// is a bare `CREATE TABLE`, so a fixture that kept `sync_gone` dies at `table sync_gone
-    /// already exists` on the way back up — a failure no real upgrade can produce, and one that
-    /// takes every unrelated test in the chain with it. **It runs straight after [`UNDO_V55`]**,
-    /// because a rewind walks the ladder backwards; it read "It runs first" until v55 landed above
-    /// it. (Written as `UNDO_V53`, with its rung; renumbered to 54 at the merge with `main`, whose
-    /// per-list piles took 53 first.)
-    ///
-    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule, and here there is none to name:
-    /// the table is `WITHOUT ROWID`, so its primary key *is* the table.
-    ///
-    /// ⚠️ **The `sync_gone_*` triggers are not the table's, so this leaves them standing** on a
-    /// fixture that ran `capture::install` before rewinding — each pointing at a table that is not
-    /// there until the climb puts it back. SQLite then refuses a `DROP COLUMN` or a `RENAME` on
-    /// any table carrying one (`error in trigger sync_gone_decks: no such table: main.sync_gone`,
-    /// measured against 3.53.0), as well as a delete from it — even one that matches no row. So
-    /// such a fixture may rewind v56, v55 and v54 and nothing below them: [`UNDO_V53`]'s very first
-    /// statement, `DELETE FROM deck_categories WHERE variant = 'theory'`, is refused over
-    /// `sync_gone_deck_categories` with `no such table: main.sync_gone` (measured against 3.53.0
-    /// on 2026-09-27, over a table holding no theory pile). The climb back alters none of those
-    /// tables until v54 has put `sync_gone` back: v55's `ADD COLUMN` on `wishlist_folders` and
-    /// v56's on `decks` both run after it.
-    const UNDO_V54: &str = "DROP TABLE IF EXISTS sync_gone;";
-
-    /// v53's per-list piles — the rewind directly under [`UNDO_V54`] and directly above
-    /// [`UNDO_V52`].
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason: `ADD COLUMN variant` is not idempotent, so a
-    /// fixture that kept the column dies at `duplicate column name` on the way back up. **The
-    /// two indexes go first and come back narrow**, [`UNDO_V29`]'s ordering: `DROP COLUMN`
-    /// refuses a column an index names, and both of v53's name `variant`. The narrow ones are
-    /// put back because a v52 file has them, and the climb drops them again before widening, so
-    /// the text they are rebuilt with never reaches the fence.
-    ///
-    /// **The theory piles are deleted rather than folded back**, [`UNDO_V52`]'s argument about
-    /// its entries: every fixture rewinds a file [`create_user_schema`] has just built, so there
-    /// is no pile to delete, and the line is here so that a chain that ever did seed one lands on
-    /// a v52 file rather than on a narrow index refusing the second `Sideboard`.
-    const UNDO_V53: &str = "DELETE FROM deck_categories WHERE variant = 'theory';
-         DROP INDEX IF EXISTS idx_deck_categories_grain;
-         DROP INDEX IF EXISTS idx_deck_categories_kind;
-         ALTER TABLE deck_categories DROP COLUMN variant;
-         CREATE UNIQUE INDEX idx_deck_categories_grain ON deck_categories (deck_id, name);
-         CREATE UNIQUE INDEX idx_deck_categories_kind
-             ON deck_categories (deck_id, kind) WHERE kind <> 'main';";
-
-    /// v52's token entries and mode — the rewind directly under [`UNDO_V53`] and directly above
-    /// [`UNDO_V51`], and the third after [`UNDO_V43`] and [`UNDO_V49`] that has to *put a column
-    /// back*: v47's `token_stack`, so that [`UNDO_V47`] beneath it finds the column it drops.
-    ///
-    /// Owed three times over, [`UNDO_V43`]'s count. The rung's `CREATE TABLE` is bare, so a
-    /// fixture that kept `deck_token_printings` dies at `table already exists` ([`UNDO_V13`]'s
-    /// loud reason); its `ADD COLUMN token_mode` is not idempotent, so one that kept the column
-    /// dies at `duplicate column name`; and its `DROP COLUMN token_stack` dies at `no such
-    /// column` on a fixture that did not get the column back. None of the three is a failure a
-    /// real upgrade can produce, and each takes every unrelated test in its chain with it.
-    ///
-    /// **`INTEGER NOT NULL DEFAULT 0`, exactly v47's words**, so the rewind lands on v51's shape
-    /// rather than near it. The column comes back at the *end* of `decks`, where a real v51 file
-    /// carries it before `managed_wishlist_mode`; the climb drops it again, so the stored text a
-    /// fixture climbs to is still byte-for-byte [`USER_SCHEMA_SQL`] — [`user_file_at_42`]'s note
-    /// about `notes`, one column along. Nothing here may assert a `decks` column *order*.
-    ///
-    /// **The entries are dropped rather than folded back into `deck_tokens`**: no fixture seeds a
-    /// token before it rewinds, and one that did would be asserting about a v51 file no upgrade
-    /// could have produced. The two indexes are named for [`UNDO_V46`]'s reason, although
-    /// `DROP TABLE` takes them.
-    const UNDO_V52: &str = "DROP INDEX IF EXISTS idx_deck_token_printings_uid;
-         DROP INDEX IF EXISTS idx_deck_token_printings_grain;
-         DROP TABLE IF EXISTS deck_token_printings;
-         ALTER TABLE decks DROP COLUMN token_mode;
-         ALTER TABLE decks ADD COLUMN token_stack INTEGER NOT NULL DEFAULT 0;";
-
-    /// v51's token rail index — the rewind directly under [`UNDO_V52`] and directly above
-    /// [`UNDO_V50`]. It was written as `UNDO_V50` and renumbered with its rung, because `main`
-    /// shipped the price-holdings v50 first.
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V47`]'s exactly: `ALTER TABLE decks ADD
-    /// COLUMN` is not idempotent, so a fixture that kept the column dies at `duplicate column
-    /// name` on the way back up. **It runs first**, because a rewind walks the ladder backwards.
-    const UNDO_V51: &str = "ALTER TABLE decks DROP COLUMN token_rail_index;";
-
-    /// v50's holdings table — the rewind directly under [`UNDO_V51`] and directly above
-    /// [`UNDO_V49`].
-    ///
-    /// **A rebuild back to v45's shape, because the rung was one**: `DROP COLUMN` could take
-    /// `copies` away but nothing can put `price`'s `NOT NULL` back, and a v49 fixture whose price
-    /// accepts NULL is head wearing a v49 label — it would pass a snapshot the real v49 file
-    /// refuses. So the unpriced rows go first (v45 had no way to record one), the v50 table is
-    /// renamed aside, v45's table is created under its own unquoted name, the priced rows are
-    /// copied back, and the index the rename carried off is put back. Owed for [`UNDO_V14`]'s
-    /// **quiet** reason, not [`UNDO_V13`]'s loud one: the rung's rebuild succeeds just as well
-    /// over a table that is already v50's, so a fixture that skipped this would climb green while
-    /// claiming a v49 file that never existed. A chain that rewinds below 45 rebuilds the table
-    /// and then [`UNDO_V45`] drops it, which costs a few statements and nothing else.
-    const UNDO_V50: &str = "DELETE FROM price_snapshots WHERE price IS NULL;
-         ALTER TABLE price_snapshots RENAME TO price_snapshots_v50;
-         CREATE TABLE price_snapshots (
-             day TEXT NOT NULL,
-             marketplace TEXT NOT NULL,
-             card_id TEXT NOT NULL,
-             finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
-             price REAL NOT NULL,
-             PRIMARY KEY (day, marketplace, card_id, finish)
-         ) WITHOUT ROWID;
-         INSERT INTO price_snapshots (day, marketplace, card_id, finish, price)
-             SELECT day, marketplace, card_id, finish, price FROM price_snapshots_v50;
-         DROP TABLE price_snapshots_v50;
-         CREATE INDEX idx_price_snapshots_printing
-             ON price_snapshots (marketplace, card_id, finish, day);";
-
-    /// v49's managed-wishlist mode — the rewind directly above [`UNDO_V48`], and the second on
-    /// this ladder (after [`UNDO_V43`]) that has to *put a column back*: v48's switch, so that
-    /// [`UNDO_V48`] beneath it finds the column it drops.
-    const UNDO_V49: &str = "ALTER TABLE decks DROP COLUMN managed_wishlist_mode;
-         ALTER TABLE decks ADD COLUMN managed_wishlist INTEGER NOT NULL DEFAULT 1;";
-
-    /// v48's managed wishlist — the rewind directly under [`UNDO_V49`] and directly above
-    /// [`UNDO_V47`], because every fixture rewinds newest first. It read "it runs first" until
-    /// v49 landed above it. Both `ADD COLUMN`s are not idempotent, so a fixture that left them
-    /// standing dies at `duplicate column name`.
-    const UNDO_V48: &str = "DROP INDEX IF EXISTS idx_wishlist_folders_managed;
-         ALTER TABLE wishlist_folders DROP COLUMN managed_deck_id;
-         ALTER TABLE decks DROP COLUMN managed_wishlist;";
-
-    /// v47's token pile setting — the rewind directly under [`UNDO_V48`] and directly above
-    /// [`UNDO_V46`]. It read "the newest rewind on the user ladder" until v48 landed above it;
-    /// the newest is whichever `UNDO_V*` matches `USER_SCHEMA_VERSION`.
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V42`]'s exactly: `ALTER TABLE decks ADD
-    /// COLUMN` is not idempotent, so a fixture that kept the column dies at `duplicate column
-    /// name` on the way back up. **It runs before [`UNDO_V46`]**, because a rewind walks the
-    /// ladder backwards.
-    const UNDO_V47: &str = "ALTER TABLE decks DROP COLUMN token_stack;";
-
-    /// v46's sticky notes — the rewind directly under [`UNDO_V47`].
-    ///
-    /// Owed for [`UNDO_V14`]'s **quiet** reason, v45's and v44's exactly: the rung is
-    /// `CREATE TABLE IF NOT EXISTS`, so a fixture that left `sticky_notes` standing would climb
-    /// perfectly happily and claim a version that never had it — green, and lying. **It runs
-    /// first, before [`UNDO_V45`]**, because a rewind walks the ladder backwards, and it carries
-    /// the same prediction the two docs below it did: the rung after this one collects a line
-    /// ahead of it.
-    ///
-    /// **The index is spelled out even though [`UNDO_V20`]'s rule says it need not be**:
-    /// `DROP TABLE` takes `idx_sticky_notes_uid` with it, and the line is here so the rewind
-    /// names everything the rung created rather than leaving the reader to work out which half
-    /// is implied. It is `IF EXISTS` and runs first, so it costs one no-op statement and cannot
-    /// fail a chain that has already lost the table.
-    const UNDO_V46: &str = "DROP INDEX IF EXISTS idx_sticky_notes_uid;
-         DROP TABLE IF EXISTS sticky_notes;";
-
-    /// v45's price history — the rewind directly under [`UNDO_V46`].
-    ///
-    /// Owed for [`UNDO_V14`]'s **quiet** reason, v44's exactly: the rung is `CREATE TABLE IF NOT
-    /// EXISTS`, so a fixture that left `price_snapshots` standing would climb happily while
-    /// claiming a version that never had it. **It runs first, before [`UNDO_V44`]**, because a
-    /// rewind walks the ladder backwards — and it carried the same prediction v44's doc did: the
-    /// rung after this one collects a line ahead of it. v46 is that line, collected exactly as
-    /// the sentence predicted, and the prediction moves up to the doc above rather than going
-    /// away.
-    ///
-    /// **The index needs no line of its own**, [`UNDO_V20`]'s rule: `DROP TABLE` takes
-    /// `idx_price_snapshots_printing` with it.
-    const UNDO_V45: &str = "DROP TABLE IF EXISTS price_snapshots;";
-
-    /// v44's activity log — the rewind directly under [`UNDO_V45`].
-    ///
-    /// Owed for [`UNDO_V14`]'s **quiet** reason rather than [`UNDO_V13`]'s loud one: the rung
-    /// is `CREATE TABLE IF NOT EXISTS`, so a fixture that left `activity` standing climbs
-    /// perfectly happily and claims a version that never had the table — green, and lying
-    /// about what it tests. That is the more dangerous of the two failures, which is why it is
-    /// written down rather than left to the climb to catch.
-    ///
-    /// **It runs first, before [`UNDO_V43`]**, for that constant's stated reason: a rewind
-    /// walks the ladder backwards and this is now the top of it. The doc directly below said
-    /// the same of itself and told whoever wrote rung 44 to expect to collect the line; this
-    /// is that line, and the sentence goes on being a prediction rather than history for
-    /// exactly one rung at a time.
-    ///
-    /// **The index needs no line of its own**, [`UNDO_V20`]'s rule and [`UNDO_V31`]'s:
-    /// `DROP TABLE` takes `idx_activity_recent` with it.
-    const UNDO_V44: &str = "DROP TABLE IF EXISTS activity;";
-
-    /// v43's two note tables and the column it took away — the rewind directly under
-    /// [`UNDO_V44`], and the first one on this ladder that has to **add** something back.
-    ///
-    /// Owed three times over, which is one more than any rung below it. The two `CREATE TABLE`s
-    /// are bare, so a fixture that kept `deck_notes` dies at `table deck_notes already exists`
-    /// on the way back up ([`UNDO_V13`]'s loud reason, and [`UNDO_V37`]'s); the
-    /// `ALTER TABLE decks ADD COLUMN notes_open` is not idempotent, so one that kept the column
-    /// dies at `duplicate column name`; and the `ALTER TABLE decks DROP COLUMN notes` is the
-    /// new half — a fixture that did **not** get `notes` back climbs the rung again and dies at
-    /// `no such column: notes`. None of the three is a failure a real upgrade can produce, and
-    /// any of them takes every unrelated test in the chain with it rather than only the ones
-    /// about notes.
-    ///
-    /// ⚠️ **`ADD COLUMN notes TEXT` is the half that is easy to forget, and a chain without it
-    /// is green until it is not.** A rewind that only dropped what v43 added would land *near*
-    /// v42 rather than on it: `decks` would be a table whose stored text is missing a column
-    /// every rung below still expects, and the first fixture to write a `notes` value would
-    /// fail somewhere with nothing pointing back here.
-    ///
-    /// **`TEXT` and nothing else, because that is exactly what v8 wrote.** A rewind lands on a
-    /// shape rather than near one; a `NOT NULL` or a `DEFAULT ''` here would be a `decks` no
-    /// database has ever had.
-    ///
-    /// **It runs after [`UNDO_V44`] and before [`UNDO_V42`]**, for that constant's stated
-    /// reason: a rewind walks the ladder backwards. It said "first" and "the top of it" while
-    /// v43 was head, which the activity log ended one rung later — the prediction the doc above
-    /// now carries, and the reason it is worth writing down each time.
-    ///
-    /// **All three indexes are spelled out where [`UNDO_V31`] needed none**, and the difference
-    /// is the last statement rather than a change of mind — [`UNDO_V37`]'s argument with one
-    /// more index on it: `DROP TABLE` would take all three with it, but `DROP COLUMN` refuses a
-    /// column an index names, so the order below is table-indexes, tables, column and the three
-    /// `DROP INDEX`es are the cheapest way to keep that order readable rather than load-bearing.
-    /// `deck_note_cards` goes before `deck_notes` because it is the child.
-    ///
-    /// **No `DROP TRIGGER` line, and none is owed.** The rung needs them off because the *real*
-    /// database it runs on has them; a fixture is built by [`create_user_schema`] and
-    /// `capture::install` has never touched it, so there is nothing here to drop.
-    const UNDO_V43: &str = "DROP INDEX IF EXISTS idx_deck_note_cards_uid;
-         DROP INDEX IF EXISTS idx_deck_notes_uid;
-         DROP INDEX IF EXISTS idx_deck_note_cards_grain;
-         DROP TABLE IF EXISTS deck_note_cards;
-         DROP TABLE IF EXISTS deck_notes;
-         ALTER TABLE decks DROP COLUMN notes_open;
-         ALTER TABLE decks ADD COLUMN notes TEXT;";
-
-    /// v42's stats disclosure — the rewind directly under [`UNDO_V43`].
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
-    /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept the column dies
-    /// at `duplicate column name` on the way back up — a failure no real upgrade can produce,
-    /// and one that takes every unrelated test in the chain with it rather than only the ones
-    /// about the stats band.
-    ///
-    /// **It runs after [`UNDO_V43`] and before [`UNDO_V41`]**, for that constant's stated
-    /// reason: a rewind walks the ladder backwards. It said "first" and "the top of it" while
-    /// v42 was head, which the note tables ended one rung later — the prediction the doc above
-    /// now carries, and the reason it is worth writing down each time.
-    ///
-    /// **One statement**, [`UNDO_V40`]'s shape: v42 appends a single column, so there is a
-    /// single column to take back off and the stored table text lands back on exactly what v41
-    /// left. ⚠️ **[`UNDO_V43`] above it is the first on this ladder that is *not* that shape** —
-    /// it has a column to put back as well as ones to take off — so read the "one statement"
-    /// rule as being about what a rung *did*, never as a fact about rewinds in general.
-    ///
-    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
-    /// `DROP COLUMN` would refuse a column an index named. The only table-level `CHECK` on
-    /// `decks` names `cover_kind`, which is the other thing `DROP COLUMN` refuses over.
-    const UNDO_V42: &str = "ALTER TABLE decks DROP COLUMN stats_open;";
-
-    /// v41's share cache — the rewind directly under [`UNDO_V42`].
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one: the rung
-    /// is a plain `CREATE TABLE`, not `CREATE TABLE IF NOT EXISTS`, so a fixture that left
-    /// `collection_shares` standing dies at `table already exists` on the way back up — a
-    /// failure no real upgrade can produce, and one that takes every unrelated test in the
-    /// chain with it rather than only the ones about sharing.
-    ///
-    /// **It runs after [`UNDO_V42`] and before [`UNDO_V40`]**, for that constant's stated
-    /// reason: a rewind walks the ladder backwards. It said "first" and "the top of it" while
-    /// v41 was head, which the stats disclosure ended one rung later — the prediction the doc
-    /// above now carries, and the reason it is worth writing down each time.
-    ///
-    /// **Neither index needs a line of its own**, [`UNDO_V20`]'s rule and [`UNDO_V31`]'s:
-    /// `DROP TABLE` takes `idx_collection_shares_folder` and `idx_collection_shares_whole`
-    /// with it.
-    const UNDO_V41: &str = "DROP TABLE IF EXISTS collection_shares;";
-
-    /// v40's deck kind — the rewind directly under [`UNDO_V41`].
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
-    /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept the column
-    /// dies at `duplicate column name` on the way back up — a failure no real upgrade can
-    /// produce, and one that takes every unrelated test in the chain with it rather than only
-    /// the ones about the deck kind.
-    ///
-    /// **It runs after [`UNDO_V41`] and before [`UNDO_V39`]**, for that constant's stated
-    /// reason: a rewind walks the ladder backwards. It said "first" and "the top of it" while
-    /// v40 was head, which the share cache ended one rung later — the prediction the doc above
-    /// now carries, and the reason it is worth writing down each time.
-    ///
-    /// **One statement**, [`UNDO_V39`]'s shape: v40 appends a single column, so there is a
-    /// single column to take back off and the stored table text lands back on exactly what v39
-    /// left.
-    ///
-    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
-    /// `DROP COLUMN` would refuse a column an index named. **Nor does a `CHECK`** — the pair
-    /// this column is half of is fenced in `deck::update_deck` and not in the DDL, which is the
-    /// rung's own argument read here as the thing that makes the rewind a one-liner: a
-    /// table-level `CHECK (NOT (theory_enabled AND virtual_only))` would have been the other
-    /// thing `DROP COLUMN` refuses over.
-    const UNDO_V40: &str = "ALTER TABLE decks DROP COLUMN virtual_only;";
-
-    /// v39's third theory-mark switch — the rewind directly under [`UNDO_V40`].
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
-    /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept the column
-    /// dies at `duplicate column name` on the way back up — a failure no real upgrade can
-    /// produce, and one that takes every unrelated test in the chain with it rather than only
-    /// the ones about the theory mark.
-    ///
-    /// **It runs after [`UNDO_V40`] and before [`UNDO_V38`]**, for that constant's stated
-    /// reason: a rewind walks the ladder backwards. It was the top of it for one rung — this
-    /// line read "it runs first" until v40 landed, exactly as the sentence directly below had
-    /// read it about [`UNDO_V38`] one rung earlier, which is this file's own prose-rot note
-    /// arriving on schedule for the third time.
-    ///
-    /// **One statement where the rung below it needs two**, and for the same reason read one
-    /// grain finer: v39 appends a single column, so there is a single column to take back off,
-    /// and the stored table text lands back on exactly what v38 left.
-    ///
-    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
-    /// `DROP COLUMN` would refuse a column an index named. The only table-level `CHECK` on
-    /// `decks` names `cover_kind`, which is the other thing `DROP COLUMN` refuses over.
-    const UNDO_V39: &str = "ALTER TABLE decks DROP COLUMN theory_mark_unplanned;";
-
-    /// v38's two theory-mark switches — the rewind directly under [`UNDO_V39`].
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
-    /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept either column
-    /// dies at `duplicate column name` on the way back up — a failure no real upgrade can
-    /// produce, and one that takes every unrelated test in the chain with it rather than only
-    /// the ones about the theory mark.
-    ///
-    /// **It runs after [`UNDO_V39`] and before [`UNDO_V37`]**, for that constant's stated
-    /// reason: a rewind walks the ladder backwards. It was the top of it for one rung.
-    ///
-    /// **The two drops are in the opposite order to the rung's two `ADD COLUMN`s**, which is
-    /// the same sentence read one grain finer: `theory_mark_name` was appended last, so it is
-    /// the one that has to come off first for the stored table text to land back on exactly
-    /// what v37 left rather than on a re-ordered spelling of it.
-    ///
-    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
-    /// `DROP COLUMN` would refuse a column an index named. The only table-level `CHECK` on
-    /// `decks` names `cover_kind`, which is the other thing `DROP COLUMN` refuses over.
-    const UNDO_V38: &str = "ALTER TABLE decks DROP COLUMN theory_mark_name;
-                            ALTER TABLE decks DROP COLUMN theory_mark_exact;";
-
-    /// v37's overrides table and the deck flag beside it — the rewind directly under
-    /// [`UNDO_V38`].
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one, and owed
-    /// twice: the rung is a bare `CREATE TABLE`, so a fixture that kept `deck_tokens` dies at
-    /// `table deck_tokens already exists` on the way back up, and it is a bare
-    /// `ALTER TABLE decks ADD COLUMN`, so one that kept `tokens_open` dies at
-    /// `duplicate column name`. Neither is a failure a real upgrade can produce, and either
-    /// takes every unrelated test in the chain with it.
-    ///
-    /// **It runs after [`UNDO_V39`] and [`UNDO_V38`], and before [`UNDO_V35`]**, a rewind
-    /// walking the ladder backwards. It was the top of it for part of one day.
-    ///
-    /// **Both indexes are spelled out where [`UNDO_V31`] needed none**, and the difference is
-    /// the second statement rather than a change of mind: `DROP TABLE` would take
-    /// `idx_deck_tokens_grain` and `idx_deck_tokens_uid` with it, but `DROP COLUMN` refuses a
-    /// column an index names, so the order below is table-indexes, table, column and the two
-    /// `DROP INDEX`es are the cheapest way to keep that order readable rather than load-bearing.
-    const UNDO_V37: &str = "DROP INDEX IF EXISTS idx_deck_tokens_uid;
-         DROP INDEX IF EXISTS idx_deck_tokens_grain;
-         DROP TABLE IF EXISTS deck_tokens;
-         ALTER TABLE decks DROP COLUMN tokens_open;";
-
-    /// v35's sixth grade, taken back off — the rewind directly under [`UNDO_V37`].
-    ///
-    /// Owed for [`UNDO_V14`]'s **quiet** reason rather than [`UNDO_V13`]'s loud one: the rung
-    /// is a rebuild, so a fixture that kept the widened CHECK would climb it again perfectly
-    /// happily while claiming to be a version that never had `'NONE'` — green, and lying about
-    /// what it tests. That is [`UNDO_V29`]'s `error_log` argument and [`UNDO_V33`]'s
-    /// `deck_audit` one, a third table over: a database below v35 that accepts an ungraded row
-    /// is not a database any reader has.
-    ///
-    /// **So it is a rebuild too, and it maps rather than deletes.** A stored `'NONE'` cannot
-    /// exist below v35 — the narrow CHECK refuses it — and the honest answer to what such a row
-    /// *was* on the way down is `'NM'`, because that is precisely what the old DEFAULT would
-    /// have recorded for the same press. Dropping the rows instead would make a rewind lose the
-    /// reader's cards, which no rewind on either ladder does. **The mapping can collide**: a
-    /// printing held at both `'NONE'` and `'NM'` folds onto one grain, and the
-    /// `CREATE UNIQUE INDEX` at the end is where that fails, loudly. No fixture seeds such a
-    /// pair — every caller rewinds a database [`create_user_schema`] built moments earlier, so
-    /// there is nothing to map at all — and this note is the fence for the one that does.
-    ///
-    /// **It runs after [`UNDO_V39`], [`UNDO_V38`] and [`UNDO_V37`] and before [`UNDO_V34`]**,
-    /// for that
-    /// constant's stated reason: a rewind walks the ladder backwards. It read "runs first, and
-    /// this is now the top of it" for as long as v35 was head, and four rungs have landed above
-    /// it since — v36 writes no shape and so owes no rewind, which is why the numbering has a gap
-    /// there rather than a missing line. The order matters here rather
-    /// than merely being tidy — [`UNDO_V29`] drops `collection_entries.sync_uid`, and a
-    /// `DROP COLUMN` refuses a column an index names, so this has to have put
-    /// `idx_collection_entries_uid` back before that constant takes it away again.
-    ///
-    /// **The five indexes are spelled out**, which is [`UNDO_V20`]'s rule read the other way:
-    /// `DROP TABLE` takes every one of them, so every one of them is owed a line.
-    const UNDO_V35: &str = "CREATE TABLE collection_entries_pre35 (
-             id INTEGER PRIMARY KEY,
-             card_id TEXT NOT NULL,
-             set_code TEXT NOT NULL,
-             collector_number TEXT NOT NULL,
-             lang TEXT NOT NULL DEFAULT 'en',
-             finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
-             condition TEXT NOT NULL DEFAULT 'NM'
-                 CHECK (condition IN ('NM','LP','MP','HP','DMG')),
-             condition_original TEXT,
-             quantity INTEGER NOT NULL CHECK (quantity >= 0),
-             tradelist_quantity INTEGER NOT NULL DEFAULT 0
-                 CHECK (tradelist_quantity >= 0),
-             purchase_price REAL,
-             purchase_currency TEXT,
-             acquired_at TEXT,
-             acquisition_source TEXT,
-             serial_number TEXT,
-             altered INTEGER NOT NULL DEFAULT 0,
-             signed INTEGER NOT NULL DEFAULT 0,
-             proxy INTEGER NOT NULL DEFAULT 0,
-             misprint INTEGER NOT NULL DEFAULT 0,
-             grading TEXT CHECK (grading IS NULL OR json_valid(grading)),
-             tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)),
-             notes TEXT,
-             needs_review TEXT,
-             created_at INTEGER NOT NULL,
-             updated_at INTEGER NOT NULL,
-             folder_id INTEGER
-                 REFERENCES collection_folders(id) ON DELETE SET NULL,
-             sync_uid TEXT
-         );
-         INSERT INTO collection_entries_pre35
-             (id, card_id, set_code, collector_number, lang, finish, condition,
-              condition_original, quantity, tradelist_quantity, purchase_price,
-              purchase_currency, acquired_at, acquisition_source, serial_number,
-              altered, signed, proxy, misprint, grading, tags, notes, needs_review,
-              created_at, updated_at, folder_id, sync_uid)
-             SELECT id, card_id, set_code, collector_number, lang, finish,
-                    CASE WHEN condition = 'NONE' THEN 'NM' ELSE condition END,
-                    condition_original, quantity, tradelist_quantity, purchase_price,
-                    purchase_currency, acquired_at, acquisition_source, serial_number,
-                    altered, signed, proxy, misprint, grading, tags, notes, needs_review,
-                    created_at, updated_at, folder_id, sync_uid
-               FROM collection_entries;
-         DROP TABLE collection_entries;
-         ALTER TABLE collection_entries_pre35 RENAME TO collection_entries;
-         CREATE UNIQUE INDEX idx_collection_grain ON collection_entries (
-             card_id, finish, condition, lang, altered, signed, proxy, misprint,
-             coalesce(serial_number, ''), coalesce(grading, ''), coalesce(folder_id, 0)
-         );
-         CREATE INDEX idx_collection_card ON collection_entries (card_id);
-         CREATE INDEX idx_collection_review
-             ON collection_entries (needs_review) WHERE needs_review IS NOT NULL;
-         CREATE INDEX idx_collection_folder ON collection_entries (folder_id);
-         CREATE UNIQUE INDEX idx_collection_entries_uid
-             ON collection_entries (sync_uid);";
-
-    /// v34's set-aside marker.
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
-    /// `ALTER TABLE collection_folders ADD COLUMN locked` is not idempotent, so a fixture that
-    /// kept the column dies at `duplicate column name` on the way back up — a failure no real
-    /// upgrade can produce, and one that takes every unrelated test in the chain with it.
-    ///
-    /// **It runs after [`UNDO_V39`], [`UNDO_V38`], [`UNDO_V37`] and [`UNDO_V35`], and before
-    /// [`UNDO_V33`]**,
-    /// for that constant's stated reason: a rewind walks the ladder backwards. It was the top of
-    /// the ladder until those four landed above it — **within days, from four branches**,
-    /// which is the ladder's own numbering rule in action rather than an accident: every chain
-    /// below now starts four rungs higher. There is no `UNDO_V36`, because v36 writes no
-    /// shape.
-    ///
-    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
-    /// `DROP COLUMN` would refuse a column an index named. The table-level `CHECK` names
-    /// `kind` and `deck_id` and not this column, which is the other thing `DROP COLUMN`
-    /// refuses over — measured with `node:sqlite` on 2026-09-03, the drop restores the v29
-    /// text byte for byte and the re-climb lands back on the v34 one.
-    const UNDO_V34: &str = "ALTER TABLE collection_folders DROP COLUMN locked;";
-
-    /// And v33's rename, back to the tag the label used to be.
-    ///
-    /// **It runs before [`UNDO_V31`] and after [`UNDO_V34`]**, for that constant's stated
-    /// reason: a rewind walks the ladder backwards. There is no `UNDO_V32` between it and v31 —
-    /// v32 writes no shape at all, which [`user_file_at_31`] explains — so above it are
-    /// [`UNDO_V39`], [`UNDO_V38`], [`UNDO_V37`], [`UNDO_V35`] and [`UNDO_V34`], in that order,
-    /// and every chain below spells the five of them together. **This enumeration had lost
-    /// `UNDO_V37` and miscounted itself as four**, which is the very hazard the paragraph below
-    /// it describes, caught only when v39 landed and the count was re-taken.
-    ///
-    /// **It said "the newest rewind on the user ladder, and every chain below starts with it"
-    /// through two rungs that were above it**, which is this repo's prose-rot hazard on the one
-    /// page where the ordering *is* the correctness argument: a doc-comment edit routes to
-    /// neither CI job, so nothing went red either time. The chains themselves were always right
-    /// — they are code.
-    ///
-    /// **It is owed for [`UNDO_V13`]'s loud reason twice over.** `ALTER TABLE deck_tags RENAME
-    /// TO deck_labels` on a database that already has `deck_labels` is `no such table`, and
-    /// `ALTER TABLE deck_cards RENAME COLUMN tag_id` on one that already says `label_id` is the
-    /// same failure a column over — so a fixture that skipped this would not quietly test
-    /// nothing, it would take every test in the chain down with an error about a table the test
-    /// is not about. `UNDO_V29`'s `deck_tags` lines are what make the ordering visible: they are
-    /// correct exactly because this ran first.
-    ///
-    /// **`deck_audit` is rebuilt narrow again**, which is [`UNDO_V29`]'s `error_log` argument
-    /// verbatim: a fixture below v33 that kept the widened CHECK would accept a `'label'` row
-    /// while claiming to be a version that never had one, and the rung above it would then be
-    /// tested against a shape no reader has. The rows are carried back the same way, `'label'`
-    /// to `'tag'` and the payload key with them.
-    ///
-    /// **No `deck_undo` carry, unlike the rung this reverses**, and the difference is the
-    /// fixtures rather than the pragma: every caller rewinds a database `create_user_schema`
-    /// built moments earlier, so `deck_undo` is empty and there is nothing for
-    /// `deck_audit`'s CASCADE to take. A fixture that seeds an undo step *before* rewinding
-    /// would need the dance the rung does; none does, and this note is the fence.
-    const UNDO_V33: &str = "ALTER TABLE deck_labels RENAME TO deck_tags;
-         ALTER TABLE deck_cards RENAME COLUMN label_id TO tag_id;
-         DROP INDEX IF EXISTS idx_deck_labels_grain;
-         DROP INDEX IF EXISTS idx_deck_labels_uid;
-         CREATE UNIQUE INDEX idx_deck_tags_grain ON deck_tags (name_key);
-         CREATE UNIQUE INDEX idx_deck_tags_uid ON deck_tags (sync_uid);
-         CREATE TABLE deck_audit_pre33 (
-             id INTEGER PRIMARY KEY,
-             deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
-             at INTEGER NOT NULL,
-             variant TEXT NOT NULL DEFAULT 'live'
-                 CHECK (variant IN ('live','theory')),
-             kind TEXT NOT NULL CHECK (kind IN
-                 ('add','remove','quantity','move','swap','tag','category','folder','deck')),
-             card_id TEXT,
-             card_name TEXT,
-             payload TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload)),
-             delta INTEGER NOT NULL DEFAULT 0,
-             sync_uid TEXT
-         );
-         INSERT INTO deck_audit_pre33
-             (id, deck_id, at, variant, kind, card_id, card_name, payload, delta, sync_uid)
-             SELECT id, deck_id, at, variant,
-                    CASE WHEN kind = 'label' THEN 'tag' ELSE kind END,
-                    card_id, card_name,
-                    CASE WHEN kind = 'label' AND json_type(payload, '$.label') IS NOT NULL
-                         THEN json_remove(
-                                  json_insert(payload, '$.tag',
-                                              json_extract(payload, '$.label')),
-                                  '$.label')
-                         ELSE payload END,
-                    delta, sync_uid
-               FROM deck_audit;
-         DROP TABLE deck_audit;
-         ALTER TABLE deck_audit_pre33 RENAME TO deck_audit;
-         CREATE INDEX idx_deck_audit_deck ON deck_audit (deck_id, at DESC);
-         CREATE UNIQUE INDEX idx_deck_audit_uid ON deck_audit (sync_uid);";
-
     /// A user file at 28 — the shape every machine that upgraded before sync landed carries,
     /// and the only population the v29 rung is *for*.
     fn user_file_at_28() -> Connection {
@@ -10702,24 +9530,6 @@ pub(crate) mod tests {
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} PRAGMA main.user_version = 50;"
-        ))
-        .unwrap();
-        conn
-    }
-
-    /// A user file at 51 — the shape every machine carries the day before a token's printings
-    /// became entries, and the only population the v52 rung is *for*.
-    ///
-    /// Head rewound past v59, v58, v57, v56, v55, v54, v53 and v52 — v52 alone until v53's piles,
-    /// v54's table, v55's column, v56's, v57's, v58's and v59's landed above it, none of which a file at
-    /// 51 can hold. What makes a test built on it a real upgrade rather than a fresh install is
-    /// what the test seeds afterwards: a `deck_tokens` row carrying a picked `card_id`, which
-    /// nothing at head writes any more, and a `decks.token_stack` that head does not have.
-    fn user_file_at_51() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!(
-            "{UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} PRAGMA main.user_version = 51;"
         ))
         .unwrap();
         conn
@@ -14189,139 +12999,6 @@ pub(crate) mod tests {
         );
     }
 
-    /// **v52 over a real v51 file holding the three kinds of override a reader can have, and the
-    /// launch conversion after it.** Seeded before the climb, v47's argument: a row inserted at
-    /// head could not hold a `token_stack` at all, so a test that started there would be
-    /// asserting about rows the rung never met.
-    ///
-    /// Deck A draws its pile (`token_stack = 1`) and picked an art for `o1` at 3 copies; deck B
-    /// draws none and stepped `o2` to 2 without picking an art. **The rung converts nothing**:
-    /// after the climb every override is as it was and the entry table is empty, because an entry
-    /// derived from a pick has to be announced to peers that never derived it, and no rung runs
-    /// with capture live. Both decks are on `managed`, B included — the reader's answer — and
-    /// `token_stack` is gone.
-    ///
-    /// Then [`crate::deck_tokens::convert_legacy_picks`], a later step of `prepare_database`,
-    /// makes A's pick one entry **per list** — both lists drew the shared pick, so both keep
-    /// drawing it — named after the override it came from, and the override is legacy. B's row is
-    /// untouched, because a quantity alone is the implicit entry's count and no printing may be
-    /// invented for it.
-    #[test]
-    fn v52_swaps_the_stack_for_a_mode_and_leaves_the_picks_to_the_launch_conversion() {
-        let conn = user_file_at_51();
-        conn.execute_batch(
-            "INSERT INTO decks (id, name, format_key, token_stack, created_at, updated_at)
-                 VALUES (1, 'A', 'modern', 1, 0, 0), (2, 'B', 'modern', 0, 0, 0);
-             INSERT INTO deck_tokens
-                 (deck_id, oracle_id, card_id, quantity, state, created_at, updated_at, sync_uid)
-                 VALUES (1, 'o1', 'p1', 3, 'auto', 5, 5, 'u-a'),
-                        (2, 'o2', NULL, 2, 'auto', 6, 6, 'u-b');",
-        )
-        .unwrap();
-        type Override = (i64, Option<String>, Option<i64>, String);
-        let overrides = |conn: &Connection| -> Vec<Override> {
-            conn.prepare(
-                "SELECT deck_id, card_id, quantity, state FROM deck_tokens ORDER BY deck_id",
-            )
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect()
-        };
-        let count_entries = |conn: &Connection| -> i64 {
-            conn.query_row("SELECT count(*) FROM deck_token_printings", [], |r| {
-                r.get(0)
-            })
-            .unwrap()
-        };
-        let before = overrides(&conn);
-
-        migrate_user(&conn).unwrap();
-
-        let version: i64 = conn
-            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(version, 59);
-        assert_eq!(
-            overrides(&conn),
-            before,
-            "the rung touches no override: converting a pick is the launch's, where it is captured"
-        );
-        assert_eq!(count_entries(&conn), 0, "and the entry table is born empty");
-        let modes: Vec<String> = conn
-            .prepare("SELECT token_mode FROM decks ORDER BY id")
-            .unwrap()
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert_eq!(
-            modes,
-            ["managed", "managed"],
-            "every deck starts on managed, the one whose pile was off included"
-        );
-        assert_eq!(has_column(&conn, "decks", "token_stack"), 0);
-
-        crate::deck_tokens::convert_legacy_picks(&conn).unwrap();
-
-        let mut stmt = conn
-            .prepare(
-                "SELECT deck_id, variant, oracle_id, card_id, finish, quantity, sync_uid
-                   FROM deck_token_printings ORDER BY deck_id, variant",
-            )
-            .unwrap();
-        type Entry = (i64, String, String, String, String, i64, Option<String>);
-        let entries: Vec<Entry> = stmt
-            .query_map([], |r| {
-                Ok((
-                    r.get(0)?,
-                    r.get(1)?,
-                    r.get(2)?,
-                    r.get(3)?,
-                    r.get(4)?,
-                    r.get(5)?,
-                    r.get(6)?,
-                ))
-            })
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        let entry = |variant: &str, uid: &str| -> Entry {
-            (
-                1,
-                variant.to_owned(),
-                "o1".to_owned(),
-                "p1".to_owned(),
-                "nonfoil".to_owned(),
-                3,
-                Some(uid.to_owned()),
-            )
-        };
-        assert_eq!(
-            entries,
-            [entry("live", "u-a-live"), entry("theory", "u-a-theory")],
-            "one entry per list for the picked art, at its quantity, `nonfoil` until the launch \
-             repair, and named after the override so every device names it alike — and nothing \
-             for the quantity-only override"
-        );
-        assert_eq!(
-            overrides(&conn),
-            [
-                (1, None, None, "auto".to_owned()),
-                (2, None, Some(2), "auto".to_owned()),
-            ],
-            "the moved override is legacy and keeps its state; the quantity-only one is untouched"
-        );
-
-        // Twice is the same as once: a second launch finds the version stamped and the picks
-        // cleared, so it moves nothing a second time — which the `DROP COLUMN` would otherwise
-        // refuse loudly and the conversion's `INSERT` would otherwise do quietly.
-        migrate_user(&conn).unwrap();
-        crate::deck_tokens::convert_legacy_picks(&conn).unwrap();
-        assert_eq!(count_entries(&conn), 2, "the second launch moved nothing");
-    }
-
     /// The fixture is a real v51 file and not head wearing a v51 label: no entry table, the
     /// stack and not the mode on `decks`, and v51's own `token_rail_index` still there — so a
     /// chain that also ran [`UNDO_V51`] is caught too.
@@ -15407,77 +14084,6 @@ pub(crate) mod tests {
         }
     }
 
-    /// **The rung runs on a paired file, and records nothing.** A paired v58 database carries
-    /// `sync_ins_decks` and `sync_upd_decks` reading `NEW.todos`, and SQLite refuses the
-    /// `DROP COLUMN` under them — so the rung has to take them off first, v43's move. The rewind
-    /// took the real ones with it and head's `capture::install` cannot put v58's back, so a
-    /// stand-in reading `NEW.todos` stands under the same name, which is the refusal the rung
-    /// must clear. Measured: with the rung's three `DROP TRIGGER`s taken out, the climb fails
-    /// `error in trigger sync_upd_decks after drop column: no such column: NEW.todos`. And the
-    /// conversion is not captured — every device converts its own copy — while the control, a
-    /// list made after the climb, is.
-    #[test]
-    fn the_v59_conversion_runs_under_a_paired_files_triggers_and_is_not_captured() {
-        let conn = Connection::open_in_memory().unwrap();
-        create_user_schema(&conn, "main").unwrap();
-        crate::sync_engine::capture::install(&conn).unwrap();
-        conn.execute_batch(
-            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
-             VALUES (1, 'dev-a', x'00', x'01', 'A', 0);
-             INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
-             VALUES (1, 'g', 0, x'02', 0);",
-        )
-        .unwrap();
-        // Inserted at head, while the capture triggers stand, so the deck carries the uid a
-        // paired device's deck has.
-        conn.execute(
-            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
-             VALUES (1, 'Burn', 'modern', 0, 0)",
-            [],
-        )
-        .unwrap();
-        conn.execute_batch(&format!("{UNDO_V59} PRAGMA main.user_version = 58;"))
-            .unwrap();
-        conn.execute_batch(
-            "UPDATE decks SET todos = '- [ ] a' WHERE id = 1;
-             CREATE TABLE fired (n INTEGER);
-             CREATE TRIGGER sync_upd_decks AFTER UPDATE ON decks
-             WHEN NEW.todos IS NOT OLD.todos BEGIN
-                 INSERT INTO fired VALUES (1);
-             END;",
-        )
-        .unwrap();
-        conn.execute("DELETE FROM sync_ops", []).unwrap();
-
-        migrate_user(&conn).unwrap();
-        let uid: String = conn
-            .query_row("SELECT sync_uid FROM decks WHERE id = 1", [], |r| r.get(0))
-            .unwrap();
-        let list_uid: String = conn
-            .query_row("SELECT sync_uid FROM deck_todo_lists", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(list_uid, todo_list_uid(&uid));
-        let ops = |conn: &Connection| -> i64 {
-            conn.query_row("SELECT count(*) FROM sync_ops", [], |r| r.get(0))
-                .unwrap()
-        };
-        assert_eq!(ops(&conn), 0, "the conversion is derived, not an edit");
-
-        crate::sync_engine::capture::install(&conn).unwrap();
-        crate::deck_todos::create_list(&conn, 1, "Mana", "- [ ] b").unwrap();
-        let listed: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM sync_ops WHERE tbl = 'deck_todo_lists'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(
-            listed, 1,
-            "the control: a list made after the climb is captured"
-        );
-    }
-
     /// **The entry table's own fences, at head.** The grain folds one printing in one finish in
     /// one list to one row; a second finish, or the other list, is a row of its own; the finish
     /// is one of the collection's three words and never NULL — a NULL would slip past the UNIQUE
@@ -15529,148 +14135,6 @@ pub(crate) mod tests {
             })
             .unwrap();
         assert_eq!(left, 0, "an entry leaves with the deck that holds it");
-    }
-
-    /// **The climb and the launch conversion are total over every override a v51 file can hold,
-    /// not only the ones a command would write.** `deck_tokens.quantity` has no `CHECK` — a
-    /// synced field, so a peer or an old build can have put any integer there — while the entry
-    /// table refuses a count below zero; and `deck_tokens`' grain is `(deck_id, oracle_id)`, so
-    /// two tokens of one deck can have picked **one printing** (a double-faced token carries two
-    /// tokens on one card), which is a single entry on [`DECK_TOKEN_PRINTING_GRAIN`]. Either
-    /// would fail an unguarded `INSERT`: in the rung, where the conversion used to run, that
-    /// stopped every launch of the reader's database for good; in the launch pass it would be a
-    /// conversion that never happens, logged at every launch.
-    ///
-    /// The rung leaves all three overrides as they were. The conversion floors the negative count
-    /// at 0, and skips the second pick of one printing rather than refusing it: the override
-    /// first in `oracle_id` order keeps the entry — every device orders one synced row set
-    /// alike, so each names the same winner and derives the same uid — and the other keeps its
-    /// **count** as its token's implicit one, losing only the art.
-    #[test]
-    fn the_climb_and_the_conversion_are_total_over_a_negative_count_and_a_shared_printing() {
-        let conn = user_file_at_51();
-        conn.execute_batch(
-            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
-                 VALUES (1, 'A', 'modern', 0, 0);
-             INSERT INTO deck_tokens
-                 (deck_id, oracle_id, card_id, quantity, created_at, updated_at, sync_uid)
-                 VALUES (1, 'o-treasure', 'dfc', 4, 0, 0, 'u-treasure'),
-                        (1, 'o-food', 'dfc', 2, 0, 0, 'u-food'),
-                        (1, 'o-negative', 'p3', -2, 0, 0, 'u-negative');",
-        )
-        .unwrap();
-
-        migrate_user(&conn).expect("no override a v51 file can hold may stop the climb");
-        let untouched: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM deck_tokens WHERE card_id IS NOT NULL",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(untouched, 3, "the climb leaves every pick where it was");
-        crate::deck_tokens::convert_legacy_picks(&conn)
-            .expect("no override a v51 file can hold may stop the conversion");
-
-        let entries: Vec<(String, String, String, i64, String)> = conn
-            .prepare(
-                "SELECT card_id, variant, oracle_id, quantity, sync_uid FROM deck_token_printings
-                  ORDER BY card_id, variant",
-            )
-            .unwrap()
-            .query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
-            })
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        let entry = |card: &str, variant: &str, oracle: &str, quantity: i64, uid: &str| {
-            (
-                card.to_owned(),
-                variant.to_owned(),
-                oracle.to_owned(),
-                quantity,
-                uid.to_owned(),
-            )
-        };
-        assert_eq!(
-            entries,
-            [
-                entry("dfc", "live", "o-food", 2, "u-food-live"),
-                entry("dfc", "theory", "o-food", 2, "u-food-theory"),
-                entry("p3", "live", "o-negative", 0, "u-negative-live"),
-                entry("p3", "theory", "o-negative", 0, "u-negative-theory"),
-            ],
-            "the shared printing is one entry per list, owned by the first oracle; the negative \
-             count is floored at zero"
-        );
-
-        let overrides: Vec<(String, Option<String>, Option<i64>)> = conn
-            .prepare("SELECT oracle_id, card_id, quantity FROM deck_tokens ORDER BY oracle_id")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert_eq!(
-            overrides,
-            [
-                ("o-food".to_owned(), None, None),
-                ("o-negative".to_owned(), None, None),
-                ("o-treasure".to_owned(), None, Some(4)),
-            ],
-            "every art is legacy afterwards; the override that lost the printing keeps its count"
-        );
-    }
-
-    /// **An override with no `sync_uid` is named before its entries derive from it.** The
-    /// derived `<uid>-live` / `-theory` needs a uid to derive from, and a row written behind
-    /// `capture::suppressed` has none — the insert trigger that mints one is guarded off there —
-    /// while `NULL || '-live'` is NULL: the nameless row the derivation exists to prevent, since
-    /// the first edit to it on a paired device emits an op with no uid. So the pick takes the
-    /// insert trigger's own mint (32 lowercase hex) first, and its two entries are named after it
-    /// like any other pick's — two rows on the wire, one name to derive them from. (Until the fifth
-    /// review round each entry took a random uid of its own and the pick stayed nameless, which on
-    /// a paired device failed the whole pass at the pick's clear;
-    /// `deck_tokens::tests::a_nameless_pick_on_a_paired_device_is_named_and_stalls_no_peer` is that
-    /// half, on the paired fixture this unpaired file cannot be.)
-    #[test]
-    fn the_launch_conversion_names_a_pick_with_no_uid_before_deriving_from_it() {
-        let conn = user_file_at_51();
-        conn.execute_batch(
-            "INSERT INTO decks (id, name, format_key, created_at, updated_at)
-                 VALUES (1, 'A', 'modern', 0, 0);
-             INSERT INTO deck_tokens
-                 (deck_id, oracle_id, card_id, quantity, created_at, updated_at, sync_uid)
-                 VALUES (1, 'o1', 'p1', 3, 0, 0, NULL);",
-        )
-        .unwrap();
-
-        migrate_user(&conn).unwrap();
-        crate::deck_tokens::convert_legacy_picks(&conn).unwrap();
-
-        let pick: String = conn
-            .query_row("SELECT sync_uid FROM deck_tokens", [], |r| r.get(0))
-            .expect("the pick is named before anything derives from it");
-        assert!(
-            pick.len() == 32
-                && pick
-                    .chars()
-                    .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
-            "{pick:?} is not the mint's 32 lowercase hex"
-        );
-        let uids: Vec<Option<String>> = conn
-            .prepare("SELECT sync_uid FROM deck_token_printings ORDER BY variant")
-            .unwrap()
-            .query_map([], |r| r.get(0))
-            .unwrap()
-            .map(Result::unwrap)
-            .collect();
-        assert_eq!(
-            uids,
-            [Some(format!("{pick}-live")), Some(format!("{pick}-theory"))],
-            "one entry per list, each derived from the minted name — two rows on the wire"
-        );
     }
 
     /// **`decks.token_mode` refuses a fourth word in SQL, on a climbed file and a fresh one.**
@@ -15757,115 +14221,6 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(errors, 1, "the rebuild must carry the log across");
         assert_eq!(message, "404");
-    }
-
-    /// **The one that cannot be faked with a fixture.** A worktree is a fresh install, so every
-    /// test above backfills two rows and calls that unique. A backfill that is unique over two
-    /// rows and collides over eight thousand is exactly the bug a fixture cannot show.
-    ///
-    /// Point `MTG_SPLIT_FIXTURE` at a **copy** of a real `mtg.db` — the escape hatch
-    /// [`crate::split::tests::the_real_database_converts_with_every_row_intact`] already uses —
-    /// and this converts it, winds the user file back to 28 with the whole rewind chain —
-    /// [`UNDO_V39`], [`UNDO_V38`], [`UNDO_V37`], [`UNDO_V35`], [`UNDO_V34`], [`UNDO_V33`],
-    /// [`UNDO_V31`],
-    /// [`UNDO_V30`] and [`UNDO_V29`], newest first, which is the chain the body spells and every
-    /// rung above 28 with a shape to take back (v32 and v36 write none) —
-    /// and climbs the rungs over the reader's own rows. **This list had lost its own top once
-    /// and nothing could go red for it**: the chain below is a `format!` and was always right,
-    /// while this enumeration is prose and the test is `#[ignore]`d, so no suite reads either.
-    /// Add the new constant here whenever one lands.
-    /// **Winding back is the whole trick**:
-    /// `split::convert` stamps head, so a converted file never climbs anything and a test that
-    /// only converted would prove nothing about the rung.
-    ///
-    /// **The counts are taken before the rewind and not after it**, which they were until v33:
-    /// [`SYNCED_TABLES`] names `deck_labels`, a rewound file calls that table `deck_tags`, and a
-    /// snapshot taken between the two would fail on the table it is most about. A rename moves
-    /// no rows, so the number is the same on either side of it.
-    ///
-    /// `cargo test --lib -- --ignored migrate_the_real_database --nocapture`
-    #[test]
-    #[ignore]
-    fn migrate_the_real_database_to_v29() {
-        let Ok(fixture) = std::env::var("MTG_SPLIT_FIXTURE") else {
-            eprintln!("set MTG_SPLIT_FIXTURE to a COPY of a real mtg.db to run this");
-            return;
-        };
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::copy(&fixture, dir.path().join(crate::db::LEGACY_DB)).unwrap();
-        crate::split::convert(dir.path()).unwrap();
-
-        let conn = crate::db::open_write(dir.path()).unwrap();
-        let before: Vec<(String, i64)> = SYNCED_TABLES
-            .iter()
-            .map(|t| {
-                let n: i64 = conn
-                    .query_row(&format!("SELECT count(*) FROM main.{t}"), [], |r| r.get(0))
-                    .unwrap();
-                ((*t).to_owned(), n)
-            })
-            .collect();
-        conn.execute_batch(&format!(
-            "{UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} {UNDO_V51} {UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V31} {UNDO_V30} {UNDO_V29} \
-             PRAGMA main.user_version = 28;"
-        ))
-        .unwrap();
-
-        let started = std::time::Instant::now();
-        migrate_user(&conn).unwrap();
-        let elapsed = started.elapsed();
-
-        let version: i64 = conn
-            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
-            .unwrap();
-        // Head rather than a literal `29`: the rewind stops at 28 and `migrate_user` climbs
-        // every rung above it, so this number moves with the ladder.
-        assert_eq!(version, USER_SCHEMA_VERSION);
-        eprintln!("the v29 rung over a real user file took {elapsed:?}");
-        for (table, rows) in &before {
-            let (now, uids): (i64, i64) = conn
-                .query_row(
-                    &format!("SELECT count(*), count(DISTINCT sync_uid) FROM main.{table}"),
-                    [],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .unwrap();
-            eprintln!("  {table}: {rows} rows before, {now} after, {uids} distinct uids");
-            assert_eq!(now, *rows, "{table} lost or gained a row across the rung");
-            assert_eq!(uids, now, "{table} has a NULL or a duplicate sync_uid");
-        }
-        let ticks: i64 = conn
-            .query_row("SELECT count(*) FROM sync_clock", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(ticks, 1);
-
-        // **The rest of the launch, over the same real file.** `prepare_database` is what
-        // installs the capture triggers, and thirty-one `CREATE TRIGGER`s against a database
-        // with the reader's own tables in it is the step no fixture exercises. Then one write,
-        // to prove the triggers fire on a real row rather than merely existing.
-        prepare_database(&conn).unwrap();
-        conn.execute(
-            "INSERT INTO decks (name, format_key, created_at, updated_at)
-             VALUES ('After the rung', 'commander', unixepoch(), unixepoch())",
-            [],
-        )
-        .unwrap();
-        let (uid, ops): (Option<String>, i64) = conn
-            .query_row(
-                "SELECT (SELECT sync_uid FROM decks WHERE name = 'After the rung'),
-                        (SELECT count(*) FROM sync_ops)",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert!(
-            uid.is_some(),
-            "the capture trigger did not mint on a real file"
-        );
-        assert_eq!(
-            ops, 0,
-            "an unpaired device records nothing, and this database has never paired"
-        );
     }
 
     /// No foreign key may cross the split. SQLite accepts the `CREATE TABLE` and fails only on
@@ -16063,93 +14418,6 @@ pub(crate) mod tests {
                 "`{index}` and its grain constant have drifted apart"
             );
         }
-    }
-
-    /// A killed sync leaves a *committed* staging table now that the ingest chunks its
-    /// load — several hundred megabytes of it, on the database of an app that ships on a
-    /// USB stick. Nothing else would drop it before the next run that is actually due:
-    /// `create_staging` holds the only other `DROP`, and `bulk_etag`/`bulk_updated_at` are
-    /// written only after a *successful* ingest — so the killed run stored nothing, and the
-    /// rest of the 24 h check window (longer, offline) stands between the residue and the
-    /// `create_staging` that would clear it.
-    ///
-    /// A real file rather than `:memory:`, because the residue this is about is disk.
-    #[test]
-    fn startup_drops_the_staging_table_a_killed_ingest_left_behind() {
-        let dir = crate::scratch::path("schema-residue");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        crate::split::convert(&dir).unwrap();
-
-        // The state a killed ingest leaves: a migrated database, a swap that never ran,
-        // and committed rows in staging.
-        {
-            let conn = crate::db::open_write(&dir).unwrap();
-            prepare_database(&conn).unwrap();
-            create_staging(&conn).unwrap();
-            conn.execute("INSERT INTO cards_staging (id, name, set_code, collector_number, lang, layout, raw) VALUES ('half','Half Ingested','x','1','en','normal','{}')", []).unwrap();
-            crate::db::checkpoint_truncate(&conn).unwrap();
-        }
-
-        // The next launch, which is `init_state`'s one act of database preparation.
-        let conn = crate::db::open_write(&dir).unwrap();
-        prepare_database(&conn).unwrap();
-
-        let staging: i64 = conn
-            .query_row(
-                &format!("SELECT count(*) FROM {CORPUS}.sqlite_master WHERE name='cards_staging'"),
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(staging, 0, "crash residue must not survive a launch");
-        // And the launch is still a launch: the schema it was there to prepare is intact.
-        let tables: i64 = conn
-            .query_row(
-                &format!(
-                    "SELECT count(*) FROM {CORPUS}.sqlite_master
-                     WHERE name IN ('cards','sets','sync_meta','cards_fts')"
-                ),
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(tables, 4);
-
-        drop(conn);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The twin of `maintenance::a_launch_survives_a_repair_it_cannot_carry_out`, for the
-    /// other non-fatal step. `init_state` turns a `prepare_database` error into "this file
-    /// may be from a newer version of the app, or damaged — move it aside", which is a
-    /// misleading thing to say about a database whose only problem is that the *disk* is
-    /// full or read-only, and a useless thing to suggest to somebody who has no room to
-    /// move it to. Space this drop would have reclaimed is not worth a launch.
-    ///
-    /// The failure is arranged with a view, because "the disk is full" is not something a
-    /// test can stage hermetically: `DROP TABLE` refuses to delete a view by name, so the
-    /// statement fails for a reason of its own while everything around it stays healthy.
-    #[test]
-    fn a_launch_survives_a_staging_drop_it_cannot_carry_out() {
-        let conn = memory_pair();
-        conn.execute_batch(&format!(
-            "CREATE VIEW {CORPUS}.cards_staging AS SELECT 1 AS x;"
-        ))
-        .unwrap();
-
-        prepare_database(&conn).expect("a launch must not die on a drop it cannot do");
-
-        // The residue is still there, and still recorded where the next attempt looks —
-        // `create_staging` at the next sync, `prepare_database` at the next launch.
-        let still: i64 = conn
-            .query_row(
-                &format!("SELECT count(*) FROM {CORPUS}.sqlite_master WHERE name='cards_staging'"),
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(still, 1, "the debt stays where a later run will find it");
     }
 
     /// The collapsed search reads this index and nothing else; without it the default
@@ -17188,32 +15456,6 @@ pub(crate) mod tests {
         assert_eq!(artist, "Christopher Rush");
     }
 
-    /// A swap rebuilds the search index from scratch, so a rebuild an interrupted compaction
-    /// was still owed has just been paid off by something else. Leaving the marker set would
-    /// cost the next launch a silent rebuild of 116 k rows for work already done.
-    #[test]
-    fn a_swap_settles_a_rebuild_an_interrupted_compaction_owed() {
-        let conn = memory_pair();
-        crate::sync::set_meta(&conn, crate::maintenance::K_FTS_REBUILD_PENDING, "1").unwrap();
-        create_staging(&conn).unwrap();
-        conn.execute("INSERT INTO cards_staging (id, name, set_code, collector_number, lang, layout, raw) VALUES ('new','Lightning Bolt','lea','161','en','normal','{}')", []).unwrap();
-
-        swap_staging(&conn).unwrap();
-
-        assert!(
-            !crate::maintenance::fts_rebuild_is_pending(&conn),
-            "the swap rebuilt the index, so nothing is owed"
-        );
-        let hits: i64 = conn
-            .query_row(
-                "SELECT count(*) FROM cards_fts WHERE cards_fts MATCH '\"lightning\"*'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(hits, 1, "and it is the swap's own index that answers");
-    }
-
     /// `image_cache` is not sync data and must outlive the table that is dropped on every
     /// refresh — which is exactly why it carries no foreign key to `cards.id`.
     #[test]
@@ -17242,83 +15484,6 @@ pub(crate) mod tests {
     // same fixture — a deck that owns cards and holds a claim on the collection — and a
     // second hand-rolled copy of it is a second thing to keep true. Plain INSERTs
     // returning ids: nothing clever, so a test that fails fails about its own subject.
-
-    /// A `cards` row good enough to be pointed at. Not a foreign key anywhere — that is
-    /// the point of most of the tests below — but the printing has to exist for the
-    /// soft reference to be *resolving* before a swap drops it.
-    pub(crate) fn seed_card(conn: &Connection, id: &str, set: &str, cn: &str) {
-        conn.execute(
-            "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout, raw)
-             VALUES (?1, 'o-' || ?1, 'Lightning Bolt', ?2, ?3, 'en', 'normal', '{}')",
-            rusqlite::params![id, set, cn],
-        )
-        .unwrap();
-    }
-
-    /// A deck, taking every default the table offers (`casual`, `card_art`, not built,
-    /// not archived) so a change to one of them shows up somewhere.
-    pub(crate) fn deck(conn: &Connection, name: &str) -> i64 {
-        conn.query_row(
-            "INSERT INTO decks (name, created_at, updated_at)
-             VALUES (?1, unixepoch(), unixepoch()) RETURNING id",
-            [name],
-            |r| r.get(0),
-        )
-        .unwrap()
-    }
-
-    /// One category of one deck — the v8 stand-in for what `deck_meta::
-    /// ensure_predefined_categories` will create once Task 2 lands. `is_active` follows
-    /// [`PREDEFINED_CATEGORIES`]'s own rule (`maybe` inactive, everything else active)
-    /// rather than taking a parameter, because no test below has a reason to want otherwise
-    /// yet — a caller that does can `UPDATE` the row it gets back the id of.
-    pub(crate) fn category(conn: &Connection, deck_id: i64, kind: &str, name: &str) -> i64 {
-        let is_active = i64::from(kind != "maybe");
-        conn.query_row(
-            "INSERT INTO deck_categories
-                (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, 0, unixepoch(), unixepoch()) RETURNING id",
-            rusqlite::params![deck_id, name, kind, is_active],
-            |r| r.get(0),
-        )
-        .unwrap()
-    }
-
-    /// One collection row, nonfoil NM, at the one grain these tests need.
-    pub(crate) fn entry(conn: &Connection, card_id: &str, quantity: i64) -> i64 {
-        conn.query_row(
-            "INSERT INTO collection_entries
-                (card_id,set_code,collector_number,lang,finish,condition,quantity,
-                 created_at,updated_at)
-             VALUES (?1,'lea','161','en','nonfoil','NM',?2,unixepoch(),unixepoch())
-             RETURNING id",
-            rusqlite::params![card_id, quantity],
-            |r| r.get(0),
-        )
-        .unwrap()
-    }
-
-    /// One printing in one category of one deck (the `live` variant, the only one these
-    /// tests need), with the printing denormalised beside the soft `card_id` exactly as
-    /// `deck.rs` will write it.
-    pub(crate) fn deck_card(
-        conn: &Connection,
-        deck_id: i64,
-        card_id: &str,
-        category_id: i64,
-        quantity: i64,
-    ) -> i64 {
-        conn.query_row(
-            "INSERT INTO deck_cards
-                (deck_id,category_id,card_id,set_code,collector_number,lang,name,quantity,
-                 created_at,updated_at)
-             VALUES (?1,?2,?3,'lea','161','en','Lightning Bolt',?4,unixepoch(),unixepoch())
-             RETURNING id",
-            rusqlite::params![deck_id, category_id, card_id, quantity],
-            |r| r.get(0),
-        )
-        .unwrap()
-    }
 
     /// The enforced FKs a deck delete reaches, exercised at that delete site.
     /// `foreign_keys=ON`, as `db::open` sets it — these tests fail without the pragma, which
@@ -18596,217 +16761,6 @@ pub(crate) mod tests {
          CREATE UNIQUE INDEX idx_deck_cards_grain
             ON deck_cards (deck_id, variant, category_id, card_id);";
 
-    /// And v20's art tags, mute list, two columns on `oracle_tags`, and the illustration
-    /// index.
-    ///
-    /// Owed for [`UNDO_V13`]'s reason — two `ALTER TABLE … ADD COLUMN`s, so a fixture that
-    /// forgot this one could not migrate at all — and for [`UNDO_V14`]'s quieter one as well,
-    /// since the six `CREATE TABLE IF NOT EXISTS`es beside them would leave a fixture claiming
-    /// a version it is not.
-    ///
-    /// **This is the first undo that has to run *before* the ones numbered below it**, and it
-    /// is why every fixture spells it first rather than last. [`UNDO_V14`] drops `oracle_tags`
-    /// outright; a v20 undo that ran after it would `ALTER` a table that is no longer there.
-    /// Newest-first is the order every rewind always meant — the ascending lists below worked
-    /// only because no rung had ever touched a table a lower rung deletes.
-    ///
-    /// Three indexes come down by hand and two ride along. `idx_oracle_tags_norm` names
-    /// `slug_norm`, and SQLite refuses `DROP COLUMN` on a column an index references — the trap
-    /// [`UNDO_V19`] documents one table over. `idx_cards_illustration` and
-    /// `idx_oracle_tag_cards_slug` are dropped for [`UNDO_V14`]'s quieter reason: `IF NOT
-    /// EXISTS` means a fixture that kept one would migrate perfectly happily while claiming a
-    /// version that never had it. **Which index needs a line is decided by whether this fixture
-    /// drops its table**, not by which rung created it — the two art indexes need none because
-    /// `DROP TABLE art_tags` and `DROP TABLE art_tag_illustrations` take their own indexes with
-    /// them, while `oracle_tag_cards` survives to be dropped by [`UNDO_V14`] and so leaves its
-    /// index standing.
-    const UNDO_V20: &str = "DROP INDEX idx_oracle_tags_norm;
-         ALTER TABLE oracle_tags DROP COLUMN slug_norm;
-         ALTER TABLE oracle_tags DROP COLUMN id;
-         DROP INDEX idx_cards_illustration;
-         DROP INDEX idx_oracle_tag_cards_slug;
-         DROP TABLE art_tags;
-         DROP TABLE art_tag_parents;
-         DROP TABLE art_taggings;
-         DROP TABLE art_tag_illustrations;
-         DROP TABLE art_tag_meta;
-         DROP TABLE muted_tags;";
-
-    /// And v21's app-wide tag list, back to the per-deck one v8 built.
-    ///
-    /// **The rewind is a rebuild rather than a column swap**, because the shape changed both
-    /// ways: `deck_id` came off and `name_key` went on, and `ALTER TABLE … DROP COLUMN` refuses
-    /// a column named by an index in any case. Dropping the table takes
-    /// `idx_deck_tags_grain` with it — [`UNDO_V20`]'s rule about which index needs a line of
-    /// its own, applied here.
-    ///
-    /// **It restores the shape and not the rows, and nothing needs it to.** Every fixture is
-    /// `migrate_single_file`d into an empty in-memory database and rewound before anything is seeded, so
-    /// there has never been a tag in one at this moment. A rewind that tried to invent a
-    /// `deck_id` for a row that has none would be inventing the very fact v21 deleted.
-    ///
-    /// **It runs first, with [`UNDO_V20`]**, for that constant's stated reason: newest-first is
-    /// the order every rewind always meant.
-    const UNDO_V21: &str = "DROP TABLE deck_tags;
-         CREATE TABLE deck_tags (
-            id INTEGER PRIMARY KEY,
-            deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
-            name TEXT NOT NULL,
-            color TEXT NOT NULL,
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-         );
-         CREATE UNIQUE INDEX idx_deck_tags_grain ON deck_tags (deck_id, name);";
-
-    /// And v23's wishlist folders. **There is no `UNDO_V22`** — see [`v21_database`] for why
-    /// that rung is the one on this ladder that owes no rewind — so this one lands beside
-    /// [`UNDO_V21`] and every chain below spells the two of them together.
-    ///
-    /// Owed for [`UNDO_V14`]'s **quieter** reason rather than [`UNDO_V13`]'s. Every statement
-    /// v23 writes is idempotent by construction — `CREATE TABLE IF NOT EXISTS`, a
-    /// `DROP INDEX IF EXISTS` before its `CREATE`, and an `ALTER TABLE … ADD COLUMN` the step
-    /// probes `pragma_table_info` for rather than issuing blind — so a fixture that forgot
-    /// this one would migrate perfectly happily and simply not be the version it claims: a
-    /// "v11 database" carrying a table and a column that did not exist until v23.
-    ///
-    /// **It is deliberately not a full rewind, and "deliberately" is the word that matters
-    /// here.** `wishlist_entries.folder_id` stays, and not because SQLite will not take it
-    /// back: it does refuse `DROP COLUMN` on a column an index names, and two name this one,
-    /// but dropping `idx_wishlist_grain` and `idx_wishlist_folder` first makes the
-    /// `DROP COLUMN` succeed — measured 2026-08-22, and
-    /// [`migrating_a_v22_wishlist_files_every_existing_wish_at_the_root`] now runs exactly that
-    /// sequence. The reason is the statement after it: putting the three-term index back means
-    /// rebuilding a *unique* index over a narrower grain than the rows beneath it were written
-    /// on, which the moment two of them differ only by folder is a constraint failure inside
-    /// somebody else's fixture. A rewind is a helper for the fixtures below it and may not
-    /// carry that. So they carry the column instead, and the v23 step's probe finds it and
-    /// skips the `ALTER`.
-    ///
-    /// `idx_wishlist_grain` needs no line of its own: v23's own `DROP INDEX IF EXISTS` is what
-    /// widens it, and it runs again over whatever the rewind left. `idx_wishlist_folder` does,
-    /// for [`UNDO_V20`]'s rule about which index needs one — `wishlist_entries` survives this
-    /// rewind, so an index over it that nothing drops would outlive the version that made it.
-    const UNDO_V23: &str = "DROP TABLE IF EXISTS wishlist_folders;
-         DROP INDEX IF EXISTS idx_wishlist_folder;";
-
-    /// And v24's collection folders — [`UNDO_V23`] one table over, and owed for the same
-    /// **quieter** reason: every statement v24 writes is idempotent by construction, so a
-    /// fixture that forgot this one would migrate perfectly happily and simply not be the
-    /// version it claims — a "v11 database" carrying a table and a column that did not exist
-    /// until v24.
-    ///
-    /// **It stops short of `collection_entries.folder_id` for [`UNDO_V23`]'s reason**, and not
-    /// because SQLite forbids it: dropping `idx_collection_grain` and `idx_collection_folder`
-    /// first would make the `DROP COLUMN` succeed. What a shared rewind may not do is the
-    /// statement after that — putting the ten-column index back means building a *narrower*
-    /// unique index over rows written on the wide grain, which is a constraint failure the
-    /// moment two of them differ only by folder, inside somebody else's fixture. So every
-    /// fixture beneath head re-enters the v24 step carrying the column, and the step's
-    /// `pragma_table_info` probe is what makes that survivable.
-    ///
-    /// `idx_collection_grain` needs no line of its own: v24's own `DROP INDEX IF EXISTS` is
-    /// what widens it, and it runs again over whatever the rewind left. `idx_collection_folder`
-    /// does, for [`UNDO_V20`]'s rule about which index needs one — `collection_entries`
-    /// survives this rewind, so an index over it that nothing drops would outlive the version
-    /// that made it.
-    ///
-    /// **A fixture that goes on to *write* to `collection_entries` before migrating needs the
-    /// full rewind [`schema_at_23`] pays, not this.** Foreign keys are ON for every connection
-    /// in this crate — `libsqlite3-sys` builds the amalgamation with
-    /// `SQLITE_DEFAULT_FOREIGN_KEYS=1` — so a surviving column whose `REFERENCES` names a table
-    /// this took away answers `no such table: main.collection_folders` at the next insert. No
-    /// fixture sharing this constant writes there today; the one that does is the one that
-    /// drops the column first.
-    ///
-    /// **It runs first, before [`UNDO_V23`]**, for that constant's stated reason: newest-first.
-    const UNDO_V24: &str = "DROP TABLE IF EXISTS collection_folders;
-         DROP INDEX IF EXISTS idx_collection_folder;";
-
-    /// And v25's deck groups. **The first rewind on this ladder that has to put a table
-    /// *back***, because v25 is the first rung that takes one away.
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one, and that
-    /// is what makes it unskippable: `DROP TABLE deck_allocations` and
-    /// `ALTER TABLE decks DROP COLUMN is_built` are not idempotent in either direction, so a
-    /// fixture that walked to head and then forgot this line does not merely mislabel itself —
-    /// it dies at `no such table: main.deck_allocations` on the way back up.
-    ///
-    /// The DDL is the v8 table verbatim, because that is what a v24 database has and this is a
-    /// description of history. `IF NOT EXISTS` throughout for the reason every rewind carries
-    /// it: a chain is spelled once per fixture, but the fixture below it may have got there by
-    /// another route.
-    ///
-    /// **The `ALTER` is the one statement that cannot be guarded**, and it is why this constant
-    /// is only ever spelled after a full [`migrate_single_file`]: `ADD COLUMN` has no `IF NOT EXISTS` and
-    /// always appends, so `is_built` comes back at the *end* of `decks`. v25 drops it again on
-    /// the way up, which is what keeps
-    /// [`every_version_ends_with_the_same_schema_as_a_fresh_install`] comparing two tables that
-    /// have both lost it — a rewind that left the column standing would fail that test on
-    /// ordinals.
-    ///
-    /// **The `app_meta` row is restored rather than merely tolerated**, and it is the only
-    /// place in the crate that writes it: the deck-driven switch that owned it is gone, so
-    /// without this line the rung's `DELETE` would run over an empty table in every test and
-    /// the assertion that it goes would be decoration.
-    ///
-    /// The two folder rows are *deleted* rather than created, this being the only half of a
-    /// rewind that looks the usual way round. `collection_entries.folder_id` is
-    /// `ON DELETE SET NULL`, so any copies the conversion filed surface at the root again —
-    /// which is a rewind for a fixture with no rows and nothing more; a fixture that wants the
-    /// *quantities* back as well would have to un-split them, and none does.
-    ///
-    /// **It runs first, before [`UNDO_V24`]**, for that constant's stated reason: newest-first.
-    /// Here the order is load-bearing rather than tidy — the `DELETE` names a table
-    /// [`UNDO_V24`] drops.
-    const UNDO_V25: &str = "DELETE FROM collection_folders WHERE kind IN ('deck', 'removed');
-         CREATE TABLE IF NOT EXISTS deck_allocations (
-            id INTEGER PRIMARY KEY,
-            deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
-            collection_entry_id INTEGER NOT NULL
-                REFERENCES collection_entries(id) ON DELETE CASCADE,
-            quantity INTEGER NOT NULL CHECK (quantity > 0),
-            created_at INTEGER NOT NULL,
-            updated_at INTEGER NOT NULL
-         );
-         CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_allocations_grain
-            ON deck_allocations (deck_id, collection_entry_id);
-         CREATE INDEX IF NOT EXISTS idx_deck_allocations_entry
-            ON deck_allocations (collection_entry_id);
-         ALTER TABLE decks ADD COLUMN is_built INTEGER NOT NULL DEFAULT 0;
-         INSERT OR REPLACE INTO app_meta (key, value)
-            VALUES ('deck_driven_collection', '1');";
-
-    /// And v26's bracket column and its three combo tables.
-    ///
-    /// Owed for [`UNDO_V13`]'s **loud** reason: `ALTER TABLE decks ADD COLUMN bracket` is not
-    /// idempotent, so a fixture that forgot this line does not merely mislabel itself — it dies
-    /// at `duplicate column name` on the way back up, a failure no real upgrade can produce.
-    /// The three `DROP TABLE`s are owed for [`UNDO_V14`]'s quieter one as well, the rung's own
-    /// DDL being `CREATE TABLE IF NOT EXISTS` throughout: a fixture that kept them would migrate
-    /// perfectly happily while claiming a version that never had them.
-    ///
-    /// **One `DROP COLUMN` is the whole of the deck half.** No index names `decks.bracket` and
-    /// no constraint references it — it is a sentinel in a `NOT NULL` column rather than a
-    /// nullable foreign key, [`UNDO_V16`]'s situation exactly — so this rewind has nothing to
-    /// take down first, where [`UNDO_V19`]'s and [`UNDO_V24`]'s do.
-    ///
-    /// **The two indexes need no line of their own**, [`UNDO_V20`]'s rule about which one does:
-    /// `DROP TABLE combo_cards` takes `idx_combo_cards_combo` and `idx_combo_cards_oracle` with
-    /// it, because the table they are on is the table that goes.
-    ///
-    /// **Child before parent**, `swap_combo_staging`'s reason: with foreign keys on a
-    /// `DROP TABLE` is an implicit `DELETE`, and dropping `combos` while `combo_cards` still
-    /// references it walks every row through the cascade first. No fixture on this ladder has
-    /// a row in either, so this is a rule stated where it can be read rather than a cost being
-    /// avoided.
-    ///
-    /// **It runs first, before [`UNDO_V25`]**, for that constant's stated reason: newest-first
-    /// is the order every rewind always meant.
-    const UNDO_V26: &str = "ALTER TABLE decks DROP COLUMN bracket;
-         DROP TABLE IF EXISTS combo_cards;
-         DROP TABLE IF EXISTS combos;
-         DROP TABLE IF EXISTS combo_meta;";
-
     /// A database that stopped at version 9 — the version below the step that *widens*
     /// `idx_cards_collapse`, which is the property this fixture exists for.
     ///
@@ -20061,21 +18015,6 @@ pub(crate) mod tests {
 
     // ---- v20: the art tags, the normalised slug and the mute list --------------------
 
-    /// A database at version 19: everything v19 left behind, and none of v20.
-    ///
-    /// Honest for [`UNDO_V13`]'s reason — two of v20's statements are
-    /// `ALTER TABLE … ADD COLUMN`, so a fixture that forgot the rewind could not migrate at
-    /// all. It is the "one step below head" fixture now, the title [`v18_database`] held.
-    fn v19_database() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
-        conn.execute_batch(&format!(
-            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} PRAGMA user_version = 19;"
-        ))
-        .unwrap();
-        conn
-    }
-
     // ---- v21: one tag list, app-wide ------------------------------------------------
 
     /// A database at version 20: everything v20 left behind, and none of v21.
@@ -20663,64 +18602,6 @@ pub(crate) mod tests {
         conn
     }
 
-    /// **Issue #180, and the test the reporter's bug is.** A database that held oracle tags
-    /// before v20 can search them the moment it has been migrated — no refresh, no network.
-    ///
-    /// The failure this pins had every property that makes one expensive: silent, total,
-    /// self-healing after up to a week, and sitting beside an art taxonomy that worked
-    /// perfectly. v20 added `slug_norm` with `DEFAULT ''`, `tags::query` matches every typed
-    /// needle against that column and nothing else, and the taxonomy is only rewritten by a
-    /// refresh — which `tags::oracle::REFRESH_INTERVAL_SECS` puts up to seven days away. So the
-    /// search answered `[]` to everything, with nothing in `error_log` to say why, while the
-    /// rail — which reads `slug` and never `slug_norm` — went on listing the very tags the box
-    /// could not find.
-    ///
-    /// **The fixture is the real upgrade path rather than a hand-built row**: a v19 database
-    /// with a tag in it, walked up the whole ladder. A test that inserted `slug_norm = ''`
-    /// into a head-version database would prove the backfill runs, not that the ladder ever
-    /// reaches it.
-    ///
-    /// **The needle is spelled three ways and the slug is spelled in neither.** `Spot-Removal`
-    /// is how the live file writes it — verified 2026-08-20, and `tags::oracle`'s own ingest
-    /// test uses that exact slug — so a backfill that lower-cased without stripping, or
-    /// stripped without lower-casing, would still answer one of these and fail the others.
-    /// That is the whole hazard `tags::normalize`'s "one copy, deliberately" note describes:
-    /// two normalisations that disagree leave both halves self-consistent and the search wrong.
-    #[test]
-    fn the_oracle_tag_search_answers_over_a_database_that_predates_the_normalised_slug() {
-        let conn = v19_database();
-        conn.execute_batch(
-            "INSERT INTO oracle_tags (slug, label, description)
-             VALUES ('Spot-Removal', 'Spot Removal', NULL);",
-        )
-        .unwrap();
-
-        migrate_single_file(&conn).unwrap();
-
-        // Exact, prefix and substring — the three bands `tags::query` ranks by, so a backfill
-        // that satisfied `LIKE '%…%'` by accident could not also answer the exact one.
-        for needle in ["Spot Removal", "spot-rem", "removal"] {
-            let hits = crate::tags::query::run_tag_search(&conn, needle, "oracle", 50).unwrap();
-            assert_eq!(
-                hits.iter().map(|h| h.slug.as_str()).collect::<Vec<_>>(),
-                ["Spot-Removal"],
-                "`{needle}` found no oracle tag",
-            );
-        }
-
-        // And it is `normalize`'s answer rather than merely *an* answer that matched. The
-        // ingest writes this column with that function; a rung that agreed with it on
-        // `Spot-Removal` and nowhere else would pass every assertion above.
-        let norm: String = conn
-            .query_row(
-                "SELECT slug_norm FROM oracle_tags WHERE slug = 'Spot-Removal'",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert_eq!(norm, crate::tags::normalize("Spot-Removal"));
-    }
-
     /// The rung leaves a taxonomy a refresh has already written exactly as it found it.
     ///
     /// `WHERE slug_norm = ''` is what makes the backfill a repair rather than a rewrite, and
@@ -21173,19 +19054,6 @@ pub(crate) mod tests {
         assert_eq!(combo_table_count(&conn), 3);
     }
 
-    /// How many of v26's three tables `sqlite_master` carries — the shape
-    /// [`oracle_tag_table_count`] has one feed over, so a fixture assertion is one number rather
-    /// than three `EXISTS` queries that can each be forgotten.
-    fn combo_table_count(conn: &Connection) -> i64 {
-        conn.query_row(
-            "SELECT count(*) FROM sqlite_master
-              WHERE type = 'table' AND name IN ('combos','combo_cards','combo_meta')",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap()
-    }
-
     /// [`v24_database`] kept the "one step below head" title until v26 arrived and
     /// [`v25_database`] took it, and it keeps the half of the assertion that is about *v25's*
     /// rung — the inverted half, because v25 is the one rung on this ladder that takes something
@@ -21434,29 +19302,6 @@ pub(crate) mod tests {
     fn v24_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         schema_at_24(&conn);
-        conn
-    }
-
-    /// Rewind a head-shaped database to version 25 — **head minus one since v26**, and the
-    /// shortest rewind on the ladder: v26 adds and takes nothing away, so [`UNDO_V26`] alone is
-    /// the whole of it.
-    ///
-    /// The `ALTER TABLE decks DROP COLUMN bracket` inside it is what makes this a real v25
-    /// database rather than head wearing a label: the v26 rung's `ADD COLUMN` has no
-    /// `IF NOT EXISTS`, so a fixture that skipped it would die on the way back up rather than
-    /// quietly mislabel itself. [`UNDO_V14`]'s quieter failure is the one the three
-    /// `DROP TABLE`s prevent.
-    fn schema_at_25(conn: &Connection) {
-        migrate_single_file(conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V26} PRAGMA user_version = 25;"))
-            .unwrap();
-    }
-
-    /// A database at version 25, as a fixture. [`schema_at_25`] with the connection made for
-    /// it — the shape every other `vNN_database` on this ladder has.
-    fn v25_database() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        schema_at_25(&conn);
         conn
     }
 
@@ -21812,39 +19657,6 @@ pub(crate) mod tests {
 
     // ---- v26: the bracket column, and the combo feed's tables ---------------------------
 
-    /// The rung over the version below it: a deck that already existed gains `bracket` reading
-    /// **0**, which is Auto, and the three combo tables arrive.
-    ///
-    /// **The deck is seeded into the v25 fixture before the migration and not after**, which is
-    /// the whole of what this test is for. A fresh install has no decks, so every deck in it is
-    /// born with the column's DEFAULT and the question "what does an *existing* deck read" is
-    /// one only an upgrade fixture can answer — the trap `src-tauri/CLAUDE.md` states as *a
-    /// fresh worktree is a fresh install and is the one population that cannot show it*.
-    #[test]
-    fn v26_gives_an_existing_deck_the_auto_bracket_and_creates_the_combo_tables() {
-        let conn = v25_database();
-        let deck_id = deck(&conn, "Atraxa");
-        assert_eq!(has_column(&conn, "decks", "bracket"), 0);
-
-        migrate_single_file(&conn).unwrap();
-
-        let version: i64 = conn
-            .query_row("PRAGMA user_version", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
-        let bracket: i64 = conn
-            .query_row("SELECT bracket FROM decks WHERE id = ?1", [deck_id], |r| {
-                r.get(0)
-            })
-            .unwrap();
-        assert_eq!(
-            bracket,
-            crate::deck::AUTO_BRACKET,
-            "a deck that predates the column has not answered the question — it is on Auto"
-        );
-        assert_eq!(combo_table_count(&conn), 3);
-    }
-
     /// The column is `NOT NULL`, so no deck can ever read "no answer" — the sentinel is the
     /// answer, and the difference matters to every reader of it.
     ///
@@ -21864,36 +19676,6 @@ pub(crate) mod tests {
         assert!(
             err.contains("NOT NULL"),
             "a NULL bracket must be refused by the column: {err}"
-        );
-    }
-
-    /// **The range is not the database's**, and this is the assertion that says so out loud
-    /// rather than leaving the next reader to discover it from a bug report.
-    ///
-    /// `ALTER TABLE … ADD COLUMN` *can* carry a CHECK — v19's `deck_cards.finish` does, and
-    /// `the_deck_card_finish_column_refuses_nonfoil` proves it — so the absence of one here is
-    /// a choice: a command parameter reaches this column, and `deck::valid_bracket` can say
-    /// which number was wrong and what the legal ones are where `CHECK constraint failed` names
-    /// only the constraint. `decks.game_key`'s arrangement, one column along.
-    #[test]
-    fn the_bracket_column_carries_no_check_because_rust_is_the_fence() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
-        let id = deck(&conn, "Atraxa");
-        conn.execute("UPDATE decks SET bracket = 9 WHERE id = ?1", [id])
-            .expect("the column itself takes any integer — the fence is deck::valid_bracket");
-        assert_eq!(
-            crate::deck::update_deck(
-                &conn,
-                id,
-                &crate::deck::DeckPatch {
-                    bracket: Some(9),
-                    ..Default::default()
-                },
-            )
-            .unwrap_err(),
-            crate::deck::BAD_BRACKET,
-            "and the command is where 9 is refused"
         );
     }
 
@@ -23240,18 +21022,6 @@ pub(crate) mod tests {
         conn
     }
 
-    /// Columns of `table` with this name — 0 or 1. Parameterised by table and read that way:
-    /// callers ask it about `deck_cards`, `oracle_tags`, `art_tags` and
-    /// `art_tag_illustrations`.
-    fn has_column(conn: &Connection, table: &str, column: &str) -> i64 {
-        conn.query_row(
-            &format!("SELECT count(*) FROM pragma_table_info('{table}') WHERE name = ?1"),
-            rusqlite::params![column],
-            |r| r.get(0),
-        )
-        .unwrap()
-    }
-
     /// The v19 step over a v18 database: the column arrives, every existing row reads regular,
     /// and the grain index comes back carrying the expression.
     ///
@@ -23927,5 +21697,1159 @@ pub(crate) mod tests {
             .map(Result::unwrap)
             .collect();
         cols
+    }
+}
+
+/// **The test scaffolding more than one test module builds on** — this file's `tests`, the
+/// other modules' in this crate, and `src-tauri`'s, which reach it through the `testing`
+/// feature: a dependency's `cfg(test)` is off while another crate's tests build.
+///
+/// Everything here was a private helper of `tests` until the storage step moved this file to
+/// `grimoire-core`. The tests that name a module still in `src-tauri` — the launch, the token
+/// conversion, the tag search — stayed there, in that crate's `schema::tests`, and these are
+/// the fixtures they share with the ones that moved: the seeds, the rewind chain, the
+/// version-pinned databases. They come back into `tests` when those tests do.
+///
+/// **At the foot of the file on purpose.** `scripts/coverage-rust.mjs` counts everything from
+/// the first column-0 `#[cfg(test)]` down as test code, and this is test code.
+#[cfg(any(test, feature = "testing"))]
+pub mod fixtures {
+    use super::*;
+
+    /// Overwrite one whole page in the middle of `corpus.db` — never page one, which holds the
+    /// header and the schema the launch probe reads.
+    pub fn damage_a_middle_page(dir: &std::path::Path) {
+        use std::io::{Seek, SeekFrom, Write};
+        let path = dir.join(crate::db::CORPUS_DB);
+        let len = std::fs::metadata(&path).unwrap().len();
+        let page = 4096;
+        let offset = (len / 2 / page) * page;
+        assert!(
+            offset >= page * 2,
+            "the fixture corpus is too small to damage past page one"
+        );
+        let mut file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.seek(SeekFrom::Start(offset)).unwrap();
+        file.write_all(&vec![0xFF; page as usize]).unwrap();
+    }
+
+    pub fn corpus_version(conn: &Connection) -> i64 {
+        conn.query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// And v29's uids, its op log and the error log's widened CHECK.
+    ///
+    /// **The longest rewind on this ladder, and every line of it is owed.** `ADD COLUMN` is not
+    /// idempotent ([`UNDO_V13`]'s loud reason), so a fixture that kept `sync_uid` dies at
+    /// `duplicate column name` on the way back up — a failure no real upgrade can produce. The
+    /// unique indexes have to go **first**, because `DROP COLUMN` refuses a column an index
+    /// names. The `error_log` half is rewound by rebuilding it narrow again: a fixture below
+    /// v29 that kept the widened CHECK would accept a `relay` row while claiming to be a
+    /// version that never had one.
+    ///
+    /// **It runs first, before [`UNDO_V28`]**, for that constant's stated reason — a rewind
+    /// walks the ladder backwards.
+    pub const UNDO_V29: &str = "DROP TABLE IF EXISTS sync_peers;
+         DROP TABLE IF EXISTS sync_state;
+         DROP TABLE IF EXISTS sync_clock;
+         DROP TABLE IF EXISTS sync_ops;
+         ALTER TABLE deck_folders DROP COLUMN needs_review;
+         ALTER TABLE wishlist_folders DROP COLUMN needs_review;
+         ALTER TABLE collection_folders DROP COLUMN needs_review;
+         DROP INDEX IF EXISTS idx_collection_entries_uid;
+         DROP INDEX IF EXISTS idx_collection_folders_uid;
+         DROP INDEX IF EXISTS idx_deck_audit_uid;
+         DROP INDEX IF EXISTS idx_deck_cards_uid;
+         DROP INDEX IF EXISTS idx_deck_categories_uid;
+         DROP INDEX IF EXISTS idx_deck_folders_uid;
+         DROP INDEX IF EXISTS idx_deck_tags_uid;
+         DROP INDEX IF EXISTS idx_decks_uid;
+         DROP INDEX IF EXISTS idx_muted_tags_uid;
+         DROP INDEX IF EXISTS idx_wishlist_entries_uid;
+         DROP INDEX IF EXISTS idx_wishlist_folders_uid;
+         ALTER TABLE collection_entries DROP COLUMN sync_uid;
+         ALTER TABLE collection_folders DROP COLUMN sync_uid;
+         ALTER TABLE deck_audit DROP COLUMN sync_uid;
+         ALTER TABLE deck_cards DROP COLUMN sync_uid;
+         ALTER TABLE deck_categories DROP COLUMN sync_uid;
+         ALTER TABLE deck_folders DROP COLUMN sync_uid;
+         ALTER TABLE deck_tags DROP COLUMN sync_uid;
+         ALTER TABLE decks DROP COLUMN sync_uid;
+         ALTER TABLE muted_tags DROP COLUMN sync_uid;
+         ALTER TABLE wishlist_entries DROP COLUMN sync_uid;
+         ALTER TABLE wishlist_folders DROP COLUMN sync_uid;
+         CREATE TABLE error_log_pre29 (
+             id INTEGER PRIMARY KEY,
+             first_at INTEGER NOT NULL,
+             last_at INTEGER NOT NULL,
+             source TEXT NOT NULL CHECK (source IN
+                 ('scryfall_api','scryfall_image','github_update','database','image_store')),
+             operation TEXT NOT NULL,
+             kind TEXT NOT NULL CHECK (kind IN
+                 ('rate_limited','timeout','http','io','parse','other')),
+             message TEXT NOT NULL,
+             detail TEXT,
+             count INTEGER NOT NULL DEFAULT 1 CHECK (count > 0)
+         );
+         INSERT INTO error_log_pre29
+             (id, first_at, last_at, source, operation, kind, message, detail, count)
+             SELECT id, first_at, last_at, source, operation, kind, message, detail, count
+               FROM error_log WHERE source <> 'relay';
+         DROP TABLE error_log;
+         ALTER TABLE error_log_pre29 RENAME TO error_log;
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_error_log_grain
+             ON error_log (source, operation, kind, message);
+         CREATE INDEX IF NOT EXISTS idx_error_log_recent ON error_log (last_at DESC);";
+
+    /// And v30's marker column.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
+    /// `ALTER TABLE sync_devices ADD COLUMN baselined_at` is not idempotent, so a fixture that
+    /// kept the column dies at `duplicate column name` on the way back up — a failure no real
+    /// upgrade can produce. [`user_file_at_28`] is where that bites, because its rewind stops
+    /// above [`UNDO_V28`] and leaves `sync_devices` standing.
+    ///
+    /// **It runs first, before [`UNDO_V29`]**, for that constant's stated reason: a rewind walks
+    /// the ladder backwards. [`user_file_at_27`] would survive without it — [`UNDO_V28`] drops
+    /// the whole table — and spells it anyway, so that one chain is not the odd one out.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
+    /// `DROP COLUMN` would refuse a column an index named.
+    pub const UNDO_V30: &str = "ALTER TABLE sync_devices DROP COLUMN baselined_at;";
+
+    /// And v31's synced name table.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one: the rung
+    /// is a plain `CREATE TABLE`, not `CREATE TABLE IF NOT EXISTS`, so a fixture that left
+    /// `device_names` standing dies at `table already exists` on the way back up — a failure
+    /// no real upgrade can produce, and one that takes every unrelated test in the chain with
+    /// it rather than only the ones about names.
+    ///
+    /// **It runs first, before [`UNDO_V30`]**, for that constant's stated reason: a rewind
+    /// walks the ladder backwards.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: `DROP TABLE` takes
+    /// `idx_device_names_uid` with it.
+    pub const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
+
+    /// v59's titled to-do lists — the newest rewind on the user ladder, directly above
+    /// [`UNDO_V58`], and prepended to every chain that starts with it.
+    ///
+    /// Owed twice over. For [`UNDO_V13`]'s **loud** reason: the rung's `CREATE TABLE` is not
+    /// `IF NOT EXISTS`, so a fixture that kept `deck_todo_lists` dies at `table already exists` on
+    /// the way back up. And for [`UNDO_V43`]'s: the rung takes a column away, so the rewind has to
+    /// **put `decks.todos` back** or [`UNDO_V58`] beneath it dies at `no such column`.
+    ///
+    /// ⚠️ **`todos_open` comes off and goes back on after `todos`, and the order is the point.** An
+    /// `ADD COLUMN` appends, so re-adding `todos` alone would leave the tail reading `…, todos_open,
+    /// todos)` where v58 left `…, todos, todos_open)` — a shape no v58 file ever had, and one
+    /// `a_rewind_from_v59_lands_on_v58s_exact_shape` compares against byte for byte. Dropping the
+    /// last column and adding both back in v58's own order is what puts the stored `CREATE TABLE`
+    /// text back exactly. It loses every deck's `todos_open`, which no chain below asserts, and
+    /// converts no list back into the column: a v58 deck with no list is a state v58 could hold.
+    ///
+    /// **The three `decks` capture triggers come off first**, [`UNDO_V58`]'s reason: on a fixture
+    /// that ran `capture::install`, `sync_ins_decks` and `sync_upd_decks` read `NEW.todos_open`.
+    /// The table's indexes are spelled out for [`UNDO_V46`]'s reason — the rewind names everything
+    /// the rung created.
+    pub const UNDO_V59: &str = "DROP TRIGGER IF EXISTS sync_ins_decks;
+         DROP TRIGGER IF EXISTS sync_upd_decks;
+         DROP TRIGGER IF EXISTS sync_del_decks;
+         DROP INDEX IF EXISTS idx_deck_todo_lists_uid;
+         DROP INDEX IF EXISTS idx_deck_todo_lists_deck;
+         DROP TABLE IF EXISTS deck_todo_lists;
+         ALTER TABLE decks DROP COLUMN todos_open;
+         ALTER TABLE decks ADD COLUMN todos TEXT NOT NULL DEFAULT '';
+         ALTER TABLE decks ADD COLUMN todos_open INTEGER NOT NULL DEFAULT 0;";
+
+    /// v58's deck to-do list and its band's disclosure — the rewind directly under [`UNDO_V59`]
+    /// and directly above [`UNDO_V57`], and prepended to every chain that starts with it. It read
+    /// "the newest rewind on the user ladder" until v59 landed above it and put back the `todos`
+    /// column this drops.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason: two `ALTER TABLE decks ADD COLUMN`s are not
+    /// idempotent, so a fixture that kept either column dies at `duplicate column name` on the
+    /// way back up. [`UNDO_V56`]'s shape otherwise: **the three `decks` capture triggers come off
+    /// first**, because on a fixture that ran `capture::install` both `sync_ins_decks` and
+    /// `sync_upd_decks` read `NEW.todos` and `NEW.todos_open`, and SQLite refuses a `DROP COLUMN`
+    /// on a column a trigger names. The columns go in the reverse of the order the rung adds them.
+    pub const UNDO_V58: &str = "DROP TRIGGER IF EXISTS sync_ins_decks;
+         DROP TRIGGER IF EXISTS sync_upd_decks;
+         DROP TRIGGER IF EXISTS sync_del_decks;
+         ALTER TABLE decks DROP COLUMN todos_open;
+         ALTER TABLE decks DROP COLUMN todos;";
+
+    /// v57's managed-wishlist tokens switch — the rewind directly under [`UNDO_V58`] and directly
+    /// above [`UNDO_V56`], and prepended to every chain that starts with it.
+    ///
+    /// [`UNDO_V56`]'s shape and both of its reasons: `ADD COLUMN` is not idempotent, and the three
+    /// `decks` capture triggers read `NEW.managed_wishlist_tokens` once `capture::install` has run,
+    /// so they come off before the `DROP COLUMN`. **The mode is not converted back**: a v56 row
+    /// reading `missing` where the reader had chosen `tokens` is a fixture v56 could have held, and
+    /// no chain below this asserts a mode.
+    pub const UNDO_V57: &str = "DROP TRIGGER IF EXISTS sync_ins_decks;
+         DROP TRIGGER IF EXISTS sync_upd_decks;
+         DROP TRIGGER IF EXISTS sync_del_decks;
+         ALTER TABLE decks DROP COLUMN managed_wishlist_tokens;";
+
+    /// v56's Mana curve split — the rewind directly under [`UNDO_V57`] and directly above
+    /// [`UNDO_V55`], and prepended to every chain that starts with it.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V51`]'s exactly: `ALTER TABLE decks ADD
+    /// COLUMN` is not idempotent, so a fixture that kept `curve_creatures` dies at `duplicate
+    /// column name` on the way back up.
+    ///
+    /// ⚠️ **The three `decks` capture triggers come off first**, v43's move in the rewind
+    /// direction. On a fixture that ran `capture::install` before rewinding — the v54 rung's test
+    /// is one, and it rewinds no further than 53, so this is the first `decks` column its chain
+    /// drops — `sync_ins_decks` and `sync_upd_decks` read `NEW.curve_creatures`, and SQLite
+    /// refuses the `DROP COLUMN` with `error in trigger sync_ins_decks after drop column`
+    /// (measured). `IF EXISTS`, so every chain run on a fixture that never installed them is
+    /// unchanged; nothing in these chains needs them back, and `install` rebuilds all three from
+    /// the spec whenever a launch runs it.
+    pub const UNDO_V56: &str = "DROP TRIGGER IF EXISTS sync_ins_decks;
+         DROP TRIGGER IF EXISTS sync_upd_decks;
+         DROP TRIGGER IF EXISTS sync_del_decks;
+         ALTER TABLE decks DROP COLUMN curve_creatures;";
+
+    /// v55's Tokens subfolder column — the rewind directly under [`UNDO_V56`] and directly above
+    /// [`UNDO_V54`], and prepended to every chain that starts with it. (Written as `UNDO_V54`,
+    /// with its rung; renumbered to 55 at the merge with the tombstones, which took 54 first.)
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason: `ADD COLUMN` is not idempotent, so a fixture that
+    /// kept `managed_tokens` dies at `duplicate column name` on the way back up. **The widened
+    /// index goes first**, because SQLite refuses `DROP COLUMN` on a column an index names, and
+    /// v48's one-column index comes back last, so the rewind lands on v54's shape rather than
+    /// near it — the climb drops it again before it widens it.
+    ///
+    /// **It runs before [`UNDO_V54`]** — straight after [`UNDO_V56`]; it read "It runs first"
+    /// until v56 landed above it — because a rewind walks the ladder backwards, and
+    /// on a fixture that ran `capture::install` that order is what lets it run at all:
+    /// `sync_gone` is still there, so the `sync_gone_wishlist_folders` trigger [`UNDO_V54`]'s ⚠️
+    /// describes does not refuse this `DROP COLUMN`.
+    pub const UNDO_V55: &str = "DROP INDEX IF EXISTS idx_wishlist_folders_managed;
+         ALTER TABLE wishlist_folders DROP COLUMN managed_tokens;
+         CREATE UNIQUE INDEX idx_wishlist_folders_managed ON wishlist_folders (managed_deck_id);";
+
+    /// v54's tombstones — the rewind directly under [`UNDO_V55`] and directly above
+    /// [`UNDO_V53`].
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V37`]'s and [`UNDO_V31`]'s exactly: the rung
+    /// is a bare `CREATE TABLE`, so a fixture that kept `sync_gone` dies at `table sync_gone
+    /// already exists` on the way back up — a failure no real upgrade can produce, and one that
+    /// takes every unrelated test in the chain with it. **It runs straight after [`UNDO_V55`]**,
+    /// because a rewind walks the ladder backwards; it read "It runs first" until v55 landed above
+    /// it. (Written as `UNDO_V53`, with its rung; renumbered to 54 at the merge with `main`, whose
+    /// per-list piles took 53 first.)
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule, and here there is none to name:
+    /// the table is `WITHOUT ROWID`, so its primary key *is* the table.
+    ///
+    /// ⚠️ **The `sync_gone_*` triggers are not the table's, so this leaves them standing** on a
+    /// fixture that ran `capture::install` before rewinding — each pointing at a table that is not
+    /// there until the climb puts it back. SQLite then refuses a `DROP COLUMN` or a `RENAME` on
+    /// any table carrying one (`error in trigger sync_gone_decks: no such table: main.sync_gone`,
+    /// measured against 3.53.0), as well as a delete from it — even one that matches no row. So
+    /// such a fixture may rewind v56, v55 and v54 and nothing below them: [`UNDO_V53`]'s very first
+    /// statement, `DELETE FROM deck_categories WHERE variant = 'theory'`, is refused over
+    /// `sync_gone_deck_categories` with `no such table: main.sync_gone` (measured against 3.53.0
+    /// on 2026-09-27, over a table holding no theory pile). The climb back alters none of those
+    /// tables until v54 has put `sync_gone` back: v55's `ADD COLUMN` on `wishlist_folders` and
+    /// v56's on `decks` both run after it.
+    pub const UNDO_V54: &str = "DROP TABLE IF EXISTS sync_gone;";
+
+    /// v53's per-list piles — the rewind directly under [`UNDO_V54`] and directly above
+    /// [`UNDO_V52`].
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason: `ADD COLUMN variant` is not idempotent, so a
+    /// fixture that kept the column dies at `duplicate column name` on the way back up. **The
+    /// two indexes go first and come back narrow**, [`UNDO_V29`]'s ordering: `DROP COLUMN`
+    /// refuses a column an index names, and both of v53's name `variant`. The narrow ones are
+    /// put back because a v52 file has them, and the climb drops them again before widening, so
+    /// the text they are rebuilt with never reaches the fence.
+    ///
+    /// **The theory piles are deleted rather than folded back**, [`UNDO_V52`]'s argument about
+    /// its entries: every fixture rewinds a file [`create_user_schema`] has just built, so there
+    /// is no pile to delete, and the line is here so that a chain that ever did seed one lands on
+    /// a v52 file rather than on a narrow index refusing the second `Sideboard`.
+    pub const UNDO_V53: &str = "DELETE FROM deck_categories WHERE variant = 'theory';
+         DROP INDEX IF EXISTS idx_deck_categories_grain;
+         DROP INDEX IF EXISTS idx_deck_categories_kind;
+         ALTER TABLE deck_categories DROP COLUMN variant;
+         CREATE UNIQUE INDEX idx_deck_categories_grain ON deck_categories (deck_id, name);
+         CREATE UNIQUE INDEX idx_deck_categories_kind
+             ON deck_categories (deck_id, kind) WHERE kind <> 'main';";
+
+    /// v52's token entries and mode — the rewind directly under [`UNDO_V53`] and directly above
+    /// [`UNDO_V51`], and the third after [`UNDO_V43`] and [`UNDO_V49`] that has to *put a column
+    /// back*: v47's `token_stack`, so that [`UNDO_V47`] beneath it finds the column it drops.
+    ///
+    /// Owed three times over, [`UNDO_V43`]'s count. The rung's `CREATE TABLE` is bare, so a
+    /// fixture that kept `deck_token_printings` dies at `table already exists` ([`UNDO_V13`]'s
+    /// loud reason); its `ADD COLUMN token_mode` is not idempotent, so one that kept the column
+    /// dies at `duplicate column name`; and its `DROP COLUMN token_stack` dies at `no such
+    /// column` on a fixture that did not get the column back. None of the three is a failure a
+    /// real upgrade can produce, and each takes every unrelated test in its chain with it.
+    ///
+    /// **`INTEGER NOT NULL DEFAULT 0`, exactly v47's words**, so the rewind lands on v51's shape
+    /// rather than near it. The column comes back at the *end* of `decks`, where a real v51 file
+    /// carries it before `managed_wishlist_mode`; the climb drops it again, so the stored text a
+    /// fixture climbs to is still byte-for-byte [`USER_SCHEMA_SQL`] — [`user_file_at_42`]'s note
+    /// about `notes`, one column along. Nothing here may assert a `decks` column *order*.
+    ///
+    /// **The entries are dropped rather than folded back into `deck_tokens`**: no fixture seeds a
+    /// token before it rewinds, and one that did would be asserting about a v51 file no upgrade
+    /// could have produced. The two indexes are named for [`UNDO_V46`]'s reason, although
+    /// `DROP TABLE` takes them.
+    pub const UNDO_V52: &str = "DROP INDEX IF EXISTS idx_deck_token_printings_uid;
+         DROP INDEX IF EXISTS idx_deck_token_printings_grain;
+         DROP TABLE IF EXISTS deck_token_printings;
+         ALTER TABLE decks DROP COLUMN token_mode;
+         ALTER TABLE decks ADD COLUMN token_stack INTEGER NOT NULL DEFAULT 0;";
+
+    /// v51's token rail index — the rewind directly under [`UNDO_V52`] and directly above
+    /// [`UNDO_V50`]. It was written as `UNDO_V50` and renumbered with its rung, because `main`
+    /// shipped the price-holdings v50 first.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V47`]'s exactly: `ALTER TABLE decks ADD
+    /// COLUMN` is not idempotent, so a fixture that kept the column dies at `duplicate column
+    /// name` on the way back up. **It runs first**, because a rewind walks the ladder backwards.
+    pub const UNDO_V51: &str = "ALTER TABLE decks DROP COLUMN token_rail_index;";
+
+    /// v50's holdings table — the rewind directly under [`UNDO_V51`] and directly above
+    /// [`UNDO_V49`].
+    ///
+    /// **A rebuild back to v45's shape, because the rung was one**: `DROP COLUMN` could take
+    /// `copies` away but nothing can put `price`'s `NOT NULL` back, and a v49 fixture whose price
+    /// accepts NULL is head wearing a v49 label — it would pass a snapshot the real v49 file
+    /// refuses. So the unpriced rows go first (v45 had no way to record one), the v50 table is
+    /// renamed aside, v45's table is created under its own unquoted name, the priced rows are
+    /// copied back, and the index the rename carried off is put back. Owed for [`UNDO_V14`]'s
+    /// **quiet** reason, not [`UNDO_V13`]'s loud one: the rung's rebuild succeeds just as well
+    /// over a table that is already v50's, so a fixture that skipped this would climb green while
+    /// claiming a v49 file that never existed. A chain that rewinds below 45 rebuilds the table
+    /// and then [`UNDO_V45`] drops it, which costs a few statements and nothing else.
+    pub const UNDO_V50: &str = "DELETE FROM price_snapshots WHERE price IS NULL;
+         ALTER TABLE price_snapshots RENAME TO price_snapshots_v50;
+         CREATE TABLE price_snapshots (
+             day TEXT NOT NULL,
+             marketplace TEXT NOT NULL,
+             card_id TEXT NOT NULL,
+             finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+             price REAL NOT NULL,
+             PRIMARY KEY (day, marketplace, card_id, finish)
+         ) WITHOUT ROWID;
+         INSERT INTO price_snapshots (day, marketplace, card_id, finish, price)
+             SELECT day, marketplace, card_id, finish, price FROM price_snapshots_v50;
+         DROP TABLE price_snapshots_v50;
+         CREATE INDEX idx_price_snapshots_printing
+             ON price_snapshots (marketplace, card_id, finish, day);";
+
+    /// v49's managed-wishlist mode — the rewind directly above [`UNDO_V48`], and the second on
+    /// this ladder (after [`UNDO_V43`]) that has to *put a column back*: v48's switch, so that
+    /// [`UNDO_V48`] beneath it finds the column it drops.
+    pub const UNDO_V49: &str = "ALTER TABLE decks DROP COLUMN managed_wishlist_mode;
+         ALTER TABLE decks ADD COLUMN managed_wishlist INTEGER NOT NULL DEFAULT 1;";
+
+    /// v48's managed wishlist — the rewind directly under [`UNDO_V49`] and directly above
+    /// [`UNDO_V47`], because every fixture rewinds newest first. It read "it runs first" until
+    /// v49 landed above it. Both `ADD COLUMN`s are not idempotent, so a fixture that left them
+    /// standing dies at `duplicate column name`.
+    pub const UNDO_V48: &str = "DROP INDEX IF EXISTS idx_wishlist_folders_managed;
+         ALTER TABLE wishlist_folders DROP COLUMN managed_deck_id;
+         ALTER TABLE decks DROP COLUMN managed_wishlist;";
+
+    /// v47's token pile setting — the rewind directly under [`UNDO_V48`] and directly above
+    /// [`UNDO_V46`]. It read "the newest rewind on the user ladder" until v48 landed above it;
+    /// the newest is whichever `UNDO_V*` matches `USER_SCHEMA_VERSION`.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason, [`UNDO_V42`]'s exactly: `ALTER TABLE decks ADD
+    /// COLUMN` is not idempotent, so a fixture that kept the column dies at `duplicate column
+    /// name` on the way back up. **It runs before [`UNDO_V46`]**, because a rewind walks the
+    /// ladder backwards.
+    pub const UNDO_V47: &str = "ALTER TABLE decks DROP COLUMN token_stack;";
+
+    /// v46's sticky notes — the rewind directly under [`UNDO_V47`].
+    ///
+    /// Owed for [`UNDO_V14`]'s **quiet** reason, v45's and v44's exactly: the rung is
+    /// `CREATE TABLE IF NOT EXISTS`, so a fixture that left `sticky_notes` standing would climb
+    /// perfectly happily and claim a version that never had it — green, and lying. **It runs
+    /// first, before [`UNDO_V45`]**, because a rewind walks the ladder backwards, and it carries
+    /// the same prediction the two docs below it did: the rung after this one collects a line
+    /// ahead of it.
+    ///
+    /// **The index is spelled out even though [`UNDO_V20`]'s rule says it need not be**:
+    /// `DROP TABLE` takes `idx_sticky_notes_uid` with it, and the line is here so the rewind
+    /// names everything the rung created rather than leaving the reader to work out which half
+    /// is implied. It is `IF EXISTS` and runs first, so it costs one no-op statement and cannot
+    /// fail a chain that has already lost the table.
+    pub const UNDO_V46: &str = "DROP INDEX IF EXISTS idx_sticky_notes_uid;
+         DROP TABLE IF EXISTS sticky_notes;";
+
+    /// v45's price history — the rewind directly under [`UNDO_V46`].
+    ///
+    /// Owed for [`UNDO_V14`]'s **quiet** reason, v44's exactly: the rung is `CREATE TABLE IF NOT
+    /// EXISTS`, so a fixture that left `price_snapshots` standing would climb happily while
+    /// claiming a version that never had it. **It runs first, before [`UNDO_V44`]**, because a
+    /// rewind walks the ladder backwards — and it carried the same prediction v44's doc did: the
+    /// rung after this one collects a line ahead of it. v46 is that line, collected exactly as
+    /// the sentence predicted, and the prediction moves up to the doc above rather than going
+    /// away.
+    ///
+    /// **The index needs no line of its own**, [`UNDO_V20`]'s rule: `DROP TABLE` takes
+    /// `idx_price_snapshots_printing` with it.
+    pub const UNDO_V45: &str = "DROP TABLE IF EXISTS price_snapshots;";
+
+    /// v44's activity log — the rewind directly under [`UNDO_V45`].
+    ///
+    /// Owed for [`UNDO_V14`]'s **quiet** reason rather than [`UNDO_V13`]'s loud one: the rung
+    /// is `CREATE TABLE IF NOT EXISTS`, so a fixture that left `activity` standing climbs
+    /// perfectly happily and claims a version that never had the table — green, and lying
+    /// about what it tests. That is the more dangerous of the two failures, which is why it is
+    /// written down rather than left to the climb to catch.
+    ///
+    /// **It runs first, before [`UNDO_V43`]**, for that constant's stated reason: a rewind
+    /// walks the ladder backwards and this is now the top of it. The doc directly below said
+    /// the same of itself and told whoever wrote rung 44 to expect to collect the line; this
+    /// is that line, and the sentence goes on being a prediction rather than history for
+    /// exactly one rung at a time.
+    ///
+    /// **The index needs no line of its own**, [`UNDO_V20`]'s rule and [`UNDO_V31`]'s:
+    /// `DROP TABLE` takes `idx_activity_recent` with it.
+    pub const UNDO_V44: &str = "DROP TABLE IF EXISTS activity;";
+
+    /// v43's two note tables and the column it took away — the rewind directly under
+    /// [`UNDO_V44`], and the first one on this ladder that has to **add** something back.
+    ///
+    /// Owed three times over, which is one more than any rung below it. The two `CREATE TABLE`s
+    /// are bare, so a fixture that kept `deck_notes` dies at `table deck_notes already exists`
+    /// on the way back up ([`UNDO_V13`]'s loud reason, and [`UNDO_V37`]'s); the
+    /// `ALTER TABLE decks ADD COLUMN notes_open` is not idempotent, so one that kept the column
+    /// dies at `duplicate column name`; and the `ALTER TABLE decks DROP COLUMN notes` is the
+    /// new half — a fixture that did **not** get `notes` back climbs the rung again and dies at
+    /// `no such column: notes`. None of the three is a failure a real upgrade can produce, and
+    /// any of them takes every unrelated test in the chain with it rather than only the ones
+    /// about notes.
+    ///
+    /// ⚠️ **`ADD COLUMN notes TEXT` is the half that is easy to forget, and a chain without it
+    /// is green until it is not.** A rewind that only dropped what v43 added would land *near*
+    /// v42 rather than on it: `decks` would be a table whose stored text is missing a column
+    /// every rung below still expects, and the first fixture to write a `notes` value would
+    /// fail somewhere with nothing pointing back here.
+    ///
+    /// **`TEXT` and nothing else, because that is exactly what v8 wrote.** A rewind lands on a
+    /// shape rather than near one; a `NOT NULL` or a `DEFAULT ''` here would be a `decks` no
+    /// database has ever had.
+    ///
+    /// **It runs after [`UNDO_V44`] and before [`UNDO_V42`]**, for that constant's stated
+    /// reason: a rewind walks the ladder backwards. It said "first" and "the top of it" while
+    /// v43 was head, which the activity log ended one rung later — the prediction the doc above
+    /// now carries, and the reason it is worth writing down each time.
+    ///
+    /// **All three indexes are spelled out where [`UNDO_V31`] needed none**, and the difference
+    /// is the last statement rather than a change of mind — [`UNDO_V37`]'s argument with one
+    /// more index on it: `DROP TABLE` would take all three with it, but `DROP COLUMN` refuses a
+    /// column an index names, so the order below is table-indexes, tables, column and the three
+    /// `DROP INDEX`es are the cheapest way to keep that order readable rather than load-bearing.
+    /// `deck_note_cards` goes before `deck_notes` because it is the child.
+    ///
+    /// **No `DROP TRIGGER` line, and none is owed.** The rung needs them off because the *real*
+    /// database it runs on has them; a fixture is built by [`create_user_schema`] and
+    /// `capture::install` has never touched it, so there is nothing here to drop.
+    pub const UNDO_V43: &str = "DROP INDEX IF EXISTS idx_deck_note_cards_uid;
+         DROP INDEX IF EXISTS idx_deck_notes_uid;
+         DROP INDEX IF EXISTS idx_deck_note_cards_grain;
+         DROP TABLE IF EXISTS deck_note_cards;
+         DROP TABLE IF EXISTS deck_notes;
+         ALTER TABLE decks DROP COLUMN notes_open;
+         ALTER TABLE decks ADD COLUMN notes TEXT;";
+
+    /// v42's stats disclosure — the rewind directly under [`UNDO_V43`].
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
+    /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept the column dies
+    /// at `duplicate column name` on the way back up — a failure no real upgrade can produce,
+    /// and one that takes every unrelated test in the chain with it rather than only the ones
+    /// about the stats band.
+    ///
+    /// **It runs after [`UNDO_V43`] and before [`UNDO_V41`]**, for that constant's stated
+    /// reason: a rewind walks the ladder backwards. It said "first" and "the top of it" while
+    /// v42 was head, which the note tables ended one rung later — the prediction the doc above
+    /// now carries, and the reason it is worth writing down each time.
+    ///
+    /// **One statement**, [`UNDO_V40`]'s shape: v42 appends a single column, so there is a
+    /// single column to take back off and the stored table text lands back on exactly what v41
+    /// left. ⚠️ **[`UNDO_V43`] above it is the first on this ladder that is *not* that shape** —
+    /// it has a column to put back as well as ones to take off — so read the "one statement"
+    /// rule as being about what a rung *did*, never as a fact about rewinds in general.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
+    /// `DROP COLUMN` would refuse a column an index named. The only table-level `CHECK` on
+    /// `decks` names `cover_kind`, which is the other thing `DROP COLUMN` refuses over.
+    pub const UNDO_V42: &str = "ALTER TABLE decks DROP COLUMN stats_open;";
+
+    /// v41's share cache — the rewind directly under [`UNDO_V42`].
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one: the rung
+    /// is a plain `CREATE TABLE`, not `CREATE TABLE IF NOT EXISTS`, so a fixture that left
+    /// `collection_shares` standing dies at `table already exists` on the way back up — a
+    /// failure no real upgrade can produce, and one that takes every unrelated test in the
+    /// chain with it rather than only the ones about sharing.
+    ///
+    /// **It runs after [`UNDO_V42`] and before [`UNDO_V40`]**, for that constant's stated
+    /// reason: a rewind walks the ladder backwards. It said "first" and "the top of it" while
+    /// v41 was head, which the stats disclosure ended one rung later — the prediction the doc
+    /// above now carries, and the reason it is worth writing down each time.
+    ///
+    /// **Neither index needs a line of its own**, [`UNDO_V20`]'s rule and [`UNDO_V31`]'s:
+    /// `DROP TABLE` takes `idx_collection_shares_folder` and `idx_collection_shares_whole`
+    /// with it.
+    pub const UNDO_V41: &str = "DROP TABLE IF EXISTS collection_shares;";
+
+    /// v40's deck kind — the rewind directly under [`UNDO_V41`].
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
+    /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept the column
+    /// dies at `duplicate column name` on the way back up — a failure no real upgrade can
+    /// produce, and one that takes every unrelated test in the chain with it rather than only
+    /// the ones about the deck kind.
+    ///
+    /// **It runs after [`UNDO_V41`] and before [`UNDO_V39`]**, for that constant's stated
+    /// reason: a rewind walks the ladder backwards. It said "first" and "the top of it" while
+    /// v40 was head, which the share cache ended one rung later — the prediction the doc above
+    /// now carries, and the reason it is worth writing down each time.
+    ///
+    /// **One statement**, [`UNDO_V39`]'s shape: v40 appends a single column, so there is a
+    /// single column to take back off and the stored table text lands back on exactly what v39
+    /// left.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
+    /// `DROP COLUMN` would refuse a column an index named. **Nor does a `CHECK`** — the pair
+    /// this column is half of is fenced in `deck::update_deck` and not in the DDL, which is the
+    /// rung's own argument read here as the thing that makes the rewind a one-liner: a
+    /// table-level `CHECK (NOT (theory_enabled AND virtual_only))` would have been the other
+    /// thing `DROP COLUMN` refuses over.
+    pub const UNDO_V40: &str = "ALTER TABLE decks DROP COLUMN virtual_only;";
+
+    /// v39's third theory-mark switch — the rewind directly under [`UNDO_V40`].
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
+    /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept the column
+    /// dies at `duplicate column name` on the way back up — a failure no real upgrade can
+    /// produce, and one that takes every unrelated test in the chain with it rather than only
+    /// the ones about the theory mark.
+    ///
+    /// **It runs after [`UNDO_V40`] and before [`UNDO_V38`]**, for that constant's stated
+    /// reason: a rewind walks the ladder backwards. It was the top of it for one rung — this
+    /// line read "it runs first" until v40 landed, exactly as the sentence directly below had
+    /// read it about [`UNDO_V38`] one rung earlier, which is this file's own prose-rot note
+    /// arriving on schedule for the third time.
+    ///
+    /// **One statement where the rung below it needs two**, and for the same reason read one
+    /// grain finer: v39 appends a single column, so there is a single column to take back off,
+    /// and the stored table text lands back on exactly what v38 left.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
+    /// `DROP COLUMN` would refuse a column an index named. The only table-level `CHECK` on
+    /// `decks` names `cover_kind`, which is the other thing `DROP COLUMN` refuses over.
+    pub const UNDO_V39: &str = "ALTER TABLE decks DROP COLUMN theory_mark_unplanned;";
+
+    /// v38's two theory-mark switches — the rewind directly under [`UNDO_V39`].
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
+    /// `ALTER TABLE decks ADD COLUMN` is not idempotent, so a fixture that kept either column
+    /// dies at `duplicate column name` on the way back up — a failure no real upgrade can
+    /// produce, and one that takes every unrelated test in the chain with it rather than only
+    /// the ones about the theory mark.
+    ///
+    /// **It runs after [`UNDO_V39`] and before [`UNDO_V37`]**, for that constant's stated
+    /// reason: a rewind walks the ladder backwards. It was the top of it for one rung.
+    ///
+    /// **The two drops are in the opposite order to the rung's two `ADD COLUMN`s**, which is
+    /// the same sentence read one grain finer: `theory_mark_name` was appended last, so it is
+    /// the one that has to come off first for the stored table text to land back on exactly
+    /// what v37 left rather than on a re-ordered spelling of it.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
+    /// `DROP COLUMN` would refuse a column an index named. The only table-level `CHECK` on
+    /// `decks` names `cover_kind`, which is the other thing `DROP COLUMN` refuses over.
+    pub const UNDO_V38: &str = "ALTER TABLE decks DROP COLUMN theory_mark_name;
+                            ALTER TABLE decks DROP COLUMN theory_mark_exact;";
+
+    /// v37's overrides table and the deck flag beside it — the rewind directly under
+    /// [`UNDO_V38`].
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one, and owed
+    /// twice: the rung is a bare `CREATE TABLE`, so a fixture that kept `deck_tokens` dies at
+    /// `table deck_tokens already exists` on the way back up, and it is a bare
+    /// `ALTER TABLE decks ADD COLUMN`, so one that kept `tokens_open` dies at
+    /// `duplicate column name`. Neither is a failure a real upgrade can produce, and either
+    /// takes every unrelated test in the chain with it.
+    ///
+    /// **It runs after [`UNDO_V39`] and [`UNDO_V38`], and before [`UNDO_V35`]**, a rewind
+    /// walking the ladder backwards. It was the top of it for part of one day.
+    ///
+    /// **Both indexes are spelled out where [`UNDO_V31`] needed none**, and the difference is
+    /// the second statement rather than a change of mind: `DROP TABLE` would take
+    /// `idx_deck_tokens_grain` and `idx_deck_tokens_uid` with it, but `DROP COLUMN` refuses a
+    /// column an index names, so the order below is table-indexes, table, column and the two
+    /// `DROP INDEX`es are the cheapest way to keep that order readable rather than load-bearing.
+    pub const UNDO_V37: &str = "DROP INDEX IF EXISTS idx_deck_tokens_uid;
+         DROP INDEX IF EXISTS idx_deck_tokens_grain;
+         DROP TABLE IF EXISTS deck_tokens;
+         ALTER TABLE decks DROP COLUMN tokens_open;";
+
+    /// v35's sixth grade, taken back off — the rewind directly under [`UNDO_V37`].
+    ///
+    /// Owed for [`UNDO_V14`]'s **quiet** reason rather than [`UNDO_V13`]'s loud one: the rung
+    /// is a rebuild, so a fixture that kept the widened CHECK would climb it again perfectly
+    /// happily while claiming to be a version that never had `'NONE'` — green, and lying about
+    /// what it tests. That is [`UNDO_V29`]'s `error_log` argument and [`UNDO_V33`]'s
+    /// `deck_audit` one, a third table over: a database below v35 that accepts an ungraded row
+    /// is not a database any reader has.
+    ///
+    /// **So it is a rebuild too, and it maps rather than deletes.** A stored `'NONE'` cannot
+    /// exist below v35 — the narrow CHECK refuses it — and the honest answer to what such a row
+    /// *was* on the way down is `'NM'`, because that is precisely what the old DEFAULT would
+    /// have recorded for the same press. Dropping the rows instead would make a rewind lose the
+    /// reader's cards, which no rewind on either ladder does. **The mapping can collide**: a
+    /// printing held at both `'NONE'` and `'NM'` folds onto one grain, and the
+    /// `CREATE UNIQUE INDEX` at the end is where that fails, loudly. No fixture seeds such a
+    /// pair — every caller rewinds a database [`create_user_schema`] built moments earlier, so
+    /// there is nothing to map at all — and this note is the fence for the one that does.
+    ///
+    /// **It runs after [`UNDO_V39`], [`UNDO_V38`] and [`UNDO_V37`] and before [`UNDO_V34`]**,
+    /// for that
+    /// constant's stated reason: a rewind walks the ladder backwards. It read "runs first, and
+    /// this is now the top of it" for as long as v35 was head, and four rungs have landed above
+    /// it since — v36 writes no shape and so owes no rewind, which is why the numbering has a gap
+    /// there rather than a missing line. The order matters here rather
+    /// than merely being tidy — [`UNDO_V29`] drops `collection_entries.sync_uid`, and a
+    /// `DROP COLUMN` refuses a column an index names, so this has to have put
+    /// `idx_collection_entries_uid` back before that constant takes it away again.
+    ///
+    /// **The five indexes are spelled out**, which is [`UNDO_V20`]'s rule read the other way:
+    /// `DROP TABLE` takes every one of them, so every one of them is owed a line.
+    pub const UNDO_V35: &str = "CREATE TABLE collection_entries_pre35 (
+             id INTEGER PRIMARY KEY,
+             card_id TEXT NOT NULL,
+             set_code TEXT NOT NULL,
+             collector_number TEXT NOT NULL,
+             lang TEXT NOT NULL DEFAULT 'en',
+             finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+             condition TEXT NOT NULL DEFAULT 'NM'
+                 CHECK (condition IN ('NM','LP','MP','HP','DMG')),
+             condition_original TEXT,
+             quantity INTEGER NOT NULL CHECK (quantity >= 0),
+             tradelist_quantity INTEGER NOT NULL DEFAULT 0
+                 CHECK (tradelist_quantity >= 0),
+             purchase_price REAL,
+             purchase_currency TEXT,
+             acquired_at TEXT,
+             acquisition_source TEXT,
+             serial_number TEXT,
+             altered INTEGER NOT NULL DEFAULT 0,
+             signed INTEGER NOT NULL DEFAULT 0,
+             proxy INTEGER NOT NULL DEFAULT 0,
+             misprint INTEGER NOT NULL DEFAULT 0,
+             grading TEXT CHECK (grading IS NULL OR json_valid(grading)),
+             tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)),
+             notes TEXT,
+             needs_review TEXT,
+             created_at INTEGER NOT NULL,
+             updated_at INTEGER NOT NULL,
+             folder_id INTEGER
+                 REFERENCES collection_folders(id) ON DELETE SET NULL,
+             sync_uid TEXT
+         );
+         INSERT INTO collection_entries_pre35
+             (id, card_id, set_code, collector_number, lang, finish, condition,
+              condition_original, quantity, tradelist_quantity, purchase_price,
+              purchase_currency, acquired_at, acquisition_source, serial_number,
+              altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+              created_at, updated_at, folder_id, sync_uid)
+             SELECT id, card_id, set_code, collector_number, lang, finish,
+                    CASE WHEN condition = 'NONE' THEN 'NM' ELSE condition END,
+                    condition_original, quantity, tradelist_quantity, purchase_price,
+                    purchase_currency, acquired_at, acquisition_source, serial_number,
+                    altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                    created_at, updated_at, folder_id, sync_uid
+               FROM collection_entries;
+         DROP TABLE collection_entries;
+         ALTER TABLE collection_entries_pre35 RENAME TO collection_entries;
+         CREATE UNIQUE INDEX idx_collection_grain ON collection_entries (
+             card_id, finish, condition, lang, altered, signed, proxy, misprint,
+             coalesce(serial_number, ''), coalesce(grading, ''), coalesce(folder_id, 0)
+         );
+         CREATE INDEX idx_collection_card ON collection_entries (card_id);
+         CREATE INDEX idx_collection_review
+             ON collection_entries (needs_review) WHERE needs_review IS NOT NULL;
+         CREATE INDEX idx_collection_folder ON collection_entries (folder_id);
+         CREATE UNIQUE INDEX idx_collection_entries_uid
+             ON collection_entries (sync_uid);";
+
+    /// v34's set-aside marker.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
+    /// `ALTER TABLE collection_folders ADD COLUMN locked` is not idempotent, so a fixture that
+    /// kept the column dies at `duplicate column name` on the way back up — a failure no real
+    /// upgrade can produce, and one that takes every unrelated test in the chain with it.
+    ///
+    /// **It runs after [`UNDO_V39`], [`UNDO_V38`], [`UNDO_V37`] and [`UNDO_V35`], and before
+    /// [`UNDO_V33`]**,
+    /// for that constant's stated reason: a rewind walks the ladder backwards. It was the top of
+    /// the ladder until those four landed above it — **within days, from four branches**,
+    /// which is the ladder's own numbering rule in action rather than an accident: every chain
+    /// below now starts four rungs higher. There is no `UNDO_V36`, because v36 writes no
+    /// shape.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
+    /// `DROP COLUMN` would refuse a column an index named. The table-level `CHECK` names
+    /// `kind` and `deck_id` and not this column, which is the other thing `DROP COLUMN`
+    /// refuses over — measured with `node:sqlite` on 2026-09-03, the drop restores the v29
+    /// text byte for byte and the re-climb lands back on the v34 one.
+    pub const UNDO_V34: &str = "ALTER TABLE collection_folders DROP COLUMN locked;";
+
+    /// And v33's rename, back to the tag the label used to be.
+    ///
+    /// **It runs before [`UNDO_V31`] and after [`UNDO_V34`]**, for that constant's stated
+    /// reason: a rewind walks the ladder backwards. There is no `UNDO_V32` between it and v31 —
+    /// v32 writes no shape at all, which [`user_file_at_31`] explains — so above it are
+    /// [`UNDO_V39`], [`UNDO_V38`], [`UNDO_V37`], [`UNDO_V35`] and [`UNDO_V34`], in that order,
+    /// and every chain below spells the five of them together. **This enumeration had lost
+    /// `UNDO_V37` and miscounted itself as four**, which is the very hazard the paragraph below
+    /// it describes, caught only when v39 landed and the count was re-taken.
+    ///
+    /// **It said "the newest rewind on the user ladder, and every chain below starts with it"
+    /// through two rungs that were above it**, which is this repo's prose-rot hazard on the one
+    /// page where the ordering *is* the correctness argument: a doc-comment edit routes to
+    /// neither CI job, so nothing went red either time. The chains themselves were always right
+    /// — they are code.
+    ///
+    /// **It is owed for [`UNDO_V13`]'s loud reason twice over.** `ALTER TABLE deck_tags RENAME
+    /// TO deck_labels` on a database that already has `deck_labels` is `no such table`, and
+    /// `ALTER TABLE deck_cards RENAME COLUMN tag_id` on one that already says `label_id` is the
+    /// same failure a column over — so a fixture that skipped this would not quietly test
+    /// nothing, it would take every test in the chain down with an error about a table the test
+    /// is not about. `UNDO_V29`'s `deck_tags` lines are what make the ordering visible: they are
+    /// correct exactly because this ran first.
+    ///
+    /// **`deck_audit` is rebuilt narrow again**, which is [`UNDO_V29`]'s `error_log` argument
+    /// verbatim: a fixture below v33 that kept the widened CHECK would accept a `'label'` row
+    /// while claiming to be a version that never had one, and the rung above it would then be
+    /// tested against a shape no reader has. The rows are carried back the same way, `'label'`
+    /// to `'tag'` and the payload key with them.
+    ///
+    /// **No `deck_undo` carry, unlike the rung this reverses**, and the difference is the
+    /// fixtures rather than the pragma: every caller rewinds a database `create_user_schema`
+    /// built moments earlier, so `deck_undo` is empty and there is nothing for
+    /// `deck_audit`'s CASCADE to take. A fixture that seeds an undo step *before* rewinding
+    /// would need the dance the rung does; none does, and this note is the fence.
+    pub const UNDO_V33: &str = "ALTER TABLE deck_labels RENAME TO deck_tags;
+         ALTER TABLE deck_cards RENAME COLUMN label_id TO tag_id;
+         DROP INDEX IF EXISTS idx_deck_labels_grain;
+         DROP INDEX IF EXISTS idx_deck_labels_uid;
+         CREATE UNIQUE INDEX idx_deck_tags_grain ON deck_tags (name_key);
+         CREATE UNIQUE INDEX idx_deck_tags_uid ON deck_tags (sync_uid);
+         CREATE TABLE deck_audit_pre33 (
+             id INTEGER PRIMARY KEY,
+             deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+             at INTEGER NOT NULL,
+             variant TEXT NOT NULL DEFAULT 'live'
+                 CHECK (variant IN ('live','theory')),
+             kind TEXT NOT NULL CHECK (kind IN
+                 ('add','remove','quantity','move','swap','tag','category','folder','deck')),
+             card_id TEXT,
+             card_name TEXT,
+             payload TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload)),
+             delta INTEGER NOT NULL DEFAULT 0,
+             sync_uid TEXT
+         );
+         INSERT INTO deck_audit_pre33
+             (id, deck_id, at, variant, kind, card_id, card_name, payload, delta, sync_uid)
+             SELECT id, deck_id, at, variant,
+                    CASE WHEN kind = 'label' THEN 'tag' ELSE kind END,
+                    card_id, card_name,
+                    CASE WHEN kind = 'label' AND json_type(payload, '$.label') IS NOT NULL
+                         THEN json_remove(
+                                  json_insert(payload, '$.tag',
+                                              json_extract(payload, '$.label')),
+                                  '$.label')
+                         ELSE payload END,
+                    delta, sync_uid
+               FROM deck_audit;
+         DROP TABLE deck_audit;
+         ALTER TABLE deck_audit_pre33 RENAME TO deck_audit;
+         CREATE INDEX idx_deck_audit_deck ON deck_audit (deck_id, at DESC);
+         CREATE UNIQUE INDEX idx_deck_audit_uid ON deck_audit (sync_uid);";
+
+    /// A user file at 51 — the shape every machine carries the day before a token's printings
+    /// became entries, and the only population the v52 rung is *for*.
+    ///
+    /// Head rewound past v59, v58, v57, v56, v55, v54, v53 and v52 — v52 alone until v53's piles,
+    /// v54's table, v55's column, v56's, v57's, v58's and v59's landed above it, none of which a file at
+    /// 51 can hold. What makes a test built on it a real upgrade rather than a fresh install is
+    /// what the test seeds afterwards: a `deck_tokens` row carrying a picked `card_id`, which
+    /// nothing at head writes any more, and a `decks.token_stack` that head does not have.
+    pub fn user_file_at_51() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V59} {UNDO_V58} {UNDO_V57} {UNDO_V56} {UNDO_V55} {UNDO_V54} {UNDO_V53} {UNDO_V52} PRAGMA main.user_version = 51;"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// A `cards` row good enough to be pointed at. Not a foreign key anywhere — that is
+    /// the point of most of the tests below — but the printing has to exist for the
+    /// soft reference to be *resolving* before a swap drops it.
+    pub fn seed_card(conn: &Connection, id: &str, set: &str, cn: &str) {
+        conn.execute(
+            "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout, raw)
+             VALUES (?1, 'o-' || ?1, 'Lightning Bolt', ?2, ?3, 'en', 'normal', '{}')",
+            rusqlite::params![id, set, cn],
+        )
+        .unwrap();
+    }
+
+    /// A deck, taking every default the table offers (`casual`, `card_art`, not built,
+    /// not archived) so a change to one of them shows up somewhere.
+    pub fn deck(conn: &Connection, name: &str) -> i64 {
+        conn.query_row(
+            "INSERT INTO decks (name, created_at, updated_at)
+             VALUES (?1, unixepoch(), unixepoch()) RETURNING id",
+            [name],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One category of one deck — the v8 stand-in for what `deck_meta::
+    /// ensure_predefined_categories` will create once Task 2 lands. `is_active` follows
+    /// [`PREDEFINED_CATEGORIES`]'s own rule (`maybe` inactive, everything else active)
+    /// rather than taking a parameter, because no test below has a reason to want otherwise
+    /// yet — a caller that does can `UPDATE` the row it gets back the id of.
+    pub fn category(conn: &Connection, deck_id: i64, kind: &str, name: &str) -> i64 {
+        let is_active = i64::from(kind != "maybe");
+        conn.query_row(
+            "INSERT INTO deck_categories
+                (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 0, unixepoch(), unixepoch()) RETURNING id",
+            rusqlite::params![deck_id, name, kind, is_active],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One collection row, nonfoil NM, at the one grain these tests need.
+    pub fn entry(conn: &Connection, card_id: &str, quantity: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at)
+             VALUES (?1,'lea','161','en','nonfoil','NM',?2,unixepoch(),unixepoch())
+             RETURNING id",
+            rusqlite::params![card_id, quantity],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One printing in one category of one deck (the `live` variant, the only one these
+    /// tests need), with the printing denormalised beside the soft `card_id` exactly as
+    /// `deck.rs` will write it.
+    pub fn deck_card(
+        conn: &Connection,
+        deck_id: i64,
+        card_id: &str,
+        category_id: i64,
+        quantity: i64,
+    ) -> i64 {
+        conn.query_row(
+            "INSERT INTO deck_cards
+                (deck_id,category_id,card_id,set_code,collector_number,lang,name,quantity,
+                 created_at,updated_at)
+             VALUES (?1,?2,?3,'lea','161','en','Lightning Bolt',?4,unixepoch(),unixepoch())
+             RETURNING id",
+            rusqlite::params![deck_id, category_id, card_id, quantity],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// And v20's art tags, mute list, two columns on `oracle_tags`, and the illustration
+    /// index.
+    ///
+    /// Owed for [`UNDO_V13`]'s reason — two `ALTER TABLE … ADD COLUMN`s, so a fixture that
+    /// forgot this one could not migrate at all — and for [`UNDO_V14`]'s quieter one as well,
+    /// since the six `CREATE TABLE IF NOT EXISTS`es beside them would leave a fixture claiming
+    /// a version it is not.
+    ///
+    /// **This is the first undo that has to run *before* the ones numbered below it**, and it
+    /// is why every fixture spells it first rather than last. [`UNDO_V14`] drops `oracle_tags`
+    /// outright; a v20 undo that ran after it would `ALTER` a table that is no longer there.
+    /// Newest-first is the order every rewind always meant — the ascending lists below worked
+    /// only because no rung had ever touched a table a lower rung deletes.
+    ///
+    /// Three indexes come down by hand and two ride along. `idx_oracle_tags_norm` names
+    /// `slug_norm`, and SQLite refuses `DROP COLUMN` on a column an index references — the trap
+    /// [`UNDO_V19`] documents one table over. `idx_cards_illustration` and
+    /// `idx_oracle_tag_cards_slug` are dropped for [`UNDO_V14`]'s quieter reason: `IF NOT
+    /// EXISTS` means a fixture that kept one would migrate perfectly happily while claiming a
+    /// version that never had it. **Which index needs a line is decided by whether this fixture
+    /// drops its table**, not by which rung created it — the two art indexes need none because
+    /// `DROP TABLE art_tags` and `DROP TABLE art_tag_illustrations` take their own indexes with
+    /// them, while `oracle_tag_cards` survives to be dropped by [`UNDO_V14`] and so leaves its
+    /// index standing.
+    pub const UNDO_V20: &str = "DROP INDEX idx_oracle_tags_norm;
+         ALTER TABLE oracle_tags DROP COLUMN slug_norm;
+         ALTER TABLE oracle_tags DROP COLUMN id;
+         DROP INDEX idx_cards_illustration;
+         DROP INDEX idx_oracle_tag_cards_slug;
+         DROP TABLE art_tags;
+         DROP TABLE art_tag_parents;
+         DROP TABLE art_taggings;
+         DROP TABLE art_tag_illustrations;
+         DROP TABLE art_tag_meta;
+         DROP TABLE muted_tags;";
+
+    /// And v21's app-wide tag list, back to the per-deck one v8 built.
+    ///
+    /// **The rewind is a rebuild rather than a column swap**, because the shape changed both
+    /// ways: `deck_id` came off and `name_key` went on, and `ALTER TABLE … DROP COLUMN` refuses
+    /// a column named by an index in any case. Dropping the table takes
+    /// `idx_deck_tags_grain` with it — [`UNDO_V20`]'s rule about which index needs a line of
+    /// its own, applied here.
+    ///
+    /// **It restores the shape and not the rows, and nothing needs it to.** Every fixture is
+    /// `migrate_single_file`d into an empty in-memory database and rewound before anything is seeded, so
+    /// there has never been a tag in one at this moment. A rewind that tried to invent a
+    /// `deck_id` for a row that has none would be inventing the very fact v21 deleted.
+    ///
+    /// **It runs first, with [`UNDO_V20`]**, for that constant's stated reason: newest-first is
+    /// the order every rewind always meant.
+    pub const UNDO_V21: &str = "DROP TABLE deck_tags;
+         CREATE TABLE deck_tags (
+            id INTEGER PRIMARY KEY,
+            deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+            name TEXT NOT NULL,
+            color TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+         );
+         CREATE UNIQUE INDEX idx_deck_tags_grain ON deck_tags (deck_id, name);";
+
+    /// And v23's wishlist folders. **There is no `UNDO_V22`** — see [`v21_database`] for why
+    /// that rung is the one on this ladder that owes no rewind — so this one lands beside
+    /// [`UNDO_V21`] and every chain below spells the two of them together.
+    ///
+    /// Owed for [`UNDO_V14`]'s **quieter** reason rather than [`UNDO_V13`]'s. Every statement
+    /// v23 writes is idempotent by construction — `CREATE TABLE IF NOT EXISTS`, a
+    /// `DROP INDEX IF EXISTS` before its `CREATE`, and an `ALTER TABLE … ADD COLUMN` the step
+    /// probes `pragma_table_info` for rather than issuing blind — so a fixture that forgot
+    /// this one would migrate perfectly happily and simply not be the version it claims: a
+    /// "v11 database" carrying a table and a column that did not exist until v23.
+    ///
+    /// **It is deliberately not a full rewind, and "deliberately" is the word that matters
+    /// here.** `wishlist_entries.folder_id` stays, and not because SQLite will not take it
+    /// back: it does refuse `DROP COLUMN` on a column an index names, and two name this one,
+    /// but dropping `idx_wishlist_grain` and `idx_wishlist_folder` first makes the
+    /// `DROP COLUMN` succeed — measured 2026-08-22, and
+    /// [`migrating_a_v22_wishlist_files_every_existing_wish_at_the_root`] now runs exactly that
+    /// sequence. The reason is the statement after it: putting the three-term index back means
+    /// rebuilding a *unique* index over a narrower grain than the rows beneath it were written
+    /// on, which the moment two of them differ only by folder is a constraint failure inside
+    /// somebody else's fixture. A rewind is a helper for the fixtures below it and may not
+    /// carry that. So they carry the column instead, and the v23 step's probe finds it and
+    /// skips the `ALTER`.
+    ///
+    /// `idx_wishlist_grain` needs no line of its own: v23's own `DROP INDEX IF EXISTS` is what
+    /// widens it, and it runs again over whatever the rewind left. `idx_wishlist_folder` does,
+    /// for [`UNDO_V20`]'s rule about which index needs one — `wishlist_entries` survives this
+    /// rewind, so an index over it that nothing drops would outlive the version that made it.
+    pub const UNDO_V23: &str = "DROP TABLE IF EXISTS wishlist_folders;
+         DROP INDEX IF EXISTS idx_wishlist_folder;";
+
+    /// And v24's collection folders — [`UNDO_V23`] one table over, and owed for the same
+    /// **quieter** reason: every statement v24 writes is idempotent by construction, so a
+    /// fixture that forgot this one would migrate perfectly happily and simply not be the
+    /// version it claims — a "v11 database" carrying a table and a column that did not exist
+    /// until v24.
+    ///
+    /// **It stops short of `collection_entries.folder_id` for [`UNDO_V23`]'s reason**, and not
+    /// because SQLite forbids it: dropping `idx_collection_grain` and `idx_collection_folder`
+    /// first would make the `DROP COLUMN` succeed. What a shared rewind may not do is the
+    /// statement after that — putting the ten-column index back means building a *narrower*
+    /// unique index over rows written on the wide grain, which is a constraint failure the
+    /// moment two of them differ only by folder, inside somebody else's fixture. So every
+    /// fixture beneath head re-enters the v24 step carrying the column, and the step's
+    /// `pragma_table_info` probe is what makes that survivable.
+    ///
+    /// `idx_collection_grain` needs no line of its own: v24's own `DROP INDEX IF EXISTS` is
+    /// what widens it, and it runs again over whatever the rewind left. `idx_collection_folder`
+    /// does, for [`UNDO_V20`]'s rule about which index needs one — `collection_entries`
+    /// survives this rewind, so an index over it that nothing drops would outlive the version
+    /// that made it.
+    ///
+    /// **A fixture that goes on to *write* to `collection_entries` before migrating needs the
+    /// full rewind [`schema_at_23`] pays, not this.** Foreign keys are ON for every connection
+    /// in this crate — `libsqlite3-sys` builds the amalgamation with
+    /// `SQLITE_DEFAULT_FOREIGN_KEYS=1` — so a surviving column whose `REFERENCES` names a table
+    /// this took away answers `no such table: main.collection_folders` at the next insert. No
+    /// fixture sharing this constant writes there today; the one that does is the one that
+    /// drops the column first.
+    ///
+    /// **It runs first, before [`UNDO_V23`]**, for that constant's stated reason: newest-first.
+    pub const UNDO_V24: &str = "DROP TABLE IF EXISTS collection_folders;
+         DROP INDEX IF EXISTS idx_collection_folder;";
+
+    /// And v25's deck groups. **The first rewind on this ladder that has to put a table
+    /// *back***, because v25 is the first rung that takes one away.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one, and that
+    /// is what makes it unskippable: `DROP TABLE deck_allocations` and
+    /// `ALTER TABLE decks DROP COLUMN is_built` are not idempotent in either direction, so a
+    /// fixture that walked to head and then forgot this line does not merely mislabel itself —
+    /// it dies at `no such table: main.deck_allocations` on the way back up.
+    ///
+    /// The DDL is the v8 table verbatim, because that is what a v24 database has and this is a
+    /// description of history. `IF NOT EXISTS` throughout for the reason every rewind carries
+    /// it: a chain is spelled once per fixture, but the fixture below it may have got there by
+    /// another route.
+    ///
+    /// **The `ALTER` is the one statement that cannot be guarded**, and it is why this constant
+    /// is only ever spelled after a full [`migrate_single_file`]: `ADD COLUMN` has no `IF NOT EXISTS` and
+    /// always appends, so `is_built` comes back at the *end* of `decks`. v25 drops it again on
+    /// the way up, which is what keeps
+    /// [`every_version_ends_with_the_same_schema_as_a_fresh_install`] comparing two tables that
+    /// have both lost it — a rewind that left the column standing would fail that test on
+    /// ordinals.
+    ///
+    /// **The `app_meta` row is restored rather than merely tolerated**, and it is the only
+    /// place in the crate that writes it: the deck-driven switch that owned it is gone, so
+    /// without this line the rung's `DELETE` would run over an empty table in every test and
+    /// the assertion that it goes would be decoration.
+    ///
+    /// The two folder rows are *deleted* rather than created, this being the only half of a
+    /// rewind that looks the usual way round. `collection_entries.folder_id` is
+    /// `ON DELETE SET NULL`, so any copies the conversion filed surface at the root again —
+    /// which is a rewind for a fixture with no rows and nothing more; a fixture that wants the
+    /// *quantities* back as well would have to un-split them, and none does.
+    ///
+    /// **It runs first, before [`UNDO_V24`]**, for that constant's stated reason: newest-first.
+    /// Here the order is load-bearing rather than tidy — the `DELETE` names a table
+    /// [`UNDO_V24`] drops.
+    pub const UNDO_V25: &str = "DELETE FROM collection_folders WHERE kind IN ('deck', 'removed');
+         CREATE TABLE IF NOT EXISTS deck_allocations (
+            id INTEGER PRIMARY KEY,
+            deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+            collection_entry_id INTEGER NOT NULL
+                REFERENCES collection_entries(id) ON DELETE CASCADE,
+            quantity INTEGER NOT NULL CHECK (quantity > 0),
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_allocations_grain
+            ON deck_allocations (deck_id, collection_entry_id);
+         CREATE INDEX IF NOT EXISTS idx_deck_allocations_entry
+            ON deck_allocations (collection_entry_id);
+         ALTER TABLE decks ADD COLUMN is_built INTEGER NOT NULL DEFAULT 0;
+         INSERT OR REPLACE INTO app_meta (key, value)
+            VALUES ('deck_driven_collection', '1');";
+
+    /// And v26's bracket column and its three combo tables.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason: `ALTER TABLE decks ADD COLUMN bracket` is not
+    /// idempotent, so a fixture that forgot this line does not merely mislabel itself — it dies
+    /// at `duplicate column name` on the way back up, a failure no real upgrade can produce.
+    /// The three `DROP TABLE`s are owed for [`UNDO_V14`]'s quieter one as well, the rung's own
+    /// DDL being `CREATE TABLE IF NOT EXISTS` throughout: a fixture that kept them would migrate
+    /// perfectly happily while claiming a version that never had them.
+    ///
+    /// **One `DROP COLUMN` is the whole of the deck half.** No index names `decks.bracket` and
+    /// no constraint references it — it is a sentinel in a `NOT NULL` column rather than a
+    /// nullable foreign key, [`UNDO_V16`]'s situation exactly — so this rewind has nothing to
+    /// take down first, where [`UNDO_V19`]'s and [`UNDO_V24`]'s do.
+    ///
+    /// **The two indexes need no line of their own**, [`UNDO_V20`]'s rule about which one does:
+    /// `DROP TABLE combo_cards` takes `idx_combo_cards_combo` and `idx_combo_cards_oracle` with
+    /// it, because the table they are on is the table that goes.
+    ///
+    /// **Child before parent**, `swap_combo_staging`'s reason: with foreign keys on a
+    /// `DROP TABLE` is an implicit `DELETE`, and dropping `combos` while `combo_cards` still
+    /// references it walks every row through the cascade first. No fixture on this ladder has
+    /// a row in either, so this is a rule stated where it can be read rather than a cost being
+    /// avoided.
+    ///
+    /// **It runs first, before [`UNDO_V25`]**, for that constant's stated reason: newest-first
+    /// is the order every rewind always meant.
+    pub const UNDO_V26: &str = "ALTER TABLE decks DROP COLUMN bracket;
+         DROP TABLE IF EXISTS combo_cards;
+         DROP TABLE IF EXISTS combos;
+         DROP TABLE IF EXISTS combo_meta;";
+
+    /// A database at version 19: everything v19 left behind, and none of v20.
+    ///
+    /// Honest for [`UNDO_V13`]'s reason — two of v20's statements are
+    /// `ALTER TABLE … ADD COLUMN`, so a fixture that forgot the rewind could not migrate at
+    /// all. It is the "one step below head" fixture now, the title [`v18_database`] held.
+    pub fn v19_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_single_file(&conn).unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} PRAGMA user_version = 19;"
+        ))
+        .unwrap();
+        conn
+    }
+
+    /// How many of v26's three tables `sqlite_master` carries — the shape
+    /// [`oracle_tag_table_count`] has one feed over, so a fixture assertion is one number rather
+    /// than three `EXISTS` queries that can each be forgotten.
+    pub fn combo_table_count(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master
+              WHERE type = 'table' AND name IN ('combos','combo_cards','combo_meta')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// Rewind a head-shaped database to version 25 — **head minus one since v26**, and the
+    /// shortest rewind on the ladder: v26 adds and takes nothing away, so [`UNDO_V26`] alone is
+    /// the whole of it.
+    ///
+    /// The `ALTER TABLE decks DROP COLUMN bracket` inside it is what makes this a real v25
+    /// database rather than head wearing a label: the v26 rung's `ADD COLUMN` has no
+    /// `IF NOT EXISTS`, so a fixture that skipped it would die on the way back up rather than
+    /// quietly mislabel itself. [`UNDO_V14`]'s quieter failure is the one the three
+    /// `DROP TABLE`s prevent.
+    pub fn schema_at_25(conn: &Connection) {
+        migrate_single_file(conn).unwrap();
+        conn.execute_batch(&format!("{UNDO_V26} PRAGMA user_version = 25;"))
+            .unwrap();
+    }
+
+    /// A database at version 25, as a fixture. [`schema_at_25`] with the connection made for
+    /// it — the shape every other `vNN_database` on this ladder has.
+    pub fn v25_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        schema_at_25(&conn);
+        conn
+    }
+
+    /// Columns of `table` with this name — 0 or 1. Parameterised by table and read that way:
+    /// callers ask it about `deck_cards`, `oracle_tags`, `art_tags` and
+    /// `art_tag_illustrations`.
+    pub fn has_column(conn: &Connection, table: &str, column: &str) -> i64 {
+        conn.query_row(
+            &format!("SELECT count(*) FROM pragma_table_info('{table}') WHERE name = ?1"),
+            rusqlite::params![column],
+            |r| r.get(0),
+        )
+        .unwrap()
     }
 }

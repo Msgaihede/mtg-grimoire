@@ -108,9 +108,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_collection_folder_deck
 the decision rather than a coincidence** — `collection_folders.parent_id` is
 `deck_folders.parent_id`, and `collection_entries.folder_id` is `decks.folder_id`. "Folders nest,
 and the things filed in them outlive the filing" is a rule this schema has now made **three
-times**. `schema.rs`'s module doc carries the whole-schema inventory of both lists and is the copy
-of record; `decks-storage.md` carries the deck slice and `wishlist-folders.md` the wishlist's. A
-rung that adds one half of a new filing cabinet and forgets the other is exactly what those
+times**. The core's `schema.rs` module doc carries the whole-schema inventory of both lists and is
+the copy of record; `decks-storage.md` carries the deck slice and `wishlist-folders.md` the
+wishlist's. A rung that adds one half of a new filing cabinet and forgets the other is exactly what those
 inventories exist to catch, since a prose-only edit routes to neither CI job.
 
 **The third action is this cabinet's own, and it points the other way on purpose.**
@@ -3217,7 +3217,7 @@ build, not a description of this one.
 
 | Path | What is in it |
 | --- | --- |
-| `src-tauri/src/schema.rs` | The v24 and v25 steps, the v34 rung that adds `locked`, the v36 rung that sweeps every `kind = 'deck'` folder to the exact-grain rule, `COLLECTION_GRAIN`, `COLLECTION_FOLDER_KINDS`, `UNDO_V24`, `UNDO_V25`, `UNDO_V34`, `schema_at_23`, `v24_database`, and the whole-schema `ON DELETE` inventory |
+| `crates/grimoire-core/src/schema.rs` | The v24 and v25 steps, the v34 rung that adds `locked`, the v36 rung that sweeps every `kind = 'deck'` folder to the exact-grain rule, `COLLECTION_GRAIN`, `COLLECTION_FOLDER_KINDS`, `UNDO_V24`, `UNDO_V25`, `UNDO_V34`, `schema_at_23`, `v24_database`, and the whole-schema `ON DELETE` inventory |
 | `src-tauri/src/collection_folders.rs` | The folder commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `set_folder_locked`, `LOCKED_FOLDER_IDS` and `effectively_locked` (the lock's inheritance, spelled once), `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK`, `FOLDER_IS_LOCKED`, `FOLDER_HOLDS_LOCKED` and the `DOOMED_FOLDERS` sub-tree it and the delete share |
 | `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the pair that moves a row across the deck boundary and back — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
 | `src-tauri/src/deck_pull.rs` | The third crossing (2026-09-03, issue #351): `deck_pull_plan` and `deck_pull_from_collection` — filling a hole the list already declares, writing no `deck_cards` row. Candidate eligibility, the pre-pick order, the all-or-nothing batch, and the `move` history row. Recorded in [decks-storage.md](decks-storage.md#the-pull-filling-a-hole-the-list-already-has) |

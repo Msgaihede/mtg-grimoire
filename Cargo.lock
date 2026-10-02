@@ -1701,7 +1701,9 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+ "tempfile",
  "thiserror 2.0.19",
+ "unicode-normalization",
  "x25519-dalek",
 ]
 
@@ -2633,7 +2635,6 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
- "unicode-normalization",
  "webview2-com",
  "windows-sys 0.61.2",
  "zip",

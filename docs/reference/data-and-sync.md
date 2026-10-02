@@ -12,7 +12,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   thirty-one until v54 — a count in prose that no build checks, which is the rot this file's own
   header warns about, so it carries none now. Both halves are
   `grep -c '^\s*("[a-z_]*", Side::User),'` and the same with `Side::Corpus` over
-  `schema.rs` — re-run 2026-09-27 at v54: **32** and **25**; **a bare `grep -c 'Side::User'`
+  `schema.rs` (`crates/grimoire-core/src/` since 2026-10-02) — re-run 2026-09-27 at v54: **32**
+  and **25**; **a bare `grep -c 'Side::User'`
   over-counts** — 37 against 32 at v54, because `mod tests` matches the enum by name five more
   times (this said four until v52's stray-table test began asking the registry). Count them,
   never add to a number written here; `src/lib/userTables.json` holds the same list and a Rust
@@ -564,7 +565,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots. **It then read 30 for two more**, through v31 and v32, and so did
   `src-tauri/CLAUDE.md`'s copy of the same pair — the identical failure, twice over, on the one
-  number in this file that a single `grep USER_SCHEMA_VERSION src-tauri/src/schema.rs` answers.
+  number in this file that a single `grep USER_SCHEMA_VERSION crates/grimoire-core/src/schema.rs`
+  answers (`src-tauri/src/schema.rs` until the file moved on 2026-10-02).
   **It then read 33 for three more after that**, through v34, v35 and v36 — this time in this file
   alone, since `src-tauri/CLAUDE.md`'s own copy stayed only one rung behind, at 34, until this
   pass corrected both. Three drifts now on the one number a `grep` settles, which is why this
@@ -1316,9 +1318,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   trigger comes off**, unlike v57, because nothing here writes a row and an `ADD COLUMN` is no edit
   to capture. Two `ADD COLUMN`s and no index, so neither figure at the top of this page moves. It
   owes **`UNDO_V58`**, for `UNDO_V13`'s loud reason, **at the head of every chain** — `grep -c
-  '{UNDO_V58}' src-tauri/src/schema.rs` counts the chains plus the rung test's own rewind, so read
-  that rather than a number here. Like `UNDO_V56` it drops the three `decks` capture triggers before
-  its two `DROP COLUMN`s, because `sync_ins_decks` and `sync_upd_decks` read `NEW.todos` and
+  '{UNDO_V58}' crates/grimoire-core/src/schema.rs src-tauri/src/schema/mod.rs` counts the chains plus
+  the rung test's own rewind (two files since 2026-10-02: one chain stayed in `src-tauri` with the
+  tests that name a module still there), so read that rather than a number here. Like `UNDO_V56`
+  it drops the three `decks` capture triggers before its two `DROP COLUMN`s, because `sync_ins_decks` and `sync_upd_decks` read `NEW.todos` and
   `NEW.todos_open` on a fixture that ran `capture::install`, and it drops the columns in the reverse
   of the order the rung adds them. [decks-storage.md](decks-storage.md)'s *Deck to-dos* has the three
   commands and the compare-and-set.
@@ -1762,10 +1765,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `v9_database` at all.
   **The per-rung fixture counts that used to be written out here are gone on purpose.** They read
   "all six below it" and "the five below that" against a fixture set that has grown twice since,
-  and a count is a fact about a *tree*: `grep -c "{UNDO_V33}" src-tauri/src/schema.rs` is the
-  census of how many fixtures the newest rung reaches, and it answers for the tree you are
-  actually in. (The constant in that command moves with the ladder — it named `UNDO_V23` until v24
-  landed, `UNDO_V24` until v25 did, and then stood at `UNDO_V25` across the split and four rungs
+  and a count is a fact about a *tree*: `grep -c "{UNDO_V33}" crates/grimoire-core/src/schema.rs
+  src-tauri/src/schema/mod.rs` is the census of how many fixtures the newest rung reaches — over both
+  files since 2026-10-02, when the schema moved to the core and one chain stayed behind — and it
+  answers for the tree you are actually in. (The constant in that command moves with the ladder —
+  it named `UNDO_V23` until v24 landed, `UNDO_V24` until v25 did, and then stood at `UNDO_V25` across the split and four rungs
   above it before v33 moved it, which is the drift a command was supposed to prevent and only
   half did — and the whole point of writing a command rather than a number is that only the command
   needed changing.) **v21 is a rebuild rather than an `ADD COLUMN`, and it still needs a line in every
