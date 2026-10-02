@@ -1390,7 +1390,7 @@ mod tests {
         let changes = std::sync::Arc::new(crate::changes::Changes::new());
         (
             Arc::new(AppState {
-                core: grimoire_core::state::State::new(
+                core: std::sync::Arc::new(grimoire_core::state::State::new(
                     conn,
                     Some(read),
                     dir.clone(),
@@ -1400,11 +1400,9 @@ mod tests {
                         changes.clone(),
                         Default::default(),
                     ),
-                ),
-                syncing: AtomicBool::new(false),
-                client: crate::scryfall::Client::new(base_url),
+                    crate::scryfall::Client::new(base_url),
+                )),
                 images: crate::images::Cache::new(dir.join("images")),
-                index: std::sync::RwLock::default(),
                 // The mirror is never started in these tests; a clean mask and an empty record are
                 // what an `AppState` looks like before the first pass.
                 mirror,

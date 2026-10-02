@@ -8428,8 +8428,22 @@ pub fn memory_pair() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(&format!("ATTACH DATABASE ':memory:' AS {CORPUS}"))
         .unwrap();
-    create_user_schema(&conn, "main").unwrap();
-    create_corpus_schema(&conn, CORPUS).unwrap();
+    build_pair(&conn);
+    conn
+}
+
+/// Both schemas at head on a connection whose pair is empty: [`memory_pair`]'s second half,
+/// for a test that needs the pair on **files** — `db::open_write` on an empty directory, then
+/// this. A second connection can then be opened on the same pair, which two in-memory ones
+/// can never be.
+///
+/// It is a fresh install with no single file to convert, built the way a host that has never
+/// had one would build it. No capture triggers and no launch passes: a test that wants a
+/// launch calls [`prepare_database`].
+#[cfg(any(test, feature = "testing"))]
+pub fn build_pair(conn: &Connection) {
+    create_user_schema(conn, "main").unwrap();
+    create_corpus_schema(conn, CORPUS).unwrap();
     conn.execute_batch(&on_schema("main", USER_SEED_SQL))
         .unwrap();
     conn.execute_batch(&format!(
@@ -8438,7 +8452,6 @@ pub fn memory_pair() -> Connection {
     ))
     .unwrap();
     conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-    conn
 }
 
 /// Create a fresh, empty `cards_staging` table with the exact `cards` layout.

@@ -11,8 +11,8 @@
 //!   (holding one across an await would not even compile for a spawned future), and a
 //!   lock held for the length of a 77 MB download would block every writer. Locks live
 //!   in short synchronous scopes only. The one long blocking operation, the ingest, runs
-//!   on a [`tauri::async_runtime::spawn_blocking`] thread and takes the lock itself, one
-//!   batch at a time — this module hands it the mutex, never a guard.
+//!   through [`crate::platform::spawn::blocking`] and takes the lock itself, one batch at a
+//!   time — this module hands it the mutex, never a guard.
 //! * **The expensive work is paid for once.** The 77 MB download is the costly step, so
 //!   the metadata that makes the *next* check cheap (`bulk_etag`, `bulk_updated_at`) is
 //!   written as soon as the ingest succeeds — before `/sets` is even called. A later
@@ -28,34 +28,42 @@
 //! listener, and Tauri drops events that nobody is listening for — so the event is the
 //! fast path, and `sync_meta` is the one the UI can still read a minute later.
 //!
+//! **No function here takes a window.** A run is handed the host's [`State`] and says what it
+//! is doing through `state.events` ([`crate::events::EventSink`]) — `sync:progress`, and
+//! `collection:reconciled` when the migration log moved something. The desktop forwards both
+//! to every window; a host with no page to tell gives the state a silent sink.
+//!
+//! **Two things of the old `sync` module are still `src-tauri`'s**, in its module of this
+//! name: the desktop's `AppState`, which wraps a [`State`], and `status`, which reads the
+//! image cache's failure count beside the five fields this module's keys answer — it comes
+//! home with the cache.
+//!
 //! `sync_meta.value` is `NOT NULL`, so this module never writes an absent value as
 //! NULL or as `""`: [`set_meta_opt`] deletes the row instead. See [`get_meta`].
 
 use crate::ingest;
 use crate::scryfall;
-use grimoire_core::state::State;
+use crate::state::State;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
-use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Emitter;
+use std::sync::Arc;
 
 /// `sync_meta` keys. Named constants because they are also read by `sync_status` and,
 /// via the DTOs below, mirrored in the frontend.
 const K_BULK_ETAG: &str = "bulk_etag";
-const K_BULK_UPDATED_AT: &str = "bulk_updated_at";
-const K_LAST_CHECK_AT: &str = "last_check_at";
+pub const K_BULK_UPDATED_AT: &str = "bulk_updated_at";
+pub const K_LAST_CHECK_AT: &str = "last_check_at";
 const K_LAST_INGEST_AT: &str = "last_ingest_at";
 const K_CARD_COUNT: &str = "card_count";
 /// Lines the last ingest could not read as cards. Scryfall's bulk file has shipped
 /// truncated lines and non-card objects before; the spec requires the count be *surfaced*
 /// rather than swallowed, because a number climbing from 3 to 30 000 is the difference
 /// between a stray token and a schema change that is quietly costing the user cards.
-const K_LAST_INGEST_SKIPPED: &str = "last_ingest_skipped";
+pub const K_LAST_INGEST_SKIPPED: &str = "last_ingest_skipped";
 /// Why the last run failed, or no row at all if it did not. Survives the process, which
 /// the `sync:progress` event does not.
-const K_LAST_ERROR: &str = "last_error";
+pub const K_LAST_ERROR: &str = "last_error";
 
 /// Where a 429 lockout is remembered, as unix seconds.
 ///
@@ -76,84 +84,6 @@ const INGEST_TOTAL_ESTIMATE: u64 = 117_000;
 /// once per network chunk (thousands of times over 77 MB), which is far more than a
 /// progress bar can use.
 const DOWNLOAD_EMIT_BYTES: u64 = 1_000_000;
-
-/// Everything a command or a background sync needs. Managed by Tauri as
-/// `Arc<AppState>` so a spawned sync can own a handle of its own.
-///
-/// **It wraps `grimoire-core`'s [`State`] and derefs to it**, so `state.db`, `state.data_dir`,
-/// `state.fence` and `state.events` are that struct's fields, read here exactly as they were
-/// while this one declared them — and a function that takes `&State` can be handed this. The
-/// core holds what every host needs and has no reason to know about a window: the connections,
-/// the data directory, the cross-file fence and the event sink, with the one update hook
-/// already on the write connection.
-///
-/// Two connections to one file, deliberately. `db` is the only one that writes, and every
-/// writer shares it — the ingest included, which is why it takes the lock a batch at a
-/// time rather than for its whole run. The other is opened read-only so searches and
-/// status polls answer from the last committed WAL snapshot without queueing behind any
-/// writer at all: take it through [`lock_db_read`], or as a mutex through [`State::reader`].
-/// See [`crate::db::open_read_only`].
-///
-/// **Not everything below is the desktop's for good.** The two mirror fields and the change
-/// mask are; the rest are every host's, and wait here for the type each one holds to move —
-/// `syncing`, `client`, `images` and `index` with the extraction's I/O step, `pairing` with
-/// its sync step.
-pub struct AppState {
-    /// The every-host half, built by [`State::new`].
-    pub core: State,
-    pub syncing: AtomicBool,
-    pub client: scryfall::Client,
-    /// The image cache. Lives here so the `mtgimg://` handler can reach it from an
-    /// `AppHandle` — that handle is the only state the handler is given.
-    pub images: crate::images::Cache,
-    /// The in-memory facet index and the generation of the corpus it describes — cold, which
-    /// is a supported state and not an error, until the first build lands. Read it through
-    /// [`crate::index::lifecycle::current`]; everything else about it is that module's.
-    ///
-    /// `RwLock` and not `Mutex`: every facet request reads it and only a sync or a collection
-    /// write replaces it. The `Arc` inside is so a reader clones the handle and lets the lock
-    /// go at once — a facet pass must never hold a lock a sync's rebuild is waiting on.
-    pub index: std::sync::RwLock<crate::index::lifecycle::IndexSlot>,
-    /// What the plain-text mirror still owes the disk, as three bits.
-    ///
-    /// An `Arc` and not a plain field because the update hook on `db` holds a clone of it for
-    /// the life of the process — it is one of the observers [`crate::mirror::watch::observers`]
-    /// hands to [`State::new`]. Written from inside SQLite's own callback and read by the
-    /// mirror thread; no lock is involved either way, which is the point.
-    pub mirror: Arc<crate::mirror::watch::Mask>,
-    /// What the mirror's last pass did, for the Settings panel to read back.
-    ///
-    /// In memory rather than in the database, deliberately: the numbers describe a folder
-    /// that may not survive a restart, and a count read back after one would be a claim about
-    /// a disk nobody has looked at since. See [`crate::mirror::watch::LastPass`].
-    pub mirror_status: Mutex<crate::mirror::watch::LastPass>,
-    /// Which user tables have been written since the other windows were last told — see
-    /// [`crate::changes`]. An `Arc` for [`AppState::mirror`]'s reason: the update hook on `db`
-    /// holds a clone of it for the life of the process, as a second observer.
-    pub changes: Arc<crate::changes::Changes>,
-    /// A pairing in flight, if there is one.
-    ///
-    /// **In memory rather than in the database, deliberately**, and it is the same argument
-    /// [`AppState::mirror_status`] makes one field up: an offer that survived a restart would
-    /// be an invite a reader printed last month still being accepted today. It outlives the
-    /// webview, which is what a reader who opens Settings twice needs, and dies with the
-    /// process, which is what makes the pairing token one-time in fact.
-    ///
-    /// It holds the derived pair key, which is the other reason it is here and not in SQLite:
-    /// nothing this side of a completed pairing has any business surviving a crash.
-    pub pairing: Mutex<Option<crate::sync_pair::pairing::Pending>>,
-}
-
-/// **What keeps every reader of `state.db` unedited.** `AppState` is named in seventy-odd files
-/// and its connection in half of them; a field access and a method call both auto-deref, and a
-/// `&AppState` coerces to the `&State` a function in the core asks for.
-impl std::ops::Deref for AppState {
-    type Target = State;
-
-    fn deref(&self) -> &State {
-        &self.core
-    }
-}
 
 /// Result of a sync run. `updated_at` is `Some` only when `updated` is true, so a
 /// caller can never mistake stale metadata for freshly ingested data.
@@ -258,7 +188,7 @@ impl Progress {
 
 /// The `sync_meta` store's three functions — `grimoire_core::sync_meta`'s since the storage step,
 /// re-exported at the names every caller here knows them by.
-pub use grimoire_core::sync_meta::{get_meta, set_meta, set_meta_opt};
+pub use crate::sync_meta::{get_meta, set_meta, set_meta_opt};
 
 /// Should this run talk to the API at all?
 ///
@@ -314,10 +244,7 @@ fn check_download_size(compressed_size: u64) -> Result<u64, String> {
 /// Seconds since the Unix epoch. A clock before 1970 is not worth a panic: it reads as
 /// 0, which makes every check due.
 fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+    u64::try_from(crate::platform::clock::now_secs()).unwrap_or(0)
 }
 
 /// What a sync run reads out of the database before it does anything else.
@@ -348,7 +275,7 @@ fn count_cards(conn: &Connection) -> i64 {
 /// — `desktop::start` holds the optional feeds back until the card download is over when it is
 /// not. An `EXISTS` rather than [`count_cards`]'s `count(*)`, which walks 116 k rows to answer
 /// yes. A corpus that cannot answer reads as empty, which only defers the feeds.
-pub(crate) fn has_cards(conn: &Connection) -> bool {
+pub fn has_cards(conn: &Connection) -> bool {
     conn.query_row("SELECT EXISTS (SELECT 1 FROM cards)", [], |r| r.get(0))
         .unwrap_or(false)
 }
@@ -393,58 +320,6 @@ fn unchanged(card_count: i64) -> SyncOutcome {
     }
 }
 
-/// Lock the database, recovering from a poisoned mutex.
-///
-/// Poisoning means some other thread panicked while holding the lock; the `Connection`
-/// itself survives that (rusqlite rolls an open transaction back as it unwinds), so
-/// refusing to lock ever again would brick every later sync and search for no gain.
-///
-/// Shared with [`crate::search`] so that recovery rule lives in exactly one place — which is
-/// [`State::lock_db`] now, and this is the name every caller here has always reached it by.
-pub(crate) fn lock_db(state: &AppState) -> MutexGuard<'_, Connection> {
-    state.core.lock_db()
-}
-
-/// Lock a connection mutex, recovering from poisoning.
-///
-/// The rule [`lock_db`] and [`lock_db_read`] both apply, in one place, over any mutex —
-/// [`crate::images::Cache`] is handed `&Mutex<Connection>` rather than an `AppState`, so
-/// it needs the rule without the state.
-///
-/// A one-line delegate on purpose: the recovery rule has exactly one definition, in
-/// [`crate::db::lock_blocking`], which the ingest also reaches directly.
-pub(crate) fn lock_conn(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
-    crate::db::lock_blocking(mutex)
-}
-
-/// Lock any std mutex, recovering from poisoning — the same rule as [`lock_conn`], for the
-/// maps and counters that are not connections ([`crate::images::Cache`]'s single-flight
-/// map is the one caller today).
-///
-/// A one-line delegate for the same reason [`lock_conn`] is one: the recovery rule has
-/// exactly one definition, in [`crate::db::lock_plain`], and a second copy of
-/// `unwrap_or_else(|e| e.into_inner())` is a second place for it to drift.
-pub(crate) fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    crate::db::lock_plain(mutex)
-}
-
-/// Lock the read-only connection, recovering from poisoning as [`lock_db`] does.
-///
-/// A different mutex from `db`, which is the point: this one is only ever held for a short
-/// run of queries — one search, or the five reads [`status`] makes — and never across an
-/// `.await`, so waiting for it is bounded no matter what the writer is doing.
-///
-/// [`State::lock_db_read`], by the name its callers know. On the desktop that is always the
-/// second connection; a host with only one reads through the one it writes with.
-pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
-    state.core.lock_db_read()
-}
-
-/// [`with_write`] and [`with_write_waiting`] — the one definition of a user-facing write —
-/// are `grimoire-core`'s since the extraction's domain step, re-exported at the names every
-/// caller here knows them by. They take `&State`, which an `&AppState` derefs to.
-pub(crate) use grimoire_core::state::{with_write, with_write_waiting};
-
 /// Upsert `sets`, returning how many rows were written.
 ///
 /// Rows with a blank `code` are skipped: `code` is the primary key, and SQLite would
@@ -480,9 +355,13 @@ pub fn insert_sets(conn: &mut Connection, sets: &[scryfall::SetRow]) -> rusqlite
     Ok(written)
 }
 
-fn emit(app: &tauri::AppHandle, phase: &str, done: u64, total: u64) {
+fn emit(state: &State, phase: &str, done: u64, total: u64) {
     // A dropped progress event is never worth failing a sync over.
-    let _ = app.emit("sync:progress", Progress::new(phase, done, total));
+    crate::events::emit(
+        &*state.events,
+        "sync:progress",
+        &Progress::new(phase, done, total),
+    );
 }
 
 /// The terminal event. Every path that leaves `do_sync` successfully sends one, so the
@@ -491,11 +370,11 @@ fn emit(app: &tauri::AppHandle, phase: &str, done: u64, total: u64) {
 /// `skipped` is `Some` only on the path that actually ingested — a run that found nothing
 /// new has no lines of its own to report, and repeating the previous run's figure would
 /// read as a fresh count.
-fn emit_done(app: &tauri::AppHandle, card_count: i64, skipped: Option<u64>) {
+fn emit_done(state: &State, card_count: i64, skipped: Option<u64>) {
     let n = card_count.max(0) as u64;
     let mut progress = Progress::new("done", n, n);
     progress.message = Some(done_message(n, skipped));
-    let _ = app.emit("sync:progress", progress);
+    crate::events::emit(&*state.events, "sync:progress", &progress);
 }
 
 /// What the `done` event says. The skipped clause appears only when there is something
@@ -543,11 +422,7 @@ impl Drop for SyncingGuard<'_> {
 /// `sync:progress` event with phase `error` (Tauri drops events the webview is not yet
 /// listening for, which at startup is all of them), and written to `sync_meta.last_error`
 /// (which is still there whenever the UI gets around to asking).
-pub async fn run_sync(
-    state: Arc<AppState>,
-    app: tauri::AppHandle,
-    force: bool,
-) -> Result<SyncOutcome, String> {
+pub async fn run_sync(state: Arc<State>, force: bool) -> Result<SyncOutcome, String> {
     if state.syncing.swap(true, Ordering::SeqCst) {
         // Returned without a progress event, and without touching `last_error`, on
         // purpose: the sync already in flight is the one driving `sync:progress`, and
@@ -556,7 +431,7 @@ pub async fn run_sync(
     }
     let _guard = SyncingGuard(&state.syncing);
 
-    let result = do_sync(&state, &app, force).await;
+    let result = do_sync(&state, force).await;
     // Unconditionally, and before the error funnel below: a 429 can be earned on a path that
     // *succeeds* overall — `reconcile_ids` logs its failure and returns — so keying this off
     // `Err` would drop exactly the lockouts nobody else records. An upsert of one integer is
@@ -564,34 +439,12 @@ pub async fn run_sync(
     persist_penalty(&state);
     if let Err(e) = &result {
         {
-            let conn = lock_db(&state);
+            let conn = state.lock_db();
             let _ = set_meta_opt(&conn, K_LAST_ERROR, Some(e.as_str()));
         }
-        let _ = app.emit("sync:progress", Progress::error(e.clone()));
+        crate::events::emit(&*state.events, "sync:progress", &Progress::error(e.clone()));
     }
     result
-}
-
-/// Tell the plain-text mirror that the sync has swapped `cards`, so every mirrored CSV's
-/// `Price` column (and any corrected card name) is owed a pass.
-///
-/// One of the four things that run a full mirror pass (spec §5). The update hook cannot carry
-/// this: `cards` maps to no surface on purpose, because a sync rewrites 116 700 rows and a
-/// per-row mark would be a hundred thousand hook fires and a rebuild every refresh.
-///
-/// **Called from [`do_sync`] the moment the swap has landed, and it was once called from
-/// [`run_sync`] on `Ok` with `updated`** (issue #551). That gate was one step too late: a run
-/// that swapped the cards and then failed at `/sets` returned `Err`, so the mirror was never
-/// told — and every later run took the 304 path, which swaps nothing and marks nothing, so the
-/// mirrored prices stayed a corpus behind until Scryfall next rotated the bulk file. Marking
-/// where the swap lands covers that run and still spends nothing on a throttled or 304 run,
-/// which changed no card name and no price.
-///
-/// A function rather than one line inline because [`do_sync`] takes a `tauri::AppHandle` and
-/// this crate has no mock-app harness, so the call site itself is unreachable from the suite —
-/// `mirror::watch`'s tests reach this instead, and the placement is what this doc records.
-pub(crate) fn note_mirror_after_swap(state: &AppState) {
-    state.mirror.mark_all();
 }
 
 /// Note a failed call to Scryfall in the error log.
@@ -604,7 +457,7 @@ pub(crate) fn note_mirror_after_swap(state: &AppState) {
 /// Best-effort, and skipped rather than waited for if the write connection is busy: this
 /// describes a failure that has already happened, on a path that is already returning an
 /// error, and no part of it is worth blocking on.
-fn note_scryfall(state: &Arc<AppState>, operation: &str, err: &scryfall::ScryfallError) {
+fn note_scryfall(state: &State, operation: &str, err: &scryfall::ScryfallError) {
     if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         crate::errors::record(
             &conn,
@@ -640,7 +493,7 @@ fn note_scryfall(state: &Arc<AppState>, operation: &str, err: &scryfall::Scryfal
 /// through here would waste that whole wait against a lock that scope already holds.
 /// `spawn_build` holds nothing, and `collection_source::with_write_owned` releases its guard before
 /// calling `invalidate_owned` — which its own doc names as the house rule.
-pub(crate) fn note_database(state: &AppState, operation: &str, message: &str) {
+pub fn note_database(state: &State, operation: &str, message: &str) {
     if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         crate::errors::record(
             &conn,
@@ -661,7 +514,7 @@ pub(crate) fn note_database(state: &AppState, operation: &str, message: &str) {
 ///
 /// **Every caller of the Scryfall API owes this, not only the sync** — `tags::refresh` runs it
 /// too, because its check shares the client's lockout (issue #551).
-pub(crate) fn persist_penalty(state: &AppState) {
+pub fn persist_penalty(state: &State) {
     let until = state.client.penalty_until_unix();
     if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         let _ = crate::app_meta::set_app_meta(&conn, K_SCRYFALL_PENALTY_UNTIL, &until.to_string());
@@ -676,43 +529,42 @@ pub(crate) fn persist_penalty(state: &AppState) {
 /// the run which ingested the cards would leave the table empty until Scryfall next
 /// rotates the bulk file. A `count(*)` is cheap; a permanently empty `sets` table is not.
 async fn finish_unchanged(
-    state: &Arc<AppState>,
-    app: &tauri::AppHandle,
+    state: &Arc<State>,
     now: u64,
     card_count: i64,
 ) -> Result<SyncOutcome, String> {
     let needs_sets = {
-        let conn = lock_db(state);
+        let conn = state.lock_db();
         sets_need_fetch(&conn)
     };
     if needs_sets {
-        emit(app, "sets", 0, 0);
+        emit(state, "sets", 0, 0);
         let sets = state
             .client
             .fetch_sets()
             .await
             .inspect_err(|e| note_scryfall(state, "sets", e))
             .map_err(|e| e.to_string())?;
-        let mut conn = lock_db(state);
+        let mut conn = state.lock_db();
         insert_sets(&mut conn, &sets).map_err(|e| e.to_string())?;
     }
 
     {
-        let conn = lock_db(state);
+        let conn = state.lock_db();
         mark_checked(&conn, now).map_err(|e| e.to_string())?;
     }
     // On this path too, and that is the point: 304 is the answer most runs get, so a
     // reconcile that only ran after an ingest would run about as often as Scryfall rotates
     // its bulk file — while `/migrations` grows on its own schedule.
-    reconcile_ids(state, app).await;
+    reconcile_ids(state).await;
     // Nothing on this path replaced `cards` — that is what "unchanged" means — so the facet
     // index is still true and is deliberately left alone. The one exception is the once-ever
     // conversion, whose `VACUUM` renumbers the rowids the index is made of; it says so, and
     // then this is the rebuild it owes.
-    if compact_once(state, app).await {
+    if compact_once(state).await {
         crate::index::lifecycle::spawn_build(state);
     }
-    emit_done(app, card_count, None);
+    emit_done(state, card_count, None);
     Ok(unchanged(card_count))
 }
 
@@ -726,11 +578,11 @@ async fn finish_unchanged(
 /// A failure is logged and dropped. The bulk data is ingested either way, and an id
 /// migration that did not apply today applies tomorrow — whereas failing the whole sync
 /// over it would cost the user their card update.
-async fn reconcile_ids(state: &Arc<AppState>, app: &tauri::AppHandle) {
+async fn reconcile_ids(state: &Arc<State>) {
     let worth_it = {
         // The read connection: this is one `count(*)` against each user table, and it must
         // not queue behind anything — least of all to decide *not* to do any work.
-        let conn = lock_db_read(state);
+        let conn = state.lock_db_read();
         !crate::reconcile::user_data_is_empty(&conn)
     };
     if !worth_it {
@@ -756,8 +608,8 @@ async fn reconcile_ids(state: &Arc<AppState>, app: &tauri::AppHandle) {
     // consumed its own handle, and a pass that moved a `card_id` has to refresh the index's
     // `owned` set.
     let owned = state.clone();
-    let applied = tauri::async_runtime::spawn_blocking(move || {
-        let mut conn = lock_db(&owned);
+    let applied = crate::platform::spawn::blocking(move || {
+        let mut conn = owned.lock_db();
         crate::reconcile::apply(&mut conn, &migrations)
     })
     .await;
@@ -773,7 +625,7 @@ async fn reconcile_ids(state: &Arc<AppState>, app: &tauri::AppHandle) {
             crate::index::lifecycle::invalidate_owned(state);
             // Only when something moved. A pass that skipped every already-applied
             // migration — which is every pass after the first — has nothing to tell anyone.
-            let _ = app.emit(
+            state.events.emit(
                 "collection:reconciled",
                 serde_json::json!({
                     "repointed": stats.repointed,
@@ -809,13 +661,17 @@ async fn reconcile_ids(state: &Arc<AppState>, app: &tauri::AppHandle) {
 ///
 /// A failure is logged and nothing more. The cards are ingested and swapped in either way,
 /// and a database whose freelist did not shrink is a database that works.
-async fn reclaim_freed_pages(state: &Arc<AppState>, app: &tauri::AppHandle) {
+async fn reclaim_freed_pages(state: &Arc<State>) {
     let joined = {
         let state = state.clone();
-        let app = app.clone();
-        tauri::async_runtime::spawn_blocking(move || {
+        crate::platform::spawn::blocking(move || {
             crate::maintenance::reclaim_freed_pages(&state.db, &mut |done, total| {
-                emit(&app, "reclaiming", done.max(0) as u64, total.max(0) as u64)
+                emit(
+                    &state,
+                    "reclaiming",
+                    done.max(0) as u64,
+                    total.max(0) as u64,
+                )
             })
         })
         .await
@@ -866,9 +722,9 @@ async fn reclaim_freed_pages(state: &Arc<AppState>, app: &tauri::AppHandle) {
 /// attempted: a caller that hears `true` owes a rebuild whatever the outcome, because a
 /// conversion that failed still leaves the index cleared and cold is not a state to settle
 /// into either.
-async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) -> bool {
+async fn compact_once(state: &Arc<State>) -> bool {
     let (convert, rebuild) = {
-        let conn = lock_db(state);
+        let conn = state.lock_db();
         (
             crate::maintenance::needs_conversion(&conn, crate::db::CORPUS)
                 && get_meta(&conn, crate::maintenance::K_AUTO_VACUUM_ERROR).is_none(),
@@ -880,7 +736,7 @@ async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) -> bool {
     if !convert && !rebuild {
         return false;
     }
-    emit(app, "compacting", 0, 0);
+    emit(state, "compacting", 0, 0);
     if convert {
         // **A `VACUUM` renumbers rowids**, which is exactly what desyncs `cards_fts` two
         // paragraphs up — and the facet index is rowids and nothing else. Cleared here rather
@@ -898,8 +754,8 @@ async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) -> bool {
     // As in `reconcile_ids`: one handle for the blocking task, one kept so a failure can
     // still be written down after the task has taken its own.
     let owned = state.clone();
-    let joined = tauri::async_runtime::spawn_blocking(move || {
-        let conn = lock_db(&owned);
+    let joined = crate::platform::spawn::blocking(move || {
+        let conn = owned.lock_db();
         if !convert {
             // Nothing to convert, only a rebuild owing: paying that off is not a
             // conversion attempt and must not be recorded as one.
@@ -932,17 +788,13 @@ async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) -> bool {
     convert
 }
 
-async fn do_sync(
-    state: &Arc<AppState>,
-    app: &tauri::AppHandle,
-    force: bool,
-) -> Result<SyncOutcome, String> {
+async fn do_sync(state: &Arc<State>, force: bool) -> Result<SyncOutcome, String> {
     let now = unix_now();
 
     // Short synchronous scope: the guard is dropped at the closing brace, well before
     // the first `.await` below.
     let stored = {
-        let conn = lock_db(state);
+        let conn = state.lock_db();
         read_stored_state(&conn)
     };
 
@@ -952,7 +804,7 @@ async fn do_sync(
         return Ok(unchanged(stored.card_count));
     }
 
-    emit(app, "checking", 0, 0);
+    emit(state, "checking", 0, 0);
     let check = state
         .client
         .check_bulk_update(conditional_etag(stored.etag.as_deref(), stored.card_count))
@@ -964,7 +816,7 @@ async fn do_sync(
         // The common case. `finish_unchanged` stamps `last_check_at` (this run really
         // did check) and emits a terminal phase, without which the UI would sit on
         // "checking" forever on the outcome most runs get.
-        return finish_unchanged(state, app, now, stored.card_count).await;
+        return finish_unchanged(state, now, stored.card_count).await;
     };
     let updated_at = Some(info.updated_at.clone()).filter(|s| !s.is_empty());
 
@@ -975,21 +827,21 @@ async fn do_sync(
     ) {
         // Re-store the ETag the 200 came with, so the next check is a free 304 again.
         {
-            let conn = lock_db(state);
+            let conn = state.lock_db();
             set_meta_opt(&conn, K_BULK_ETAG, info.etag.as_deref()).map_err(|e| e.to_string())?;
         }
-        return finish_unchanged(state, app, now, stored.card_count).await;
+        return finish_unchanged(state, now, stored.card_count).await;
     }
 
     let expected_size = check_download_size(info.compressed_size)?;
 
     let gz = state.data_dir.join("tmp").join("default-cards.jsonl.gz");
     if let Some(parent) = gz.parent() {
-        std::fs::create_dir_all(parent)
+        crate::platform::files::create_dir_all(parent)
             .map_err(|e| format!("could not create {}: {e}", parent.display()))?;
     }
 
-    emit(app, "downloading", 0, expected_size);
+    emit(state, "downloading", 0, expected_size);
     let mut last_emit = 0u64;
     let downloaded = state
         .client
@@ -999,7 +851,7 @@ async fn do_sync(
             expected_size,
             &mut |done, total| {
                 if done.saturating_sub(last_emit) >= DOWNLOAD_EMIT_BYTES || done >= total {
-                    emit(app, "downloading", done, total);
+                    emit(state, "downloading", done, total);
                     last_emit = done;
                 }
             },
@@ -1020,13 +872,12 @@ async fn do_sync(
     // blocking thread rather than on the async runtime — never across an await.
     let joined = {
         let state = state.clone();
-        let app = app.clone();
         let gz = gz.clone();
-        tauri::async_runtime::spawn_blocking(move || {
+        crate::platform::spawn::blocking(move || {
             // No lock is taken here any more: the ingest takes it per batch and gives it
             // back, so a collection edit waits one batch rather than one sync.
             ingest::ingest_gz(&state.db, &gz, &mut |n| {
-                emit(&app, "ingesting", n, INGEST_TOTAL_ESTIMATE)
+                emit(&state, "ingesting", n, INGEST_TOTAL_ESTIMATE)
             })
         })
         .await
@@ -1074,16 +925,24 @@ async fn do_sync(
     // it: a clear on a failed ingest with nothing scheduled leaves the app cold for the rest
     // of the session. Named rather than fixed.
     crate::index::lifecycle::clear(state);
-    // And the mirror is owed a pass for the same reason, told here rather than at the end of
-    // the run so that a failure between here and there — `/sets` is the one that reaches the
-    // network again — cannot leave the mirrored prices a corpus behind for good.
-    note_mirror_after_swap(state);
+    // And whoever renders from the corpus is owed a pass for the same reason — on the desktop
+    // that is the plain-text mirror, whose every CSV carries a `Price` column. The update hook
+    // cannot carry this: `cards` maps to no surface on purpose, because a sync rewrites
+    // 116 700 rows and a per-row mark would be a hundred thousand hook fires.
+    //
+    // **Told here, the moment the swap has landed, and it was once told from [`run_sync`] on
+    // `Ok` with `updated`** (issue #551). That gate was one step too late: a run that swapped
+    // the cards and then failed at `/sets` returned `Err`, so the mirror was never told — and
+    // every later run took the 304 path, which swaps nothing and marks nothing, so the mirrored
+    // prices stayed a corpus behind until Scryfall next rotated the bulk file. Marking where
+    // the swap lands covers that run and still spends nothing on a throttled or 304 run.
+    state.corpus_replaced();
 
     // Only now the unlink. 77 MB of blocking I/O, and until this line moved above it, it sat
     // inside the window the paragraph above is about.
     scryfall::discard_partial(&gz);
 
-    reclaim_freed_pages(state, app).await;
+    reclaim_freed_pages(state).await;
 
     {
         // The half that needs no network: after a swap, a row whose printing is gone is
@@ -1093,7 +952,7 @@ async fn do_sync(
         //
         // Logged, never fatal: the cards are ingested and swapped in either way, and a
         // sweep that did not run today runs after the next ingest.
-        let conn = lock_db(state);
+        let conn = state.lock_db();
         match crate::reconcile::sweep_orphans(&conn) {
             Ok((flagged, cleared)) if flagged > 0 || cleared > 0 => {
                 eprintln!("collection review: {flagged} rows flagged, {cleared} cleared")
@@ -1121,7 +980,7 @@ async fn do_sync(
         // Written before `/sets` is called, not after: the download is the expensive
         // part of a sync, and a failure fetching sets must not cost the user a repeat
         // of it. With these stored, a retry is a 304 plus one `/sets` call.
-        let conn = lock_db(state);
+        let conn = state.lock_db();
         set_meta_opt(&conn, K_BULK_ETAG, info.etag.as_deref()).map_err(|e| e.to_string())?;
         set_meta_opt(&conn, K_BULK_UPDATED_AT, updated_at.as_deref()).map_err(|e| e.to_string())?;
         set_meta(&conn, K_LAST_INGEST_AT, &unix_now().to_string()).map_err(|e| e.to_string())?;
@@ -1142,7 +1001,7 @@ async fn do_sync(
         // Best-effort by construction: the cards are ingested either way, and a missed day is a
         // gap in a history that the launch snapshot and the next sync both fill. The row goes to
         // `error_log` rather than the terminal because a release build has no terminal.
-        let conn = lock_db(state);
+        let conn = state.lock_db();
         if let Err(e) = crate::price_history::snapshot(&conn) {
             crate::errors::record(
                 &conn,
@@ -1155,7 +1014,7 @@ async fn do_sync(
         }
     }
 
-    emit(app, "sets", 0, 0);
+    emit(state, "sets", 0, 0);
     let sets = state
         .client
         .fetch_sets()
@@ -1163,7 +1022,7 @@ async fn do_sync(
         .inspect_err(|e| note_scryfall(state, "sets", e))
         .map_err(|e| e.to_string())?;
     {
-        let mut conn = lock_db(state);
+        let mut conn = state.lock_db();
         insert_sets(&mut conn, &sets).map_err(|e| e.to_string())?;
     }
 
@@ -1171,18 +1030,18 @@ async fn do_sync(
         // Last, because this is the record that the *whole* run succeeded. Stamping it
         // any earlier would let a failure between here and the check throttle the next
         // 24 hours of automatic retries.
-        let conn = lock_db(state);
+        let conn = state.lock_db();
         mark_checked(&conn, now).map_err(|e| e.to_string())?;
     }
-    reconcile_ids(state, app).await;
+    reconcile_ids(state).await;
     // Its answer is ignored on purpose: this path swapped `cards`, so it owes a rebuild
     // whether or not a conversion also ran.
-    let _ = compact_once(state, app).await;
+    let _ = compact_once(state).await;
     // Last, and only now: everything that could still move a rowid or a `card_id` has run,
     // so this build reads the generation the app will keep. ~767 ms on its own thread — the
     // sync is finished either way and nothing waits for it.
     crate::index::lifecycle::spawn_build(state);
-    emit_done(app, card_count, Some(stats.skipped));
+    emit_done(state, card_count, Some(stats.skipped));
     Ok(SyncOutcome {
         updated: true,
         card_count,
@@ -1190,55 +1049,10 @@ async fn do_sync(
     })
 }
 
-/// Current sync state for the UI.
-///
-/// Read through the **read-only** connection, which is what makes the header's numbers
-/// stay live during a sync: this used to share the write connection, and so answered
-/// `None` for every database-derived field for the whole of an ingest — 44 s when that
-/// was written, ~80 s of a 92–99 s sync since schema v3 gzipped `raw`. Under WAL a
-/// reader sees the last committed snapshot without blocking, so mid-sync this reports the
-/// pre-swap figures — which are true, and are what the user is still looking at in the
-/// results list. (The ingest now releases the write lock between batches too, but that is
-/// belt to this brace: a poll must not depend on catching a gap.)
-///
-/// The fields stay `Option` regardless, because the read can still fail outright — this
-/// app runs from a USB stick, and the database going away underneath it is the case they
-/// are `Option` *for*. `None` means "not readable right now", never "zero".
-///
-/// `image_store_failures` is the one field here that never touches the connection at all —
-/// it is read straight off the image cache's atomic, which is what makes it answerable on
-/// exactly the polls where a full disk has also made the database unreadable.
-///
-/// `card_count` is counted live rather than read from `sync_meta`, so it is right even if
-/// a previous run died before writing its meta — and it is counted *here* rather than
-/// through [`count_cards`], whose `unwrap_or(0)` is right for its own callers (an empty
-/// database must download) and wrong for this one. `Some(0)` is not the smaller lie: `0`
-/// is what the UI renders as "no card data yet", so a failed count would put a first-run
-/// overlay over a running app and throw away the figures it already had. `None` is what
-/// the frontend's `mergeStatus` keys off to keep them; the test
-/// `a_count_that_cannot_be_read_is_none_and_never_zero` pins this side of that contract.
-pub fn status(state: &AppState) -> SyncStatus {
-    let conn = lock_db_read(state);
-    SyncStatus {
-        card_count: conn
-            .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
-            .ok(),
-        last_check_at: get_meta(&conn, K_LAST_CHECK_AT),
-        bulk_updated_at: get_meta(&conn, K_BULK_UPDATED_AT),
-        last_error: get_meta(&conn, K_LAST_ERROR),
-        last_ingest_skipped: get_meta(&conn, K_LAST_INGEST_SKIPPED).and_then(|s| s.parse().ok()),
-        data_dir: state.data_dir.display().to_string(),
-        syncing: state.syncing.load(Ordering::SeqCst),
-        // An atomic in memory, so this one is answered even when the read above was not.
-        image_store_failures: state.images.store_failures(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use rusqlite::Connection;
-    use std::path::PathBuf;
 
     fn db() -> Connection {
         crate::schema::memory_pair()
@@ -1257,56 +1071,6 @@ mod tests {
         )
         .unwrap();
         assert!(has_cards(&conn));
-    }
-
-    /// A real file with both connections on it — the shape `init_state` builds — because
-    /// a status that reads through `db_read` cannot be tested against a `db_read` that
-    /// points somewhere else. (An in-memory pair cannot stand in: two in-memory
-    /// connections are two different databases.)
-    fn file_state(name: &str, syncing: bool) -> (AppState, std::path::PathBuf) {
-        let dir = crate::scratch::path(&format!("sync-{name}"));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        crate::split::convert(&dir).unwrap();
-        let conn = crate::db::open_write(&dir).unwrap();
-        let read = crate::db::open_read(&dir).unwrap();
-        // **Hooked up, so what these fixtures drive runs with the cross-file fence
-        // armed.** `State::new` installs it, `crate::sync::with_write`'s `debug_assert`
-        // reads it, so a command that committed to both files fails its own test rather
-        // than printing a line nobody reads. The desktop's three observers ride along as
-        // they do in the app, and nothing here looks at them: the wake is a throwaway,
-        // since nothing in this fixture starts `sync_engine::live`.
-        let mirror = std::sync::Arc::new(crate::mirror::watch::Mask::default());
-        let changes = std::sync::Arc::new(crate::changes::Changes::new());
-        (
-            AppState {
-                core: State::new(
-                    conn,
-                    Some(read),
-                    PathBuf::from("D:\\app\\data"),
-                    grimoire_core::events::silent(),
-                    crate::mirror::watch::observers(
-                        mirror.clone(),
-                        changes.clone(),
-                        Default::default(),
-                    ),
-                ),
-                syncing: AtomicBool::new(syncing),
-                // Never called: these tests stop short of the network.
-                client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
-                // Never touched either — a `Cache` creates nothing until it is asked for
-                // an image, so this directory does not have to exist.
-                images: crate::images::Cache::new(PathBuf::from("D:\\app\\data\\images")),
-                index: std::sync::RwLock::default(),
-                // The mirror is never started in these tests; a clean mask and an empty record are
-                // what an `AppState` looks like before the first pass.
-                mirror,
-                mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
-                pairing: std::sync::Mutex::new(None),
-                changes,
-            },
-            dir,
-        )
     }
 
     fn set_row(code: &str, name: &str) -> crate::scryfall::SetRow {
@@ -1513,96 +1277,6 @@ mod tests {
         assert_eq!(size, Some(269), "and the upsert stores it");
     }
 
-    /// The status a UI polls *during* a sync. The header used to go blank for the whole of
-    /// an ingest — a 44 s one then, ~80 s of a 92–99 s sync now — because the poll shared
-    /// the write connection with it. The read-only connection exists for exactly this, and
-    /// under WAL it answers from the last committed snapshot without waiting for anyone.
-    ///
-    /// The ingest also releases that write connection between batches now, so this test
-    /// holds it by hand: what is being pinned is that a poll answers while the connection
-    /// is held, not that it catches a gap between two batches.
-    #[test]
-    fn status_answers_real_numbers_while_the_write_connection_is_held() {
-        let (state, dir) = file_state("status", true);
-        {
-            let conn = lock_db(&state);
-            set_meta(&conn, K_LAST_CHECK_AT, "1800000000").unwrap();
-            set_meta(&conn, K_LAST_ERROR, "rate limited by Scryfall").unwrap();
-            set_meta(&conn, K_LAST_INGEST_SKIPPED, "12").unwrap();
-            conn.execute(
-                "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
-                 VALUES ('x','Lightning Bolt','lea','161','en','normal','{}')",
-                [],
-            )
-            .unwrap();
-            crate::db::checkpoint_truncate(&conn).unwrap();
-        }
-        let state = Arc::new(state);
-
-        // Stands in for the ingest. Called from another thread, as the real poll is, so a
-        // regression to a blocking lock fails here in five seconds instead of hanging.
-        let held = state.db.lock().unwrap();
-        let (tx, rx) = std::sync::mpsc::channel();
-        {
-            let state = state.clone();
-            std::thread::spawn(move || {
-                let _ = tx.send(status(&state));
-            });
-        }
-        let busy = rx
-            .recv_timeout(std::time::Duration::from_secs(5))
-            .expect("status must not queue behind the writer");
-        drop(held);
-
-        assert!(busy.syncing);
-        assert_eq!(busy.data_dir, "D:\\app\\data");
-        assert_eq!(
-            busy.card_count,
-            Some(1),
-            "the read connection can count cards while the writer is busy"
-        );
-        assert_eq!(busy.last_check_at.as_deref(), Some("1800000000"));
-        assert_eq!(busy.last_error.as_deref(), Some("rate limited by Scryfall"));
-        assert_eq!(busy.last_ingest_skipped, Some(12));
-
-        drop(state);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// The other half of the `Option`, and the case the whole nullable DTO exists for: a
-    /// status read that genuinely cannot count answers `None`, never `Some(0)`.
-    ///
-    /// This is a USB-stick app, so "the database went away underneath us" is a Tuesday.
-    /// `Some(0)` there is not a smaller lie than a wrong number: `0` is the value the UI
-    /// reads as "no card data yet", and it takes the whole screen with a first-run overlay
-    /// over a running app. `None` is what `mergeStatus` keys off to keep the figures it
-    /// already had, so this test is the backend half of that contract.
-    #[test]
-    fn a_count_that_cannot_be_read_is_none_and_never_zero() {
-        let (state, dir) = file_state("unreadable", false);
-        {
-            // Stands in for the volume disappearing: the table the count needs is gone,
-            // which is what the read connection then reports. (Deleting the file itself
-            // is not available as a test — Windows will not unlink an open one.)
-            let conn = lock_db(&state);
-            conn.execute_batch("DROP TABLE cards_fts; DROP TABLE cards;")
-                .unwrap();
-        }
-
-        let broken = status(&state);
-
-        assert_eq!(
-            broken.card_count, None,
-            "an unreadable count must not be reported as an empty collection"
-        );
-        // The two that never needed the database still answer, as they always did.
-        assert!(!broken.syncing);
-        assert_eq!(broken.data_dir, "D:\\app\\data");
-
-        drop(state);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     #[test]
     fn sets_are_upserted_and_rows_without_a_code_are_skipped() {
         let mut conn = db();
@@ -1790,110 +1464,5 @@ mod tests {
             "an empty `cards` must be able to get past its own ETag"
         );
         assert_eq!(conditional_etag(None, 116_568), None);
-    }
-
-    /// The skipped count survives the process, which the `done` event does not: the
-    /// startup sync emits it before the webview is listening, and Tauri drops it.
-    #[test]
-    fn the_skipped_count_is_readable_from_the_status_long_after_the_event() {
-        let (state, dir) = file_state("skipped", false);
-        set_meta(&lock_db(&state), K_LAST_INGEST_SKIPPED, "12").unwrap();
-
-        assert_eq!(status(&state).last_ingest_skipped, Some(12));
-
-        // No ingest yet is not the same as an ingest that skipped nothing.
-        let (fresh, fresh_dir) = file_state("skipped-fresh", false);
-        assert_eq!(status(&fresh).last_ingest_skipped, None);
-
-        drop(state);
-        drop(fresh);
-        let _ = std::fs::remove_dir_all(&dir);
-        let _ = std::fs::remove_dir_all(&fresh_dir);
-    }
-
-    /// A write that cannot have the connection answers the one sentence, after spending the one
-    /// bound — and runs `f` when it can. Five copies of this helper agreed on that by accident
-    /// until 2026-08-16; now there is one and this is what holds it.
-    #[test]
-    fn with_write_answers_busy_rather_than_queueing_when_the_connection_is_held() {
-        let (state, dir) = file_state("with-write-busy", false);
-        let held = crate::db::lock_blocking(&state.db);
-
-        let start = std::time::Instant::now();
-        let answer: Result<(), String> = with_write(&state, |_| Ok(()));
-        let waited = start.elapsed();
-
-        assert_eq!(
-            answer.unwrap_err(),
-            crate::db::BUSY,
-            "a write that cannot have the connection answers the one sentence"
-        );
-        // It spent the bound rather than failing instantly or queueing forever.
-        assert!(
-            waited >= crate::db::WRITE_LOCK_WAIT,
-            "with_write must spend the whole bound before giving up, waited {waited:?}"
-        );
-        assert!(
-            waited < crate::db::WRITE_LOCK_WAIT * 2,
-            "the wait is bounded, and took {waited:?}"
-        );
-        drop(held);
-
-        // And with the connection free it runs `f` and hands back its answer.
-        let answer = with_write(&state, |c| {
-            c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))
-                .map_err(|e| e.to_string())
-        });
-        assert_eq!(answer.unwrap(), 1);
-
-        drop(state);
-        let _ = std::fs::remove_dir_all(dir);
-    }
-
-    /// **The waiting write outlasts the bound [`with_write`] gives up at, and runs `f` once the
-    /// connection comes back** — issue #546, item 7: a Leave pressed during a sync trip that held
-    /// the connection for longer than five seconds answered BUSY, and "leaving is always possible"
-    /// had a condition.
-    ///
-    /// The holder is **another thread**, because that is the real shape (a trip on the blocking
-    /// pool) and because a same-thread call would never return — see the helper's doc. It holds
-    /// for the bound plus half a second, so an implementation that quietly kept the bound fails
-    /// with BUSY rather than passing on timing luck.
-    #[test]
-    fn with_write_waiting_outlasts_the_bound_and_runs_once_the_connection_is_free() {
-        let (state, dir) = file_state("with-write-waiting", false);
-        let hold = crate::db::WRITE_LOCK_WAIT + std::time::Duration::from_millis(500);
-        let (taken_tx, taken_rx) = std::sync::mpsc::channel();
-
-        let (answer, waited) = std::thread::scope(|scope| {
-            let holder = scope.spawn(|| {
-                let held = crate::db::lock_blocking(&state.db);
-                taken_tx.send(()).expect("signal");
-                std::thread::sleep(hold);
-                drop(held);
-            });
-            taken_rx.recv().expect("the holder took the connection");
-
-            let start = std::time::Instant::now();
-            let answer = with_write_waiting(&state, |c| {
-                c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))
-                    .map_err(|e| e.to_string())
-            });
-            let waited = start.elapsed();
-            holder.join().expect("the holder");
-            (answer, waited)
-        });
-
-        assert_eq!(
-            answer.expect("the waiting write gave up, which is the bug"),
-            1
-        );
-        assert!(
-            waited > crate::db::WRITE_LOCK_WAIT,
-            "it ran before the holder let go, so nothing was held: waited {waited:?}"
-        );
-
-        drop(state);
-        let _ = std::fs::remove_dir_all(dir);
     }
 }

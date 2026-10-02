@@ -728,7 +728,6 @@ pub async fn push_now(state: Arc<AppState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::AtomicBool;
     use std::sync::Mutex;
 
     /// A real `AppState` on a real file. [`crate::sync::tests::file_state`]'s shape, kept here
@@ -748,7 +747,7 @@ mod tests {
         let mirror = Arc::new(crate::mirror::watch::Mask::default());
         let changes = Arc::new(crate::changes::Changes::new());
         Arc::new(AppState {
-            core: grimoire_core::state::State::new(
+            core: std::sync::Arc::new(grimoire_core::state::State::new(
                 conn,
                 Some(read),
                 dir.clone(),
@@ -758,12 +757,10 @@ mod tests {
                     changes.clone(),
                     Arc::new(Notify::new()),
                 ),
-            ),
-            syncing: AtomicBool::new(false),
-            // Never called: `push_now` with no group answers `Ok(None)` before it would be.
-            client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+                // Never called: `push_now` with no group answers `Ok(None)` before it would be.
+                crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            )),
             images: crate::images::Cache::new(dir.join("images")),
-            index: std::sync::RwLock::default(),
             mirror,
             mirror_status: Mutex::new(crate::mirror::watch::LastPass::default()),
             changes,

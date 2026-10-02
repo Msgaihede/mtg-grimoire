@@ -157,54 +157,6 @@ mod tests {
     use super::*;
     use grimoire_core::deck_tokens::fixtures::*;
 
-    /// **The backstop**: a cut through `collection_alloc::deck_to_collection` files no undo step,
-    /// so its transaction has nowhere to put a reconcile — and after `sync::with_write` returns
-    /// the Treasure is settled anyway by the reconcile that rides every write: its entry at zero
-    /// gone, and the one with copies kept as `manual`.
-    #[test]
-    fn the_backstop_reconciles_a_cut_that_files_no_step() {
-        let state = crate::index::fixtures::state_with_seeded_cards("deck-tokens-backstop");
-        let (deck, landed) = {
-            let conn = crate::db::lock_blocking(&state.db);
-            tithe().insert(&conn);
-            tithe_other_printing().insert(&conn);
-            treasure().insert(&conn);
-            treasure_older().insert(&conn);
-            let deck = crate::deck::create_deck(
-                &conn,
-                &crate::deck::DeckInput {
-                    name: "Tithe".to_owned(),
-                    format_key: "commander".to_owned(),
-                    ..Default::default()
-                },
-            )
-            .unwrap()
-            .id;
-            let landed = crate::deck::add_card(
-                &conn,
-                deck,
-                tithe().id,
-                None,
-                Some("Main deck"),
-                "live",
-                None,
-                1,
-            )
-            .unwrap()
-            .id;
-            seed_used_and_zero_treasure(&conn, deck);
-            (deck, landed)
-        };
-
-        crate::sync::with_write(&state, |c| {
-            crate::collection_alloc::deck_to_collection(c, landed, 1).map(|_| ())
-        })
-        .unwrap();
-
-        let conn = crate::db::lock_blocking(&state.db);
-        assert_kept_as_manual(&conn, deck, "the backstop");
-    }
-
     /// **A paired device converts nothing at launch until a pull at v52 has landed, and from
     /// then on converts at launch too.** The launch pass is where a paired device would convert
     /// before hearing its group; the pull half sets [`PICKS_READY`] and converts, and a pick that

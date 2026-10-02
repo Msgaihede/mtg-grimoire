@@ -30,10 +30,10 @@
 //! build or a ~767 ms build on a quick-add. The window is the length of one build.
 
 use super::CardIndex;
-use crate::sync::AppState;
+use crate::state::State;
 use std::sync::Arc;
 
-/// What [`crate::sync::AppState`] holds: the published index, and the generation of the
+/// What [`crate::state::State`] holds: the published index, and the generation of the
 /// corpus it was built against.
 ///
 /// **The two are one lock and not an index plus an `AtomicU64` beside it**, because the
@@ -54,7 +54,7 @@ pub struct IndexSlot {
 /// Clones the `Arc` and drops the read guard at once, deliberately: a facet pass is then
 /// free to take as long as it likes over a snapshot nobody can pull out from under it, and a
 /// sync's rebuild never waits on a reader.
-pub fn current(state: &AppState) -> Option<Arc<CardIndex>> {
+pub fn current(state: &State) -> Option<Arc<CardIndex>> {
     crate::db::lock_read(&state.index).index.clone()
 }
 
@@ -67,7 +67,7 @@ pub fn current(state: &AppState) -> Option<Arc<CardIndex>> {
 /// The returned generation is what a rebuild carries to its publish. Returned rather than
 /// re-read, because re-reading it is itself a race: a second clear between the two would be
 /// invisible.
-pub fn clear(state: &AppState) -> u64 {
+pub fn clear(state: &State) -> u64 {
     let mut slot = crate::db::lock_write(&state.index);
     slot.index = None;
     slot.generation += 1;
@@ -85,7 +85,7 @@ pub fn clear(state: &AppState) -> u64 {
 ///
 /// Answers whether it landed. A refusal is not a failure: the clear that superseded it belongs
 /// to something that owes a rebuild of its own.
-fn publish_build(state: &AppState, generation: u64, ix: CardIndex) -> bool {
+fn publish_build(state: &State, generation: u64, ix: CardIndex) -> bool {
     let mut slot = crate::db::lock_write(&state.index);
     if slot.generation != generation {
         return false;
@@ -115,7 +115,7 @@ fn publish_build(state: &AppState, generation: u64, ix: CardIndex) -> bool {
 /// the database and publishes, and the second — whose re-read held both rows — was refused here
 /// and dropped, so the Owned chip greyed out over a card the search still returned. The refusal
 /// is now [`amend_owned`]'s cue to re-clone whatever is live and read again.
-fn publish_amendment(state: &AppState, base: &Arc<CardIndex>, ix: CardIndex) -> bool {
+fn publish_amendment(state: &State, base: &Arc<CardIndex>, ix: CardIndex) -> bool {
     let mut slot = crate::db::lock_write(&state.index);
     if !slot
         .index
@@ -136,10 +136,10 @@ fn publish_amendment(state: &AppState, base: &Arc<CardIndex>, ix: CardIndex) -> 
 /// user cannot click because a facet said it was empty. It is also what makes a *failed*
 /// build safe — the app is left with no index rather than the last one.
 ///
-/// **It opens a connection of its own**, never `AppState.db_read`: this is a full pass over
+/// **It opens a connection of its own**, never the state's read connection: this is a full pass over
 /// `cards`, and holding the read connection for it would queue every search behind it at
 /// launch — which is the exact failure that second connection exists to prevent.
-pub fn build_now(state: &AppState) -> Result<(), String> {
+pub fn build_now(state: &State) -> Result<(), String> {
     // Spelled here and in `desktop.rs`'s `init_state`, which is the one that creates it.
     let conn =
         crate::db::open_read(&state.data_dir).map_err(|e| format!("index connection: {e}"))?;
@@ -162,11 +162,15 @@ pub fn build_now(state: &AppState) -> Result<(), String> {
 /// costs one uncontended lock and keeps the same guarantee for a direct call.
 ///
 /// The handle is returned so a test can join it; the three production call sites drop it and
-/// let the thread run detached. A failure is logged and nothing else — see the module docs.
-pub fn spawn_build(state: &Arc<AppState>) -> std::thread::JoinHandle<()> {
+/// let the build run detached. A failure is logged and nothing else — see the module docs.
+///
+/// **Off the calling thread where the host has a second one** ([`crate::platform::spawn`]). In
+/// a browser the build has run by the time this returns, which the guarantee above already
+/// covers: cold first, then whatever the build publishes.
+pub fn spawn_build(state: &Arc<State>) -> crate::platform::spawn::Background {
     clear(state);
     let state = state.clone();
-    std::thread::spawn(move || {
+    crate::platform::spawn::background(move || {
         if let Err(e) = build_now(&state) {
             eprintln!("card index unavailable, facets will stay open: {e}");
             // Recorded here and not in `build_now`, which returns its error for the caller to
@@ -191,7 +195,7 @@ pub fn spawn_build(state: &Arc<AppState>) -> std::thread::JoinHandle<()> {
 /// and every byte of it is memcpy'd. Copy-on-write rather than mutation because the published
 /// index is behind an `Arc` that readers are holding — there is no `&mut` to be had, and
 /// there should not be.
-pub fn invalidate_owned(state: &AppState) {
+pub fn invalidate_owned(state: &State) {
     let Some(base) = current(state) else {
         return;
     };
@@ -219,7 +223,7 @@ const AMEND_ATTEMPTS: usize = 4;
 /// not the place to spend a build. **Replaced** — a sibling amendment or a build landed first —
 /// retries, because the index that won may have read `owned` before this write committed; see
 /// [`publish_amendment`] for the race that cost.
-fn amend_owned(state: &AppState, conn: &rusqlite::Connection, mut base: Arc<CardIndex>) {
+fn amend_owned(state: &State, conn: &rusqlite::Connection, mut base: Arc<CardIndex>) {
     for _ in 0..AMEND_ATTEMPTS {
         let mut next = (*base).clone();
         if let Err(e) = next.rebuild_owned(conn) {
@@ -359,7 +363,7 @@ mod tests {
 
     /// One printing's worth of index, built the way [`build_now`] builds it — the thing a
     /// rebuild is holding in its hands when the moment below arrives.
-    fn built(state: &AppState) -> CardIndex {
+    fn built(state: &State) -> CardIndex {
         let conn = crate::db::open_read(&state.data_dir).unwrap();
         CardIndex::build(&conn).unwrap()
     }

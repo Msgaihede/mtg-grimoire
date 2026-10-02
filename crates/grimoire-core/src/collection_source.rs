@@ -204,6 +204,26 @@ pub fn owned_rowids(_conn: &Connection) -> String {
     "SELECT DISTINCT c.rowid FROM collection_entries e JOIN cards c ON c.id = e.card_id".to_owned()
 }
 
+/// [`crate::state::with_write`], plus the facet index's `owned` rebuild on success.
+///
+/// Only on success. A refusal — [`crate::db::BUSY`], a `GONE`, a rejected quantity — changed
+/// nothing, and re-reading after one would be a copy of the whole index to arrive at the same
+/// answer.
+///
+/// Lives here rather than in [`crate::collection`] because its callers are a collection write,
+/// [`crate::reset::collection_clear`] and anything else that can move what the reader owns, and
+/// the thing they have in common is this module rather than that one.
+pub fn with_write_owned<T>(
+    state: &crate::state::State,
+    f: impl FnOnce(&rusqlite::Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let answer = crate::state::with_write(state, f);
+    if answer.is_ok() {
+        crate::index::lifecycle::invalidate_owned(state);
+    }
+    answer
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

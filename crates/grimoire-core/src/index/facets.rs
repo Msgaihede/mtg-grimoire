@@ -20,10 +20,9 @@
 use super::bitset::BitSet;
 use super::CardIndex;
 use crate::search::SearchRequest;
-use crate::sync::{lock_db_read, AppState};
+use crate::state::State;
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 #[derive(Debug, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -992,7 +991,7 @@ fn fts_docs(conn: &rusqlite::Connection, capacity: usize, query: &str) -> Result
 /// There are **two** ways to get that answer and [`compute`] owns the second: no index at
 /// all, and an index over an empty corpus, which is a first launch waiting out its opening
 /// sync.
-pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse, String> {
+pub fn run_facets(state: &State, req: &SearchRequest) -> Result<FacetResponse, String> {
     let Some(ix) = super::lifecycle::current(state) else {
         return Ok(FacetResponse {
             ready: false,
@@ -1045,7 +1044,7 @@ pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse
         return Ok(compute(&ix, req, None));
     }
 
-    let conn = lock_db_read(state);
+    let conn = state.lock_db_read();
 
     // **The one thing that still needs the database**: neither FTS nor the tag closures has a
     // precomputed bitset, so each is resolved to rowids and turned into one. Text is 25 ms at
@@ -1074,27 +1073,6 @@ pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse
     };
 
     Ok(compute(&ix, req, narrow.as_ref()))
-}
-
-/// Facet counts for one search.
-///
-/// A **separate command** from `search_cards` on purpose: facets depend on neither `sort` nor
-/// `offset`, so they must not be recomputed per page, and they must never delay page one. The
-/// frontend keys them on the filter half of the search key alone.
-///
-/// `async` + `spawn_blocking` for [`crate::search::search_cards`]' reason: a sync command body
-/// runs inline on the IPC thread, and the FTS half of this is blocking SQLite work. It reads
-/// through `db_read` like every other read, so a text facet during a sync is not stuck behind
-/// the ingest.
-#[tauri::command]
-pub async fn facet_cards(
-    state: tauri::State<'_, Arc<AppState>>,
-    req: SearchRequest,
-) -> Result<FacetResponse, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || run_facets(&state, &req))
-        .await
-        .map_err(|e| format!("facets could not be computed: {e}"))?
 }
 
 #[cfg(test)]
@@ -2010,7 +1988,7 @@ mod tests {
     /// `cards_fts` is external-content with no triggers, so rows inserted straight into
     /// `cards` — which is what the fixture does — match nothing until this runs. Without it
     /// every text assertion below would pass by counting zero.
-    fn state(name: &str) -> std::sync::Arc<crate::sync::AppState> {
+    fn state(name: &str) -> std::sync::Arc<crate::state::State> {
         let state = state_with_seeded_cards(name);
         {
             let conn = crate::db::lock_blocking(&state.db);
@@ -2224,7 +2202,7 @@ mod tests {
     ///   filter;
     /// * the oracle closure **crosses** the art one rather than agreeing with it, so a
     ///   request naming both narrows further than either.
-    fn tagged_state(name: &str) -> std::sync::Arc<crate::sync::AppState> {
+    fn tagged_state(name: &str) -> std::sync::Arc<crate::state::State> {
         let state = state(name);
         {
             let conn = crate::db::lock_blocking(&state.db);
@@ -2794,7 +2772,7 @@ mod tests {
         for (name, r) in cases {
             let mut best = std::time::Duration::MAX;
             for _ in 0..5 {
-                let t = std::time::Instant::now();
+                let t = crate::platform::clock::Tick::now();
                 let f = compute(&ix, &r, None);
                 best = best.min(t.elapsed());
                 std::hint::black_box(f.total);

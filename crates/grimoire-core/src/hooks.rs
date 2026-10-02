@@ -38,7 +38,7 @@ use std::sync::Arc;
 
 /// Something that hears about writes on the write connection.
 ///
-/// Both methods default to nothing, so an observer implements the half it listens for.
+/// Every method defaults to nothing, so an observer implements the part it listens for.
 ///
 /// **`Send + Sync`, and called from inside SQLite's own callback** — see the module doc for
 /// what that allows. An implementation that takes a lock another thread can hold is a write
@@ -56,6 +56,16 @@ pub trait WriteObserver: Send + Sync {
     /// From the commit hook: a transaction on this connection committed. Not called for a
     /// rollback.
     fn committed(&self) {}
+
+    /// **Not from a hook at all**: the card corpus was replaced wholesale — a sync swapped
+    /// `cards` — and [`crate::state::State::corpus_replaced`] is saying so.
+    ///
+    /// It exists because [`WriteObserver::row`] cannot carry this usefully. A swap rewrites
+    /// 116 700 rows, so an observer that mapped `cards` to something it must redo would be
+    /// told a hundred thousand times per refresh; the desktop's mirror maps it to nothing for
+    /// that reason and is told once, here, the moment the swap has landed. Called on the
+    /// thread that ran the sync, with no connection held.
+    fn corpus_replaced(&self) {}
 }
 
 /// Put the three hooks on `conn`: the fence, and every observer in the order given.

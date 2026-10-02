@@ -24,7 +24,6 @@ use crate::{
     wishlist, wishlist_folders, wishlist_optimize, zoom,
 };
 use std::path::Path;
-use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
@@ -36,10 +35,9 @@ const SCRYFALL_API: &str = "https://api.scryfall.com";
 #[tauri::command]
 async fn sync_run(
     state: tauri::State<'_, Arc<AppState>>,
-    app: tauri::AppHandle,
     force: bool,
 ) -> Result<sync::SyncOutcome, String> {
-    sync::run_sync(state.inner().clone(), app, force).await
+    sync::run_sync(state.core.clone(), force).await
 }
 
 /// Open another window onto the same app — Ctrl+Shift+N. `caller` is the window that asked, so the
@@ -887,7 +885,7 @@ fn start(app: &tauri::AppHandle) {
     // Until it lands, `facet_cards` answers `ready: false` and every filter control
     // stays live. Nothing about it is fatal; the handle is dropped and the thread
     // runs detached.
-    index::lifecycle::spawn_build(&state);
+    index::lifecycle::spawn_build(&state.core);
     // The image cache's budget: a thread of its own, first pass a minute in (`images::evict`).
     images::spawn_upkeep(&state);
 
@@ -967,7 +965,7 @@ fn start(app: &tauri::AppHandle) {
     let handle = app.clone();
     let sync_state = state.clone();
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = sync::run_sync(sync_state.clone(), handle.clone(), false).await {
+        if let Err(e) = sync::run_sync(sync_state.core.clone(), false).await {
             eprintln!("initial sync failed: {e}");
         }
         if first_run {
@@ -1307,22 +1305,21 @@ fn init_state(
     // in the order the hook has always called them. SQLite allows one update hook per
     // connection, so the core owns the installer and everything else that needs to hear about
     // a write registers with it — see `grimoire_core::hooks`.
+    //
+    // The state starts with no sync in flight and a cold index, which `start` builds the
+    // moment this is in an `Arc` — see there for why the build cannot be started from in here.
     let core = grimoire_core::state::State::new(
         conn,
         Some(conn_read),
         data_dir,
         Arc::new(WindowEvents(app.clone())),
         mirror::watch::observers(mirror.clone(), changes.clone(), writes.clone()),
+        client,
     );
 
     Ok(AppState {
-        core,
-        syncing: AtomicBool::new(false),
-        client,
+        core: Arc::new(core),
         images,
-        // Cold, and built by `start` the moment this state is in an `Arc` — see there for
-        // why the build cannot be started from in here.
-        index: std::sync::RwLock::default(),
         mirror,
         mirror_status: Mutex::new(mirror::watch::LastPass::default()),
         changes,
@@ -1333,10 +1330,10 @@ fn init_state(
 /// The desktop's [`grimoire_core::events::EventSink`]: an event the engine raises goes to every
 /// window, as `app.emit` sends one.
 ///
-/// **Nothing calls it yet.** Every emit in this crate still names its `AppHandle` — the card
-/// sync, the three feeds and live sync each take one — and moves onto the sink with the module
-/// that makes it, as that module moves to the core. A dropped event is never worth failing
-/// anything over, here as at those call sites.
+/// **The card sync is its first caller**: `sync:progress` and `collection:reconciled` arrive
+/// here from `grimoire_core::sync`, which takes no window. The three feeds and live sync still
+/// name their `AppHandle`, and move onto the sink as each moves to the core. A dropped event
+/// is never worth failing anything over, here as at those call sites.
 struct WindowEvents(tauri::AppHandle);
 
 impl grimoire_core::events::EventSink for WindowEvents {

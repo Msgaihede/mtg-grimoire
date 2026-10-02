@@ -103,7 +103,8 @@ pub mod hooks;
 /// between them and one predicate over a string.
 pub mod image_uri;
 pub mod import;
-/// **The facet index's bitset.** The index itself still lives in `src-tauri`.
+/// **The in-memory facet index**: `CardIndex`, the facet pass over it, and the lifecycle that
+/// keeps it — cold, built, and amended when the collection moves.
 pub mod index;
 /// **A Scryfall bulk file, streamed into `cards`** a batch at a time, the write connection
 /// given back between batches.
@@ -149,6 +150,9 @@ pub mod startview;
 /// user-facing write.
 pub mod state;
 pub mod sticky_notes;
+/// **The card sync**: check, download, ingest, sets, the migration log, the reclaim — one
+/// supervised run over a [`state::State`], saying what it is doing through the state's sink.
+pub mod sync;
 /// **The sync engine without its transport** — the hybrid logical clock, the capture triggers,
 /// the merge rules, apply and the baseline. The envelope and the client are still `src-tauri`'s.
 pub mod sync_engine;

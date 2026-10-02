@@ -55,6 +55,12 @@ function swap(text, a, b, count = 1) {
 }
 const swaps = (text, pairs) => pairs.reduce((t, [a, b, n]) => swap(t, a, b, n ?? 1), text);
 
+/** `text` with every `a` replaced by `b`, however many there are. */
+function swapAll(text, a, b) {
+  if (!text.includes(a)) return text;
+  return text.split(a).join(b);
+}
+
 /** A regex replaced at least once — for a spelling that recurs a number of times nobody pins. */
 function sweep(text, re, to) {
   if (!re.test(text)) throw new Error(`nothing matches ${re}`);
@@ -676,6 +682,8 @@ pub fn spawn_build(state: &Arc<State>) -> crate::platform::spawn::Background {
     facets.tail;
   facetsCore = swaps(facetsCore, [
     ["use crate::sync::{lock_db_read, AppState};\n", "use crate::state::State;\n"],
+    // Only the command named it.
+    ["use std::collections::BTreeMap;\nuse std::sync::Arc;\n", "use std::collections::BTreeMap;\n"],
     [
       "pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse, String> {",
       "pub fn run_facets(state: &State, req: &SearchRequest) -> Result<FacetResponse, String> {",
@@ -815,9 +823,13 @@ pub use grimoire_core::index::*;
 pub mod facets;
 
 /// The core's four seeded printings, and this crate's own state over them.
+///
+/// \`pub\`, in a test build only: the glob above carries the core's \`fixtures\` out of this module
+/// publicly, and a private module of the same name over a public re-export is what
+/// \`hidden_glob_reexports\` warns about.
 #[cfg(test)]
-pub(crate) mod fixtures {
-    pub(crate) use grimoire_core::index::fixtures::*;
+pub mod fixtures {
+    pub use grimoire_core::index::fixtures::*;
 
 ${swaps(stays.text.replace(/^\n+/, ""), [
   [
@@ -856,7 +868,7 @@ ${swaps(stays.text.replace(/^\n+/, ""), [
             images: crate::images::Cache::new(dir.join("images")),
 `,
   ],
-])}}
+]).replace("    pub(crate) fn state_with_seeded_cards(", "    pub fn state_with_seeded_cards(")}}
 `,
   );
   console.log(
@@ -903,6 +915,96 @@ ${swaps(stays.text.replace(/^\n+/, ""), [
   removed.push(join(DESK, "collection_source/mod.rs"));
   console.log(
     "collection_source: `with_write_owned` goes home; the remainder file had nothing else",
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// two tests go home
+// ══════════════════════════════════════════════════════════════════════════════════════════
+
+// Step 4 left a test in `src-tauri` wherever it named something still there. These two named
+// the index's fixture and nothing else of the desktop's, and the fixture has a core copy now.
+const HOMECOMING = [
+  {
+    module: "collection",
+    tests: ["a_write_that_lands_refreshes_the_owned_facet_and_one_that_is_refused_does_not"],
+  },
+  { module: "deck_tokens", tests: ["the_backstop_reconciles_a_cut_that_files_no_step"] },
+];
+
+for (const { module, tests: names } of HOMECOMING) {
+  const deskPath = join(DESK, module, "mod.rs");
+  const corePath = join(CORE, `${module}.rs`);
+  const desk = split(read(deskPath));
+  const deskTests = desk.items.find((it) => it.kind === "mod" && it.name === "tests");
+  if (!deskTests) throw new Error(`${module}/mod.rs has no \`mod tests\``);
+  const body = inner(deskTests);
+  const going = names.map((name) => {
+    const it = body.items.find((item) => item.name === name);
+    if (!it) throw new Error(`${module}/mod.rs's tests have no \`${name}\``);
+    return it;
+  });
+  const left = body.items.filter((it) => !going.includes(it));
+
+  // Into the core's test module, at its foot.
+  const core = split(out.get(corePath) ?? read(corePath));
+  const coreTests = core.items.find((it) => it.kind === "mod" && it.name === "tests");
+  if (!coreTests) throw new Error(`the core's ${module}.rs has no \`mod tests\``);
+  const home = inner(coreTests);
+  const arriving = going
+    .map(
+      (it) =>
+        "\n" +
+        swapAll(
+          it.text.replace(/^\n+/, ""),
+          "crate::sync::with_write(",
+          "crate::state::with_write(",
+        ),
+    )
+    .join("");
+  coreTests.text =
+    home.before + home.items.map((it) => it.text).join("") + arriving + home.tail + home.after;
+  put(corePath, core.header + core.items.map((it) => it.text).join("") + core.tail);
+
+  // And out of the desktop's: the whole module when nothing but its imports is left.
+  if (left.some((it) => it.kind !== "use")) {
+    deskTests.text = body.before + left.map((it) => it.text).join("") + body.tail + body.after;
+  } else {
+    desk.items.splice(desk.items.indexOf(deskTests), 1);
+  }
+  put(
+    deskPath,
+    (desk.header + desk.items.map((it) => it.text).join("") + desk.tail).replace(/\n+$/, "\n"),
+  );
+  console.log(
+    `${module}: ${names.length} test goes home; ` +
+      `${left.filter((it) => it.kind === "fn").length} stay in src-tauri`,
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════════════════════
+// the one frontend test that reads a moved file as text
+// ══════════════════════════════════════════════════════════════════════════════════════════
+
+// `ipc.test.ts` holds `ipc.ts` to the Rust it mirrors by reading the Rust. `facets.rs` is two
+// files now, and is read as both halves under the name its assertions already use — what step
+// 4 did for every module it split.
+{
+  const path = join(ROOT, "src/lib/ipc.test.ts");
+  put(
+    path,
+    swaps(read(path), [
+      [
+        `import facetsRs from "../../src-tauri/src/index/facets.rs?raw";\n`,
+        `import facetsRsCore from "../../crates/grimoire-core/src/index/facets.rs?raw";\n` +
+          `import facetsRsDesktop from "../../src-tauri/src/index/facets/mod.rs?raw";\n`,
+      ],
+      [
+        `const homeRs = homeRsCore + "\\n" + homeRsDesktop;\n`,
+        `const facetsRs = facetsRsCore + "\\n" + facetsRsDesktop;\n` +
+          `const homeRs = homeRsCore + "\\n" + homeRsDesktop;\n`,
+      ],
+    ]),
   );
 }
 
