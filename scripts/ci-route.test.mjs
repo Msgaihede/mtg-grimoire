@@ -24,7 +24,8 @@ const TS_TESTS = import.meta.glob(
   { query: "?raw", import: "default", eager: true },
 );
 
-// Both cargo packages `rust` tests. `target/` is never globbed.
+// Every cargo package `rust` tests: the app, the engine in `crates/grimoire-core` — whose tests
+// run in `rust` and in no other job — and `card-scanner`. `target/` is never globbed.
 const RUST = import.meta.glob(
   ["/src-tauri/src/**/*.rs", "/src-tauri/build.rs", "/crates/*/src/**/*.rs", "/crates/*/build.rs"],
   { query: "?raw", import: "default", eager: true },
@@ -104,6 +105,16 @@ describe("the census", () => {
     expect(rustPaths).toContain("share-worker/wrangler.jsonc");
   });
 
+  // The engine's sources are in the census by the same glob as `card-scanner`'s, so a file one
+  // of them reads is held to `rust` below — where its tests run; `core` only compiles. A crate
+  // the glob missed would be a crate whose reads nothing checks.
+  it("reads every package's sources, the engine's among them", () => {
+    const sources = Object.keys(RUST).map(rel);
+    expect(sources).toContain("crates/grimoire-core/src/lib.rs");
+    expect(sources).toContain("crates/card-scanner/src/session.rs");
+    expect(sources).toContain("src-tauri/src/desktop.rs");
+  });
+
   it("routes every file a frontend test reads to `frontend`", () => {
     const missed = ts.filter((r) => !route([asChangedFile(r.path)]).frontend);
     expect(missed).toEqual([]);
@@ -133,53 +144,60 @@ describe("the census", () => {
 describe("the arms", () => {
   const T = true;
   const F = false;
-  // [path, frontend, rust, powershell, storybook]
+  // [path, frontend, rust, core, powershell, storybook]
   it.each([
-    [".github/workflows/ci.yml", T, T, T, T],
-    ["scripts/ci-route.mjs", T, T, T, T],
-    ["rust-toolchain.toml", T, T, F, F],
-    [".github/actions/rust-toolchain/action.yml", T, T, F, F],
-    [".github/workflows/release.yml", T, F, F, F],
-    [".github/workflows/scanner-bundle.yml", T, F, F, F],
-    [".github/dependabot.yml", T, F, F, F],
-    [".nvmrc", T, F, F, T],
-    ["src/lib/core/index.ts", T, F, F, T],
-    ["docs/reference/ci-and-releases.md", F, F, F, F],
-    ["README.md", F, F, F, F],
-    ["src/features/decks/CLAUDE.md", F, F, F, F],
-    [".storybook/CLAUDE.md", F, F, F, F],
-    [".vscode/settings.json", F, F, F, F],
-    [".gitignore", F, F, F, F],
-    [".release-please-manifest.json", F, F, F, F],
-    ["scripts/x.ps1", F, F, T, F],
-    [".claude/skills/running-the-app/lock.ps1", F, F, T, F],
-    ["src-tauri/x.psm1", F, F, T, F],
-    ["tools/x.psd1", F, F, T, F],
-    ["src-tauri/src/deck.rs", T, T, F, F],
-    ["src-tauri/src/desktop.rs", T, T, F, F],
-    ["src-tauri/src/schema.rs", T, T, F, F],
-    ["src-tauri/Cargo.lock", T, T, F, F],
-    ["src-tauri/src/share/__golden__/snapshot.json", T, T, F, F],
-    ["src/features/transfer/__golden__/deck.arena.all.txt", T, T, F, T],
-    ["src/features/transfer/__golden__/corpus.json", T, T, F, T],
-    ["src/lib/userTables.json", T, T, F, T],
-    ["src/lib/syncedTables.json", T, T, F, T],
-    ["src/features/decks/DeckEditor.tsx", T, F, F, T],
-    ["public/favicon.svg", T, F, F, T],
-    ["index.html", T, F, F, T],
-    [".storybook/fake/db.ts", T, F, F, T],
-    [".storybook/DesignSystem.mdx", T, F, F, T],
-    ["package.json", T, F, F, T],
-    ["package-lock.json", T, F, F, T],
-    ["vite.config.ts", T, F, F, T],
-    ["eslint.config.js", T, F, F, T],
-    ["scripts/golden.mjs", T, F, F, F],
-    ["crates/card-scanner/src/session.rs", T, T, F, F],
-    ["share-worker/wrangler.jsonc", T, T, F, T],
-    ["relay/src/index.ts", T, T, F, T],
-    ["some/new/thing.txt", T, T, F, T],
-  ])("%s", (path, frontend, rust, powershell, storybook) => {
-    expect(route([path])).toEqual({ frontend, rust, powershell, storybook });
+    [".github/workflows/ci.yml", T, T, T, T, T],
+    ["scripts/ci-route.mjs", T, T, T, T, T],
+    ["rust-toolchain.toml", T, T, T, F, F],
+    [".github/actions/rust-toolchain/action.yml", T, T, T, F, F],
+    ["Cargo.toml", T, T, T, F, F],
+    ["Cargo.lock", T, T, T, F, F],
+    [".cargo/config.toml", T, T, T, F, F],
+    [".github/workflows/release.yml", T, F, F, F, F],
+    [".github/workflows/scanner-bundle.yml", T, F, F, F, F],
+    [".github/dependabot.yml", T, F, F, F, F],
+    [".nvmrc", T, F, F, F, T],
+    ["src/lib/core/index.ts", T, F, F, F, T],
+    ["docs/reference/ci-and-releases.md", F, F, F, F, F],
+    ["README.md", F, F, F, F, F],
+    ["src/features/decks/CLAUDE.md", F, F, F, F, F],
+    [".storybook/CLAUDE.md", F, F, F, F, F],
+    [".vscode/settings.json", F, F, F, F, F],
+    [".gitignore", F, F, F, F, F],
+    [".release-please-manifest.json", F, F, F, F, F],
+    ["scripts/x.ps1", F, F, F, T, F],
+    [".claude/skills/running-the-app/lock.ps1", F, F, F, T, F],
+    ["src-tauri/x.psm1", F, F, F, T, F],
+    ["tools/x.psd1", F, F, F, T, F],
+    ["src-tauri/src/deck.rs", T, T, F, F, F],
+    ["src-tauri/src/desktop.rs", T, T, F, F, F],
+    ["src-tauri/src/schema.rs", T, T, F, F, F],
+    ["src-tauri/Cargo.toml", T, T, F, F, F],
+    ["src-tauri/src/share/__golden__/snapshot.json", T, T, F, F, F],
+    ["src/features/transfer/__golden__/deck.arena.all.txt", T, T, F, F, T],
+    ["src/features/transfer/__golden__/corpus.json", T, T, F, F, T],
+    ["src/lib/userTables.json", T, T, F, F, T],
+    ["src/lib/syncedTables.json", T, T, F, F, T],
+    ["src/features/decks/DeckEditor.tsx", T, F, F, F, T],
+    ["public/favicon.svg", T, F, F, F, T],
+    ["index.html", T, F, F, F, T],
+    [".storybook/fake/db.ts", T, F, F, F, T],
+    [".storybook/DesignSystem.mdx", T, F, F, F, T],
+    ["package.json", T, F, F, F, T],
+    ["package-lock.json", T, F, F, F, T],
+    ["vite.config.ts", T, F, F, F, T],
+    ["eslint.config.js", T, F, F, F, T],
+    ["scripts/golden.mjs", T, F, F, F, F],
+    ["crates/grimoire-core/src/lib.rs", T, T, T, F, F],
+    ["crates/grimoire-core/Cargo.toml", T, T, T, F, F],
+    ["crates/card-scanner/src/session.rs", T, T, F, F, F],
+    ["crates/card-scanner/Cargo.lock", T, T, F, F, F],
+    ["crates/card-scanner/.cargo/config.toml", T, T, F, F, F],
+    ["share-worker/wrangler.jsonc", T, T, T, F, T],
+    ["relay/src/index.ts", T, T, T, F, T],
+    ["some/new/thing.txt", T, T, T, F, T],
+  ])("%s", (path, frontend, rust, core, powershell, storybook) => {
+    expect(route([path])).toEqual({ frontend, rust, core, powershell, storybook });
   });
 
   it("routes an empty diff nowhere, skipping blank lines as the `case` loop did", () => {
@@ -191,6 +209,7 @@ describe("the arms", () => {
     expect(route(["README.md", "scripts/x.ps1", "src/lib/userTables.json"])).toEqual({
       frontend: true,
       rust: true,
+      core: false,
       powershell: true,
       storybook: true,
     });
@@ -200,7 +219,24 @@ describe("the arms", () => {
     const last = ARMS.at(-1);
     expect(last.match).toEqual(["*"]);
     expect(armFor("anything/at/all")).toBe(armFor("zzz"));
-    expect([...last.jobs].sort()).toEqual(["frontend", "rust", "storybook"]);
+    expect([...last.jobs].sort()).toEqual(["core", "frontend", "rust", "storybook"]);
+  });
+
+  // `core` compiles the engine for two foreign targets and runs nothing. Its native compile and
+  // its tests are `rust`'s, so an arm that set `core` alone would cross-compile a change no job
+  // had tested.
+  it("never routes to `core` without `rust`", () => {
+    const coreArms = ARMS.filter((arm) => arm.jobs.includes("core"));
+    expect(coreArms.length).toBeGreaterThan(0);
+    expect(coreArms.filter((arm) => !arm.jobs.includes("rust"))).toEqual([]);
+  });
+
+  // First match wins, and `crates/*` would take the engine's tree and skip the one job that
+  // exists for it.
+  it("puts the engine's arm above `crates/*`", () => {
+    const at = (pattern) => ARMS.findIndex((arm) => arm.match.includes(pattern));
+    expect(at("crates/grimoire-core/*")).toBeGreaterThan(-1);
+    expect(at("crates/grimoire-core/*")).toBeLessThan(at("crates/*"));
   });
 });
 

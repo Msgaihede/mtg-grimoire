@@ -13,12 +13,27 @@
 // attribute is the last item, and the one file with two (`index/mod.rs`, a `fixtures`
 // module then `mod tests`) has nothing but test code between them.
 //
+// **Both workspace members are measured, since 2026-10-02**: the app in `src-tauri` and the
+// engine in `crates/grimoire-core`, which is where the app's modules are moving. One run, one
+// LCOV, one table — a module that moves keeps its lines in the total and changes only its name.
+//
 // Prints both totals. The non-test one is what README.md quotes.
 import { execFileSync } from "node:child_process";
 import { readFileSync, readdirSync, mkdirSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 
-const SRC = join("src-tauri", "src");
+/**
+ * Where each member keeps its sources, `/`-separated from the repository root, and the prefix
+ * its files carry in the table. The app's stay bare, as they were when it was the only package
+ * here; the engine's say which crate they are in, because both have a `lib.rs` and a module
+ * that has moved can leave a file of the same name behind. No module directory can be called
+ * `grimoire-core` — a hyphen is not an identifier — so the prefix cannot collide with one.
+ */
+const MEMBERS = [
+  { src: "src-tauri/src", prefix: "" },
+  { src: "crates/grimoire-core/src", prefix: "grimoire-core/" },
+];
+// Still under `src-tauri/target`: the workspace builds there (`.cargo/config.toml`).
 const LCOV = join("src-tauri", "target", "llvm-cov", "coverage.lcov");
 
 const reportOnly = process.argv.includes("--report-only");
@@ -28,25 +43,20 @@ const reportOnly = process.argv.includes("--report-only");
 if (!reportOnly) {
   // `--locked` for the same reason both CI workflows use it: a coverage run that quietly
   // resolves a different dependency set is measuring a build nobody ships.
+  //
+  // `--workspace`, run from the repository root where the workspace's manifest is: both
+  // members' tests, which is what `cargo test --workspace` runs in `verify` and in CI.
+  // `crates/card-scanner` is not a member, so its own suite is not in this figure — it never
+  // was — and whatever of it the app's tests execute is dropped below with the dependencies.
   mkdirSync(join("src-tauri", "target", "llvm-cov"), { recursive: true });
-  execFileSync(
-    "cargo",
-    [
-      "llvm-cov",
-      "--manifest-path",
-      join("src-tauri", "Cargo.toml"),
-      "--locked",
-      "--lcov",
-      "--output-path",
-      LCOV,
-    ],
-    { stdio: "inherit" },
-  );
+  execFileSync("cargo", ["llvm-cov", "--workspace", "--locked", "--lcov", "--output-path", LCOV], {
+    stdio: "inherit",
+  });
 }
 
 // ------------------------------------------------------- where each file stops being code
 
-/** Every `.rs` under `src-tauri/src/`, relative and `/`-separated. */
+/** Every `.rs` under `dir`, at any depth. */
 function sources(dir) {
   return readdirSync(dir, { withFileTypes: true }).flatMap((e) => {
     const path = join(dir, e.name);
@@ -55,13 +65,34 @@ function sources(dir) {
   });
 }
 
-/** file -> 1-based line of its first `#[cfg(test)]`, or Infinity if it has none. */
+/**
+ * file -> 1-based line of its first `#[cfg(test)]`, or Infinity if it has none. The key is the
+ * member's prefix and the path below its `src/`, `/`-separated — the name the table prints.
+ */
 const boundary = new Map();
-for (const path of sources(SRC)) {
-  const lines = readFileSync(path, "utf8").split("\n");
-  const at = lines.findIndex((l) => l.startsWith("#[cfg(test)]"));
-  const key = relative(SRC, path).split(sep).join("/");
-  boundary.set(key, at === -1 ? Infinity : at + 1);
+for (const { src, prefix } of MEMBERS) {
+  const dir = join(...src.split("/"));
+  for (const path of sources(dir)) {
+    const lines = readFileSync(path, "utf8").split("\n");
+    const at = lines.findIndex((l) => l.startsWith("#[cfg(test)]"));
+    const key = prefix + relative(dir, path).split(sep).join("/");
+    boundary.set(key, at === -1 ? Infinity : at + 1);
+  }
+}
+
+/**
+ * An LCOV `SF:` path as the key above, or null when it is under neither member. The path is
+ * absolute, and `\`-separated on Windows, so it is matched on the member's own `/…/src/`
+ * segment rather than against a root that would have to agree with it about drive-letter case.
+ */
+function keyOf(sf) {
+  const norm = sf.split("\\").join("/");
+  for (const { src, prefix } of MEMBERS) {
+    const marker = `/${src}/`;
+    const i = norm.indexOf(marker);
+    if (i !== -1) return prefix + norm.slice(i + marker.length);
+  }
+  return null;
 }
 
 // ------------------------------------------------------------------- read the LCOV back
@@ -72,12 +103,10 @@ let file = null;
 
 for (const line of readFileSync(LCOV, "utf8").split("\n")) {
   if (line.startsWith("SF:")) {
-    // Absolute, and `\`-separated on Windows. Only the part below `src-tauri/src/` is a
-    // key the boundary map knows; anything outside it (a dependency, a build script) is
-    // not this crate's coverage and is dropped.
-    const norm = line.slice(3).split("\\").join("/");
-    const i = norm.indexOf("/src-tauri/src/");
-    file = i === -1 ? null : norm.slice(i + "/src-tauri/src/".length);
+    // Only a path below a member's `src/` is a key the boundary map knows; anything outside
+    // both (a dependency, `card-scanner`, a build script) is not these crates' coverage and
+    // is dropped.
+    file = keyOf(line.slice(3));
     if (file && !per.has(file)) {
       per.set(file, { hit: 0, total: 0, prodHit: 0, prodTotal: 0 });
     }
@@ -103,22 +132,28 @@ const show = (hit, total) => {
 
 const totals = { hit: 0, total: 0, prodHit: 0, prodTotal: 0 };
 
+// The name column is as wide as the longest name needs, and never narrower than it was when
+// every name was the app's: a prefixed path under `sync_engine/` is past 24 characters, and a
+// row that overflowed would push its three figures out from under their headings.
+const NAME = Math.max(24, ...[...per.keys()].map((name) => name.length + 2));
+const RULE = "-".repeat(NAME + 28);
+
 console.log(
-  "file".padEnd(24) + "all lines".padStart(10) + "non-test".padStart(10) + "lines".padStart(8),
+  "file".padEnd(NAME) + "all lines".padStart(10) + "non-test".padStart(10) + "lines".padStart(8),
 );
-console.log("-".repeat(52));
+console.log(RULE);
 for (const [name, r] of [...per].sort((a, b) => a[0].localeCompare(b[0]))) {
   for (const k of ["hit", "total", "prodHit", "prodTotal"]) totals[k] += r[k];
   console.log(
-    name.padEnd(24) +
+    name.padEnd(NAME) +
       show(r.hit, r.total) +
       show(r.prodHit, r.prodTotal) +
       String(r.prodTotal).padStart(8),
   );
 }
-console.log("-".repeat(52));
+console.log(RULE);
 console.log(
-  "TOTAL".padEnd(24) +
+  "TOTAL".padEnd(NAME) +
     show(totals.hit, totals.total) +
     show(totals.prodHit, totals.prodTotal) +
     String(totals.prodTotal).padStart(8),

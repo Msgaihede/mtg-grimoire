@@ -1,0 +1,12 @@
+# This package builds into its own `target/`, beside this folder — not into the workspace's.
+#
+# It is a standalone package, deliberately excluded from the root workspace (see the root
+# `Cargo.toml`), and the root's `.cargo/config.toml` pins every cargo run under the repository
+# to `src-tauri/target`. Cargo reads config from the working directory upwards and the nearest
+# file wins, so this answers a run started from inside `crates/card-scanner/`.
+#
+# **A run from the repository root with `--manifest-path` does not read this file** — config
+# follows the working directory, never the manifest. Those pass
+# `--target-dir crates/card-scanner/target`, as `npm run verify` and both workflows do.
+[build]
+target-dir = "target"

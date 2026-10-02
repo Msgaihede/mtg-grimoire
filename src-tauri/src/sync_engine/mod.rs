@@ -16,6 +16,9 @@
 //! statement about rows rather than about Magic, an apply has to be transactional with the
 //! writes it makes, and [`crate::reconcile`] already merges two versions of the reader's own
 //! rows and writes `needs_review` sentences from Rust.
+//!
+//! [`hlc`] and [`merge`] are `grimoire-core`'s, re-exported here beside the layers that have not
+//! moved yet.
 
 pub mod apply;
 pub mod baseline;
@@ -26,9 +29,9 @@ pub mod commands;
 /// The entitlement grant — the tokens that let this device talk to the relay at all, and the
 /// supporter status the relay last reported.
 pub mod entitlement;
-pub mod hlc;
+pub use grimoire_core::sync_engine::hlc;
 /// The relay socket and the task that acts on it.
 pub mod live;
-pub mod merge;
+pub use grimoire_core::sync_engine::merge;
 pub mod schedule;
 pub mod wire;

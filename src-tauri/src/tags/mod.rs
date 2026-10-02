@@ -1808,6 +1808,18 @@ pub(crate) mod testing {
 mod tests {
     use super::*;
 
+    /// The re-export above is what keeps five call sites inside this module — and `schema`'s
+    /// own test — spelled the way they always were. A re-export that quietly stopped pointing
+    /// at `slug` would be invisible everywhere else. (It lived beside the function until
+    /// `slug` moved to `grimoire-core`, which cannot name this module.)
+    #[test]
+    fn the_normalize_re_export_is_slugs_function() {
+        assert_eq!(
+            normalize("Spot-Removal"),
+            crate::slug::normalize("Spot-Removal")
+        );
+    }
+
     /// A closure row reachable from two taggings of different weights resolves to the
     /// stronger. A printing whose `dog` tagging is weak but whose `hound` tagging is strong
     /// is not a weak match — and `hound`'s ancestor is `dog`, so both land on one row.

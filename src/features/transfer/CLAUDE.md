@@ -486,7 +486,7 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   `timeless` alone would drop **462** cards Arena has — every `A-` rebalanced Alchemy card among
   them, since Timeless excludes rebalanced cards and Arena is the only place they exist. The blob
   is read by key **name** and never by bit position: `legal_mask`'s offsets are stored data
-  `src-tauri/src/legalities.rs` freezes, and a copy of that order over here would be a second
+  `crates/grimoire-core/src/legalities.rs` freezes, and a copy of that order over here would be a second
   place for it to drift. Every figure, and why `CollectionRow`/`WishRow` carry the 483-byte blob
   rather than the 8-byte mask: [import-export.md](../../../docs/reference/import-export.md).
 - **`foldForFields` merges rows the chosen fields cannot tell apart, and `DISCRIMINATOR` is why a

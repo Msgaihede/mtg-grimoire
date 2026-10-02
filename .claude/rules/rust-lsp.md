@@ -38,12 +38,16 @@ symbol's whole range, so `pub fn open` at `db.rs:113` is reported as **line 106*
 cite a `documentSymbol` line number as a declaration site**; confirm with `workspaceSymbol` or a
 read.
 
-**Only `src-tauri` is loaded as a workspace.** The one crate with `.rs` outside it is
-`crates/card-scanner`, which is deliberately not a workspace member (its own `Cargo.toml` says
-why) but is a path dependency of `src-tauri`, so rust-analyzer reaches it through that dependency
-rather than as a workspace of its own. How the server answers inside it has not been measured
-here; if a query there comes back empty, confirm with grep and a read before calling the server
-broken. (The `spike/` wasm probes that this paragraph used to describe were deleted on
+**The loaded workspace is the cargo workspace at the repository root** — `src-tauri` and
+`crates/grimoire-core` — since 2026-10-02; until then `src-tauri` was a standalone package and
+the only thing loaded. **No measurement on this page was repeated after that change**, so a first
+query inside `crates/grimoire-core` that comes back empty is a cold server or an unmeasured case
+before it is a broken one. The one crate with `.rs` outside the workspace is
+`crates/card-scanner`, which is deliberately not a member (the root `Cargo.toml` excludes it and
+its own says why) but is a path dependency of `src-tauri`, so rust-analyzer reaches it through
+that dependency rather than as a workspace of its own. How the server answers inside it has not
+been measured here; if a query there comes back empty, confirm with grep and a read before
+calling the server broken. (The `spike/` wasm probes that this paragraph used to describe were deleted on
 2026-09-27; they had their own standalone `[workspace]` and resolved nothing.)
 
 **A `rust-analyzer.toml` in this repo does nothing — do not add one.** Verified across two clean

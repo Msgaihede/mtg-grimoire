@@ -4,8 +4,22 @@
 protocol). **TS owns domain logic** (deck validation, import/export parsing). Rust supplies
 _facts_; TypeScript draws _conclusions_. Keep that boundary.
 
-`cargo test` and `cargo clippy -D warnings` run from here; `npm run verify` at the root runs
-both, `cargo fmt --check` and the frontend. (It ran neither `clippy` nor `fmt` until 2026-09-27,
+**This package is one of two members of the cargo workspace at the repository root**
+(2026-10-02); the other is [`crates/grimoire-core`](../crates/grimoire-core/CLAUDE.md), the
+engine being extracted for the Android and web hosts. A `pub use grimoire_core::…` in `lib.rs`'s
+module map is a module that has moved there and is re-exported at the path it always had — so a
+rule below about `legalities`, `sync_pair::crypto` or any other moved module still binds it, in
+its new file. `Cargo.lock` and the `[profile.*]` blocks are at the root; the build tree is still
+`src-tauri/target`, pinned by `.cargo/config.toml`. ⚠️ **A worktree whose branch predates the
+workspace fails every cargo command** (`current package believes it's in a workspace when it's
+not`) once the main checkout has it, because cargo walks up parent directories and worktrees
+sit under the main checkout: merge `main`. The root `Cargo.toml` has the reproduction and why
+`.claude` must never be added to its `exclude`.
+
+`cargo test` and `cargo clippy -D warnings` run from here for this package alone, and from the
+root with `--workspace` for both; `npm run verify` at the root runs the workspace forms,
+`cargo fmt --check` and the frontend. **Never `cargo fmt --all`** — it follows path dependencies
+into `crates/card-scanner`, which is hand-formatted. (It ran neither `clippy` nor `fmt` until 2026-09-27,
 while this line said it ran the first.) The toolchain is `rust-toolchain.toml`'s pin — rustup
 picks it up from any directory under the root.
 
@@ -3011,12 +3025,23 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 The whole record, including the pipeline the crate implements:
 [docs/reference/card-scanner.md](../docs/reference/card-scanner.md) — §9 and §10 are this side.
 
-- **`card-scanner` is a `path` dependency and deliberately not a workspace member**, so its three
-  tools keep building into `crates/card-scanner/target/`. Its features here are `corpus` (labels
+- **`card-scanner` is a `path` dependency and deliberately not a workspace member** — the root
+  `Cargo.toml` excludes it by name, because a path dependency under a workspace root joins it
+  otherwise — so its three tools keep building into `crates/card-scanner/target/`. **A run from
+  the repository root has to say so**: `.cargo/config.toml` pins every cargo run under the root
+  to `src-tauri/target`, cargo reads config from the working directory rather than from
+  `--manifest-path`, and so `npm run verify` and both workflows pass
+  `--target-dir crates/card-scanner/target`. A run started inside the crate's folder reads its
+  own `.cargo/config.toml` and needs no flag. **Its manifest also carries an empty
+  `[workspace]` table that must stay**: without it cargo walks up past this checkout's root —
+  which excludes the crate — to the main checkout's, from any worktree nested under it, and
+  refuses. Its features here are `corpus` (labels
   out of `corpus.db`, and it unifies with this manifest's `rusqlite = "0.40"`) and `ocr`.
-- **The `[profile.dev.package.image]` / `.imageproc` overrides live in _this_ manifest, and
-  repeating them in the crate's is not enough.** Cargo reads `[profile.*]` from the **build root
-  only**, so the crate's own copies do nothing the moment `src-tauri` takes it as a dependency.
+- **The `[profile.dev.package.image]` / `.imageproc` overrides live in the workspace root's
+  `Cargo.toml`, and repeating them in the crate's is not enough.** Cargo reads `[profile.*]` from
+  the **build root only**, so the crate's own copies do nothing the moment `src-tauri` takes it as
+  a dependency — and since 2026-10-02 the build root is the repository root, not this package:
+  left in `src-tauri/Cargo.toml` they would be ignored with a warning.
   Measured 2026-09-08 on the debug server: rectify 2,022 ms against 48 ms in release, a 960 px
   JPEG decode 230 ms against 3–4 — a `tauri dev` scanner without these is a slideshow.
   **The block is seventeen packages rather than the two this bullet names**: those two and

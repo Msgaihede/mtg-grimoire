@@ -41,6 +41,7 @@ jobs:
     outputs:
       frontend: ${{ steps.classify.outputs.frontend }}
       rust: ${{ steps.classify.outputs.rust }}
+      core: ${{ steps.classify.outputs.core }}
       powershell: ${{ steps.classify.outputs.powershell }}
       storybook: ${{ steps.classify.outputs.storybook }}
     steps:
@@ -93,7 +94,7 @@ jobs:
           # missing one reads as `''`, every job gated on it skips, and `ci-ok` counts a skip
           # as a pass — so a router that printed nothing would take the gate green having run
           # nothing. Fail here instead.
-          for job in frontend rust powershell storybook; do
+          for job in frontend rust core powershell storybook; do
             grep -Eqx "$job=(true|false)" <<< "$flags" \
               || { echo "ci-route.mjs printed no '$job=true|false' line:" >&2; echo "$flags" >&2; exit 1; }
           done
@@ -237,29 +238,38 @@ jobs:
       # `rust-toolchain.toml`'s pin, never `stable` — see that file.
       - uses: ./.github/actions/rust-toolchain
 
+      # The cargo workspace is rooted at the repository since 2026-10-02 and still builds into
+      # `src-tauri/target` — `.cargo/config.toml` pins it there — so the cache is told both
+      # halves: where the lockfile is, and where the artifacts are.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: src-tauri
+          workspaces: ". -> src-tauri/target"
 
       # Formatting has no platform split, so it runs once. Lints do: the source has
       # cfg-gated Windows paths that a Linux-only clippy pass never compiles.
+      #
+      # **All three run from the repository root, over both workspace members** (2026-10-02):
+      # the app in `src-tauri` and the engine in `crates/grimoire-core`. This is the only job
+      # that runs the core's tests, and the only one that compiles it for Windows — `core` below
+      # builds it for the other two targets and runs nothing.
+      #
+      # **`fmt` names the two packages and never `--all`**, which follows path dependencies
+      # into `crates/card-scanner` — not a member, and not rustfmt-clean (below). `--workspace`
+      # has no such reach: clippy and the tests see the members and nothing else.
       - name: cargo fmt
         if: matrix.os == 'ubuntu-22.04'
-        working-directory: src-tauri
-        run: cargo fmt --check
+        run: cargo fmt -p mtg-grimoire -p grimoire-core --check
 
       - name: cargo clippy
-        working-directory: src-tauri
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: cargo test
-        working-directory: src-tauri
-        run: cargo test --locked
+        run: cargo test --workspace --locked
 
       # **The `card-scanner` crate's own suite, which ran in no CI job until 2026-09-08.** It is
-      # a separate cargo package rather than a workspace member, so the `cargo test` above does
-      # not touch a line of it — and `session::tests` is where the `live.html` key census, the
-      # panic guard and the reader cadence live. `npm run verify` was the only fence.
+      # a separate cargo package, excluded from the workspace on purpose, so the `cargo test`
+      # above does not touch a line of it — and `session::tests` is where the `live.html` key
+      # census, the panic guard and the reader cadence live. `npm run verify` was the only fence.
       # `--features cli` is what `verify` runs, so the debug server's tests are in it.
       #
       # **Test-only, on purpose.** The crate is not `cargo fmt`-clean and carries four
@@ -280,12 +290,122 @@ jobs:
       # `synth` is `#[cfg(feature = "builder")]`, so neither line above compiled its tests —
       # including the one that proves the evaluation's frames are something the detector can
       # see. `--lib synth` runs that module alone rather than the whole library a second time.
+      #
+      # **`--target-dir` on every line, since the workspace** (2026-10-02). Cargo reads its config
+      # from the working directory, never from `--manifest-path`, so run from the repository
+      # root these would follow `.cargo/config.toml` into `src-tauri/target` — the app's tree,
+      # and the one the cache above saves. The flag keeps this package building where it always
+      # has; `crates/card-scanner/.cargo/config.toml` says the same to a run started inside it.
       - name: cargo test (card-scanner)
         if: matrix.os == 'ubuntu-22.04'
         run: |
-          cargo test --locked --features cli --manifest-path crates/card-scanner/Cargo.toml
-          cargo test --locked --features builder --bins --manifest-path crates/card-scanner/Cargo.toml
-          cargo test --locked --features builder --lib synth --manifest-path crates/card-scanner/Cargo.toml
+          cargo test --locked --features cli --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target
+          cargo test --locked --features builder --bins --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target
+          cargo test --locked --features builder --lib synth --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target
+
+  # **`grimoire-core` on the two targets a desktop build never touches** (2026-10-02). The engine
+  # is moving out of `src-tauri` into a crate three hosts link — this desktop, an Android shell
+  # and a WASM build — and a green `rust` job proves the host triple and nothing else: a `use`
+  # that is desktop-only, a dependency that will not build for a triple and a `cfg` that leaves
+  # a module unreachable are all invisible to it. The first attempt at these targets had the
+  # same two gates and they were removed with it on 2026-09-27; this one starts the day the
+  # crate exists, with whatever is in it, because a gate added after the extraction proves
+  # nothing during it.
+  #
+  # **It is a compile gate, and it proves that much and no more**: the library builds for each
+  # triple and lints clean there. Nothing in this job runs — no test (a cross-compiled harness
+  # needs a device, an emulator or a browser to run on, hence `--lib` and never
+  # `--all-targets`), no APK, no bundle. Whether the core *works* on a phone or in a browser is
+  # still a hardware pass. **The Windows compile and the native test run are the `rust` job's**,
+  # which reaches this crate through `--workspace`.
+  #
+  # Linux, and not as a preference: clang and the NDK are the same compilers on every host, MSVC
+  # cannot emit WASM, and the Ubuntu images already ship an NDK. **No measured figure in this
+  # repo comes off a Linux build**, and this job produces none.
+  #
+  # **24.04 for the clang version, and 22.04 genuinely does not work.** `sqlite-wasm-rs`'s
+  # `shim/wasm-shim.h` declares `[[noreturn]] void rust_sqlite_wasm_abort();` — C23 attribute
+  # syntax, which clang accepts in C mode by default only from **18**. Ubuntu 22.04's
+  # `apt-get install clang` gives **14**, which rejects it with four `expected expression`
+  # errors inside a `cargo:warning=` stream, so the real cause is buried in build-script output
+  # and the visible failure is `cc-rs: command did not execute successfully`. Measured on the
+  # first attempt's `wasm` job, not on this one — and the crate asks for that SQLite from its
+  # first day (`rusqlite` in its wasm dependency table), so the floor is live from the first run.
+  #
+  # No `dist/` stub and no Node, unlike `rust`: the core has no `tauri-build`, so nothing here
+  # asks for `frontendDist`.
+  core:
+    name: core (${{ matrix.target }})
+    needs: changes
+    if: needs.changes.outputs.core == 'true'
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [wasm32-unknown-unknown, aarch64-linux-android]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `sqlite-wasm-rs` compiles SQLite's C amalgamation with `cc` targeting wasm32, and that
+      # means clang. There is no way around it and no way to cache past it.
+      - name: Install clang
+        if: matrix.target == 'wasm32-unknown-unknown'
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang
+          # Printed, and checked, because the failure this guards is four errors deep in a
+          # build script's warning stream — and `apt-get install clang` reads as correct and
+          # pins nothing. 18 is the floor for C23 `[[noreturn]]`. A version that could not be
+          # read fails too, rather than comparing as empty and passing.
+          clang --version
+          major=$(clang --version | sed -n 's/.*clang version \([0-9]*\).*/\1/p' | head -1)
+          if ! [ "${major:-0}" -ge 18 ]; then
+            echo "clang '${major}' is too old or unreadable: sqlite-wasm-rs's shim needs C23 attributes (clang 18+)" >&2
+            exit 1
+          fi
+
+      # **`cargo` and `cc-rs` have never heard of `NDK_HOME`** — that variable is the Tauri
+      # CLI's, and this job does not go through the CLI. Driving the target directly needs two
+      # things set by hand, and each fails with an error naming something other than the cause:
+      # clang on `PATH` (or `cc-rs` reports `failed to find tool "clang"` while compiling
+      # `libsqlite3-sys`), and an explicit linker (or `rustc` reports ``linker `cc` not found``).
+      #
+      # **API 26 is the first attempt's `minSdk`, carried over and not decided here.** There is
+      # no Android project in the tree to read one from; the level is phase 4's to settle, with
+      # the host, and this linker name moves with it.
+      - name: Point cargo at the NDK toolchain
+        if: matrix.target == 'aarch64-linux-android'
+        run: |
+          set -euo pipefail
+          # The runner image sets this; failing loudly beats compiling against a surprise.
+          : "${ANDROID_NDK_LATEST_HOME:?the runner image did not set ANDROID_NDK_LATEST_HOME}"
+          bin="$ANDROID_NDK_LATEST_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          linker="$bin/aarch64-linux-android26-clang"
+          # Named checks, because both of these fail later as something else entirely.
+          [ -d "$bin" ] || { echo "no NDK toolchain bin at $bin" >&2; exit 1; }
+          [ -x "$linker" ] || { echo "no API-26 linker at $linker" >&2; exit 1; }
+          echo "$bin" >> "$GITHUB_PATH"
+          echo "CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER=$linker" >> "$GITHUB_ENV"
+          "$linker" --version | head -1
+
+      # `rust-toolchain.toml`'s pin, never `stable` — and the one target this leg builds for.
+      - uses: ./.github/actions/rust-toolchain
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> src-tauri/target"
+          # A key per target: neither leg's artifacts are any use to the other or to the host
+          # build, and one cache would thrash between them.
+          key: core-${{ matrix.target }}
+
+      - name: cargo build (${{ matrix.target }})
+        run: cargo build --lib -p grimoire-core --locked --target ${{ matrix.target }}
+
+      - name: cargo clippy (${{ matrix.target }})
+        run: cargo clippy --lib -p grimoire-core --locked --target ${{ matrix.target }} -- -D warnings
 
   # Branch protection pins required checks by name string, and a matrix job's name embeds
   # its matrix values — so protecting `rust (windows-latest)` would silently stop applying
@@ -325,7 +445,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, frontend, rust, powershell, storybook]
+    needs: [changes, frontend, rust, core, powershell, storybook]
     runs-on: ubuntu-22.04
     steps:
       - name: Fail unless every dependency succeeded or was deliberately skipped
@@ -333,10 +453,11 @@ jobs:
           CHANGES: ${{ needs.changes.result }}
           FRONTEND: ${{ needs.frontend.result }}
           RUST: ${{ needs.rust.result }}
+          CORE: ${{ needs.core.result }}
           POWERSHELL: ${{ needs.powershell.result }}
           STORYBOOK: ${{ needs.storybook.result }}
         run: |
-          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST powershell=$POWERSHELL storybook=$STORYBOOK"
+          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST core=$CORE powershell=$POWERSHELL storybook=$STORYBOOK"
 
           # `changes` is the one dependency that may never be skipped or fail. It decides
           # what the other two do, so if it dies they skip — and a rule that reads a skip
@@ -346,7 +467,7 @@ jobs:
           # A skip here is a deliberate answer from `changes`: that part of the repo did
           # not change, so it has nothing to prove. Every job gated on a `changes` output
           # belongs in this loop — one left out is a job whose failure the gate ignores.
-          for result in "$FRONTEND" "$RUST" "$POWERSHELL" "$STORYBOOK"; do
+          for result in "$FRONTEND" "$RUST" "$CORE" "$POWERSHELL" "$STORYBOOK"; do
             case "$result" in
               success|skipped) ;;
               *) exit 1 ;;

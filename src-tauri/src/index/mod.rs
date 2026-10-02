@@ -29,7 +29,7 @@
 //! running. `cards` is dropped and recreated by every sync, which renumbers every rowid, so
 //! the index is rebuilt after each swap — see [`lifecycle`].
 
-pub mod bitset;
+pub use grimoire_core::index::bitset;
 pub mod facets;
 pub mod lifecycle;
 

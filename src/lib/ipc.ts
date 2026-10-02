@@ -1720,7 +1720,7 @@ export interface CollectionRow {
    * The blob rather than `cards.legal_mask`, which would have been 8 bytes against this
    * field's 483-byte average (528 at most, over the 116,712-printing corpus of 2026-08-22,
    * where `promoTypes` above averages 23): bit positions are stored data Rust owns and freezes
-   * — `src-tauri/src/legalities.rs` — and a copy of that order over here would be a second
+   * — `crates/grimoire-core/src/legalities.rs` — and a copy of that order over here would be a second
    * place for it to drift. Scryfall's key *names* are public vocabulary and cannot.
    *
    * `null` is an orphan — the printing this entry names has left `cards`.

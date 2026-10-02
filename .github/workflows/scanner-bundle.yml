@@ -39,6 +39,9 @@ jobs:
       # `rust-toolchain.toml`'s pin, never `stable` — see that file.
       - uses: ./.github/actions/rust-toolchain
 
+      # `crates/card-scanner/target` is what this saves, and both `cargo run` lines below say
+      # `--target-dir` to build there: run from the root, they would otherwise follow the root's
+      # `.cargo/config.toml` into `src-tauri/target` and leave this cache empty.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: crates/card-scanner
@@ -80,7 +83,7 @@ jobs:
       - name: Build the bundle
         run: >-
           cargo run --locked --release --bin build-hashes --features builder
-          --manifest-path crates/card-scanner/Cargo.toml --
+          --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target --
           --bulk default-cards.jsonl --cache card-hashes-cache.db --out card-hashes.bin --sections card
 
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -106,7 +109,8 @@ jobs:
         id: eval
         continue-on-error: true
         run: |
-          cargo run --locked --release --bin eval --features builder --manifest-path crates/card-scanner/Cargo.toml -- \
+          cargo run --locked --release --bin eval --features builder \
+            --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target -- \
             --bundle card-hashes.bin --bulk default-cards.jsonl --models models \
             --printings crates/card-scanner/eval/printings.txt --cache eval-cache --summary eval.md
           cat eval.md >> "$GITHUB_STEP_SUMMARY"

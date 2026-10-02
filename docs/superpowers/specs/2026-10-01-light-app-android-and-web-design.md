@@ -233,6 +233,12 @@ Three things round one measured that this layer inherits rather than rediscovers
 A `core` job compiles `grimoire-core` for `x86_64-pc-windows-msvc`, `aarch64-linux-android` and
 `wasm32-unknown-unknown`, and runs its tests natively. It joins `ci-ok`.
 
+**As built, 2026-10-02, that is two jobs' work.** The `core` job compiles and lints the crate for
+the two targets no desktop build touches; the Windows compile and the native test run are the
+existing `rust` job's, which reaches the crate through `--workspace` on both of its legs. Every
+change that routes to `core` routes to `rust` as well, so the three targets are still gated
+together.
+
 **It starts the day the crate exists, with whatever is in it** — a gate added after the extraction
 is a gate that proves nothing during it. `sqlite-wasm-rs` compiles SQLite's C amalgamation with
 `cc` targeting WASM, MSVC cannot emit WASM, so the job needs clang ≥ 18 (Ubuntu 24.04), as round
@@ -246,6 +252,11 @@ Each step is its own PR. **The light UI waits for none of them** (§9).
    `errors`, `feed/`, `index/bitset`, and the sync crypto and merge core (`sync_pair/{crypto,invite}`,
    `sync_engine/{hlc,merge,wire}`). The crate, the `platform/` skeleton, the sweep and the CI job
    land here.
+   **Built 2026-10-02, and six of these fifteen were not leaves**: `sorting`, `image_uri`,
+   `card_row`, `errors`, `feed/backoff` and `sync_engine/wire` each name `schema`, `sync` or
+   `sync_pair::identity` — in their code or in the tests that move with them — and go with step
+   2. [The step's plan](../plans/2026-10-02-light-app-core-step-1-leaves.md) has the reason for
+   each.
 2. **Storage** — `db`, `schema`, `filters`, `collection_source`, `reconcile`, `managed_wishlist`,
    `sync_engine/{capture,apply,baseline}`, `sync_pair/identity`.
 3. **State** — the `AppState` split, `with_write`, the hook installer and its observers, `EventSink`.
@@ -272,9 +283,16 @@ survive it. **That phase opens with a spike, not a plan.**
   deal of this repo's tooling and documentation names `src-tauri/target/debug/data`. `card-scanner`
   is a path dependency and deliberately not a workspace member for a related reason. The default is
   **no workspace**; the plan may argue otherwise with the list of paths it would move.
+  **Settled 2026-10-02: a workspace at the repository root, with `target/` pinned where it was.**
+  Without one, cargo refuses to test a path dependency that has dev-dependencies from the package
+  that depends on it, so the core would have needed a second lockfile and a second build tree.
+  Markus chose the root over a workspace rooted at `src-tauri`; `.cargo/config.toml` keeps the
+  tree at `src-tauri/target`, so the list of paths it moved is one — `Cargo.lock`. `card-scanner`
+  is excluded by name and unchanged.
 - **`[profile.dev.package.*]` blocks follow the build root.** Cargo reads them from the root
   manifest only, so the seventeen overrides that make a dev scanner usable are owed in every host's
-  manifest.
+  manifest. **With the workspace they are owed once**: they moved to the root `Cargo.toml`, and
+  a host that joins the workspace inherits them.
 - **Text fences that read Rust by path.** `ipc.test.ts` imports about 48 `.rs` files with `?raw`;
   `fake/parity.test.ts` reads `desktop.rs`; `coverage-rust.mjs` hardcodes `src-tauri/src`; seven
   Rust tests reach into `../../src/lib/*.json` and `../../../relay/src/*.ts` by relative path. Each
@@ -747,7 +765,7 @@ columns, with the build named.
 | Question | Settled in |
 | --- | --- |
 | The sync trip without a lock held across an `await` | Phase 2, step 6 — a spike first |
-| A Cargo workspace, and where `target/` lives | Phase 2's plan |
+| A Cargo workspace, and where `target/` lives | Settled 2026-10-02 — §2.9. Open: moving `target/` to the root, which is deleting one file on an announced day |
 | How the desktop face behaves below its 700px height floor in a browser | Phase 3, measured |
 | What the deck editor is on a 360px screen | Phase 3, as built options put to Markus |
 | Android signing and distribution | Phase 4, with Markus |

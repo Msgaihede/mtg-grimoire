@@ -1,5 +1,9 @@
 //! The crate's module map, and nothing else: the command registry and the app's startup are
 //! `desktop.rs`'s.
+//!
+//! **A `pub use grimoire_core::…` in this map is a module that has moved to the shared core**
+//! (`crates/grimoire-core`, the light app's spec §2.8) and is re-exported at the path it always
+//! had, so `crate::legalities` here is that crate's `legalities` and no caller changed.
 
 /// **The collection's and the wishlist's history, and the feed that reads it beside
 /// [`deck_audit`].** A table, a `record` that takes the caller's `&Connection` so a row lands
@@ -7,8 +11,8 @@
 /// own `unixepoch()`, no filesystem and no network.
 pub mod activity;
 /// **The `app_meta` key–value store, carved out of [`update`].** Eleven modules keep view state
-/// in that one table and only `update` swaps an `.exe`.
-pub mod app_meta;
+/// in that one table and only `update` swaps an `.exe`. `grimoire-core`'s, re-exported.
+pub use grimoire_core::app_meta;
 /// **Which pages are this app's own, and the navigation guard that keeps every window on them.**
 /// One origin set, read by the guard and by [`camera`], so the two cannot disagree.
 pub mod app_origin;
@@ -23,7 +27,7 @@ pub mod camera;
 /// `&Connection` in, DTO out.
 pub mod card;
 pub mod card_row;
-pub mod cardtypes;
+pub use grimoire_core::cardtypes;
 /// **Which user tables a commit wrote, told to every open window.** It rides the write
 /// connection's update hook and lives on `AppState` beside `mirror`. See the module doc.
 pub mod changes;
@@ -103,7 +107,7 @@ pub mod images;
 pub mod import;
 pub mod index;
 pub mod ingest;
-pub mod legalities;
+pub use grimoire_core::legalities;
 /// **The four view-state modules.** `listview`, `nav`, `searchopen` and `zoom` each keep one
 /// setting in `app_meta` and answer it back - two commands apiece. [`searchopen`] arrived on
 /// 2026-09-07, when `deck.rs`'s one boolean row became a map three docked search columns share.
@@ -170,7 +174,7 @@ pub mod share;
 /// level deeper: an infallible read, a write that refuses an unknown page or a key that is not a
 /// folder id, and `None` taking an override back off. No filesystem, no clock and no network.
 pub mod shelffolds;
-pub mod slug;
+pub use grimoire_core::slug;
 pub mod sorting;
 /// **A pre-27 single-file `mtg.db`, taken apart into `user.db` and `corpus.db`.** Its one
 /// caller, [`schema::prepare_data_dir`], is reached only from `desktop::init_state`.

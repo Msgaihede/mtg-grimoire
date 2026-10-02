@@ -219,7 +219,7 @@ mod tests {
     /// is red on the other.
     #[test]
     fn the_bound_is_the_relays() {
-        let relay = include_str!("../../../relay/src/log.ts");
+        let relay = include_str!("../../../../relay/src/log.ts");
         assert_eq!(MAX_AHEAD_MS, 24 * 60 * 60 * 1000);
         assert!(
             relay.contains("export const MAX_CLOCK_AHEAD_MS = 24 * 60 * 60 * 1000;"),

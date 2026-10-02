@@ -168,7 +168,10 @@ no combo" and "we have never downloaded the list" have to be two different sente
   one app runs across every worktree. See the `running-the-app` skill.
 - `npm run verify` — build + lint + `cargo fmt --check` + clippy + Vitest + cargo test. **Run
   before every commit.** Rust is pinned by `rust-toolchain.toml` and Node by `.nvmrc`.
-- `npm run test` / `test:run` — frontend tests; `cargo test` in `src-tauri/` — Rust tests
+- `npm run test` / `test:run` — frontend tests; `cargo test --workspace` — Rust tests, for both
+  members of the cargo workspace at the root (`src-tauri` and `crates/grimoire-core`). **Its
+  build tree is still `src-tauri/target`**: `.cargo/config.toml` pins it, so nothing that names
+  that folder moved when the workspace arrived on 2026-10-02.
 - `npm run test:coverage` / `test:coverage:rust` — coverage. **The Rust one's number is not
   `cargo llvm-cov`'s**: that counts the inline `#[cfg(test)]` modules, where every line is
   covered by definition, and reads ~14 points high. See
@@ -207,6 +210,7 @@ on — do not work from this page alone.
 | File | Read it when you are working on |
 | --- | --- |
 | [`src-tauri/CLAUDE.md`](src-tauri/CLAUDE.md) | Anything Rust: schema and migrations, sync, Scryfall, images, deck storage, capabilities |
+| [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md) | The engine with no window, which three hosts will link — its four rules and the fence behind them, how a module moves there from `src-tauri`, and how to compile it for WASM on this machine. **`src-tauri/CLAUDE.md`'s rules about a module still bind it after it moves** |
 | [`src/CLAUDE.md`](src/CLAUDE.md) | Any UI. Carries the Storybook-MCP rule, the `frontend-design` skill, layers, card images |
 | [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md) | Deck validation, categories, the editor's views and drags |
 | [`src/features/transfer/CLAUDE.md`](src/features/transfer/CLAUDE.md) | Decklist import and export — parsing, planning, the two dialogs |
@@ -281,7 +285,7 @@ number to compare against.
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
 | [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
 | [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what the 2026-10-01 deploy has not proved** |
-| [light-app.md](docs/reference/light-app.md) | The Android and web face — one entry and two faces, what a browser over the fake was driven to show at 360 and 1280 and across the crossing between them, the phone-sized Tauri window over the real core and the desktop app launched after it, the build's chunks, the two ways the dev server died, and what is open by the phase that owns it. **Phase 1 only: no Android host, no WASM host, no sync** |
+| [light-app.md](docs/reference/light-app.md) | The Android and web face — one entry and two faces, what a browser over the fake was driven to show at 360 and 1280 and across the crossing between them, the phone-sized Tauri window over the real core and the desktop app launched after it, the build's chunks, the two ways the dev server died, and what is open by the phase that owns it — and, in §6, the shared core as each extraction step lands it: the cargo workspace and why `target/` did not move, which modules have moved, the WASM compile, and what the desktop was checked for afterwards. **No Android host, no WASM host, no sync** |
 | [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the eighteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 

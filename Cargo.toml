@@ -1,0 +1,97 @@
+# The cargo workspace: every package that shares one lockfile, one build tree and one set of
+# profiles. Since 2026-10-02 — until then `src-tauri` was a standalone package and the root held
+# no manifest at all.
+#
+# **Why a workspace, and why here.** The light app (docs/superpowers/specs/2026-10-01-light-app-
+# android-and-web-design.md §2) moves the engine into `crates/grimoire-core` so three hosts can
+# link it — this desktop, an Android shell and a WASM build. Measured the day it landed: a path
+# dependency that is *not* a workspace member cannot be tested from the package that depends on
+# it once it has a dev-dependency ("requires dev-dependencies and is not a member of the
+# workspace"), so without a workspace the core would have needed its own `Cargo.lock` and its own
+# multi-gigabyte `target/` beside this one, and two lockfiles for one engine drift.
+#
+# **`target/` did not move.** A workspace's build tree is `<root>/target` by default, and
+# `.cargo/config.toml` pins it back to `src-tauri/target` — where every script, skill and
+# reference doc in this repository, and every checkout's dev database
+# (`src-tauri/target/debug/data`), already expects it. That file has the argument.
+#
+# **`crates/card-scanner` is excluded on purpose**, and the `exclude` is not optional: a path
+# dependency that lives under the workspace root becomes a member automatically. It stays a
+# standalone package with its own `Cargo.lock` because it is not `cargo fmt`-clean and carries
+# clippy warnings (`docs/reference/card-scanner.md` §8), so membership would turn `--workspace`
+# lints red for something no change here is about.
+#
+# ⚠️ **A manifest here reaches every checkout nested under this directory, and the agent
+# worktrees are nested under the main checkout** (`.claude/worktrees/<name>/`). Cargo finds a
+# workspace by walking up parent directories, with no notion of a git boundary. Reproduced
+# 2026-10-02 in a scratch copy of the layout:
+#
+# - **A worktree whose branch predates this file has no root manifest of its own**, so the walk
+#   from its `src-tauri` reaches the main checkout's — which does not list it — and every cargo
+#   command there stops on `current package believes it's in a workspace when it's not`. The
+#   fix is merging `main`, which brings that worktree its own root manifest. A worktree parked
+#   on an older commit on purpose (a release tag, a bisect) needs an empty `[workspace]` table
+#   added to its `src-tauri/Cargo.toml` by hand.
+# - **`crates/card-scanner` carries an empty `[workspace]` table for the same reason**: excluded
+#   here, cargo would walk on up to the main checkout's manifest from inside any worktree.
+# - **Never add `.claude` to `exclude` to "fix" a stale worktree.** It makes one build again —
+#   into the *main checkout's* `src-tauri/target`, because `.cargo/config.toml` is found by the
+#   same upward walk — so its app opens the main checkout's dev database and two checkouts
+#   share one build tree. A loud refusal is the better failure.
+[workspace]
+# Explicit, because a virtual manifest has no `edition` to imply it: without this line cargo
+# falls back to resolver 1, which unifies features across targets — and the core's WASM build
+# asks `rusqlite` for a different feature set than the desktop's does.
+resolver = "2"
+members = ["src-tauri", "crates/grimoire-core"]
+exclude = ["crates/card-scanner"]
+
+# **The scanner's crates at full optimisation in a debug build.** The `image`/`imageproc`
+# overrides live in `crates/card-scanner/Cargo.toml` too, and there they do nothing for this
+# package: cargo reads `[profile.*]` from the build root only. Measured 2026-09-08 on the debug
+# server: one rectification 2022 ms against 48 ms in release, a 960 px JPEG decode 230 ms
+# against 3–4, so a `tauri dev` scanner without these is a slideshow.
+#
+# **The crate itself and the OCR runtime are on the list because the first live pass measured
+# them in** (2026-09-08, `tauri dev` with only the two image crates optimised): the pump's
+# budget read rectify 1 829 ms and 5 012 ms of unitemised hash, search and reader time per
+# frame — 7.0 s a frame, 0.1 frames a second. The warp is `imageproc`'s, so what stayed slow
+# was `card-scanner`'s own loops (cardness, trim, the descriptor) and `rten`'s inference. Every
+# `rten-*` crate in the lock file is named, because a graph with one unoptimised member inherits
+# its speed. **`zune-jpeg` is the JPEG decoder `image` 0.25 delegates to**, and it is the same
+# lesson one crate down: with `image` alone optimised, a 960 px frame still decoded in 117 ms
+# against release's 3–4.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package.imageproc]
+opt-level = 3
+[profile.dev.package.zune-jpeg]
+opt-level = 3
+[profile.dev.package.zune-core]
+opt-level = 3
+[profile.dev.package.card-scanner]
+opt-level = 3
+[profile.dev.package.ocrs]
+opt-level = 3
+[profile.dev.package.rten]
+opt-level = 3
+[profile.dev.package.rten-base]
+opt-level = 3
+[profile.dev.package.rten-gemm]
+opt-level = 3
+[profile.dev.package.rten-imageproc]
+opt-level = 3
+[profile.dev.package.rten-model-file]
+opt-level = 3
+[profile.dev.package.rten-onnx]
+opt-level = 3
+[profile.dev.package.rten-parallel]
+opt-level = 3
+[profile.dev.package.rten-shape-inference]
+opt-level = 3
+[profile.dev.package.rten-simd]
+opt-level = 3
+[profile.dev.package.rten-tensor]
+opt-level = 3
+[profile.dev.package.rten-vecmath]
+opt-level = 3

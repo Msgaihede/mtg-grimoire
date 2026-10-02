@@ -23,6 +23,20 @@ existed and did not. Fast-forward to the branch your task belongs to, with the
 **PowerShell tool**: Bash refuses `git reset --hard`, `git merge --ff-only` and
 `git switch -c` here. Never rebase, and never `git reset` a branch another agent tracks.
 
+## When cargo says the package "believes it's in a workspace when it's not"
+
+The branch predates the cargo workspace (2026-10-02) and the main checkout has it. Cargo looks
+for a workspace by walking up parent directories; a worktree sits under the main checkout, so
+with no root `Cargo.toml` of its own the walk reaches the main checkout's, which does not list
+this worktree's packages. **Merge `main`** — that brings the worktree its own root manifest and
+every cargo command works again. If `src-tauri/Cargo.lock` conflicts in that merge, take the
+root `Cargo.lock` and let cargo re-resolve.
+
+For a worktree parked on an older commit on purpose (a release tag, a bisect), add an empty
+`[workspace]` table to its `src-tauri/Cargo.toml` and do not commit it. **Never "fix" it by
+adding `.claude` to the root manifest's `exclude`**: the worktree then builds into the main
+checkout's `src-tauri/target` and its app opens the main checkout's dev database.
+
 ## What is and is not shared
 
 | Per worktree | Shared with every worktree |

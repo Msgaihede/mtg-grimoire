@@ -113,9 +113,11 @@ jobs:
       # `rust-toolchain.toml`'s pin, never `stable` — see that file.
       - uses: ./.github/actions/rust-toolchain
 
+      # The cargo workspace is rooted at the repository since 2026-10-02 and still builds into
+      # `src-tauri/target` (`.cargo/config.toml`), which is where the portable step below looks.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: src-tauri
+          workspaces: ". -> src-tauri/target"
 
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:

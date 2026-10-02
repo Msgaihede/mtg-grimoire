@@ -1,0 +1,94 @@
+[package]
+name = "grimoire-core"
+version = "0.0.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "MTG Grimoire's engine, with no window: what every host links."
+publish = false
+
+# **Three hosts link this crate and it knows about none of them**: the desktop app in
+# `src-tauri`, an Android shell and a WASM build in a Worker
+# (`docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md` §2). So it compiles
+# for `x86_64-pc-windows-msvc`, `aarch64-linux-android` and `wasm32-unknown-unknown`, and CI's
+# `core` job is what says so on every pull request that can have broken it.
+#
+# **There is no `tauri` here and there never may be** — `platform::fence` reads this file and
+# fails on a dependency by that name, because a window is a host's and a crate that can name
+# one has stopped being portable without anything going red on a desktop build.
+#
+# A dependency this crate shares with `src-tauri` is declared in both manifests with the same
+# version and the same features. Cargo unifies them into one build either way; spelling them
+# alike is what keeps `cargo test -p grimoire-core` from compiling a second SQLite.
+
+[lib]
+name = "grimoire_core"
+
+[dependencies]
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+
+# HKDF-SHA256's hash. `src-tauri` names it too, for the user schema's derived uids and the
+# updater's digest check.
+sha2 = "0.10"
+# Pairing (spec §7.5) and the sync envelope (§7.7). The version choices are one decision rather
+# than several, and they moved here from `src-tauri/Cargo.toml` with `sync_pair::crypto`, which
+# is the only code that names any of them.
+#
+# `x25519-dalek` gets `getrandom` so `StaticSecret::random()` exists and this crate never has to
+# hold an RNG of its own, and `static_secrets` because a device's key is reused for every pairing
+# it ever does — an `EphemeralSecret` is consumed by its one `diffie_hellman`.
+x25519-dalek = { version = "3", features = ["static_secrets", "getrandom"] }
+# **0.10 and deliberately not 0.11.** 0.11 moves RustCrypto's array types to `hybrid-array`,
+# which would stand a second array stack beside the `sha2 0.10 -> digest 0.10 -> crypto-common
+# 0.1 -> generic-array 0.14` this tree already carries. 0.10 and `hkdf 0.12` sit on that one.
+# XChaCha20-Poly1305 rather than the 96-bit-nonce variant: a 192-bit nonce can be drawn at
+# random for every message with no counter to keep, and a counter kept across three devices and
+# a restore-from-backup is exactly the thing that gets reused.
+#
+# **`default-features = false` drops `getrandom`.** The default feature set enables
+# `aead/getrandom`, which pulls `rand_core 0.6` and with it **`getrandom 0.2`** - a third major
+# of that crate in the tree, and the one that refuses `wasm32-unknown-unknown` outright. Nothing
+# here uses what it buys: `AeadCore::generate_nonce` is unreachable, because `crypto::seal`
+# draws its own 24 bytes through `crypto::random_bytes`. So the line is a subtraction.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+hkdf = "0.12"
+# Random bytes for the group key, the group id, the device id, the pairing token and every
+# nonce. `fill` is the whole API this uses, and it is spelled the same in 0.3 and 0.4 — so the
+# pin follows whichever major `x25519-dalek` resolved, and moving it is a one-word edit with no
+# code change. `cargo tree -d` is the check: `x25519-dalek 3.0.0` resolves **0.4.3**, and
+# declaring 0.3 would stand two majors of the same crate in the tree.
+getrandom = "0.4"
+# The invite as a picture. The page renders the matrix itself — see
+# `sync_pair::invite::qr_matrix` — so the crate's own `image` and `svg` renderers are dead
+# weight and `default-features = false` drops them. Building the matrix is the fact; drawing it
+# is the page's, which is this repo's boundary applied to a QR code.
+qrcode = { version = "0.14", default-features = false }
+
+# ── Desktop and Android ──────────────────────────────────────────────────────────────────────
+# `bundled` is libsqlite3-sys compiling sqlite3.c with the host's C compiler — right on Windows,
+# on Linux and through the NDK, and impossible for a browser. `hooks` is the update hook the
+# mirror and the change mask ride; it is here ahead of the code that installs it (the
+# extraction's step 3) so this crate asks for the same SQLite the desktop does.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
+
+# ── Web ──────────────────────────────────────────────────────────────────────────────────────
+# ⚠️ NEVER add `default-features = false` to this rusqlite line. `ffi-sqlite-wasm-rs` — the FFI
+# backend that makes wasm work at all — is in rusqlite's DEFAULT feature set, and switching it
+# off fails the build with `unresolved import libsqlite3_sys`, which reads exactly like "wasm is
+# unsupported" and is the opposite of the truth. The first web build paid for that once
+# (`docs/superpowers/research/2026-08-27-wasm-core-spike.md`, in history at `cd54f1a6`).
+#
+# `hooks` and not `bundled`: `bundled` is a host C compile. What compiles SQLite here is
+# `sqlite-wasm-rs`, with `cc` targeting wasm32 — which needs clang 18 or newer and is why CI's
+# `core` job runs on Ubuntu 24.04.
+[target.'cfg(target_family = "wasm")'.dependencies]
+rusqlite = { version = "0.40", features = ["hooks"] }
+# The browser's `crypto.getRandomValues`. Features across target tables are additive, so this
+# and the line above are one dependency. With getrandom 0.3 the feature had to be paired with
+# `--cfg getrandom_backend="wasm_js"`; 0.4 needs no build flag.
+getrandom = { version = "0.4", features = ["wasm_js"] }
+# `Date.now()`, for `platform::clock` — `SystemTime::now()` panics on this target.
+js-sys = "0.3"

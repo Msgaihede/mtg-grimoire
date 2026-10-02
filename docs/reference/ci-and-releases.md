@@ -9,7 +9,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   matrix (below — one leg for `npm run build` and `lint`, four for `test:run --shard`), a
   `storybook` job (`npm run build-storybook`), a `rust` matrix over `windows-latest` +
   `ubuntu-22.04` (`cargo fmt --check` on Linux only, `clippy -D warnings` and `cargo test`
-  on both, everything `--locked`, **and since 2026-09-08 the `card-scanner` crate's own suite
+  on both, everything `--locked` — over both members of the cargo workspace since 2026-10-02,
+  below — **and since 2026-09-08 the `card-scanner` crate's own suite
   on the Linux leg** — `cargo test --locked --features cli --manifest-path
   crates/card-scanner/Cargo.toml`, and since 2026-09-15 a second command in the same step,
   `cargo test --locked --features builder --bins` against the same manifest, because `cli` does
@@ -17,8 +18,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `scanner-bundle.yml` — tests only, because that crate is not rustfmt-clean and
   carries four pre-existing clippy warnings, both listed in
   [card-scanner.md](card-scanner.md) §8; until that step `session::tests` was fenced by
-  `npm run verify` and by nothing in CI) and a `powershell` job (below). The `wasm` and
-  `android` compile gates went with the web and Android builds, which were removed on 2026-09-27.
+  `npm run verify` and by nothing in CI), a `core` matrix (below, 2026-10-02) and a
+  `powershell` job (below). The `wasm` and `android` compile gates went with the web and
+  Android builds, which were removed on 2026-09-27; `core` is what replaces them, for the
+  extracted engine alone.
   **`ci-ok` is the one protected check** — branch protection
   pins names by string and a matrix job's name embeds its matrix values, so the aggregator is
   what has teeth and the matrix underneath stays free. `enforce_admins` is **false**: a red PR
@@ -31,10 +34,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   first-match-wins order and `*`-crosses-`/` matching kept), which routes each one:
   `src-tauri/**` → **`frontend` and `rust`**; `src/**`, `public/**`,
   `index.html`, **`.storybook/**`** (its own arm since 2026-09-27 — it used to fall to the
-  fail-safe and run the Rust matrix), the lockfiles and the frontend's configs → `frontend`
+  fail-safe and run the Rust matrix), the npm lockfile and the frontend's configs → `frontend`
   **and `storybook`**, plus **`scripts/` because `eslint .` lints it** (its ignore list does
   not name it) → `frontend` alone;
-  **`rust-toolchain.toml` and `.github/actions/rust-toolchain/`** → `frontend` and `rust`;
+  **`rust-toolchain.toml` and `.github/actions/rust-toolchain/`** → `frontend`, `rust` and,
+  since 2026-10-02, `core`; **the cargo workspace's own files at the root — `Cargo.toml`,
+  `Cargo.lock`, `.cargo/**`** → the same three (2026-10-02, below);
   **`release.yml`, `scanner-bundle.yml` and `.github/dependabot.yml` → `frontend`**, because
   `scripts/toolchain.test.mjs` and `scripts/actions-pinned.test.mjs` read them (below); `.nvmrc`
   → every job that installs Node;
@@ -43,9 +48,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` and the router itself → **every job**;
   **`crates/*` → `frontend` and `rust`** (declared 2026-09-08 — it is what
   the fail-safe below was already doing for the `card-scanner` crate, whose `.rs` files
-  `ipc.test.ts` reads as text and whose `scripts/*.mjs` `eslint .` lints);
+  `ipc.test.ts` reads as text and whose `scripts/*.mjs` `eslint .` lints), **with
+  `crates/grimoire-core/**` above it → `frontend`, `rust` and `core`** (2026-10-02);
   prose and editor/release bookkeeping → neither; and **anything unrecognised → every**
-  build job, `storybook` included.
+  build job, `storybook` and `core` included.
   That last arm is the fail-safe that makes the lists safe to be wrong in the cheap
   direction — a new root config file or a new top-level directory gets full CI until someone
   narrows it deliberately. Only the "neither" arm can wrongly skip work, so it stays small.
@@ -160,6 +166,77 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   compile a fresh checkout; the stub is what keeps it parallel with `frontend` instead of
   serialized behind a full Vite build — and it is also why the `rust` job is safe to run with
   `frontend` skipped entirely: the frontend it needs is one file it writes itself.
+- **The repository is a cargo workspace rooted at the top, and nothing a workflow reads moved
+  except the lockfile** (2026-10-02). The light app's engine is being extracted into
+  `crates/grimoire-core` so three hosts can link it, and a path dependency with
+  dev-dependencies cannot be tested from the package that depends on it unless both are
+  members of one workspace — so the root gained a virtual `Cargo.toml` whose members are
+  `src-tauri` and that crate, and `src-tauri/Cargo.lock` became the root `Cargo.lock`.
+  **`target/` did not move**: a workspace builds into `<root>/target` by default, and
+  `.cargo/config.toml` pins `build.target-dir = "src-tauri/target"`, which is where the dev
+  database, the portable-zip step and the coverage report already look. `cargo metadata` on
+  the day: workspace root the repository, target directory `src-tauri/target`. What followed
+  in the workflows:
+  - **The `rust` job's commands run from the root**, with no `working-directory`:
+    `cargo fmt -p mtg-grimoire -p grimoire-core --check`, `cargo clippy --workspace
+    --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`. `lint:rust` is
+    the first two as written, and `npm run verify` runs it and then `cargo test --workspace`.
+    **`cargo fmt --all` is the one spelling that must not be used** — it follows path
+    dependencies, and `card-scanner` is one and is not rustfmt-clean. `--workspace` lints and
+    tests the members only.
+  - **`card-scanner` stays outside**, `exclude`d by name because a path dependency under the
+    workspace root would otherwise become a member by itself. It keeps its own `Cargo.lock`
+    and its own `target/`, and **every scripted run of it from the root passes
+    `--target-dir crates/card-scanner/target`** — the test lines in `ci.yml`, the one in
+    `verify`, both `cargo run` lines in `scanner-bundle.yml`. Cargo reads its config from the
+    working directory, never from `--manifest-path`, so without the flag those runs would
+    follow the root's config into `src-tauri/target`; in `scanner-bundle.yml` that is also a
+    tree its `rust-cache` (`workspaces: crates/card-scanner`) never saves.
+  - **`Swatinem/rust-cache` takes `workspaces: ". -> src-tauri/target"`** in `ci.yml` and
+    `release.yml` — where the lockfile is, then where the artifacts are.
+  - **Not yet proven by a run, as of this writing**: that `rust-cache` restores under the new
+    line, and that `tauri-action` still finds its bundles — it is invoked exactly as before,
+    and the portable step reads `src-tauri/target/release/mtg-grimoire.exe` as before. The
+    first is settled by the PR that lands this; the second only by the next release.
+  - **What stands in for that run is the action's own source, read at the pinned SHA**
+    (`1deb371b`, `src/utils.ts`). `getWorkspaceDir` walks up from the Tauri directory to the
+    first `Cargo.toml` whose `[workspace]` lists it — the repository root now — and its default
+    target is `<that>/target`, which would be wrong here. But `getTargetDir` looks first, on the
+    same walk up, for a `.cargo/config` or `.cargo/config.toml` with `build.target-dir`, and
+    joins a relative value onto the directory holding the `.cargo` folder: `<root>/src-tauri/target`.
+    `CARGO_TARGET_DIR` would outrank both and no job sets it. `tauri dev`, which asks
+    `cargo metadata`, was launched under the same layout on 2026-10-02 and built into
+    `src-tauri/target/debug`.
+- **The `core` job compiles `grimoire-core` for the two targets a desktop build never
+  touches** (2026-10-02): a matrix over `wasm32-unknown-unknown` and `aarch64-linux-android`
+  on `ubuntu-24.04`, `fail-fast: false`, each leg `cargo build --lib -p grimoire-core --locked
+  --target <triple>` followed by `cargo clippy` with the same selection and `-D warnings`. A
+  green `rust` job proves the host triple and nothing else — a desktop-only `use`, a
+  dependency that will not build for a triple, a `cfg` that leaves a module unreachable are
+  invisible to it — and the gate starts the day the crate exists because one added after the
+  extraction would prove nothing during it.
+  **It is a compile gate.** No test runs (a cross-compiled harness needs a device, an
+  emulator or a browser — hence `--lib`, never `--all-targets`), no APK is assembled and no
+  bundle is served, so nothing here says the core *works* on a phone or in a browser. The
+  Windows compile and the native tests are the `rust` job's, through `--workspace`. There is
+  no `dist/` stub and no Node, because the core has no `tauri-build`.
+  **Its routing is narrower than `rust`'s**: the crate itself, the workspace's root files and
+  the pinned toolchain, plus the gate and the fail-safe — and not `src-tauri/**` or
+  `card-scanner`, which the engine does not depend on. The scanner's session glue is the
+  extraction's last step; the day it moves, `crates/*` gains `core`. Every arm that sets
+  `core` sets `rust` too, and `ci-route.test.mjs` holds the router to that.
+  **None of the job's own details were measured on it when this was written; its first run is
+  the PR that adds it.** They are the removed `wasm` and `android` jobs' (the first attempt,
+  still readable at `cd54f1a6`), where each was measured: Ubuntu **24.04 for clang ≥ 18**, because
+  `sqlite-wasm-rs`'s `shim/wasm-shim.h` uses C23 `[[noreturn]]` and 22.04's `apt-get install
+  clang` gives 14, failing four errors deep in a build script's warning stream as `cc-rs:
+  command did not execute successfully` (the step prints the version and refuses one below
+  18, or one it cannot read); **the NDK's `bin` on `PATH` and
+  `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER`**, because `cargo` and `cc-rs` know nothing of
+  `NDK_HOME` and each omission fails naming something else (`failed to find tool "clang"`,
+  ``linker `cc` not found``); and **a `rust-cache` `key` per target**. The linker is the
+  API-26 clang, the first attempt's `minSdk` carried over — there is no Android project in
+  the tree to read a level from, and it is phase 4's to settle.
 - **`.github/workflows/release.yml` is one workflow on purpose.** A release created with
   `GITHUB_TOKEN` does not trigger `on: release` in another workflow — GitHub's recursion
   guard — so release-please, the build matrix and the publish step are jobs in one file,
@@ -167,7 +244,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - **Versions are never typed by hand.** release-please reads the `feat:`/`fix:`/`!` prefixes
   and keeps a `chore(main): release X.Y.Z` PR open that bumps all five version files —
   `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`,
-  `src-tauri/Cargo.lock` — and writes `CHANGELOG.md`. Merging it tags, builds and publishes.
+  `Cargo.lock` (at the root since 2026-10-02; `src-tauri/Cargo.lock` until then) — and writes
+  `CHANGELOG.md`. Merging it tags, builds and publishes.
   `bump-minor-pre-major` is on, so while on `0.x` a `feat!:` bumps the **minor**; reaching
   1.0 is a deliberate `Release-As: 1.0.0` footer, never something a stray `!` does.
 - **The `Cargo.lock` selector must read `@.name.value`, never `@.name`.** release-please
@@ -176,7 +254,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   2026-08-09: `.value` changes exactly one line and leaves the `version = 4` lockfile-format
   key alone; the bare form changes nothing at all. **`--locked` on every cargo call in both
   workflows is what converts that silence into a failed check on the release PR itself**,
-  before anything is tagged.
+  before anything is tagged. **The lockfile moved to the repository root on 2026-10-02** and
+  `release-please-config.json`'s `path` with it; the selector did not change, and it names
+  `mtg-grimoire`, so the `grimoire-core` entry now in the same file is not what it matches.
+  Not re-measured since the move — the first release PR after it is the measurement, and
+  `--locked` is still what would fail it.
 - The release is created as a **draft** and published only after every platform's assets
   attach, so a release is never visible without its binaries. `force-tag-creation` pairs with
   that and is not optional: a draft has no git tag until published, and without it

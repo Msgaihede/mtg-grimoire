@@ -11,10 +11,13 @@
 //! **TypeScript renders, compares and confirms; it never sees a key.** The six digits cross the
 //! IPC boundary as a string because they are what a *person* compares, and everything else that
 //! crosses is either a public key or a sealed blob.
+//!
+//! [`crypto`] and [`invite`] are `grimoire-core`'s, re-exported here beside the two layers that
+//! have not moved yet.
 
-pub mod crypto;
+pub use grimoire_core::sync_pair::crypto;
 pub mod identity;
-pub mod invite;
+pub use grimoire_core::sync_pair::invite;
 /// It is `#[tauri::command]`s over `AppState`, so it is the webview's IPC surface rather than a
 /// piece of the protocol.
 pub mod pairing;

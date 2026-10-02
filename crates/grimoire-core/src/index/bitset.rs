@@ -3,6 +3,13 @@
 //! 116 694 printings is 1 824 machine words — 14 KB — so intersecting two filters is an
 //! `AND` and a `popcount` over 14 KB rather than a query. The whole low-cardinality half of
 //! [`super::CardIndex`] is 40 of these.
+//!
+//! **The per-doc and per-word methods are `#[inline]`, and that is the crate boundary's doing.**
+//! The index that calls them is still in `src-tauri`, no profile here turns on LTO, and a
+//! non-generic function is not inlined across crates unless it says so — so without the
+//! attribute `set` and `contains` would have become real calls, once per printing per
+//! dimension, in a release build that inlined them the day before this file moved. Not
+//! measured either way; the attribute restores what the compiler was free to do.
 
 /// One bit per rowid. Rowid 0 is never used by SQLite, so index 0 is simply always clear.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -33,12 +40,14 @@ impl BitSet {
     /// what `new` was asked for: `new(100)` answers 128, and doc 127 set on it stays set.
     /// Rounding *up* is the load-bearing half — rounding down would silently drop the last
     /// rowids of a corpus, which is exactly the stale answer [`BitSet::set`] exists to avoid.
+    #[inline]
     pub fn capacity(&self) -> usize {
         self.words.len() * BITS
     }
 
     /// A doc past the end is dropped. The alternative is a panic on a database that grew
     /// between the build and the query, which is a crash rather than a stale answer.
+    #[inline]
     pub fn set(&mut self, doc: u32) {
         let (w, b) = (doc as usize / BITS, doc as usize % BITS);
         if let Some(word) = self.words.get_mut(w) {
@@ -46,6 +55,7 @@ impl BitSet {
         }
     }
 
+    #[inline]
     pub fn contains(&self, doc: u32) -> bool {
         let (w, b) = (doc as usize / BITS, doc as usize % BITS);
         self.words
@@ -55,6 +65,7 @@ impl BitSet {
 
     /// Shorter operand wins: two sets built against different capacities intersect over
     /// what they share, which is the only honest answer.
+    #[inline]
     pub fn and(&self, other: &BitSet) -> BitSet {
         let n = self.words.len().min(other.words.len());
         BitSet {
@@ -62,6 +73,7 @@ impl BitSet {
         }
     }
 
+    #[inline]
     pub fn and_count(&self, other: &BitSet) -> u32 {
         let n = self.words.len().min(other.words.len());
         (0..n)
@@ -69,6 +81,7 @@ impl BitSet {
             .sum()
     }
 
+    #[inline]
     pub fn count(&self) -> u32 {
         self.words.iter().map(|w| w.count_ones()).sum()
     }
